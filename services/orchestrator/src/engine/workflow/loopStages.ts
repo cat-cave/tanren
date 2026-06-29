@@ -55,7 +55,12 @@ interface SpecContext {
 
 export interface StageBase {
   pool: LoopQueryClient;
-  writer?: RunStateWriter;
+  /**
+   * REQUIRED (audit finding H3 sweep): the demo-run / design-oracle / triage
+   * / convergence stages' terminal row + event pairs ride the atomic seam
+   * through this writer — no fallback.
+   */
+  writer: RunStateWriter;
   costCtx: SubtaskCostContext;
   runId: string;
   workspacePath: string;
@@ -96,9 +101,7 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
   // WIDER FINALIZE GUARD (task #35): wrap the WHOLE post-row body so a recorder
   // / event-append throw closes the row loud + emits `task.failed`.
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
     writer: args.writer,
-    appendEvent: args.appendEvent,
     taskId: demoTaskId,
     taskKind: "demo",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -264,9 +267,7 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
   // `PersistentlyInvalidSpecError` is INTENTIONAL — the guard classifies it as
   // `crashed`, emits `task.failed{crashed}`, re-throws to the run-level catch.
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
     writer: args.writer,
-    appendEvent: args.appendEvent,
     taskId: triageTaskId,
     taskKind: "triage",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -384,9 +385,7 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
   await args.appendEvent("convergence.started", { taskKind: "convergence" }, convergenceTaskId);
   // WIDER FINALIZE GUARD (task #35): same shape as demoRun.
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
     writer: args.writer,
-    appendEvent: args.appendEvent,
     taskId: convergenceTaskId,
     taskKind: "convergence",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -484,11 +483,9 @@ async function loopStageTaskDone(
   taskKind: "demo" | "triage" | "convergence",
 ): Promise<void> {
   await markTaskDoneWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId,
     envelope: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId, taskKind },
     outcome: "passed",
-    appendEventFallback: (eventType, payload, t) => args.appendEvent(eventType, payload as never, t),
   });
 }

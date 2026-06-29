@@ -37,22 +37,38 @@ interface RecordedEvent {
   payload: Record<string, unknown>;
 }
 
+// Audit finding H3 sweep: the checker's terminal seam now REQUIRES a writer.
+// The harness wires the InMemoryRunStateWriter fixture; the writer's atomic
+// terminal pair drives both the row state (read off `writer.tasks`) and the
+// terminal event (forwarded into `events`).
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
+
 class CheckerHarness {
   readonly events: RecordedEvent[] = [];
-  readonly taskOutcomes = new Map<string, string>();
+  readonly writer = new InMemoryRunStateWriter({
+    forwardAppend: async (input) => {
+      this.events.push({
+        eventType: input.eventType as EventName,
+        payload: input.payload as Record<string, unknown>,
+      });
+    },
+  });
+  get taskOutcomes(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const [taskId, row] of this.writer.tasks.entries()) {
+      if (row.outcome !== null) {
+        map.set(taskId, row.outcome);
+      }
+    }
+    return map;
+  }
 
   appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string): Promise<void> => {
     this.events.push({ eventType, payload: payload as Record<string, unknown> });
     if (taskId !== undefined) void taskId;
   };
 
-  // pg-shaped stub recording the rejected_by_checker / passed outcome the stage
-  // UPDATEs (so the accept-vs-reject branch is observable in the test).
-  query = async (sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
-    // markTaskDone: `UPDATE tasks SET status = 'done', outcome = $2 ... WHERE task_id = $1`.
-    if (sql.trim().startsWith("UPDATE tasks SET status") && typeof params[0] === "string") {
-      this.taskOutcomes.set(String(params[0]), String(params[1]));
-    }
+  query = async (_sql: string, _params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
     return { rows: [], rowCount: 1 };
   };
 
@@ -73,6 +89,7 @@ class CheckerHarness {
 function checkerArgs(h: CheckerHarness, verdict: typeof completeCheck) {
   return {
     pool: { query: h.query },
+    writer: h.writer,
     costCtx: h.costCtx(),
     adapter: makeChecker([verdict]),
     runId: "run_1",

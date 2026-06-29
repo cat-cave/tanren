@@ -20,14 +20,11 @@ import {
   makeWriter,
   p1Audit,
 } from "./helpers/plannerLoopHelpers.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 // subtaskStages.ts owns the per-call event timeline + task-row transitions for
-// each planner/writer/checker/auditor invocation. The mutation survivors were
-// almost entirely event-name / payload string literals, array spreads, and the
-// commit-sha fallback — exercised by the loop tests but never asserted at the
-// payload level. These tests call each stage directly with a recording
-// appendEvent + fake pool and pin the emitted event names, the task kinds, the
-// payload values, and the outcome branch.
+// each planner/writer/checker/auditor invocation. These tests pin the emitted
+// event names, the task kinds, the payload values, and the outcome branch.
 
 interface RecordedEvent {
   eventType: EventName;
@@ -55,35 +52,49 @@ interface RecordedCost {
   rawUsage: Record<string, unknown>;
 }
 
+// Audit finding H3 sweep: stage helpers now REQUIRE a writer; harness derives
+// `tasks` / `taskOutcomes` from the writer's atomic row state so existing
+// assertions keep holding without churn.
 class StageHarness {
   readonly events: RecordedEvent[] = [];
-  readonly tasks: RecordedTask[] = [];
-  readonly taskOutcomes = new Map<string, string>();
   readonly costRecords: RecordedCost[] = [];
+  readonly writer = new InMemoryRunStateWriter({
+    forwardAppend: async (input) => {
+      this.events.push({
+        eventType: input.eventType as EventName,
+        payload: input.payload as Record<string, unknown>,
+        taskId: input.taskId,
+      });
+    },
+  });
+  get tasks(): RecordedTask[] {
+    return this.writer.inserts.map((i) => ({
+      taskId: i.taskId,
+      kind: i.kind,
+      title: i.title,
+      parentTaskId: i.parentTaskId ?? null,
+      agentKind: i.agentKind,
+      cli: i.cli,
+      model: i.model,
+    }));
+  }
+  get taskOutcomes(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const [taskId, row] of this.writer.tasks.entries()) {
+      if (row.outcome !== null) map.set(taskId, row.outcome);
+    }
+    return map;
+  }
 
   appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string): Promise<void> => {
     this.events.push({ eventType, payload: payload as Record<string, unknown>, taskId });
   };
 
-  // pg-shaped query stub: records the task INSERTs / outcome UPDATEs the
-  // stages issue so we can assert task-row transitions without a database.
-  // The INSERT param order is taskId, runId, kind, title, parent_task_id,
-  // agent_kind, cli, model — see insertChildTask in subtaskTasks.ts.
-  query = async (sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
-    const trimmed = sql.trim();
-    if (trimmed.startsWith("INSERT INTO tasks") && trimmed.includes("parent_task_id")) {
-      this.tasks.push({
-        taskId: String(params[0]),
-        kind: String(params[2]),
-        title: String(params[3]),
-        parentTaskId: params[4] === null ? null : String(params[4]),
-        agentKind: String(params[5]),
-        cli: String(params[6]),
-        model: params[7] === null ? null : String(params[7]),
-      });
-    } else if (trimmed.startsWith("UPDATE tasks SET status")) {
-      this.taskOutcomes.set(String(params[0]), String(params[1]));
-    }
+  // pg-shaped query stub — task INSERTs/UPDATEs now route through the writer
+  // (audit H3 sweep) and surface on `this.tasks` (derived from writer.inserts);
+  // this stub is a no-op so any other incidental SQL the workflow drives
+  // doesn't blow up.
+  query = async (_sql: string, _params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
     return { rows: [], rowCount: 1 };
   };
 
@@ -144,6 +155,7 @@ describe("runPlannerStage", () => {
     const plan = buildPlan([{ title: "Wire behavior B1", intent: "touch the README", behaviorIds: ["B1", "B2"] }]);
     const result = await runPlannerStage({
       pool: { query: h.query },
+      writer: h.writer,
       costCtx: h.costCtx(),
       adapter: makePlanner([plan]),
       spec: { specTitle: "S", specDescription: "D", acceptanceCriteria: ["AC1"], behaviorIds: [], behaviorContext: [] },
@@ -182,6 +194,7 @@ describe("runPlannerStage", () => {
     const plan = buildPlan([{ title: "T", intent: "i", behaviorIds: ["B1"] }]);
     await runPlannerStage({
       pool: { query: h.query },
+      writer: h.writer,
       costCtx: h.costCtx(),
       adapter: makePlanner([plan]),
       spec: { specTitle: "S", specDescription: "D", acceptanceCriteria: ["AC1"], behaviorIds: [], behaviorContext: [] },
@@ -204,6 +217,7 @@ describe("runWriterStage", () => {
     const h = new StageHarness();
     await runWriterStage({
       pool: { query: h.query },
+      writer: h.writer,
       costCtx: h.costCtx(),
       adapter: makeWriter(["diff body\n"]),
       runId: "run_1",
@@ -259,6 +273,7 @@ describe("runWriterStage", () => {
     const diff = "éあ";
     await runWriterStage({
       pool: { query: h.query },
+      writer: h.writer,
       costCtx: h.costCtx(),
       adapter: makeWriter([diff]),
       runId: "run_1",
@@ -279,6 +294,7 @@ describe("runWriterStage", () => {
     const h = new StageHarness();
     await runWriterStage({
       pool: { query: h.query },
+      writer: h.writer,
       costCtx: h.costCtx(),
       adapter: makeWriter(["diff body\n"]),
       runId: "run_1",
@@ -298,6 +314,7 @@ describe("runWriterStage", () => {
     const h = new StageHarness();
     await runWriterStage({
       pool: { query: h.query },
+      writer: h.writer,
       costCtx: h.costCtx(),
       adapter: makeWriter([""]),
       runId: "run_1",
@@ -318,6 +335,7 @@ describe("runWriterStage", () => {
 function checkerArgs(h: StageHarness, verdict: typeof completeCheck) {
   return {
     pool: { query: h.query },
+    writer: h.writer,
     costCtx: h.costCtx(),
     adapter: makeChecker([verdict]),
     runId: "run_1",
@@ -337,6 +355,7 @@ function checkerArgs(h: StageHarness, verdict: typeof completeCheck) {
 function auditorArgs(h: StageHarness, verdict: typeof cleanAudit) {
   return {
     pool: { query: h.query },
+    writer: h.writer,
     costCtx: h.costCtx(),
     adapter: makeAuditor([verdict]),
     runId: "run_1",

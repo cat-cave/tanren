@@ -186,9 +186,17 @@ export class HttpRunStateWriter implements RunStateWriter {
     // SILENT success so the finalize-guard's recovery call doesn't surface as
     // a fresh error after the original work already landed.
     const orgId = input.task.orgId ?? this.requireOrgId();
+    // Audit finding D2 writer-seam extension: forward the optional pre-terminal
+    // `priorEvents` bundle so the server applies the whole sequence (prior events
+    // → row UPDATE → terminal event) on ONE in-transaction client. Omitted when
+    // the caller carries no priors — the route's schema treats it as optional.
     return this.postWithStatus<UpdateTaskWithEventOutcome>(
       "/internal/update-task-with-event",
-      { task: { ...input.task, orgId }, event: input.event },
+      {
+        task: { ...input.task, orgId },
+        event: input.event,
+        ...(input.priorEvents !== undefined && input.priorEvents.length > 0 ? { priorEvents: input.priorEvents } : {}),
+      },
       (status, body) => {
         if (status === 200) {
           return body as UpdateTaskWithEventOutcome;

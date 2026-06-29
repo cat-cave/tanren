@@ -24,13 +24,14 @@ import type { ActorRef } from "../state/actor.js";
 import { designResolverActor } from "../design/designWriterContext.js";
 
 /**
- * the optional lifecycle-writer seam for a sub-stage input — the
- * `runStateWriter` when one is wired, else `{}` (the sub-stage does its in-process
- * write). One helper so the workflow threads it into each stage with no per-call
- * `exactOptionalPropertyTypes` ternary (keeping the workflow's branch count down).
+ * The lifecycle-writer seam for a sub-stage input. Audit finding D3/H3 sweep:
+ * the writer is now REQUIRED everywhere, so this is a trivial pass-through.
+ * Retained as a helper so future cross-stage writer wiring (e.g. an
+ * org-tagging wrapper) has a single edit site, and so existing call sites
+ * read unchanged.
  */
-export function writerSeam(input: RunPlannerLoopInput): { runStateWriter?: RunStateWriter } {
-  return input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter };
+export function writerSeam(input: RunPlannerLoopInput): { runStateWriter: RunStateWriter } {
+  return { runStateWriter: input.runStateWriter };
 }
 
 export function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {

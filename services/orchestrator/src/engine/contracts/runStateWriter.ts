@@ -153,11 +153,8 @@ export interface MergeRunVerifiedAncestorShaInput {
   entryJson: string;
 }
 
-/** The `UPDATE specs SET metadata` the autonomous INTAKE drives when it stamps
- * discovery provenance onto an auto-routed spec (`writeProvenance`). A direct
- * `UPDATE specs` from the de-privileged data plane is rejected (migration 0035),
- * so the intake routes this through the control plane. The caller has already
- * merged + serialized the full metadata blob, so this carries the final JSON verbatim. */
+/** `UPDATE specs SET metadata` (intake discovery provenance). The caller has
+ * already merged + serialized the full metadata blob. */
 export interface SetSpecMetadataInput {
   specId: string;
   orgId: string;
@@ -165,10 +162,7 @@ export interface SetSpecMetadataInput {
   metadataJson: string;
 }
 
-/** Append a steering note to the spec's `description` (v55 #59 plane-split fix: the
- * merge-queue gate-fail-rework router's raw `UPDATE specs` previously crashed on the
- * de-privileged `tanren_dataplane` pool — routing through the writer tunnels to the
- * privileged control plane, matching {@link SetSpecStatusInput}'s plane-split). */
+/** Append a steering note to the spec's description (gate-fail rework / recovery replan). */
 export interface AppendSpecSteeringInput {
   specId: string;
   orgId: string;
@@ -234,17 +228,26 @@ export interface UpdateTaskInput {
 }
 
 /**
- * The atomic terminal-task input (task #39): a TERMINAL `tasks` UPDATE paired
- * with the matching terminal `task.*` event, applied together in ONE
+ * The atomic terminal-task input (task #39, extended by the writer-seam
+ * doctrine sweep — audit findings D2/D3/H3/N1): a TERMINAL `tasks` UPDATE
+ * paired with the matching terminal `task.*` event, applied together in ONE
  * org-scoped transaction so the row + event live or die together. The pairing
  * constraint (`done` ↔ `task.completed`, `failed*` ↔ `task.failed`) is enforced
- * by `terminalPairSchema` in `engine/worker/runStateLifecycleSql.ts`, so a
- * non-terminal transition or a mismatched type is rejected at the seam before
- * any DB I/O.
+ * by `terminalPairSchema` in `engine/worker/runStateLifecycleSql.ts`. The
+ * optional `priorEvents` list bundles PRE-TERMINAL observation events (e.g.
+ * the review-stage verdict) into the SAME transaction — the audit-D2
+ * writer-seam extension PR #711 deferred.
  */
 export interface UpdateTaskWithEventInput {
   task: UpdateTaskInput;
   event: AppendEventInput;
+  /**
+   * Optional pre-terminal events to append in the SAME transaction BEFORE the
+   * row UPDATE + terminal event (audit finding D2 writer-seam extension). A
+   * malformed payload throws inside the transaction → ROLLBACK (atomicity is
+   * total). Omitted ⇒ behavior identical to pre-extension.
+   */
+  priorEvents?: ReadonlyArray<AppendEventInput>;
 }
 
 // Task #48 atomic-seam types live in `./runStateAtomicSeam.ts` (file-size cap); re-exported.
@@ -258,17 +261,12 @@ export type {
 } from "./runStateAtomicSeam.js";
 
 /**
- * The outcome of an atomic terminal-row + terminal-event apply (task #40 Class B —
- * RPC phantom-write idempotency). The event INSERT inside
- * `applyUpdateTaskWithEvent` is `ON CONFLICT DO NOTHING` against the partial
- * unique index `events_task_terminal_unique (task_id, event_type)`, so a
- * server-side COMMIT whose HTTP response was DROPPED + a data-plane retry
- * does NOT write a contradictory second same-type terminal event. The
- * `alreadyTerminal` flag tells the caller whether THIS call's INSERT landed
- * (`false`) or was deduped because the original landed (`true`); the wrapping
- * helpers (`markTaskDoneWithEvent` / `markTaskFailedWithEvent` /
- * `markTaskFailedIfRunningWithEvent`) treat `true` as a SILENT success (the
- * work is durably done) rather than a throwable error.
+ * Outcome of an atomic terminal-row + terminal-event apply (task #40 Class B —
+ * RPC phantom-write idempotency). The event INSERT runs through
+ * `ON CONFLICT DO NOTHING` against the partial unique index
+ * `events_task_terminal_unique (task_id, event_type)`, so a dropped-HTTP-response
+ * retry returns `alreadyTerminal: true` instead of contradicting the timeline.
+ * Wrapping helpers (`markTaskDoneWithEvent` etc.) treat that as silent success.
  */
 export interface UpdateTaskWithEventOutcome {
   /** True when the event was already terminal (this call deduped); false when this call wrote it. */

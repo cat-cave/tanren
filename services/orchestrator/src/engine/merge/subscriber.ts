@@ -38,13 +38,14 @@ export interface MergeCoordinatorSubscriberDeps {
   ssh?: CommandSubstrate;
   identitySecretRef?: string;
   /**
-   * Plane-split (autonomy loops): the control-plane run-state writer. When present
-   * (remote-writes on), the production coordinator routes EVERY tenant write it
-   * drives (merge-stage events/tasks/runs/specs, spec-status finalize, conflict
-   * re-exec, queue/batch events) through the control plane; absent, direct on the
-   * pool (byte-identical). Only consulted when `coordinator` is not injected.
+   * REQUIRED (audit finding D3/H3 sweep): the production coordinator routes
+   * every tenant write it drives (merge-stage events/tasks/runs/specs,
+   * spec-status finalize, conflict re-exec, queue/batch events) through this
+   * writer. Default is the in-process `DirectRunStateWriter`; the cross-process
+   * `worker` resolves it to the `HttpRunStateWriter` over mTLS. Only consulted
+   * when `coordinator` is not injected.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
   /**
    * The coordinator to drive. Defaults to the production
    * `buildBatchMergeCoordinator(...)` (via `buildProductionCoordinator`). A test
@@ -186,9 +187,8 @@ export class MergeCoordinatorSubscriber {
       ssh,
       identitySecretRef,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
-      // Plane-split: route every coordinator-driven tenant write through the
-      // control plane when wired; else direct on the pool (byte-identical).
-      ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),
+      // Audit finding D3/H3 sweep: writer ALWAYS wired (Direct or HTTP).
+      runStateWriter: this.deps.runStateWriter,
     });
   }
 

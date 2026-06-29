@@ -90,6 +90,7 @@ export function noopFinalizeWriter(): RunStateWriter {
     finalizeLand: noop("finalizeLand"),
     finalizeRunWithEvent: noop("finalizeRunWithEvent"),
     updateSpecWithEvent: noop("updateSpecWithEvent"),
+    resumePausedRunAtomic: noop("resumePausedRunAtomic"),
     createQueuedRun: noop("createQueuedRun"),
     createSpec: noop("createSpec"),
   } as unknown as RunStateWriter;

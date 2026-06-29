@@ -32,6 +32,7 @@ import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { inertGitHubHttp } from "./helpers/githubHttp.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 const RUN_ID = "run_drive";
 const SPEC_ID = "spec_drive";
@@ -181,6 +182,10 @@ function projectConfig(): unknown {
 function driveDeps(pool: pg.Pool) {
   return {
     pool,
+    // Audit finding D3/H3 sweep: writer is now REQUIRED on the coordinator deps.
+    // The drive path under test is `external_reviewer` (no merge call), so the
+    // in-memory fixture's no-op observers satisfy the contract.
+    runStateWriter: new InMemoryRunStateWriter(),
     secrets: new FakeSecretStore(),
     githubHttp: inertGitHubHttp(),
     // The drive-path conflict resolver's deps. This test exercises the
@@ -202,8 +207,13 @@ function driveDeps(pool: pg.Pool) {
 
 describe("buildDriveMerge — RLS scope on the coordinator merge drive", () => {
   it("loads the run context under a GUC-bearing scope (no ReviewMergeRunNotFoundError for an existing run) and never returns the masked 'blocked'", async () => {
-    const { pool, events } = fakeDrivePool();
-    const drive = buildDriveMerge(driveDeps(pool));
+    const { pool } = fakeDrivePool();
+    // Audit finding D3/H3 sweep: the writer is now REQUIRED on the coordinator
+    // deps, so events route through it (not the FakePool's events table
+    // inserts). Use the writer's `appends` recorder as the event-observability
+    // surface for this assertion.
+    const deps = driveDeps(pool);
+    const drive = buildDriveMerge(deps);
 
     // Pre-fix, the drive read tenant tables on the RAW pool under only a per-job
     // org-id marker (empty GUC). loadReviewMergeRunContext saw zero rows and threw
@@ -214,8 +224,9 @@ describe("buildDriveMerge — RLS scope on the coordinator merge drive", () => {
 
     // The hand-off ran end-to-end: it appended task.started + merge.queued (a denied
     // context read would have thrown BEFORE the first append).
-    expect(events).toContain("task.started");
-    expect(events).toContain("merge.queued");
+    const allEvents = (deps.runStateWriter as InMemoryRunStateWriter).allEvents.map((e) => e.eventType);
+    expect(allEvents).toContain("task.started");
+    expect(allEvents).toContain("merge.queued");
     // `handed_off` maps to a terminal non-`merged` kind — NOT the masked `blocked`.
     expect(outcome.kind).not.toBe("blocked");
   });

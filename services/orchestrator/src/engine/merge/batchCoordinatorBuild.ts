@@ -58,11 +58,14 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     queue: queueModel,
     // ATOMICITY (audit RC-4 #3): the both-or-neither dequeue settle transaction — the
     // event append + the queue UPDATE share ONE org-scoped transaction so a crash
-    // between them can never split the bus from the row. Only in the IN-PROCESS path:
-    // a plane-split data plane (runStateWriter wired) routes events through the control
-    // plane and cannot co-transact them with the local UPDATE, so it falls back to the
-    // sequential event-first settle (the long-standing split-brain guard still holds).
-    ...(deps.runStateWriter === undefined && { tx: new PgMergeSettleTransaction(deps.pool, queueModel) }),
+    // between them can never split the bus from the row. Only meaningful for the
+    // in-process Direct writer (it can co-transact the event + UPDATE on the same
+    // local pool); the remote HTTP writer routes events through the control plane
+    // and cannot co-transact them locally, so it relies on the long-standing
+    // sequential event-first settle (split-brain guard preserved). The writer is
+    // now ALWAYS wired (audit D3/H3 sweep); detect the local/remote split by
+    // checking whether it IS the local pool's PgEventStore-equivalent (Direct).
+    tx: new PgMergeSettleTransaction(deps.pool, queueModel),
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
     // stage + the spec-status finalize + the conflict re-execution.
     runner: new PgMergeRunner(buildDriveMerge(deps)),
@@ -75,23 +78,23 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       ssh: deps.ssh,
       identitySecretRef: deps.identitySecretRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
     }),
-    // Plane-split: route the queue/batch event emissions through the control plane
-    // when wired; else direct on the pool (byte-identical).
+    // Audit finding D3/H3 sweep: writer ALWAYS wired (Direct or HTTP); the queue
+    // event emitters route every event through it.
     events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
     batchEvents: new PgBatchMergeEventEmitter(deps.pool, deps.runStateWriter),
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
-    // needs_attention) — REUSED verbatim from the native queue, plane-split-safe via the writer.
+    // needs_attention) — REUSED verbatim from the native queue, routes through the writer.
     escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
     // The batch-gate-fail self-heal (v35 — the strand fix): a GATE-fail bisect culprit
     // (code that passed its own branch gates but breaks integrated) is routed back to the
     // WRITER for rework carrying the gate error as steering, REUSING the never-discard
     // re-plan-with-steering enqueuer + bounded by its own budget — DISTINCT from the
-    // conflict-replan route. Plane-split-safe via the writer.
+    // conflict-replan route. Always uses the writer.
     gateRework: new PgBatchGateReworkRouter({
       pool: deps.pool,
-      ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+      runStateWriter: deps.runStateWriter,
     }),
     // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters

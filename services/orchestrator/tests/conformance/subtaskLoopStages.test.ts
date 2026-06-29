@@ -54,8 +54,15 @@ import {
 import { runConvergenceStage, runDemoRunStage, runTriageStage } from "../../src/engine/workflow/loopStages.js";
 import type { SubtaskCostContext } from "../../src/engine/workflow/subtaskCost.js";
 import { buildPlan } from "../helpers/plannerLoopHelpers.js";
+import { InMemoryRunStateWriter } from "../fixtures/inMemoryRunStateWriter.js";
 
 // ---- recording harness (a focused subset of StageHarness in subtaskStages.test.ts) --
+//
+// Audit finding H3 sweep: every stage now requires a writer at its atomic
+// terminal seam (no fallback arm). The harness wires the InMemoryRunStateWriter
+// fixture; its terminal `updateTaskWithEvent` drives both the row state and
+// the terminal event back into the existing recorder so the conformance
+// assertions hold unchanged.
 
 interface RecordedEvent {
   eventType: EventName;
@@ -65,20 +72,39 @@ interface RecordedEvent {
 
 class StageHarness {
   readonly events: RecordedEvent[] = [];
-  readonly tasksMarkedFailed = new Map<string, string>();
-  readonly tasksMarkedDone = new Map<string, string>();
+  readonly writer = new InMemoryRunStateWriter({
+    forwardAppend: async (input) => {
+      this.events.push({
+        eventType: input.eventType as EventName,
+        payload: input.payload as Record<string, unknown>,
+        taskId: input.taskId,
+      });
+    },
+  });
+  get tasksMarkedFailed(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const [taskId, row] of this.writer.tasks.entries()) {
+      if (row.status === "failed" && row.failureKind !== null) {
+        map.set(taskId, row.failureKind);
+      }
+    }
+    return map;
+  }
+  get tasksMarkedDone(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const [taskId, row] of this.writer.tasks.entries()) {
+      if (row.status === "done" && row.outcome !== null) {
+        map.set(taskId, row.outcome);
+      }
+    }
+    return map;
+  }
 
   appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string): Promise<void> => {
     this.events.push({ eventType, payload: payload as Record<string, unknown>, taskId });
   };
 
-  query = async (sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
-    const trimmed = sql.trim();
-    if (trimmed.startsWith("UPDATE tasks SET status = 'failed'")) {
-      this.tasksMarkedFailed.set(String(params[0]), String(params[1]));
-    } else if (trimmed.startsWith("UPDATE tasks SET status")) {
-      this.tasksMarkedDone.set(String(params[0]), String(params[1]));
-    }
+  query = async (_sql: string, _params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
     return { rows: [], rowCount: 1 };
   };
 
@@ -191,6 +217,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runPlannerStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingAnswerer<PlanAnswer>(error),
         spec: {
@@ -214,6 +241,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runWriterStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingWriter(error),
         runId: "run_1",
@@ -231,6 +259,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runCheckerStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingAnswerer<CheckAnswer>(error),
         runId: "run_1",
@@ -255,6 +284,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runAuditorStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingAnswerer<AuditAnswer>(error),
         runId: "run_1",
@@ -274,6 +304,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runDemoRunStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingAnswerer<DemoRunAnswer>(error),
         runId: "run_1",
@@ -292,6 +323,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runTriageStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingAnswerer<TriageAnswer>(error),
         runId: "run_1",
@@ -311,6 +343,7 @@ const DRIVERS: ReadonlyArray<StageDriver> = [
     runThrow: (h, error) =>
       runConvergenceStage({
         pool: { query: h.query },
+        writer: h.writer,
         costCtx: h.costCtx(),
         adapter: throwingAnswerer<ConvergenceAnswer>(error),
         runId: "run_1",

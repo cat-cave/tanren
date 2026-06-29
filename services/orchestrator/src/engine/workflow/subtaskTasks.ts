@@ -109,54 +109,16 @@ export async function markTaskDone(
   );
 }
 
-// Move a subtask row to a hard FAILED terminal with its failure kind. Used when a
-// writer run did NOT complete (crashed / timed out): the task must NOT be laundered
-// to a `done`/`passed` row whose partial/empty diff then flows downstream as a
-// success. Mirrors the merge dispatcher's `failed_with_kind` transition (same fixed
-// UPDATE), so the row reads status='failed', outcome='failed', failure_kind=$kind.
-export async function markTaskFailed(
-  pool: LoopQueryClient,
-  taskId: string,
-  failureKind: string,
-  writer?: RunStateWriter,
-): Promise<void> {
-  if (writer !== undefined) {
-    await writer.updateTask({ taskId, transition: "failed_with_kind", failureKind });
-    return;
-  }
-  await resolveWritableClient(pool).query(
-    `UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1`,
-    [taskId, failureKind],
-  );
-}
+// Audit finding H3 sweep: `markTaskFailed` + `markTaskFailedIfRunning` (the
+// non-atomic, optional-writer row-only failure helpers) are DELETED. Every
+// caller in the workflow uses the atomic terminal pair (`markTaskFailedWithEvent`
+// / `markTaskFailedIfRunningWithEvent`) below, which routes the row UPDATE +
+// the `task.failed` event through `writer.updateTaskWithEvent` in ONE org-scoped
+// transaction. There is no longer a path that updates the row without emitting
+// the matching loud terminal event.
 
-// Idempotent FAILED-terminal transition: move a task row to `failed` ONLY when it
-// is still `status='running'`. Used by the finalize guard
-// (`runStageBodyWithFinalizeGuard`) so a POST-success throw — the cost-recorder
-// fails after a successful provider call, or appendEvent fails after the row was
-// already moved to `done` by a clean branch — leaves the existing terminal row
-// alone (a `done`/`passed` row a clean branch already wrote is not clobbered to
-// `failed`; that case is a missing-event problem, not a missing-failure-row
-// problem). The `WHERE status='running'` guard is the idempotency primitive: a
-// re-run sees no `running` row and is a no-op. Mirrors `markTaskFailed` shape but
-// adds the guard; both routes (in-process direct UPDATE + `RunStateWriter`) honor it.
-export async function markTaskFailedIfRunning(
-  pool: LoopQueryClient,
-  taskId: string,
-  failureKind: string,
-  writer?: RunStateWriter,
-): Promise<void> {
-  if (writer !== undefined) {
-    await writer.updateTask({ taskId, transition: "failed_with_kind_if_running", failureKind });
-    return;
-  }
-  await resolveWritableClient(pool).query(
-    `UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1 AND status = 'running'`,
-    [taskId, failureKind],
-  );
-}
-
-// --- ATOMIC terminal row + terminal `task.*` event helpers (task #39) -------
+// --- ATOMIC terminal row + terminal `task.*` event helpers (task #39, audit
+//     finding H3 sweep — writer is REQUIRED, no fallback arm) ----------------
 //
 // The single-finalize invariant (autonomy-engine.md §1c) requires the terminal
 // row UPDATE and its matching `task.*` event to live or die TOGETHER — a
@@ -172,16 +134,16 @@ export async function markTaskFailedIfRunning(
 // `taskKind` for the payload). The call sites already have these in scope —
 // they were already passing them to the separate `appendEvent` call.
 //
-// THE WRITER IS THE ATOMIC SEAM. Production wires a `RunStateWriter` (either
-// `Direct`-in-process, which itself opens `runWithOrgScope`, or `Http`-remote,
-// which posts to `/internal/update-task-with-event`); the seam is the SOLE
-// guarantor of atomicity. The no-writer fallback paths below are TEST-ONLY:
-// they run the row UPDATE + a separate `appendEvent` call (the same shape the
-// pre-#39 split issued) so unit-test harnesses that hand a fake `{ query }`
-// pool + a recording appendEvent (e.g. `subtaskLoopStages.test.ts`) keep
-// observing terminal events through the recorder. The atomicity contract is
-// asserted in the conformance test (`markTaskWithEventAtomic.test.ts`)
-// against a real Postgres + the `DirectRunStateWriter`.
+// WRITER IS REQUIRED (audit finding H3, doctrine sweep): the prior shape
+// branched on `if (writer !== undefined)` with a split-write fallback arm that
+// ran the row UPDATE + a separate `appendEvent` call when no writer was
+// wired. That fallback DEFEATED the atomic seam — it was reachable in
+// production whenever `runStateWriterFromEnv` returned `undefined`
+// (TANREN_DATA_PLANE_REMOTE_WRITES off), so the "TEST-ONLY" label was a
+// fiction. The sweep makes the writer non-optional everywhere: production
+// always wires the writer (via the boundary that now always returns one — see
+// `runStateWriterFromEnv.ts`), and tests wire an `InMemoryRunStateWriter`
+// fixture. The atomicity contract is the SOLE path; no fallback.
 
 /** The durable lineage a terminal `task.*` event always carries (task #39). */
 export interface TerminalTaskEventEnvelope {
@@ -191,41 +153,19 @@ export interface TerminalTaskEventEnvelope {
   taskKind: string;
 }
 
-/**
- * A narrow event-append callback for the no-writer test fallback (task #39):
- * appends ONE terminal `task.*` event with the plain payload shape these
- * helpers construct internally (`{ taskKind, failureKind?, message? }`). The
- * call site adapts its own typed `appendEvent` to this shape — the
- * registry-typed payload schema is byte-identical (the `task.completed` /
- * `task.failed` payloads are exactly `{ taskKind, ... }` records). Production
- * NEVER hits this seam (the writer path commits the event atomically with the
- * row inside `RunStateWriter.updateTaskWithEvent`).
- */
-type TerminalTaskEventAppend = (
-  eventType: "task.completed" | "task.failed",
-  payload: Record<string, unknown>,
-  taskId: string,
-) => Promise<void>;
-
-/** Shared option shape for the atomic terminal-pair helpers (task #39). */
+/** Shared option shape for the atomic terminal-pair helpers (task #39 + H3). */
 export interface MarkTaskTerminalOpts {
-  pool: LoopQueryClient;
-  writer?: RunStateWriter;
+  /** REQUIRED (audit finding H3 sweep — no fallback arm). */
+  writer: RunStateWriter;
   taskId: string;
   envelope: TerminalTaskEventEnvelope;
-  /**
-   * No-writer test fallback's appendEvent sink (the stage's recorder); absent
-   * ⇒ the no-writer path runs an unwrapped row UPDATE via the pool + emits no
-   * event (matches the pre-#39 direct-path behavior).
-   */
-  appendEventFallback?: TerminalTaskEventAppend;
 }
 
 /**
- * The atomic SUCCESS-terminal pair (task #39): move the task row to `done` AND
- * append its `task.completed` event in ONE org-scoped transaction. Replaces the
- * split `markTaskDone(...)` + a separate `appendEvent("task.completed", ...)`
- * call — see the per-call-site migration notes in PR #674 (task #39).
+ * The atomic SUCCESS-terminal pair (task #39 + audit H3): move the task row
+ * to `done` AND append its `task.completed` event in ONE org-scoped
+ * transaction. Replaces the split `markTaskDone(...)` + a separate
+ * `appendEvent("task.completed", ...)` call.
  *
  * IDEMPOTENT RETRY (task #40 Class B): the writer's `updateTaskWithEvent`
  * returns `{ alreadyTerminal }` — `true` when the server-side commit landed
@@ -240,42 +180,34 @@ export async function markTaskDoneWithEvent(
     outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted";
   },
 ): Promise<void> {
-  const { pool, writer, taskId, envelope, appendEventFallback, outcome } = opts;
-  if (writer !== undefined) {
-    // The outcome is consumed silently — the seam's idempotency-retry signal
-    // (task #40 Class B) is bookkeeping the helper does NOT propagate; the
-    // caller's view is "the work is done", regardless of whether THIS call or
-    // an earlier dropped-response call actually wrote the row + event.
-    await writer.updateTaskWithEvent({
-      task: { taskId, transition: "done", outcome },
-      event: {
-        runId: envelope.runId,
-        taskId,
-        specId: envelope.specId,
-        projectId: envelope.projectId,
-        eventType: "task.completed",
-        // Payload is registry-typed downstream by `PgEventStore.append`'s Zod
-        // parse; the cast crosses the generic-payload seam (the runtime decode
-        // is the ground truth).
-        payload: { taskKind: envelope.taskKind } as never,
-      },
-    });
-    return;
-  }
-  // No-writer test fallback: row UPDATE → event append (matches the pre-#39
-  // split — atomicity is proven via the writer seam, not this path).
-  await markTaskDone(pool, taskId, outcome);
-  if (appendEventFallback !== undefined) {
-    await appendEventFallback("task.completed", { taskKind: envelope.taskKind }, taskId);
-  }
+  const { writer, taskId, envelope, outcome } = opts;
+  // The outcome is consumed silently — the seam's idempotency-retry signal
+  // (task #40 Class B) is bookkeeping the helper does NOT propagate; the
+  // caller's view is "the work is done", regardless of whether THIS call or
+  // an earlier dropped-response call actually wrote the row + event.
+  await writer.updateTaskWithEvent({
+    task: { taskId, transition: "done", outcome },
+    event: {
+      runId: envelope.runId,
+      taskId,
+      specId: envelope.specId,
+      projectId: envelope.projectId,
+      eventType: "task.completed",
+      // Payload is registry-typed downstream by `PgEventStore.append`'s Zod
+      // parse; the cast crosses the generic-payload seam (the runtime decode
+      // is the ground truth).
+      payload: { taskKind: envelope.taskKind } as never,
+    },
+  });
 }
 
 /**
- * The atomic HARD-FAILED-terminal pair (task #39): move the task row to
- * `failed` AND append `task.failed` in ONE org-scoped transaction. The optional
- * `message` carries the safe failure message the writer-failed branches
- * (`window_exhausted` / `crashed` / `timeout`) already emit on the event
- * payload — kept here so the migrated call site is a single combined call.
+ * The atomic HARD-FAILED-terminal pair (task #39 + audit H3): move the task
+ * row to `failed` AND append `task.failed` in ONE org-scoped transaction. The
+ * optional `message` carries the safe failure message the writer-failed
+ * branches (`window_exhausted` / `crashed` / `timeout`) already emit on the
+ * event payload — kept here so the migrated call site is a single combined
+ * call.
  *
  * IDEMPOTENT RETRY (task #40 Class B): like {@link markTaskDoneWithEvent},
  * a `{ alreadyTerminal: true }` outcome from the writer is SWALLOWED — the
@@ -285,40 +217,34 @@ export async function markTaskDoneWithEvent(
 export async function markTaskFailedWithEvent(
   opts: MarkTaskTerminalOpts & { failureKind: string; message?: string },
 ): Promise<void> {
-  const { pool, writer, taskId, envelope, appendEventFallback, failureKind, message } = opts;
+  const { writer, taskId, envelope, failureKind, message } = opts;
   const payload: Record<string, unknown> = { taskKind: envelope.taskKind, failureKind };
   if (message !== undefined) {
     payload["message"] = message;
   }
-  if (writer !== undefined) {
-    await writer.updateTaskWithEvent({
-      task: { taskId, transition: "failed_with_kind", failureKind },
-      event: {
-        runId: envelope.runId,
-        taskId,
-        specId: envelope.specId,
-        projectId: envelope.projectId,
-        eventType: "task.failed",
-        // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
-        payload: payload as never,
-      },
-    });
-    return;
-  }
-  await markTaskFailed(pool, taskId, failureKind);
-  if (appendEventFallback !== undefined) {
-    await appendEventFallback("task.failed", payload, taskId);
-  }
+  await writer.updateTaskWithEvent({
+    task: { taskId, transition: "failed_with_kind", failureKind },
+    event: {
+      runId: envelope.runId,
+      taskId,
+      specId: envelope.specId,
+      projectId: envelope.projectId,
+      eventType: "task.failed",
+      // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
+      payload: payload as never,
+    },
+  });
 }
 
 /**
- * The atomic GUARDED-FAILED-terminal pair (task #39): the finalize-guard's
- * idempotency primitive — move the task row to `failed` ONLY when it is still
- * `status='running'` AND append `task.failed` in ONE org-scoped transaction. The
- * row UPDATE is no-op when the row is already terminal (a clean branch beat us
- * to `done`); the `task.failed` event lands the FIRST TIME for this taskId as the
- * loud timeline signal (per `stageFailureKind.ts` §IDEMPOTENCY). The `message`
- * carries the safe stage-failure message the guard already passes.
+ * The atomic GUARDED-FAILED-terminal pair (task #39 + audit H3): the
+ * finalize-guard's idempotency primitive — move the task row to `failed` ONLY
+ * when it is still `status='running'` AND append `task.failed` in ONE
+ * org-scoped transaction. The row UPDATE is no-op when the row is already
+ * terminal (a clean branch beat us to `done`); the `task.failed` event lands
+ * the FIRST TIME for this taskId as the loud timeline signal (per
+ * `stageFailureKind.ts` §IDEMPOTENCY). The `message` carries the safe
+ * stage-failure message the guard already passes.
  *
  * IDEMPOTENT RETRY (task #40 Class B): this helper is the data plane's recovery
  * after a dropped HTTP response from a PRIOR `updateTaskWithEvent` — the
@@ -337,30 +263,23 @@ export async function markTaskFailedWithEvent(
 export async function markTaskFailedIfRunningWithEvent(
   opts: MarkTaskTerminalOpts & { failureKind: string; message: string },
 ): Promise<void> {
-  const { pool, writer, taskId, envelope, appendEventFallback, failureKind, message } = opts;
+  const { writer, taskId, envelope, failureKind, message } = opts;
   const payload = { taskKind: envelope.taskKind, failureKind, message };
-  if (writer !== undefined) {
-    await writer.updateTaskWithEvent({
-      task: { taskId, transition: "failed_with_kind_if_running", failureKind },
-      event: {
-        runId: envelope.runId,
-        taskId,
-        specId: envelope.specId,
-        projectId: envelope.projectId,
-        eventType: "task.failed",
-        // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
-        payload: payload as never,
-      },
-    });
-    return;
-  }
-  await markTaskFailedIfRunning(pool, taskId, failureKind);
-  if (appendEventFallback !== undefined) {
-    await appendEventFallback("task.failed", payload, taskId);
-  }
+  await writer.updateTaskWithEvent({
+    task: { taskId, transition: "failed_with_kind_if_running", failureKind },
+    event: {
+      runId: envelope.runId,
+      taskId,
+      specId: envelope.specId,
+      projectId: envelope.projectId,
+      eventType: "task.failed",
+      // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
+      payload: payload as never,
+    },
+  });
 }
 
-// --- task #46: PLANNER-LEVEL atomic terminal-pair wrappers ----------------
+// --- task #46 + audit H3: PLANNER-LEVEL atomic terminal-pair wrappers ------
 //
 // Thin context-binding wrappers around `markTaskDoneWithEvent` /
 // `markTaskFailedWithEvent` for the spec-implementation loop's planner task
@@ -371,8 +290,11 @@ export async function markTaskFailedIfRunningWithEvent(
 // the SAME atomic seam the writer / checker / auditor stage helpers use
 // (`RunStateWriter.updateTaskWithEvent` — task #39), so the row UPDATE + the
 // terminal `task.*` event commit in ONE org-scoped transaction.
-
-import type { EventName, EventPayload } from "../events/index.js";
+//
+// WRITER REQUIRED (audit finding H3 sweep): the wrappers no longer carry a
+// `writer?:` deps-threading slot or an `appendEvent` fallback — the SOLE path
+// is the atomic seam. Callers wire a real writer (production via the always-
+// returning `runStateWriterFromEnv`, tests via `InMemoryRunStateWriter`).
 
 /** The planner-task's run lineage the atomic terminal pair always carries. */
 export interface PlannerTaskLineage {
@@ -381,29 +303,21 @@ export interface PlannerTaskLineage {
   projectId: string;
 }
 
-/** The minimal append callback the call sites already thread through the loop. */
-export type LoopAppendEvent = <N extends EventName>(
-  eventType: N,
-  payload: EventPayload<N>,
-  taskId?: string,
-) => Promise<void>;
-
-/** Shared opts for both planner-task atomic-terminal-pair wrappers (task #46). */
+/** Shared opts for both planner-task atomic-terminal-pair wrappers (task #46 + H3). */
 export interface PlannerTerminalBase {
-  pool: LoopQueryClient;
-  writer?: RunStateWriter;
+  /** REQUIRED (audit finding H3 sweep — no fallback arm). */
+  writer: RunStateWriter;
   taskId: string;
   lineage: PlannerTaskLineage;
   taskKind: string;
-  appendEvent: LoopAppendEvent;
 }
 
 /**
  * Atomic SUCCESS-terminal pair for the planner task: row → `done`/`passed` AND
  * the matching `task.completed` event in ONE org-scoped transaction through
  * `writer.updateTaskWithEvent`. Same contract as the writer/checker/auditor
- * stage helpers; this just hides the lineage + no-writer-fallback wiring so
- * each call site reads as one focused intention.
+ * stage helpers; this just hides the lineage so each call site reads as one
+ * focused intention.
  */
 export async function markPlannerTaskDoneWithEvent(
   opts: PlannerTerminalBase & {
@@ -411,12 +325,10 @@ export async function markPlannerTaskDoneWithEvent(
   },
 ): Promise<void> {
   await markTaskDoneWithEvent({
-    pool: opts.pool,
-    ...(opts.writer !== undefined && { writer: opts.writer }),
+    writer: opts.writer,
     taskId: opts.taskId,
     envelope: { ...opts.lineage, taskKind: opts.taskKind },
     outcome: opts.outcome,
-    appendEventFallback: (eventType, payload, taskId) => opts.appendEvent(eventType, payload as never, taskId),
   });
 }
 
@@ -431,28 +343,25 @@ export async function markPlannerTaskFailedWithEvent(
   opts: PlannerTerminalBase & { failureKind: string; message?: string },
 ): Promise<void> {
   await markTaskFailedWithEvent({
-    pool: opts.pool,
-    ...(opts.writer !== undefined && { writer: opts.writer }),
+    writer: opts.writer,
     taskId: opts.taskId,
     envelope: { ...opts.lineage, taskKind: opts.taskKind },
     failureKind: opts.failureKind,
     ...(opts.message !== undefined && { message: opts.message }),
-    appendEventFallback: (eventType, payload, taskId) => opts.appendEvent(eventType, payload as never, taskId),
   });
 }
 
 /**
- * The bound-once context the loop-level helpers consume — pool/writer/lineage/
- * appendEvent built ONCE per loop run, so each terminal site is `markPlannerPassed(ctx)`
+ * The bound-once context the loop-level helpers consume — writer/lineage/taskId
+ * built ONCE per loop run, so each terminal site is `markPlannerPassed(ctx)`
  * or `markPlannerFailed(ctx, kind, message?)`. Keeps the loop file lean while the
  * atomic guarantee lives one layer down. taskKind defaults to "plan".
  */
 export interface PlannerTerminalContext {
-  pool: LoopQueryClient;
-  writer?: RunStateWriter;
+  /** REQUIRED (audit finding H3 sweep — no fallback arm). */
+  writer: RunStateWriter;
   taskId: string;
   lineage: PlannerTaskLineage;
-  appendEvent: LoopAppendEvent;
 }
 const PLAN_KIND = "plan";
 /** task #46: 1-line call site for the SUCCESS-terminal pair (`task.completed`). */

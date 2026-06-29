@@ -9,6 +9,7 @@ import type { PlanSubtask } from "../src/engine/answerers/schemas/index.js";
 import { runWriterStage, type WriterStageOutcome } from "../src/engine/workflow/subtaskStages.js";
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import { makeFailingWriter, makeWriter } from "./helpers/plannerLoopHelpers.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 interface RecordedEvent {
   eventType: EventName;
@@ -17,25 +18,37 @@ interface RecordedEvent {
 
 // A tiny pg-shaped harness that captures the task-row UPDATE the stage issues so
 // we can assert it lands `done`/`passed` vs `failed`/<kind> WITHOUT a database.
+//
+// Audit finding H3 sweep: terminal row + event pair now flows through the
+// required `RunStateWriter`. The fixture's terminal `updateTaskWithEvent`
+// drives both the row state (read off `writer.tasks`) AND the terminal event
+// (forwarded into `events`), so the existing assertions on `h.status` /
+// `h.outcomeOrKind` / `h.names()` keep holding without churn.
 class Harness {
   readonly events: RecordedEvent[] = [];
-  status: string | null = null;
-  outcomeOrKind: string | null = null;
+  readonly writer = new InMemoryRunStateWriter({
+    forwardAppend: async (input) => {
+      this.events.push({
+        eventType: input.eventType as EventName,
+        payload: input.payload as Record<string, unknown>,
+      });
+    },
+  });
+  get status(): string | null {
+    const row = this.writer.tasks.get("task_write");
+    return row?.status ?? null;
+  }
+  get outcomeOrKind(): string | null {
+    const row = this.writer.tasks.get("task_write");
+    if (row === undefined) return null;
+    return row.failureKind ?? row.outcome ?? null;
+  }
 
   appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>): Promise<void> => {
     this.events.push({ eventType, payload: payload as Record<string, unknown> });
   };
 
-  query = async (sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
-    const trimmed = sql.trim();
-    // params[1] is failure_kind on the failed UPDATE, outcome on the done UPDATE.
-    if (trimmed.startsWith("UPDATE tasks SET status = 'failed'")) {
-      this.status = "failed";
-      this.outcomeOrKind = String(params[1]);
-    } else if (trimmed.startsWith("UPDATE tasks SET status")) {
-      this.status = "done";
-      this.outcomeOrKind = String(params[1]);
-    }
+  query = async (_sql: string, _params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
     return { rows: [], rowCount: 1 };
   };
 
@@ -60,6 +73,7 @@ const subtask: PlanSubtask = {
 function callArgs(h: Harness, adapter: ReturnType<typeof makeWriter>) {
   return {
     pool: { query: h.query },
+    writer: h.writer,
     costCtx: h.costCtx(),
     adapter,
     runId: "run_1",

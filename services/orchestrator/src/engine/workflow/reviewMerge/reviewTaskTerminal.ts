@@ -1,24 +1,22 @@
-// AUDIT FINDING #6 — the review-kind task terminal pair. PR #690 made the
-// merge-kind task terminal atomic but the sibling review-kind terminal in
-// `finalizeReviewTask` stayed three sequential writes (row UPDATE → `review.*`
-// event → `task.completed` event) with no transaction. Apex doesn't currently
-// exercise live human review polling — doctrine, not blocking — but a Tier-3
-// governance run would expose the same strand class the merge fix closed.
+// AUDIT FINDING #6 (PR #711) + AUDIT FINDING D2 (writer-seam doctrine sweep):
+// the review-kind task terminal pair, now FULLY atomic across all three
+// writes. PR #711 routed the pre-terminal `review.*` event through the writer
+// seam (`writer.append`) AND the row UPDATE + `task.completed` through the
+// atomic seam (`writer.updateTaskWithEvent`) — but those were still TWO
+// separate transactions, with the PR file header explicitly noting "A future
+// writer-seam extension can collapse the pre-event into the same tx". This is
+// that extension. `RunStateWriter.updateTaskWithEvent` now carries an optional
+// `priorEvents` array; the applier appends those events on the SAME
+// in-transaction client BEFORE the row UPDATE + terminal event, so a
+// crash/DB failure anywhere in the bundle rolls back the WHOLE thing — the
+// `review.*` observation, the row terminal flip, and the matching
+// `task.completed` event live or die together (autonomy-engine.md §1c
+// single-finalize invariant, now extended to the pre-terminal observation).
 //
-// Mirrors `mergeTaskTerminal.markMergeTaskDoneWithEvent`: the §1c-critical
-// terminal pair (row + `task.completed`) lands atomically through the writer
-// seam (`updateTaskWithEvent`); the pre-terminal `review.*` observation event
-// lands BEFORE through the SAME writer surface (`writer.append`), so all three
-// writes route through the same writer (the production atomic seam). The
-// pre-terminal event is not in the same transaction as the row+terminal pair —
-// that would require a new writer-seam variant carrying a `priorEvents[]` (the
-// terminalPairSchema only admits ONE terminal event); the doctrine-critical
-// atomicity (row + terminal event) is what §1c guards, and that part IS atomic
-// here. A future writer-seam extension can collapse the pre-event into the
-// same tx; this PR scopes to the helper-purity + atomic-terminal fix the
-// merge-kind sibling already shipped.
+// One writer call, one transaction, no half-measure.
 
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
+import type { AppendEventInput } from "../../eventStore.js";
 
 export interface ReviewTaskTerminalBase {
   runId: string;
@@ -28,12 +26,13 @@ export interface ReviewTaskTerminalBase {
 }
 
 /**
- * Atomic review-task terminal pair: append the verdict event (`review.approved`
- * / `review.changes_requested`) then commit the row UPDATE + `task.completed`
- * atomically via `writer.updateTaskWithEvent`. All three writes flow through
- * the same writer seam. The `status` carried on the `task.completed` payload
- * mirrors the verdict so downstream consumers (dashboard phase, review-stall
- * insight) react unchanged.
+ * Atomic review-task terminal triplet: the pre-terminal `review.*` verdict
+ * event (`review.approved` / `review.changes_requested`), the row UPDATE,
+ * and the matching `task.completed` event, all committed together in ONE
+ * org-scoped transaction via `writer.updateTaskWithEvent`'s `priorEvents`
+ * bundle. The `status` carried on the `task.completed` payload mirrors the
+ * verdict so downstream consumers (dashboard phase, review-stall insight)
+ * react unchanged.
  */
 export async function markReviewTaskDoneWithEvent(input: {
   writer: RunStateWriter;
@@ -47,27 +46,27 @@ export async function markReviewTaskDoneWithEvent(input: {
 }): Promise<void> {
   const { writer, base, verdict, prUrl, prNumber, reviewer, feedback } = input;
   // PRE-TERMINAL verdict event (the loud `review.*` observation, downstream
-  // consumers key off this event). Routed through the writer's EventStore
-  // surface so all three review-terminal writes flow through the same seam.
-  if (verdict === "approved") {
-    await writer.append({
-      ...base,
-      eventType: "review.approved",
-      payload: { prUrl, prNumber, ...(reviewer !== undefined && { reviewer }) } as never,
-    });
-  } else {
-    await writer.append({
-      ...base,
-      eventType: "review.changes_requested",
-      payload: {
-        prUrl,
-        prNumber,
-        ...(reviewer !== undefined && { reviewer }),
-        ...(feedback !== undefined && { message: feedback }),
-      } as never,
-    });
-  }
-  // TERMINAL row + event atomic pair (the §1c single-finalize guarantee).
+  // consumers key off this event). Bundled into the SAME atomic transaction
+  // as the terminal row + `task.completed` via the writer-seam `priorEvents`
+  // extension — collapses what used to be a separate `writer.append()` call
+  // into ONE commit alongside the terminal pair.
+  const verdictEvent: AppendEventInput =
+    verdict === "approved"
+      ? {
+          ...base,
+          eventType: "review.approved",
+          payload: { prUrl, prNumber, ...(reviewer !== undefined && { reviewer }) } as never,
+        }
+      : {
+          ...base,
+          eventType: "review.changes_requested",
+          payload: {
+            prUrl,
+            prNumber,
+            ...(reviewer !== undefined && { reviewer }),
+            ...(feedback !== undefined && { message: feedback }),
+          } as never,
+        };
   await writer.updateTaskWithEvent({
     task: { taskId: base.taskId, transition: "done", outcome: "ok" },
     event: {
@@ -75,5 +74,6 @@ export async function markReviewTaskDoneWithEvent(input: {
       eventType: "task.completed",
       payload: { taskKind: "review", status: verdict } as never,
     },
+    priorEvents: [verdictEvent],
   });
 }

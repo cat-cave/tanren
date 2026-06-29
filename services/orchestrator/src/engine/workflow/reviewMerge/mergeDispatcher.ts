@@ -9,15 +9,6 @@
 import { routeTaskUpdate } from "../taskWriteRouting.js";
 import { serviceAuditActor, type AuditEnvelope } from "../../events/schemas/audit.js";
 import type { EventStore } from "../../eventStore.js";
-import {
-  completeHeldMergeTask,
-  finalizeDirectSplitDone,
-  finalizeDirectSplitFailed,
-} from "./mergeTaskTerminalFallback.js";
-
-// Re-export so `mergeDispatch.ts` reaches the speculative-hold helper through the
-// dispatcher import (keeping mergeDispatch.ts's file-dependency count under the lint cap).
-export { completeHeldMergeTask };
 import type { PullRequestMergeability, RepoRef } from "../../contracts/codeHostTypes.js";
 import type { ReviewMergeRunContext } from "./context.js";
 import type { PostureDecision } from "./governancePosture.js";
@@ -30,6 +21,10 @@ import {
 } from "./mergeDispatchTypes.js";
 import { landViaAuthority, rebaseBehindBranch, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
 import { markMergeTaskDoneWithEvent, markMergeTaskFailedWithEvent } from "./mergeTaskTerminal.js";
+
+// Re-exported so `mergeDispatch.ts` reaches the speculative-hold terminal helper
+// through ONE dispatcher import (keeping its file-dependency count under the lint cap).
+export { markMergeTaskDoneWithEvent };
 
 export interface DispatcherDeps {
   input: MergeForRunInput;
@@ -438,36 +433,27 @@ export class MergeDispatcher implements LandOps {
       failureKind?: string;
     },
   ): Promise<void> {
-    const { input, taskId, eventStore, integration } = this.deps;
+    // Audit finding D3 sweep: the writer is REQUIRED — there is no longer a
+    // `writer === undefined` fallback arm that bypassed the atomic seam (the
+    // surface the audit named, reachable in production whenever the worker
+    // ran with remote-writes off). The doctrine-pure helpers
+    // `markMergeTaskDoneWithEvent` / `markMergeTaskFailedWithEvent` are the
+    // SOLE path; both commit the row UPDATE + the `task.*` event in ONE
+    // org-scoped transaction through `writer.updateTaskWithEvent`.
+    const { input, taskId } = this.deps;
     const writer = input.runStateWriter;
     if (state.taskStatus === "done") {
-      // Audit finding #5: the WRITER-PRESENT path uses the doctrine-pure
-      // `markMergeTaskDoneWithEvent` (row + `task.completed` in ONE atomic
-      // transaction via `updateTaskWithEvent`). Production ALWAYS wires the
-      // writer; this is the live land path. The writer-undefined branch below
-      // is the TEST-ONLY split-write seam — the merge-stage unit tests that
-      // build the dispatcher without a workflow-level writer (e.g. the
-      // dispatcher-direct-conflict-authority suites) still need a terminal
-      // recording. The HELPER itself has no fallback (writer is required);
-      // the dispatcher's split-write here is the bounded compromise the
-      // helper-purity refactor preserves until the workflow-driving tests
-      // wire a writer too.
-      if (writer === undefined) {
-        await finalizeDirectSplitDone(input.pool, eventStore, this.base(), integration);
-        return;
-      }
-      await markMergeTaskDoneWithEvent({ writer, base: this.base(), integration });
+      await markMergeTaskDoneWithEvent({ writer, base: this.base(), integration: this.deps.integration });
       return;
     }
     if (state.taskStatus === "failed") {
       const failureKind = state.failureKind ?? "merge_failed";
-      if (writer === undefined) {
-        await finalizeDirectSplitFailed(input.pool, eventStore, this.base(), failureKind);
-        return;
-      }
       await markMergeTaskFailedWithEvent({ writer, base: this.base(), failureKind });
       return;
     }
+    // The `running` / pending-clear branch: a non-terminal row UPDATE only,
+    // routed through the writer's lifecycle `updateTask` seam (same SQL the
+    // pool-direct path used to run; the writer is byte-identical for Direct).
     await routeTaskUpdate(
       writer,
       input.pool,

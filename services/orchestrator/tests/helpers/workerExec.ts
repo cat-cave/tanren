@@ -45,6 +45,7 @@ import {
   triageAllTasks,
 } from "./plannerLoopHelpers.js";
 import { WorkerPool } from "./workerPool.js";
+import { DirectRunStateWriter } from "../../src/engine/worker/directRunStateWriter.js";
 
 function directMergeConfig(): Record<string, unknown> {
   return {
@@ -274,6 +275,12 @@ export function deps(pool: WorkerPool, secrets: FakeSecretStore, jobQueue: FakeJ
     secrets,
     githubHttp: github,
     identitySecretRef: "runner/test/identity",
+    // Audit finding D3/H3 sweep: the writer is REQUIRED on RunExecutorDeps.
+    // The `DirectRunStateWriter` over the WorkerPool's SQL stub gives
+    // byte-identical behavior to the prior direct path (the pool's `UPDATE
+    // runs SET status` interceptor still observes the finalize), so the
+    // existing pool-driven assertions (`pool.runStatus`) keep holding.
+    runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
     runWorkflow: fakeWorkflowRunner(github),
   };
 }

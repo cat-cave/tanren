@@ -63,8 +63,10 @@ import {
   type TemplateConfig,
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
-import { assertComposedCiYmlParsesAsCiConfigV1 } from "./helpers/templateCiYmlSchemaCheck.js";
-import { assertScaffoldBootstrapsFromFreshCheckout } from "./helpers/templateFreshBootstrapCheck.js";
+import {
+  assertComposedCiYmlParsesAsCiConfigV1,
+  assertScaffoldBootstrapsFromFreshCheckout,
+} from "../src/engine/templates/fragments/runtimeValidation.js";
 
 const RUBY_RUNTIME_ID = "runtime-ruby-bundler";
 

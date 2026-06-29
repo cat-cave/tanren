@@ -34,6 +34,7 @@ import {
   triageAllSpecs,
   buildPlan,
 } from "./helpers/plannerLoopHelpers.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 const ORG = "org_design";
 const actor: ActorContext = {
@@ -149,8 +150,26 @@ function designLoopInput(opts: {
     },
     ...(opts.wireActor && { designOracleActor }),
   });
-  // Replace the helper's default FakePool with the design-aware pool.
+  // Replace the helper's default FakePool with the design-aware pool. Audit
+  // finding D3/H3 sweep: also re-wire the writer's forwarders so its task
+  // INSERTs land on THIS pool's `tasks` array (the test asserts on it).
   (input as { pool: unknown }).pool = pool;
+  (input as { runStateWriter: unknown }).runStateWriter = new InMemoryRunStateWriter({
+    forwardAppend: (e) => events.append(e),
+    forwardInsertTask: (insert) => {
+      pool.tasks.push({
+        taskId: insert.taskId,
+        runId: insert.runId,
+        kind: insert.kind,
+        title: insert.title,
+        parentTaskId: insert.parentTaskId ?? null,
+        status: insert.status,
+        outcome: null,
+        failureKind: null,
+        cli: insert.cli,
+      });
+    },
+  });
   return { input, pool, events };
 }
 

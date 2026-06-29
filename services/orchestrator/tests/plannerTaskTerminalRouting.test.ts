@@ -40,6 +40,8 @@ import type {
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
   ReconcileCostInput,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   RunStateWriter,
   SetRunAuthRefInput,
   SetRunPercolationReexecIdInput,
@@ -136,11 +138,15 @@ class RecordingWriter implements RunStateWriter {
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async finalizeRunWithEvent(_input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> {
-    return { finalized: false };
+    return { updated: false, alreadyTerminal: false };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async updateSpecWithEvent(_input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> {
-    return { flipped: false };
+    return { flipped: false, alreadyTerminal: false };
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async resumePausedRunAtomic(_input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> {
+    return { runFinalized: false, runEventAlreadyTerminal: false, specFlipped: false };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
   async createQueuedRun(_input: CreateQueuedRunInput): Promise<SpecRunContract> {

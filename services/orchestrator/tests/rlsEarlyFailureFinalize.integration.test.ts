@@ -35,6 +35,7 @@ import { PgJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { Allocator } from "../src/engine/contracts/allocator.js";
 import type { CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -158,6 +159,7 @@ describeDb("RLS early-failure finalize — a pre-scope throw still finalizes the
       secrets: new FakeSecretStore(),
       githubHttp: INERT_GITHUB,
       identitySecretRef: "runner/test/identity",
+      runStateWriter: new DirectRunStateWriter(appPool),
       // No heartbeat noise; the job finishes in one synchronous pass.
       heartbeatIntervalMs: 1_000_000,
     });

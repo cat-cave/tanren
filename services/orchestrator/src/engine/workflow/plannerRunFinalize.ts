@@ -426,20 +426,13 @@ export async function finalizeWorkflowThrow(error: unknown, ctx: WorkflowErrorCo
 // The spec-run trigger pre-creates a queued 'plan' task + job_queue row for the
 // async worker path. The workflow executes the run directly and the loop creates
 // its own planner task, so the pre-created artifacts are vestigial — cancel them
-// so the run does not carry a dangling queued task.
+// so the run does not carry a dangling queued task. Audit finding D3/H3 sweep:
+// the writer is REQUIRED, so the vestigial `plan` task cancel always routes
+// through the lifecycle writer (Direct or HTTP — same SQL either way). The
+// `job_queue` cancel always runs in-process — `job_queue` is a cross-org system
+// table OUTSIDE RLS that the data plane keeps writing directly.
 export async function supersedeQueuedPlannerTask(input: RunPlannerLoopInput, runId: string): Promise<void> {
-  // the vestigial `plan` task cancel routes through the lifecycle
-  // writer when wired (remote), else the byte-identical in-process write. The
-  // `job_queue` cancel always runs in-process — `job_queue` is a cross-org system
-  // table OUTSIDE RLS that the data plane keeps writing directly.
-  if (input.runStateWriter === undefined) {
-    await input.pool.query(
-      "UPDATE tasks SET status = 'cancelled', outcome = 'cancelled', ended_at = now() WHERE run_id = $1 AND kind = 'plan' AND status = 'queued'",
-      [runId],
-    );
-  } else {
-    await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
-  }
+  await input.runStateWriter.supersedeQueuedPlannerTask({ runId });
   await input.pool.query("UPDATE job_queue SET status = 'cancelled' WHERE run_id = $1 AND status = 'queued'", [runId]);
 }
 

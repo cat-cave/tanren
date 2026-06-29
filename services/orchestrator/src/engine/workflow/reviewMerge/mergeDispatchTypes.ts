@@ -111,9 +111,15 @@ export interface MergeForRunResult {
 export interface MergeForRunInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // route the merge task INSERT/UPDATE through the control plane
-  // when wired (remote-writes on); absent, the in-process org-scoped write runs.
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit finding D3 sweep): the merge dispatcher's finalize routes
+   * the terminal `task.*` row + event pair through this writer's atomic
+   * `updateTaskWithEvent` seam — no fallback. The prior `writer ?:` slot let
+   * `mergeDispatcher.finalize` branch to a split-write fallback whenever
+   * `runStateWriterFromEnv` returned `undefined` (the production reality with
+   * remote-writes off); that branch is the surface the D3 finding named.
+   */
+  runStateWriter: RunStateWriter;
   secrets: SecretStore;
   /** The shared (timed) GitHub HTTP client the merge stage's host seams build over. */
   githubHttp: GitHubHttpClient;

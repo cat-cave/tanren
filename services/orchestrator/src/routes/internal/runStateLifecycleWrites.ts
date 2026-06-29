@@ -168,6 +168,21 @@ const updateTaskSchema = z.object({
 // `runWithOrgScope` deterministically — the worker resolved its org from the
 // ambient per-job scope before posting). The pairing constraint itself is
 // enforced by the shared `terminalPairSchema` (matched transition + event type).
+//
+// `priorEvents` (audit finding D2 writer-seam extension) bundles pre-terminal
+// observation events into the SAME transaction — see
+// `UpdateTaskWithEventInput` in `contracts/runStateWriter.ts`.
+const priorEventRouteShape = z
+  .object({
+    runId: z.string().min(1).optional(),
+    taskId: z.string().min(1).optional(),
+    specId: z.string().min(1).optional(),
+    projectId: z.string().min(1),
+    eventType: z.string().min(1),
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 const updateTaskWithEventRouteShape = z
   .object({
     task: z
@@ -190,6 +205,8 @@ const updateTaskWithEventRouteShape = z
         payload: z.record(z.string(), z.unknown()),
       })
       .strict(),
+    // Audit finding D2: optional pre-terminal events bundle (see route header).
+    priorEvents: z.array(priorEventRouteShape).optional(),
   })
   .strict();
 

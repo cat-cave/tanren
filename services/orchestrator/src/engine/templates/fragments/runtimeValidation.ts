@@ -2,14 +2,17 @@
 // tests/helpers/ so the live fragment-authoring smoke pipeline catches the same
 // classes PR #696's + PR #701's static harnesses catch).
 //
-// Both `assertComposedCiYmlParsesAsCiConfigV1` (originally
-// tests/helpers/templateCiYmlSchemaCheck.ts — PR #696, apex v62 halt class) and
-// `assertScaffoldBootstrapsFromFreshCheckout` (originally
-// tests/helpers/templateFreshBootstrapCheck.ts — PR #701, apex v63 halt class)
-// were test-only. The static matrix + isolation harnesses ran them, but the LIVE
-// fragment-authoring smoke pipeline did NOT — so an LLM-authored runtime fragment
-// that emitted `pnpm install --frozen-lockfile` or a malformed `.tanren/ci.yml`
-// passed smoke and persisted, and the next live run reproduced the halt.
+// Both `assertComposedCiYmlParsesAsCiConfigV1` (PR #696, apex v62 halt class)
+// and `assertScaffoldBootstrapsFromFreshCheckout` (PR #701, apex v63 halt class)
+// were originally test-only helpers in `tests/helpers/`. The static matrix +
+// isolation harnesses ran them, but the LIVE fragment-authoring smoke pipeline
+// did NOT — so an LLM-authored runtime fragment that emitted
+// `pnpm install --frozen-lockfile` or a malformed `.tanren/ci.yml` passed
+// smoke and persisted, and the next live run reproduced the halt. The 1-line
+// re-export shims that lived at `tests/helpers/templateCiYmlSchemaCheck.ts` +
+// `tests/helpers/templateFreshBootstrapCheck.ts` were the audit-N1 finding
+// (two import paths for one helper); the writer-seam doctrine sweep deleted
+// them, so this file is now the SOLE import path.
 //
 // Living in a runtime module makes the correctness contract a SINGLE INTENDED
 // PATH: the same assertion runs in (a) the per-fragment isolation test,

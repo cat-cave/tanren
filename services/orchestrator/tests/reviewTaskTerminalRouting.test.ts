@@ -1,8 +1,20 @@
-// AUDIT FINDING #6 — the review-kind task terminal pair. Mirrors
-// `mergeTaskTerminalRouting.test.ts`: pin the writer-required signature + the
-// atomic row + `task.completed` shape via `updateTaskWithEvent`, plus the
-// pre-terminal `review.*` event routed through the SAME writer surface so all
-// three writes flow through the writer seam.
+// AUDIT FINDING #6 (PR #711) + AUDIT FINDING D2 (writer-seam doctrine sweep):
+// the review-kind task terminal routing. PR #711 made the row + `task.completed`
+// atomic through `writer.updateTaskWithEvent` and routed the pre-terminal
+// `review.*` event through the SAME writer surface, but those were still TWO
+// separate transactions (the PR header admitted the deferral as "a future
+// writer-seam extension"). The sweep delivers that extension — the writer-seam's
+// `priorEvents` slot bundles the pre-terminal verdict into the SAME atomic
+// transaction as the row + `task.completed`, so all three writes commit (or
+// roll back) together.
+//
+// These tests pin:
+//   1. exactly ONE writer.updateTaskWithEvent call (proving the 3 writes are
+//      ONE transaction — the audit-D2 atomicity);
+//   2. the pre-terminal `review.approved` / `review.changes_requested` event
+//      rides on `priorEvents` (not a separate `writer.append()` call);
+//   3. the terminal row + `task.completed` payload still match the prior
+//      contract.
 import { describe, expect, it } from "vitest";
 import type {
   AppendEventInput,
@@ -20,20 +32,20 @@ const BASE = {
 
 class RecordingWriter implements Pick<RunStateWriter, "updateTaskWithEvent" | "append"> {
   readonly appended: AppendEventInput[] = [];
-  readonly updates: UpdateTaskWithEventInput[] = [];
+  readonly atomic: UpdateTaskWithEventInput[] = [];
 
   async append(input: AppendEventInput): Promise<void> {
     this.appended.push(input);
   }
 
   async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<{ alreadyTerminal: boolean }> {
-    this.updates.push(input);
+    this.atomic.push(input);
     return { alreadyTerminal: false };
   }
 }
 
-describe("review task terminal routing (audit finding #6)", () => {
-  it("approved verdict: appends review.approved THEN commits row + task.completed atomically", async () => {
+describe("review task terminal routing (audit findings #6 + D2 — atomic 3-write)", () => {
+  it("approved verdict: bundles review.approved into the SAME atomic transaction as the row + task.completed", async () => {
     const writer = new RecordingWriter();
 
     await markReviewTaskDoneWithEvent({
@@ -45,28 +57,29 @@ describe("review task terminal routing (audit finding #6)", () => {
       reviewer: "alice",
     });
 
-    // Pre-terminal review.approved appended via the writer surface.
-    expect(writer.appended).toEqual([
+    // D2 atomicity proof: EXACTLY ONE writer.updateTaskWithEvent call carries
+    // all three writes (the pre-terminal review.approved on priorEvents, the
+    // row UPDATE, and the matching task.completed). The pre-terminal event is
+    // NO LONGER on `writer.appended` — that was the pre-D2 split shape.
+    expect(writer.appended).toEqual([]);
+    expect(writer.atomic).toHaveLength(1);
+    const call = writer.atomic[0]!;
+    expect(call.task).toEqual({ taskId: BASE.taskId, transition: "done", outcome: "ok" });
+    expect(call.event).toEqual({
+      ...BASE,
+      eventType: "task.completed",
+      payload: { taskKind: "review", status: "approved" },
+    });
+    expect(call.priorEvents).toEqual([
       {
         ...BASE,
         eventType: "review.approved",
         payload: { prUrl: "https://github.com/o/r/pull/7", prNumber: 7, reviewer: "alice" },
       },
     ]);
-    // Atomic row + task.completed pair via updateTaskWithEvent (the §1c invariant).
-    expect(writer.updates).toEqual([
-      {
-        task: { taskId: BASE.taskId, transition: "done", outcome: "ok" },
-        event: {
-          ...BASE,
-          eventType: "task.completed",
-          payload: { taskKind: "review", status: "approved" },
-        },
-      },
-    ]);
   });
 
-  it("changes_requested verdict: appends review.changes_requested with feedback THEN commits row + task.completed atomically", async () => {
+  it("changes_requested verdict: bundles review.changes_requested (with feedback) into the SAME atomic transaction", async () => {
     const writer = new RecordingWriter();
 
     await markReviewTaskDoneWithEvent({
@@ -79,7 +92,10 @@ describe("review task terminal routing (audit finding #6)", () => {
       feedback: "fix the edge case",
     });
 
-    expect(writer.appended).toEqual([
+    expect(writer.appended).toEqual([]);
+    expect(writer.atomic).toHaveLength(1);
+    const call = writer.atomic[0]!;
+    expect(call.priorEvents).toEqual([
       {
         ...BASE,
         eventType: "review.changes_requested",
@@ -93,16 +109,12 @@ describe("review task terminal routing (audit finding #6)", () => {
     ]);
     // changes_requested closes the task as done/ok (the verdict steers the writer
     // rework re-entry which opens its own writer tasks).
-    expect(writer.updates).toEqual([
-      {
-        task: { taskId: BASE.taskId, transition: "done", outcome: "ok" },
-        event: {
-          ...BASE,
-          eventType: "task.completed",
-          payload: { taskKind: "review", status: "changes_requested" },
-        },
-      },
-    ]);
+    expect(call.task).toEqual({ taskId: BASE.taskId, transition: "done", outcome: "ok" });
+    expect(call.event).toEqual({
+      ...BASE,
+      eventType: "task.completed",
+      payload: { taskKind: "review", status: "changes_requested" },
+    });
   });
 
   it("omits reviewer + feedback fields when undefined (no null placeholders in the payload)", async () => {
@@ -116,7 +128,9 @@ describe("review task terminal routing (audit finding #6)", () => {
       prNumber: 7,
     });
 
-    const payload = writer.appended[0]!.payload as Record<string, unknown>;
+    const prior = writer.atomic[0]!.priorEvents!;
+    expect(prior).toHaveLength(1);
+    const payload = prior[0]!.payload as Record<string, unknown>;
     expect(payload).toEqual({ prUrl: "https://github.com/o/r/pull/7", prNumber: 7 });
     expect(payload).not.toHaveProperty("reviewer");
   });

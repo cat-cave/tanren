@@ -39,8 +39,13 @@ type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface AuditorStageInput {
   pool: LoopQueryClient;
-  /** route the auditor task INSERT/UPDATE remote when wired. */
-  writer?: RunStateWriter;
+  /**
+   * REQUIRED (audit finding H3 sweep): the auditor's terminal row + event pair
+   * rides the atomic seam through this writer — no fallback. Production wires
+   * the always-returning `runStateWriterFromEnv`; tests wire the
+   * `InMemoryRunStateWriter` fixture.
+   */
+  writer: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<AuditAnswer>;
   runId: string;
@@ -127,9 +132,7 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
   // row + terminal-event block so a recorder / event-append throw closes the row
   // loud + emits `task.failed` (rather than stranding the row in `running`).
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
     writer: args.writer,
-    appendEvent: args.appendEvent,
     taskId: auditorTaskId,
     taskKind: "audit",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -167,12 +170,10 @@ async function runAuditorTerminalBlock(
   // transaction so the row UPDATE + `task.completed` COMMIT together — replaces
   // the prior split that stranded `done` rows with no `task.completed` event.
   await markTaskDoneWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: auditorTaskId,
     envelope: auditorEventEnvelope(args),
     outcome: "passed",
-    appendEventFallback: stageFallbackAppend(args),
   });
   return { findings, auditorTaskId };
 }
@@ -185,13 +186,6 @@ function auditorEventEnvelope(args: AuditorStageInput) {
     projectId: args.costCtx.projectId,
     taskKind: "audit",
   };
-}
-
-/** No-writer test fallback append sink for the auditor stage (task #39). */
-function stageFallbackAppend(
-  args: AuditorStageInput,
-): (eventType: "task.completed" | "task.failed", payload: Record<string, unknown>, taskId: string) => Promise<void> {
-  return (eventType, payload, taskId) => args.appendEvent(eventType, payload as never, taskId);
 }
 
 // Replay the prior apex v51 emit-on-throw shape for a non-schema auditor-answerer
@@ -209,13 +203,11 @@ async function emitAuditorAnswererThrow(
   // never strands a `failed` row with no event (or vice-versa) — the loud
   // timeline signal lands iff the row does.
   await markTaskFailedWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: auditorTaskId,
     envelope: auditorEventEnvelope(args),
     failureKind,
     message: stageFailureMessage(error),
-    appendEventFallback: stageFallbackAppend(args),
   });
   throw error;
 }
@@ -249,12 +241,10 @@ async function failClosedForSchemaMiss(
   // (the prior split that emitted `task.completed` against a `failed` row is
   // also gone — the EVENT here is correctly `task.failed`).
   await markTaskFailedWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: auditorTaskId,
     envelope: auditorEventEnvelope(args),
     failureKind: "auditor_schema_invalid",
-    appendEventFallback: stageFallbackAppend(args),
   });
   return { findings: [AUDITOR_SCHEMA_MISS_FINDING], auditorTaskId };
 }

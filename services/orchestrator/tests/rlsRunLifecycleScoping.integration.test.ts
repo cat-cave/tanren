@@ -42,6 +42,7 @@ import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { StaticRunnerAllocator } from "../src/engine/allocators/staticRunnerAllocator.js";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 import {
   lifecycleAuthorityBundle,
@@ -195,6 +196,7 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
       secrets,
       githubHttp: passingGitHub(),
       identitySecretRef: "runner/test/identity",
+      runStateWriter: new DirectRunStateWriter(appPool),
       heartbeatIntervalMs: 1_000_000,
       // Drive the REAL workflow with the deterministic fake harness + stubbed
       // transports. `executeNextPlanJob` wraps this in `runWithJobOrgId(ORG)` and

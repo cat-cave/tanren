@@ -16,23 +16,12 @@
 // `answerer_schema_invalid` for a parse miss. An unrecognized error falls
 // CLOSED to `crashed` (the writer-stage's existing default).
 
-import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { EventName, EventPayload } from "../events/index.js";
 import { AnswererSchemaValidationError, AnswererStalledError } from "../providers/answererSchemaError.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import { ClaudeUsageLimitError } from "../providers/claude.js";
 import { StageStallEscalationError } from "./loopStageRecovery.js";
 import { markTaskFailedIfRunningWithEvent, type TerminalTaskEventEnvelope } from "./subtaskTasks.js";
-
-type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
-/** Shape of the per-stage `appendEvent` callback the loop threads through every stage. */
-export type StageAppendEvent = <N extends EventName>(
-  eventType: N,
-  payload: EventPayload<N>,
-  taskId?: string,
-) => Promise<void>;
 
 /** The closed vocabulary the per-stage `task.failed.failureKind` carries. */
 export type StageFailureKind =
@@ -157,9 +146,13 @@ export function stageFailureMessage(error: unknown): string {
  * could strand the row terminal-`done` with no `task.completed` is gone.
  */
 export async function runStageBodyWithFinalizeGuard<T>(opts: {
-  pool: LoopQueryClient;
-  writer?: RunStateWriter;
-  appendEvent: StageAppendEvent;
+  /**
+   * REQUIRED (audit finding H3 sweep — no fallback arm). The guarded row
+   * UPDATE + the `task.failed` event commit in ONE org-scoped transaction
+   * through `writer.updateTaskWithEvent`; there is no longer an
+   * appendEvent-only test fallback that defeated the atomic seam.
+   */
+  writer: RunStateWriter;
   taskId: string;
   taskKind: string;
   // Lineage for the ATOMIC terminal-row + `task.failed` pair (task #39): the
@@ -187,21 +180,12 @@ export async function runStageBodyWithFinalizeGuard<T>(opts: {
     // event still lands EVERY time as the loud signal — that semantics is
     // preserved here because the event INSERT runs unconditionally after the
     // guarded UPDATE on the SAME transaction).
-    //
-    // The `appendEvent` fallback is the no-writer test path's append sink (the
-    // production writer path bypasses it via `updateTaskWithEvent`). Re-routed
-    // through `appendEvent` here so the unit-test harnesses keep observing the
-    // terminal `task.failed` event through their recorder (the atomicity
-    // contract is proven via the dedicated conformance test).
     await markTaskFailedIfRunningWithEvent({
-      pool: opts.pool,
       writer: opts.writer,
       taskId: opts.taskId,
       envelope,
       failureKind,
       message: stageFailureMessage(error),
-      appendEventFallback: (eventType, payload, taskId) =>
-        opts.appendEvent(eventType, payload as EventPayload<typeof eventType>, taskId),
     });
     throw error;
   }

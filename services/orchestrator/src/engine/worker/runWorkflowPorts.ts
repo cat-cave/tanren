@@ -17,6 +17,11 @@
 // RLS-scoped (not on the org-scoping workflow proxy).
 
 export { buildNativeQueueEnqueuer } from "../merge/coordinatorBuild.js";
+// Audit finding D3/H3 sweep: the workflow's writer-seam helper in `runExecutor.ts`
+// rebuilds the Direct writer over `orgScopingPool` so in-process events carry the
+// per-job org GUC. Re-exported here so `runExecutor.ts` reaches the class via
+// its existing port import (file-dependency cap).
+export { DirectRunStateWriter } from "./directRunStateWriter.js";
 export {
   buildAncestorPhaseReader,
   buildBootstrapStackHeadShaWriteBack,
