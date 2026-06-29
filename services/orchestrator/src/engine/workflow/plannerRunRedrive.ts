@@ -15,10 +15,6 @@
 // three GENUINE-HALT classes (misconfiguration / persistent-same-failure / human-decision),
 // each with a SPECIFIC, actionable diagnostic (never a bare "internal error").
 
-import type pg from "pg";
-import { runWithOrgScope } from "@tanren/db";
-import type { RunFailureCode } from "../worker/runFailureClassifier.js";
-import { createLogger } from "../observability/logger.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
 import {
@@ -28,10 +24,6 @@ import {
   type RunDisposition,
   type TerminalOutcome,
 } from "./runFinalizeAuthority.js";
-import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
-import { assessWanderingHalt, type WanderingHaltVerdict } from "./wanderingHaltDetector.js";
-
-const log = createLogger("run-redrive");
 
 // Re-exported so the historical import sites (tests, the worker wiring) keep their imports
 // pointed at this module while the backoff helper lives in the authority core.
@@ -39,144 +31,11 @@ export { redriveBackoffSeconds };
 // Re-export the apex v67 #119/#120 atomic seam from its own module so
 // `plannerRunFinalize.ts`'s dispositionSeams wiring stays under its import cap.
 export { finalizeRedriveAtomicSeam } from "./plannerRunRedriveSeam.js";
-
-/** Facts a fixed-point read needs: the spec + its org + the failure code + the work signature now seen. */
-export interface RedriveHistoryFacts {
-  orgId: string;
-  specId: string;
-  /** The classified failure code of the CURRENT failure (one fixed-point axis). */
-  code: RunFailureCode;
-  /** The run STAGE the CURRENT failure is attributed to. Used by the wandering-halt
-   * detector (apex v67 #122) as one progress axis — a later-stage failure than every
-   * prior re-drive is deliverable progress. The fixed-point detector ignores this. */
-  stage: string;
-  /** The produced-work signature of the CURRENT run (the head/commit sha), when observable. */
-  workSignature?: string;
-}
-
-/** The full convergence facts the authority reasons over: the fixed-point streak (PR #710 —
- * same failure recurring) + the wandering-halt verdict (apex v67 #122 — N re-drives with
- * different failures but no deliverable progress). Coalesced into ONE org-scoped read. */
-export interface RedriveConvergenceFacts {
-  priorSameFixedPoint: number;
-  wandering: WanderingHaltVerdict;
-}
-
-/**
- * Read the FIXED-POINT streak for a spec — the count of CONSECUTIVE prior re-drives that are
- * structurally INDISTINGUISHABLE from the current one (same failure code AND, when both
- * observed, the same produced-work signature). Computed via the shared `convergenceDetector`
- * over the spec's `dag.spec.redriven` history. A DIFFERENT failure code OR DIFFERENT produced
- * work (PROGRESS) breaks the streak, so the loop is UNBOUNDED while it keeps changing; the
- * authority escalates ONLY once the streak shows a proven fixed point (the prior attempt was
- * already identical). ALSO computes the WANDERING-HALT verdict (apex v67 #122) over the
- * full re-drive history + the spec-level PR/merge markers — the second convergence signal
- * that catches the changing-failure-no-progress trap the fixed-point judge cannot see.
- */
-export type RedriveHistoryReader = (facts: RedriveHistoryFacts) => Promise<RedriveConvergenceFacts>;
-
-/**
- * The Pg-backed {@link RedriveHistoryReader} the run worker wires: an org-scoped read of the
- * spec's prior `dag.spec.redriven` events (newest first), assembled into the shared
- * convergence-detector history (failure code + work signature per attempt) with the CURRENT
- * attempt appended — then `decideConvergence` (routed through the principled fixed-point judge)
- * decides progress vs a proven fixed point.
- *
- * FAIL-CLOSED toward RE-DRIVING (not toward stranding): a read failure logs loudly and
- * returns 0 (treat as progress / first of its kind) — a transient DB hiccup must NOT cause a
- * spurious escalation to `needs_attention`; the fixed-point detection still bites once the
- * read recovers.
- */
-export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
-  return async (facts) => {
-    try {
-      return await runWithOrgScope(pool, facts.orgId, async (client) => {
-        const redriveRows = await client.query<{
-          payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
-          ts: string;
-        }>(
-          `SELECT payload, ts FROM events
-             WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
-             ORDER BY ts ASC, id ASC`,
-          [facts.specId],
-        );
-        // apex v67 #122 — read the spec-level PR / merge markers (their earliest timestamps,
-        // so we can determine which re-drives in the history had them in place). ONE round-trip
-        // covers both events; an absent event row yields a null timestamp (treated as
-        // "never happened" by the assembly below).
-        const progressRows = await client.query<{ event_type: string; first_ts: string | null }>(
-          `SELECT event_type, MIN(ts) AS first_ts FROM events
-             WHERE spec_id = $1 AND event_type IN ('github.pr.created', 'merge.completed')
-             GROUP BY event_type`,
-          [facts.specId],
-        );
-        const firstPrTs = progressRows.rows.find((r) => r.event_type === "github.pr.created")?.first_ts ?? null;
-        const firstMergeTs = progressRows.rows.find((r) => r.event_type === "merge.completed")?.first_ts ?? null;
-        // Audit finding #13: `dag.spec.redriven` rows whose `payload.source === "prober_resume"`
-        // are the window-pause prober's atomic spec flip from `in_flight` → `open`; they carry
-        // a synthetic `failureCode: "usage_limit"` only because the spec pair-schema requires
-        // a code for an `open` flip. Folding them into the convergence history reads as "a new
-        // state appeared between two structural re-drives" — exactly the `internal, usage_limit,
-        // internal` sequence that defeats cycle detection. Filter them out at assembly time so
-        // a genuinely stuck spec is escalated regardless of intervening pause/resume churn. The
-        // SAME filter applies to the wandering-halt history assembly below for the same reason.
-        const structuralRows = redriveRows.rows.filter((row) => row.payload.source !== "prober_resume");
-        // Assemble the oldest→newest attempt history (each prior re-drive's failure code +
-        // work signature) and append the CURRENT attempt, then route the escalation decision
-        // through the shared convergence judge (below). 1 ⇒ a proven fixed point (the authority
-        // escalates); 0 ⇒ progress (a changing failure / work, or a not-yet-cyclic repeat).
-        const history: AttemptSignature[] = structuralRows.map((row) => ({
-          failureSignature: row.payload.failureCode ?? "",
-          ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
-        }));
-        history.push({
-          failureSignature: facts.code,
-          ...(facts.workSignature !== undefined && { workSignature: facts.workSignature }),
-        });
-        // Route the escalation decision through the SHARED `decideConvergence` judge — NOT a raw
-        // `=== "fixed_point"` boolean (the disguised-K=2 the audit flagged). There is no answerer
-        // at the durable re-drive point (it is a bare DB-driven decision), so `fixedPointRuleJudgment`
-        // is the principled stand-in: it escalates ONLY at a PROVEN dead-end (a byte-identical
-        // reproduced head, or a cycle with no progress). `priorSameFixedPoint` = 1 when the judge
-        // escalates, 0 while progressing — the authority escalates only when this is >= 1.
-        const decision = await decideConvergence(history, (h) =>
-          fixedPointRuleJudgment(
-            h,
-            () =>
-              `the run reached a FIXED POINT (${facts.code}) — it produced the identical failure and ` +
-              `identical work with no new information across re-drives; the spec is genuinely stuck`,
-          ),
-        );
-        const priorSameFixedPoint = decision.decision === "escalate" ? 1 : 0;
-        // apex v67 #122 — assemble the wandering-halt history (the same `dag.spec.redriven`
-        // events with prober_resume filtered out, stage carried, and each re-drive's monotonic
-        // PR/merge markers computed against the first-seen timestamps). The CURRENT attempt
-        // rides the tail with the live progress markers.
-        const wanderingHistory = structuralRows.map((row) => ({
-          failureCode: row.payload.failureCode ?? "",
-          stage: row.payload.stage ?? "",
-          prCreatedSoFar: firstPrTs !== null && firstPrTs <= row.ts,
-          mergeCompletedSoFar: firstMergeTs !== null && firstMergeTs <= row.ts,
-        }));
-        wanderingHistory.push({
-          failureCode: facts.code,
-          stage: facts.stage,
-          prCreatedSoFar: firstPrTs !== null,
-          mergeCompletedSoFar: firstMergeTs !== null,
-        });
-        const wandering = assessWanderingHalt(wanderingHistory);
-        return { priorSameFixedPoint, wandering };
-      });
-    } catch (error) {
-      log.warn(
-        "convergence-facts read failed (fail-closed toward re-drive: treat as progress / first of its kind)",
-        { specId: facts.specId },
-        error,
-      );
-      return { priorSameFixedPoint: 0, wandering: { wandering: false } };
-    }
-  };
-}
+// The Pg-backed convergence-facts reader + its types live in their own modules
+// (file-size cap) — re-exported here so existing import sites keep working.
+export { buildRedriveHistoryReader } from "./redriveHistoryReader.js";
+export type { RedriveConvergenceFacts, RedriveHistoryFacts, RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
+import type { RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
 
 /** The append-event seam the applier emits its observable timeline events through. */
 type AppendEvent = <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
