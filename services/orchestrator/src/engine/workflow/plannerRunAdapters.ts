@@ -377,6 +377,9 @@ function buildResolver(
     specTitle: context.specTitle,
     specDescription: context.specDescription,
     acceptanceCriteria: context.acceptanceCriteria,
+    // Task #86: thread the spec mode through so the re-gate's checker + auditor see
+    // the seeded-mode tail block on `specialize_seed` specs.
+    ...(context.specMode !== undefined && { specMode: context.specMode }),
     ...(context.endpointBaseUrl !== undefined && { endpointBaseUrl: context.endpointBaseUrl }),
     routing,
     checker: deps.checker,
