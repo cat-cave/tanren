@@ -125,8 +125,8 @@ derive's synchronous wait. That close is exactly what apex still has to prove.
    project DAG seeds from a **fragment-composed template**; a missing fragment
    spawns the per-fragment authoring DAG (F2 — writer → validate, fixed-point
    convergent) or halts loud (`FragmentAuthoringFailedError` → `409
-   fragment_authoring_failed`). PR-F #693 collapsed the prior creation meta-flow
-   + `template.*` events into this single fragment-only path. DO NOT pre-seed
+fragment_authoring_failed`). PR-F #693 collapsed the prior creation meta-flow
+   and `template.*` events into this single fragment-only path. DO NOT pre-seed
    fragments; apex must exercise the F2 authoring path. Watch
    `fragment.authoring.{started,succeeded,failed}`, never the removed
    `template.*` events.
