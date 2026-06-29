@@ -172,46 +172,18 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
   // via `exitReason`; read it HERE so a non-`completed` run never reaches the
   // checker as a passed task with a partial/empty diff). The cost above is
   // recorded for every outcome — the work consumed real tokens regardless.
+  //
+  // task #22: the three writer-failed branches (window_exhausted / crashed /
+  // timeout) all converge on the SAME shape — a wrapped pre-terminal
+  // `writer.subtask.failed` event with `{ failureKind, message }`, then the atomic
+  // FAILED-terminal pair (row UPDATE + `task.failed`) keyed on the same
+  // `failureKind`. The branches now select only the per-kind `WriterFailedExit`
+  // descriptor (kind + message + WriterStageOutcome shape) and route through ONE
+  // helper, so the event payload + atomic terminal contract are written down ONCE.
   const exitReason = writerResult.exitReason;
-  if (exitReason === "window_exhausted") {
-    // §4.3 window pressure surfaced MID-CALL (not just by the pre-flight probe):
-    // the task did NOT complete its subtask. Mark it failed (window_exhausted)
-    // and emit the failed event; the loop halts the run as recoverable window
-    // pressure. Never `passed`.
-    //
-    // The PRE-TERMINAL `writer.subtask.failed` rides FIRST (wrapped — a transport
-    // throw lands as `event_append_failed`), then the atomic terminal pair (row
-    // UPDATE + `task.failed`) — task #39.
-    await wrapEventAppend(() =>
-      emitWriterSubtaskFailed(args, "window_exhausted", "writer usage window exhausted mid-subtask"),
-    );
-    await markTaskFailedWithEvent({
-      pool: args.pool,
-      writer: args.writer,
-      taskId: args.writeTaskId,
-      envelope: writerEventEnvelope(args),
-      failureKind: "window_exhausted",
-      appendEventFallback: stageFallbackAppend(args),
-    });
-    return { kind: "window_exhausted", writer: writerResult };
-  }
-  if (exitReason === "crashed" || exitReason === "timeout") {
-    // The writer crashed or timed out before finishing: its diff is partial or
-    // empty and must NOT be handed to the checker as a success. Fail the task
-    // with the typed kind; the loop routes it through the planner-rework path
-    // (or exhausts the retry budget) — a loud, recoverable halt.
-    const message =
-      exitReason === "timeout" ? "writer timed out before completing the subtask" : "writer crashed mid-subtask";
-    await wrapEventAppend(() => emitWriterSubtaskFailed(args, exitReason, message));
-    await markTaskFailedWithEvent({
-      pool: args.pool,
-      writer: args.writer,
-      taskId: args.writeTaskId,
-      envelope: writerEventEnvelope(args),
-      failureKind: exitReason,
-      appendEventFallback: stageFallbackAppend(args),
-    });
-    return { kind: "failed", writer: writerResult, failureKind: exitReason };
+  const failedExit = classifyFailedExit(exitReason);
+  if (failedExit !== undefined) {
+    return await emitWriterSubtaskTerminalFailure(args, writerResult, failedExit);
   }
   // `completed` / `token_limit`: the diff is usable, mark the task passed and
   // emit the success event (the writer genuinely produced its subtask output).
@@ -295,4 +267,73 @@ async function emitWriterSubtaskFailed(args: WriterStageInput, failureKind: stri
     },
     args.writeTaskId,
   );
+}
+
+// task #22: the closed set of writer FAILED `exitReason` arms the stage handles.
+// Each carries (a) the deterministic `failureKind` written to BOTH the pre-terminal
+// `writer.subtask.failed` event AND the atomic `task.failed` row/event pair, (b) the
+// human-readable message that rides on `writer.subtask.failed` so the timeline
+// carries one loud explanation per kind, and (c) the matching `WriterStageOutcome`
+// shape returned to the caller. Centralized so all three branches use ONE
+// payload+atomic-terminal contract — adding a future failed-exit kind only edits
+// this descriptor.
+type WriterFailedExitKind = "window_exhausted" | "crashed" | "timeout";
+interface WriterFailedExitDescriptor {
+  failureKind: WriterFailedExitKind;
+  message: string;
+  outcome: (writer: WriterResult) => WriterStageOutcome;
+}
+
+function classifyFailedExit(exitReason: WriterResult["exitReason"]): WriterFailedExitDescriptor | undefined {
+  switch (exitReason) {
+    case "window_exhausted":
+      return {
+        failureKind: "window_exhausted",
+        message: "writer usage window exhausted mid-subtask",
+        outcome: (writer) => ({ kind: "window_exhausted", writer }),
+      };
+    case "timeout":
+      return {
+        failureKind: "timeout",
+        message: "writer timed out before completing the subtask",
+        outcome: (writer) => ({ kind: "failed", writer, failureKind: "timeout" }),
+      };
+    case "crashed":
+      return {
+        failureKind: "crashed",
+        message: "writer crashed mid-subtask",
+        outcome: (writer) => ({ kind: "failed", writer, failureKind: "crashed" }),
+      };
+    default:
+      // `completed` / `token_limit` — the SUCCESS arms, not handled here.
+      return undefined;
+  }
+}
+
+// task #22: the SINGLE writer-failed terminal helper. Every failed-exit branch
+// (window_exhausted / crashed / timeout) flows through here:
+//   1. wrapped pre-terminal `writer.subtask.failed` (so a transport throw lands as
+//      `event_append_failed`, not the fail-closed `crashed`); then
+//   2. the atomic FAILED-terminal pair (row UPDATE + `task.failed`) through
+//      `markTaskFailedWithEvent` — ONE org-scoped transaction (task #39).
+// Cost accounting is recorded for EVERY outcome BEFORE this helper runs (see the
+// `recordWriterCost` call in `runWriterStageBody`), so the failed-exit branches
+// already share that, too. The descriptor → outcome mapping is the only per-kind
+// thing left.
+async function emitWriterSubtaskTerminalFailure(
+  args: WriterStageInput,
+  writerResult: WriterResult,
+  exit: WriterFailedExitDescriptor,
+): Promise<WriterStageOutcome> {
+  await wrapEventAppend(() => emitWriterSubtaskFailed(args, exit.failureKind, exit.message));
+  await markTaskFailedWithEvent({
+    pool: args.pool,
+    writer: args.writer,
+    taskId: args.writeTaskId,
+    envelope: writerEventEnvelope(args),
+    failureKind: exit.failureKind,
+    message: exit.message,
+    appendEventFallback: stageFallbackAppend(args),
+  });
+  return exit.outcome(writerResult);
 }
