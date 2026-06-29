@@ -12,9 +12,16 @@
 // halts are (a) convergence stall (the convergence answerer, after N CONSECUTIVE stalls —
 // a stall counter, NOT a retry counter) and (b) budget exhaustion (handled at the
 // project/walker level, OUTSIDE this loop). A P0 finding, a failed gate, an incomplete
-// task are LOOPBACKS, not halts. Per-stage detail lives in subtaskStages.ts /
-// auditorStage.ts / loopStages.ts; cost in subtaskCost.ts; task-row persistence in
-// subtaskTasks.ts. This file stays focused on the loop topology under the 500-line cap.
+// task are LOOPBACKS, not halts.
+//
+// SHAPE (audit round-2 N2): this file is the THIN OUTER ORCHESTRATOR — it builds the
+// loop context (planner task row, append-event closure, cost ctx, terminal-write ctx)
+// and drives `runSubtaskIteration` (sibling module) until it returns a TERMINAL
+// outcome. Each iteration's discrete phases (plan → write+gate inner loop → check →
+// audit → triage → convergence) live in `runSubtaskIteration.ts`, where the function
+// also stays under the 220-line function cap on its own. Per-stage detail lives in
+// subtaskStages.ts / auditorStage.ts / loopStages.ts; cost in subtaskCost.ts;
+// task-row persistence in subtaskTasks.ts.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type {
@@ -48,17 +55,14 @@ import type { AnswererAdapter, WriterAdapter, WriterResult } from "../providers/
 import type { UsageProbe } from "../usage/index.js";
 import type { GateOutcome } from "./gate/index.js";
 import type { PlannerRejectionFeedback, PlannerSpecContext } from "./planner/planner.js";
-import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
-import { budgetPausedOutcome, checkIterationBudget, emitBudgetPause } from "./subtaskBudget.js";
+import { type CreditState, observeRunAccounting } from "./subtaskAccounting.js";
 import { buildSubtaskCostContext, type SubtaskCostContext } from "./subtaskCost.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
-import { insertPlannerTask, markPlannerFailed, markPlannerPassed } from "./subtaskTasks.js";
-import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
-import { runSubtaskSequence } from "./subtaskInnerLoop.js";
-import { runConvergenceStage, runPostAuditFindingStages, runTriageStage } from "./loopStages.js";
+import { insertPlannerTask } from "./subtaskTasks.js";
 import { type ConvergenceState } from "./loopPolicy.js";
-import { buildPlannerTerminalContext, worstKeptSeverity } from "./subtaskLoopHelpers.js";
-import { gateFindings, routedToNewSpec, triageToRejection, type TriageSpecValidator } from "./loopFindings.js";
+import { buildPlannerTerminalContext } from "./subtaskLoopHelpers.js";
+import { type TriageSpecValidator } from "./loopFindings.js";
+import { runSubtaskIteration } from "./runSubtaskIteration.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("subtask-loop");
 
@@ -170,6 +174,14 @@ export interface NewSpecRequest {
   body: string;
   severity: "P0" | "P1" | "P2" | "P3";
   findingIds: ReadonlyArray<string>;
+  // Audit round-2 H1 (triage half): the PARENT spec's writer-prompt MODE preserved
+  // so the spec-creating contract materializing this NewSpecRequest carries it into
+  // the child spec row's `mode` column. Without preservation a child remediation
+  // from a `specialize_seed` parent would land `from_scratch` and re-emerge the
+  // v64-class contradiction PR #708 closed at the prompt layer one rung deeper.
+  // Absent ⇒ DEFAULT_SPEC_MODE on materialization (matches the parent's absent
+  // default).
+  parentSpecMode?: SpecMode;
 }
 
 export type SubtaskLoopOutcome =
@@ -270,198 +282,33 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   let priorFindings: Finding[] = [];
   let loopCount = 0;
 
+  // Audit round-2 N2: the per-iteration body (plan → write+gate inner loop → check →
+  // audit → triage → convergence) lives in `runSubtaskIteration.ts`. This outer loop
+  // is a thin orchestrator — drive iterations until one returns TERMINAL, finalize
+  // its outcome, return. `rejectionHistory` is mutated in place by the iteration on a
+  // progress loopback (same shape as the previous inline version); `convergenceState`
+  // + `priorFindings` are carried through the LOOPBACK so the next iteration sees
+  // the updated state.
   while (true) {
-    // PER-ITERATION BUDGET GATE (audit §3.7a): stops an in-flight cohort the instant
-    // it crosses the ceiling (or the gate fails closed); halt PARKS the spec, requeueable.
-    const budgetPause = await checkIterationBudget(input);
-    if (budgetPause !== null) {
-      // Audit finding #4: pause routes through `markPlannerFailed` (atomic row +
-      // `task.failed`) — the sister site PR #705's six-site lift missed.
-      await emitBudgetPause(input, appendEvent, planCtx, budgetPause);
-      return await finalize(budgetPausedOutcome(budgetPause, loopCount));
-    }
-    const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, loopCount, creditState);
-    if (windowOutcome !== null) {
-      // task #46: atomic FAILED terminal pair (row + `task.failed`) — same shape
-      // as the writer stage's `failureKind: "window_exhausted"` terminal.
-      await markPlannerFailed(planCtx, "window_exhausted");
-      return await finalize({ ...windowOutcome, loopCount });
-    }
-    const plan = await runPlannerStage({
-      pool: input.pool,
-      // task #21: writer threaded so the finalize guard's FAILED terminal rides ONE txn via `updateTaskWithEvent`.
-      writer: input.runStateWriter,
+    const result = await runSubtaskIteration({
+      input,
       costCtx,
-      adapter: input.adapters.planner,
-      spec: input.context,
-      runId: input.context.runId,
-      workspacePath: input.context.workspacePath,
-      plannerTaskId,
       appendEvent,
-      attempt: loopCount + 1,
-      rejectionHistory,
-      buildUsage: input.costHooks?.buildPlannerUsage,
-    });
-
-    // Per-task inner loop: WRITER → FAST GATE → CHECKER, for every subtask in order.
-    const sequence = await runSubtaskSequence({ input, costCtx, appendEvent, plan, plannerTaskId });
-    if (sequence.kind === "window_exhausted") {
-      await markPlannerFailed(planCtx, "window_exhausted");
-      return await finalize({ ...sequence.outcome, loopCount });
-    }
-
-    // Collect ALL spec-level findings: per-task incompleteness + the tier-2 SPEC GATE
-    // (CI fail = P0) + the auditor + the optional demo. They flow as ONE union to triage.
-    const findings: Finding[] = [...sequence.taskFindings];
-
-    if (input.runGate !== undefined) {
-      const specGate = await input.runGate({ when: "pre_audit", taskId: plannerTaskId });
-      if (!specGate.passed) {
-        findings.push(gateFindings(specGate));
-      }
-    }
-
-    const audit = await runAuditorStage({
-      pool: input.pool,
-      writer: input.runStateWriter,
-      costCtx,
-      adapter: input.adapters.auditor,
-      runId: input.context.runId,
-      workspacePath: input.context.workspacePath,
       plannerTaskId,
-      plan,
-      ...(input.context.baseSha === undefined ? {} : { baseSha: input.context.baseSha }),
-      specTitle: input.context.specTitle,
-      specDescription: input.context.specDescription,
-      acceptanceCriteria: input.context.acceptanceCriteria,
-      specMode: input.context.specMode,
-      appendEvent,
-      buildUsage: input.costHooks?.buildAuditorUsage,
-    });
-    findings.push(...audit.findings);
-
-    // POST-AUDITOR findings: demo-run gate (policy-enabled) + WS-D4 design-oracle
-    // gate (wired actor + existing contract). Both merge into the SAME triage input.
-    findings.push(
-      ...(await runPostAuditFindingStages({
-        pool: input.pool,
-        writer: input.runStateWriter,
-        costCtx,
-        runId: input.context.runId,
-        workspacePath: input.context.workspacePath,
-        plannerTaskId,
-        client: input.pool,
-        projectId: input.context.projectId,
-        specTitle: input.context.specTitle,
-        specDescription: input.context.specDescription,
-        acceptanceCriteria: input.context.acceptanceCriteria,
-        baselineSha: input.context.baseSha ?? "HEAD",
-        demoRunAdapter: input.adapters.demoRun,
-        designOracleAdapter: input.adapters.designOracle,
-        demoRunEnabled: convergencePolicy.demoRunEnabled,
-        ...(input.designOracleActor !== undefined && { designOracleActor: input.designOracleActor }),
-        appendEvent,
-      })),
-    );
-
-    // critic-arc R1 #4 fix: SUCCESS terminations emit `task.completed` via the
-    // atomic terminal pair (task #46) so the planner row isn't silent on the audit trail.
-    if (findings.length === 0) {
-      await markPlannerPassed(planCtx);
-      return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs: [], loopCount });
-    }
-
-    // TRIAGE: dedup findings to root-cause work items + route each (task-here / new spec).
-    const triage = await runTriageStage({
-      pool: input.pool,
-      writer: input.runStateWriter,
-      costCtx,
-      adapter: input.adapters.triage,
-      runId: input.context.runId,
-      workspacePath: input.context.workspacePath,
-      plannerTaskId,
-      specTitle: input.context.specTitle,
-      specDescription: input.context.specDescription,
-      baselineSha: input.context.baseSha ?? "HEAD",
-      findings,
+      planCtx,
+      creditState,
       posture,
-      ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
-      appendEvent,
-    });
-    const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map(routedToNewSpec);
-
-    // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
-    if (triage.routing.outcome === "passed") {
-      await markPlannerPassed(planCtx);
-      return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs, loopCount });
-    }
-
-    // Work KEPT in-spec → CONVERGENCE: progress vs stall vs velocity-defer. The
-    // velocity-defer gate reasons over the worst severity among the items KEPT here
-    // (the mild-leftovers test) + the configured strategy.
-    const convergence = await runConvergenceStage({
-      pool: input.pool,
-      writer: input.runStateWriter,
-      costCtx,
-      adapter: input.adapters.convergence,
-      runId: input.context.runId,
-      workspacePath: input.context.workspacePath,
-      plannerTaskId,
-      specTitle: input.context.specTitle,
-      baselineSha: input.context.baseSha ?? "HEAD",
-      loopIndex: loopCount,
-      currentFindings: findings,
+      convergencePolicy,
+      rejectionHistory,
+      convergenceState,
       priorFindings,
-      state: convergenceState,
-      velocityPolicy: {
-        enabled: convergencePolicy.velocityDeferEnabled,
-        maxSeverity: convergencePolicy.velocityDeferMaxSeverity,
-        afterStalls: convergencePolicy.velocityDeferAfterStalls,
-      },
-      ...(worstKeptSeverity(triage.routing.tasksHere) !== undefined && {
-        worstLeftoverSeverity: worstKeptSeverity(triage.routing.tasksHere),
-      }),
-      appendEvent,
+      loopCount,
     });
-    convergenceState = convergence.state;
-
-    if (convergence.decision === "halt") {
-      // HALT by the agent's INTELLIGENT escalation verdict (a human decision/blocker
-      // /dead-end), NOT a count. `escalationReason` is the human-actionable reason.
-      const haltReason = convergence.escalationReason === "" ? convergence.reasoning : convergence.escalationReason;
-      await appendEvent("convergence.stalled", {
-        runId: input.context.runId,
-        consecutiveStalls: convergence.state.consecutiveStalls,
-        reason: haltReason,
-      });
-      // task #46: atomic FAILED terminal pair; row lands `status=failed` with
-      // `failureKind=convergence_stalled` (was `done/rejected_by_auditor` + glued
-      // `task.failed` event; dashboard already treats both as "failed").
-      await markPlannerFailed(planCtx, "convergence_stalled", haltReason);
-      return await finalize({
-        kind: "convergence_stalled",
-        loopCount,
-        consecutiveStalls: convergence.state.consecutiveStalls,
-        reason: haltReason,
-      });
+    if (result.kind === "terminal") {
+      return await finalize(result.outcome);
     }
-    if (convergence.decision === "pass") {
-      // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
-      const deferred: NewSpecRequest[] = triage.routing.tasksHere.map(routedToNewSpec);
-      await markPlannerPassed(planCtx);
-      return await finalize({
-        kind: "passed",
-        plannerTaskId,
-        subtasks: plan.subtasks,
-        newSpecs: [...newSpecs, ...deferred],
-        loopCount,
-      });
-    }
-
-    // progress → loop. Seed the planner with the kept work as steering + carry the
-    // current findings forward as the next loop's prior.
-    rejectionHistory.push(triageToRejection(triage.routing.tasksHere, plan.subtasks));
-    priorFindings = findings;
+    convergenceState = result.convergenceState;
+    priorFindings = result.priorFindings;
     loopCount += 1;
   }
 }

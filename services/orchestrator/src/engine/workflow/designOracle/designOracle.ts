@@ -56,6 +56,7 @@ import type { Finding } from "../../contracts/findings.js";
 import { BehaviorStore } from "../../entities/behaviors.js";
 import { PersonaStore } from "../../entities/personas.js";
 import type { ActorRef } from "../../state/actor.js";
+import type { SpecMode } from "../../state/spec.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import {
@@ -78,6 +79,12 @@ export interface DesignOracleStageInput {
   baselineSha: string;
   // The read-only workspace the oracle self-inspects (the built output).
   workspacePath: string;
+  // OPTIONAL spec writer-prompt MODE (audit round-2 H1). Threaded through to the
+  // designOracle prompt so a `specialize_seed` spec gets the seeded-mode tail block
+  // that scopes the oracle off the pre-existing seed surfaces, mirroring PR #708's
+  // checker/auditor lift. Absent / `from_scratch` ⇒ no block (byte-identical to the
+  // legacy oracle prompt).
+  specMode?: SpecMode;
 }
 
 export interface DesignOracleStageResult {
@@ -143,6 +150,7 @@ export async function runDesignOracleStage(input: DesignOracleStageInput): Promi
     personas,
     behaviors,
     baselineSha: input.baselineSha,
+    ...(input.specMode !== undefined && { specMode: input.specMode }),
   });
 
   const outputSchema = answererOutputSchemaFor("designOracle", DesignOracleAnswerSchema);
