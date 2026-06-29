@@ -278,6 +278,70 @@ proven on real cases.
 
 ---
 
+## §5 — the writer-prompt MODE (specialize_seed vs from_scratch)
+
+Task #86 (v64 root cause). Every spec carries a `mode` column — either
+`specialize_seed` or `from_scratch` (DEFAULT) — that selects which standing
+instructions the writer prompt assembles at every iteration. The two modes
+exist because the workspace at the writer's first iteration looks
+fundamentally different between the greenfield scaffold spec and every other
+spec:
+
+- `from_scratch` (DEFAULT — brownfield + non-scaffold specs): the workspace
+  is the project's existing tree (or, in the legacy from-scratch case, an
+  empty repo). The standing GRADING instruction tells the writer to "Build
+  everything ELSE — manifest/lockfile, sources, configs, tests, fixtures"
+  and to regenerate the lockfile after a manifest edit. This is the
+  brownfield/legacy default and matches every spec created via the
+  discovery/triage path, the BDD behavior path, the `build`/`deploy`
+  foundation specs, etc.
+- `specialize_seed` (greenfield's scaffold spec only, post-PR-G + PR #701):
+  the workspace's initial commit IS the composed seed VFS — the manifest,
+  lockfile, tsconfig, lint/test/build configs, contract files (justfile +
+  `.tanren/ci.yml`), source skeleton, and demo are ALREADY in place AND
+  proven green by composition. The standing instructions tell the writer to
+  touch ONLY product-identity surfaces — the canonical list is the spec's
+  acceptance criteria, typically the manifest's `name` field, the deploy
+  descriptor's `app`/slug, `.env.example` placeholders, README, the
+  product-specific demo. The writer is explicitly forbidden from rebuilding
+  the manifest, regenerating the lockfile, editing tsconfig / lint configs
+  / test configs / build configs, adding new tests or test fixtures, or
+  touching the contract files. The lockfile-regeneration / manifest-
+  companion / package-manager-upgrade rules are dropped entirely — they
+  don't apply, since there ARE no manifest edits in seeded mode.
+
+**Why both modes exist.** Before this fix, the standing instructions
+contradicted the scaffold spec's text. The spec said "SEED FROM TEMPLATE —
+INSTANTIATE the seed, touch only product-identity surface"; the standing
+instructions said "Build everything ELSE — the manifest/lockfile, sources,
+configs, tests, fixtures." The writer reads top→bottom and weights the LAST
+thing it reads most heavily, so the standing instruction WON every
+iteration: writer over-edits configs → checker rejects with a scope-drift
+finding → writer over-edits a slightly DIFFERENT set of configs the next
+iteration. v64 ran this loop for 6 hours / 61 writer iterations / 5 auditor
+verdicts and produced ZERO merges — each iteration's diff was different, so
+the fixed-point convergence detector (which fires only on byte-identical
+diff + byte-identical rejection) never fired.
+
+The fix is two-part: (1) the GRADING + CONTRACT standing instructions are
+selected by `specMode` so the seeded scaffold spec gets the seeded
+guidance, not the from-scratch guidance; (2) defensively, the rework reason
+moved AFTER the standing instructions in every iteration (regardless of
+mode), so on a re-iteration the LAST thing the writer reads is the concrete
+failing reason — the strongest signal where it belongs.
+
+**Plumbing.** `mode` originates in `scaffoldSpecsFor()`
+(`engine/forge/interview/deriveScaffoldSpecs.ts`): the `scaffold` spec is
+`specialize_seed`; `build`/`deploy` and every other spec stay
+`from_scratch`. `createSpec` persists it to `specs.mode` (DB column with
+default `from_scratch`, CHECK constraint mirroring the Zod enum).
+`loadRunExecutionContext` reads it onto the `PlannerRunContext`;
+`plannerRun` threads it into `SubtaskLoopInput.context.specMode`;
+`writerPromptFor()` selects the matching standing instructions. The
+`SpecMode` Zod enum lives in `engine/state/spec.ts`.
+
+---
+
 ## Relationship to the stack-flexible contract
 
 The templating system sits **above** the stack-flexible contract (the

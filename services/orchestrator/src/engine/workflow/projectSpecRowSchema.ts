@@ -4,7 +4,7 @@
 // max-lines cap; behavior is unchanged (a plain re-home of the schemas).
 
 import { z } from "zod";
-import { SpecPriority } from "../state/spec.js";
+import { SpecMode, SpecPriority } from "../state/spec.js";
 
 /** A jsonb object column → a record, defaulting non-objects (incl. arrays/null) to `{}`. */
 const RecordOrEmpty = z
@@ -34,4 +34,8 @@ export const SpecProjectRowSchema = z.object({
   depends_on: StringArrayOrEmpty,
   status: z.string(),
   priority: SpecPriority,
+  // Task #86: the writer-prompt mode the spec was created with. The DB column is NOT
+  // NULL with default `from_scratch`, so a real row always carries a value; the schema
+  // mirrors that default so a hand-built fixture row missing the field still parses.
+  mode: SpecMode.optional().default("from_scratch"),
 });

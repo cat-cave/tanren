@@ -39,6 +39,7 @@ import {
   DEFAULT_AUDIT_POSTURE,
   DEFAULT_CONVERGENCE_POLICY,
 } from "../config/shared.js";
+import type { SpecMode } from "../state/spec.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
 import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
 import type { CostRecorder } from "../costs/index.js";
@@ -127,6 +128,13 @@ export interface SubtaskLoopInput {
     // `DesignContract` (persona-scoped, behavior-linked, domain-general). Injected into the
     // writer prompt so the build honors the design. Absent ⇒ no design contract ⇒ no block.
     designContextBlock?: string;
+    // Task #86 (v64 root cause): the spec's writer-prompt MODE. Selects which standing
+    // instruction set `writerPromptFor()` emits — `specialize_seed` (greenfield's scaffold
+    // spec post-PR-G; the composed seed is in place + proven green, touch ONLY product-
+    // identity surfaces) vs `from_scratch` (today's brownfield/legacy default — build the
+    // manifest/sources/configs/tests, regenerate lockfile after manifest edits, etc).
+    // Absent ⇒ DEFAULT_SPEC_MODE (`from_scratch`) — byte-identical to before this field.
+    specMode?: SpecMode;
   };
   // The CONVERGENCE policy (the SOLE loop bound) + the audit posture (triage routing).
   // Optional → resolve to the balanced defaults.

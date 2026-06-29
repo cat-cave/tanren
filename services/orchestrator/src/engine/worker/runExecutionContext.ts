@@ -25,6 +25,7 @@ import { resolveProjectEnv } from "../environments/index.js";
 // imports it alongside `loadRunExecutionContext` without a separate dependency.
 export { refineRunnerImageForEnv, type EnvCreationDeps } from "./runExecutorEnvRefine.js";
 import { systemActor } from "../state/actor.js";
+import { SpecMode } from "../state/spec.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -92,6 +93,11 @@ const RunSpecProjectRowSchema = z.object({
   title: z.string(),
   description: z.string(),
   acceptance_criteria: z.unknown(),
+  // Task #86: the spec's writer-prompt MODE (`specialize_seed` for the greenfield scaffold
+  // spec; `from_scratch` otherwise). The DB column is NOT NULL with default `from_scratch`,
+  // so a real row always carries a value; the schema mirrors that default so a missing-
+  // column row (e.g. an older test fixture that hand-builds the join shape) parses cleanly.
+  mode: SpecMode.optional().default("from_scratch"),
 });
 
 function stringArray(value: unknown): string[] {
@@ -133,7 +139,8 @@ export async function loadRunExecutionContext(
        o.config AS org_config,
        s.title,
        s.description,
-       s.acceptance_criteria
+       s.acceptance_criteria,
+       s.mode
      FROM runs r
      JOIN specs s ON s.spec_id = r.spec_id
      JOIN projects p ON p.project_id = r.project_id
@@ -227,6 +234,12 @@ export async function loadRunExecutionContext(
     specTitle: decoded.title,
     specDescription: decoded.description,
     acceptanceCriteria: stringArray(decoded.acceptance_criteria),
+    // Task #86 (v64 root cause): the spec's writer-prompt MODE. Threaded so the
+    // greenfield scaffold spec's `specialize_seed` mode reaches `writerPromptFor()`
+    // and the writer is told the composed seed is already in place + proven green
+    // (touch ONLY product-identity surfaces) rather than today's "build everything
+    // ELSE" guidance that produced v64's 6-hour non-converging writer-checker loop.
+    specMode: decoded.mode,
     // env P3: the env-RESOLVED runner image — `env.image_ref` on a registry match,
     // else the golden base (the no-match / no-toolchain fallback). Replaces the
     // direct `runner_image` default read; the existing flow (no env) is preserved.
