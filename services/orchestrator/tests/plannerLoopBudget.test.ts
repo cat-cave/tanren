@@ -52,6 +52,16 @@ describe("spec loop — per-iteration budget gate (audit §3.7a)", () => {
     // The run halted BEFORE any planner/writer work — the cohort stops spending.
     expect(pool.tasks.map((t) => t.kind)).not.toContain("write");
     expect(events.events.map((e) => e.eventType)).not.toContain("planner.completed");
+    // Audit finding #4: the planner task is paired with a `task.failed` envelope
+    // (failureKind=budget_paused) — the bare `markTaskDone(rejected_by_auditor)`
+    // shape that stranded the audit trail is gone (autonomy-engine.md §1c).
+    const plannerFailed = events.events.find(
+      (e) => e.eventType === "task.failed" && (e.payload as { taskKind?: string }).taskKind === "plan",
+    );
+    expect(plannerFailed?.payload).toMatchObject({ taskKind: "plan", failureKind: "budget_paused" });
+    const plannerTask = pool.tasks.find((t) => t.kind === "plan");
+    expect(plannerTask?.status).toBe("failed");
+    expect(plannerTask?.failureKind).toBe("budget_paused");
   });
 
   it("a FAIL-CLOSED budget (unpriced spend) also pauses the in-flight run", async () => {

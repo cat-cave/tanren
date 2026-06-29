@@ -6,7 +6,7 @@
 // can never keep spending past the ceiling. The halt PARKS the spec (requeueable); the
 // `shouldPauseOnBudget` predicate is the SAME one the walker uses, so the two never drift.
 import { type ProjectBudgetState, shouldPauseOnBudget } from "../contracts/dagWalker.js";
-import { markTaskDone } from "./subtaskTasks.js";
+import { markPlannerFailed, type PlannerTerminalContext } from "./subtaskTasks.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
 
 // Resolve the run's project budget and return the over-ceiling/fail-closed state when the
@@ -20,12 +20,17 @@ export async function checkIterationBudget(input: SubtaskLoopInput): Promise<Pro
   return shouldPauseOnBudget(budget) ? budget : null;
 }
 
-// Emit the loud `dag.budget.paused` event + mark the planner task done for a per-iteration
-// budget pause.
+// Emit the loud `dag.budget.paused` event + mark the planner task FAILED via the atomic
+// terminal pair for a per-iteration budget pause (audit finding #4). The prior shape was a
+// bare `markTaskDone(rejected_by_auditor)` with NO paired `task.failed` envelope — a §1c
+// single-finalize violation: the planner row read terminal-`done` while the timeline had no
+// matching terminal `task.*` event, so every $50-ceiling apex pause stranded the audit trail.
+// Routing through `markPlannerFailed` (the PR #705 wrapper) lands the row + `task.failed`
+// (`failureKind: "budget_paused"`) in ONE org-scoped transaction through the writer seam.
 export async function emitBudgetPause(
-  input: SubtaskLoopInput,
+  _input: SubtaskLoopInput,
   appendEvent: AppendEvent,
-  plannerTaskId: string,
+  planCtx: PlannerTerminalContext,
   budget: ProjectBudgetState,
 ): Promise<void> {
   await appendEvent(
@@ -37,9 +42,9 @@ export async function emitBudgetPause(
       readyHeldBack: 0,
       ...(budget.failClosed !== undefined && { reason: budget.failClosed }),
     },
-    plannerTaskId,
+    planCtx.taskId,
   );
-  await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
+  await markPlannerFailed(planCtx, "budget_paused", budget.failClosed);
 }
 
 // Build the terminal `budget_paused` loop outcome for a per-iteration pause.
