@@ -126,6 +126,17 @@ export class PgRunnerStore implements RunnerStore {
         // are NULL for a runless / project-less Forge ideation allocation — both
         // columns are nullable, so NULL avoids the run_id→runs / project_id→projects
         // FK violations the synthetic handle would otherwise cause.
+        // LOCKSTEP CREATED_AT (task #8): on a re-adopt UPDATE branch (a previously-
+        // released runner_id being re-claimed — e.g. orchestrator restart, lease
+        // takeover, job-reaper requeue) `created_at` is set EXPLICITLY to
+        // `runners.created_at` (the existing row's value) — a deliberate no-op SQL
+        // pin that documents the invariant in the statement itself rather than
+        // leaving it implicit-by-omission. A future mutation that drops the line
+        // would visibly REGRESS the SQL surface and is caught by
+        // `runnerStore.test.ts`. The original allocation timestamp drives
+        // oldest-first sweeper ordering + DORA timing; resetting it to `now()` on
+        // re-adopt (the `EXCLUDED.created_at` alternative, the bug shape #8 names)
+        // would silently warp every downstream signal that keys off allocation age.
         `INSERT INTO runners (
            runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
            host_key_fingerprint, image_sha, container_id
@@ -142,6 +153,7 @@ export class PgRunnerStore implements RunnerStore {
            host_key_fingerprint = EXCLUDED.host_key_fingerprint,
            image_sha = EXCLUDED.image_sha,
            container_id = EXCLUDED.container_id,
+           created_at = runners.created_at,
            released_at = NULL
          WHERE runners.released_at IS NOT NULL`,
         [

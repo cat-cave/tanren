@@ -201,6 +201,58 @@ describe("PgRunnerStore.claim idempotency (task #21A)", () => {
   });
 });
 
+describe("PgRunnerStore.claim — lockstep created_at on re-adopt (task #8)", () => {
+  // Task #8: a re-adopt of a RELEASED runner_id (orchestrator restart, lease
+  // takeover, job-reaper requeue) MUST preserve the ORIGINAL `created_at`. The
+  // ON CONFLICT branch pins `created_at = runners.created_at` explicitly — a
+  // deliberate no-op SQL that documents the invariant in the statement itself
+  // (rather than leaving it implicit-by-omission). A mutation that switches it
+  // to `EXCLUDED.created_at` would silently re-stamp the row to `now()` and
+  // warp every downstream signal that keys off allocation age (oldest-first
+  // sweeper ordering, DORA timing). These tests pin BOTH that the locking
+  // clause is present AND that the wrong shape (`EXCLUDED.created_at`) is
+  // absent, so neither direction of the mutation slides through.
+  it("the UPDATE branch pins created_at to runners.created_at (the existing row's value)", async () => {
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
+
+    const { text } = pool.queries[0]!;
+    // The lockstep no-op: `created_at = runners.created_at` — the existing
+    // row's value, NOT EXCLUDED.created_at (which would resolve to the INSERT
+    // attempt's default `now()` and re-stamp the row).
+    expect(text).toMatch(/created_at\s*=\s*runners\.created_at/u);
+  });
+
+  it("the UPDATE branch never re-sets created_at to EXCLUDED.created_at (the bug shape)", async () => {
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
+
+    const { text } = pool.queries[0]!;
+    // The bug shape #8 names: `created_at = EXCLUDED.created_at` would resolve
+    // to the INSERT attempt's `now()` default and silently re-set the row's
+    // original allocation timestamp on every re-adopt — breaking oldest-first
+    // ordering + DORA timing. Pin its absence so a future mutation cannot
+    // sneak it in.
+    expect(text).not.toMatch(/created_at\s*=\s*EXCLUDED\.created_at/u);
+  });
+
+  it("created_at is NOT in the INSERT column list (the DB DEFAULT now() stamps a fresh row)", async () => {
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
+
+    const { text } = pool.queries[0]!;
+    // A FRESH insert (no conflict): `created_at` is intentionally absent from
+    // the INSERT columns so the table's `DEFAULT now()` stamps it. Asserting on
+    // the INSERT column block (the parenthesized list immediately after `INTO
+    // runners`) makes this pin specific — the UPDATE SET clause's
+    // `created_at = runners.created_at` lockstep above must NOT bleed into the
+    // INSERT column list (which would require a matching VALUES entry).
+    const insertColsMatch = /INSERT\s+INTO\s+runners\s*\(([\s\S]*?)\)/u.exec(text);
+    expect(insertColsMatch).not.toBeNull();
+    expect(insertColsMatch![1]).not.toMatch(/\bcreated_at\b/u);
+  });
+});
+
 describe("PgRunnerStore.release", () => {
   it("UPDATEs the row to released and stamps released_at, scoped by runner_id", async () => {
     const pool = new RecordingPool();
