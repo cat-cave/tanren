@@ -66,7 +66,7 @@ export function appWithGreenfieldRoutes(
   pool: RoutesPool,
   githubHttp: FakeRepoCreateHttp = new FakeRepoCreateHttp(),
   onboardingOverrides: Partial<
-    Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy" | "materializeTemplate">
+    Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy" | "materializeTemplate" | "runFragmentAuthoring">
   > = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
   // secret read THROWS — exercising the no_silent_fallbacks fix that a token-resolution

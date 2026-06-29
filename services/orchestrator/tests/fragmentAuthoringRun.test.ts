@@ -111,6 +111,26 @@ describe("buildFragmentAuthoring — failure surfaces in failedIds (fixed-point 
     const kinds = calls.map((c) => (c as { kind: string }).kind);
     expect(kinds).toContain("fragment.authoring.failed");
   });
+
+  // v66 fix — the per-fragment writer-rejection reason must survive on the
+  // result object so the derive can put it on the 409 body.
+  it("propagates the last writer rejection into result.failureReasons keyed by fragment id", async () => {
+    const { events } = recordingEvents();
+    const { persistence } = inMemoryPersistence();
+    const runner = buildFragmentAuthoring({ authorer: failingAuthorer, persistence, events });
+    const result = await runner({
+      orgId: "org_a",
+      actor: { userId: "u", orgId: "org_a", projectId: null, scopes: ["platform:admin"], source: "session" },
+      missing: [spec("runtime", "python")],
+      lifecycle: lifecycle(),
+    });
+    expect(result.failedIds).toEqual(["runtime-python"]);
+    expect(result.failureReasons).toHaveProperty("runtime-python");
+    // The reason carries the actual validator output (a parse rejection here) —
+    // not the empty-string sentinel that the v66 halt surfaced.
+    expect(result.failureReasons["runtime-python"]).toMatch(/body parse|smoke compose|authorer/iu);
+    expect(result.failureReasons["runtime-python"]?.length ?? 0).toBeGreaterThan(0);
+  });
 });
 
 // Authorer that produces a node-only addon body (uses addPackageJsonDep) without

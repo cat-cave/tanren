@@ -78,16 +78,29 @@ export type SelectFragmentConfigResult =
  */
 export class FragmentAuthoringFailedError extends Error {
   readonly failedIds: readonly string[];
-  constructor(failedIds: readonly string[], cause?: unknown) {
+  /** Per-fragment-id: the LAST writer rejection captured at the fixed point. The
+   * derive 409 response embeds this map so the operator can read WHY F2 halted
+   * directly off the response body — no log-grepping (v66 fix). Empty when the
+   * error is raised before authoring ran (no seam wired). */
+  readonly failureReasons: Readonly<Record<string, string>>;
+  constructor(failedIds: readonly string[], options?: { failureReasons?: Record<string, string>; cause?: unknown }) {
     const list = failedIds.length === 0 ? "<none>" : failedIds.join(", ");
+    const reasons = options?.failureReasons ?? {};
+    const detail =
+      Object.keys(reasons).length === 0
+        ? ""
+        : ` Reasons: ${Object.entries(reasons)
+            .map(([id, reason]) => `${id}: ${reason}`)
+            .join(" | ")}.`;
     super(
-      `per-fragment authoring failed for: ${list}. The derive halts fail-closed; ` +
+      `per-fragment authoring failed for: ${list}.${detail} The derive halts fail-closed; ` +
         `there is no silent-skip path. Inspect the per-fragment authoring run logs ` +
         `(\`fragment.authoring.failed\` events), fix the writer / validator gate, and retry.`,
     );
     this.name = "FragmentAuthoringFailedError";
     this.failedIds = failedIds;
-    if (cause !== undefined) this.cause = cause;
+    this.failureReasons = reasons;
+    if (options?.cause !== undefined) this.cause = options.cause;
   }
 }
 

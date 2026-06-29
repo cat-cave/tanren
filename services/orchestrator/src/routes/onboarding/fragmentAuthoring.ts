@@ -32,7 +32,14 @@ import type { EventStore } from "../../engine/eventStore.js";
 
 export interface FragmentAuthoringFlowDeps {
   pool: pg.Pool;
-  eventStore?: EventStore;
+  /** The durable event store — REQUIRED. The per-fragment-authoring run emits
+   * `fragment.authoring.{started,succeeded,failed}` events that the operator
+   * inspects when F2 halts (templating-system doctrine). Omitting it used to
+   * short-circuit the emit path silently; the writer-seam discipline (PR
+   * #714/#718) bans silent-degradation, so this is now load-bearing. Production
+   * wires `new PgEventStore(scopedPool)` from `mountFeatureRoutes.ts`; tests
+   * inject a recording fake (v66 fix). */
+  eventStore: EventStore;
   /** The LLM-backed fragment authorer — REQUIRED. There is no default. */
   authorer: FragmentAuthorer;
 }
@@ -44,6 +51,15 @@ export function buildLiveRunFragmentAuthoring(
 ): FragmentAuthoring {
   const { pool, eventStore, authorer } = deps;
   const { orgId } = ctx;
+  // Loud-throw on a missing eventStore — silent-degradation is banned (v66 fix).
+  // The TS signature already requires it; this guards against erased-type callers.
+  if (eventStore === undefined) {
+    throw new Error(
+      "buildLiveRunFragmentAuthoring: `eventStore` is required — the per-fragment authoring run " +
+        "must emit `fragment.authoring.*` events for operator observability. Wire " +
+        "`new PgEventStore(scopedPool)` from the route mount (v66 fix).",
+    );
+  }
 
   const persistence: FragmentPersistence = {
     async create(input) {
@@ -73,7 +89,6 @@ export function buildLiveRunFragmentAuthoring(
 
   const events: FragmentAuthoringEvents = {
     async emit(event) {
-      if (eventStore === undefined) return;
       // The fragment.authoring.* events are registered in the event vocabulary
       // (services/orchestrator/src/engine/events/schemas/templates.ts) so the
       // event store accepts them. The synthetic "fragment-authoring" runId is

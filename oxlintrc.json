@@ -150,7 +150,7 @@
       // only — type-only imports are already ignored at the base config.
       "files": ["services/orchestrator/src/main.ts", "services/orchestrator/src/mountFeatureRoutes.ts"],
       "rules": {
-        "import/max-dependencies": ["error", { "max": 24, "ignoreTypeImports": true }]
+        "import/max-dependencies": ["error", { "max": 25, "ignoreTypeImports": true }]
       }
     },
     {

@@ -71,6 +71,9 @@ export interface FragmentAuthoringResult {
   /** Ids the authoring runner could not produce a valid fragment for. The derive
    * halts loud (FragmentAuthoringFailedError) when this is non-empty. */
   failedIds: string[];
+  /** Per-fragment-id: the LAST writer rejection captured at the fixed point. The
+   * derive surfaces this in the 409 body so the operator sees WHY F2 halted (v66 fix). */
+  failureReasons: Record<string, string>;
 }
 
 export type FragmentAuthoring = (input: FragmentAuthoringInput) => Promise<FragmentAuthoringResult>;
@@ -144,6 +147,7 @@ export interface FragmentAuthoringDeps {
 export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAuthoring {
   return async (input: FragmentAuthoringInput): Promise<FragmentAuthoringResult> => {
     const failedIds: string[] = [];
+    const failureReasons: Record<string, string> = {};
     const authored: OrgFragmentSource[] = [];
 
     for (const spec of input.missing) {
@@ -157,6 +161,7 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
         authored.push(outcome.source);
       } else {
         failedIds.push(spec.id);
+        failureReasons[spec.id] = outcome.reason;
       }
     }
 
@@ -175,7 +180,7 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
       }
     }
 
-    return { library, failedIds };
+    return { library, failedIds, failureReasons };
   };
 }
 

@@ -9,6 +9,7 @@
 import type { Hono } from "hono";
 import type pg from "pg";
 import { orgScopingPool } from "./engine/data/orgScopedDb.js";
+import { PgEventStore } from "./engine/eventStore.js";
 import type { Allocator, SecretStore, CommandSubstrate } from "./engine/contracts/index.js";
 import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.js";
 import type { GitHubHttpClient } from "./engine/providers/github.js";
@@ -235,6 +236,12 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
         buildLiveRunFragmentAuthoring(
           {
             pool: scopedPool,
+            // v66 fix: wire the durable event store so `fragment.authoring.*`
+            // events land in the DB — the templating-system doctrine points
+            // operators to those events when F2 halts. Mirrors the pattern in
+            // `plannerRun.ts` and `driveCi.ts`. EventStore is now REQUIRED on
+            // the seam (no silent-degradation, per writer-seam discipline).
+            eventStore: new PgEventStore(scopedPool),
             authorer: forgeAnswerers.fragmentAuthorer({ orgId: ctx.orgId }),
           },
           ctx,

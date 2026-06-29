@@ -348,6 +348,11 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             error: "fragment_authoring_failed",
             capability: "fragments",
             failedIds: error.failedIds,
+            // v66 fix: surface the per-fragment writer rejection reason on the 409
+            // body so the operator can read WHY F2 halted directly off the
+            // response — no orchestrator-log grepping. Keyed by fragment id; value
+            // is the LAST rejection captured by F2 at the fixed point.
+            failureReasons: error.failureReasons,
             message: error.message,
           },
           409,
