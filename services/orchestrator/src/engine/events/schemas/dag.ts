@@ -399,83 +399,10 @@ export const IntegrationProofReusedPayload = z
   .strict();
 export type IntegrationProofReusedPayload = z.infer<typeof IntegrationProofReusedPayload>;
 
-// GENUINE-HALT escalation reasons (apex v35 — the unified run-finalize authority,
-// `runFinalizeAuthority.ts`). `needs_attention` is RESERVED for the three GENUINE-HALT
-// classes; a RANDOM/TRANSIENT/internal/crash/orphan fault NEVER rests here — it RE-DRIVES
-// (emitting `dag.spec.redriven`). The old slot-occupying strand reasons (`halted_reexec` /
-// `orphaned_marker` / `no_live_run`) are GONE: they were transient classes the per-path
-// logic mis-parked; their diagnostic detail now rides `dag.spec.redriven.failureCode`.
-//   - `misconfiguration` — a structural cause a human must fix (missing/unscoped credential,
-//     unresolvable provider mode). Never self-heals on retry, so it escalates immediately.
-//   - `persistent_failure` — the run failed the SAME classified way K consecutive times (each
-//     transient RE-DRIVEN but never converged): a genuinely STUCK spec (a bug / mis-spec).
-//   - `human_decision` — a genuine merge-boundary decision (a HITL hold / changes-requested).
-const StrandReason = z.enum(["misconfiguration", "persistent_failure", "human_decision"]);
-// One of the strand's terminal runs (its id + final status) — for the audit trail.
-const StrandTerminalRun = z.object({ runId: z.string(), status: z.string() }).strict();
-
-// dag.spec.needs_attention: a spec parked at the terminal `needs_attention` status — freeing the
-// DAG slot and blocking ONLY its dependents (never the whole DAG), surfacing a loud, bounded ask-
-// for-help. A discriminated union on `source` because TWO subsystems reach the SAME terminal parked
-// state, each carrying its own halt history:
-//   - `strand`: the NEVER-STRAND reconciler exhausted the bounded re-enqueue cap (a
-//     spec stuck occupying a slot with no live run) — the canonical §2c safety net.
-//   - `merge_conflict`: the native merge queue's intent-preserving conflict resolver
-//     judged the spec GENUINELY irreconcilable against another in-flight spec (re-
-//     executing it would just re-conflict forever), so the coordinator parked it
-//     instead of blindly re-executing (autonomy-engine.md §2c — the non-bricking
-//     conflict escalation). Carries the PR + the resolver's message.
-//   - `cancelled_ancestor`: an operator CANCELLED an ancestor of this spec (the
-//     operator cancel-spec action, workflow/cancelSpec). A dependent of a cancelled
-//     spec is NOT silently dropped (the human-escalation discipline): cancelling the
-//     ancestor removed the work the dependent assumed, so the dependent parks at
-//     `needs_attention` for a human to DECIDE (re-scope the dependent, re-queue the
-//     ancestor, or cancel the dependent too) — never an autonomous cascade-cancel.
-//     Carries the cancelled ancestor's spec id.
-// One event type (no new event / no events-CHECK migration) so the DAG/UI consume the
-// parked state uniformly regardless of which subsystem escalated it.
-export const DagSpecNeedsAttentionPayload = z.discriminatedUnion("source", [
-  z
-    .object({
-      source: z.literal("strand"),
-      specId: z.string(),
-      reason: StrandReason,
-      // The spec's terminal runs at escalation time (the halt history).
-      terminalRuns: z.array(StrandTerminalRun),
-      // How many times the spec had already been re-enqueued (exceeded the cap).
-      attempts: z.number().int().nonnegative(),
-      // The human-readable DECISION ask (the escalation discipline): framed as
-      // "the autonomous self-heal could not make progress — a human must decide",
-      // NOT "an error occurred". Mirrors the merge_conflict source's `message` so
-      // both parked-state reasons surface as decisions, not error reports.
-      message: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      source: z.literal("merge_conflict"),
-      specId: z.string(),
-      // The PR whose merge the resolver found genuinely irreconcilable.
-      prUrl: z.string(),
-      prNumber: z.number().int(),
-      // The resolver's human-readable reason the conflict could not be reconciled.
-      message: z.string(),
-    })
-    .strict(),
-  z
-    .object({
-      source: z.literal("cancelled_ancestor"),
-      specId: z.string(),
-      // The ancestor an operator cancelled — the dependency this spec assumed that
-      // no longer exists, forcing the human decision.
-      cancelledAncestorSpecId: z.string(),
-      // The human-readable DECISION ask (the escalation discipline): framed as "an
-      // ancestor was cancelled — decide how to proceed", not "an error occurred".
-      message: z.string(),
-    })
-    .strict(),
-]);
-export type DagSpecNeedsAttentionPayload = z.infer<typeof DagSpecNeedsAttentionPayload>;
+// dag.spec.needs_attention (apex v35 — the unified GENUINE-HALT event; v67 #122 added the
+// `wandering_halt` source) is defined in `dagNeedsAttention.ts` (file-size cap) and
+// re-exported here so import sites are unchanged.
+export { DagSpecNeedsAttentionPayload } from "./dagNeedsAttention.js";
 
 // dag.spec.attention_resolved: the OPERATOR (a human, never a background loop)
 // resolved a `needs_attention` escalation — they ADDRESSED the underlying blocker
