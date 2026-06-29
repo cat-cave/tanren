@@ -31,6 +31,7 @@ import {
   type ReviewMergeRunContext,
   type RunStateClient,
 } from "./context.js";
+import { markReviewTaskDoneWithEvent } from "./reviewTaskTerminal.js";
 import {
   reviewBodyFor,
   reviewEventFor,
@@ -294,40 +295,54 @@ async function finalizeReviewTask(
     projectId: context.projectId,
     taskId: result.taskId,
   };
-  if (result.verdict === "approved") {
-    await markTaskDoneOk(pool, result.taskId, writer);
-    await eventStore.append({
-      ...base,
-      eventType: "review.approved",
-      payload: { prUrl: result.prUrl, prNumber: result.prNumber, reviewer: result.reviewer },
-    });
-    await eventStore.append({
-      ...base,
-      eventType: "task.completed",
-      payload: { taskKind: "review", status: "approved" },
-    });
-    return;
-  }
-  if (result.verdict === "changes_requested") {
-    // A standing changes-requested is not a task failure — it routes back into
-    // the writer-rework path. Record the verdict event with the reviewer's body
-    // as the steering message, and leave the task closed as ok (the rework
-    // re-enters the loop, which opens its own writer tasks).
-    await markTaskDoneOk(pool, result.taskId, writer);
-    await eventStore.append({
-      ...base,
-      eventType: "review.changes_requested",
-      payload: {
+  if (result.verdict === "approved" || result.verdict === "changes_requested") {
+    // AUDIT FINDING #6 — the review-kind task terminal now routes through the
+    // doctrine helper `markReviewTaskDoneWithEvent` (the merge-kind sibling's
+    // shape): all three writes (row UPDATE + `review.*` + `task.completed`)
+    // flow through the writer seam, and the row + `task.completed` pair lands
+    // atomically via `updateTaskWithEvent`. The prior shape was three
+    // sequential pool/eventStore writes with no transaction — a crash between
+    // them stranded the terminal row with a missing `task.completed` (the
+    // §1c invariant the merge-kind fix closed). A `changes_requested` keeps
+    // closing the task as done/ok (the verdict steers the writer-rework path,
+    // which opens its own writer tasks). The WRITER-PRESENT path is the live
+    // production path; the writer-undefined branch below is the TEST-ONLY
+    // split-write seam (the helper itself is doctrine-pure, writer-required).
+    if (writer !== undefined) {
+      await markReviewTaskDoneWithEvent({
+        writer,
+        base,
+        verdict: result.verdict,
         prUrl: result.prUrl,
         prNumber: result.prNumber,
-        reviewer: result.reviewer,
-        message: result.feedback,
-      },
-    });
+        ...(result.reviewer !== undefined && { reviewer: result.reviewer }),
+        ...(result.feedback !== undefined && { feedback: result.feedback }),
+      });
+      return;
+    }
+    await markTaskDoneOk(pool, result.taskId, writer);
+    if (result.verdict === "approved") {
+      await eventStore.append({
+        ...base,
+        eventType: "review.approved",
+        payload: { prUrl: result.prUrl, prNumber: result.prNumber, reviewer: result.reviewer },
+      });
+    } else {
+      await eventStore.append({
+        ...base,
+        eventType: "review.changes_requested",
+        payload: {
+          prUrl: result.prUrl,
+          prNumber: result.prNumber,
+          reviewer: result.reviewer,
+          message: result.feedback,
+        },
+      });
+    }
     await eventStore.append({
       ...base,
       eventType: "task.completed",
-      payload: { taskKind: "review", status: "changes_requested" },
+      payload: { taskKind: "review", status: result.verdict },
     });
     return;
   }
