@@ -87,6 +87,26 @@ function req(runId: string) {
   };
 }
 
+/**
+ * Snapshot-restore-shape fake (task #42): the droplet traces `new|no-ip` →
+ * `off|no-ip` → `active|ip`. The transient `off` is the snapshot-copy step;
+ * the allocator must NOT classify it as terminal. Each poll yields a distinct
+ * structural signature so the convergence detector sees forward motion.
+ */
+class SnapshotRestoreFakeClient implements DigitalOceanClient {
+  private getCalls = 0;
+  async createDroplet(): Promise<DigitalOceanDroplet> {
+    return { id: 99, status: "new", publicIpv4: undefined };
+  }
+  async getDroplet(dropletId: number): Promise<DigitalOceanDroplet> {
+    this.getCalls += 1;
+    if (this.getCalls === 1) return { id: dropletId, status: "new", publicIpv4: undefined };
+    if (this.getCalls === 2) return { id: dropletId, status: "off", publicIpv4: undefined };
+    return { id: dropletId, status: "active", publicIpv4: "203.0.113.30" };
+  }
+  async deleteDroplet(): Promise<void> {}
+}
+
 describe("DigitalOceanAllocator", () => {
   it("creates a droplet, waits for active+IP, and returns the SSH target", async () => {
     const client = new FakeDigitalOceanClient();
@@ -209,6 +229,24 @@ describe("DigitalOceanAllocator", () => {
     const error = new DigitalOceanAllocatorError("boom");
     expect(error.name).toBe("DigitalOceanAllocatorError");
     expect(error).toBeInstanceOf(Error);
+  });
+
+  // Task #42 — snapshot-restore intermediate `off` is ADVANCING, not terminal.
+  // A snapshot-backed droplet traces `new` → `off` → `active`. The previous
+  // allowlist (`["off","archive"]`) classified the transient `off` as terminal,
+  // false-escalating every snapshot-restore allocation. With `off` moved to
+  // {@link DO_PROVISIONING_STATUSES}, the allocator now traces past the
+  // transient and resolves to ready when the droplet comes back to `active`.
+  it("treats a transient `off` mid-snapshot-restore as advancing (not terminal) and resolves to ready", async () => {
+    const client = new SnapshotRestoreFakeClient();
+    const runners = new FakeRunnerStore();
+    const allocator = new DigitalOceanAllocator({ ...baseOpts(client, runners), pollIntervalMs: 1 });
+    const allocation = await allocator.allocate(req("run_snap"));
+    expect(allocation.target.host).toBe("203.0.113.30");
+    // The mid-restore `off` must NOT have destroyed the droplet (the false-
+    // escalation shape #42 names). The droplet that actually resolves to
+    // `active` is the same one the run claims.
+    expect(runners.claims[0]?.containerId).toBe("99");
   });
 
   // The droplet tags are the run/project ids, lowercased with disallowed chars

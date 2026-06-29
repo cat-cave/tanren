@@ -25,6 +25,11 @@ export { buildRunCredentialScoping } from "../workflow/plannerRunScopedCreds.js"
 // boot starts it from this same module — no new boot import-dependency.
 export { startRunWorkspaceReaper } from "./buildRunWorkspaceReaper.js";
 export type { RunWorkspaceReaper } from "./runWorkspaceReaper.js";
+// Task #9: the runner-row orphan sweeper is the third co-located worker
+// reconciler (alongside the run-workspace reaper + the job reaper). Re-exported
+// from here so the worker boot starts it without a new import dependency.
+export { startRunnerRowOrphanSweeper } from "./buildRunnerRowOrphanSweeper.js";
+export type { RunnerRowOrphanSweeper } from "./buildRunnerRowOrphanSweeper.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
