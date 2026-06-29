@@ -5,9 +5,9 @@
 // culprit so the timeline shows the batch decision; the culprit event carries the
 // run/spec so the recoverable re-execution dequeue links back.
 
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { type EventStore, PgEventStore } from "../eventStore.js";
+import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { BatchFormation } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
@@ -19,13 +19,13 @@ function membersOf(batch: ReadonlyArray<MergeQueueEntry>): Array<{ specId: strin
 
 export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
   /**
-   * @param runStateWriter Plane-split (autonomy loops): when present, merge.batch.*
-   *   events append through the control-plane writer (the de-privileged data plane
-   *   can no longer write `events` directly); absent, in-process via `PgEventStore`.
+   * @param runStateWriter REQUIRED (audit D-R3.2 sweep): merge.batch.* events append through
+   *   the writer seam — the de-privileged data plane cannot write `events` directly, and
+   *   PR #714 made the writer-undefined fallback unreachable in production.
    */
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter,
   ) {}
 
   private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
@@ -37,14 +37,8 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) return;
-    // Plane-split: route the append through the control plane when wired (ambient
-    // per-job org carries the scope); else append in-process — byte-identical.
-    if (this.runStateWriter !== undefined) {
-      const writer = this.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(writer));
-      return;
-    }
-    await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client)));
+    const writer = this.runStateWriter;
+    await runWithJobOrgId(orgId, () => work(writer));
   }
 
   async emitChecking(input: {

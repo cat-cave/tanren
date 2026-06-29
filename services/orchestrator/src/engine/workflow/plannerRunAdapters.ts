@@ -41,7 +41,6 @@ export {
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
-  writerSeam,
 } from "./plannerRunSeams.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
@@ -363,7 +362,7 @@ function buildResolver(
   return buildDefaultConflictResolver({
     applier,
     pool: input.pool,
-    ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+    runStateWriter: input.runStateWriter,
     eventStore: deps.eventStore,
     ssh: input.ssh,
     secrets: input.secrets,

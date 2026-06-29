@@ -250,7 +250,7 @@ async function runResolverOverWorkspace(input: {
       { oursRev: `${ctx.headBranch}@origin`, theirsRev: applierFacts.baseRevision },
     ),
     pool: deps.scopedPool,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
     eventStore: deps.eventStore,
     ssh: deps.ssh,
     secrets: deps.secrets,

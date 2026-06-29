@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { pollReviewForRun, type ReviewProbe } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
-import { ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+import { fakeMergeWriter, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
 describe("review polling — no poll-count cap (awaits indefinitely)", () => {
   it("a review pending well past the old 12-poll cap resolves when approval finally arrives", async () => {
@@ -31,6 +31,7 @@ describe("review polling — no poll-count cap (awaits indefinitely)", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",

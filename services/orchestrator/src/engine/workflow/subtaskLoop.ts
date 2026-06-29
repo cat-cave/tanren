@@ -180,14 +180,6 @@ export interface NewSpecRequest {
   body: string;
   severity: "P0" | "P1" | "P2" | "P3";
   findingIds: ReadonlyArray<string>;
-  // Audit round-2 H1 (triage half): the PARENT spec's writer-prompt MODE preserved
-  // so the spec-creating contract materializing this NewSpecRequest carries it into
-  // the child spec row's `mode` column. Without preservation a child remediation
-  // from a `specialize_seed` parent would land `from_scratch` and re-emerge the
-  // v64-class contradiction PR #708 closed at the prompt layer one rung deeper.
-  // Absent ⇒ DEFAULT_SPEC_MODE on materialization (matches the parent's absent
-  // default).
-  parentSpecMode?: SpecMode;
 }
 
 export type SubtaskLoopOutcome =

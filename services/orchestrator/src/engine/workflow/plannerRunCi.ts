@@ -40,7 +40,7 @@ import type { EventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
-import { appTokenSeam, writerSeam } from "./plannerRunSeams.js";
+import { appTokenSeam } from "./plannerRunSeams.js";
 import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
 import { applyFailedMergeGate, mergeGateSelfHeal, type MergeGateBudget } from "./plannerRunSelfHeal.js";
 import type { ReGateCiHook } from "./reviewMerge/index.js";
@@ -131,7 +131,7 @@ export async function publishCleanedDraftPr(
     const pullRequest = await publishDraftPullRequest({
       pool: input.pool,
       eventStore: ctx.eventStore,
-      ...writerSeam(input),
+      runStateWriter: input.runStateWriter,
       orgId: context.orgId,
       secrets: input.secrets,
       githubHttp: input.githubHttp,

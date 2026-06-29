@@ -19,7 +19,7 @@ import {
   runSimulatedReviewer,
 } from "../src/engine/workflow/reviewMerge/simulatedReviewer.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
-import { ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
+import { fakeMergeWriter, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
 interface SubmittedReview {
   event: SubmitReviewEvent;
@@ -138,6 +138,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -175,6 +176,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
     const result = await pollReviewForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",
@@ -209,6 +211,7 @@ describe("review polling stage — reviewPolicy: simulated", () => {
       pollReviewForRun({
         pool: pool.asPgPool(),
         eventStore: events,
+        runStateWriter: fakeMergeWriter(pool, events),
         secrets: new FakeSecretStore(),
         githubHttp: unusedHttp(),
         runId: "run_1",

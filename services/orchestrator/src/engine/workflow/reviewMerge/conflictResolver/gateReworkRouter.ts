@@ -42,7 +42,15 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface SpecStatusGateReworkRouterDeps {
   pool: QueryClient;
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
+   * in production; the prior optional slot was a split-write hazard. The router resolves
+   * org-scoped operations through the writer when `orgId` is wired (production); the
+   * degenerate no-org test path uses the writer for the bare `setSpecStatus` flip too.
+   */
+  runStateWriter: RunStateWriter;
+  /** The org scope every write rides; absent ⇒ degenerate path (no `parkSpecAtomic`/`enqueuer`). */
   orgId?: string;
   eventStore: EventStore;
   runId: string;
@@ -82,8 +90,8 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
 
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     if (this.deps.enqueuer === undefined || this.deps.orgId === undefined) {
-      // Degenerate/test path (no enqueuer wired): production ALWAYS wires it. Flip the
-      // status so the spec is re-drivable; never silently merge.
+      // Degenerate/test path (no enqueuer/orgId wired): production ALWAYS wires them. Flip
+      // the status so the spec is re-drivable; never silently merge.
       await this.setSpecStatus(input.specId, "open");
       return;
     }
@@ -241,42 +249,26 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     });
   }
 
-  /** Set the spec status through the control plane when wired, else the in-process UPDATE.
-   * Retained for the degenerate/test branch in `routeGateFailToRework` that
-   * needs only a bare status flip (no paired event), not the atomic seam. */
+  /** Set the spec status through the (REQUIRED) writer. Used by the degenerate/test
+   * branch in `routeGateFailToRework` that needs only a bare status flip (no paired
+   * event), not the atomic seam. */
   private async setSpecStatus(specId: string, status: string): Promise<void> {
-    if (this.deps.runStateWriter !== undefined && this.deps.orgId !== undefined) {
-      await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId, status });
-    } else {
-      await this.deps.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> 'merged'", [
-        specId,
-        status,
-      ]);
-    }
+    await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId ?? "", status });
   }
 
   /** Task #48 Site J: ATOMIC spec park to `needs_attention` + the matching
-   * `dag.spec.needs_attention` event in ONE org-scoped transaction (control
-   * plane when wired, else the in-process UPDATE + a separate event-store
-   * append, mirroring the original split-write fallback when no writer/org is
-   * wired — the unit/degenerate path retains the prior shape). */
+   * `dag.spec.needs_attention` event in ONE org-scoped transaction through the
+   * REQUIRED writer (audit D-R3.2 — the no-writer split-write fallback was
+   * unreachable in production after PR #714). */
   private async parkSpecAtomic(specId: string, event: AppendEventInput): Promise<void> {
-    if (this.deps.runStateWriter !== undefined && this.deps.orgId !== undefined) {
-      await this.deps.runStateWriter.updateSpecWithEvent({
-        spec: {
-          specId,
-          orgId: this.deps.orgId,
-          status: "needs_attention",
-          notFromStatuses: ["merged", "needs_attention"],
-        },
-        event,
-      });
-      return;
-    }
-    // No writer / no org (the degenerate/test path) — fall back to the legacy
-    // split (the in-process UPDATE + the event store), exactly mirroring the
-    // pre-task-#48 shape; production always wires the writer.
-    await this.setSpecStatus(specId, "needs_attention");
-    await this.deps.eventStore.append(event);
+    await this.deps.runStateWriter.updateSpecWithEvent({
+      spec: {
+        specId,
+        orgId: this.deps.orgId ?? "",
+        status: "needs_attention",
+        notFromStatuses: ["merged", "needs_attention"],
+      },
+      event,
+    });
   }
 }

@@ -164,7 +164,11 @@ async function retargetStackWalk(args: SpeculativeRetargetArgs & { defaultBranch
   // (`UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1`); absent them (the
   // in-process dev path), it runs the same UPDATE on the pool directly.
   if (remainingStack.length !== args.speculative.ancestorStack.length) {
-    if (args.runStateWriter !== undefined && args.orgId !== undefined) {
+    // Audit D-R3.2: the writer is REQUIRED; on production paths the ambient
+    // `runWithJobOrgId` provides the org, so the writer route always runs. The
+    // pool-direct UPDATE is kept ONLY for the test/dev path with no ambient org
+    // (the writer cannot resolve a scope without it) — byte-identical SQL.
+    if (args.orgId !== undefined) {
       await args.runStateWriter.setRunSpeculativeBase({
         runId: args.context.runId,
         orgId: args.orgId,
@@ -184,11 +188,11 @@ export interface SpeculativeRetargetArgs {
   pool: RunStateClient;
   eventStore: EventStore;
   /**
-   * PLANE-SPLIT: the run-state writer the `runs.ancestor_stack` head-drop routes through
-   * when remote-writes is on (the de-privileged data plane can't `UPDATE runs` directly).
-   * Absent ⇒ the in-process UPDATE on `pool` (the dev path), byte-identical.
+   * REQUIRED (audit D-R3.2 sweep): the `runs.ancestor_stack` head-drop routes through the
+   * writer — the de-privileged data plane can't `UPDATE runs` directly. PR #714 made the
+   * writer-undefined fallback unreachable in production.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
   /** The run's org (the ambient per-job org), required to scope the remote `setRunSpeculativeBase`. */
   orgId?: string;
   context: ReviewMergeRunContext;

@@ -61,7 +61,12 @@ export interface LiveBaseShiftDeps {
   /** The shared (timed) GitHub HTTP client the run/merge host seams build over. */
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
+   * in production.
+   */
+  runStateWriter: RunStateWriter;
   /** The event store the re-gate + the resolver's re-gate emit `gate.*` through. */
   eventStore: EventStore;
   /** The org-scoping pool the resolver's tenant reads/writes self-route through. */
@@ -337,7 +342,7 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.runId);
     const router = new SpecStatusGateReworkRouter({
       pool: this.deps.scopedPool,
-      ...(this.deps.runStateWriter !== undefined && { runStateWriter: this.deps.runStateWriter }),
+      runStateWriter: this.deps.runStateWriter,
       orgId: ctx.orgId,
       eventStore: this.deps.eventStore,
       runId: input.runId,

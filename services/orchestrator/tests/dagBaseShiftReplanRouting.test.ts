@@ -22,6 +22,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
 import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 import {
   conflictSignatureOf,
   type PriorReplanReader,
@@ -115,8 +116,18 @@ function buildRouter(deps: {
   enqueuer?: ReplanEnqueuer;
   priorReplans?: PriorReplanReader;
 }): SpecStatusReplanRouter {
+  // Audit D-R3.2: the writer is REQUIRED on `SpecStatusReplanRouter`. Forward the
+  // writer's `setSpecStatus` into the recording pool's `statusWrites` array so the
+  // existing assertions on "the spec was re-opened to `open` / escalated to
+  // `needs_attention`" hold unchanged.
+  const writer = new InMemoryRunStateWriter({
+    forwardSetSpecStatus: (input) => {
+      deps.pool.statusWrites.push({ specId: input.specId, status: input.status });
+    },
+  });
   return new SpecStatusReplanRouter({
     pool: deps.pool,
+    runStateWriter: writer,
     orgId: ORG,
     eventStore: deps.eventStore,
     runId: "run_b",

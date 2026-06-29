@@ -7,7 +7,6 @@
 // TYPE-ONLY from plannerRun.ts to avoid a circular runtime import.
 import type { AuditPostureConfig, ConvergencePolicyConfig } from "../config/shared.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
-import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SpecQualityAnswerer } from "../forge/specQuality/index.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
@@ -22,17 +21,6 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { ActorRef } from "../state/actor.js";
 import { designResolverActor } from "../design/designWriterContext.js";
-
-/**
- * The lifecycle-writer seam for a sub-stage input. Audit finding D3/H3 sweep:
- * the writer is now REQUIRED everywhere, so this is a trivial pass-through.
- * Retained as a helper so future cross-stage writer wiring (e.g. an
- * org-tagging wrapper) has a single edit site, and so existing call sites
- * read unchanged.
- */
-export function writerSeam(input: RunPlannerLoopInput): { runStateWriter: RunStateWriter } {
-  return { runStateWriter: input.runStateWriter };
-}
 
 export function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueue?: NativeQueueEnqueuer } {
   return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
@@ -59,7 +47,7 @@ export function reGateGateReworkSeam(
   return {
     reGateGateRework: new SpecStatusGateReworkRouter({
       pool: input.pool,
-      ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+      runStateWriter: input.runStateWriter,
       ...(orgId !== undefined && { orgId }),
       eventStore: deps.eventStore,
       runId: context.runId,
@@ -120,7 +108,7 @@ export function baseShiftRebaseSeam(
       ssh: input.ssh,
       identitySecretRef: context.identitySecretRef,
       ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
-      ...writerSeam(input),
+      runStateWriter: input.runStateWriter,
     })
   );
 }

@@ -12,7 +12,6 @@
 // this durable record is the LAST — and a finalize failure after the land is a typed
 // reconcile state, not a plain failure.
 
-import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { PgEventStore } from "../eventStore.js";
 import { applySetSpecStatus } from "../worker/runStateLifecycleSql.js";
@@ -115,19 +114,16 @@ function finalizeLandInputFrom(context: LandFinalizeContext, mainSha: string): F
  * `merged` (which unblocks its dependents) is recorded atomically with the land.
  */
 export function buildLandFinalizer(
-  pool: pg.Pool,
+  _pool: pg.Pool,
   context: LandFinalizeContext,
-  writer?: RunStateWriter,
+  writer: RunStateWriter,
 ): LandFinalizer {
   return {
     async finalizeLanded(input: { authorization: LandAuthorization; mainSha: string }): Promise<{ auditId: string }> {
-      if (writer !== undefined) {
-        return writer.finalizeLand(finalizeLandInputFrom(context, input.mainSha));
-      }
-      await runWithOrgScope(pool, context.orgId, (client) =>
-        applyFinalizeLand(client, finalizeLandInputFrom(context, input.mainSha)),
-      );
-      return { auditId: context.runId };
+      // Audit D-R3.2: the writer is REQUIRED — the in-process `runWithOrgScope +
+      // applyFinalizeLand` fallback was an unreachable half-measure once PR #714's
+      // `runStateWriterFromEnv` always returned a writer.
+      return writer.finalizeLand(finalizeLandInputFrom(context, input.mainSha));
     },
   };
 }

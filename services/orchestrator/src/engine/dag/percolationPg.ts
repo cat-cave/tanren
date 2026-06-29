@@ -32,7 +32,7 @@ import { parseGitHubRepository, type GitHubHttpClient, type GithubAppTokenMinter
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgDagLifecycleReadModel } from "./lifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { type EventStore, PgEventStore } from "../eventStore.js";
+import type { EventStore } from "../eventStore.js";
 import {
   buildBaseFromAncestorStack,
   clearPercolationPending,
@@ -59,12 +59,11 @@ export interface PgPercolationReadModelDeps {
   secrets: SecretStore;
   githubAppMinter?: GithubAppTokenMinter;
   /**
-   * Plane-split (autonomy loops): when present, the stale-marker housekeeping
-   * clear (a `percolation_pending` marker left on a now-MERGED/DONE run) routes
-   * through the control plane (the de-privileged data plane can no longer UPDATE
-   * runs); absent, the clear runs in-process org-scoped — byte-identical to today.
+   * REQUIRED (audit D-R3.2 sweep): the stale-marker housekeeping clear routes through
+   * the writer — the de-privileged data plane can no longer UPDATE runs. PR #714 made
+   * the writer-undefined fallback unreachable in production.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
 }
 
 /**
@@ -324,11 +323,11 @@ export class PgPercolationReadModel implements PercolationReadModel {
 export interface PgPercolationEventEmitterDeps {
   pool: pg.Pool;
   /**
-   * Plane-split (autonomy loops): when present, the dag.spec.percolation events
-   * append through the control-plane writer (the de-privileged data plane can no
-   * longer write `events` directly); absent, in-process via `PgEventStore`.
+   * REQUIRED (audit D-R3.2 sweep): the dag.spec.percolation events append through the
+   * writer — the de-privileged data plane can no longer write `events` directly. PR #714
+   * made the writer-undefined fallback unreachable in production.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
 }
 
 /** The pg-backed dag.spec.percolation emitter (org-scoped, mirrors PgDagEventEmitter). */
@@ -338,14 +337,8 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
   private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
     const orgId = await resolveProjectOrg(this.deps.pool, projectId);
     if (orgId === null) return;
-    // Plane-split: route the append through the control plane when wired (ambient
-    // per-job org carries the scope); else append in-process — byte-identical.
-    if (this.deps.runStateWriter !== undefined) {
-      const writer = this.deps.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(writer));
-      return;
-    }
-    await runWithOrgScope(this.deps.pool, orgId, (client) => work(new PgEventStore(client)));
+    const writer = this.deps.runStateWriter;
+    await runWithJobOrgId(orgId, () => work(writer));
   }
 
   async emitPercolating(input: {

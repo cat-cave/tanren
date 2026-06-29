@@ -16,7 +16,6 @@ import type { PercolationPending } from "../contracts/changePercolation.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
-import { PgEventStore } from "../eventStore.js";
 import { SpecStatusReplanRouter } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import {
   buildPriorReplanReader,
@@ -43,7 +42,9 @@ export async function appendIntegrationRebaseEvent(
     rebaseConflicted: boolean;
     decision: "rebased_clean" | "rebased_resolved" | "replanned" | "held";
   },
-  runStateWriter?: RunStateWriter,
+  // REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+  // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.
+  runStateWriter: RunStateWriter,
 ): Promise<void> {
   const event = {
     runId: input.runId,
@@ -63,11 +64,7 @@ export async function appendIntegrationRebaseEvent(
   };
   const orgId = await resolveProjectOrg(pool, input.projectId);
   if (orgId === null) return;
-  if (runStateWriter !== undefined) {
-    await runWithJobOrgId(orgId, () => runStateWriter.append(event));
-    return;
-  }
-  await runWithOrgScope(pool, orgId, (client) => new PgEventStore(client).append(event));
+  await runWithJobOrgId(orgId, () => runStateWriter.append(event));
 }
 
 /** Resolve the project's org id (system-scoped bootstrap, the same hop the walker uses). */
@@ -173,33 +170,21 @@ export function decodePercolationPending(value: unknown): PercolationPending | u
 export async function recordVerifiedAncestorSha(
   pool: pg.Pool,
   input: { projectId: string; runId: string; ancestorSpecId: string; sha: string; reviewVerdict?: ReviewVerdict },
-  runStateWriter?: RunStateWriter,
+  // REQUIRED (audit D-R3.2 sweep): writer-only — the in-process UPDATE fallback was
+  // unreachable in production after PR #714.
+  runStateWriter: RunStateWriter,
 ): Promise<void> {
   const entry: { sha: string; reviewVerdict?: ReviewVerdict } = {
     sha: input.sha,
     ...(input.reviewVerdict !== undefined && { reviewVerdict: input.reviewVerdict }),
   };
-  // Plane-split: route the `verified_ancestor_shas` merge through the control plane
-  // when wired (the de-privileged data plane can no longer UPDATE runs); else direct.
-  if (runStateWriter !== undefined) {
-    const orgId = await resolveProjectOrg(pool, input.projectId);
-    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
-    await runStateWriter.mergeRunVerifiedAncestorSha({
-      runId: input.runId,
-      orgId,
-      ancestorSpecId: input.ancestorSpecId,
-      entryJson: JSON.stringify(entry),
-    });
-    return;
-  }
-  await orgScopedWrite(pool, input.projectId, async (client) => {
-    await client.query(
-      `UPDATE runs
-          SET verified_ancestor_shas =
-            COALESCE(verified_ancestor_shas, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb)
-        WHERE run_id = $1`,
-      [input.runId, input.ancestorSpecId, JSON.stringify(entry)],
-    );
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
+  await runStateWriter.mergeRunVerifiedAncestorSha({
+    runId: input.runId,
+    orgId,
+    ancestorSpecId: input.ancestorSpecId,
+    entryJson: JSON.stringify(entry),
   });
 }
 
@@ -252,41 +237,30 @@ export async function recordPercolationPending(
 export async function repointRunAncestorStack(
   pool: pg.Pool,
   input: { projectId: string; runId: string; ancestorStack: AncestorStack },
-  runStateWriter?: RunStateWriter,
+  // REQUIRED (audit D-R3.2 sweep): writer-only — the in-process UPDATE fallback was
+  // unreachable in production after PR #714.
+  runStateWriter: RunStateWriter,
 ): Promise<void> {
-  if (runStateWriter !== undefined) {
-    const orgId = await resolveProjectOrg(pool, input.projectId);
-    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the base-shift re-point`);
-    await runStateWriter.setRunSpeculativeBase({
-      runId: input.runId,
-      orgId,
-      ancestorStack: input.ancestorStack,
-    });
-    return;
-  }
-  await orgScopedWrite(pool, input.projectId, async (client) => {
-    await client.query("UPDATE runs SET ancestor_stack = $2::jsonb WHERE run_id = $1", [
-      input.runId,
-      JSON.stringify(input.ancestorStack),
-    ]);
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) throw new Error(`project ${input.projectId} has no org for the base-shift re-point`);
+  await runStateWriter.setRunSpeculativeBase({
+    runId: input.runId,
+    orgId,
+    ancestorStack: input.ancestorStack,
   });
 }
 
-/** Clear the in-flight percolation marker once a percolation settled (absorbed/replan). */
+/** Clear the in-flight percolation marker once a percolation settled (absorbed/replan).
+ * Writer is REQUIRED (audit D-R3.2 sweep): in-process UPDATE fallback was unreachable
+ * in production after PR #714. */
 export async function clearPercolationPending(
   pool: pg.Pool,
   input: { projectId: string; runId: string },
-  runStateWriter?: RunStateWriter,
+  runStateWriter: RunStateWriter,
 ): Promise<void> {
-  if (runStateWriter !== undefined) {
-    const orgId = await resolveProjectOrg(pool, input.projectId);
-    if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
-    await runStateWriter.clearRunPercolationPending({ runId: input.runId, orgId });
-    return;
-  }
-  await orgScopedWrite(pool, input.projectId, async (client) => {
-    await client.query("UPDATE runs SET percolation_pending = NULL WHERE run_id = $1", [input.runId]);
-  });
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation write`);
+  await runStateWriter.clearRunPercolationPending({ runId: input.runId, orgId });
 }
 
 /**
@@ -310,7 +284,9 @@ export async function recordReplanContext(
     ancestorSha: string;
     reason: string;
   },
-  runStateWriter?: RunStateWriter,
+  // REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
+  // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.
+  runStateWriter: RunStateWriter,
 ): Promise<void> {
   const newContext = `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`;
   const orgId = await resolveProjectOrg(pool, input.projectId);
@@ -323,34 +299,17 @@ export async function recordReplanContext(
   // independent of the event-append plane below.
   const enqueuer = buildReplanEnqueuer(pool, runStateWriter);
   const priorReplans = buildPriorReplanReader(pool);
-  // Plane-split: the writer IS the EventStore + carries the status write; else the
-  // in-process org-scoped client backs BOTH the status UPDATE and the event append.
-  if (runStateWriter !== undefined) {
-    const router = new SpecStatusReplanRouter({
-      pool,
-      runStateWriter,
-      orgId,
-      eventStore: runStateWriter,
-      runId: input.runId,
-      projectId: input.projectId,
-      enqueuer,
-      priorReplans,
-    });
-    await runWithJobOrgId(orgId, () =>
-      router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId }),
-    );
-    return;
-  }
-  await runWithOrgScope(pool, orgId, async (client) => {
-    const router = new SpecStatusReplanRouter({
-      pool: client,
-      orgId,
-      eventStore: new PgEventStore(client),
-      runId: input.runId,
-      projectId: input.projectId,
-      enqueuer,
-      priorReplans,
-    });
-    await router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId });
+  const router = new SpecStatusReplanRouter({
+    pool,
+    runStateWriter,
+    orgId,
+    eventStore: runStateWriter,
+    runId: input.runId,
+    projectId: input.projectId,
+    enqueuer,
+    priorReplans,
   });
+  await runWithJobOrgId(orgId, () =>
+    router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId }),
+  );
 }

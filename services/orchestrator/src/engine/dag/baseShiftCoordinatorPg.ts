@@ -39,7 +39,7 @@ import {
 export class PgBaseShiftPersistence implements BaseShiftPersistence {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter,
   ) {}
 
   async repointBase(input: { projectId: string; runId: string; ancestorStack: AncestorStack }): Promise<void> {
@@ -105,7 +105,7 @@ export class PgBaseShiftNodeReader implements BaseShiftNodeReader {
 export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter?: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter,
   ) {}
 
   async emitRebase(input: {
