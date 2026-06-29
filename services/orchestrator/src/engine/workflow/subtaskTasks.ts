@@ -359,3 +359,116 @@ export async function markTaskFailedIfRunningWithEvent(
     await appendEventFallback("task.failed", payload, taskId);
   }
 }
+
+// --- task #46: PLANNER-LEVEL atomic terminal-pair wrappers ----------------
+//
+// Thin context-binding wrappers around `markTaskDoneWithEvent` /
+// `markTaskFailedWithEvent` for the spec-implementation loop's planner task
+// row. The prior `markTaskDone(...)` + a separate `appendEvent(...)` shape was
+// a non-atomic split — a crash/DB blip between the two writes could strand the
+// row terminal-`done` with no event (autonomy-engine.md §1c single-finalize
+// invariant). These wrappers route every planner-level terminal call through
+// the SAME atomic seam the writer / checker / auditor stage helpers use
+// (`RunStateWriter.updateTaskWithEvent` — task #39), so the row UPDATE + the
+// terminal `task.*` event commit in ONE org-scoped transaction.
+
+import type { EventName, EventPayload } from "../events/index.js";
+
+/** The planner-task's run lineage the atomic terminal pair always carries. */
+export interface PlannerTaskLineage {
+  runId: string;
+  specId: string;
+  projectId: string;
+}
+
+/** The minimal append callback the call sites already thread through the loop. */
+export type LoopAppendEvent = <N extends EventName>(
+  eventType: N,
+  payload: EventPayload<N>,
+  taskId?: string,
+) => Promise<void>;
+
+/** Shared opts for both planner-task atomic-terminal-pair wrappers (task #46). */
+export interface PlannerTerminalBase {
+  pool: LoopQueryClient;
+  writer?: RunStateWriter;
+  taskId: string;
+  lineage: PlannerTaskLineage;
+  taskKind: string;
+  appendEvent: LoopAppendEvent;
+}
+
+/**
+ * Atomic SUCCESS-terminal pair for the planner task: row → `done`/`passed` AND
+ * the matching `task.completed` event in ONE org-scoped transaction through
+ * `writer.updateTaskWithEvent`. Same contract as the writer/checker/auditor
+ * stage helpers; this just hides the lineage + no-writer-fallback wiring so
+ * each call site reads as one focused intention.
+ */
+export async function markPlannerTaskDoneWithEvent(
+  opts: PlannerTerminalBase & {
+    outcome: "passed" | "rejected_by_checker" | "rejected_by_auditor" | "window_exhausted";
+  },
+): Promise<void> {
+  await markTaskDoneWithEvent({
+    pool: opts.pool,
+    ...(opts.writer !== undefined && { writer: opts.writer }),
+    taskId: opts.taskId,
+    envelope: { ...opts.lineage, taskKind: opts.taskKind },
+    outcome: opts.outcome,
+    appendEventFallback: (eventType, payload, taskId) => opts.appendEvent(eventType, payload as never, taskId),
+  });
+}
+
+/**
+ * Atomic FAILED-terminal pair for the planner task: row → `failed`/`failed_with_kind`
+ * AND the matching `task.failed` event in ONE org-scoped transaction. The
+ * `failureKind` rides on the row's `failure_kind` column AND the event payload
+ * so the timeline + the row stay aligned; optional `message` carries the
+ * human-readable cause.
+ */
+export async function markPlannerTaskFailedWithEvent(
+  opts: PlannerTerminalBase & { failureKind: string; message?: string },
+): Promise<void> {
+  await markTaskFailedWithEvent({
+    pool: opts.pool,
+    ...(opts.writer !== undefined && { writer: opts.writer }),
+    taskId: opts.taskId,
+    envelope: { ...opts.lineage, taskKind: opts.taskKind },
+    failureKind: opts.failureKind,
+    ...(opts.message !== undefined && { message: opts.message }),
+    appendEventFallback: (eventType, payload, taskId) => opts.appendEvent(eventType, payload as never, taskId),
+  });
+}
+
+/**
+ * The bound-once context the loop-level helpers consume — pool/writer/lineage/
+ * appendEvent built ONCE per loop run, so each terminal site is `markPlannerPassed(ctx)`
+ * or `markPlannerFailed(ctx, kind, message?)`. Keeps the loop file lean while the
+ * atomic guarantee lives one layer down. taskKind defaults to "plan".
+ */
+export interface PlannerTerminalContext {
+  pool: LoopQueryClient;
+  writer?: RunStateWriter;
+  taskId: string;
+  lineage: PlannerTaskLineage;
+  appendEvent: LoopAppendEvent;
+}
+const PLAN_KIND = "plan";
+/** task #46: 1-line call site for the SUCCESS-terminal pair (`task.completed`). */
+export async function markPlannerPassed(ctx: PlannerTerminalContext): Promise<void> {
+  await markPlannerTaskDoneWithEvent({ ...ctx, taskKind: PLAN_KIND, outcome: "passed" });
+}
+/** task #46: 1-line call site for the FAILED-terminal pair (`task.failed`). */
+export async function markPlannerFailed(
+  ctx: PlannerTerminalContext,
+  failureKind: string,
+  message?: string,
+): Promise<void> {
+  await markPlannerTaskFailedWithEvent({
+    ...ctx,
+    taskKind: PLAN_KIND,
+    failureKind,
+    ...(message !== undefined && { message }),
+  });
+}

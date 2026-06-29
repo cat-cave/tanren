@@ -482,10 +482,8 @@ describe("pure decisions", () => {
     expect(decision.behaviorIdsFailed).toEqual(["B1"]);
   });
 
-  // The pure `applyConvergencePolicy` decisions (incl. the configurable velocity
-  // policy) live in loopPolicy.test.ts.
+  // pure `applyConvergencePolicy` decisions (incl. velocity policy) live in loopPolicy.test.ts.
 });
-
 describe("spec loop — non-completing writer (never laundered to passed)", () => {
   it("a window_exhausted writer halts the run as window_exhausted; planner task not passed", async () => {
     const { input, pool } = defaultLoopInput({
@@ -493,8 +491,10 @@ describe("spec loop — non-completing writer (never laundered to passed)", () =
     });
     const outcome = await runSubtaskLoop(input);
     expect(outcome.kind).toBe("window_exhausted");
+    // task #46: atomic terminal pair lands status='failed' / failure_kind='window_exhausted'.
     const planner = pool.tasks.find((t) => t.kind === "plan")!;
-    expect(planner.outcome).toBe("window_exhausted");
+    expect(planner.status).toBe("failed");
+    expect(planner.failureKind).toBe("window_exhausted");
     expect(pool.tasks.some((t) => t.kind === "check")).toBe(false);
   });
 });
