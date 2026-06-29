@@ -441,23 +441,32 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
   });
 
   // Audit finding D2 — the writer-seam extension: `priorEvents` is admitted
-  // as an optional bundle. The schema accepts the field (non-terminal event
-  // types are allowed; the registry parse happens downstream inside the
-  // transaction, so a malformed payload throws there → ROLLBACK).
-  it("(D2) the priorEvents field is admitted as an optional array", () => {
+  // as an optional bundle. Round-3 H-R3.2: each entry REQUIRES a stable
+  // `idempotencyKey` + `runId` (the partial unique index
+  // `events_prior_idempotency_unique` is `(run_id, idempotency_key)`). The
+  // registry parse happens downstream inside the transaction, so a malformed
+  // payload throws there → ROLLBACK.
+  it("(D2) the priorEvents field is admitted as an optional array (runId + idempotencyKey required)", () => {
     const ok = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: ORG, transition: "done", outcome: "passed" },
       event: { projectId: PROJECT, eventType: "task.completed", payload: { taskKind: "review" } },
       priorEvents: [
         {
+          runId: "r",
           projectId: PROJECT,
           eventType: "review.approved",
           payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 },
+          idempotencyKey: "r:review:approved",
         },
       ],
     });
     expect(ok.success).toBe(true);
   });
+
+  // Round-3 H-R3.1 (terminal-leak guard) + H-R3.2 (idempotencyKey + runId
+  // required) negative cases live in `tests/priorEventsDiscipline.test.ts`
+  // alongside the InMemoryRunStateWriter parity tests (H-R3.3), so the
+  // schema + the fixture's conformance against the same schema co-locate.
 });
 
 // The audit-D2 `priorEvents` real-PG conformance lives in

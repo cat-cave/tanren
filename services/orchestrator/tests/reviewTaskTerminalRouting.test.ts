@@ -75,6 +75,10 @@ describe("review task terminal routing (audit findings #6 + D2 — atomic 3-writ
         ...BASE,
         eventType: "review.approved",
         payload: { prUrl: "https://github.com/o/r/pull/7", prNumber: 7, reviewer: "alice" },
+        // Round-3 H-R3.2: the prior-event entry carries a stable idempotency
+        // key so a retried atomic write deduplicates the verdict event on
+        // (run_id, idempotency_key) under `events_prior_idempotency_unique`.
+        idempotencyKey: `${BASE.runId}:review:approved`,
       },
     ]);
   });
@@ -105,6 +109,7 @@ describe("review task terminal routing (audit findings #6 + D2 — atomic 3-writ
           reviewer: "carol",
           message: "fix the edge case",
         },
+        idempotencyKey: `${BASE.runId}:review:changes_requested`,
       },
     ]);
     // changes_requested closes the task as done/ok (the verdict steers the writer

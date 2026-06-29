@@ -167,19 +167,24 @@ const updateTaskSchema = z.object({
 // The route enforces an EXPLICIT `task.orgId` (so the server can open
 // `runWithOrgScope` deterministically — the worker resolved its org from the
 // ambient per-job scope before posting). The pairing constraint itself is
-// enforced by the shared `terminalPairSchema` (matched transition + event type).
+// enforced by the shared `terminalPairSchema` (matched transition + event type),
+// which also enforces the round-3 H-R3.1 (no-terminal-event-in-priorEvents)
+// refinement and the H-R3.2 (idempotencyKey required) shape.
 //
 // `priorEvents` (audit finding D2 writer-seam extension) bundles pre-terminal
 // observation events into the SAME transaction — see
-// `UpdateTaskWithEventInput` in `contracts/runStateWriter.ts`.
+// `UpdateTaskWithEventInput` in `contracts/runStateWriter.ts`. Round-3 H-R3.2:
+// each entry REQUIRES a caller-supplied `idempotencyKey`; round-3 H-R3.1:
+// terminal task/run event types are rejected (terminal-leak guard).
 const priorEventRouteShape = z
   .object({
-    runId: z.string().min(1).optional(),
+    runId: z.string().min(1),
     taskId: z.string().min(1).optional(),
     specId: z.string().min(1).optional(),
     projectId: z.string().min(1),
     eventType: z.string().min(1),
     payload: z.record(z.string(), z.unknown()),
+    idempotencyKey: z.string().min(1),
   })
   .strict();
 

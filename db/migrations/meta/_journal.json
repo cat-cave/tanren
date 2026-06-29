@@ -127,6 +127,13 @@
       "when": 1782660355198,
       "tag": "0019_window_pause_auto_resume",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1782748001354,
+      "tag": "0020_events_idempotency_key",
+      "breakpoints": true
     }
   ]
 }

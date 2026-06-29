@@ -16,7 +16,7 @@
 // One writer call, one transaction, no half-measure.
 
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
-import type { AppendEventInput } from "../../eventStore.js";
+import type { PriorEventInput } from "../../eventStore.js";
 
 export interface ReviewTaskTerminalBase {
   runId: string;
@@ -50,22 +50,33 @@ export async function markReviewTaskDoneWithEvent(input: {
   // as the terminal row + `task.completed` via the writer-seam `priorEvents`
   // extension — collapses what used to be a separate `writer.append()` call
   // into ONE commit alongside the terminal pair.
-  const verdictEvent: AppendEventInput =
+  //
+  // Round-3 audit finding H-R3.2: the prior-event entry carries a stable
+  // idempotency key so a retried atomic write deduplicates the verdict event
+  // on (run_id, idempotency_key) instead of double-emitting. Key shape
+  // `${runId}:review:${verdict}` keys the verdict to its run + outcome, so a
+  // retry of THIS finalize call dedupes cleanly; a subsequent flip of the
+  // verdict (e.g. an explicit re-review with a DIFFERENT outcome) would carry
+  // a distinct key and land afresh.
+  const eventType = verdict === "approved" ? "review.approved" : "review.changes_requested";
+  const verdictEvent: PriorEventInput =
     verdict === "approved"
       ? {
           ...base,
-          eventType: "review.approved",
+          eventType,
           payload: { prUrl, prNumber, ...(reviewer !== undefined && { reviewer }) } as never,
+          idempotencyKey: `${base.runId}:review:${verdict}`,
         }
       : {
           ...base,
-          eventType: "review.changes_requested",
+          eventType,
           payload: {
             prUrl,
             prNumber,
             ...(reviewer !== undefined && { reviewer }),
             ...(feedback !== undefined && { message: feedback }),
           } as never,
+          idempotencyKey: `${base.runId}:review:${verdict}`,
         };
   await writer.updateTaskWithEvent({
     task: { taskId: base.taskId, transition: "done", outcome: "ok" },
