@@ -115,7 +115,9 @@ services:
       # cross-process smoke can act as a data-plane client against it from the
       # host. In a real deployment this stays on the private control↔data network
       # (not host-published); it is exposed here only for the smoke.
-      - "3110:3110"
+      # Host port is remappable (default 3110) via TANREN_INTERNAL_MTLS_HOST_PORT
+      # or the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 3110.
+      - "${TANREN_INTERNAL_MTLS_HOST_PORT:-3110}:3110"
     healthcheck:
       test:
         - CMD
@@ -272,7 +274,9 @@ services:
       # auto-detects between the two. See justfile + apex-run-playbook §1.
       - ${TANREN_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
     ports:
-      - "3200:3200"
+      # Host port is remappable (default 3200) via TANREN_ALLOCATOR_HOST_PORT or
+      # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 3200.
+      - "${TANREN_ALLOCATOR_HOST_PORT:-3200}:3200"
     depends_on:
       postgres:
         condition: service_healthy
