@@ -27,6 +27,7 @@ import type {
   WriterResult,
 } from "../../src/engine/providers/types.js";
 import type { SubtaskLoopInput } from "../../src/engine/workflow/subtaskLoop.js";
+import { buildLoopWriter } from "./plannerLoopWriter.js";
 
 interface FakePoolRecord {
   taskId: string;
@@ -457,10 +458,12 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
 } {
   const pool = new FakePool();
   const events = new FakeEventStore();
+  const writer = buildLoopWriter(pool, events);
   const recorder = new CostRecorder(pool, events);
   const input: SubtaskLoopInput = {
     pool,
     eventStore: events,
+    runStateWriter: writer,
     recorder,
     adapters: {
       planner: makePlanner([buildPlan([{ title: "T1", intent: "Touch README", behaviorIds: ["B1"] }])]),

@@ -11,6 +11,7 @@ import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import { runCheckerStage } from "../src/engine/workflow/subtaskStages.js";
 import { completeCheck, makeChecker } from "./helpers/plannerLoopHelpers.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 interface RecordedEvent {
   eventType: EventName;
@@ -19,6 +20,15 @@ interface RecordedEvent {
 
 class CheckerHarness {
   readonly events: RecordedEvent[] = [];
+  // Audit finding H3 sweep: writer REQUIRED at the checker's atomic terminal seam.
+  readonly writer = new InMemoryRunStateWriter({
+    forwardAppend: async (input) => {
+      this.events.push({
+        eventType: input.eventType as EventName,
+        payload: input.payload as Record<string, unknown>,
+      });
+    },
+  });
 
   appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>): Promise<void> => {
     this.events.push({ eventType, payload: payload as Record<string, unknown> });
@@ -41,6 +51,7 @@ class CheckerHarness {
 function checkerArgs(h: CheckerHarness) {
   return {
     pool: { query: h.query },
+    writer: h.writer,
     costCtx: h.costCtx(),
     adapter: makeChecker([completeCheck]),
     runId: "run_1",

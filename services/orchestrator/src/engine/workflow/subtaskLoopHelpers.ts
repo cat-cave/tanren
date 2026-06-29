@@ -2,13 +2,10 @@
 // Both helpers are pure compositions — no engine state, no side effects — they just
 // hide repeated noise so the run-loop reads as a sequence of intentions.
 
-import type pg from "pg";
 import { type FindingSeverity, severityRank } from "../contracts/findings.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import type { PlannerTerminalContext, LoopAppendEvent } from "./subtaskTasks.js";
+import type { PlannerTerminalContext } from "./subtaskTasks.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
-
-type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * The minimum SubtaskLoopInput shape this helper reads — accepts a structural
@@ -16,8 +13,8 @@ type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
  * create a circular dependency back into subtaskLoop.ts).
  */
 export interface PlannerTerminalContextSource {
-  pool: LoopQueryClient;
-  runStateWriter?: RunStateWriter;
+  /** REQUIRED (audit finding H3 sweep — no fallback arm). */
+  runStateWriter: RunStateWriter;
   context: { runId: string; specId: string; projectId: string };
 }
 
@@ -25,14 +22,11 @@ export interface PlannerTerminalContextSource {
 export function buildPlannerTerminalContext(
   input: PlannerTerminalContextSource,
   plannerTaskId: string,
-  appendEvent: LoopAppendEvent,
 ): PlannerTerminalContext {
   return {
-    pool: input.pool,
-    ...(input.runStateWriter !== undefined && { writer: input.runStateWriter }),
+    writer: input.runStateWriter,
     taskId: plannerTaskId,
     lineage: { runId: input.context.runId, specId: input.context.specId, projectId: input.context.projectId },
-    appendEvent,
   };
 }
 

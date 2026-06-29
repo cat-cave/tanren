@@ -158,11 +158,10 @@ export interface RunPlannerLoopInput {
   // in-process org-scoped UPDATE on `pool`; the worker injects a writer-backed
   // finalizer that routes through the control-plane endpoint when remote-writes is on.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
-  // the run/spec/task LIFECYCLE writer. When present (remote-writes
-  // on, the run has an org), every non-finalize `runs` / `specs` / `tasks` write the
-  // workflow drives routes through the control-plane endpoints; absent (the default),
-  // the workflow runs its byte-identical in-process org-scoped writes on `pool`.
-  runStateWriter?: RunStateWriter;
+  // REQUIRED (audit D3/H3 sweep): the workflow's atomic terminal seams ride
+  // through this writer (DirectRunStateWriter default; HttpRunStateWriter via
+  // TANREN_DATA_PLANE_REMOTE_WRITES=1).
+  runStateWriter: RunStateWriter;
   allocator: Allocator;
   ssh: CommandSubstrate;
   secrets: SecretStore;
@@ -490,6 +489,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // re-driven recoverable-halt result (never re-throw into the worker's strand path, the #580
     // double-finalize) or re-throw WRAPPED. The orchestration lives in `finalizeWorkflowThrow`.
     releaseReason = "failed";
+    // eslint-disable-next-line no-console
+    console.error("DEBUG halt", error);
     return await finalizeWorkflowThrow(error, { finalizeRunState, appendEvent, workspacePath, input, context });
   } finally {
     // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>` sandbox (layer 1 of the ≈204 GB disk-leak fix), then release through the RELEASE FINALIZER seam + emit `release.finalized`. The helper never throws (a throw here would mask the run's error); `releaseReason` reflects the run's outcome.

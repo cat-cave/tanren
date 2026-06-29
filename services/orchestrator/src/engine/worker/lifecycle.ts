@@ -77,12 +77,13 @@ export interface StartRunWorkerInput {
   // `worker` container passes an `HttpJobClaimClient` that claims over the mTLS
   // control-plane endpoint.
   claimClient?: JobClaimClient;
-  // How the worker WRITES the run's tenant state. Omit (the
-  // DEFAULT) for today's in-process org-scoped DB writes; the cross-process
-  // `worker` container passes an `HttpRunStateWriter` (under
-  // TANREN_DATA_PLANE_REMOTE_WRITES=1) that routes writes through the
-  // control-plane endpoints over mTLS.
-  runStateWriter?: RunStateWriter;
+  // REQUIRED (audit finding D3/H3 sweep): the workflow's atomic terminal
+  // seams require this writer everywhere. Default in-process (the
+  // `DirectRunStateWriter` constructed by `buildRunStateWriterFromEnv(pool)`,
+  // byte-identical to the prior direct path); the cross-process `worker`
+  // container resolves it to an `HttpRunStateWriter` over mTLS when
+  // TANREN_DATA_PLANE_REMOTE_WRITES=1.
+  runStateWriter: RunStateWriter;
   // Environment management (env-management.md §4 + §7 P4): the JIT env-image creation
   // seams threaded to the executor. Wired ⇒ an off-baseline no-match run synchronously
   // builds→validates→publishes a real env image before seeding. Omitted ⇒ P3's
@@ -128,7 +129,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
       ...(input.githubAppMinter === undefined ? {} : { githubAppMinter: input.githubAppMinter }),
       identitySecretRef: input.identitySecretRef,
       ...(input.claimClient === undefined ? {} : { claimClient: input.claimClient }),
-      ...(input.runStateWriter === undefined ? {} : { runStateWriter: input.runStateWriter }),
+      runStateWriter: input.runStateWriter,
       ...(input.envCreation === undefined ? {} : { envCreation: input.envCreation }),
     },
     { concurrency: input.concurrency, notifyListener, ...input.options },
@@ -144,7 +145,7 @@ export function startRunWorker(input: StartRunWorkerInput): StartedRunWorker {
   const reaper = new JobReaper({
     pool: input.pool,
     jobQueue,
-    ...(input.runStateWriter === undefined ? {} : { eventStore: input.runStateWriter }),
+    eventStore: input.runStateWriter,
   });
   reaper.start();
   installSignalHandlers(worker, reaper);

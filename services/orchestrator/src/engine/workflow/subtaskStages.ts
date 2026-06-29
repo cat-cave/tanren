@@ -41,16 +41,13 @@ export interface StageAppendEvent {
 export interface PlannerStageInput {
   pool: LoopQueryClient;
   /**
-   * Route the planner task's atomic FAILED terminal write (task #21) through the
-   * writer seam when wired. The finalize guard's `markTaskFailedIfRunningWithEvent`
-   * commits the row UPDATE + the `task.failed` event in ONE org-scoped transaction
-   * through `RunStateWriter.updateTaskWithEvent`; without this seam the guard falls
-   * through to the no-writer split path (the row UPDATE + a separate append), which
-   * strands the planner row in `running` if the event append fails between the two.
-   * Production wires `input.runStateWriter` here from `runSubtaskLoop` — parity with
-   * the writer / checker / auditor stages, which already thread the seam.
+   * REQUIRED (audit finding H3 sweep): the planner task's atomic FAILED
+   * terminal write rides the writer seam through this writer — no fallback.
+   * The finalize guard's `markTaskFailedIfRunningWithEvent` commits the row
+   * UPDATE + the `task.failed` event in ONE org-scoped transaction through
+   * `RunStateWriter.updateTaskWithEvent`.
    */
-  writer?: RunStateWriter;
+  writer: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<PlanAnswer>;
   spec: PlannerSpecContext;
@@ -78,9 +75,7 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
   // `RunStateWriter.updateTaskWithEvent`) — atomicity parity with the writer /
   // checker / auditor stages. Absent (unit paths) ⇒ the no-writer split fallback.
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
-    ...(args.writer !== undefined && { writer: args.writer }),
-    appendEvent: args.appendEvent,
+    writer: args.writer,
     taskId: args.plannerTaskId,
     taskKind: "plan",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -141,8 +136,11 @@ export { runWriterStage, type WriterStageInput, type WriterStageOutcome } from "
 
 export interface CheckerStageInput {
   pool: LoopQueryClient;
-  /** route the checker task INSERT/UPDATE remote when wired. */
-  writer?: RunStateWriter;
+  /**
+   * REQUIRED (audit finding H3 sweep): the checker's terminal row + event pair
+   * rides the atomic seam through this writer — no fallback.
+   */
+  writer: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<CheckAnswer>;
   runId: string;
@@ -263,9 +261,7 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
   // emits exactly one `task.failed`. Supersedes the prior inner
   // `runStageWithEmitOnThrow` (which only covered the answerer call).
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
     writer: args.writer,
-    appendEvent: args.appendEvent,
     taskId: args.checkerTaskId,
     taskKind: "check",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -391,12 +387,6 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
     projectId: args.costCtx.projectId,
     taskKind: "check",
   };
-  // No-writer test fallback append sink (task #39).
-  const fallbackAppend = (
-    eventType: "task.completed" | "task.failed",
-    payload: Record<string, unknown>,
-    taskId: string,
-  ): Promise<void> => args.appendEvent(eventType, payload as never, taskId);
   if (decision.kind === "reject") {
     // PRE-TERMINAL `checker.rejected` rides FIRST (wrapped — a transport throw
     // lands as `event_append_failed` rather than the fail-closed `crashed`),
@@ -416,22 +406,18 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
       ),
     );
     await markTaskDoneWithEvent({
-      pool: args.pool,
       writer: args.writer,
       taskId: args.checkerTaskId,
       envelope: eventEnvelope,
       outcome: "rejected_by_checker",
-      appendEventFallback: fallbackAppend,
     });
     return decision;
   }
   await markTaskDoneWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: args.checkerTaskId,
     envelope: eventEnvelope,
     outcome: "passed",
-    appendEventFallback: fallbackAppend,
   });
   return decision;
 }

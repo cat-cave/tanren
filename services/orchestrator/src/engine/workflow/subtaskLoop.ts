@@ -104,7 +104,13 @@ export interface SubtaskLoopCostHooks {
 export interface SubtaskLoopInput {
   pool: LoopQueryClient;
   eventStore: EventStore;
-  runStateWriter?: RunStateWriter;
+  /**
+   * REQUIRED (audit finding H3 sweep): every stage's terminal row + event pair
+   * rides the atomic seam through this writer — no fallback. Production wires
+   * the always-returning `runStateWriterFromEnv`; tests wire the
+   * `InMemoryRunStateWriter` fixture.
+   */
+  runStateWriter: RunStateWriter;
   recorder: CostRecorder;
   adapters: SubtaskLoopAdapters;
   context: PlannerSpecContext & {
@@ -274,7 +280,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
 
   // task #46: pre-bound atomic-terminal context the planner-task terminal sites use.
-  const planCtx = buildPlannerTerminalContext(input, plannerTaskId, appendEvent);
+  const planCtx = buildPlannerTerminalContext(input, plannerTaskId);
   const rejectionHistory: PlannerRejectionFeedback[] = [...(input.seedRejections ?? [])];
   // The cross-loop convergence state — the SOLE loop bound (NOT a retry counter). A
   // `progress`/`velocity_defer` resets it; a `stalled` increments; N consecutive halts.

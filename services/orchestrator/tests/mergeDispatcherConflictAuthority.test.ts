@@ -18,6 +18,7 @@ import {
   context,
   fakePool,
   mergeability,
+  noopFinalizeWriter,
   reGate,
   recordingEventStore,
   scriptedProbe,
@@ -67,6 +68,8 @@ function dispatcherLazy(
       state.builds += 1;
       return buildBundle();
     },
+    // Audit finding D3 sweep: the dispatcher's finalize REQUIRES a writer.
+    runStateWriter: noopFinalizeWriter(),
   } as unknown as MergeForRunInput;
   const deps: DispatcherDeps = {
     input,
@@ -217,6 +220,8 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
       runId: "run_1",
       resolveConflict: async () => ({ resolved: true }),
       // NO mergeAuthority, NO buildMergeAuthority — the authority is live (default flag).
+      // Audit finding D3 sweep: dispatcher.finalize REQUIRES a writer.
+      runStateWriter: noopFinalizeWriter(),
     } as unknown as MergeForRunInput;
     const deps: DispatcherDeps = {
       input,

@@ -36,6 +36,7 @@ import {
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
   buildRedriveHistoryReader,
+  DirectRunStateWriter,
 } from "./runWorkflowPorts.js";
 import { createLogger, finalizeRunRecoverable, rawCauseOf } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
@@ -80,16 +81,12 @@ export interface RunExecutorDeps {
   // the queue surface (fail/complete/heartbeat) still uses `jobQueue`; the
   // control-plane routing moves the CLAIM and the run-state WRITES separately.
   claimClient?: JobClaimClient;
-  // How this worker WRITES the run's tenant state — event-append,
-  // cost-record insert, and run finalize. Omit (the DEFAULT) → the worker does
-  // today's in-process org-scoped DB writes directly (the `DirectRunStateWriter`
-  // path, lower risk, behavior-identical). Set to an `HttpRunStateWriter` (when
-  // TANREN_DATA_PLANE_REMOTE_WRITES=1) → those writes route through the
-  // control-plane `/internal/*` write endpoints over mTLS, so the data plane
-  // writes no tenant tables directly. Keeping DIRECT the default makes the cutover
-  // REVERSIBLE: nothing changes unless the flag is set. A plan run always carries
-  // an org (the fail-closed guard), so a remote write always has a scope.
-  runStateWriter?: RunStateWriter;
+  // REQUIRED (audit D3/H3 sweep): every workflow stage's terminal row +
+  // event pair rides the atomic seam through this writer. Default is the
+  // in-process `DirectRunStateWriter`; an `HttpRunStateWriter` (under
+  // TANREN_DATA_PLANE_REMOTE_WRITES=1) routes writes through the
+  // control-plane `/internal/*` endpoints over mTLS.
+  runStateWriter: RunStateWriter;
   allocator: Allocator;
   ssh: CommandSubstrate;
   secrets: SecretStore;
@@ -277,33 +274,26 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
     // its OWN short org-scoped txn from that org-id, so a connection is held only
     // for one DB op, never across I/O. The org is ALWAYS concrete (the fail-closed
     // guard), so this is always a real per-job org scope — never a BYPASSRLS handoff.
-    // When a remote run-state writer is wired, route the workflow's tenant
-    // run-state writes — events, cost_records, the terminal run finalize —
-    // through it (the control-plane endpoints). Otherwise inject nothing: the
-    // workflow uses its own in-process org-scoped stores over `orgScopingPool`,
-    // BYTE-IDENTICAL to the direct in-process path (and its mutation suite).
-    const remoteWriter = deps.runStateWriter;
-    const remoteWorkflowSeams =
-      remoteWriter === undefined
-        ? {}
-        : {
-            eventStore: remoteWriter,
-            recorder: new CostRecorder(
-              deps.pool,
-              remoteWriter,
-              (cost) => remoteWriter.recordCost(cost),
-              // route the run-end cost reconcile/apportion through
-              // the control plane too — the de-privileged data plane can no longer
-              // UPDATE cost_records directly (migration 0031).
-              (rec) => remoteWriter.reconcileCost({ ...rec, orgId }),
-            ),
-            finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
-              remoteWriter.finalizeRun({ ...f, orgId }).then(() => {}),
-            // the full lifecycle writer. When present (remote-writes
-            // on), the workflow routes its run/spec/task lifecycle writes through the
-            // control plane; absent, it does its byte-identical in-process writes.
-            runStateWriter: remoteWriter,
-          };
+    // Audit finding D3/H3 sweep: writer is REQUIRED. The workflow's tenant
+    // writes (events, cost_records, finalize, lifecycle) route through it.
+    // `workflowWriter` rebuilds an in-process writer over `orgScopingPool` so
+    // its `INSERT INTO events` carries the per-job org GUC under RLS.
+    const writer = workflowWriter(deps.runStateWriter, deps.pool, orgId);
+    const workflowWriterSeams = {
+      eventStore: writer,
+      // run-end cost reconcile/apportion routes through the writer too — the
+      // de-privileged data plane can no longer UPDATE cost_records directly
+      // (migration 0031). Direct writer runs the SAME `applyReconcile`.
+      recorder: new CostRecorder(
+        deps.pool,
+        writer,
+        (c) => writer.recordCost(c),
+        (rec) => writer.reconcileCost({ ...rec, orgId }),
+      ),
+      finalizeRun: (f: { runId: string; status: string; outcome: string; fromStatuses: string[] }) =>
+        writer.finalizeRun({ ...f, orgId }).then(() => {}),
+      runStateWriter: writer,
+    };
     const result = await withJobOrg(orgId, () =>
       runWorkflow({
         // The workflow ALWAYS gets the org-scoping proxy so its tenant ops
@@ -311,7 +301,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // implicit bare-pool handoff is gone (no silent unscoped tenant op), and
         // there is no null-org BYPASSRLS path — the run always carries an org.
         pool: orgScopingPool(deps.pool),
-        ...remoteWorkflowSeams,
+        ...workflowWriterSeams,
         allocator: deps.allocator,
         // The PROGRESS-instrumented substrate (every SSH boundary ticks the job-progress signal).
         ssh,
@@ -338,7 +328,7 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // key reads the shas from `ancestor_stack`. PLANE-SPLIT: `runs` is de-privileged on the data plane
         // (migration 0035), so a wired remote writer routes the UPDATE through the control plane (else the
         // byte-identical in-process UPDATE on the worker pool). It never gates the run.
-        bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool, remoteWriter),
+        bootstrapStackHeadShaWriteBack: buildBootstrapStackHeadShaWriteBack(deps.pool, writer),
         // §3 NEVER-DISCARD (apex v35): reads the ancestor specs' lifecycle buckets so a dependent whose
         // ancestor is non-terminal but headless BENIGN-WAITS (re-driven) instead of stranding. Org-scoped.
         ancestorPhaseReader: buildAncestorPhaseReader(deps.pool),
@@ -496,4 +486,12 @@ function redactErrorDetail(detail: string): string {
   return detail
     .replaceAll(/\bhttps?:\/\/\S+/giu, "[url]")
     .replaceAll(/\b(bearer|authorization|token|password|secret|api[_-]?key)(\s*[:=]\s*)\S+/giu, "$1$2[redacted]");
+}
+
+/** Audit finding D3/H3 sweep: rebuild an in-process writer over the workflow's
+ *  `orgScopingPool` so in-process writes carry the per-job org GUC under RLS.
+ *  HTTP writers (which scope server-side) pass through unchanged. */
+function workflowWriter(boot: RunStateWriter, pool: pg.Pool, _orgId: string): RunStateWriter {
+  if (boot instanceof DirectRunStateWriter) return new DirectRunStateWriter(orgScopingPool(pool));
+  return boot;
 }

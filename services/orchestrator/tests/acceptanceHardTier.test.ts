@@ -27,6 +27,7 @@ import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answere
 import { FakeJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { AnswererAdapter } from "../src/engine/usage/index.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { executeNextPlanJob } from "../src/engine/worker/index.js";
 import {
   buildPlan,
@@ -80,6 +81,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       secrets,
       githubHttp: github,
       identitySecretRef,
+      runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
       // Budgets generous enough that the scripted loops stay well within them.
       runWorkflow: hardTierWorkflowRunner(github, trace),
     });
@@ -137,6 +139,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       secrets,
       githubHttp: github,
       identitySecretRef,
+      runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,
@@ -208,6 +211,7 @@ describe("acceptance hard tier (dequeue→execute, all hard paths)", () => {
       secrets,
       githubHttp: hardTierGitHub(),
       identitySecretRef,
+      runStateWriter: new DirectRunStateWriter(pool.asPgPool()),
       runWorkflow: (input) =>
         runPlannerLoopWorkflow({
           ...input,

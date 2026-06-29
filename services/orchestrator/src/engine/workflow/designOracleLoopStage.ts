@@ -122,7 +122,6 @@ export async function runDesignOracleLoopStage(
   // ATOMIC terminal-row + terminal-event pair (task #39): row UPDATE +
   // `task.completed` ride ONE org-scoped transaction.
   await markTaskDoneWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: designOracleTaskId,
     envelope: {
@@ -132,7 +131,6 @@ export async function runDesignOracleLoopStage(
       taskKind: "designOracle",
     },
     outcome: "passed",
-    appendEventFallback: (eventType, payload, t) => args.appendEvent(eventType, payload as never, t),
   });
   return { findings: result.findings, designOracleTaskId };
 }

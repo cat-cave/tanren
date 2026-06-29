@@ -22,8 +22,13 @@ type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface WriterStageInput {
   pool: LoopQueryClient;
-  /** route the writer task INSERT/UPDATE remote when wired. */
-  writer?: RunStateWriter;
+  /**
+   * REQUIRED (audit finding H3 sweep): the writer-subtask's terminal row +
+   * event pair rides the atomic seam through this writer — no fallback.
+   * Production wires the always-returning `runStateWriterFromEnv`; tests wire
+   * the `InMemoryRunStateWriter` fixture.
+   */
+  writer: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: WriterAdapter;
   runId: string;
@@ -96,9 +101,7 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterStag
   // inner `runStageWithEmitOnThrow` apex v51 wrap (it only covered the provider
   // body — a recorder throw still stranded the row in `running`).
   return await runStageBodyWithFinalizeGuard({
-    pool: args.pool,
     writer: args.writer,
-    appendEvent: args.appendEvent,
     taskId: args.writeTaskId,
     taskKind: "write",
     eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
@@ -211,12 +214,10 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
     ),
   );
   await markTaskDoneWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: args.writeTaskId,
     envelope: writerEventEnvelope(args),
     outcome: "passed",
-    appendEventFallback: stageFallbackAppend(args),
   });
   return { kind: "completed", writer: writerResult };
 }
@@ -229,26 +230,6 @@ function writerEventEnvelope(args: WriterStageInput) {
     projectId: args.costCtx.projectId,
     taskKind: "write",
   };
-}
-
-/**
- * No-writer test path's append sink (task #39). The production writer path
- * commits the terminal event atomically with the row inside
- * `RunStateWriter.updateTaskWithEvent`; the unit-test harnesses pass no writer
- * + a recording `args.appendEvent`, so this re-routes the terminal event back
- * through their recorder so existing per-stage emit-on-throw conformance
- * assertions stay green. The atomicity contract itself is exercised in the
- * dedicated `markTaskWithEventAtomic.test.ts` conformance suite.
- */
-function stageFallbackAppend(
-  args: WriterStageInput,
-): (eventType: "task.completed" | "task.failed", payload: Record<string, unknown>, taskId: string) => Promise<void> {
-  // Adapt the typed `appendEvent` (`EventPayload<N>` per name) to the helper's
-  // name-agnostic payload shape: the payload was constructed in `markTask*WithEvent`
-  // from the literal `{ taskKind, failureKind?, message? }` shape, which is
-  // byte-identical to the registered `task.completed` / `task.failed` Zod
-  // payload schema (the runtime Zod parse downstream is the source of truth).
-  return (eventType, payload, taskId) => args.appendEvent(eventType, payload as never, taskId);
 }
 
 // Emit the (previously latent) `writer.subtask.failed` timeline event so a
@@ -327,13 +308,11 @@ async function emitWriterSubtaskTerminalFailure(
 ): Promise<WriterStageOutcome> {
   await wrapEventAppend(() => emitWriterSubtaskFailed(args, exit.failureKind, exit.message));
   await markTaskFailedWithEvent({
-    pool: args.pool,
     writer: args.writer,
     taskId: args.writeTaskId,
     envelope: writerEventEnvelope(args),
     failureKind: exit.failureKind,
     message: exit.message,
-    appendEventFallback: stageFallbackAppend(args),
   });
   return exit.outcome(writerResult);
 }

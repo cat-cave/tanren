@@ -454,6 +454,7 @@ export function fakeMergeWriter(pool: ReviewMergePool, events: EventStore): RunS
     supersedeQueuedPlannerTask: unsupported("supersedeQueuedPlannerTask"),
     finalizeLand: unsupported("finalizeLand"),
     finalizeRunWithEvent: unsupported("finalizeRunWithEvent"),
+    resumePausedRunAtomic: unsupported("resumePausedRunAtomic"),
     updateSpecWithEvent: unsupported("updateSpecWithEvent"),
     createQueuedRun: unsupported("createQueuedRun"),
     createSpec: unsupported("createSpec"),

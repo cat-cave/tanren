@@ -47,13 +47,14 @@ export interface AutonomyLoopsDeps {
    * Plane-split (autonomy loops): the control-plane run-state writer. When present
    * (remote-writes on, full de-privilege), EVERY tenant write the loops drive — the
    * DagWalker's run-creation + dag.* events, the merge coordinator's merge-stage
-   * writes + spec-status + conflict re-exec, the post-merge watcher's events, and
-   * the intake's run/spec creation — routes through the control plane over mTLS
-   * (the de-privileged data-plane role can no longer write those tables directly).
-   * Absent (single-role dev), the loops write the tenant tables directly via
-   * `deps.pool` — byte-identical to today. Mirrors the run executor's seam.
+   * writes + spec-status + conflict re-exec, the post-merge watcher's events,
+   * and the intake's run/spec creation — routes through this writer. Audit
+   * finding D3/H3 sweep: REQUIRED. Default is the in-process
+   * `DirectRunStateWriter` (byte-identical to the prior direct path); the
+   * cross-process `worker` container resolves it to an `HttpRunStateWriter`
+   * over mTLS when TANREN_DATA_PLANE_REMOTE_WRITES=1.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
 }
 
 export interface AutonomyLoops {
@@ -110,7 +111,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // Plane-split: route the change-percolation coordinator's run-column writes +
     // spec reopen + re-execution run-CREATE + events through the control plane when
     // wired; else direct on the pool (byte-identical).
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
     // The LIVE base shift: the runner allocator + SSH substrate + identity ref (the SAME
     // the merge coordinator's drive resolver uses) so a base shift actually REBASES the
     // dependent's branch in place over jj + re-gates it. These are REQUIRED — absent, the
@@ -132,7 +133,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     percolation,
     // Plane-split: the walker's run-creation + dag.* events route through the
     // control plane when wired (else direct on deps.pool, byte-identical).
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   log.info("DagWalker + change-percolation subscriber started (autonomous DAG execution + §2c percolation)");
   // the native intelligent merge queue. It reacts on the SAME run-activity bus
@@ -156,7 +157,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     // Plane-split: the coordinator's merge-stage writes (events/tasks/runs/specs),
     // its spec-status finalize, and its conflict resolver's replan write route
     // through the control plane when wired (else direct on deps.pool, byte-identical).
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   log.info("native merge-queue coordinator subscriber started (autonomy-engine §2d)");
   // tempering.md dim A: the post-merge watcher reacts on the SAME run-activity bus —
@@ -171,7 +172,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   const deployWatcher = buildDeployOnMergeWatcher({
     pool: deps.pool,
     secrets: deps.secrets,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   // Demos-as-evidence: on the SAME wake, AFTER the deploy is verified, exercise the
   // spec's behaviors against the live deploy surface + record per-behavior evidence.
@@ -179,7 +180,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   const demoWatcher = buildDemoOnDeployWatcher({
     pool: deps.pool,
     secrets: deps.secrets,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   const postMerge = await startPostMergeSubscriber({
     pool: deps.pool,
@@ -191,7 +192,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     // Plane-split: the watcher's post-merge events route through the control plane
     // when wired (else direct on deps.pool, byte-identical).
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   log.info("post-merge auto-issue + deploy-on-merge watcher subscriber started (tempering.md dim A)");
   // Notifications: build the dispatcher ONCE (channel registry with the real
@@ -227,7 +228,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     identitySecretRef: deps.identitySecretRef,
     // Plane-split: the intake auto-route's spec/run creation routes through the
     // control plane when wired (else direct on deps.pool, byte-identical).
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   log.info("intake poller + audit scheduler loops started (autonomy-engine §1d)");
   // CI-intelligence PR2+PR3: the flaky+duration detector on a cadence (replaces the
@@ -242,7 +243,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
     allocator: deps.allocator,
     ssh: deps.ssh,
     identitySecretRef: deps.identitySecretRef,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   log.info("CI-insights detect+quarantine + generative root-cause loop started (CI-intelligence PR2+PR3)");
   // task #82: the window-pause auto-resume prober — a sign-of-life loop that
@@ -254,7 +255,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // default) — HOW OFTEN to ask "did capacity return", never a deadline.
   const pausedRunResumeProber = startPausedRunResumeProber({
     pool: deps.pool,
-    ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    runStateWriter: deps.runStateWriter,
   });
   log.info("paused-run resume prober started (task #82 — window-pause auto-resume)");
   const stop = async (): Promise<void> => {

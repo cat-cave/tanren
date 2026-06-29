@@ -20,7 +20,11 @@ import { FetchGitHubHttpClient, GithubAppTokenMinter } from "../providers/github
 import { SshCommandSubstrate } from "../ssh/index.js";
 import { assertStandaloneClaimMtlsConfigured, buildClaimClientFromEnv } from "./claimClientFromEnv.js";
 import { resolveRunnerIdentitySecretRef, seedRunnerIdentitySecret } from "./runnerIdentityFromEnv.js";
-import { assertStandaloneRemoteWritesConfigured, buildRunStateWriterFromEnv } from "./runStateWriterFromEnv.js";
+import {
+  assertStandaloneRemoteWritesConfigured,
+  buildRunStateWriterFromEnv,
+  remoteWritesEnabled,
+} from "./runStateWriterFromEnv.js";
 import type { JobReaper } from "./jobReaper.js";
 import type { RunWorker } from "./runWorker.js";
 import {
@@ -129,14 +133,15 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
       ? "claiming via direct DB-CAS (no control-plane endpoint configured)"
       : "claiming via the mTLS control-plane endpoint",
   );
-  // When TANREN_DATA_PLANE_REMOTE_WRITES=1 (+ endpoint + certs),
-  // route the worker's run-state WRITES through the control plane over mTLS; else
-  // the worker writes the tenant tables directly (the default, reversible).
-  const runStateWriter = buildRunStateWriterFromEnv();
+  // Audit finding D3/H3 sweep: the writer is REQUIRED everywhere downstream,
+  // so this always returns a writer — `DirectRunStateWriter` (in-process,
+  // byte-identical to the prior direct path) by default, `HttpRunStateWriter`
+  // (mTLS to the control plane) when TANREN_DATA_PLANE_REMOTE_WRITES=1.
+  const runStateWriter = buildRunStateWriterFromEnv(pool);
   log.info(
-    runStateWriter === undefined
-      ? "writing run state via direct in-process DB writes (remote-writes off)"
-      : "writing run state via the mTLS control-plane endpoints",
+    remoteWritesEnabled()
+      ? "writing run state via the mTLS control-plane endpoints"
+      : "writing run state via direct in-process DB writes (remote-writes off)",
   );
   // Concurrency is a GOVERNED CONFIG KNOB, not an env var (autonomy-engine.md
   // §1.4): resolve the worker's slot ceiling from the config surface's
@@ -192,7 +197,7 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
     githubAppMinter,
     identitySecretRef,
     ...(claimClient === undefined ? {} : { claimClient }),
-    ...(runStateWriter === undefined ? {} : { runStateWriter }),
+    runStateWriter,
     ...(envCreation === undefined ? {} : { envCreation }),
   });
   // Autonomy engine §1a + §1d: start the worker's autonomy background loops — the
@@ -212,15 +217,13 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
     // integration state through the SAME GitHub HTTP client + App minter the
     // run/merge lifecycle uses.
     githubAppMinter,
-    // Plane-split (autonomy loops): when remote-writes is on, route EVERY tenant
-    // write the autonomy loops drive — the DagWalker's run-creation + dag.* events,
-    // the merge coordinator's merge-stage writes + spec-status + conflict re-exec,
-    // the post-merge watcher's events, and the intake's run/spec creation —
-    // through the SAME control-plane writer the run executor uses. Absent
-    // (single-role dev / remote-writes off) the loops keep their direct-pool
-    // writes, byte-identical to today. The de-privileged data-plane role must
-    // never write a tenant table directly (migrations 0031/0035).
-    ...(runStateWriter === undefined ? {} : { runStateWriter }),
+    // Audit finding D3/H3 sweep: writer is now ALWAYS wired (Direct or HTTP).
+    // The autonomy loops route EVERY tenant write through it — the DagWalker's
+    // run-creation + dag.* events, the merge coordinator's merge-stage writes +
+    // spec-status + conflict re-exec, the post-merge watcher's events, and the
+    // intake's run/spec creation. The de-privileged data-plane role must never
+    // write a tenant table directly (migrations 0031/0035).
+    runStateWriter,
   });
   // Run-sandbox reaper (layer 2 of the ≈204 GB disk-leak fix): start the periodic
   // `/workspace/runs/*` sweep ONLY for a long-lived (static) runner — the builder reads

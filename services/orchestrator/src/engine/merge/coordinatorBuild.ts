@@ -29,7 +29,6 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
-import { PgEventStore } from "../eventStore.js";
 import { buildReGateCiForQueuedRun } from "./driveCi.js";
 import {
   buildDriveConflictResolve,
@@ -63,15 +62,16 @@ export interface BuildMergeCoordinatorDeps {
   /** The runner identity key ref (same value the worker boot seeds). REQUIRED for the resolver. */
   identitySecretRef: string;
   /**
-   * Plane-split (autonomy loops): the control-plane run-state writer. When present
-   * (remote-writes on), the coordinator routes EVERY tenant write it drives through
-   * the control plane: the merge stage's events/tasks/runs/specs (mergeForRun's
-   * `eventStore` + `runStateWriter` seams), the drive-pass spec-status finalize, the
-   * conflict resolver's replan spec-status write, and the queue/batch event
-   * emissions. Absent (single-role dev), the coordinator writes those tables
-   * directly — byte-identical to today.
+   * REQUIRED (audit finding D3/H3 sweep): the coordinator routes every
+   * tenant write it drives through this writer — the merge stage's
+   * events/tasks/runs/specs (mergeForRun's `eventStore` + `runStateWriter`
+   * seams), the drive-pass spec-status finalize, the conflict resolver's
+   * replan spec-status write, and the queue/batch event emissions. Default
+   * is the in-process `DirectRunStateWriter` (byte-identical to the prior
+   * direct path); the cross-process `worker` container resolves it to an
+   * `HttpRunStateWriter` over mTLS.
    */
-  runStateWriter?: RunStateWriter;
+  runStateWriter: RunStateWriter;
   /**
    * TEST SEAM: the merge-stage freshness/retarget probe. Production OMITS it → the drive
    * builds the real `CodeHost`-derived freshness probe from the GitHub provider (§5h). A
@@ -196,7 +196,9 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     // EventStore + carries the run/spec/task lifecycle writer). Absent, the merge
     // stage uses the in-process PgEventStore over the org-scoping pool (its appends
     // self-route through the per-job org scope) — byte-identical to today.
-    const eventStore = deps.runStateWriter ?? new PgEventStore(scopedPool);
+    // Audit finding D3/H3 sweep: the writer is REQUIRED and itself IS an
+    // EventStore, so the merge stage's event surface is just the writer.
+    const eventStore = deps.runStateWriter;
     // The §2c classify-then-escalate capture cell: the merge dispatcher only sees the
     // conflict hook's `{resolved:boolean}`, so the drive-path resolver records its
     // autonomous disposition (resolved / bounded-replan / escalate / percolation-yield)
@@ -214,10 +216,8 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         mergeForRun({
           pool: scopedPool,
           eventStore,
-          // Plane-split: route the merge stage's run/spec/task lifecycle writes
-          // through the control plane when wired (else the in-process org-scoped
-          // writes run — byte-identical to today).
-          ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+          // Audit finding D3/H3 sweep: writer is REQUIRED at the merge seam.
+          runStateWriter: deps.runStateWriter,
           secrets: deps.secrets,
           githubHttp: deps.githubHttp,
           runId,
@@ -246,7 +246,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             secrets: deps.secrets,
             githubHttp: deps.githubHttp,
             ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-            ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+            runStateWriter: deps.runStateWriter,
             eventStore,
             identitySecretRef: deps.identitySecretRef,
             verdict,

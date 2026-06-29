@@ -44,7 +44,7 @@ import {
   type PostureDecision,
   type PullRequestContributors,
 } from "./governancePosture.js";
-import { completeHeldMergeTask, MergeDispatcher } from "./mergeDispatcher.js";
+import { markMergeTaskDoneWithEvent, MergeDispatcher } from "./mergeDispatcher.js";
 import {
   type ConflictContext,
   type ConflictResolverHook,
@@ -119,10 +119,11 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     await applySpeculativeRetarget({
       pool: input.pool,
       eventStore,
-      // PLANE-SPLIT: route the `runs.ancestor_stack` head-drop through the control plane
-      // when remote-writes is on (the de-privileged data plane can't UPDATE runs). The org
-      // is the ambient per-job org the worker set (`runWithJobOrgId`), as the task ops use.
-      ...(input.runStateWriter !== undefined && { runStateWriter: input.runStateWriter }),
+      // Audit finding D3/H3 sweep: the writer is REQUIRED — the
+      // `runs.ancestor_stack` head-drop always routes through it (Direct or
+      // HTTP — same SQL either way). The org is the ambient per-job org the
+      // worker set (`runWithJobOrgId`), as the task ops use.
+      runStateWriter: input.runStateWriter,
       ...(getJobOrgId() !== undefined && { orgId: getJobOrgId() }),
       context,
       taskId,
@@ -152,18 +153,16 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
         },
       });
       if (integration !== "native_queue" || input.queueDrive === true) {
-        // Audit finding #5: route through `completeHeldMergeTask` — the one source
-        // of truth that replaces the deleted duplicate `completeHeldMergeTask`
-        // local function. Production has a writer wired and runs the doctrine-pure
-        // atomic helper; the writer-undefined branch is the TEST-ONLY split-write
-        // seam (see `mergeTaskTerminalFallback.ts`).
-        await completeHeldMergeTask(
-          input.runStateWriter,
-          input.pool,
-          eventStore,
-          { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId },
+        // Audit finding D3 sweep: the speculative-hold's terminal-task
+        // completion routes through the SOLE atomic helper
+        // (`markMergeTaskDoneWithEvent` → `writer.updateTaskWithEvent`). The
+        // prior `completeHeldMergeTask` indirection plus the
+        // `mergeTaskTerminalFallback.ts` split-write fallback are GONE.
+        await markMergeTaskDoneWithEvent({
+          writer: input.runStateWriter,
+          base: { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId },
           integration,
-        );
+        });
         return {
           runId: context.runId,
           taskId,
@@ -375,8 +374,9 @@ function buildContributorProbe(
   };
 }
 
-// Audit finding #5: `completeHeldMergeTask` (the local duplicate) is DELETED —
-// the speculative-hold path now invokes the one source of truth in
-// `mergeTaskTerminalFallback.ts` (which delegates to `markMergeTaskDoneWithEvent`
-// when a writer is wired). `ensureMergeTask` is inlined at its single call site
-// above so the file's dependency count stays under the architecture lint cap.
+// Audit finding D3 sweep (writer-seam doctrine): the speculative-hold path
+// calls `markMergeTaskDoneWithEvent` DIRECTLY now — the prior
+// `completeHeldMergeTask` indirection (which split-write-fell-back when the
+// writer was undefined) is gone, along with the `mergeTaskTerminalFallback.ts`
+// file it lived in. `ensureMergeTask` is inlined at its single call site above
+// so the file's dependency count stays under the architecture lint cap.

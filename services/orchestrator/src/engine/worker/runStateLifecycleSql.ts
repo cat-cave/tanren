@@ -300,6 +300,20 @@ export async function applyUpdateTaskWithEvent(
   client: TaskLifecycleClient,
   input: UpdateTaskWithEventInput,
 ): Promise<UpdateTaskWithEventOutcome> {
+  // PRE-TERMINAL events (audit finding D2 writer-seam extension): a caller
+  // bundling e.g. the review-stage's `review.*` verdict appends those FIRST on
+  // the SAME in-transaction client so the whole pre-terminal-plus-terminal
+  // bundle COMMITs (or ROLLs BACK) together — the doctrine-critical atomicity
+  // the prior `writer.append()` + `writer.updateTaskWithEvent()` split missed.
+  // These are NON-terminal observations: they route through plain `.append`
+  // (full registry parse, no `appendIfAbsent` dedupe — the caller deduplicates
+  // upstream, the terminal pair below keeps its own dedupe).
+  if (input.priorEvents !== undefined && input.priorEvents.length > 0) {
+    const store = new PgEventStore(client);
+    for (const prior of input.priorEvents) {
+      await store.append(prior);
+    }
+  }
   await applyUpdateTask(client, input.task);
   const inserted = await new PgEventStore(client).appendIfAbsent(input.event);
   return { alreadyTerminal: !inserted };
@@ -349,6 +363,23 @@ function expectedEventTypeFor(transition: TerminalTaskTransition): TerminalTaskE
  * against the {@link EventRegistry}, so a malformed payload throws at the
  * append (the existing event-validation contract is unchanged).
  */
+// Pre-terminal event shape (audit finding D2 writer-seam extension). Same
+// permissive shape as the terminal event — payload is parsed downstream by
+// `PgEventStore.append` against the registry — but the event TYPE is NOT
+// constrained to the terminal pair vocabulary (the prior-event slot admits
+// any registered non-terminal event the caller is bundling, e.g.
+// `review.approved`).
+const priorEventShape = z
+  .object({
+    runId: z.string().min(1).optional(),
+    taskId: z.string().min(1).optional(),
+    specId: z.string().min(1).optional(),
+    projectId: z.string().min(1),
+    eventType: z.string().min(1),
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 export const terminalPairSchema = z
   .object({
     task: z
@@ -375,6 +406,12 @@ export const terminalPairSchema = z
         payload: z.record(z.string(), z.unknown()),
       })
       .strict(),
+    // Audit finding D2: optional pre-terminal events to append in the SAME
+    // transaction BEFORE the row UPDATE + terminal event. Each is permissive
+    // here (type vocabulary not constrained — they are non-terminal observation
+    // events the caller is bundling); the registry parse happens downstream
+    // inside the transaction, so a malformed payload throws → ROLLBACK.
+    priorEvents: z.array(priorEventShape).optional(),
   })
   .strict()
   .refine((value) => expectedEventTypeFor(value.task.transition) === value.event.eventType, {

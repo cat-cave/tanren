@@ -439,4 +439,26 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  // Audit finding D2 — the writer-seam extension: `priorEvents` is admitted
+  // as an optional bundle. The schema accepts the field (non-terminal event
+  // types are allowed; the registry parse happens downstream inside the
+  // transaction, so a malformed payload throws there → ROLLBACK).
+  it("(D2) the priorEvents field is admitted as an optional array", () => {
+    const ok = terminalPairSchema.safeParse({
+      task: { taskId: "t", orgId: ORG, transition: "done", outcome: "passed" },
+      event: { projectId: PROJECT, eventType: "task.completed", payload: { taskKind: "review" } },
+      priorEvents: [
+        {
+          projectId: PROJECT,
+          eventType: "review.approved",
+          payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 },
+        },
+      ],
+    });
+    expect(ok.success).toBe(true);
+  });
 });
+
+// The audit-D2 `priorEvents` real-PG conformance lives in
+// `markTaskWithEventPriorEventsAtomic.test.ts` (split out for the 500-line cap).

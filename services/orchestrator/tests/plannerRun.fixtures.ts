@@ -15,22 +15,31 @@ import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
-import { runWithSystemJobScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemJobScope } from "@tanren/db";
 import {
   runPlannerLoopWorkflow,
   type PlannerRunContext,
   type PlannerRunResult,
   type RunPlannerLoopInput,
 } from "../src/engine/workflow/plannerRun.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 
-/**
- * Run the planner-loop workflow under the EXPLICIT per-job SYSTEM scope, mirroring
- * production (the run worker wraps the workflow in `runWithSystemJobScope`). Without
- * it the tenant write resolves with no ambient scope and the hardened seam correctly
- * throws `MissingOrgScopeError`.
- */
-export function runPlannerLoopScoped(input: RunPlannerLoopInput): Promise<PlannerRunResult> {
-  return runWithSystemJobScope(() => runPlannerLoopWorkflow(input));
+/** Run the planner-loop workflow under the EXPLICIT per-job SYSTEM + per-job
+ *  ORG scope, mirroring production (the run worker wraps the workflow in
+ *  `runWithSystemJobScope` + `runWithJobOrgId`). Audit finding D3/H3 sweep:
+ *  the writer is REQUIRED — default to `DirectRunStateWriter` over the
+ *  supplied pool (byte-identical to the prior direct path). */
+export function runPlannerLoopScoped(
+  input: Omit<RunPlannerLoopInput, "runStateWriter"> & {
+    runStateWriter?: RunPlannerLoopInput["runStateWriter"];
+  },
+): Promise<PlannerRunResult> {
+  const resolved: RunPlannerLoopInput = {
+    ...input,
+    runStateWriter: input.runStateWriter ?? new DirectRunStateWriter(input.pool),
+  };
+  const orgId = typeof input.context.orgId === "string" ? input.context.orgId : "org_planner_test";
+  return runWithSystemJobScope(() => runWithJobOrgId(orgId, () => runPlannerLoopWorkflow(resolved)));
 }
 
 export {
@@ -148,9 +157,7 @@ export function fakeProbe(window: WindowObservation, acct: CcusageAccounting | n
   };
 }
 
-// The adapter-set fixtures (loopStageAdapters / twoSubtaskAdapters) live in
-// plannerRunAdapterFixtures.ts (split out for the 500-line cap); re-exported here so the
-// existing single import site is unchanged.
+// adapter-set fixtures live in plannerRunAdapterFixtures.ts (500-line cap split).
 export { loopStageAdapters, twoSubtaskAdapters } from "./plannerRunAdapterFixtures.js";
 
 export async function setup(projectConfig?: Record<string, unknown>) {
@@ -164,13 +171,9 @@ export async function setup(projectConfig?: Record<string, unknown>) {
   return { ctx, pool, events, secrets, allocator, ssh };
 }
 
-// Project config that routes the merge stage down the direct-merge branch with
-// an open governance posture (so the posture gate proceeds without a contributor
-// lookup). The merge probe then decides merged / conflict / failed.
+// direct-merge + open posture; merge probe decides merged/conflict/failed.
 export function directMergeConfig(): Record<string, unknown> {
   return {
-    // version:1 is mandatory — migrateProjectConfig fails hard on an unversioned
-    // config. Strict schema, so the static credential ref lives under `credentials`.
     version: 1,
     mergeIntegration: "direct_merge",
     governancePosture: "open",
@@ -218,9 +221,7 @@ export function pendingReview() {
   };
 }
 
-// the merge stage reads branch freshness before merging. These tail fixtures
-// exercise the merge OUTCOME mapping, so they report the branch CLEAN + up to date
-// (the enforcement is a no-op; the merge() outcome drives the result, as pre-P2a).
+// merge-OUTCOME-mapping fixtures: report the branch CLEAN + up to date.
 function cleanFreshness() {
   return {
     readFreshness: async () => ({

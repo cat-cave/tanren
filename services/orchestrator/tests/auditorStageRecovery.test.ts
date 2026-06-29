@@ -15,21 +15,40 @@ import { AnswererSchemaValidationError } from "../src/engine/providers/codex.js"
 import { runAuditorStage, type AuditorStageInput } from "../src/engine/workflow/subtaskStages.js";
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import { buildPlan } from "./helpers/plannerLoopHelpers.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 // A compact recording harness: just the appendEvent + pg-shaped query stub + costCtx the
 // auditor stage drives (a focused subset of the StageHarness in subtaskStages.test.ts).
 class AuditHarness {
   readonly events: { eventType: EventName; payload: Record<string, unknown> }[] = [];
-  readonly taskOutcomes = new Map<string, string>();
+  // Audit finding H3 sweep: the auditor stage's terminal seam REQUIRES a writer
+  // (the fallback split-write arm is gone). The fixture forwards atomic events
+  // back into `events` so the existing pin assertions keep holding.
+  readonly writer = new InMemoryRunStateWriter({
+    forwardAppend: async (input) => {
+      this.events.push({
+        eventType: input.eventType as EventName,
+        payload: input.payload as Record<string, unknown>,
+      });
+    },
+  });
+  get taskOutcomes(): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const [taskId, row] of this.writer.tasks.entries()) {
+      if (row.failureKind !== null) {
+        map.set(taskId, row.failureKind);
+      } else if (row.outcome !== null) {
+        map.set(taskId, row.outcome);
+      }
+    }
+    return map;
+  }
 
   appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>): Promise<void> => {
     this.events.push({ eventType, payload: payload as Record<string, unknown> });
   };
 
-  query = async (sql: string, params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
-    if (sql.trim().startsWith("UPDATE tasks SET status")) {
-      this.taskOutcomes.set(String(params[0]), String(params[1]));
-    }
+  query = async (_sql: string, _params: ReadonlyArray<unknown> = []): Promise<{ rows: never[]; rowCount: number }> => {
     return { rows: [], rowCount: 1 };
   };
 
@@ -50,6 +69,7 @@ class AuditHarness {
 function auditorArgs(h: AuditHarness, adapter: AnswererAdapter<AuditAnswer>): AuditorStageInput {
   return {
     pool: { query: h.query },
+    writer: h.writer,
     costCtx: h.costCtx(),
     adapter,
     runId: "run_1",
