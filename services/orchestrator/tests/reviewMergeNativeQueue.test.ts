@@ -11,10 +11,11 @@ import { mergeForRun, type NativeQueueEnqueuer } from "../src/engine/workflow/re
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   AUTHORITY_HEAD_SHA,
+  ReviewMergePool,
   authorityBundle,
   authorityHost,
+  fakeMergeWriter,
   recordingMergeProbe,
-  ReviewMergePool,
   unusedHttp,
 } from "./reviewMerge.fixtures.js";
 
@@ -43,6 +44,7 @@ describe("P2d native_queue merge stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -73,6 +75,7 @@ describe("P2d native_queue merge stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -97,6 +100,7 @@ describe("P2d native_queue merge stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -134,6 +138,7 @@ describe("P2d native_queue merge stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -164,6 +169,7 @@ describe("P2d native_queue merge stage", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),

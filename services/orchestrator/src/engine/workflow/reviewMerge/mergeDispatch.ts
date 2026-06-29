@@ -26,22 +26,16 @@
 
 import { getJobOrgId } from "@tanren/db";
 import type { MergeIntegration } from "../../config/shared.js";
-import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { applySpeculativeRetarget, resolveSpeculativeState } from "./speculativeStackRetarget.js";
-import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
-import { PgEventStore, type EventStore } from "../../eventStore.js";
+import { ensureSystemTask } from "../taskWriteRouting.js";
+import { PgEventStore } from "../../eventStore.js";
 import type { ResolvedVcsToken, RepoRef } from "../../contracts/codeHostTypes.js";
 import { buildProjectHostSeams } from "../../providers/hostFactory.js";
 import { resolveVcsToken, resolveVcsActorIdentity } from "../../credentials/vcsCredentials.js";
 import { parsePullRequestRef } from "../../providers/githubRepoRef.js";
 import { buildFreshnessProbe } from "./freshnessProbe.js";
 import { buildBundleForMergeStage } from "../../merge/mergeAuthorityBundleBuild.js";
-import {
-  contextOptionsFor,
-  loadReviewMergeRunContext,
-  type ReviewMergeRunContext,
-  type RunStateClient,
-} from "./context.js";
+import { contextOptionsFor, loadReviewMergeRunContext, type ReviewMergeRunContext } from "./context.js";
 import {
   assessExternalChange,
   decidePosture,
@@ -50,7 +44,7 @@ import {
   type PostureDecision,
   type PullRequestContributors,
 } from "./governancePosture.js";
-import { MergeDispatcher } from "./mergeDispatcher.js";
+import { completeHeldMergeTask, MergeDispatcher } from "./mergeDispatcher.js";
 import {
   type ConflictContext,
   type ConflictResolverHook,
@@ -94,7 +88,11 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
   const prRef = parsePullRequestRef(context.prUrl);
   const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const integration = dispatchedIntegrationFor(context.mergeIntegration);
-  const taskId = await ensureMergeTask(input.pool, context, input.runStateWriter);
+  const taskId = await ensureSystemTask(
+    input.pool,
+    { runId: context.runId, kind: "merge", title: "Merge pull request" },
+    input.runStateWriter,
+  );
   await eventStore.append({
     runId: context.runId,
     specId: context.specId,
@@ -154,7 +152,18 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
         },
       });
       if (integration !== "native_queue" || input.queueDrive === true) {
-        await completeHeldMergeTask(input.pool, eventStore, context, taskId, integration, input.runStateWriter);
+        // Audit finding #5: route through `completeHeldMergeTask` — the one source
+        // of truth that replaces the deleted duplicate `completeHeldMergeTask`
+        // local function. Production has a writer wired and runs the doctrine-pure
+        // atomic helper; the writer-undefined branch is the TEST-ONLY split-write
+        // seam (see `mergeTaskTerminalFallback.ts`).
+        await completeHeldMergeTask(
+          input.runStateWriter,
+          input.pool,
+          eventStore,
+          { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId },
+          integration,
+        );
         return {
           runId: context.runId,
           taskId,
@@ -366,49 +375,8 @@ function buildContributorProbe(
   };
 }
 
-async function ensureMergeTask(
-  pool: RunStateClient,
-  context: ReviewMergeRunContext,
-  writer?: RunStateWriter,
-): Promise<string> {
-  return ensureSystemTask(pool, { runId: context.runId, kind: "merge", title: "Merge pull request" }, writer);
-}
-
-async function completeHeldMergeTask(
-  pool: RunStateClient,
-  eventStore: EventStore,
-  context: ReviewMergeRunContext,
-  taskId: string,
-  integration: DispatchedIntegration,
-  writer?: RunStateWriter,
-): Promise<void> {
-  if (writer !== undefined) {
-    await writer.updateTaskWithEvent({
-      task: { taskId, transition: "done", outcome: "ok" },
-      event: {
-        runId: context.runId,
-        specId: context.specId,
-        projectId: context.projectId,
-        taskId,
-        eventType: "task.completed",
-        payload: { taskKind: "merge", status: integration } as never,
-      },
-    });
-    return;
-  }
-  await routeTaskUpdate(
-    undefined,
-    pool,
-    { taskId, transition: "done", outcome: "ok" },
-    "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
-    [taskId, "ok"],
-  );
-  await eventStore.append({
-    runId: context.runId,
-    specId: context.specId,
-    projectId: context.projectId,
-    taskId,
-    eventType: "task.completed",
-    payload: { taskKind: "merge", status: integration },
-  });
-}
+// Audit finding #5: `completeHeldMergeTask` (the local duplicate) is DELETED —
+// the speculative-hold path now invokes the one source of truth in
+// `mergeTaskTerminalFallback.ts` (which delegates to `markMergeTaskDoneWithEvent`
+// when a writer is wired). `ensureMergeTask` is inlined at its single call site
+// above so the file's dependency count stays under the architecture lint cap.

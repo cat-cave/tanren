@@ -13,10 +13,11 @@ import { mergeForRun } from "../src/engine/workflow/reviewMerge/index.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   AUTHORITY_HEAD_SHA,
+  ReviewMergePool,
   authorityBundle,
   authorityHost,
+  fakeMergeWriter,
   recordingMergeProbe,
-  ReviewMergePool,
   unusedHttp,
 } from "./reviewMerge.fixtures.js";
 
@@ -40,6 +41,7 @@ describe("P2b merge-stage conflict resolution", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       githubHttp: unusedHttp(),
       runId: "run_1",

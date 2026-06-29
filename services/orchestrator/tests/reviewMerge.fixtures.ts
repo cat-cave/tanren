@@ -8,6 +8,14 @@ import type { MergeProbe, ReviewProbe } from "../src/engine/workflow/reviewMerge
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
 import type { PullRequestMergeability } from "../src/engine/contracts/codeHostTypes.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
+import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
+import type {
+  InsertTaskInput,
+  RunStateWriter,
+  UpdateTaskInput,
+  UpdateTaskWithEventInput,
+  UpdateTaskWithEventOutcome,
+} from "../src/engine/contracts/runStateWriter.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
@@ -359,4 +367,95 @@ export class ReviewMergePool {
     if (task === undefined) throw new Error(`missing task: ${String(taskId)}`);
     return task;
   }
+}
+
+/**
+ * AUDIT FINDING #5: a recording `RunStateWriter` the merge-stage integration tests
+ * pass into `mergeForRun.runStateWriter` so the writer-required atomic terminal
+ * pair has somewhere to land. Mirrors `writer.updateTaskWithEvent` writes back
+ * into the {@link ReviewMergePool}'s tasks + the supplied `EventStore`, so the
+ * pre-#5 test assertions (`pool.tasks` status + `events.events` includes
+ * `task.completed`) keep holding under the new "writer is the SOLE atomic land
+ * path" doctrine. The other writer surfaces throw — every dispatcher-path that a
+ * merge-stage test exercises only touches the terminal-pair seam through this
+ * recorder.
+ */
+const fakeMergeWriterUnsupported = (name: string) => async (): Promise<never> => {
+  throw new Error(`fakeMergeWriter: ${name} is not wired (the merge-stage tests do not exercise it)`);
+};
+
+export function fakeMergeWriter(pool: ReviewMergePool, events: EventStore): RunStateWriter {
+  const patchTask = (taskId: string, patch: Record<string, unknown>): void => {
+    const task = pool.tasks.find((t) => t.task_id === taskId);
+    if (task !== undefined) {
+      Object.assign(task, patch);
+    }
+  };
+  const unsupported = fakeMergeWriterUnsupported;
+  return {
+    async append(input: AppendEventInput): Promise<void> {
+      await events.append(input);
+    },
+    async insertTask(input: InsertTaskInput): Promise<void> {
+      pool.tasks.push({
+        task_id: input.taskId,
+        run_id: input.runId,
+        kind: input.kind,
+        status: input.status,
+        outcome: null,
+      });
+    },
+    async updateTask(input: UpdateTaskInput): Promise<void> {
+      // Mirror the per-transition row mutations the SQL helper would do.
+      if (input.transition === "running") {
+        patchTask(input.taskId, { status: "running", outcome: null, failure_kind: null });
+      } else if (input.transition === "running_pending") {
+        patchTask(input.taskId, { status: "running", outcome: "pending" });
+      } else if (input.transition === "done") {
+        patchTask(input.taskId, { status: "done", outcome: input.outcome ?? "ok" });
+      } else if (
+        input.transition === "failed" ||
+        input.transition === "failed_with_kind" ||
+        input.transition === "failed_with_kind_if_running"
+      ) {
+        patchTask(input.taskId, { status: "failed", outcome: "failed", failure_kind: input.failureKind });
+      }
+    },
+    async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<UpdateTaskWithEventOutcome> {
+      if (input.task.transition === "done") {
+        patchTask(input.task.taskId, { status: "done", outcome: input.task.outcome ?? "ok" });
+      } else if (
+        input.task.transition === "failed" ||
+        input.task.transition === "failed_with_kind" ||
+        input.task.transition === "failed_with_kind_if_running"
+      ) {
+        patchTask(input.task.taskId, {
+          status: "failed",
+          outcome: "failed",
+          failure_kind: input.task.failureKind,
+        });
+      }
+      await events.append(input.event);
+      return { alreadyTerminal: false };
+    },
+    recordCost: unsupported("recordCost"),
+    reconcileCost: unsupported("reconcileCost"),
+    finalizeRun: unsupported("finalizeRun"),
+    setRunStatus: unsupported("setRunStatus"),
+    setRunPrUrl: unsupported("setRunPrUrl"),
+    setRunAuthRef: unsupported("setRunAuthRef"),
+    setSpecStatus: unsupported("setSpecStatus"),
+    setSpecMetadata: unsupported("setSpecMetadata"),
+    appendSpecSteering: unsupported("appendSpecSteering"),
+    setRunSpeculativeBase: unsupported("setRunSpeculativeBase"),
+    setRunPercolationReexecId: unsupported("setRunPercolationReexecId"),
+    clearRunPercolationPending: unsupported("clearRunPercolationPending"),
+    mergeRunVerifiedAncestorSha: unsupported("mergeRunVerifiedAncestorSha"),
+    supersedeQueuedPlannerTask: unsupported("supersedeQueuedPlannerTask"),
+    finalizeLand: unsupported("finalizeLand"),
+    finalizeRunWithEvent: unsupported("finalizeRunWithEvent"),
+    updateSpecWithEvent: unsupported("updateSpecWithEvent"),
+    createQueuedRun: unsupported("createQueuedRun"),
+    createSpec: unsupported("createSpec"),
+  } as unknown as RunStateWriter;
 }

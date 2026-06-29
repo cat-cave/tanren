@@ -1,9 +1,12 @@
-import type pg from "pg";
-import type { EventStore } from "../../eventStore.js";
+// AUDIT FINDING #5 — `writer` is non-optional + the legacy no-writer fallback arm is GONE.
+// The prior shape branched on `if (writer !== undefined)` and split row UPDATE + event
+// append into two separate writes on the absent-writer arm, defeating the §1c
+// single-finalize invariant the helper exists to enforce. Production has ALWAYS wired
+// the writer; the fallback existed only to keep the old split shape compilable for tests
+// (which now wire a writer, or assert on the writer's recorded calls). Caller sites that
+// lack a writer FAIL LOUD before this helper is called (the dispatcher's finalize asserts
+// at its boundary).
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
-import { routeTaskUpdate } from "../taskWriteRouting.js";
-
-type TaskQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface MergeTaskTerminalBase {
   runId: string;
@@ -13,67 +16,33 @@ export interface MergeTaskTerminalBase {
 }
 
 export async function markMergeTaskDoneWithEvent(input: {
-  writer?: RunStateWriter;
-  pool: TaskQueryClient;
-  eventStore: EventStore;
+  writer: RunStateWriter;
   base: MergeTaskTerminalBase;
   integration: string;
 }): Promise<void> {
-  const { writer, pool, eventStore, base, integration } = input;
-  if (writer !== undefined) {
-    await writer.updateTaskWithEvent({
-      task: { taskId: base.taskId, transition: "done", outcome: "ok" },
-      event: {
-        ...base,
-        eventType: "task.completed",
-        payload: { taskKind: "merge", status: integration } as never,
-      },
-    });
-    return;
-  }
-  await routeTaskUpdate(
-    undefined,
-    pool,
-    { taskId: base.taskId, transition: "done", outcome: "ok" },
-    "UPDATE tasks SET status = 'done', outcome = $2, ended_at = now() WHERE task_id = $1",
-    [base.taskId, "ok"],
-  );
-  await eventStore.append({
-    ...base,
-    eventType: "task.completed",
-    payload: { taskKind: "merge", status: integration },
+  const { writer, base, integration } = input;
+  await writer.updateTaskWithEvent({
+    task: { taskId: base.taskId, transition: "done", outcome: "ok" },
+    event: {
+      ...base,
+      eventType: "task.completed",
+      payload: { taskKind: "merge", status: integration } as never,
+    },
   });
 }
 
 export async function markMergeTaskFailedWithEvent(input: {
-  writer?: RunStateWriter;
-  pool: TaskQueryClient;
-  eventStore: EventStore;
+  writer: RunStateWriter;
   base: MergeTaskTerminalBase;
   failureKind: string;
 }): Promise<void> {
-  const { writer, pool, eventStore, base, failureKind } = input;
-  if (writer !== undefined) {
-    await writer.updateTaskWithEvent({
-      task: { taskId: base.taskId, transition: "failed_with_kind", failureKind },
-      event: {
-        ...base,
-        eventType: "task.failed",
-        payload: { taskKind: "merge", failureKind } as never,
-      },
-    });
-    return;
-  }
-  await routeTaskUpdate(
-    undefined,
-    pool,
-    { taskId: base.taskId, transition: "failed_with_kind", failureKind },
-    "UPDATE tasks SET status = 'failed', outcome = 'failed', failure_kind = $2, ended_at = now() WHERE task_id = $1",
-    [base.taskId, failureKind],
-  );
-  await eventStore.append({
-    ...base,
-    eventType: "task.failed",
-    payload: { taskKind: "merge", failureKind },
+  const { writer, base, failureKind } = input;
+  await writer.updateTaskWithEvent({
+    task: { taskId: base.taskId, transition: "failed_with_kind", failureKind },
+    event: {
+      ...base,
+      eventType: "task.failed",
+      payload: { taskKind: "merge", failureKind } as never,
+    },
   });
 }

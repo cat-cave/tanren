@@ -16,6 +16,7 @@ import type { ReviewMergeRunContext } from "../../src/engine/workflow/reviewMerg
 import type { PullRequestMergeability } from "../../src/engine/contracts/codeHostTypes.js";
 import type { LandFinalizer } from "../../src/engine/merge/mergeAuthorityImpl.js";
 import type { AuditPosture } from "../../src/engine/contracts/auditPosture.js";
+import type { RunStateWriter } from "../../src/engine/contracts/runStateWriter.js";
 
 export const REPO = { owner: "o", name: "r" };
 export const POSTURE: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
@@ -51,6 +52,48 @@ export function recordingEventStore() {
 
 /** A fake pool (no DB): the task-finalize UPDATEs are no-ops here. */
 export const fakePool = { query: async () => ({ rows: [], rowCount: 0 }) };
+
+/**
+ * AUDIT FINDING #5: a stub `RunStateWriter` for the dispatcher harness — the merge
+ * task terminal pair now flows through writer.updateTaskWithEvent (the SOLE atomic
+ * land path), so the dispatcher's finalize needs a writer. The dispatcher tests
+ * here assert on the recording event store / landed list — they don't care about
+ * task-row state, so the writer is a no-op observer.
+ */
+const noopFinalizeWriterMethod = (name: string) => async (): Promise<never> => {
+  throw new Error(`noopFinalizeWriter: ${name} is not wired (dispatcher harness)`);
+};
+
+export function noopFinalizeWriter(): RunStateWriter {
+  const noop = noopFinalizeWriterMethod;
+  return {
+    async append() {},
+    async updateTask() {},
+    async updateTaskWithEvent() {
+      return { alreadyTerminal: false };
+    },
+    insertTask: noop("insertTask"),
+    recordCost: noop("recordCost"),
+    reconcileCost: noop("reconcileCost"),
+    finalizeRun: noop("finalizeRun"),
+    setRunStatus: noop("setRunStatus"),
+    setRunPrUrl: noop("setRunPrUrl"),
+    setRunAuthRef: noop("setRunAuthRef"),
+    setSpecStatus: noop("setSpecStatus"),
+    setSpecMetadata: noop("setSpecMetadata"),
+    appendSpecSteering: noop("appendSpecSteering"),
+    setRunSpeculativeBase: noop("setRunSpeculativeBase"),
+    setRunPercolationReexecId: noop("setRunPercolationReexecId"),
+    clearRunPercolationPending: noop("clearRunPercolationPending"),
+    mergeRunVerifiedAncestorSha: noop("mergeRunVerifiedAncestorSha"),
+    supersedeQueuedPlannerTask: noop("supersedeQueuedPlannerTask"),
+    finalizeLand: noop("finalizeLand"),
+    finalizeRunWithEvent: noop("finalizeRunWithEvent"),
+    updateSpecWithEvent: noop("updateSpecWithEvent"),
+    createQueuedRun: noop("createQueuedRun"),
+    createSpec: noop("createSpec"),
+  } as unknown as RunStateWriter;
+}
 
 /** The §5 finalizer: records land (or throws for the merge_state_unknown case). */
 export function fakeFinalizer(opts: { fail?: boolean; landed: string[] }): LandFinalizer {
@@ -162,6 +205,8 @@ export function buildDispatcher(args: {
     // drives the conflict-resolved land flow the regression locks assert.
     baseShiftRebase: async () => ({ outcome: "conflict" as const, message: "branch conflicts with base" }),
     mergeAuthority: args.bundle,
+    // Audit finding #5: the dispatcher's finalize requires a writer for the atomic terminal pair.
+    runStateWriter: noopFinalizeWriter(),
   } as unknown as MergeForRunInput;
   const deps: DispatcherDeps = {
     input,

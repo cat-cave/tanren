@@ -14,10 +14,11 @@ import type { AncestorStack } from "../src/engine/dag/ancestorStack.js";
 import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   AUTHORITY_HEAD_SHA,
+  ReviewMergePool,
   authorityBundle,
   authorityHost,
+  fakeMergeWriter,
   recordingMergeProbe,
-  ReviewMergePool,
   unusedHttp,
 } from "./reviewMerge.fixtures.js";
 
@@ -68,6 +69,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -115,6 +117,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
@@ -152,6 +155,7 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     const result = await mergeForRun({
       pool: pool.asPgPool(),
       eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
       secrets: new FakeSecretStore(),
       resolveConflict: noopConflictResolver,
       githubHttp: unusedHttp(),
