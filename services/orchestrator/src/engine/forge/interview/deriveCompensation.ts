@@ -55,10 +55,20 @@ export type DeleteRepositoryCallback = (target: { owner: string; name: string })
  * this against `DeployProvisioner.destroyApp` (which delegates to Fly / Vercel
  * delete primitives); tests inject a fake. IDEMPOTENT per the contract — a
  * target that no longer exists is a successful no-op.
+ *
+ * Carries BOTH `appId` and `appName` because the two providers key on
+ * different attributes: Vercel's DELETE goes to `/v9/projects/{id}` (id), Fly's
+ * to `/v1/apps/{name}` (name). Fly's `listApps` returns `appId: app.id ?? app.name`,
+ * which is typically the distinct internal id (e.g. `fly_app_1`), so a synthesis
+ * that filled `name` from `appId` would route the DELETE at the wrong path —
+ * Fly would 404 and the per-provider arm would swallow it as "already-gone
+ * success" (audit finding D4, the regression PR #711 reintroduced once it
+ * dropped the listApps gate).
  */
 export type DestroyDeployAppCallback = (target: {
   providerKind: "deploy.vercel" | "deploy.flyio";
   appId: string;
+  appName: string;
 }) => Promise<void>;
 
 /**
