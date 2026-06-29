@@ -27,6 +27,13 @@
     ".env.example"
   ],
   "words": [
+    "CANONICALIZER",
+    "canonicalizer",
+    "MMSS",
+    "mfoo",
+    "mtypecheck",
+    "onds",
+    "sess",
     "Abramowitz",
     "acked",
     "authorer",
