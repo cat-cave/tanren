@@ -30,7 +30,11 @@
 import type { ActorContext } from "../../../auth/schemas.js";
 import { composeTemplate } from "./compose.js";
 import { BASE_FRAGMENT_ID, loadFragmentLibrary, RUNTIME_NODE_PNPM_ID } from "./library/index.js";
-import { type Fragment, type FragmentLibrary, type TemplateConfig } from "./types.js";
+import {
+  assertComposedCiYmlParsesAsCiConfigV1,
+  assertScaffoldBootstrapsFromFreshCheckout,
+} from "./runtimeValidation.js";
+import { type Fragment, type FragmentLibrary, type TemplateConfig, type VirtualFileSystem } from "./types.js";
 import type { FragmentSpec } from "./selectFragmentConfig.js";
 import {
   type FragmentOp,
@@ -352,15 +356,42 @@ async function runSmokeComposition(
     library.register(fragment);
   }
   const config: TemplateConfig = configForSmoke(spec, fragment);
+  let vfs: VirtualFileSystem;
   try {
-    await composeTemplate(config, library);
-    return { kind: "ok", dependsOn: derivedDependsOn };
+    vfs = await composeTemplate(config, library);
   } catch (err) {
     return {
       kind: "failed",
       reason: `smoke compose failed: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+
+  // POST-COMPOSE RUNTIME VALIDATORS (audit finding #12). The same checks the
+  // static matrix + isolation harnesses run — lifted to the runtime module so
+  // the live smoke pipeline catches the same v62 (malformed `.tanren/ci.yml`)
+  // + v63 (frozen-install on fresh checkout, justfile OR Dockerfile) halt
+  // classes. A failing validator rejects the fragment with the specific reason
+  // so the writer's next rework iteration sees it.
+  try {
+    assertComposedCiYmlParsesAsCiConfigV1(spec.id, vfs);
+  } catch (err) {
+    return {
+      kind: "failed",
+      reason: `runtime validator (ci.yml schema) rejected: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  try {
+    assertScaffoldBootstrapsFromFreshCheckout(spec.id, vfs);
+  } catch (err) {
+    return {
+      kind: "failed",
+      reason: `runtime validator (fresh-checkout bootstrap) rejected: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+
+  return { kind: "ok", dependsOn: derivedDependsOn };
 }
 
 function configForSmoke(spec: FragmentSpec, fragment: Fragment): TemplateConfig {
