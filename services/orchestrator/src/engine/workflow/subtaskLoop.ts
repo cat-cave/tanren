@@ -38,7 +38,7 @@ import {
 } from "../config/shared.js";
 import type { SpecMode } from "../state/spec.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
-import { type Finding, type FindingSeverity, severityRank } from "../contracts/findings.js";
+import { type Finding } from "../contracts/findings.js";
 import type { CostRecorder } from "../costs/index.js";
 import type { EntityMapProduction } from "../oracle/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
@@ -52,49 +52,17 @@ import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./
 import { budgetPausedOutcome, checkIterationBudget, emitBudgetPause } from "./subtaskBudget.js";
 import { buildSubtaskCostContext, type SubtaskCostContext } from "./subtaskCost.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
-import {
-  insertPlannerTask,
-  markPlannerFailed,
-  markPlannerPassed,
-  type PlannerTerminalContext,
-} from "./subtaskTasks.js";
+import { insertPlannerTask, markPlannerFailed, markPlannerPassed } from "./subtaskTasks.js";
 import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
 import { runSubtaskSequence } from "./subtaskInnerLoop.js";
 import { runConvergenceStage, runPostAuditFindingStages, runTriageStage } from "./loopStages.js";
-import { type ConvergenceState, type RoutedWorkItem } from "./loopPolicy.js";
+import { type ConvergenceState } from "./loopPolicy.js";
+import { buildPlannerTerminalContext, worstKeptSeverity } from "./subtaskLoopHelpers.js";
 import { gateFindings, routedToNewSpec, triageToRejection, type TriageSpecValidator } from "./loopFindings.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("subtask-loop");
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
-// task #46: builds the planner-task atomic-terminal context bag once per run.
-function buildPlanCtx(
-  input: SubtaskLoopInput,
-  plannerTaskId: string,
-  appendEvent: AppendEvent,
-): PlannerTerminalContext {
-  return {
-    pool: input.pool,
-    ...(input.runStateWriter !== undefined && { writer: input.runStateWriter }),
-    taskId: plannerTaskId,
-    lineage: { runId: input.context.runId, specId: input.context.specId, projectId: input.context.projectId },
-    appendEvent,
-  };
-}
-
-// The worst severity among the work items KEPT in-spec this loopback — the "are the
-// leftovers mild?" input to the velocity-defer policy. Undefined when nothing was
-// kept (the leftover-severity gate is then vacuously satisfied).
-function worstKeptSeverity(kept: ReadonlyArray<RoutedWorkItem>): FindingSeverity | undefined {
-  let worst: FindingSeverity | undefined;
-  for (const { item } of kept) {
-    if (worst === undefined || severityRank(item.severity) < severityRank(worst)) {
-      worst = item.severity;
-    }
-  }
-  return worst;
-}
 
 export interface SubtaskLoopAdapters {
   planner: AnswererAdapter<PlanAnswer>;
@@ -296,7 +264,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
 
   // task #46: pre-bound atomic-terminal context the planner-task terminal sites use.
-  const planCtx = buildPlanCtx(input, plannerTaskId, appendEvent);
+  const planCtx = buildPlannerTerminalContext(input, plannerTaskId, appendEvent);
   const rejectionHistory: PlannerRejectionFeedback[] = [...(input.seedRejections ?? [])];
   // The cross-loop convergence state — the SOLE loop bound (NOT a retry counter). A
   // `progress`/`velocity_defer` resets it; a `stalled` increments; N consecutive halts.
