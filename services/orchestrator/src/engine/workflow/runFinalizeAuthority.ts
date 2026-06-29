@@ -44,6 +44,7 @@
 // orphan reconciler. The per-path strand logic collapses into routing this verdict.
 
 import { classifyRunFailure, type RunFailureCode, type RunFailureStage } from "../worker/runFailureClassifier.js";
+import type { WanderingHaltVerdict } from "./wanderingHaltDetector.js";
 
 // The base backoff (seconds) between re-drives + the per-attempt growth, so the
 // re-enqueue does not hot-loop. The walker honors `backoffSeconds` (the cooldown before
@@ -194,6 +195,21 @@ export type RunDisposition =
       message: string;
       // The escalating consecutive-same-failure count, for the persistent-failure case.
       consecutiveSameFailure: number;
+      // apex v67 #122 — which detector fired the genuine-halt: the existing FIXED-POINT
+      // detector ("strand", the default — the SAME-failure-repeating case) OR the NEW
+      // WANDERING-HALT detector ("wandering_halt" — N re-drives with different failures
+      // but no deliverable progress). Surfaces on the `dag.spec.needs_attention` event's
+      // `source` field so operators can distinguish the two halt patterns. Defaults to
+      // "strand" so every existing call site keeps its prior behavior.
+      source?: "strand" | "wandering_halt";
+      // apex v67 #122 — the wandering-halt diagnostics. Present ONLY when
+      // `source === "wandering_halt"`; absent on the strand path so the existing payload
+      // shape is unchanged for the fixed-point case.
+      wanderingDiagnostics?: {
+        totalRedrives: number;
+        noProgressStreak: number;
+        distinctFailureCodes: string[];
+      };
     }
   | { bucket: "converge" };
 
@@ -213,6 +229,22 @@ export type RunDisposition =
  */
 export interface ConvergenceFacts {
   priorSameFixedPoint: number;
+  /**
+   * apex v67 #122 — the SECOND convergence signal: a wandering halt (N consecutive
+   * re-drives with DIFFERENT failure codes but ZERO deliverable progress between them).
+   * Computed by the caller via `assessWanderingHalt` over the spec's full re-drive
+   * history + the spec-level PR/merge progress markers (see
+   * `engine/workflow/wanderingHaltDetector.ts`). The fixed-point detector
+   * (`priorSameFixedPoint`) keys on the SAME failure repeating; the wandering-halt
+   * detector catches the changing-failure-no-progress trap the fixed-point judge
+   * structurally cannot see.
+   *
+   * Optional + defaults to `{ wandering: false }` for back-compat with call sites that
+   * have not been wired (e.g. the worker-orphan path, which has no spec-level PR/merge
+   * facts at hand). When omitted, the authority falls back to the fixed-point-only
+   * behavior — never a regression.
+   */
+  wandering?: WanderingHaltVerdict;
 }
 
 /**
@@ -328,6 +360,13 @@ function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: Co
   // one (identical failure + identical work) surfaces as a human-decision.
   const atFixedPoint = priorSameFixedPoint >= 1;
   if (!atFixedPoint) {
+    // apex v67 #122 — the SECOND convergence escalation. The fixed-point detector said
+    // "progress" (this attempt's failure differs from prior re-drives), but the spec may
+    // still be WANDERING — re-driving across a varied failure surface with no deliverable
+    // progress. Consulted ONLY at this position (the fixed-point detector wins when both
+    // would fire — a same-failure spec escalates as `strand`, not `wandering_halt`).
+    const wandering = maybeWanderingHalt(failure, facts.wandering);
+    if (wandering !== undefined) return wandering;
     // task #82: `usage_limit` is now routed UPSTREAM (in `decideRunDisposition`)
     // to the `pause_for_capacity` bucket — never reaches this point. The
     // `runOutcome` is the FailureFacts as-passed (`halted` or
@@ -350,6 +389,41 @@ function decideFromCode(failureFacts: FailureFacts, subReason: string, facts: Co
       `(and identical work, where observable) with no new information across re-drives; the spec is ` +
       `genuinely stuck (a bug or mis-spec, not a flake), so a human must intervene; requeue after addressing the cause`,
     consecutiveSameFailure: priorSameFixedPoint + 1,
+    source: "strand",
+  };
+}
+
+/**
+ * apex v67 #122 — the SECOND convergence escalation: a WANDERING halt. If the caller's
+ * wandering verdict says the spec has accumulated N consecutive re-drives with ZERO
+ * deliverable progress (a different failure each time, no PR opened, no merge, no new
+ * pipeline stage), escalate to `genuine_halt` with `source: "wandering_halt"` and
+ * `reason: "persistent_failure"`. The fixed-point detector runs FIRST (in
+ * `decideFromCode`); this check is consulted only when the fixed-point detector returned
+ * "progress" (so this catches what the fixed-point detector structurally cannot — a
+ * varied failure surface with no forward motion).
+ *
+ * Returns `undefined` when no wandering verdict is supplied (back-compat for orphan-path
+ * callers that don't compute wandering facts) OR when the verdict says "not wandering".
+ */
+function maybeWanderingHalt(
+  failure: { code: RunFailureCode; stage: RunFailureStage; summary: string },
+  wandering: WanderingHaltVerdict | undefined,
+): RunDisposition | undefined {
+  if (wandering === undefined || !wandering.wandering) return undefined;
+  const { totalRedrives, noProgressStreak, distinctFailureCodes } = wandering;
+  return {
+    bucket: "genuine_halt",
+    reason: "persistent_failure",
+    failure,
+    message:
+      `the spec re-drove ${totalRedrives} times across ${distinctFailureCodes.length} distinct failure ` +
+      `classes (${distinctFailureCodes.join(", ")}) without making any deliverable progress (no PR opened, ` +
+      `no merge, no new pipeline stage reached) — a WANDERING halt: the autonomous self-heal is changing its ` +
+      `failure mode without converging on a solution, so a human must intervene; requeue after addressing the cause`,
+    consecutiveSameFailure: 0,
+    source: "wandering_halt",
+    wanderingDiagnostics: { totalRedrives, noProgressStreak, distinctFailureCodes },
   };
 }
 

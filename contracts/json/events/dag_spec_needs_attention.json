@@ -112,6 +112,51 @@
         "message"
       ],
       "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "distinctFailureCodes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "message": {
+          "type": "string"
+        },
+        "noProgressStreak": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        },
+        "reason": {
+          "const": "persistent_failure",
+          "type": "string"
+        },
+        "source": {
+          "const": "wandering_halt",
+          "type": "string"
+        },
+        "specId": {
+          "type": "string"
+        },
+        "totalRedrives": {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "specId",
+        "reason",
+        "totalRedrives",
+        "noProgressStreak",
+        "distinctFailureCodes",
+        "message"
+      ],
+      "type": "object"
     }
   ],
   "x-tanren-schema-id": "tanren.event.dag.spec.needs_attention"

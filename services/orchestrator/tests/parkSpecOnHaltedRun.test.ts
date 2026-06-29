@@ -74,9 +74,11 @@ function harness(pool: RecordingPool, redriveHistoryReader?: RedriveHistoryReade
   return { events, appendEvent, finalizeRunState, input };
 }
 
-/** A fixed FIXED-POINT reader (0 ⇒ progress / re-drive; 1 ⇒ a fixed point / escalate — no count). */
+/** A fixed FIXED-POINT reader (0 ⇒ progress / re-drive; 1 ⇒ a fixed point / escalate — no count).
+ * Always reports `wandering: false` so the wandering-halt detector (apex v67 #122) is a no-op
+ * in these tests — the fixture exercises the fixed-point disposition. */
 function readerReturning(fixedPointStreak: number): RedriveHistoryReader {
-  return async () => fixedPointStreak;
+  return async () => ({ priorSameFixedPoint: fixedPointStreak, wandering: { wandering: false } });
 }
 
 /** The `dag.spec.redriven` event the re-drive emitted (asserts an OBSERVABLE retry, not a strand). */

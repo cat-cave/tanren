@@ -20,7 +20,12 @@ describe("redriveBackoffSeconds — grows with the fixed-point streak, capped (t
 });
 
 /** A fake org-scoped pool returning a fixed prior-redriven event list (oldest first — the
- * reader queries `ORDER BY ts ASC`). Each row is the prior re-drive's payload. */
+ * reader queries `ORDER BY ts ASC`). Each row is the prior re-drive's payload. The reader
+ * issues TWO queries: the redriven history + the spec-level PR/merge first-timestamps (apex
+ * v67 #122). The fake routes them by SQL substring; the PR/merge query returns no rows by
+ * default (no progress markers) so the wandering verdict stays "not wandering" in the
+ * fixed-point matrix tests below. The `source` field rides each row so the prober_resume
+ * filter (audit finding #13) can be exercised. */
 function fakePool(rows: { failureCode: string; workSignature?: string; source?: string }[]) {
   return {
     connect: async () => ({
@@ -28,17 +33,36 @@ function fakePool(rows: { failureCode: string; workSignature?: string; source?: 
         if (sql.includes("SET LOCAL") || sql.startsWith("SET") || sql.startsWith("BEGIN") || sql.startsWith("COMMIT")) {
           return { rows: [], rowCount: 0 };
         }
-        return { rows: rows.map((r) => ({ payload: r })), rowCount: rows.length };
+        if (sql.includes("github.pr.created")) {
+          // The progress-markers query (apex v67 #122). No rows ⇒ no markers ever set.
+          return { rows: [], rowCount: 0 };
+        }
+        // The dag.spec.redriven history query. Stamp a synthesized `ts` so the reader can
+        // compare against the (absent) progress-markers timestamps; the value is opaque.
+        return {
+          rows: rows.map((r, i) => ({ payload: r, ts: new Date(1_000_000_000_000 + i).toISOString() })),
+          rowCount: rows.length,
+        };
       },
       release: () => {},
     }),
   } as never;
 }
 
+/** The reader now returns `{ priorSameFixedPoint, wandering }`. The existing matrix asserts
+ * only the fixed-point count; this helper unwraps it so the assertions stay readable. */
+async function fixedPointCount(
+  reader: ReturnType<typeof buildRedriveHistoryReader>,
+  facts: { orgId: string; specId: string; code: "internal" | "merge"; workSignature?: string },
+): Promise<number> {
+  const result = await reader({ ...facts, stage: "run" });
+  return result.priorSameFixedPoint;
+}
+
 describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-drive; 1 = stuck / escalate)", () => {
   it("no prior re-drives ⇒ 0 (the first failure of its kind — PROGRESS, re-drive)", async () => {
     const reader = buildRedriveHistoryReader(fakePool([]));
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
   });
 
   it("a SINGLE same-code repeat (no work signature) ⇒ 0 (NOT an instant fixed point — a transient may recur once)", async () => {
@@ -46,14 +70,14 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
     // dead-end (it may be a transient flake recurring once) — the disguised-K=2 fix. The
     // cycle-aware judge keeps re-driving until the recurrence is evidenced beyond one repeat.
     const reader = buildRedriveHistoryReader(fakePool([{ failureCode: "internal" }]));
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
   });
 
   it("the SAME no-work failure RECURRING (a cycle: ≥2 priors) ⇒ 1 (a proven FIXED POINT — escalate)", async () => {
     // Two prior `internal` re-drives + the current `internal` failure, no observable work ⇒
     // the state has recurred beyond the immediate neighbor ⇒ a cycle ⇒ the judge escalates.
     const reader = buildRedriveHistoryReader(fakePool([{ failureCode: "internal" }, { failureCode: "internal" }]));
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
   });
 
   it("a DIFFERENT prior code is PROGRESS ⇒ 0 (re-drive, UNBOUNDED — a changing failure never escalates)", async () => {
@@ -62,19 +86,23 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
     const reader = buildRedriveHistoryReader(
       fakePool([{ failureCode: "internal" }, { failureCode: "internal" }, { failureCode: "merge" }]),
     );
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
   });
 
   it("the SAME failure code but DIFFERENT produced work is PROGRESS ⇒ 0 (the agent did something different)", async () => {
     // Same `internal` code as the prior, but the prior produced a different head sha than this
     // run will — so the WORK axis advanced ⇒ progress, re-drive.
     const reader = buildRedriveHistoryReader(fakePool([{ failureCode: "internal", workSignature: "sha-A" }]));
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-B" })).toBe(0);
+    expect(
+      await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-B" }),
+    ).toBe(0);
   });
 
   it("the SAME failure code AND the SAME produced work is a FIXED POINT ⇒ 1 (identical output, identical failure)", async () => {
     const reader = buildRedriveHistoryReader(fakePool([{ failureCode: "internal", workSignature: "sha-A" }]));
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-A" })).toBe(1);
+    expect(
+      await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-A" }),
+    ).toBe(1);
   });
 
   it("a long run of NEW produced work each attempt NEVER reaches a fixed point (UNBOUNDED progress)", async () => {
@@ -83,7 +111,9 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
     const reader = buildRedriveHistoryReader(
       fakePool(Array.from({ length: 8 }, (_unused, i) => ({ failureCode: "internal", workSignature: `sha-${i}` }))),
     );
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-new" })).toBe(0);
+    expect(
+      await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal", workSignature: "sha-new" }),
+    ).toBe(0);
   });
 
   it("an OSCILLATION among a FIXED set of failures with no new work reaches a fixed point ⇒ 1 (the soft-brick)", async () => {
@@ -98,7 +128,7 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
         { failureCode: "merge" },
       ]),
     );
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
   });
 
   it("audit finding #13: dag.spec.redriven rows with source:'prober_resume' are FILTERED OUT of the convergence history", async () => {
@@ -119,7 +149,7 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
         { failureCode: "usage_limit", source: "prober_resume" },
       ]),
     );
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
   });
 
   it("audit finding #13: a HISTORY of ONLY prober_resume rows reads as no structural priors ⇒ 0 (progress)", async () => {
@@ -132,6 +162,6 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
         { failureCode: "usage_limit", source: "prober_resume" },
       ]),
     );
-    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+    expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
   });
 });

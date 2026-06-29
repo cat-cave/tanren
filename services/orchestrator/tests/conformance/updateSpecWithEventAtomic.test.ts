@@ -294,7 +294,8 @@ describeDb("updateSpecWithEvent atomic spec-pair (task #48) — real PG, enforce
     // we assert ONLY that the reader runs to completion and returns a number
     // (the seam-as-reader-input contract — Plan §7 step 12).
     const reader = buildRedriveHistoryReader(ownerPool());
-    const priorSameFixedPoint = await reader({ orgId: ORG, specId: SPEC, code: "internal" });
+    const facts = await reader({ orgId: ORG, specId: SPEC, code: "internal", stage: "run" });
+    const priorSameFixedPoint = facts.priorSameFixedPoint;
     expect(typeof priorSameFixedPoint).toBe("number");
     // The harness's pool is the OWNER pool (RLS does not apply to the table
     // owner), so the reader reads under a SYSTEM scope rather than the
