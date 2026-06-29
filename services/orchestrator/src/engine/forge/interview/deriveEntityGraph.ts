@@ -89,8 +89,10 @@ export async function buildEntityGraph(
         ],
         ...(dependsOn.length > 0 ? { dependsOn } : {}),
         // Task #86 (v64 root cause): thread the writer-prompt mode from the scaffold-
-        // spec definition. The `scaffold` spec carries `specialize_seed`; `build`/
-        // `deploy` and every behavior/schema spec omit it and default to `from_scratch`.
+        // spec definition. EVERY foundation spec (`scaffold` · `build` · `deploy`)
+        // carries `specialize_seed` — each specializes a surface the composed seed
+        // already shipped (the justfile recipes, the toolchain) for THIS product.
+        // Behavior/schema specs created downstream omit it and default to `from_scratch`.
         ...(def.mode !== undefined && { mode: def.mode }),
       },
       actor,
