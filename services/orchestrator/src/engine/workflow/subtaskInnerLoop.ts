@@ -22,6 +22,7 @@ import type { GateOutcome } from "./gate/index.js";
 import { runCheckerStage, runWriterStage } from "./subtaskStages.js";
 import { type SubtaskCostContext } from "./subtaskCost.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "./convergenceDetector.js";
+import { canonicalizeFailureSignature } from "./convergenceSignatureCanonical.js";
 import { writerPromptFor } from "./subtaskWriterPrompt.js";
 import type { AppendEvent, SubtaskLoopInput, SubtaskLoopOutcome } from "./subtaskLoop.js";
 
@@ -261,13 +262,21 @@ async function runOneSubtask(args: {
 // `undefined` while making PROGRESS (the loop continues, UNBOUNDED — a changed rejection OR a
 // changed diff is progress), or a builder for the residual P0 `incomplete` result when the
 // judge escalates (no count — the structural fixed point / cycle IS the stop condition).
+//
+// AUDIT FINDING #14 — the comparison key (`failureSignature`) is the CANONICALIZED
+// rejection text (ANSI escapes / timestamps / durations / run+task+spec id refs / vitest
+// summary lines / content-addressed hex stripped). The RAW `rejectionReason` is still
+// surfaced verbatim to the residual finding body — only the convergence-detector
+// comparison key flows through the canonicalizer. Two semantically-identical rejections
+// that previously differed only in tool-reported durations or timestamps (defeating the
+// fixed-point detector silently — the v64-class non-convergence) now hash equal.
 async function recordAttemptAndCheckFixedPoint(
   attempts: AttemptSignature[],
   rejectionReason: string,
   diffSignature?: string,
 ): Promise<((subtask: PlanSubtask, rounds: number) => OneSubtaskResult) | undefined> {
   attempts.push({
-    failureSignature: rejectionReason,
+    failureSignature: canonicalizeFailureSignature(rejectionReason),
     ...(diffSignature !== undefined && { workSignature: diffSignature }),
   });
   const decision = await decideConvergence(attempts, (h) =>
