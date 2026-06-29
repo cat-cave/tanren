@@ -85,6 +85,21 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     stage: "workspace",
     summary: "the dependent run's speculative base assembly failed",
   },
+  // apex v65: `WorkspaceCommandError` is the catch-all thrown by `workspace/ssh.ts` for
+  // any SSH command that exits non-zero (a `git rebase` blocked by an unstaged-change tree,
+  // a `git fetch` with a vanished remote, etc.). Aliasing all such failures under the
+  // generic `internal` code hid the v65 `prepareCleanPrBranch` root cause behind an opaque
+  // `run.failed { failureCode: "internal" }` with no underlying error event on the public
+  // timeline, AND aliased it together with every unrelated workspace failure in the
+  // convergence detector. Pulling it into the "workspace" class — same shape as the v56 #61
+  // `SpeculativeAssemblyError` entry above — gives operators a SPECIFIC actionable category
+  // on `dag.spec.needs_attention` and lets the convergence detector key a real fix-point on
+  // the workspace class, not every unknown throw aliased together.
+  WorkspaceCommandError: {
+    code: "workspace",
+    stage: "workspace",
+    summary: "a workspace command failed during the run",
+  },
 };
 
 // Fail-closed default: an unrecognized error is the generic internal failure with a

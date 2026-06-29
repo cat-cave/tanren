@@ -163,6 +163,27 @@ describe("run-failure public-error-leak hardening (runExecutor catch → run.fai
     expect(failed.failure.kind).toBe("SpeculativeAssemblyError");
   });
 
+  it("classifies WorkspaceCommandError to the specific `workspace` code (apex v65)", async () => {
+    // The bare workspace-SSH catch-all used to fall through to the catch-all `internal @ run`
+    // — apex v65 stranded with `run.failed { failureCode: "internal" }` and no underlying
+    // error event on the public timeline, hiding a real `prepare clean PR branch failed:
+    // cannot rebase: You have unstaged changes` root cause. The classifier now keys it to a
+    // SPECIFIC `workspace` code (stage `workspace`, fixed safe summary) so the operator
+    // sees an actionable class on `dag.spec.needs_attention` and the convergence detector
+    // keys a real fix-point on the workspace class, not every unknown throw aliased together.
+    const { WorkspaceCommandError } = await import("../src/engine/workspace/ssh.js");
+    const result = { exitCode: 1, stdout: "", stderr: "cannot rebase: You have unstaged changes", timedOut: false };
+    expect(
+      classifyRunFailure(
+        new WorkspaceCommandError("prepare clean PR branch failed: exit 1", "prepare clean PR branch", result),
+      ),
+    ).toEqual({
+      code: "workspace",
+      stage: "workspace",
+      summary: "a workspace command failed during the run",
+    });
+  });
+
   it("classifies the empty-writer-commit error as the retriable `empty_writer_output` code (v35)", async () => {
     const { EmptyWriterCommitError } = await import("../src/engine/workflow/plannerRunCi.js");
     // A "No commits between base and head" 422 whose branch produced nothing this attempt

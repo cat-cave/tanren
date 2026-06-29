@@ -79,6 +79,17 @@ export interface CleanedPushSource {
 // committing vs it. We rebase a detached copy and capture its sha into
 // PR_CLEAN_REF.
 //
+// The rebase runs with `--autostash` so dirty working-tree artifacts from the
+// per-iteration gates (rspec `reports/`, rubocop autocorrects, etc.) don't
+// block the cleanup with `cannot rebase: You have unstaged changes` — apex v65
+// halted exactly there. Those artifacts are disposable per-iteration evidence
+// already captured in the gate's `gate.verdict` event payload; they were never
+// something we want in the PR commit. Autostash pops them back after the
+// rebase, leaving the working tree intact. On a stash-pop conflict git leaves
+// the stash in `refs/stash` for manual recovery, but the rebase itself still
+// succeeds and PR_CLEAN_REF still gets the correct sha — which is all the
+// push needs (the runner is released right after).
+//
 // When cloneHeadSha/bootstrapSha are empty (fake-SSH unit paths) or equal (no
 // real bootstrap commit), there is nothing to drop and the working HEAD is
 // pushed unchanged.
@@ -122,7 +133,7 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       // (bootstrapSha..HEAD) onto the clone HEAD — dropping the bootstrap commit.
       // The working branch ref is untouched (we are detached).
       'git checkout --quiet --detach "$orig_head"',
-      `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git rebase --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
+      `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git rebase --autostash --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
       // Capture the cleaned tip into the push ref, then restore the working HEAD.
       `git update-ref ${quoteSshShellArg(PR_CLEAN_REF)} HEAD`,
       'git checkout --quiet --detach "$orig_head"',
