@@ -336,29 +336,18 @@ async function validateFragmentBody(args: {
   return runSmokeComposition(args.spec, fragment, derivedDependsOn);
 }
 
-/** Derive the implicit `dependsOn` list from the parsed ops. The rule (audit
- * findings #11 + H2): any op whose effect implies a runtime MUST surface that
- * runtime as a `dependsOn`. A runtime fragment is its own runtime — we never
- * synthesize a self-dependency.
+/** Derive the implicit `dependsOn` list from the parsed ops (audit findings #11
+ * + H2). Any op whose effect implies a runtime MUST surface that runtime — a
+ * runtime fragment is its own runtime so we never self-depend. Implications:
+ *  - `addPackageJsonDep` / `addPackageJsonDevDep` ⇒ runtime-node-pnpm.
+ *  - `vfs.write|overwrite("package.json", …)` ⇒ runtime-node-pnpm (a fragment
+ *    writing pkg.json directly bypasses the addPackageJsonDep API).
+ *  - `vfs.write|overwrite("Gemfile", …)` ⇒ runtime-ruby-bundler.
+ *  - `vfs.appendToJustfileTarget` lines containing a pnpm / npm / yarn / npx /
+ *    node token ⇒ runtime-node-pnpm; bundle / gem / ruby ⇒ runtime-ruby-bundler.
  *
- * The IMPLICATIONS are:
- *  - `addPackageJsonDep` / `addPackageJsonDevDep` ⇒ runtime-node-pnpm
- *    (pkg.json deps only land under that runtime).
- *  - `vfs.write("package.json", …)` or `vfs.overwrite("package.json", …)` ⇒
- *    runtime-node-pnpm (a fragment writing pkg.json directly bypasses the
- *    addPackageJsonDep API but still requires the node runtime).
- *  - `vfs.write("Gemfile", …)` or `vfs.overwrite("Gemfile", …)` ⇒
- *    runtime-ruby-bundler (the Bundler manifest only exists under that runtime).
- *  - `vfs.appendToJustfileTarget(target, lines)` whose `lines` contain a
- *    pnpm / npm / yarn / npx / node token ⇒ runtime-node-pnpm.
- *  - `vfs.appendToJustfileTarget(target, lines)` whose `lines` contain a
- *    bundle / gem / ruby token ⇒ runtime-ruby-bundler.
- *
- * The derivation is the doctrine close on H2: a fragment whose ops imply a
- * runtime MUST declare that runtime as a dependsOn. The composer's existing
- * `dependency_runtime_mismatch` then fails LOUD if the surrounding template
- * pairs the fragment with the wrong runtime, instead of silently dropping the
- * mismatch + producing a broken composed VFS. */
+ * The composer's `dependency_runtime_mismatch` then fails LOUD on a misaligned
+ * pair, instead of silently dropping the mismatch + producing a broken VFS. */
 export function deriveImplicitDependsOn(ops: readonly FragmentOp[], spec: FragmentSpec): readonly string[] {
   // A runtime fragment IS the runtime — never imply a self-dependency. Bail
   // before the per-op walk so a runtime-fragment that happens to author its
@@ -383,20 +372,32 @@ export function deriveImplicitDependsOn(ops: readonly FragmentOp[], spec: Fragme
   return [...implied];
 }
 
+/** Strip the justfile comment portion of a line before token-matching (task
+ * #103). Justfile/shell comments are `#` to end-of-line, so `# pnpm here is
+ * historical` or `mkdir output # was: npm` would otherwise false-positive the
+ * tooling-token regex. A `#` at column 0 OR preceded by whitespace begins a
+ * comment; a `#` mid-token (rare quoted-string case) is left alone. */
+function stripJustfileComment(line: string): string {
+  const match = line.match(/(?:^|\s)#/u);
+  if (match === null || match.index === undefined) return line;
+  return line.slice(0, match.index);
+}
+
 /** A justfile line invokes node tooling — pnpm / npm / yarn / npx / node — as a
- * whole-word token (not a substring match, so `node` does NOT match a directory
- * called `linode`, and a line whose only word is e.g. `cathode` derives no
- * runtime). The check is intentionally simple: a fragment that authors a
- * just-target line with one of these tokens REQUIRES the node runtime. */
+ * whole-word token (not a substring, so `node` does NOT match `linode`). The
+ * comment portion is stripped FIRST (task #103) so `# pnpm here is historical`
+ * does NOT derive the node runtime. */
 function lineHasNodeToolingToken(line: string): boolean {
-  return /(?:^|[\s|;&"'`(])(?:pnpm|npm|yarn|npx|node)(?=$|[\s|;&"'`)])/u.test(line);
+  const code = stripJustfileComment(line);
+  return /(?:^|[\s|;&"'`(])(?:pnpm|npm|yarn|npx|node)(?=$|[\s|;&"'`)])/u.test(code);
 }
 
 /** A justfile line invokes ruby tooling — bundle / gem / ruby — as a whole-word
- * token. Mirrors {@link lineHasNodeToolingToken}: a fragment authoring a
- * just-target line with one of these REQUIRES the ruby runtime. */
+ * token. Mirrors {@link lineHasNodeToolingToken} (comment strip + whole-word
+ * regex). */
 function lineHasRubyToolingToken(line: string): boolean {
-  return /(?:^|[\s|;&"'`(])(?:bundle|gem|ruby)(?=$|[\s|;&"'`)])/u.test(line);
+  const code = stripJustfileComment(line);
+  return /(?:^|[\s|;&"'`(])(?:bundle|gem|ruby)(?=$|[\s|;&"'`)])/u.test(code);
 }
 
 async function runSmokeComposition(

@@ -143,6 +143,61 @@ describe("deriveImplicitDependsOn — appendToJustfileTarget tooling-token deriv
   });
 });
 
+describe("deriveImplicitDependsOn — justfile comment lines do NOT false-positive the token match (task #103)", () => {
+  // Justfile / shell comments are `#` to end-of-line. A line whose tooling
+  // token lives INSIDE a comment must NOT derive a runtime — otherwise a
+  // fragment that documents history (`# we used to use pnpm here`) or adds an
+  // inline comment (`mkdir output # was: npm init`) falsely flags as needing
+  // the node / ruby runtime, then pairs wrong with the surrounding template.
+  // The audit found `lineHasNodeToolingToken` matched whole-line comments AND
+  // trailing comments; both must now strip the comment portion first.
+  it("a whole-line comment containing pnpm / npm / yarn / npx / node does NOT derive runtime-node-pnpm", () => {
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "docs", lines: ["# we used to use pnpm here"] },
+      { kind: "just", target: "history", lines: ["# npm was deprecated in v3"] },
+      { kind: "just", target: "history", lines: ["# yarn install removed"] },
+      { kind: "just", target: "history", lines: ["# npx replaced"] },
+      { kind: "just", target: "history", lines: ["# node binary path now resolves via mise"] },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
+  });
+
+  it("a whole-line comment containing bundle / gem / ruby does NOT derive runtime-ruby-bundler", () => {
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "docs", lines: ["# bundle install was here pre-migration"] },
+      { kind: "just", target: "history", lines: ["# gem install bundler — now mise-managed"] },
+      { kind: "just", target: "history", lines: ["# ruby version pinned in .tool-versions"] },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
+  });
+
+  it("a TRAILING comment (code + ` # …`) ignores tokens after the `#`", () => {
+    // The code BEFORE the `#` is a real command — `mkdir output` has no
+    // tooling token, so the line implies no runtime even though the comment
+    // names every tooling token. Strip first, then match.
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "build", lines: ["mkdir output # was: pnpm build, npm run build, yarn build"] },
+      { kind: "just", target: "build", lines: ["true # bundle / gem / ruby were here"] },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
+  });
+
+  it("a TRAILING comment does NOT mask a REAL tooling invocation on the same line", () => {
+    // The code before the `#` IS a real `pnpm install` — the derive must still
+    // see it. The strip removes only the comment, not the leading command.
+    const ops: FragmentOp[] = [{ kind: "just", target: "bootstrap", lines: ["pnpm install # historical npm note"] }];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-node-pnpm"]);
+  });
+
+  it("indented whole-line comments are also stripped (justfile bodies are indented)", () => {
+    // A justfile recipe body is conventionally indented; a comment LINE inside
+    // a recipe starts with whitespace then `#`. The strip rule (`#` preceded
+    // by whitespace) covers this case too.
+    const ops: FragmentOp[] = [{ kind: "just", target: "docs", lines: ["    # pnpm install was here"] }];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
+  });
+});
+
 describe("deriveImplicitDependsOn — runtime fragments never imply a self-dependency", () => {
   it("a runtime fragment that writes its OWN package.json does NOT self-derive runtime-node-pnpm", () => {
     // A runtime fragment IS the runtime — synthesizing a `runtime-node-pnpm`
