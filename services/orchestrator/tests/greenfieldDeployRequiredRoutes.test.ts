@@ -372,9 +372,18 @@ describe("greenfield/apex deploy dependency routes", () => {
     });
 
     expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string; failedIds: string[] };
+    const body = (await res.json()) as {
+      error: string;
+      failedIds: string[];
+      failureReasons: Record<string, string>;
+    };
     expect(body.error).toBe("fragment_authoring_failed");
     expect(body.failedIds.length).toBeGreaterThan(0);
+    // v66 fix — the body always carries a `failureReasons` map (the property
+    // exists even on the no-seam halt path, where it is empty). This shape is
+    // load-bearing for operator self-diagnosis.
+    expect(body.failureReasons).toBeDefined();
+    expect(typeof body.failureReasons).toBe("object");
     // No project / repo leaked through the fail-closed halt (it preceded creation).
     expect(pool.projects.size).toBe(0);
     expect(pool.specs.size).toBe(0);

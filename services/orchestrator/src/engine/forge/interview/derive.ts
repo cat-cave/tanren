@@ -265,7 +265,9 @@ async function resolveFragmentConfig(
   if (input.runFragmentAuthoring === undefined) {
     throw new FragmentAuthoringFailedError(
       decision.missing.map((m: FragmentSpec) => m.id),
-      new Error("no runFragmentAuthoring seam wired; cannot author missing fragments"),
+      {
+        cause: new Error("no runFragmentAuthoring seam wired; cannot author missing fragments"),
+      },
     );
   }
   const authoringResult = await input.runFragmentAuthoring({
@@ -275,7 +277,9 @@ async function resolveFragmentConfig(
     lifecycle,
   });
   if (authoringResult.failedIds.length > 0) {
-    throw new FragmentAuthoringFailedError(authoringResult.failedIds);
+    throw new FragmentAuthoringFailedError(authoringResult.failedIds, {
+      failureReasons: authoringResult.failureReasons,
+    });
   }
   library = authoringResult.library;
   decision = selectFragmentConfig(lifecycle, library);
