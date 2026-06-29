@@ -176,6 +176,105 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
     const prose = "// We never use a DEFAULT_TIMEOUT_MS kill timer here.\nexport const x = 1;\n";
     expect(checkNoArbitraryTimeouts([{ file: srcFile, text: prose }])).toEqual([]);
   });
+
+  // Task #41 / audit #672 — close the disguised-survivor evasion paths the prior
+  // regex set scanned past. Each new pattern carries its own positive test, its own
+  // negative shape that must NOT trip, and an `// arch-allow: timeout-class` bless test.
+
+  it("(g) flags AbortSignal.timeout(N) — a primitive wall-clock-kill (audit #672 evasion path)", () => {
+    const text = "const signal = AbortSignal.timeout(5000);\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.map((item) => item.rule)).toEqual(["no-arbitrary-timeouts"]);
+    expect(flagged[0]?.message).toContain("AbortSignal.timeout(N) is a wall-clock kill primitive");
+  });
+
+  it("(g) flags AbortSignal.timeout used inline in a fetch options bag", () => {
+    const text = "await fetch(url, { method: 'GET', signal: AbortSignal.timeout(5000) });\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged).toHaveLength(1);
+    expect(flagged[0]?.message).toContain("AbortSignal.timeout(N)");
+  });
+
+  it("(g) does NOT flag AbortSignal.abort() (the immediate-abort companion, not a wall-clock timer)", () => {
+    const text = "controller.abort();\nconst sig = AbortSignal.abort();\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("(g) honors `// arch-allow: timeout-class` on an AbortSignal.timeout line", () => {
+    const text =
+      "const sig = AbortSignal.timeout(5000); // arch-allow: timeout-class — discrete one-shot probe, abort cannot truncate work\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("(h) flags Promise.race against a setTimeout that rejects (the disguised wall-clock wait)", () => {
+    const text =
+      "await Promise.race([\n" +
+      "  work,\n" +
+      "  new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), ms)),\n" +
+      "]);\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.some((d) => d.rule === "no-arbitrary-timeouts")).toBe(true);
+    expect(flagged.some((d) => d.message.includes("Promise.race against a wall-clock timer"))).toBe(true);
+  });
+
+  it("(h) does NOT flag the legitimate poll-with-wakeup Promise.race (sleep raced with a wake signal)", () => {
+    // The shape used in services/orchestrator/src/engine/worker/runWorker.ts:139 and
+    // services/orchestrator/src/routes/runs/sse.ts:217 — both branches resolve, neither
+    // rejects or throws, so the lookahead window contains no kill verb. Untouched.
+    const text =
+      "const woken = new Promise<void>((resolve) => { this.wakeWaiter = resolve; });\n" +
+      "await Promise.race([this.sleep(this.args.intervalMs), woken]);\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("(h) flags Promise.race where the kill verb rides the opener line (single-line shape)", () => {
+    const text = "await Promise.race([work, timer.then(() => { throw new Error('x'); })]);\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.some((d) => d.message.includes("Promise.race against a wall-clock timer"))).toBe(true);
+  });
+
+  it("(h) honors `// arch-allow: timeout-class` inside a multi-line Promise.race body window", () => {
+    const text =
+      "await Promise.race([\n" +
+      "  // arch-allow: timeout-class — discrete one-shot, no work to lose\n" +
+      "  work,\n" +
+      "  new Promise((_, rej) => setTimeout(() => rej(new Error('x')), ms)),\n" +
+      "]);\n";
+    expect(
+      checkNoArbitraryTimeouts([{ file: srcFile, text }]).filter((d) => d.message.includes("Promise.race")),
+    ).toEqual([]);
+  });
+
+  // (e+) BARE retry-cap identifiers the suffix-only family did not catch. The prior
+  // patterns required a leading qualifier (`MAX_X_ATTEMPTS`, `FOO_RETRIES`). A fresh
+  // module reintroducing `MAX_ATTEMPTS` / `RETRY_LIMIT` / `MAX_TRIES` / `ATTEMPT_LIMIT` /
+  // `RETRY_CAP` / `ATTEMPT_CAP` / `RETRY_COUNT` scanned past the gate — task #41.
+  it("(e+) flags BARE retry-cap identifiers (MAX_ATTEMPTS, RETRY_LIMIT, ATTEMPT_LIMIT, MAX_TRIES)", () => {
+    const text =
+      "const MAX_ATTEMPTS = 4;\n" +
+      "const RETRY_LIMIT = 5;\n" +
+      "const ATTEMPT_LIMIT = 3;\n" +
+      "const MAX_TRIES = 6;\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged).toHaveLength(4);
+    const ids = flagged.map((d) => d.message);
+    expect(ids[0]).toContain("MAX_ATTEMPTS");
+    expect(ids[1]).toContain("RETRY_LIMIT");
+    expect(ids[2]).toContain("ATTEMPT_LIMIT");
+    expect(ids[3]).toContain("MAX_TRIES");
+  });
+
+  it("(e+) flags the remaining bare retry-cap family (RETRY_CAP, ATTEMPT_CAP, RETRY_COUNT, MAX_RETRY_COUNT)", () => {
+    const text = "const RETRY_CAP = 2;\nconst ATTEMPT_CAP = 3;\nconst RETRY_COUNT = 4;\nconst MAX_RETRY_COUNT = 5;\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged).toHaveLength(4);
+  });
+
+  it("(e+) honors `// arch-allow: timeout-class` on a bare retry-cap identifier line", () => {
+    const text =
+      "const MAX_ATTEMPTS = 1; // arch-allow: timeout-class — external API allows exactly 1 attempt, fact not budget\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
 });
 
 // ENFORCEMENT wiring (Phase-1 SEAL): the lint is no longer report-only — it is part of

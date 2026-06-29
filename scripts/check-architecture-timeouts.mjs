@@ -27,7 +27,19 @@
 //       past the keyword-before-`=` form.
 //   (d) fixed QUIET-WINDOW / no-output-for-N watchdogs (disguised timeouts).
 //   (e) banned IDENTIFIERS — DEFAULT_TIMEOUT_MS, *_TIMEOUT_MS = 600_000, maxWriterIter*,
-//       maxRetriesPerTransient*, MAX_*_ATTEMPTS, maxRunHours, DEFAULT_TRIAL_TIMEOUT_MS, etc.
+//       maxRetriesPerTransient*, MAX_*_ATTEMPTS, maxRunHours, DEFAULT_TRIAL_TIMEOUT_MS, plus
+//       the BARE retry-cap family (MAX_ATTEMPTS, RETRY_LIMIT, ATTEMPT_LIMIT, MAX_TRIES,
+//       RETRY_CAP, ATTEMPT_CAP, RETRY_COUNT, MAX_RETRY_COUNT) — added task #41 / audit #672
+//       because the prior suffix-only patterns required a leading qualifier.
+//   (f) ssh2 connect-config `timeout:` (the apex v44 socket-LIFETIME idle bound).
+//   (g) `AbortSignal.timeout(N)` — the standard-library wall-clock-kill primitive feeding
+//       fetch / any abort-aware API (audit #672 evasion path). Aborts at exactly N ms
+//       regardless of progress; the same doctrine status as a setTimeout-kill.
+//   (h) `Promise.race(` against a wall-clock-kill timer — flagged when the multi-line
+//       lookahead window contains a kill verb (`reject` / `throw` / `abort` / `destroy` /
+//       `fail` / `terminate` / `timedOut`) (audit #672 evasion path). The legitimate
+//       poll-with-wakeup shape (`Promise.race([sleep(ms), wakeSignal])`) has no kill verb
+//       and is untouched.
 //
 // BLESSED (not violations): poll INTERVALS, backoff SPACING, heartbeat cadence,
 // connect-establishment timeouts, lease windows, token TTLs, debounce, the
@@ -132,6 +144,30 @@ const quietWindowPattern =
 // + `keepaliveCountMax` to detect a dead connection without killing a quiet-but-alive command.
 const ssh2SocketIdleTimeoutPattern = /^\s*timeout\s*:/u;
 
+// (g) `AbortSignal.timeout(N)` — the standard-library primitive that produces a
+// wall-clock-kill AbortSignal (audit #672 evasion path). It is unambiguously a
+// total-duration kill on a running operation: the signal aborts at exactly N ms regardless
+// of progress. Same doctrine status as a setTimeout-kill — replace with an ActivityWatchdog
+// over a progress signal, or for a discrete one-shot HTTP probe (the shape blessed at
+// `fetchDeployTransport` / `fetchUrlReachabilityProbe`) document the bless at the call
+// site via `// arch-allow: timeout-class`. The pattern catches the call expression
+// directly so an inline `fetch(url, { signal: AbortSignal.timeout(5000) })` trips even
+// when the `signal:` keyword and the abort site span a single line.
+const abortSignalTimeoutPattern = /\bAbortSignal\s*\.\s*timeout\s*\(/gu;
+
+// (h) `Promise.race(` with a kill-verb companion in the multi-line lookahead — the
+// disguised wall-clock wait audit #672 surfaced. The KILL shape races a real op against a
+// `setTimeout(...reject)` / `setTimeout(...throw)` so the wall-clock branch terminates
+// the work (a total-duration kill on whichever side loses); the LEGITIMATE shape races a
+// `sleep(intervalMs)` against a wake signal (poll-with-wakeup, both branches just resolve).
+// We flag only when the opener line OR its lookahead window contains a kill verb —
+// `reject`, `throw`, `abort`, `destroy`, `fail`, `terminate`, `timedOut`. The wakeup
+// pattern has no kill verb and stays untouched. The per-line `// arch-allow: timeout-class`
+// annotation on the opener OR within the lookahead window blesses the construct (the same
+// multi-line bless the kill-timer scanner honors for oxfmt-shaped layouts).
+const promiseRaceOpener = /\bPromise\s*\.\s*race\s*\(/gu;
+const raceKillVerb = /\b(reject|throw|abort|destroy|fail|terminate|timedOut)\b/u;
+
 // (e) banned identifier DECLARATIONS — the 600_000 timeout family + the attempt-cap family.
 // Matches a const/let/field declaration of a name in the banned taxonomy.
 const bannedIdentifierPatterns = [
@@ -145,6 +181,12 @@ const bannedIdentifierPatterns = [
   /\b([A-Z][A-Z0-9_]*_RETRY_ATTEMPTS|[A-Z][A-Z0-9_]*_RETRIES)\b/gu,
   // camelCase max-iteration / retries-per / run-hours give-up knobs.
   /\b(maxWriterIter[A-Za-z0-9_$]*|maxRetriesPerTransient[A-Za-z0-9_$]*|maxRunHours[A-Za-z0-9_$]*|DEFAULT_[A-Z0-9_]*_MAX_ATTEMPTS)\b/gu,
+  // BARE retry-cap identifiers the suffix-only patterns above don't catch (audit #672
+  // evasion path). The prior taxonomy required a leading family qualifier (`MAX_X_ATTEMPTS`,
+  // `FOO_RETRIES`), so a fresh module reintroducing `MAX_ATTEMPTS` / `RETRY_LIMIT` /
+  // `MAX_TRIES` / `ATTEMPT_LIMIT` / `RETRY_CAP` / `ATTEMPT_CAP` / `RETRY_COUNT` scanned past
+  // the gate. Enumerated to keep the surface explicit + reviewable (additions are loud).
+  /\b(MAX_ATTEMPTS|RETRY_LIMIT|ATTEMPT_LIMIT|MAX_TRIES|RETRY_CAP|ATTEMPT_CAP|RETRY_COUNT|MAX_RETRY_COUNT)\b/gu,
 ];
 
 function isProductionSource(file) {
@@ -283,11 +325,50 @@ function violationsInLine(code, rawFollowingLines = "", followingLines = "") {
         " + `keepaliveCountMax` to detect a dead connection without killing a quiet-but-alive command",
     );
   }
+  // (g) `AbortSignal.timeout(N)` — a primitive wall-clock kill (audit #672 evasion path).
+  // Each occurrence is its own finding; bless at the call site via `// arch-allow:
+  // timeout-class` for a documented discrete one-shot (the per-line annotation overrides).
+  for (let i = [...code.matchAll(abortSignalTimeoutPattern)].length; i > 0; i -= 1) {
+    found.push(
+      "AbortSignal.timeout(N) is a wall-clock kill primitive — it aborts at exactly N ms regardless of progress;" +
+        " use an ActivityWatchdog (progress-based) instead, or bless a discrete one-shot HTTP probe with" +
+        " `// arch-allow: timeout-class` at the call site",
+    );
+  }
+  // (h) `Promise.race(` with a kill verb in the multi-line lookahead — the disguised
+  // wall-clock wait (audit #672 evasion path). The legitimate poll-with-wakeup shape
+  // (a sleep raced with a wake signal — both branches just resolve) has no kill verb in
+  // its window and stays untouched.
+  for (const match of code.matchAll(promiseRaceOpener)) {
+    if (!isRaceWallClockKill(code, match.index, rawFollowingLines, followingLines)) continue;
+    found.push(
+      "Promise.race against a wall-clock timer (a setTimeout that rejects/throws/aborts) — a disguised" +
+        " total-duration kill on the racing op; use an ActivityWatchdog over a progress signal, or, for a" +
+        " documented discrete one-shot, bless the construct with `// arch-allow: timeout-class`",
+    );
+  }
   // Identifier families (banned declarations + give-up counters). Dedupe by the captured
   // identifier; a banned-family hit wins over a give-up hit for the same identifier; skip
   // allowlisted names and any identifier that is a loop-cap head's bound (counted above).
   found.push(...identifierViolations(code, loopSpans));
   return found;
+}
+
+// Does the `Promise.race(` at `openerIndex` race against a wall-clock-kill timer? We
+// check the opener line's same-statement window AND the multi-line lookahead window for
+// a kill verb (`reject`/`throw`/`abort`/`destroy`/`fail`/`terminate`/`timedOut`). The
+// legitimate poll-with-wakeup shape has neither side throwing, so its window matches no
+// kill verb. A multi-line construct whose body line carries the per-line bless annotation
+// is honored — same mechanism as the kill-timer scanner's multi-line bless.
+function isRaceWallClockKill(code, openerIndex, rawFollowingLines = "", followingLines = "") {
+  const sameLineWindow = code.slice(openerIndex, openerIndex + 240);
+  if (raceKillVerb.test(sameLineWindow)) {
+    return true;
+  }
+  if (!raceKillVerb.test(followingLines)) {
+    return false;
+  }
+  return !rawFollowingLines.includes(ARCH_ALLOW);
 }
 
 // One pass over the identifier families: each distinct identifier yields at most one finding.
