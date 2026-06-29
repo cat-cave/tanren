@@ -269,8 +269,9 @@ describe("runPlannerLoopWorkflow", () => {
     expect(writerBaseShas).toEqual([bootstrapSha]);
     // The PR branch is built by replaying the writer commit onto the clone HEAD
     // (bootstrap commit dropped) and pushed from the cleaned ref.
-    const rebase = ssh.commands.find((c) => c.includes("git rebase --onto"));
-    expect(rebase).toContain(`git rebase --onto '${cloneHead}' '${bootstrapSha}'`);
+    const rebase = ssh.commands.find((c) => c.includes("git rebase"));
+    // `--autostash` (apex v65) guards the cleanup against dirty per-iteration gate artifacts.
+    expect(rebase).toContain(`git rebase --autostash --onto '${cloneHead}' '${bootstrapSha}'`);
     const push = ssh.commands.find((c) => c.includes("git push"));
     expect(push).toContain("refs/tanren/pr-clean:refs/heads/");
   });

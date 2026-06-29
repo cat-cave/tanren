@@ -121,7 +121,7 @@ describe("bootstrap-artifact isolation", () => {
     // trailing `git rev-parse PR_CLEAN_REF` echoes the cleaned tip (the future PR
     // head) as the command's stdout — the COMMIT-BINDING sha the merge gate anchors on.
     const CLEAN_SHA = "4".repeat(40);
-    const ssh = new ScriptedSsh([{ match: "git rebase --onto", stdout: `${CLEAN_SHA}\n` }]);
+    const ssh = new ScriptedSsh([{ match: "git rebase", stdout: `${CLEAN_SHA}\n` }]);
     const pushSource = await prepareCleanPrBranch({
       ssh,
       target,
@@ -136,13 +136,46 @@ describe("bootstrap-artifact isolation", () => {
     expect(pushSource.headSha).toBe(CLEAN_SHA);
     const cmd = ssh.commands[0] ?? "";
     // Replay writer commits onto the clone HEAD, dropping the bootstrap commit.
-    expect(cmd).toContain(`git rebase --onto '${CLONE_HEAD}' '${BOOTSTRAP_SHA}'`);
+    // `--autostash` (apex v65) stashes per-iteration gate artifacts (rspec `reports/`,
+    // rubocop autocorrects, etc.) before the rebase so `cannot rebase: You have
+    // unstaged changes` cannot block the cleanup, and pops them back after.
+    expect(cmd).toContain(`git rebase --autostash --onto '${CLONE_HEAD}' '${BOOTSTRAP_SHA}'`);
     // Capture the cleaned tip into the push ref, then restore the working HEAD
     // (so a review-rework re-entry keeps its bootstrapSha diff base intact).
     expect(cmd).toContain(`git update-ref '${PR_CLEAN_REF}' HEAD`);
     expect(cmd).toContain('git checkout --quiet --detach "$orig_head"');
     // The cleaned tip is echoed LAST so it is the command's stdout (the PR-head sha).
     expect(cmd).toContain(`git rev-parse '${PR_CLEAN_REF}'`);
+  });
+
+  it("(b) apex v65 — the rebase uses `--autostash` so a dirty working tree from the per-iteration gates doesn't block the clean-PR prep", async () => {
+    // Regression: v65 ran writer → checker → tier-1/tier-2 gates → auditor → 4 design
+    // findings → designOracle → triage → plan.completed, then HALTED on
+    // `prepare clean PR branch failed: exit 1; stderr: cannot rebase: You have unstaged
+    // changes`. The gates (`just tier-1` running rubocop autocorrect, `just tier-2`
+    // writing `reports/`) legitimately dirty the working tree; that evidence is already
+    // captured in the gate's `gate.verdict` event payload and is never something we
+    // want in the PR commit. `--autostash` is git's native fix: stash dirty tracked +
+    // untracked changes before the rebase, pop them back after, leaving PR_CLEAN_REF
+    // resolved to the cleaned tip regardless.
+    const CLEAN_SHA = "5".repeat(40);
+    const ssh = new ScriptedSsh([{ match: "git rebase", stdout: `${CLEAN_SHA}\n` }]);
+    await prepareCleanPrBranch({
+      ssh,
+      target,
+      workspacePath,
+      cloneHeadSha: CLONE_HEAD,
+      bootstrapSha: BOOTSTRAP_SHA,
+      timeoutMs,
+    });
+    const cmd = ssh.commands[0] ?? "";
+    // The `--autostash` flag must precede `--onto` on the `git rebase` invocation — git
+    // applies it before the rebase plan runs, which is what makes a dirty tree survive.
+    expect(cmd).toContain("git rebase --autostash --onto");
+    // Specifically, the flag must NOT have been dropped or re-ordered after `--onto`
+    // (git would treat a post-`--onto` arg as the upstream ref and the rebase would
+    // refuse a flag-shaped value loudly).
+    expect(cmd).not.toMatch(/git rebase --onto[^|&;]*--autostash/u);
   });
 
   it("(b) no-ops the PR-branch cleanup when there is no real bootstrap commit", async () => {
