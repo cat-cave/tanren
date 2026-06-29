@@ -422,4 +422,56 @@ describe("runDesignOracleStage", () => {
       }),
     ).rejects.toThrow(/findings/u);
   });
+
+  // Audit round-2 H1: the stage threads `specMode` through to the oracle prompt
+  // builder so a `specialize_seed` spec gets the seeded-mode tail block scoping the
+  // oracle off the pre-existing seed surfaces (mirrors PR #708's checker/auditor
+  // lift). Pins the end-to-end seam from the stage input down to the prompt text.
+  it("threads specMode='specialize_seed' through to the oracle prompt (seeded-mode tail block)", async () => {
+    const { adapter, prompts } = fakeAdapter({ verificationMode: "x", findings: [], summary: "x" });
+    const client = fakeClient({
+      contract: webContract(),
+      personas: [{ id: "persona_admin", name: "Admin", description: "runs the org" }],
+      behaviors: [{ id: "behavior_invite", personaId: "persona_admin", title: "Invite a teammate" }],
+    });
+    await runDesignOracleStage({
+      client,
+      projectId: "project_1",
+      actor,
+      actorRef,
+      adapter,
+      baselineSha,
+      timeoutMs: 1000,
+      workspacePath: "/tmp/ws",
+      specMode: "specialize_seed",
+    });
+    // The seeded-mode tail block — exact phrases pinned in designOraclePromptMode.test.ts.
+    expect(prompts[0]).toContain("SPECIALIZE-SEED mode");
+    expect(prompts[0]).toContain("composed seed is PRE-EXISTING and PROVEN GREEN");
+    expect(prompts[0]).toContain("PRODUCT-SPECIFIC");
+  });
+
+  // Symmetric: `from_scratch` (and absent) ⇒ no seeded-mode tail block in the
+  // prompt, so brownfield/legacy specs see the byte-identical legacy oracle prompt.
+  it("specMode='from_scratch' ⇒ NO seeded-mode tail block in the prompt (legacy shape)", async () => {
+    const { adapter, prompts } = fakeAdapter({ verificationMode: "x", findings: [], summary: "x" });
+    const client = fakeClient({
+      contract: webContract(),
+      personas: [{ id: "persona_admin", name: "Admin", description: "runs the org" }],
+      behaviors: [{ id: "behavior_invite", personaId: "persona_admin", title: "Invite a teammate" }],
+    });
+    await runDesignOracleStage({
+      client,
+      projectId: "project_1",
+      actor,
+      actorRef,
+      adapter,
+      baselineSha,
+      timeoutMs: 1000,
+      workspacePath: "/tmp/ws",
+      specMode: "from_scratch",
+    });
+    expect(prompts[0]).not.toContain("SPECIALIZE-SEED mode");
+    expect(prompts[0]).not.toContain("composed seed is PRE-EXISTING");
+  });
 });

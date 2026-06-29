@@ -22,6 +22,21 @@
 // artifacts the contract names + the diff) and, when fidelity genuinely cannot be
 // judged statically (it needs a live render the sandbox cannot do), emits a single
 // `design-not-verifiable` info finding rather than fabricate a pass or a failure.
+//
+// SPEC-MODE AWARENESS (audit round-2 H1, mirroring PR #708's checker/auditor lift).
+// The oracle independently judges the built output against the contract and can
+// emit P1/P2 findings citing pre-existing seed surfaces (e.g. the contract's
+// behaviorRefs vs the seed-shipped skeleton). When `specMode === "specialize_seed"`,
+// the prompt appends a seeded-mode tail block that tells the oracle the composed
+// seed is pre-existing + proven green and that pre-existing seed surfaces are NOT
+// design-contract gaps THIS spec was asked to fill — only gaps in the PRODUCT-
+// SPECIFIC surfaces this spec was supposed to deliver. Wording mirrors the writer's
+// `WRITER_SPECIALIZE_SEED_GRADING_INSTRUCTION` (PR #704) + the checker/auditor
+// seeded-mode block (PR #708) so all four answerers agree on what is in-scope for a
+// `specialize_seed` spec. When `specMode === "from_scratch"` (the default) the
+// block is ABSENT so brownfield/legacy specs see the byte-identical legacy prompt.
+
+import type { SpecMode } from "../../state/spec.js";
 
 export interface ResolvedPersona {
   id: string;
@@ -69,6 +84,13 @@ export interface DesignOraclePromptInput {
   behaviors: ReadonlyArray<ResolvedBehavior>;
   // The run base the writer's change is diffed against; the oracle self-inspects.
   baselineSha: string;
+  // OPTIONAL spec writer-prompt MODE (audit round-2 H1, mirroring PR #708's
+  // checker/auditor lift). When `specialize_seed`, the prompt appends the seeded-
+  // mode tail block that scopes the oracle off the pre-existing seed surfaces (a
+  // false design finding against a seed-owned skeleton wedges merge exactly like a
+  // false checker/auditor finding). Absent / `from_scratch` ⇒ no block (byte-
+  // identical to the legacy oracle prompt), so brownfield/legacy specs are unchanged.
+  specMode?: SpecMode;
 }
 
 function renderPersona(persona: ResolvedPersona): string {
@@ -96,6 +118,40 @@ function renderDimension(dimension: ResolvedDimension): string {
     lines.push(`    Guidance: ${dimension.guidance}`);
   }
   return lines.join("\n");
+}
+
+// The seeded-mode tail block for the designOracle prompt (audit round-2 H1). Mirrors
+// the writer's `WRITER_SPECIALIZE_SEED_GRADING_INSTRUCTION` (PR #704) + the
+// checker/auditor seeded-mode block (PR #708) so all four answerers agree on what is
+// in-scope for a `specialize_seed` spec. The composed seed is pre-existing + proven
+// green by composition; this block tells the oracle NOT to cite design-contract gaps
+// that are properties of the pre-existing seed surfaces (e.g. a missing component the
+// spec wasn't tasked with adding) — only design-contract gaps in the PRODUCT-SPECIFIC
+// surfaces this spec was supposed to deliver. EMPTY for `from_scratch` (the default)
+// so brownfield/legacy specs see a byte-identical legacy oracle prompt.
+function seededModeBlock(specMode: SpecMode | undefined): string[] {
+  if (specMode !== "specialize_seed") {
+    return [];
+  }
+  return [
+    "",
+    "SPECIALIZE-SEED mode: this spec's composed seed is PRE-EXISTING and PROVEN GREEN",
+    "by composition. The manifest, lockfile, tsconfig, lint/test/build configs, contract",
+    "files (justfile + .tanren/ci.yml), source skeleton, and demo were ALL shipped by",
+    "the seed before the writer touched anything. Do NOT cite design-contract gaps that",
+    "are properties of the PRE-EXISTING SEED SURFACE (e.g. a missing component the spec",
+    "wasn't tasked with adding, a behavior the seed-shipped skeleton doesn't yet cover) —",
+    "the writer's job here is to SPECIALIZE the seed for THIS product, not to extend the",
+    "seed's behavior coverage. Only cite design-contract gaps in the PRODUCT-SPECIFIC",
+    "surfaces this spec was supposed to deliver (the acceptance criteria name them —",
+    "typically: product identity in the manifest's `name`, deploy descriptor's slug,",
+    ".env.example placeholders, README + product metadata, the product-specific demo or",
+    'entrypoint). A finding like "behavior X has no covering surface" against a seed-',
+    "owned skeleton is a FALSE finding in this mode — the seed already ships that",
+    "surface, and the writer is explicitly forbidden from rebuilding it. Re-elaboration",
+    "gaps (behaviors added to the project AFTER the design phase) are still surfaced",
+    "normally — those are loud structural gaps the seed cannot have shipped.",
+  ];
 }
 
 // The canonical self-inspection block — the writer's change is committed on the
@@ -178,5 +234,10 @@ export function buildDesignOraclePrompt(input: DesignOraclePromptInput): string 
     "finding. Set `verificationMode` to the domain-derived mode you used, and `summary`",
     "to what you inspected (surfaces/artifacts read + behaviors/personas/dimensions",
     "verified).",
+    // SEEDED-MODE tail block (audit round-2 H1) — placed AFTER the answer instructions
+    // so the agent reads "this spec is specialize_seed; pre-existing seed surfaces are
+    // NOT findings" LAST. Mirrors the checker/auditor's last-position-strongest-signal
+    // placement (PR #708) — defensive on a re-iteration. EMPTY for `from_scratch`.
+    ...seededModeBlock(input.specMode),
   ].join("\n");
 }

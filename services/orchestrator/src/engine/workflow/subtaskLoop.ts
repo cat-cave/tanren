@@ -170,6 +170,14 @@ export interface NewSpecRequest {
   body: string;
   severity: "P0" | "P1" | "P2" | "P3";
   findingIds: ReadonlyArray<string>;
+  // Audit round-2 H1 (triage half): the PARENT spec's writer-prompt MODE preserved
+  // so the spec-creating contract materializing this NewSpecRequest carries it into
+  // the child spec row's `mode` column. Without preservation a child remediation
+  // from a `specialize_seed` parent would land `from_scratch` and re-emerge the
+  // v64-class contradiction PR #708 closed at the prompt layer one rung deeper.
+  // Absent ⇒ DEFAULT_SPEC_MODE on materialization (matches the parent's absent
+  // default).
+  parentSpecMode?: SpecMode;
 }
 
 export type SubtaskLoopOutcome =
@@ -360,6 +368,9 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
         designOracleAdapter: input.adapters.designOracle,
         demoRunEnabled: convergencePolicy.demoRunEnabled,
         ...(input.designOracleActor !== undefined && { designOracleActor: input.designOracleActor }),
+        // Audit round-2 H1: thread the spec mode → seeded-mode tail block on the
+        // oracle prompt (mirrors PR #708's checker/auditor lift).
+        ...(input.context.specMode !== undefined && { specMode: input.context.specMode }),
         appendEvent,
       })),
     );
@@ -388,7 +399,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       ...(input.specValidator !== undefined && { specValidator: input.specValidator }),
       appendEvent,
     });
-    const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map(routedToNewSpec);
+    const newSpecs: NewSpecRequest[] = triage.routing.newSpecs.map((r) => routedToNewSpec(r, input.context.specMode));
 
     // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
     if (triage.routing.outcome === "passed") {
@@ -447,7 +458,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     }
     if (convergence.decision === "pass") {
       // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
-      const deferred: NewSpecRequest[] = triage.routing.tasksHere.map(routedToNewSpec);
+      const deferred: NewSpecRequest[] = triage.routing.tasksHere.map((r) => routedToNewSpec(r, input.context.specMode));
       await markPlannerPassed(planCtx);
       return await finalize({
         kind: "passed",
