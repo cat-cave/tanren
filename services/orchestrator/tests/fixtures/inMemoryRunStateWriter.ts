@@ -19,6 +19,12 @@
 // finalizeRun, the autonomy-loop ops) THROW LOUDLY with a clear name — if a
 // test reaches them it's a wiring bug, not a degraded silent path.
 
+import {
+  resumePausedRunPairSchema,
+  runPairSchema,
+  specPairSchema,
+  terminalPairSchema,
+} from "../../src/engine/worker/runStateLifecycleSql.js";
 import type { AppendEventInput, EventStore } from "../../src/engine/eventStore.js";
 import type { RecordedCost, RecordCostInput, ReconcileCostInput } from "../../src/engine/costs/recorder.js";
 import type {
@@ -171,25 +177,59 @@ export class InMemoryRunStateWriter implements RunStateWriter {
   }
 
   async updateTaskWithEvent(input: UpdateTaskWithEventInput): Promise<UpdateTaskWithEventOutcome> {
+    // Round-3 audit finding H-R3.3: the InMemory fixture is conformance-equivalent
+    // to the production `DirectRunStateWriter`. Run the SAME `terminalPairSchema`
+    // parse the direct writer runs at this seam so a contract drift (terminal
+    // event in priorEvents, missing idempotencyKey, mismatched pair, malformed
+    // shape) fails LOUD in tests rather than silently passing while production
+    // would crash. The schema enforces:
+    //   - H-R3.1: priorEvents.eventType MUST NOT be a terminal task/run type.
+    //   - H-R3.2: priorEvents[*].idempotencyKey REQUIRED; runId REQUIRED.
+    //   - terminal task transition + matching terminal event pair (task #39).
+    terminalPairSchema.parse(input);
+    // Round-3 audit finding H-R3.2 idempotency: a retried atomic write with the
+    // SAME (runId, idempotencyKey) tuple on a prior event MUST NOT double-emit
+    // (mirrors the production `events_prior_idempotency_unique` partial index
+    // + `ON CONFLICT DO NOTHING`). Dedupe entries we've already seen so the
+    // fixture's `allEvents`/`atomic[*].priorEvents` shapes match what a real PG
+    // commit would store after the retry.
+    const allPriors: ReadonlyArray<AppendEventInput & { idempotencyKey: string; runId: string }> =
+      input.priorEvents ?? [];
+    const dedupedPriors: AppendEventInput[] = [];
+    for (const p of allPriors) {
+      const key = `${p.runId}::${p.idempotencyKey}`;
+      if (this.priorIdempotencyKeys.has(key)) {
+        continue;
+      }
+      this.priorIdempotencyKeys.add(key);
+      dedupedPriors.push(p);
+    }
     // Mirror the SQL applier's transaction semantics so a forwarded-append
     // throw rolls back the whole bundle (row + terminal event + priorEvents).
     // The forwarded appends run FIRST so a throw aborts before the row + the
     // atomic record are committed — analogous to the applier's `ROLLBACK` on
     // an event INSERT throw inside the transaction.
-    const priorEvents: ReadonlyArray<AppendEventInput> = input.priorEvents ?? [];
     if (this.options.forwardAppend !== undefined) {
-      for (const p of priorEvents) {
+      for (const p of dedupedPriors) {
         await this.options.forwardAppend(p);
       }
       await this.options.forwardAppend(input.event);
     }
-    this.atomic.push({ task: input.task, event: input.event, priorEvents });
+    this.atomic.push({ task: input.task, event: input.event, priorEvents: dedupedPriors });
     this.applyTransitionToRow(input.task);
     if (this.options.forwardUpdateTask !== undefined) {
       await this.options.forwardUpdateTask(input.task);
     }
     return { alreadyTerminal: false };
   }
+
+  /**
+   * Round-3 H-R3.2 fixture-side dedupe ledger: tracks the (runId, idempotencyKey)
+   * tuples the fixture has seen across `updateTaskWithEvent` calls so a retry
+   * of the SAME bundle's priors does not double-emit (mirrors the production
+   * partial unique index `events_prior_idempotency_unique`).
+   */
+  private readonly priorIdempotencyKeys = new Set<string>();
 
   // --- methods workflow stages drive but unit tests usually don't assert on. ---
   // The defaults are RECORD-OR-NOOP-and-succeed so a test wiring this fixture
@@ -256,6 +296,9 @@ export class InMemoryRunStateWriter implements RunStateWriter {
 
   readonly runFinalizeWithEvents: FinalizeRunWithEventInput[] = [];
   async finalizeRunWithEvent(input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> {
+    // Round-3 H-R3.3 (run-level mirror): parse-validate against the production
+    // `runPairSchema` so a misuse fails LOUD in tests instead of slipping past.
+    runPairSchema.parse(input);
     this.runFinalizeWithEvents.push(input);
     if (this.options.forwardAppend !== undefined) {
       await this.options.forwardAppend(input.event);
@@ -264,6 +307,8 @@ export class InMemoryRunStateWriter implements RunStateWriter {
   }
 
   async updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> {
+    // Round-3 H-R3.3 (spec-level mirror): parse-validate against `specPairSchema`.
+    specPairSchema.parse(input);
     if (this.options.forwardAppend !== undefined) {
       await this.options.forwardAppend(input.event);
     }
@@ -271,6 +316,9 @@ export class InMemoryRunStateWriter implements RunStateWriter {
   }
 
   async resumePausedRunAtomic(input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> {
+    // Round-3 H-R3.3 (resume-pause atomic mirror): parse-validate against
+    // `resumePausedRunPairSchema` (the seam's four-write pairing constraint).
+    resumePausedRunPairSchema.parse(input);
     if (this.options.forwardAppend !== undefined) {
       await this.options.forwardAppend(input.resumedEvent);
       await this.options.forwardAppend(input.redrivenEvent);

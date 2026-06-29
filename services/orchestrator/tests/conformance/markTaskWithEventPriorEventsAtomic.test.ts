@@ -78,6 +78,7 @@ describeDb("updateTaskWithEvent + priorEvents atomic 3-write (audit finding D2)"
             projectId: PROJECT,
             eventType: "review.approved",
             payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1, reviewer: "alice" } as never,
+            idempotencyKey: `${runId}:review:approved`,
           },
         ],
       }),
@@ -124,6 +125,7 @@ describeDb("updateTaskWithEvent + priorEvents atomic 3-write (audit finding D2)"
             projectId: PROJECT,
             eventType: "review.approved",
             payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: "not-a-number" } as never,
+            idempotencyKey: `${runId}:review:approved`,
           },
         ],
       }),
@@ -134,5 +136,57 @@ describeDb("updateTaskWithEvent + priorEvents atomic 3-write (audit finding D2)"
     expect(row.rows[0]?.status).toBe("running");
     const events = await ownerPool().query("SELECT 1 FROM events WHERE task_id = $1", [taskId]);
     expect(events.rowCount).toBe(0);
+  });
+
+  // Round-3 audit finding H-R3.2: a retried atomic write with the SAME
+  // (runId, idempotencyKey) on a prior event MUST NOT double-emit — the
+  // partial unique index `events_prior_idempotency_unique` + ON CONFLICT
+  // DO NOTHING dedupe the bundle's pre-terminal leg in the SAME way
+  // `events_task_terminal_unique` + `appendIfAbsent` dedupe the terminal leg.
+  it("(H-R3.2) retried priorEvents with the SAME idempotencyKey dedupe (one row each)", async () => {
+    const runId = "run_prior_events_retry";
+    const taskId = "task_prior_events_retry";
+    await seedRun(ownerPool(), runId);
+    await seedChildTask(ownerPool(), runId, taskId);
+
+    const writer = new DirectRunStateWriter(runtimePool());
+    const bundle = () =>
+      writer.updateTaskWithEvent({
+        task: { taskId, orgId: ORG, transition: "done", outcome: "ok" },
+        event: {
+          runId,
+          taskId,
+          specId: SPEC,
+          projectId: PROJECT,
+          eventType: "task.completed",
+          payload: { taskKind: "review", status: "approved" } as never,
+        },
+        priorEvents: [
+          {
+            runId,
+            taskId,
+            specId: SPEC,
+            projectId: PROJECT,
+            eventType: "review.approved",
+            payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1, reviewer: "alice" } as never,
+            idempotencyKey: `${runId}:review:approved`,
+          },
+        ],
+      });
+
+    // First call — fresh write of the whole bundle.
+    const first = await runWithJobOrgId(ORG, bundle);
+    expect(first.alreadyTerminal).toBe(false);
+    // Retry — every prior event AND the terminal event dedupe. The row UPDATE
+    // is also a no-op (the row is already terminal `done`).
+    const retry = await runWithJobOrgId(ORG, bundle);
+    expect(retry.alreadyTerminal).toBe(true);
+
+    // EXACTLY 1 review.approved + 1 task.completed (not 2 of either).
+    const events = await ownerPool().query<{ event_type: string }>(
+      "SELECT event_type FROM events WHERE task_id = $1 ORDER BY id ASC",
+      [taskId],
+    );
+    expect(events.rows.map((r) => r.event_type)).toEqual(["review.approved", "task.completed"]);
   });
 });

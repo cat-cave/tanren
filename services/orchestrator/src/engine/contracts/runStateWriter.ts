@@ -20,7 +20,7 @@
 // statement runs (in the data plane vs. server-side in the control plane). See
 // ROADMAP.md.
 
-import type { AppendEventInput, EventStore } from "../eventStore.js";
+import type { AppendEventInput, EventStore, PriorEventInput } from "../eventStore.js";
 import type { CostRecordContext, RecordedCost } from "../costs/recorder.js";
 import type { TokenUsage } from "../providers/types.js";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -228,26 +228,21 @@ export interface UpdateTaskInput {
 }
 
 /**
- * The atomic terminal-task input (task #39, extended by the writer-seam
- * doctrine sweep — audit findings D2/D3/H3/N1): a TERMINAL `tasks` UPDATE
- * paired with the matching terminal `task.*` event, applied together in ONE
- * org-scoped transaction so the row + event live or die together. The pairing
- * constraint (`done` ↔ `task.completed`, `failed*` ↔ `task.failed`) is enforced
- * by `terminalPairSchema` in `engine/worker/runStateLifecycleSql.ts`. The
- * optional `priorEvents` list bundles PRE-TERMINAL observation events (e.g.
- * the review-stage verdict) into the SAME transaction — the audit-D2
- * writer-seam extension PR #711 deferred.
+ * The atomic terminal-task input (task #39 + audit findings D2/D3/H3/N1 +
+ * round-3 H-R3.1/H-R3.2): a TERMINAL `tasks` UPDATE paired with the matching
+ * terminal `task.*` event in ONE org-scoped transaction. Pairing enforced by
+ * `terminalPairSchema` (`done` ↔ `task.completed`, `failed*` ↔ `task.failed`).
+ * The optional `priorEvents` list bundles PRE-TERMINAL observation events into
+ * the SAME transaction. Each entry MUST carry an `idempotencyKey` (H-R3.2 —
+ * retried writes dedupe on (run_id, idempotency_key) under
+ * `events_prior_idempotency_unique`) and MUST NOT be a terminal task/run event
+ * type (H-R3.1 — terminal types belong on the `event` leg).
  */
 export interface UpdateTaskWithEventInput {
   task: UpdateTaskInput;
   event: AppendEventInput;
-  /**
-   * Optional pre-terminal events to append in the SAME transaction BEFORE the
-   * row UPDATE + terminal event (audit finding D2 writer-seam extension). A
-   * malformed payload throws inside the transaction → ROLLBACK (atomicity is
-   * total). Omitted ⇒ behavior identical to pre-extension.
-   */
-  priorEvents?: ReadonlyArray<AppendEventInput>;
+  /** Optional pre-terminal events appended atomically before the row + terminal event. */
+  priorEvents?: ReadonlyArray<PriorEventInput>;
 }
 
 // Task #48 atomic-seam types live in `./runStateAtomicSeam.ts` (file-size cap); re-exported.

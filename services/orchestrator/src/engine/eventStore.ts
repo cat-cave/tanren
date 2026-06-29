@@ -23,6 +23,26 @@ export type AppendEventInput<N extends EventName = EventName> = {
   payload: EventPayload<N>;
 };
 
+/**
+ * A pre-terminal `priorEvents` entry — `AppendEventInput` plus a REQUIRED
+ * caller-supplied idempotency key (round-3 audit finding H-R3.2). The
+ * `priorEvents` slot of `RunStateWriter.updateTaskWithEvent` accepts these,
+ * and the SQL path inserts with `ON CONFLICT DO NOTHING` against the partial
+ * unique index `events_prior_idempotency_unique (run_id, idempotency_key)`
+ * so a retried atomic write deduplicates the bundle instead of double-emitting.
+ *
+ * The key MUST be stable across retries of the SAME logical write — convention
+ * is `${runId}:${stageName}:${eventType}` or a domain id derived from the
+ * underlying entity. A `runId` is REQUIRED here (the partial unique index
+ * uses run_id as its first column).
+ */
+export type PriorEventInput<N extends EventName = EventName> = AppendEventInput<N> & {
+  /** Caller-supplied stable key — keys this prior event under the partial unique index. */
+  idempotencyKey: string;
+  /** The atomic-bundle key is keyed on (run_id, idempotency_key); runId is required. */
+  runId: string;
+};
+
 export interface EventStore {
   append<N extends EventName>(input: AppendEventInput<N>): Promise<void>;
 }
@@ -109,6 +129,53 @@ export class PgEventStore implements EventStore {
     if (eventId !== undefined) {
       await notifyEventAppended(client, eventId);
     }
+  }
+
+  /**
+   * Conditional append for a PRE-TERMINAL `priorEvents` bundle entry (round-3
+   * audit finding H-R3.2): writes the event with the caller-supplied
+   * `idempotency_key` stamp + `ON CONFLICT DO NOTHING` against the partial
+   * unique index `events_prior_idempotency_unique (run_id, idempotency_key)
+   * WHERE idempotency_key IS NOT NULL`. A retried atomic write whose original
+   * already landed sees a no-op INSERT (returns `false`, no NOTIFY) — the
+   * same at-most-once guarantee `appendIfAbsent` gives the terminal task/run
+   * events, but keyed on a CALLER-OWNED stable key (not on event_type, since
+   * priorEvents admits recurring non-terminal observation types).
+   *
+   * Returns:
+   *   - `true`  — the row LANDED (this caller wrote it; both NOTIFYs fire).
+   *   - `false` — the row already existed (`ON CONFLICT DO NOTHING` matched);
+   *     no NOTIFYs fire (the ORIGINAL append already fired them at its commit).
+   */
+  async appendPriorIfAbsent<N extends EventName>(input: PriorEventInput<N>): Promise<boolean> {
+    assertEventName(input.eventType);
+    const parsed = parseEventPayload(input.eventType, input.payload);
+    const client = resolveWritableClient(this.pool);
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload, idempotency_key)
+       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb, $7)
+       ON CONFLICT DO NOTHING
+       RETURNING id::text AS id`,
+      [
+        input.runId,
+        input.taskId ?? null,
+        input.specId ?? null,
+        input.projectId,
+        input.eventType,
+        JSON.stringify(parsed),
+        input.idempotencyKey,
+      ],
+    );
+    const eventId = inserted.rows[0]?.id;
+    if (eventId === undefined) {
+      // Conflict path: original INSERT already landed and already NOTIFY'd at
+      // its own commit. NO re-NOTIFY here (mirrors `appendIfAbsent` for the
+      // terminal-event index).
+      return false;
+    }
+    await notifyRunActivity(client, input.runId);
+    await notifyEventAppended(client, eventId);
+    return true;
   }
 
   /**

@@ -300,18 +300,20 @@ export async function applyUpdateTaskWithEvent(
   client: TaskLifecycleClient,
   input: UpdateTaskWithEventInput,
 ): Promise<UpdateTaskWithEventOutcome> {
-  // PRE-TERMINAL events (audit finding D2 writer-seam extension): a caller
-  // bundling e.g. the review-stage's `review.*` verdict appends those FIRST on
-  // the SAME in-transaction client so the whole pre-terminal-plus-terminal
-  // bundle COMMITs (or ROLLs BACK) together — the doctrine-critical atomicity
-  // the prior `writer.append()` + `writer.updateTaskWithEvent()` split missed.
-  // These are NON-terminal observations: they route through plain `.append`
-  // (full registry parse, no `appendIfAbsent` dedupe — the caller deduplicates
-  // upstream, the terminal pair below keeps its own dedupe).
+  // PRE-TERMINAL events (audit finding D2 writer-seam extension, hardened by
+  // round-3 finding H-R3.2): a caller bundling e.g. the review-stage's
+  // `review.*` verdict appends those FIRST on the SAME in-transaction client
+  // so the whole pre-terminal-plus-terminal bundle COMMITs (or ROLLs BACK)
+  // together — the doctrine-critical atomicity the prior split missed. Each
+  // prior event routes through `appendPriorIfAbsent` keyed on the caller's
+  // `idempotencyKey` against the partial unique index
+  // `events_prior_idempotency_unique`, so a retried atomic write deduplicates
+  // the bundle instead of double-emitting (matching the terminal pair's
+  // `appendIfAbsent` symmetry).
   if (input.priorEvents !== undefined && input.priorEvents.length > 0) {
     const store = new PgEventStore(client);
     for (const prior of input.priorEvents) {
-      await store.append(prior);
+      await store.appendPriorIfAbsent(prior);
     }
   }
   await applyUpdateTask(client, input.task);
@@ -338,6 +340,26 @@ type TerminalTaskTransition = (typeof TERMINAL_TASK_TRANSITIONS)[number];
 const TERMINAL_TASK_EVENT_TYPES = ["task.completed", "task.failed"] as const;
 type TerminalTaskEventType = (typeof TERMINAL_TASK_EVENT_TYPES)[number];
 
+/**
+ * The closed set of TERMINAL event types REFUSED in the `priorEvents` slot
+ * (round-3 audit finding H-R3.1). The terminal event is the `event` leg's
+ * parameter — putting one in `priorEvents` too would silently emit two
+ * terminal events for the same task/run, contradicting the §1c single-finalize
+ * invariant. Includes the run-side terminals (`run.completed` etc.) because
+ * `priorEvents` is a general pre-terminal bundle, not just for task events.
+ * The list mirrors `TERMINAL_DEDUPED_EVENT_TYPES` in `eventStore.ts` (the
+ * partial-unique-index-covered set), plus `task.cancelled` for completeness
+ * even though the atomic seam does not currently admit a cancelled transition.
+ */
+const TERMINAL_EVENT_TYPES_REJECTED_IN_PRIOR_EVENTS = [
+  "task.completed",
+  "task.failed",
+  "task.cancelled",
+  "run.completed",
+  "run.failed",
+  "run.cancelled",
+] as const;
+
 /** Map a terminal transition to the matching event type (the pairing constraint). */
 function expectedEventTypeFor(transition: TerminalTaskTransition): TerminalTaskEventType {
   // `done` is the success terminal → `task.completed`. Every `failed*` variant
@@ -363,20 +385,34 @@ function expectedEventTypeFor(transition: TerminalTaskTransition): TerminalTaskE
  * against the {@link EventRegistry}, so a malformed payload throws at the
  * append (the existing event-validation contract is unchanged).
  */
-// Pre-terminal event shape (audit finding D2 writer-seam extension). Same
-// permissive shape as the terminal event — payload is parsed downstream by
-// `PgEventStore.append` against the registry — but the event TYPE is NOT
-// constrained to the terminal pair vocabulary (the prior-event slot admits
-// any registered non-terminal event the caller is bundling, e.g.
-// `review.approved`).
+// Pre-terminal event shape (audit finding D2 writer-seam extension, hardened
+// by round-3 findings H-R3.1 + H-R3.2). The event TYPE is NOT constrained to
+// the terminal pair vocabulary (the prior-event slot admits any registered
+// non-terminal event the caller is bundling, e.g. `review.approved`) — BUT a
+// TERMINAL task/run event type is REJECTED at the seam (H-R3.1: the terminal
+// event leg is the `event` parameter; putting one in `priorEvents` too would
+// silently double-emit a terminal event). The payload is parsed downstream by
+// `PgEventStore.appendPriorIfAbsent` against the registry.
+//
+// `runId` and `idempotencyKey` are REQUIRED (H-R3.2): the partial unique index
+// `events_prior_idempotency_unique` is `(run_id, idempotency_key)`, so the
+// idempotency dedup needs both — a retried atomic write dedupes on this
+// caller-supplied key instead of double-emitting the bundle.
 const priorEventShape = z
   .object({
-    runId: z.string().min(1).optional(),
+    runId: z.string().min(1),
     taskId: z.string().min(1).optional(),
     specId: z.string().min(1).optional(),
     projectId: z.string().min(1),
-    eventType: z.string().min(1),
+    eventType: z
+      .string()
+      .min(1)
+      .refine((t) => !TERMINAL_EVENT_TYPES_REJECTED_IN_PRIOR_EVENTS.includes(t as never), {
+        error:
+          "prior-event terminal-leak: a terminal task/run event type belongs on the atomic write's `event` leg, not in priorEvents (H-R3.1)",
+      }),
     payload: z.record(z.string(), z.unknown()),
+    idempotencyKey: z.string().min(1),
   })
   .strict();
 

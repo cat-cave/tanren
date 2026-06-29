@@ -101,8 +101,7 @@ export const costRecords = pgTable(
     cli: text("cli").notNull(),
     provider: text("provider").notNull(),
     model: text("model").notNull(),
-    // Disjoint token-type buckets (see providers/types.ts TokenUsage). Token
-    // accounting is mandatory and first-class; never fold types together.
+    // Disjoint token-type buckets (providers/types.ts TokenUsage); never fold types together.
     inputTokens: integer("input_tokens").notNull().default(0),
     cachedInputTokens: integer("cached_input_tokens").notNull().default(0),
     cacheCreationTokens: integer("cache_creation_tokens").notNull().default(0),
@@ -115,12 +114,10 @@ export const costRecords = pgTable(
     // column — it is the real-spend ceiling signal. Per-token API = real;
     // subscription within-window = NULL; subscription overage (credits) = real.
     costUsd: numeric("cost_usd", { precision: 14, scale: 6 }),
-    // NOTIONAL VALUE (FOCUS ListCost): the dollar value of the tokens at public
-    // API LIST RATES, computed for EVERY call regardless of billing mode
-    // (including subscription/self_hosted, where real spend is $0/NULL). This is
-    // the comparable, forecastable figure — NOT real spend, and NEVER summed by
-    // the budget gate. NULL only when no provider rate is known (unpriced model /
-    // unattributed credential).
+    // NOTIONAL VALUE (FOCUS ListCost): dollar value at public API LIST RATES,
+    // computed for EVERY call (including subscription/self_hosted, where real
+    // spend is $0/NULL). Comparable + forecastable; NOT real spend; NEVER summed
+    // by the budget gate. NULL only when no provider rate is known.
     notionalCostUsd: numeric("notional_cost_usd", { precision: 14, scale: 6 }),
     billingMode: text("billing_mode").notNull(),
     costBasis: text("cost_basis").notNull(),
@@ -161,6 +158,8 @@ export const events = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`),
     userId: text("user_id"),
+    // Round-3 H-R3.2 dedup key for the `priorEvents` bundle; NULL on non-prior events.
+    idempotencyKey: text("idempotency_key"),
   },
   (table) => [
     index("events_run_id_ts").on(table.runId, table.ts),
@@ -169,14 +168,17 @@ export const events = pgTable(
     index("events_org_id").on(table.orgId),
     index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
     index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
-    // Terminal events per task/run are AT MOST ONCE per type (#40 Class B + #48 —
-    // ON CONFLICT DO NOTHING dedupes dropped-HTTP-response retries).
+    // Terminal task/run events: AT MOST ONCE per type (#40 Class B + #48).
     uniqueIndex("events_task_terminal_unique")
       .on(table.taskId, table.eventType)
       .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
     uniqueIndex("events_run_terminal_unique")
       .on(table.runId, table.eventType)
       .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled')`),
+    // Round-3 H-R3.2: priorEvents dedupe on (run_id, idempotency_key).
+    uniqueIndex("events_prior_idempotency_unique")
+      .on(table.runId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} IS NOT NULL`),
   ],
 );
 
@@ -446,9 +448,8 @@ export const specBehaviors = pgTable(
   ],
 );
 
-// spec_milestones is modeled as a join table to keep the schema additive for
-// future many-to-many evolution, but a unique index on spec_id enforces the
-// current one-milestone-per-spec product rule (see docs product-entities.md).
+// Modeled as a join table for additive m:n evolution; the unique index on
+// spec_id enforces the current one-milestone-per-spec rule.
 export const specMilestones = pgTable(
   "spec_milestones",
   {
