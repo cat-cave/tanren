@@ -35,6 +35,9 @@ const log = createLogger("run-redrive");
 // Re-exported so the historical import sites (tests, the worker wiring) keep their imports
 // pointed at this module while the backoff helper lives in the authority core.
 export { redriveBackoffSeconds };
+// Re-export the apex v67 #119/#120 atomic seam from its own module so
+// `plannerRunFinalize.ts`'s dispositionSeams wiring stays under its import cap.
+export { finalizeRedriveAtomicSeam } from "./plannerRunRedriveSeam.js";
 
 /** Facts a fixed-point read needs: the spec + its org + the failure code + the work signature now seen. */
 export interface RedriveHistoryFacts {
@@ -189,6 +192,26 @@ export interface DispositionSeams {
    * atomicity invariant as `finalizeGenuineHaltAtomic`).
    */
   finalizePauseForCapacityAtomic: (event: AppendEventInput) => Promise<void>;
+  /**
+   * apex v67 fixes #119 + #120 — RE-DRIVE halt observability. The re-drive halt
+   * is RECOVERABLE, but watchers/observers/UI that key on the canonical
+   * `run.failed` halt event were BLIND to it (only `dag.spec.redriven` was
+   * emitted) and the raw error string was LOST (the `job_queue.failure_message`
+   * capture in `runExecutor.ts` only fires on the WORKER catch). v67 ran 1h47m
+   * through three wandering failure codes with ZERO actionable detail.
+   *
+   * Runs THREE writes in ONE org-scoped transaction: (1) UPDATE runs to
+   * `halted` (guarded for exactly-once); (2) `run.failed` event (paired via
+   * `events_run_terminal_unique`); (3) UPDATE job_queue.failure_message
+   * (internal-only — same split as `runExecutor.ts`). A throw rolls back all
+   * three. Suppresses on no-row-moved (the workflow's earlier finalize already
+   * landed this run). See `plannerRunRedriveSeam.ts`.
+   */
+  finalizeRedriveAtomic: (input: {
+    runOutcome: "halted" | "convergence_stalled";
+    runFailedEvent: AppendEventInput;
+    rawErrorMessage: string;
+  }) => Promise<void>;
 }
 
 /** The run/spec facts the applier reads (the subset of the workflow error context it uses). */
@@ -224,7 +247,7 @@ export async function applyTerminalOutcome(
   const facts = await readConvergenceFacts(ctx, outcome);
   const disposition = decideRunDisposition(outcome, facts);
   if (disposition.bucket === "re_drive") {
-    await applyRedrive(ctx, seams, disposition);
+    await applyRedrive(ctx, seams, disposition, rawErrorMessageOf(outcome));
     return "re_drive";
   }
   if (disposition.bucket === "pause_for_capacity") {
@@ -246,28 +269,55 @@ function resolveProjectId(ctx: DispositionContext): string {
 
 /** Apply a RE-DRIVE: halt the run recoverable, return the spec to `open`, emit `dag.spec.redriven`.
  *
- * Task #48 Site A: the spec flip + `dag.spec.redriven` event are now ATOMIC
+ * Task #48 Site A: the spec flip + `dag.spec.redriven` event are atomic
  * (`updateSpecAtomic` — `applyUpdateSpecWithEvent`), so a crash/DB failure
  * between the row UPDATE and the event INSERT no longer strands the spec
- * `open` with no `dag.spec.redriven` event (or vice versa). The
- * `finalizeNonPass` run-level finalize remains separate — re-drive does NOT
- * emit `run.failed` today (the re-drive shape is `dag.spec.redriven`, not
- * a terminal run failure), so there is no run-level pair to atomize. */
+ * `open` with no `dag.spec.redriven` event (or vice versa).
+ *
+ * apex v67 fixes #119 + #120: the RUN-LEVEL halt is now ALSO observable —
+ * `finalizeRedriveAtomic` emits the canonical `run.failed` event AND captures
+ * the raw error string to `job_queue.failure_message`, both atomic with the
+ * runs UPDATE. v67 halted 1h47m through three wandering failure codes with
+ * ZERO actionable detail; this restores the operator triage surface. See
+ * `plannerRunRedriveSeam.ts` for the three-arm dispatch. */
 async function applyRedrive(
   ctx: DispositionContext,
   seams: DispositionSeams,
   disposition: Extract<RunDisposition, { bucket: "re_drive" }>,
+  rawErrorMessage: string | undefined,
 ): Promise<void> {
-  await seams.finalizeNonPass(disposition.runOutcome);
-  // A re-drive WITH a classified failure emits the OBSERVABLE `dag.spec.redriven` (the
-  // consecutive-same-failure counter rides it so the bound is visible on the timeline). A
-  // NO-FAULT re-drive (an ancestor-wait / a merge hold) carries no failure code and so does
-  // not count toward the cap — it re-opens silently (its own event, if any, is the caller's).
+  // A re-drive WITH a classified failure emits BOTH the observable `run.failed`
+  // (atomic via #119/#120's seam) AND `dag.spec.redriven` (atomic via #48's spec
+  // seam). A NO-FAULT re-drive (ancestor-wait / merge hold) re-opens silently —
+  // emitting `run.failed` there would mis-imply a fault.
   if (disposition.failure === undefined) {
-    // No event to pair → fall back to the bare status flip (no atomic seam needed).
+    await seams.finalizeNonPass(disposition.runOutcome);
     await seams.setSpecStatus("open");
     return;
   }
+  // The raw message defaults to the classified safe summary when the outcome
+  // carries no raw error (the non-pass detail path); the public payload always
+  // uses the classified summary, never the raw caught string (public-leak hardening).
+  await seams.finalizeRedriveAtomic({
+    runOutcome: disposition.runOutcome,
+    runFailedEvent: {
+      runId: ctx.context.runId,
+      specId: ctx.context.specId,
+      projectId: resolveProjectId(ctx),
+      eventType: "run.failed",
+      payload: {
+        // Mirrors `runFinalize.ts`'s worker-orphan `run.failed` shape so a
+        // single reader handles both paths uniformly: `status: "halted"`
+        // (recoverable, the re-drive class) with the classified
+        // failureCode/stage/summary.
+        status: "halted",
+        failureCode: disposition.failure.code,
+        stage: disposition.failure.stage,
+        message: disposition.failure.summary,
+      },
+    },
+    rawErrorMessage: rawErrorMessage ?? disposition.failure.summary,
+  });
   await seams.updateSpecAtomic(
     { status: "open" },
     {
@@ -285,6 +335,20 @@ async function applyRedrive(
       },
     },
   );
+}
+
+/**
+ * Extract the raw caught-error message from a {@link TerminalOutcome} for the
+ * INTERNAL `job_queue.failure_message` capture (fix #120). Returns `undefined`
+ * for non-error outcomes (non_pass / merge / ancestor_wait) — those carry a
+ * public-safe sub-reason but no thrown error; the applier defaults to the
+ * classified summary in that case. NEVER walks beyond `error.message`; the
+ * shape doctrine matches `runExecutor.ts`'s `messageOf` helper.
+ */
+function rawErrorMessageOf(outcome: TerminalOutcome): string | undefined {
+  if (outcome.kind !== "error") return undefined;
+  if (outcome.error instanceof Error) return outcome.error.message;
+  return String(outcome.error);
 }
 
 /** Apply a GENUINE-HALT: land the run `failed`, park the spec `needs_attention` with a specific reason.
