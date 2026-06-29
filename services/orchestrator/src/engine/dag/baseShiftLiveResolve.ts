@@ -267,6 +267,9 @@ async function runResolverOverWorkspace(input: {
     specTitle: ctx.specTitle,
     specDescription: ctx.specDescription,
     acceptanceCriteria: ctx.acceptanceCriteria,
+    // Task #86: thread the spec mode so the re-gate's checker/auditor see the seeded-
+    // mode tail block on `specialize_seed` specs.
+    specMode: ctx.specMode,
     ...(ctx.endpointBaseUrl !== undefined && { endpointBaseUrl: ctx.endpointBaseUrl }),
     routing: ctx.routing,
     checker: adapters.checker,

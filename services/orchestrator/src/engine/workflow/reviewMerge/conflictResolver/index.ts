@@ -19,6 +19,7 @@ import { buildConflictResolverAdapter } from "../../../providers/adapterSelector
 import type { AnswererAdapter } from "../../../providers/types.js";
 import type { RoutingTable } from "../../../config/shared.js";
 import type { SecretStore } from "../../../contracts/secretStore.js";
+import type { SpecMode } from "../../../state/spec.js";
 import type { ConflictResolverHook } from "../mergeDispatchTypes.js";
 import type { GateOutcome } from "../../gate/index.js";
 import type { CiWhen } from "../../../ci/index.js";
@@ -51,6 +52,13 @@ export interface DefaultConflictResolverDeps {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
+  /**
+   * The merging spec's writer-prompt MODE (task #86). Threaded through to the re-gate's
+   * checker + auditor so the seeded-mode tail block is emitted on `specialize_seed`
+   * specs (the same agreement the in-loop checker/auditor honor). Absent ⇒ legacy
+   * byte-shape.
+   */
+  specMode?: SpecMode;
   /**
    * The PR number for the gate-rework routing event (the observable
    * `merge.regate.gate_rework_routed`). The base-shift dependent has no real PR handle
@@ -135,6 +143,9 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       specDescription: deps.specDescription,
       acceptanceCriteria: deps.acceptanceCriteria,
       baseSha: deps.baseSha,
+      // Task #86: thread the spec mode so the re-gate's checker/auditor see the seeded-
+      // mode tail block on `specialize_seed` specs.
+      ...(deps.specMode !== undefined && { specMode: deps.specMode }),
     }),
     // v35 NEVER-STALL: the replan router ENQUEUES a fresh re-plan run + emits the
     // observable `recovery.replan_queued` (carrying the replanRunId) + is BOUNDED by the

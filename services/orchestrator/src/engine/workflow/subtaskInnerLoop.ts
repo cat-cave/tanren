@@ -215,6 +215,8 @@ async function runOneSubtask(args: {
       specTitle: input.context.specTitle,
       specDescription: input.context.specDescription,
       acceptanceCriteria: input.context.acceptanceCriteria,
+      // Task #86: thread spec mode → checker's seeded-mode tail block on `specialize_seed`.
+      specMode: input.context.specMode,
       appendEvent,
       buildUsage: input.costHooks?.buildCheckerUsage,
       // §3.1: the host-side entity-risk producer (shells `sem` read-only on the

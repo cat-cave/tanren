@@ -27,9 +27,23 @@
 // inspects the diff itself. When no risk signal is supplied — or it is the
 // `unknown` class (sem absent / can't-parse) — NO steer is added and the prompt
 // is byte-for-byte the same as the no-oracle path (the graceful fallback).
+//
+// SPEC-MODE AWARENESS (task #86 — v64 root-cause class one rung downstream from the
+// writer fix in PR #704). The checker + auditor prompts MUST know whether the spec
+// runs in `specialize_seed` mode — otherwise a mode-BLIND checker emits "you didn't
+// set up tests/configs" for a tiny specialize-seed diff, or a mode-blind auditor
+// emits a P1 about "no test coverage for the new entrypoint", which wedges merge for
+// any spec whose surfaces pre-existed in the composed seed. When `specMode ===
+// "specialize_seed"`, both prompts emit a tail block that tells the answerer the seed
+// is pre-existing + proven green by composition and that pre-existing seed surfaces
+// (manifest, lockfile, tsconfig, lint/test/build configs, contract files, source
+// skeleton, demo) are NOT findings — only gaps in the product-specific surfaces this
+// spec was supposed to deliver. `from_scratch` (the default) keeps today's prompt
+// byte-identical so brownfield/legacy specs are unchanged.
 
 import { renderRiskPostureLines } from "../oracle/index.js";
 import type { EntityRiskSignal } from "../oracle/index.js";
+import type { SpecMode } from "../state/spec.js";
 
 export interface CheckerPromptInput {
   specTitle: string;
@@ -51,6 +65,11 @@ export interface CheckerPromptInput {
   // NOT the `unknown` class, its posture STEER is appended after the
   // self-inspection block. Absent / `unknown` ⇒ no steer (graceful fallback).
   riskSignal?: EntityRiskSignal;
+  // OPTIONAL spec writer-prompt MODE (task #86). When `specialize_seed`, the prompt
+  // appends the seeded-mode tail block that scopes the checker off the pre-existing
+  // seed surfaces. Absent / `from_scratch` ⇒ no block (byte-identical to the legacy
+  // checker prompt), so brownfield/legacy specs are unchanged.
+  specMode?: SpecMode;
 }
 
 export interface AuditorPromptInput {
@@ -69,6 +88,11 @@ export interface AuditorPromptInput {
   checkAnswer?: unknown;
   // The schema-specific closing instruction (one element per line).
   outputInstructions: ReadonlyArray<string>;
+  // OPTIONAL spec writer-prompt MODE (task #86). When `specialize_seed`, the prompt
+  // appends the seeded-mode tail block that scopes the auditor off the pre-existing
+  // seed surfaces. Absent / `from_scratch` ⇒ no block (byte-identical to the legacy
+  // auditor prompt), so brownfield/legacy specs are unchanged.
+  specMode?: SpecMode;
 }
 
 // The canonical self-inspection block: the writer's change is committed on the
@@ -144,6 +168,38 @@ function riskSteerBlock(riskSignal: EntityRiskSignal | undefined): string[] {
   return lines.length === 0 ? [] : ["", ...lines];
 }
 
+// The seeded-mode tail block for the checker/auditor prompts (task #86). Mirrors the
+// writer's `WRITER_SPECIALIZE_SEED_GRADING_INSTRUCTION` from PR #704 so the three
+// answerers (writer + checker + auditor) agree on what is in-scope for a
+// `specialize_seed` spec. The composed seed is pre-existing + proven green by
+// composition; this block tells the checker/auditor NOT to cite pre-existing seed
+// surfaces (manifest, lockfile, tsconfig, lint/test/build configs, contract files,
+// source skeleton, demo) as completeness/quality findings — only gaps in the
+// product-specific surfaces this spec was supposed to deliver. EMPTY for
+// `from_scratch` (the default) so brownfield/legacy specs see a byte-identical prompt.
+function seededModeBlock(specMode: SpecMode | undefined): string[] {
+  if (specMode !== "specialize_seed") {
+    return [];
+  }
+  return [
+    "",
+    "SPECIALIZE-SEED mode: this spec's composed seed is PRE-EXISTING and PROVEN GREEN",
+    "by composition. The manifest, lockfile, tsconfig, lint/test/build configs, contract",
+    "files (justfile + .tanren/ci.yml), source skeleton, and demo were ALL shipped by",
+    "the seed before the writer touched anything. Do NOT cite any of those pre-existing",
+    "seed surfaces as a completeness or quality finding — they are not the writer's job",
+    "in this spec, and the gate already proved them green. The writer's job here is to",
+    "SPECIALIZE the seed for THIS product. Emit findings ONLY for gaps in the PRODUCT-",
+    "SPECIFIC surfaces this spec was supposed to deliver (the acceptance criteria name",
+    "them — typically: product identity in the manifest's `name`, deploy descriptor's",
+    "slug, .env.example placeholders, README + product metadata, the product-specific",
+    'demo or entrypoint). A finding like "no tests for the new entrypoint" or "missing',
+    'lint config" against a seed-owned surface is a FALSE finding — the seed already',
+    "ships those, and the writer is explicitly forbidden from adding new tests or",
+    "editing configs in this mode.",
+  ];
+}
+
 // Render the acceptance-criteria block under `header`. When the criteria list is EMPTY,
 // emit an explicit "(none ...)" guard line instead of a dangling header followed by
 // nothing — otherwise the prompt reads as "judge each one:" then silence, which misleads
@@ -199,6 +255,11 @@ export function buildCheckerPrompt(input: CheckerPromptInput): string {
           `Subtask intent: ${input.subtask.intent}`,
           `Subtask behavior ids: ${input.subtask.behaviorIds.join(", ") || "(none)"}`,
         ]),
+    // SEEDED-MODE tail block (task #86). Placed AFTER the spec/criteria/subtask block
+    // so the agent reads "this spec is specialize_seed; pre-existing seed surfaces are
+    // NOT findings" LAST — the position writer/checker prompts treat as the strongest
+    // signal on a re-iteration. EMPTY for `from_scratch` (the legacy byte-shape).
+    ...seededModeBlock(input.specMode),
     "",
     ...input.outputInstructions,
   ].join("\n");
@@ -226,6 +287,10 @@ export function buildAuditorPrompt(input: AuditorPromptInput): string {
           ),
         ]),
     ...(input.checkAnswer === undefined ? [] : ["", "Checker answer:", JSON.stringify(input.checkAnswer, null, 2)]),
+    // SEEDED-MODE tail block (task #86). Placed AFTER the spec/criteria/subtasks/check
+    // block — same defensive last-position placement as the checker. EMPTY for
+    // `from_scratch` (the legacy byte-shape).
+    ...seededModeBlock(input.specMode),
     "",
     ...input.outputInstructions,
   ].join("\n");
