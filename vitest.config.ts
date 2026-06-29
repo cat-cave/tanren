@@ -35,6 +35,15 @@ export default defineConfig({
       // computed against the whole codebase; per-glob thresholds still apply
       // to their (narrower) subsets of this set.
       include: ["cli/src/**", "db/src/**", "services/*/src/**"],
+      // Non-code files that live under `src/**` (e.g. fragment library
+      // doctrine doc `services/orchestrator/src/engine/templates/fragments/
+      // README.md`) match the include glob, then the v8 provider tries to
+      // parse them as JavaScript and emits a noisy `Failed to parse … code:
+      // PARSE_ERROR` over every coverage run (task #95). The default v8
+      // exclude does not cover markdown, so add it (and other obvious
+      // non-code extensions) explicitly. The default exclude is MERGED with
+      // the user exclude, so coverage/node_modules/dist/etc remain skipped.
+      exclude: ["**/*.md", "**/*.css", "**/*.json"],
       thresholds: {
         // Strictness wave 2 — REPO-WIDE floor. RE-BASELINED for Vitest 4: the v8
         // coverage provider switched from v8-to-istanbul to AST-based remapping
