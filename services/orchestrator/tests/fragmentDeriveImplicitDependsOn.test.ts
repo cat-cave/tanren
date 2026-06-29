@@ -56,16 +56,12 @@ describe("deriveImplicitDependsOn — vfs.write/overwrite path-keyed runtime der
     // fragment would pair silently with a Ruby runtime and the composed
     // scaffold would carry both a Gemfile and a package.json with no node
     // tooling to run the latter.
-    const ops: FragmentOp[] = [
-      { kind: "write", path: "package.json", content: '{"name":"x","version":"0.0.0"}' },
-    ];
+    const ops: FragmentOp[] = [{ kind: "write", path: "package.json", content: '{"name":"x","version":"0.0.0"}' }];
     expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-node-pnpm"]);
   });
 
   it("derives runtime-node-pnpm when the body OVERWRITES package.json", () => {
-    const ops: FragmentOp[] = [
-      { kind: "overwrite", path: "package.json", content: '{"name":"x","version":"0.0.0"}' },
-    ];
+    const ops: FragmentOp[] = [{ kind: "overwrite", path: "package.json", content: '{"name":"x","version":"0.0.0"}' }];
     expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-node-pnpm"]);
   });
 
@@ -75,9 +71,7 @@ describe("deriveImplicitDependsOn — vfs.write/overwrite path-keyed runtime der
   });
 
   it("derives runtime-ruby-bundler when the body OVERWRITES Gemfile", () => {
-    const ops: FragmentOp[] = [
-      { kind: "overwrite", path: "Gemfile", content: "source 'https://rubygems.org'\n" },
-    ];
+    const ops: FragmentOp[] = [{ kind: "overwrite", path: "Gemfile", content: "source 'https://rubygems.org'\n" }];
     expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-ruby-bundler"]);
   });
 
@@ -116,11 +110,15 @@ describe("deriveImplicitDependsOn — appendToJustfileTarget tooling-token deriv
     expect(deriveImplicitDependsOn(rubyOps, addonSpec)).toEqual(["runtime-ruby-bundler"]);
   });
 
-  it("token-matches as WHOLE words, not substrings (e.g. `snpm` does NOT match `npm`)", () => {
-    // A defensive check: a path/token containing the substring `npm` (e.g. `snpm`)
-    // should NOT trigger node-pnpm derivation. The regex requires the token to be
-    // bounded by start/end OR a whitespace/punctuation neighbor.
-    const ops: FragmentOp[] = [{ kind: "just", target: "build", lines: ["mkdir snpm-output"] }];
+  it("token-matches as WHOLE words, not substrings (a token EMBEDDED in another word does NOT match)", () => {
+    // A defensive check: a word containing one of the runtime tokens as a
+    // SUBSTRING (e.g. `linode` contains `node`, `cathode` contains `node`) MUST
+    // NOT trigger derivation. The regex requires the token to be bounded by
+    // start/end OR a whitespace/punctuation neighbor on BOTH sides.
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "build", lines: ["mkdir output"] },
+      { kind: "just", target: "deploy", lines: ["ssh linode-host echo ok"] },
+    ];
     expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
   });
 

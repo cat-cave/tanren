@@ -384,8 +384,9 @@ export function deriveImplicitDependsOn(ops: readonly FragmentOp[], spec: Fragme
 }
 
 /** A justfile line invokes node tooling — pnpm / npm / yarn / npx / node — as a
- * whole-word token (not a substring match, so `npm` does NOT match a path like
- * `/snpm/`). The check is intentionally simple: a fragment that authors a
+ * whole-word token (not a substring match, so `node` does NOT match a directory
+ * called `linode`, and a line whose only word is e.g. `cathode` derives no
+ * runtime). The check is intentionally simple: a fragment that authors a
  * just-target line with one of these tokens REQUIRES the node runtime. */
 function lineHasNodeToolingToken(line: string): boolean {
   return /(?:^|[\s|;&"'`(])(?:pnpm|npm|yarn|npx|node)(?=$|[\s|;&"'`)])/u.test(line);
