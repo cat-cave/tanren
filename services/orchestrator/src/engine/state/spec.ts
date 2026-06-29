@@ -40,8 +40,10 @@ export const SpecMode = z.enum(["specialize_seed", "from_scratch"]);
 export type SpecMode = z.infer<typeof SpecMode>;
 
 /** The default spec mode (matches the DB column default): the from-scratch authoring
- * the writer guidance was originally written for. Greenfield's scaffold spec opts INTO
- * `specialize_seed` explicitly at `scaffoldSpecsFor()`. */
+ * the writer guidance was originally written for. EVERY foundation spec (greenfield's
+ * `scaffold` · `build` · `deploy`) opts INTO `specialize_seed` explicitly at
+ * `scaffoldSpecsFor()` — each specializes a surface the composed seed already shipped
+ * (justfile recipes, the toolchain) for THIS product. */
 export const DEFAULT_SPEC_MODE: SpecMode = "from_scratch";
 
 const SPEC_PRIORITY_RANK: Record<SpecPriority, number> = { P0: 0, P1: 1, P2: 2, tbd: 3 };

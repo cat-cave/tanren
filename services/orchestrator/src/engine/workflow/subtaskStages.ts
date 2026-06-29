@@ -7,6 +7,7 @@ import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { CheckAnswer, PlanAnswer, PlanSubtask } from "../answerers/schemas/index.js";
 import type { EventName, EventPayload } from "../events/index.js";
+import type { SpecMode } from "../state/spec.js";
 import { emitStageTiming } from "../observability/index.js";
 import { createLogger } from "../observability/logger.js";
 import {
@@ -158,6 +159,13 @@ export interface CheckerStageInput {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
+  // Task #86: the spec's writer-prompt MODE (`specialize_seed` for greenfield's
+  // foundation specs; `from_scratch` otherwise). Threaded so the checker prompt's
+  // seeded-mode tail block is emitted when the writer is specializing a pre-existing,
+  // proven-green composed seed — pre-existing seed surfaces are then NOT cited as
+  // completeness findings (only gaps in the product-specific surfaces this spec
+  // delivered). Absent ⇒ no block (byte-identical to the legacy checker prompt).
+  specMode?: SpecMode;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: {
     checkerTaskId: string;
@@ -310,6 +318,9 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
     baselineSha,
     // §3.1: steer ONLY when the signal is a real class; `unknown` adds no steer.
     riskSignal: riskSignal.riskClass === "unknown" ? undefined : riskSignal,
+    // Task #86: thread the spec mode so the checker prompt's seeded-mode tail block
+    // is emitted when the spec runs in `specialize_seed` mode.
+    ...(args.specMode !== undefined && { specMode: args.specMode }),
   };
   const startedAt = Date.now();
   // STAGE-LOCAL stall recovery: a transient checker stall re-drives THIS call in place; a

@@ -53,6 +53,7 @@ import {
   runGateForWhen,
 } from "../workflow/gate/index.js";
 import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
+import type { SpecMode } from "../state/spec.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { atReplanFixedPoint, conflictSignatureOf } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { driveResolveOverJj } from "./driveConflictResolveJj.js";
@@ -146,6 +147,11 @@ interface DriveRunContext {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: string[];
+  // Task #86: spec writer-prompt MODE (`specialize_seed` for the foundation specs;
+  // `from_scratch` otherwise). Threaded into the drive-path conflict resolver so the
+  // re-gate's checker + auditor see the seeded-mode tail block on `specialize_seed`
+  // specs (the same agreement the in-loop stages honor).
+  specMode: SpecMode;
   routing: RoutingTable;
   defaultLlm: RoutingChainEntry;
   endpointBaseUrl?: string;
@@ -303,9 +309,10 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
       title: string;
       description: string;
       acceptance_criteria: unknown;
+      mode: unknown;
     }>(
       `SELECT p.repo_url, p.default_branch, r.ancestor_stack, r.branch, p.runner_image, p.config,
-              o.config AS org_config, s.title, s.description, s.acceptance_criteria
+              o.config AS org_config, s.title, s.description, s.acceptance_criteria, s.mode
          FROM runs r
          JOIN specs s ON s.spec_id = r.spec_id
          JOIN projects p ON p.project_id = r.project_id
@@ -329,6 +336,11 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
   // ancestor's PR-head branch (the LAST `ancestor_stack` entry) when the run is stacked, else
   // the project default. Mirrors the draft-PR stacked base (`resolveDraftPrBaseBranch`).
   const immediateAncestorBranch = immediateAncestorBranchFromStack(row.ancestor_stack);
+  // Task #86: read the spec's writer-prompt MODE off the joined `s.mode` column. The DB
+  // CHECK is NOT NULL with default `from_scratch`, so a real row always carries one of the
+  // two literals; a fixture row without the column safely defaults to `from_scratch`. A
+  // narrow literal compare avoids a runtime zod import (the file's max-dependencies cap).
+  const specMode: SpecMode = row.mode === "specialize_seed" ? "specialize_seed" : "from_scratch";
   return {
     repoUrl: row.repo_url,
     baseBranch:
@@ -340,6 +352,7 @@ async function loadDriveRunContext(deps: DriveConflictResolveDeps): Promise<Driv
     specTitle: row.title,
     specDescription: row.description,
     acceptanceCriteria: toStringArray(row.acceptance_criteria),
+    specMode,
     routing: buildEffectiveRouting(projectConfig.routing, resolved.defaultLlm),
     defaultLlm: resolved.defaultLlm,
     ...(resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {}),
@@ -400,6 +413,9 @@ function buildResolverForDrive(
     specTitle: ctx.specTitle,
     specDescription: ctx.specDescription,
     acceptanceCriteria: ctx.acceptanceCriteria,
+    // Task #86: thread the spec mode so the re-gate's checker/auditor see the seeded-
+    // mode tail block on `specialize_seed` specs.
+    specMode: ctx.specMode,
     ...(ctx.endpointBaseUrl !== undefined && { endpointBaseUrl: ctx.endpointBaseUrl }),
     routing: ctx.routing,
     checker: adapters.checker,

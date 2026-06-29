@@ -116,10 +116,12 @@ export interface SubtaskLoopInput {
     // `DesignContract` (persona-scoped, behavior-linked, domain-general). Injected into the
     // writer prompt so the build honors the design. Absent ⇒ no design contract ⇒ no block.
     designContextBlock?: string;
-    // Task #86 (v64 root cause): the spec's writer-prompt MODE drives `writerPromptFor()`.
-    // `specialize_seed` (greenfield's scaffold spec post-PR-G; the composed seed is in
-    // place + proven green, touch ONLY product-identity surfaces) vs `from_scratch`
-    // (brownfield/legacy default). Absent ⇒ DEFAULT_SPEC_MODE (`from_scratch`).
+    // Task #86 (v64 root cause): the spec's writer-prompt MODE — selects the
+    // standing instructions `writerPromptFor()` emits AND the seeded-mode tail
+    // block on the checker/auditor prompts. `specialize_seed` (greenfield scaffold
+    // spec post-PR-G; composed seed in place + proven green, touch ONLY product-
+    // identity surfaces) vs `from_scratch` (brownfield/legacy default). Absent ⇒
+    // DEFAULT_SPEC_MODE (`from_scratch`).
     specMode?: SpecMode;
   };
   // The CONVERGENCE policy (the SOLE loop bound) + the audit posture (triage routing).
@@ -290,8 +292,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     }
     const plan = await runPlannerStage({
       pool: input.pool,
-      // task #21: thread the writer so the finalize guard's FAILED terminal pair
-      // rides ONE org-scoped transaction via `updateTaskWithEvent`.
+      // task #21: writer threaded so the finalize guard's FAILED terminal rides ONE txn via `updateTaskWithEvent`.
       writer: input.runStateWriter,
       costCtx,
       adapter: input.adapters.planner,
@@ -336,6 +337,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       specTitle: input.context.specTitle,
       specDescription: input.context.specDescription,
       acceptanceCriteria: input.context.acceptanceCriteria,
+      specMode: input.context.specMode,
       appendEvent,
       buildUsage: input.costHooks?.buildAuditorUsage,
     });

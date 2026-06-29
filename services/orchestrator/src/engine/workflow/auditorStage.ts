@@ -18,6 +18,7 @@ import type { AuditAnswer, PlanAnswer } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
+import type { SpecMode } from "../state/spec.js";
 import { AnswererSchemaValidationError } from "../providers/codex.js";
 import { auditorFindings, invokeAuditor, type AuditorSpecContext } from "./auditor/auditor.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
@@ -53,6 +54,12 @@ export interface AuditorStageInput {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: ReadonlyArray<string>;
+  // Task #86: the spec's writer-prompt MODE (`specialize_seed` for greenfield's
+  // foundation specs; `from_scratch` otherwise). Threaded so the auditor prompt's
+  // seeded-mode tail block is emitted when the writer is specializing a pre-existing,
+  // proven-green composed seed — pre-existing seed surfaces are then NOT cited as
+  // quality findings. Absent ⇒ no block (byte-identical to the legacy auditor prompt).
+  specMode?: SpecMode;
   appendEvent: StageAppendEvent;
   buildUsage?: (input: { auditorTaskId: string; verdict: AuditAnswer }) => Record<string, unknown>;
 }
@@ -89,6 +96,9 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
     acceptanceCriteria: args.acceptanceCriteria,
     subtasks: args.plan.subtasks,
     baselineSha: args.baseSha ?? "HEAD",
+    // Task #86: thread the spec mode so the auditor prompt's seeded-mode tail block
+    // is emitted when the spec runs in `specialize_seed` mode.
+    ...(args.specMode !== undefined && { specMode: args.specMode }),
   };
   // SCHEMA-MISS PATH (KEPT OUTSIDE THE GUARD): a parse miss is an IN-STAGE RECOVERY,
   // not a failure — it becomes the synthetic P0 (fail-closed) so the loop's triage

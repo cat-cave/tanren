@@ -14,6 +14,7 @@ import { answererOutputSchemaFor, AuditAnswer } from "../../answerers/schemas/in
 import { normalizeFinding } from "../../answerers/schemas/index.js";
 import type { PlanSubtask } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
+import type { SpecMode } from "../../state/spec.js";
 import { type Finding, maxSeverity } from "../../contracts/findings.js";
 import { buildAuditorPrompt as buildAuditorPromptText } from "../answererPrompts.js";
 
@@ -41,6 +42,15 @@ export interface AuditorSpecContext {
   // INSIDE the read-only workspace and inspects the change itself (rather than
   // having the full combined diff injected into the prompt).
   baselineSha: string;
+  // OPTIONAL spec writer-prompt MODE (task #86 — v64 root-cause class one rung
+  // downstream from PR #704's writer-prompt fix). When `specialize_seed`, the prompt
+  // appends a seeded-mode tail block telling the auditor the composed seed is pre-
+  // existing + proven green, so pre-existing seed surfaces (manifest, lockfile,
+  // tsconfig, lint/test/build configs, contract files, source skeleton, demo) are
+  // NOT quality findings — only gaps in the product-specific surfaces this spec
+  // was supposed to deliver. Absent / `from_scratch` ⇒ byte-identical to the legacy
+  // auditor prompt (the brownfield/legacy default).
+  specMode?: SpecMode;
 }
 
 export interface AuditorInvokeInput {
@@ -83,6 +93,10 @@ export function buildAuditorPrompt(context: AuditorSpecContext): string {
       behaviorIds: subtask.behaviorIds,
     })),
     outputInstructions: AUDITOR_FINDINGS_OUTPUT_INSTRUCTIONS,
+    // Task #86: thread the spec mode through so the seeded-mode tail block is appended
+    // when the spec runs in `specialize_seed` mode. Absent ⇒ no block (byte-identical
+    // to the legacy prompt for brownfield/legacy specs).
+    ...(context.specMode !== undefined && { specMode: context.specMode }),
   });
 }
 

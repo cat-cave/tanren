@@ -22,6 +22,10 @@
 //      `just build` / `just deploy` targets — never a hardcoded command.
 //   3. The SCAFFOLD BAR is structure + bootstrap/tier-1/build passing — a thorough
 //      test SUITE is NOT required at scaffold (tests arrive with the feature specs).
+//   4. EVERY foundation spec (`scaffold` · `build` · `deploy`) runs in
+//      `specialize_seed` mode — they all SPECIALIZE surfaces the composed seed
+//      already shipped (build/deploy wire through the seed's `just build` / `just
+//      deploy` recipes; the writer must not re-invent the toolchain).
 
 import {
   buildSeedScaffoldAcceptanceCriteria,
@@ -44,10 +48,11 @@ export interface ScaffoldSpecDef {
   // wiring that serializes the foundation into a chain instead of parallel roots.
   dependsOnPrev?: boolean;
   // Task #86 (v64 root cause): the writer-prompt MODE the spec is created with.
-  // The `scaffold` spec sets `specialize_seed` (the composed seed is in place +
-  // proven green; the writer specializes ONLY product-identity surfaces); `build`/
-  // `deploy` and every other spec stay `from_scratch` (today's default — build the
-  // manifest/sources/configs/tests). Omitted ⇒ the default at `createSpec`.
+  // EVERY foundation spec (`scaffold` · `build` · `deploy`) sets `specialize_seed`
+  // — the composed seed is in place + proven green, and `build`/`deploy` SPECIALIZE
+  // the seed's `just build` / `just deploy` recipes (they must not re-invent the
+  // stack). Behavior/schema specs created downstream OMIT the field and default to
+  // `from_scratch` at `createSpec`. Omitted ⇒ the default at `createSpec`.
   mode?: SpecMode;
 }
 
@@ -57,13 +62,19 @@ export interface ScaffoldSpecDef {
  * specializes the seed for THIS product); `build` and `deploy` route through the
  * conventional `just build` / `just deploy` targets the seed established.
  *
- * MODE (task #86 — v64 root cause): the `scaffold` spec opts INTO `specialize_seed`
- * mode so `writerPromptFor()` emits the seeded-mode standing instructions ("the
- * composed seed is already in place + proven green; touch ONLY product-identity
- * surfaces") instead of the brownfield/legacy "build everything ELSE — manifest/
- * lockfile, sources, configs, tests" guidance that produced v64's 6-hour non-
- * converging writer-checker loop. `build` and `deploy` stay `from_scratch` (they
- * may legitimately edit configs / add tests / etc as the product grows).
+ * MODE (task #86 — v64 root cause): EVERY foundation spec (`scaffold` · `build` ·
+ * `deploy`) opts INTO `specialize_seed` mode so `writerPromptFor()` emits the
+ * seeded-mode standing instructions ("the composed seed is already in place +
+ * proven green; touch ONLY product-identity surfaces") instead of the brownfield/
+ * legacy "build everything ELSE — manifest/lockfile, sources, configs, tests"
+ * guidance that produced v64's 6-hour non-converging writer-checker loop. `build`
+ * and `deploy` are not exceptions: their job is to SPECIALIZE the seed's
+ * conventional `just build` / `just deploy` recipes (which already came in the
+ * composed seed); a `from_scratch` standing instruction here would explicitly tell
+ * the writer to "Build everything ELSE — manifest/lockfile, sources, configs,
+ * tests, fixtures", directly contradicting the spec text that says "Build on the
+ * EXISTING justfile/toolchain on `main` — do NOT re-invent the stack" — the exact
+ * v64 contradiction class one rung downstream from `scaffold`.
  */
 export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, seed: SeededTemplate): ScaffoldSpecDef[] {
   const scaffoldSpec: ScaffoldSpecDef = {
@@ -87,6 +98,11 @@ export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, seed: SeededTempla
         "given the scaffolded repo, when `just build` runs, then it produces the deployable artifact and exits 0",
       ],
       dependsOnPrev: true,
+      // The seed's `just build` recipe is already in place and proven green by composition;
+      // this spec SPECIALIZES that surface for the project's artifact. `from_scratch` would
+      // tell the writer "Build everything ELSE — manifest/lockfile, sources, configs, tests"
+      // — directly contradicting the description above.
+      mode: "specialize_seed",
     },
     {
       title: "deploy",
@@ -98,6 +114,9 @@ export function scaffoldSpecsFor(lifecycle: CaptureLifecycle, seed: SeededTempla
         "given a built artifact, when `just deploy` runs, then it ships to the deploy target via the conventional `just deploy` (no hardcoded deploy command)",
       ],
       dependsOnPrev: true,
+      // Same reasoning as `build`: the seed's `just deploy` recipe is already in place;
+      // this spec SPECIALIZES it for the project's deploy target.
+      mode: "specialize_seed",
     },
   ];
 }
