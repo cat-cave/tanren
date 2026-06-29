@@ -137,20 +137,30 @@ export class ProvisioningTerminalStateError extends Error {
 }
 
 /**
- * The probe-count floor before a fixed-point assessment can declare a wedge. This
- * is the saturation gate (same role as `SSH_TRANSIENT_BACKOFF_MS.length` in the SSH
- * transient retry, same role as `RECOVERABLE_RETRY_DELAYS_MS.length` in the answerer
- * retry): a single transient identical-signature read mid-provisioning is NOT proof
- * of a wedge — only IDENTICAL signatures past this saturation gate are a fixed
- * point. Set to 5: a cloud-provisioning probe at a 3s default cadence sees a stuck
- * signature for at least ~15 seconds before the gate even considers escalating, well
- * past any single-tick mid-IO-burst false fire (the analogous concern the
- * `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` floor protects in the activity watchdog).
+ * The MINIMUM trailing-history length before the convergence detector's fixed-point
+ * read may declare a wedge. NOT a poll cap, NOT a give-up budget — a genuinely-
+ * advancing signature (a different state token, lifecycle advance, IP appearing) at
+ * any probe resets the saturation window and the loop continues UNBOUNDED. The
+ * trigger remains signature IDENTITY (the convergence detector's `isCycle` recurrence
+ * + `reproducedIdenticalWork` neighbor-identity branches); this floor only guards
+ * against the detector firing too eagerly on the first 2–3 provisioning ramp-up
+ * ticks where an identical structural signature is normal noise.
  *
- * NOT a poll cap, NOT a budget: the saturation gate gates the CONVERGENCE DECISION,
- * not the loop length. A genuinely-advancing signature (a different state token,
- * lifecycle advance, IP appearing) at any probe resets it and the loop continues
- * UNBOUNDED. The fixed-point evaluation only ever fires AFTER this floor is reached.
+ * Mirrors the activity watchdog's `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` ratchet:
+ * the same idea (a streak floor) applied to a different cadence — provisioning
+ * cycles are longer than agent-exec ticks, so the floor sits higher (~15s of
+ * identical signature at the default 3s cadence before the detector even considers
+ * escalation, well past any single-tick mid-IO-burst false fire).
+ *
+ * task #43 audit (kept as-is): the original framing of this constant as a "count-
+ * based give-up" was a misreading — the helper does NOT return after N stable
+ * observations, it ESCALATES to {@link PersistentProvisioningOutageError} (loud,
+ * recoverable). The doctrine is "kill on evidence of death"; an identical structural
+ * signature across the saturation window IS evidence of a wedge (no new state across
+ * the cloud's own state machine ticks). The floor is the saturation primitive, not
+ * a wall-clock timeout.
+ *
+ * arch-allow: timeout-class — STREAK floor on signature identity, not elapsed time.
  */
 export const STABLE_CADENCE_FLOOR = 5;
 
