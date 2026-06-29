@@ -493,3 +493,7 @@ describe("deploy-app namespacing (task #27 — global-collision fix)", () => {
     });
   });
 });
+
+// Audit finding #8 (DeployProvisioner.destroyApp drops the listApps gate) is
+// covered in `deployProvisionerDestroyApp.test.ts` — split out to keep this
+// file under the 500-line architecture cap.
