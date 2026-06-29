@@ -36,24 +36,26 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   job-liveness backstop and reduced `keepaliveCountMax` from 1440 → 40 (≈ 6 h →
 >   10 min of transport-level dead-socket detection; the keepalive is a TCP-layer
 >   ping, not a work-budget).
-> - **Task #21B (apex v49) — derive's synchronous wait has a progress-based
->   circuit breaker [RESOLVED].** v49 drove past this session's env + code
->   cleanups into the live writer-checker-auditor LLM loop running real scaffold
->   work and halted on a legitimate pre-session tanren-code finding: a
->   runner-INSERT retry loop (`duplicate key value violates unique constraint
-"runners_pkey"`) between the run-executor and the job-reaper, compounded by
->   derive's synchronous wait having no inner-failure circuit breaker (8-hour
->   curl hang). The doctrine extension landed in
->   `services/orchestrator/src/engine/templates/creation/childRunProgressProbe.ts`:
->   a PROGRESS / SIGN-OF-LIFE based circuit breaker over the child template-build
->   project's append-only `MAX(events.id)` signature, identity-based, never
->   elapsed-time-based. A flat signature across `NON_ADVANCE_PROBES_BEFORE_STALL`
->   consecutive probes halts LOUD as `ChildRunStalledError`, wrapped through
->   `TemplateBuildFailedError` and surfaced at the derive HTTP boundary as a
->   distinct 504 `template_build_stalled` naming the stalled child project id.
->   The doctrine stands; the synchronous-wait surface is no longer a disguised
->   survivor. The sister lane (task #21A — runner-INSERT idempotency in
->   `services/allocator/**`) ships separately.
+> - **Task #21B (apex v49) — derive's synchronous wait on the template-build
+>   child run [OBVIATED by PR-F #693].** v49 surfaced derive's synchronous wait
+>   having no inner-failure circuit breaker (8-hour curl hang) compounding a
+>   runner-INSERT retry loop (`duplicate key … "runners_pkey"`) between the
+>   run-executor and the job-reaper. The original fix landed as a child-run
+>   progress probe over the template-build child project's `MAX(events.id)`
+>   signature. **PR-F #693 then collapsed templating to a single fragment-only
+>   scaffold path:** the `engine/templates/creation/` meta-flow (including
+>   `childRunProgressProbe.ts`, `ChildRunStalledError`, `TemplateBuildFailedError`,
+>   and the `504 template_build_stalled` surface) was DELETED — there is no
+>   template-build child run anymore. The replacement synchronous-wait surface
+>   in `engine/forge/interview/derive.ts` is the in-process `runFragmentAuthoring`
+>   (F2) writer→validate loop, itself progress-based + fixed-point convergent
+>   per `docs/roadmap/templating-system.md` §2 (UNBOUNDED while body or
+>   rejection advances; loud `FragmentAuthoringFailedError` at the fixed point);
+>   surrounding `composeTemplate + materializeTemplate` are fast fs+push ops
+>   with no child run to wait on. The disguised-survivor entry stays as
+>   historical evidence; the surface that motivated it no longer exists. The
+>   sister lane (task #21A — runner-INSERT idempotency in
+>   `services/allocator/**`) shipped separately.
 > - **v51 — per-stage `task.failed` emit-on-throw across the subtask-loop stages
 >   [RESOLVED].** v51 surfaced the FIFTH disguised survivor in this family (after
 >   #638 ssh2 socket-idle, #640 lock-file mtime-probe, #21B initial dag-noise
@@ -418,8 +420,6 @@ so no count appears in the code or the docstring.
 | `ssh/keygen.ts:56` `KEYGEN_MAX_ATTEMPTS = 8`                                                                                    | pure-CPU keygen retry               | regenerates a malformed ed25519 key; pure-CPU, failure probability < 1e-21 — never gates real work.                                                                                                                                                                                                                                                                      |
 | `db/src/client.ts`                                                                                                              | **NO statement / lock timeouts**    | must **STAY ABSENT** — adding a `statement_timeout` / `lock_timeout` here would be a disguised kill-timeout on legitimate long queries. Warn against ever adding one.                                                                                                                                                                                                    |
 | `services/allocator/src/dockerEngine.ts:105` `stopContainer(timeoutSeconds = 5)`                                                | docker stop grace                   | a 5s SIGTERM→SIGKILL teardown grace on a container we are _already_ destroying — not a work budget.                                                                                                                                                                                                                                                                      |
-| `engine/templates/creation/childRunProgressProbe.ts CHILD_PROGRESS_PROBE_CADENCE_MS`                                            | probe cadence                       | how often to read the child project's audit signature; trigger is signal IDENTITY across probes, never elapsed time.                                                                                                                                                                                                                                                     |
-| `engine/templates/creation/childRunProgressProbe.ts NON_ADVANCE_PROBES_BEFORE_STALL`                                            | non-advance streak ceiling          | identity ceiling at 30 probes (~15 min at the 30s cadence) — bumped from 10 in apex v52 after evidence showed a single legitimate Codex writer turn can run 6-8 min with no allowlisted event between `writer.subtask.started` and `writer.subtask.completed`; a working child resets every probe — same class as `runHeartbeat.ts atRiskThreshold` non-advancing-beats. |
 
 ---
 
