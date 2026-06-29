@@ -148,12 +148,10 @@ export interface SubtaskLoopInput {
     // `DesignContract` (persona-scoped, behavior-linked, domain-general). Injected into the
     // writer prompt so the build honors the design. Absent ⇒ no design contract ⇒ no block.
     designContextBlock?: string;
-    // Task #86 (v64 root cause): the spec's writer-prompt MODE. Selects which standing
-    // instruction set `writerPromptFor()` emits — `specialize_seed` (greenfield's scaffold
-    // spec post-PR-G; the composed seed is in place + proven green, touch ONLY product-
-    // identity surfaces) vs `from_scratch` (today's brownfield/legacy default — build the
-    // manifest/sources/configs/tests, regenerate lockfile after manifest edits, etc).
-    // Absent ⇒ DEFAULT_SPEC_MODE (`from_scratch`) — byte-identical to before this field.
+    // Task #86 (v64 root cause): the spec's writer-prompt MODE drives `writerPromptFor()`.
+    // `specialize_seed` (greenfield's scaffold spec post-PR-G; the composed seed is in
+    // place + proven green, touch ONLY product-identity surfaces) vs `from_scratch`
+    // (brownfield/legacy default). Absent ⇒ DEFAULT_SPEC_MODE (`from_scratch`).
     specMode?: SpecMode;
   };
   // The CONVERGENCE policy (the SOLE loop bound) + the audit posture (triage routing).
