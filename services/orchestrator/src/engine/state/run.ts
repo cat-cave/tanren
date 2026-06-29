@@ -34,10 +34,13 @@ export type RunStatus = z.infer<typeof RunStatus>;
 // the resume flips the run to `halted` with the SAME `window_paused` outcome
 // so the recovery surface keeps the distinct WHY without re-classifying.
 //
-// `provider_unhealthy` (task #82): the outcome a `paused` run terminates with
-// when the prober detects the provider's probe ITSELF is broken (auth revoked,
-// account suspended, CLI binary missing) — distinct from a recoverable
-// capacity gap; escalates the spec to `needs_attention` so an operator can act.
+// No-fallback doctrine: a `paused` → `failed` provider-unhealthy outcome is
+// intentionally NOT enumerated — the orchestrator does not yet run an
+// authoritative provider-health probe, and the existing preflight
+// `usage.read_failed` (LOUD on auth revoked / CLI missing / nonzero_exit)
+// already routes a structural read failure through the standard finalize path
+// the convergence detector handles. Re-introduce only when a real probe lands;
+// "a future extension might wire this" enumerations are dead by definition.
 export const RunOutcome = z.enum([
   "ok",
   "halted",
@@ -49,7 +52,6 @@ export const RunOutcome = z.enum([
   "convergence_stalled",
   "window_exhausted",
   "window_paused",
-  "provider_unhealthy",
   "cancelled",
   "failed",
 ]);
@@ -63,13 +65,15 @@ export type RunOutcome = z.infer<typeof RunOutcome>;
 // task #82: `paused` is a non-terminal "awaiting capacity" state. A `running`
 // run that hits `window_exhausted` flips to `paused`; the background prober
 // resumes it by flipping to `halted` (re-drive, walker re-enqueues) once
-// capacity returns, or terminates it `failed` when the provider is
-// structurally unhealthy. A `queued` run that the preflight catches at
-// window pressure can flip straight to `paused` without ever `running`.
+// capacity returns. A `queued` run that the preflight catches at window
+// pressure can flip straight to `paused` without ever `running`. The
+// operator-cancel path is the only `paused`-terminal exit — provider-unhealthy
+// is NOT a separate `paused → failed` arm (no real probe exists today, so
+// enumerating that transition would be a dead "future swap"; see RunOutcome).
 const allowedRunTransitions: Record<RunStatus, ReadonlyArray<RunStatus>> = {
   queued: ["running", "paused", "cancelled"],
   running: ["paused", "halted", "completed", "failed", "cancelled"],
-  paused: ["halted", "failed", "cancelled"],
+  paused: ["halted", "cancelled"],
   halted: ["running", "cancelled"],
   completed: [],
   failed: [],

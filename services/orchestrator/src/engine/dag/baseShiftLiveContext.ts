@@ -22,6 +22,7 @@ import {
   type RoutingTable,
 } from "../config/shared.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { SpecMode } from "../state/spec.js";
 import { buildEffectiveRouting } from "../worker/runExecutionContext.js";
 
 /** The terminal runner image a live base-shift rebase allocates against when none is set. */
@@ -46,6 +47,13 @@ export interface BaseShiftRunContext {
   specTitle: string;
   specDescription: string;
   acceptanceCriteria: string[];
+  /**
+   * Task #86: spec writer-prompt MODE (`specialize_seed` for the foundation specs;
+   * `from_scratch` otherwise). Threaded into the live base-shift conflict resolver so
+   * the re-gate's checker + auditor see the seeded-mode tail block on `specialize_seed`
+   * specs (the same agreement the in-loop stages honor).
+   */
+  specMode: SpecMode;
   routing: RoutingTable;
   defaultLlm: RoutingChainEntry;
   endpointBaseUrl?: string;
@@ -72,10 +80,11 @@ export async function loadBaseShiftRunContext(pool: pg.Pool, runId: string): Pro
       title: string;
       description: string;
       acceptance_criteria: unknown;
+      mode: unknown;
     }>(
       `SELECT p.org_id, r.project_id, r.spec_id, p.repo_url, p.default_branch, r.branch,
               p.runner_image, p.config, o.config AS org_config, s.title, s.description,
-              s.acceptance_criteria
+              s.acceptance_criteria, s.mode
          FROM runs r
          JOIN specs s ON s.spec_id = r.spec_id
          JOIN projects p ON p.project_id = r.project_id
@@ -96,6 +105,10 @@ export async function loadBaseShiftRunContext(pool: pg.Pool, runId: string): Pro
     resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(orgId) }),
   );
   const installation = installationFromOrgConfig(row.org_config);
+  // Task #86: parse the spec's writer-prompt MODE off the joined `s.mode` column. The DB
+  // CHECK is NOT NULL with default `from_scratch`; a fixture row missing the column safely
+  // defaults to `from_scratch` (the legacy byte-shape).
+  const specMode = SpecMode.safeParse(row.mode).success ? SpecMode.parse(row.mode) : "from_scratch";
   return {
     orgId,
     projectId: row.project_id,
@@ -111,6 +124,7 @@ export async function loadBaseShiftRunContext(pool: pg.Pool, runId: string): Pro
     specTitle: row.title,
     specDescription: row.description,
     acceptanceCriteria: toStringArray(row.acceptance_criteria),
+    specMode,
     routing: buildEffectiveRouting(projectConfig.routing, resolved.defaultLlm),
     defaultLlm: resolved.defaultLlm,
     ...(resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {}),

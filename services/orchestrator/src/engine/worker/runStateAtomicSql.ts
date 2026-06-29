@@ -27,6 +27,8 @@ import { z } from "zod";
 import type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,
+  ResumePausedRunAtomicInput,
+  ResumePausedRunAtomicOutcome,
   UpdateSpecWithEventInput,
   UpdateSpecWithEventOutcome,
 } from "../contracts/runStateAtomicSeam.js";
@@ -229,4 +231,161 @@ export const specPairSchema = z
     error:
       "spec-pair mismatch: status must pair with the matching spec-disposition event type (open → dag.spec.redriven; needs_attention → dag.spec.needs_attention)",
     path: ["event", "eventType"],
+  });
+
+// --- WINDOW-PAUSE RESUME atomic applier (audit finding #3) -------------------
+
+/**
+ * Audit finding #3 — apply the window-pause prober's resume as ONE atomic
+ * unit. Lands FOUR writes in the caller's single transaction:
+ *   (1) `runs.status: paused → halted` (guarded by `fromStatuses=['paused']`)
+ *   (2) `events: run.resumed` (paired with the run finalize)
+ *   (3) `specs.status: in_flight → open` (guarded by `notFromStatuses`)
+ *   (4) `events: dag.spec.redriven` (paired with the spec flip)
+ *
+ * The shared `TaskLifecycleClient` makes the row UPDATEs + event INSERTs
+ * COMMIT together — a crash between any two writes rolls the whole apply
+ * back, so `runs.status=halted` + `specs.status=in_flight` (the split-write
+ * orphan the audit found) is impossible.
+ *
+ * The run-side INSERT goes through `appendIfAbsent` (idempotent under the
+ * partial unique index `events_run_terminal_unique`). The spec-side INSERT
+ * goes through plain `.append` (recurring events admit duplicates by design).
+ * A no-row-moved outcome on either UPDATE skips its paired event emit and
+ * surfaces in the outcome flags so the caller knows the seam de-duped.
+ */
+export async function applyResumePausedRunAtomic(
+  client: TaskLifecycleClient,
+  input: ResumePausedRunAtomicInput,
+): Promise<ResumePausedRunAtomicOutcome> {
+  // 1) Run finalize: paused → halted, exactly-once via the `fromStatuses` guard.
+  const finalized = await client.query(
+    `UPDATE runs SET status = $2, outcome = $3, ended_at = now()
+       WHERE run_id = $1 AND status = ANY($4::text[])
+       RETURNING spec_id, project_id`,
+    [input.finalize.runId, input.finalize.status, input.finalize.outcome, input.finalize.fromStatuses],
+  );
+  const row = finalized.rows[0] as { spec_id?: unknown; project_id?: unknown } | undefined;
+  if (row === undefined) {
+    // No row moved — the run was already past `paused`. Skip the rest of the
+    // atomic unit (the spec flip is conditional on the run actually resuming).
+    return { runFinalized: false, runEventAlreadyTerminal: false, specFlipped: false };
+  }
+  const rowSpecId = scalarTextOr(row.spec_id, "");
+  const rowProjectId = scalarTextOr(row.project_id, "");
+
+  // 2) run.resumed: paired terminal event for the run finalize, deduped by
+  //    the partial unique index on a dropped-HTTP-response retry.
+  const store = new PgEventStore(client);
+  const callerResumedSpecId =
+    input.resumedEvent.specId === undefined || input.resumedEvent.specId === "" ? "" : input.resumedEvent.specId;
+  if (callerResumedSpecId !== "" && rowSpecId !== "" && callerResumedSpecId !== rowSpecId) {
+    throw new Error(
+      `applyResumePausedRunAtomic: resumedEvent.specId='${callerResumedSpecId}' disagrees with the run row's spec_id='${rowSpecId}'`,
+    );
+  }
+  const resumedEventSpecId = callerResumedSpecId === "" ? rowSpecId : callerResumedSpecId;
+  const callerResumedProjectId =
+    input.resumedEvent.projectId === undefined || input.resumedEvent.projectId === ""
+      ? ""
+      : input.resumedEvent.projectId;
+  if (callerResumedProjectId !== "" && rowProjectId !== "" && callerResumedProjectId !== rowProjectId) {
+    throw new Error(
+      `applyResumePausedRunAtomic: resumedEvent.projectId='${callerResumedProjectId}' disagrees with the run row's project_id='${rowProjectId}'`,
+    );
+  }
+  const resumedEventProjectId = callerResumedProjectId === "" ? rowProjectId : callerResumedProjectId;
+  const insertedRunEvent = await store.appendIfAbsent({
+    ...input.resumedEvent,
+    specId: resumedEventSpecId,
+    projectId: resumedEventProjectId,
+  });
+
+  // 3) Spec flip: in_flight → open, guarded by `notFromStatuses` so a spec
+  //    already settled (merged / needs_attention) is not clobbered.
+  let specUpdated: { rowCount?: number | null };
+  if (input.spec.notFromStatuses !== undefined && input.spec.notFromStatuses.length > 0) {
+    specUpdated = await client.query(
+      "UPDATE specs SET status = $2 WHERE spec_id = $1 AND status <> ALL($3::text[]) RETURNING spec_id",
+      [input.spec.specId, input.spec.status, input.spec.notFromStatuses],
+    );
+  } else {
+    specUpdated = await client.query("UPDATE specs SET status = $2 WHERE spec_id = $1 RETURNING spec_id", [
+      input.spec.specId,
+      input.spec.status,
+    ]);
+  }
+  if ((specUpdated.rowCount ?? 0) === 0) {
+    // Spec already past `in_flight` (operator cancelled, merged elsewhere) —
+    // the run resumed, the spec doesn't need a re-drive. Skip the redriven event.
+    return {
+      runFinalized: true,
+      runEventAlreadyTerminal: !insertedRunEvent,
+      specFlipped: false,
+      specId: rowSpecId,
+      projectId: rowProjectId,
+    };
+  }
+
+  // 4) dag.spec.redriven: paired event for the spec flip (recurring, plain append).
+  await store.append(input.redrivenEvent);
+  return {
+    runFinalized: true,
+    runEventAlreadyTerminal: !insertedRunEvent,
+    specFlipped: true,
+    specId: rowSpecId,
+    projectId: rowProjectId,
+  };
+}
+
+/** Zod refinement for {@link ResumePausedRunAtomicInput}: validates BOTH the
+ * run-side terminal pair (`halted` ↔ `run.resumed`-ish) and the spec-side
+ * pair (`open` ↔ `dag.spec.redriven`) at the seam, so a misuse is rejected
+ * before any DB I/O. The run side is intentionally narrower than
+ * `runPairSchema` (only the `paused → halted` shape this seam admits); the
+ * spec side reuses the same closed status/event vocab `specPairSchema` uses. */
+export const resumePausedRunPairSchema = z
+  .object({
+    finalize: z
+      .object({
+        runId: z.string().min(1),
+        orgId: z.string().min(1),
+        status: z.literal("halted"),
+        outcome: z.literal("window_paused"),
+        fromStatuses: z.array(z.literal("paused")).min(1),
+      })
+      .strict(),
+    resumedEvent: z
+      .object({
+        runId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        specId: z.string().optional(),
+        projectId: z.string(),
+        eventType: z.literal("run.resumed"),
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+    spec: z
+      .object({
+        specId: z.string().min(1),
+        orgId: z.string().min(1),
+        status: z.literal("open"),
+        notFromStatuses: z.array(z.string().min(1)).optional(),
+      })
+      .strict(),
+    redrivenEvent: z
+      .object({
+        runId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        specId: z.string().min(1).optional(),
+        projectId: z.string().min(1),
+        eventType: z.literal("dag.spec.redriven"),
+        payload: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+  })
+  .strict()
+  .refine((value) => value.finalize.orgId === value.spec.orgId, {
+    error: "resume-paused-run-pair mismatch: finalize.orgId and spec.orgId must match (one org-scoped transaction)",
+    path: ["spec", "orgId"],
   });

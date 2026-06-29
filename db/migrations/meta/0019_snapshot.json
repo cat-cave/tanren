@@ -6031,7 +6031,7 @@
         },
         "runs_outcome_check": {
           "name": "runs_outcome_check",
-          "value": "\"runs\".\"outcome\" IS NULL OR \"runs\".\"outcome\" IN ('ok','halted','escape_hatch_hit','retry_budget_exhausted','convergence_stalled','window_exhausted','window_paused','provider_unhealthy','cancelled','failed')"
+          "value": "\"runs\".\"outcome\" IS NULL OR \"runs\".\"outcome\" IN ('ok','halted','escape_hatch_hit','retry_budget_exhausted','convergence_stalled','window_exhausted','window_paused','cancelled','failed')"
         }
       },
       "isRLSEnabled": false

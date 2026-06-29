@@ -13,6 +13,7 @@ import type { CheckAnswer, AuditAnswer, PlanSubtask } from "../../../answerers/s
 import type { CiWhen } from "../../../ci/index.js";
 import type { ReGateVerdict, ResolvedTreeReGate } from "../../../contracts/conflictResolution.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
+import type { SpecMode } from "../../../state/spec.js";
 import type { GateOutcome } from "../../gate/index.js";
 import { decideCheckerOutcome, invokeChecker } from "../../checker/checker.js";
 import { auditorReGateDecision, invokeAuditor } from "../../auditor/auditor.js";
@@ -29,6 +30,13 @@ export interface ResolvedTreeReGateDeps {
   acceptanceCriteria: ReadonlyArray<string>;
   /** The run base the checker/auditor diff the resolved tree against (self-inspected in-workspace). */
   baseSha: string;
+  /**
+   * The merging spec's writer-prompt MODE (task #86). Threaded to the re-gate's
+   * checker + auditor so the seeded-mode tail block is emitted on `specialize_seed`
+   * specs (the same agreement the in-loop checker/auditor honor). Absent ⇒ legacy
+   * byte-shape (the brownfield/legacy default).
+   */
+  specMode?: SpecMode;
 }
 
 export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
@@ -60,6 +68,10 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
         acceptanceCriteria: this.deps.acceptanceCriteria,
         subtask,
         baselineSha: this.deps.baseSha,
+        // Task #86: thread the spec mode so the seeded-mode tail block is emitted on
+        // `specialize_seed` specs (the re-gate honors the same writer/checker/auditor
+        // agreement the in-loop stages do).
+        ...(this.deps.specMode !== undefined && { specMode: this.deps.specMode }),
       },
       workspace: this.deps.workspacePath,
     });
@@ -76,6 +88,9 @@ export class RunPathResolvedTreeReGate implements ResolvedTreeReGate {
         acceptanceCriteria: this.deps.acceptanceCriteria,
         subtasks: [subtask],
         baselineSha: this.deps.baseSha,
+        // Task #86: thread the spec mode so the seeded-mode tail block is emitted on
+        // `specialize_seed` specs.
+        ...(this.deps.specMode !== undefined && { specMode: this.deps.specMode }),
       },
       workspace: this.deps.workspacePath,
     });

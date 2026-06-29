@@ -21,7 +21,7 @@ describe("redriveBackoffSeconds — grows with the fixed-point streak, capped (t
 
 /** A fake org-scoped pool returning a fixed prior-redriven event list (oldest first — the
  * reader queries `ORDER BY ts ASC`). Each row is the prior re-drive's payload. */
-function fakePool(rows: { failureCode: string; workSignature?: string }[]) {
+function fakePool(rows: { failureCode: string; workSignature?: string; source?: string }[]) {
   return {
     connect: async () => ({
       query: async (sql: string) => {
@@ -99,5 +99,39 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
       ]),
     );
     expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
+  });
+
+  it("audit finding #13: dag.spec.redriven rows with source:'prober_resume' are FILTERED OUT of the convergence history", async () => {
+    // The window-pause prober's resume writes a `dag.spec.redriven` event with a synthetic
+    // `failureCode: "usage_limit"` (the spec pair-schema requires SOME failure code for an
+    // `open` flip). If folded into the convergence history, a sequence
+    // `internal, usage_limit, internal` reads as "a new state appeared between two
+    // structural re-drives" — defeating cycle detection and masking a genuinely stuck spec.
+    //
+    // The fix: rows tagged `payload.source === "prober_resume"` are FILTERED OUT at assembly
+    // time. The reader sees only the structural re-drives: two `internal` priors + the
+    // current `internal` failure ⇒ a proven fixed point ⇒ ESCALATE (1).
+    const reader = buildRedriveHistoryReader(
+      fakePool([
+        { failureCode: "internal" },
+        { failureCode: "usage_limit", source: "prober_resume" },
+        { failureCode: "internal" },
+        { failureCode: "usage_limit", source: "prober_resume" },
+      ]),
+    );
+    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(1);
+  });
+
+  it("audit finding #13: a HISTORY of ONLY prober_resume rows reads as no structural priors ⇒ 0 (progress)", async () => {
+    // Two prober resumes between structural attempts must not promote a first-of-its-kind
+    // structural failure into a fixed point. After filtering, the history is empty and the
+    // current attempt is the FIRST structural attempt — progress, re-drive.
+    const reader = buildRedriveHistoryReader(
+      fakePool([
+        { failureCode: "usage_limit", source: "prober_resume" },
+        { failureCode: "usage_limit", source: "prober_resume" },
+      ]),
+    );
+    expect(await reader({ orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
   });
 });

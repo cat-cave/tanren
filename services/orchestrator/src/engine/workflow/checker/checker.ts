@@ -12,6 +12,7 @@ import { answererOutputSchemaFor, CheckAnswer } from "../../answerers/schemas/in
 import type { CheckFinding, PlanSubtask } from "../../answerers/schemas/index.js";
 import type { EntityRiskSignal } from "../../oracle/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
+import type { SpecMode } from "../../state/spec.js";
 import { buildCheckerPrompt as buildCheckerPromptText } from "../answererPrompts.js";
 
 // The v3 CheckAnswer (completeness findings + reasoning) closing instruction. The
@@ -43,6 +44,15 @@ export interface CheckerSubtaskContext {
   // and not the `unknown` class, its posture steers where the checker concentrates
   // scrutiny. Absent / `unknown` ⇒ the checker proceeds on the raw diff as today.
   riskSignal?: EntityRiskSignal;
+  // OPTIONAL spec writer-prompt MODE (task #86 — v64 root-cause class one rung
+  // downstream from PR #704's writer-prompt fix). When `specialize_seed`, the prompt
+  // appends a seeded-mode tail block telling the checker the composed seed is pre-
+  // existing + proven green, so pre-existing seed surfaces (manifest, lockfile,
+  // tsconfig, lint/test/build configs, contract files, source skeleton, demo) are
+  // NOT completeness findings — only gaps in the product-specific surfaces this
+  // spec was supposed to deliver. Absent / `from_scratch` ⇒ byte-identical to the
+  // legacy checker prompt (the brownfield/legacy default).
+  specMode?: SpecMode;
 }
 
 export interface CheckerInvokeInput {
@@ -86,6 +96,10 @@ export function buildCheckerPrompt(context: CheckerSubtaskContext): string {
     },
     outputInstructions: CHECKER_V3_OUTPUT_INSTRUCTIONS,
     riskSignal: context.riskSignal,
+    // Task #86: thread the spec mode through so the seeded-mode tail block is appended
+    // when the spec runs in `specialize_seed` mode. Absent ⇒ no block (byte-identical
+    // to the legacy prompt for brownfield/legacy specs).
+    ...(context.specMode !== undefined && { specMode: context.specMode }),
   });
 }
 
