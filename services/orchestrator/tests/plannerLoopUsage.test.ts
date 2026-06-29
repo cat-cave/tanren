@@ -186,7 +186,12 @@ describe("subtask loop — usage probe wiring", () => {
     expect(names).not.toContain("planner.subtasks.emitted");
     expect(pool.tasks.filter((task) => task.kind !== "plan")).toHaveLength(0);
     const plannerTask = pool.tasks.find((task) => task.kind === "plan")!;
-    expect(plannerTask.outcome).toBe("window_exhausted");
+    // task #46: planner-task window_exhausted now lands as `status='failed'`
+    // with `failure_kind='window_exhausted'` through the atomic
+    // `markTaskFailedWithEvent` seam, replacing the prior mixed `done`/outcome
+    // shape glued to a `task.failed` event.
+    expect(plannerTask.status).toBe("failed");
+    expect(plannerTask.failureKind).toBe("window_exhausted");
   });
 
   it("emits accounting but does NOT reconcile when ccusage reports no cost (honest NULL)", async () => {

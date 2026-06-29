@@ -55,7 +55,12 @@ import { checkWindowPreflight, type CreditState, observeRunAccounting } from "./
 import { budgetPausedOutcome, checkIterationBudget, emitBudgetPause } from "./subtaskBudget.js";
 import { buildSubtaskCostContext, type SubtaskCostContext } from "./subtaskCost.js";
 import type { RealProviderCostCapturer } from "../costs/generationCostCapture.js";
-import { insertPlannerTask, markTaskDone } from "./subtaskTasks.js";
+import {
+  insertPlannerTask,
+  markPlannerFailed,
+  markPlannerPassed,
+  type PlannerTerminalContext,
+} from "./subtaskTasks.js";
 import { runAuditorStage, runPlannerStage } from "./subtaskStages.js";
 import { runSubtaskSequence } from "./subtaskInnerLoop.js";
 import { runConvergenceStage, runPostAuditFindingStages, runTriageStage } from "./loopStages.js";
@@ -65,6 +70,21 @@ import { createLogger } from "../observability/logger.js";
 const log = createLogger("subtask-loop");
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+// task #46: builds the planner-task atomic-terminal context bag once per run.
+function buildPlanCtx(
+  input: SubtaskLoopInput,
+  plannerTaskId: string,
+  appendEvent: AppendEvent,
+): PlannerTerminalContext {
+  return {
+    pool: input.pool,
+    ...(input.runStateWriter !== undefined && { writer: input.runStateWriter }),
+    taskId: plannerTaskId,
+    lineage: { runId: input.context.runId, specId: input.context.specId, projectId: input.context.projectId },
+    appendEvent,
+  };
+}
 
 // The worst severity among the work items KEPT in-spec this loopback — the "are the
 // leftovers mild?" input to the velocity-defer policy. Undefined when nothing was
@@ -257,22 +277,13 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 
   const plannerTaskId = `task_${randomUUID()}`;
   const creditState: CreditState = { atStart: null };
-  // Absent-default: the BALANCED posture (block on P0/P1, park for a human). A
-  // project that needs the autonomous posture (residual routes to the DAG, blocking
-  // finding becomes a remediation spec) sets it on the project config via the
-  // governance API — the input's `auditPosture` then carries that explicit value.
+  // Absent-default: the BALANCED posture (block on P0/P1, park for a human); projects
+  // wanting autonomous posture set it via the governance API on the project config.
   const posture = input.auditPosture ?? DEFAULT_AUDIT_POSTURE;
   const convergencePolicy = input.convergencePolicy ?? DEFAULT_CONVERGENCE_POLICY;
 
-  // finalize runs run-level accounting + reconciles cost, then returns the terminal
-  // outcome. Routed through EVERY return so cost is captured regardless of how the run
-  // ended. GUARDED (audit §3.7d): the run-end ccusage/credit reconcile is BEST-EFFORT
-  // — the control plane / usage probe can blip. The run OUTCOME (passed /
-  // convergence_stalled / halted / window_exhausted) is the durable result and MUST
-  // persist regardless: a transient reconcile throw must NOT discard a finished run's
-  // outcome AND its spend back-fill. So the reconcile is caught LOUD-but-non-fatal —
-  // the committed cost_records rows are already the row-is-truth budget source; only
-  // the run-end apportion estimate is missing — and the outcome always returns.
+  // finalize: run-end accounting + cost reconcile, routed through EVERY return so the
+  // terminal outcome is preserved on a best-effort reconcile blip (audit §3.7d).
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
     try {
       await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
@@ -287,6 +298,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   await appendEvent("task.started", { taskKind: "plan" }, plannerTaskId);
   await appendEvent("planner.started", { taskKind: "plan" }, plannerTaskId);
 
+  // task #46: pre-bound atomic-terminal context the planner-task terminal sites use.
+  const planCtx = buildPlanCtx(input, plannerTaskId, appendEvent);
   const rejectionHistory: PlannerRejectionFeedback[] = [...(input.seedRejections ?? [])];
   // The cross-loop convergence state — the SOLE loop bound (NOT a retry counter). A
   // `progress`/`velocity_defer` resets it; a `stalled` increments; N consecutive halts.
@@ -295,11 +308,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   let loopCount = 0;
 
   while (true) {
-    // PER-ITERATION BUDGET GATE (audit §3.7a): the enqueue-time gate only stops NEW
-    // work — an in-flight cohort would otherwise keep spending PAST the ceiling. Re-
-    // resolve the budget at the top of EVERY iteration so a run halts the instant its
-    // project crosses the ceiling (or the gate fails closed — unpriced spend). The halt
-    // PARKS the spec (requeueable); raising the ceiling + requeue resumes it.
+    // PER-ITERATION BUDGET GATE (audit §3.7a): stops an in-flight cohort the instant
+    // it crosses the ceiling (or the gate fails closed); halt PARKS the spec, requeueable.
     const budgetPause = await checkIterationBudget(input);
     if (budgetPause !== null) {
       await emitBudgetPause(input, appendEvent, plannerTaskId, budgetPause);
@@ -307,12 +317,16 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     }
     const windowOutcome = await checkWindowPreflight(input, appendEvent, plannerTaskId, loopCount, creditState);
     if (windowOutcome !== null) {
-      await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
-      await appendEvent("task.failed", { taskKind: "plan", failureKind: "window_exhausted" }, plannerTaskId);
+      // task #46: atomic FAILED terminal pair (row + `task.failed`) — same shape
+      // as the writer stage's `failureKind: "window_exhausted"` terminal.
+      await markPlannerFailed(planCtx, "window_exhausted");
       return await finalize({ ...windowOutcome, loopCount });
     }
     const plan = await runPlannerStage({
       pool: input.pool,
+      // task #21: thread the writer so the finalize guard's FAILED terminal pair
+      // rides ONE org-scoped transaction via `updateTaskWithEvent`.
+      writer: input.runStateWriter,
       costCtx,
       adapter: input.adapters.planner,
       spec: input.context,
@@ -328,8 +342,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     // Per-task inner loop: WRITER → FAST GATE → CHECKER, for every subtask in order.
     const sequence = await runSubtaskSequence({ input, costCtx, appendEvent, plan, plannerTaskId });
     if (sequence.kind === "window_exhausted") {
-      await markTaskDone(input.pool, plannerTaskId, "window_exhausted", input.runStateWriter);
-      await appendEvent("task.failed", { taskKind: "plan", failureKind: "window_exhausted" }, plannerTaskId);
+      await markPlannerFailed(planCtx, "window_exhausted");
       return await finalize({ ...sequence.outcome, loopCount });
     }
 
@@ -362,10 +375,8 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     });
     findings.push(...audit.findings);
 
-    // OPTIONAL POST-AUDITOR finding stages: the demo-run gate (policy-enabled) + the WS-D4
-    // design-oracle gate (runs whenever a design actor is wired AND a contract exists — no
-    // kill-switch). Both findings merge into the SAME triage input — a genuine
-    // design-fidelity gap re-drives the writer exactly like the demo/auditor.
+    // POST-AUDITOR findings: demo-run gate (policy-enabled) + WS-D4 design-oracle
+    // gate (wired actor + existing contract). Both merge into the SAME triage input.
     findings.push(
       ...(await runPostAuditFindingStages({
         pool: input.pool,
@@ -388,12 +399,10 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
       })),
     );
 
-    // critic-arc R1 #4 fix: every markTaskDone planner site below ALSO emits the
-    // matching `task.completed` (or `task.failed`) so the SUCCESS terminations don't
-    // leave the planner task row silent in the audit trail.
+    // critic-arc R1 #4 fix: SUCCESS terminations emit `task.completed` via the
+    // atomic terminal pair (task #46) so the planner row isn't silent on the audit trail.
     if (findings.length === 0) {
-      await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
-      await appendEvent("task.completed", { taskKind: "plan" }, plannerTaskId);
+      await markPlannerPassed(planCtx);
       return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs: [], loopCount });
     }
 
@@ -418,8 +427,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
 
     // TRIAGE → PASSED: every finding became a NEW spec (none kept here).
     if (triage.routing.outcome === "passed") {
-      await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
-      await appendEvent("task.completed", { taskKind: "plan" }, plannerTaskId);
+      await markPlannerPassed(planCtx);
       return await finalize({ kind: "passed", plannerTaskId, subtasks: plan.subtasks, newSpecs, loopCount });
     }
 
@@ -453,18 +461,18 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     convergenceState = convergence.state;
 
     if (convergence.decision === "halt") {
-      // HALT by the agent's INTELLIGENT escalation verdict (a genuine human decision/blocker/
-      // dead-end), NOT a count. The specific human-actionable reason is the agent's
-      // `escalationReason`; the broader `reasoning` is the evidence trail.
+      // HALT by the agent's INTELLIGENT escalation verdict (a human decision/blocker
+      // /dead-end), NOT a count. `escalationReason` is the human-actionable reason.
       const haltReason = convergence.escalationReason === "" ? convergence.reasoning : convergence.escalationReason;
       await appendEvent("convergence.stalled", {
         runId: input.context.runId,
         consecutiveStalls: convergence.state.consecutiveStalls,
         reason: haltReason,
       });
-      await markTaskDone(input.pool, plannerTaskId, "rejected_by_auditor", input.runStateWriter);
-      const failedPayload = { taskKind: "plan" as const, failureKind: "convergence_stalled", reason: haltReason };
-      await appendEvent("task.failed", failedPayload, plannerTaskId);
+      // task #46: atomic FAILED terminal pair; row lands `status=failed` with
+      // `failureKind=convergence_stalled` (was `done/rejected_by_auditor` + glued
+      // `task.failed` event; dashboard already treats both as "failed").
+      await markPlannerFailed(planCtx, "convergence_stalled", haltReason);
       return await finalize({
         kind: "convergence_stalled",
         loopCount,
@@ -475,8 +483,7 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     if (convergence.decision === "pass") {
       // Velocity policy: defer the mild kept leftovers as specs and ALLOW the pass.
       const deferred: NewSpecRequest[] = triage.routing.tasksHere.map(routedToNewSpec);
-      await markTaskDone(input.pool, plannerTaskId, "passed", input.runStateWriter);
-      await appendEvent("task.completed", { taskKind: "plan" }, plannerTaskId);
+      await markPlannerPassed(planCtx);
       return await finalize({
         kind: "passed",
         plannerTaskId,

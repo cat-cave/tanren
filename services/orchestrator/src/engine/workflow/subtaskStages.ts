@@ -39,6 +39,17 @@ export interface StageAppendEvent {
 
 export interface PlannerStageInput {
   pool: LoopQueryClient;
+  /**
+   * Route the planner task's atomic FAILED terminal write (task #21) through the
+   * writer seam when wired. The finalize guard's `markTaskFailedIfRunningWithEvent`
+   * commits the row UPDATE + the `task.failed` event in ONE org-scoped transaction
+   * through `RunStateWriter.updateTaskWithEvent`; without this seam the guard falls
+   * through to the no-writer split path (the row UPDATE + a separate append), which
+   * strands the planner row in `running` if the event append fails between the two.
+   * Production wires `input.runStateWriter` here from `runSubtaskLoop` — parity with
+   * the writer / checker / auditor stages, which already thread the seam.
+   */
+  writer?: RunStateWriter;
   costCtx: SubtaskCostContext;
   adapter: AnswererAdapter<PlanAnswer>;
   spec: PlannerSpecContext;
@@ -60,8 +71,14 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
   // `markTaskFailedIfRunning` in the guard is the idempotency primitive — a row a
   // clean branch already moved to `done` is left alone, the loud signal is the
   // `task.failed` event on the timeline.
+  //
+  // task #21: thread `writer` through so the guard's row UPDATE + `task.failed`
+  // event ride ONE org-scoped transaction (`markTaskFailedIfRunningWithEvent` via
+  // `RunStateWriter.updateTaskWithEvent`) — atomicity parity with the writer /
+  // checker / auditor stages. Absent (unit paths) ⇒ the no-writer split fallback.
   return await runStageBodyWithFinalizeGuard({
     pool: args.pool,
+    ...(args.writer !== undefined && { writer: args.writer }),
     appendEvent: args.appendEvent,
     taskId: args.plannerTaskId,
     taskKind: "plan",
