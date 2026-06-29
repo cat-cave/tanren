@@ -36,8 +36,11 @@ export const DagSpecRedrivenPayload = z
     // DIFFERENT failure code OR a DIFFERENT produced work (PROGRESS) resets it to 1, so the
     // loop is UNBOUNDED while it keeps changing the failure or the work. The spec escalates
     // ONLY once this exceeds 1 (a proven fixed point — identical failure + identical work,
-    // no new information) — NOT at any hardcoded count.
-    consecutiveSameFailure: z.number().int().positive(),
+    // no new information) — NOT at any hardcoded count. Nonnegative (not strictly positive) to
+    // admit the `prober_resume` source's `0` value (a window-pressure resume is NOT a structural
+    // re-drive and is filtered out of the convergence history reader entirely; the slot is
+    // present for payload-shape uniformity only).
+    consecutiveSameFailure: z.number().int().nonnegative(),
     // The WORK signature of the run that just failed (the produced PR-head / commit sha when
     // observable) — the second fixed-point axis: identical failure but DIFFERENT work is
     // PROGRESS (the agent did something different). Absent when the run produced no
@@ -48,6 +51,20 @@ export const DagSpecRedrivenPayload = z
     // hot-loop — grows with the fixed-point streak. The backoff (NOT a counter) is the hot-loop
     // guard while the loop is unbounded.
     backoffSeconds: z.number().int().nonnegative(),
+    // SOURCE discriminator (audit finding #13): a `dag.spec.redriven` is emitted from TWO
+    // distinct call sites that MUST NOT pollute each other's convergence history:
+    //   - "workflow_redrive" (the default; absent on legacy rows) — the disposition applier's
+    //     real structural re-drive: a writer/checker/auditor failure routed through the
+    //     `re_drive` bucket. THIS is what the convergence detector reads to find a fixed point.
+    //   - "prober_resume" — `pausedRunResumeProber.resumeOne`'s spec flip on a window-pressure
+    //     resume. It carries a synthetic `failureCode: "usage_limit"` only because the spec
+    //     pair-schema requires SOME code for an `open` flip; the convergence reader MUST
+    //     skip these rows or a sequence (workflow_redrive[internal], prober_resume[usage_limit],
+    //     workflow_redrive[internal]) reads as "a new state appeared," masking a genuine cycle.
+    //     The reader filters by `payload.source === "prober_resume"`.
+    // OPTIONAL so existing committed rows (which carry no `source`) parse cleanly; absent ⇒
+    // treat as the default `workflow_redrive`.
+    source: z.enum(["workflow_redrive", "prober_resume"]).optional(),
   })
   .strict();
 export type DagSpecRedrivenPayload = z.infer<typeof DagSpecRedrivenPayload>;

@@ -57,6 +57,9 @@ export const strandSensitivityRules: SensitivityRule[] = [
     ["consecutiveSameFailure", "public"],
     ["workSignature", "public"],
     ["backoffSeconds", "public"],
+    // Audit finding #13: discriminator that excludes prober resumes from the
+    // structural-redrive convergence history. Closed vocabulary, no secrets.
+    ["source", "public"],
   ]),
   // dag.spec.attention_resolved: an operator resolved a needs_attention escalation
   // and re-queued the spec. All fields are public — the spec id is run lineage, the

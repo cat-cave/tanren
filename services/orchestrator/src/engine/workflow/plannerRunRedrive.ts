@@ -73,7 +73,9 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
   return async (facts) => {
     try {
       return await runWithOrgScope(pool, facts.orgId, async (client) => {
-        const result = await client.query<{ payload: { failureCode?: string; workSignature?: string } }>(
+        const result = await client.query<{
+          payload: { failureCode?: string; workSignature?: string; source?: string };
+        }>(
           `SELECT payload FROM events
              WHERE spec_id = $1 AND event_type = 'dag.spec.redriven'
              ORDER BY ts ASC, id ASC`,
@@ -83,10 +85,20 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
         // work signature) and append the CURRENT attempt, then route the escalation decision
         // through the shared convergence judge (below). 1 ⇒ a proven fixed point (the authority
         // escalates); 0 ⇒ progress (a changing failure / work, or a not-yet-cyclic repeat).
-        const history: AttemptSignature[] = result.rows.map((row) => ({
-          failureSignature: row.payload.failureCode ?? "",
-          ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
-        }));
+        //
+        // Audit finding #13: `dag.spec.redriven` rows whose `payload.source === "prober_resume"`
+        // are the window-pause prober's atomic spec flip from `in_flight` → `open`; they carry
+        // a synthetic `failureCode: "usage_limit"` only because the spec pair-schema requires
+        // a code for an `open` flip. Folding them into the convergence history reads as "a new
+        // state appeared between two structural re-drives" — exactly the `internal, usage_limit,
+        // internal` sequence that defeats cycle detection. Filter them out at assembly time so
+        // a genuinely stuck spec is escalated regardless of intervening pause/resume churn.
+        const history: AttemptSignature[] = result.rows
+          .filter((row) => row.payload.source !== "prober_resume")
+          .map((row) => ({
+            failureSignature: row.payload.failureCode ?? "",
+            ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
+          }));
         history.push({
           failureSignature: facts.code,
           ...(facts.workSignature !== undefined && { workSignature: facts.workSignature }),
