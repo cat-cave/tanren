@@ -89,6 +89,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.completed",
           payload: { taskKind: "write" } as never,
         },
@@ -124,6 +125,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.failed",
           payload: { taskKind: "write", failureKind: "crashed", message: "boom" } as never,
         },
@@ -165,6 +167,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.completed",
           payload: { taskKind: 42 } as never,
         },
@@ -196,6 +199,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.failed",
           payload: { taskKind: "write", failureKind: "crashed" } as never,
         },
@@ -228,6 +232,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.completed",
           payload: { taskKind: "write" } as never,
         },
@@ -265,6 +270,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
         taskId,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "task.completed" as const,
         payload: { taskKind: "write" } as never,
       },
@@ -309,6 +315,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
         taskId,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "task.failed" as const,
         payload: { taskKind: "write", failureKind: "crashed", message: "boom" } as never,
       },
@@ -354,6 +361,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.completed",
           payload: { taskKind: "write" } as never,
         },
@@ -369,6 +377,7 @@ describeDb("markTaskWithEvent atomic terminal-pair (task #39) — real PG, enfor
           taskId,
           specId: SPEC,
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "task.failed",
           payload: { taskKind: "write", failureKind: "crashed", message: "loud" } as never,
         },
@@ -411,7 +420,7 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
   it.each(TERMINAL_OK)("valid pair: transition=%s eventType=%s passes", (transition, eventType) => {
     const result = terminalPairSchema.safeParse({
       task: { taskId: "t", orgId: ORG, transition, outcome: "passed", failureKind: "crashed" },
-      event: { projectId: PROJECT, eventType, payload: { taskKind: "write" } },
+      event: { projectId: PROJECT, orgId: ORG, eventType, payload: { taskKind: "write" } },
     });
     expect(result.success).toBe(true);
   });
@@ -454,6 +463,7 @@ describe("terminalPairSchema — typed pairing matrix (task #39)", () => {
         {
           runId: "r",
           projectId: PROJECT,
+          orgId: ORG,
           eventType: "review.approved",
           payload: { prUrl: "https://github.com/o/r/pull/1", prNumber: 1 },
           idempotencyKey: "r:review:approved",

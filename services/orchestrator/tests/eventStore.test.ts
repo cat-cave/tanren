@@ -18,6 +18,7 @@ describe("event store", () => {
       runId: "run_1",
       specId: "spec_1",
       projectId: "project_1",
+      orgId: "org_test",
       eventType: "hello.started",
       payload: {},
     });
@@ -33,6 +34,7 @@ describe("event store", () => {
         runId: "run_1",
         specId: "spec_1",
         projectId: "project_1",
+        orgId: "org_test",
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         eventType: "made_up.event" as never,
         payload: {} as never,
@@ -78,6 +80,7 @@ describe("PgEventStore — RLS R2 org-scope routing (inert)", () => {
     runId: "run_1",
     specId: "spec_1",
     projectId: "project_1",
+    orgId: "org_acme",
     eventType: "run.started" as const,
     payload: { status: "running" },
   };

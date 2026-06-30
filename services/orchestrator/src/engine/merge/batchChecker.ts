@@ -213,6 +213,7 @@ export class PgBatchChecker implements BatchChecker {
       eventStore,
       governancePosture,
       integrationRef,
+      orgId,
       projectId,
       tailSpecId,
     } as const;

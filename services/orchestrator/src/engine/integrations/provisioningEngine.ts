@@ -271,6 +271,7 @@ export async function provisionCapability(
   const secretRefNames = Object.values(artifact.secretRefs ?? {});
   await deps.events.append({
     projectId: request.projectId,
+    orgId: request.orgId,
     eventType: "integration.provisioned",
     payload: {
       capability: request.capability,

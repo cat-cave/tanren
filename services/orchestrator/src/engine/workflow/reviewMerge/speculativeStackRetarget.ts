@@ -144,6 +144,8 @@ async function retargetStackWalk(args: SpeculativeRetargetArgs & { defaultBranch
       runId: args.context.runId,
       specId: args.context.specId,
       projectId: args.context.projectId,
+      // The run's explicit tenant key (v68 fix) the eventStore.append stamps directly.
+      orgId: args.context.orgId,
       taskId: args.taskId,
       eventType: "merge.retargeted",
       payload: {

@@ -21,13 +21,22 @@ import type { MergeQueueEventEmitter } from "./coordinator.js";
  * audit RC-4 #3). Single-sourcing the payloads keeps the two paths from drifting.
  */
 export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter {
-  constructor(private readonly store: EventStore) {}
+  /**
+   * @param store The resolved event store (org-scoped, in-transaction, or plane-split writer).
+   * @param orgId The resolved project org — stamped onto every emitted event so the row
+   *   carries the explicit tenant key (the v68 fix; no derive-from-project subquery).
+   */
+  constructor(
+    private readonly store: EventStore,
+    private readonly orgId: string,
+  ) {}
 
   async emitAdvanced(input: { projectId: string; entry: MergeQueueEntry; queueDepth: number }): Promise<void> {
     await this.store.append({
       runId: input.entry.runId,
       specId: input.entry.specId,
       projectId: input.projectId,
+      orgId: this.orgId,
       eventType: "merge.queue.advanced",
       payload: {
         prUrl: input.entry.prUrl,
@@ -49,6 +58,7 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
       runId: input.entry.runId,
       specId: input.entry.specId,
       projectId: input.projectId,
+      orgId: this.orgId,
       eventType: "merge.dequeued",
       payload: {
         prUrl: input.entry.prUrl,
@@ -72,6 +82,7 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
       runId: input.entry.runId,
       specId: input.entry.specId,
       projectId: input.projectId,
+      orgId: this.orgId,
       eventType: "merge.queue.infra_blocked",
       payload: {
         prUrl: input.entry.prUrl,
@@ -115,8 +126,9 @@ export class PgMergeQueueEventEmitter implements MergeQueueEventEmitter {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) return;
+    // v68 fix: pass `orgId` into the emitter so every event.append stamps it directly.
     const writer = this.runStateWriter;
-    await runWithJobOrgId(orgId, () => work(new ClientBoundMergeQueueEventEmitter(writer)));
+    await runWithJobOrgId(orgId, () => work(new ClientBoundMergeQueueEventEmitter(writer, orgId)));
   }
 
   async emitAdvanced(input: { projectId: string; entry: MergeQueueEntry; queueDepth: number }): Promise<void> {

@@ -106,6 +106,7 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
         runId: RUN_A,
         specId: SPEC_A,
         projectId: PROJECT_A,
+        orgId: ORG_A,
         eventType: "run.started",
         payload: { status: "running" },
       }),
@@ -226,6 +227,7 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
         runId: RUN_A,
         specId: SPEC_A,
         projectId: PROJECT_A,
+        orgId: ORG_A,
         eventType: "run.completed",
         payload: { status: "completed", outcome: "scoped" },
       });
@@ -244,6 +246,7 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
         runId: RUN_A,
         specId: SPEC_A,
         projectId: PROJECT_A,
+        orgId: ORG_A,
         eventType: "run.completed",
         payload: { status: "completed", outcome: "pool" },
       }),
@@ -252,6 +255,59 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
     // Only the in-scope append landed (owner pool = RLS-exempt ground truth).
     const after = await countEvents(ownerPool, RUN_A);
     expect(after - before).toBe(1);
+  });
+
+  // (v68 fix) An ORG-SCOPED append carries NO projectId — the F2 per-fragment
+  // authoring DAG fires BEFORE `createProject` in derive, so its events have no
+  // project row to derive `org_id` from. The pre-fix store used
+  // `(SELECT org_id FROM projects WHERE project_id = $4)` to compute org_id; with
+  // no projectId the subquery returned no rows, org_id landed NULL, and RLS
+  // denied (apex v68 halt: `interview_derive_failed: new row violates row-level
+  // security policy for table "events"`). The fix: the caller supplies `orgId`
+  // explicitly; the INSERT uses that parameter directly. This test asserts that
+  // an org-scoped append (no projectId) lands cleanly under the org's scope.
+  it("(v68 fix) accepts an ORG-SCOPED append (no projectId) and the row lands under the org's scope", async () => {
+    // Fragment-authoring events fire OUTSIDE any project; the runId is a
+    // placeholder string the F2 emitter uses ("fragment-authoring"). Mirror that
+    // shape here exactly, but use a unique run id so the count assertion does
+    // not collide with the run.completed event the prior test appended on RUN_A.
+    const placeholderRunId = "fragment-authoring-v68";
+    await runWithOrgScope(runtimePool, ORG_A, async (client) => {
+      await new PgEventStore(runtimePool).append({
+        orgId: ORG_A,
+        runId: placeholderRunId,
+        eventType: "fragment.authoring.started",
+        payload: {
+          orgId: ORG_A,
+          fragmentId: "frag_v68",
+          kind: "runtime",
+          label: "runtime-python",
+        },
+      });
+      // VISIBLE in the SAME org-scoped transaction → the INSERT used that client.
+      const within = await client.query<{ n: string }>(
+        "SELECT count(*)::text AS n FROM events WHERE run_id = $1 AND event_type = 'fragment.authoring.started'",
+        [placeholderRunId],
+      );
+      expect(Number(within.rows[0]?.n)).toBe(1);
+      // The row carries the EXPLICIT org_id we passed (NOT NULL on the column,
+      // and NOT derived via a subquery on a non-existent project).
+      const orgRow = await client.query<{ org_id: string | null; project_id: string | null }>(
+        "SELECT org_id, project_id FROM events WHERE run_id = $1 AND event_type = 'fragment.authoring.started'",
+        [placeholderRunId],
+      );
+      expect(orgRow.rows[0]?.org_id).toBe(ORG_A);
+      // And project_id is genuinely NULL (the column is nullable on the events table).
+      expect(orgRow.rows[0]?.project_id).toBeNull();
+    });
+
+    // Org B's scope must NOT see org A's row (RLS denies under enforced policies).
+    await runWithOrgScope(runtimePool, ORG_B, async (client) => {
+      const visible = await client.query<{ n: string }>("SELECT count(*)::text AS n FROM events WHERE run_id = $1", [
+        placeholderRunId,
+      ]);
+      expect(Number(visible.rows[0]?.n)).toBe(0);
+    });
   });
 });
 

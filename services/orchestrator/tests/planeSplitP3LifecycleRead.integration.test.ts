@@ -121,6 +121,7 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
         runId: RUN,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "github.pr.created",
         payload: {
           repoUrl: "https://example.com/r.git",
@@ -134,6 +135,7 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
         runId: RUN,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "gate.verdict",
         payload: {
           when: "pre_merge",
@@ -148,6 +150,7 @@ describeDb("plane-split P3 — the DagWalker lifecycle read uses the system pool
         runId: RUN,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "merge.completed",
         payload: {
           prUrl: "https://example.com/r/pull/1",

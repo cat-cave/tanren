@@ -234,6 +234,7 @@ function buildAcceptAppendEvent(
         ...(taskId === undefined ? {} : { taskId }),
         specId: ids.specId,
         projectId: ids.projectId,
+        orgId,
         eventType,
         payload,
       });

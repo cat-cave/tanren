@@ -32,9 +32,14 @@ class PriorityPool {
       const id = String(params[0]);
       return this.projects.has(id) ? { rows: [{ project_id: id }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
+    // v68 fix: createSpec calls loadProjectOrgId for the spec's NOT NULL org_id.
+    if (sql.startsWith("SELECT org_id FROM projects")) {
+      const id = String(params[0]);
+      return this.projects.has(id) ? { rows: [{ org_id: "org_p1b" }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }
     if (sql.startsWith("INSERT INTO specs")) {
-      // params[7] is the `priority` bind.
-      this.specs.set(String(params[0]), { priority: String(params[7]) });
+      // params[8] is the `priority` bind (v68 fix: org_id at $3 shifts +1).
+      this.specs.set(String(params[0]), { priority: String(params[8]) });
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };

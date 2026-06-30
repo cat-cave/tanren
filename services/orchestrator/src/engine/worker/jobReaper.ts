@@ -80,11 +80,24 @@ async function emitLeaseExpiredEvent(pool: pg.Pool, eventStore: EventStore, job:
   if (context === undefined) {
     return false;
   }
+  // v68 fix: events.org_id is NOT NULL + the eventStore now requires an explicit
+  // `orgId`. A null-org reaped run (system / null-org job) has no org to scope the
+  // event under — skip the append loudly here (LOG + count as a write-failure
+  // sibling) rather than fake an org. The non-null path stamps it directly.
+  if (context.orgId === null) {
+    log.warn(
+      "lease-expired event SKIPPED — reaped run has no org (system/null-org job); RLS-scoped event store cannot stamp org_id",
+      { jobId: job.id, runId: job.runId, specId: context.specId, projectId: context.projectId },
+    );
+    return false;
+  }
+  const orgId = context.orgId;
   const append = (): Promise<void> =>
     eventStore.append({
       runId: job.runId!,
       specId: context.specId,
       projectId: context.projectId,
+      orgId,
       eventType: "job.lease_expired",
       payload: {
         jobId: job.id,
@@ -99,11 +112,10 @@ async function emitLeaseExpiredEvent(pool: pg.Pool, eventStore: EventStore, job:
     });
   // RLS R3a-worker: scope the lease-expiry event to the reaped run's org via the
   // per-job org-id (the default PgEventStore then opens a short org-scoped txn
-  // for the INSERT). A system / null-org job (org_id NULL) appends on the pool —
-  // inert. A failed append is LOUD (logged + counted, r6 §1): losing this event
-  // silently hides a crashing worker from the operator.
+  // for the INSERT). A failed append is LOUD (logged + counted, r6 §1): losing
+  // this event silently hides a crashing worker from the operator.
   try {
-    await (context.orgId === null ? append() : runWithJobOrgId(context.orgId, append));
+    await runWithJobOrgId(orgId, append);
     return false;
   } catch (error) {
     log.error(

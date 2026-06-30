@@ -61,6 +61,9 @@ export interface EntityMergeFirstPassHook {
 export interface IntentPreservingResolverDeps {
   /** The run's project + the merging spec + its intent (captured per-run). */
   projectId: string;
+  /** The run's REQUIRED tenant key (v68 fix). Stamped on every eventStore.append
+   * directly rather than re-derived via a SELECT-join — a null org_id row trips RLS. */
+  orgId: string;
   mergingSpecIntent: SpecIntent;
   eventStore: EventStore;
   /** Identify the other conflicting spec + the DAG edge (DAG provenance). */
@@ -164,6 +167,7 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
             runId: context.runId,
             specId: deps.mergingSpecIntent.specId,
             projectId: deps.projectId,
+            orgId: deps.orgId,
             eventType: "merge.conflict.entity_merged",
             payload: {
               prUrl: context.prUrl,
@@ -203,6 +207,7 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       runId: context.runId,
       specId: deps.mergingSpecIntent.specId,
       projectId: deps.projectId,
+      orgId: deps.orgId,
       eventType: "merge.conflict.resolving",
       payload: {
         prUrl: context.prUrl,
@@ -287,6 +292,7 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       runId: context.runId,
       specId: deps.mergingSpecIntent.specId,
       projectId: deps.projectId,
+      orgId: deps.orgId,
       eventType: "merge.conflict.resolved",
       payload: {
         prUrl: context.prUrl,
@@ -360,6 +366,7 @@ async function routeIrreconcilable(
     runId: context.runId,
     specId: deps.mergingSpecIntent.specId,
     projectId: deps.projectId,
+    orgId: deps.orgId,
     eventType: "merge.conflict.irreconcilable",
     payload: {
       prUrl: context.prUrl,

@@ -35,6 +35,8 @@ export interface BatchNodeGateClosureDeps {
   governancePosture: GovernancePosture;
   /** The integration ref the batch verdict reports (the local bookmark name). */
   integrationRef: string;
+  /** The project's tenant key — stamped onto every gate event for RLS (v68 fix). */
+  orgId: string;
   projectId: string;
   tailSpecId: string;
 }
@@ -117,6 +119,7 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
       appendEvent: async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
         await deps.eventStore.append({
           projectId: deps.projectId,
+          orgId: deps.orgId,
           specId: deps.tailSpecId,
           ...(taskId !== undefined && { taskId }),
           eventType,

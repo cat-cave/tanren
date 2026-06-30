@@ -43,6 +43,10 @@ export interface PublishDraftPullRequestInput {
   runId: string;
   specId: string;
   projectId: string;
+  /** v68 fix: the run's tenant key (NOT NULL on runs.org_id). Stamped on every
+   *  appended event (`credential.requested`, `github.pr.created`, etc) — events.org_id
+   *  is NOT NULL + AppendEventInput now requires it explicitly. */
+  appendEventOrgId: string;
   workspacePath: string;
   repoUrl: string;
   targetBranch: string;
@@ -234,6 +238,9 @@ export async function publishDraftPullRequestForRun(
   return await publishDraftPullRequest({
     pool: input.pool,
     eventStore: input.eventStore,
+    // v68 fix: tenant key (runs.org_id NOT NULL); stamped on every appended event.
+    orgId: context.orgId,
+    appendEventOrgId: context.orgId,
     secrets: input.secrets,
     githubHttp: input.githubHttp,
     ssh: input.ssh,
@@ -273,10 +280,13 @@ export async function publishDraftPullRequestForRun(
 
 async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promise<DraftPrRunContext | undefined> {
   const result = await pool.query(
+    // v68 fix: select runs.org_id (NOT NULL) so the operator PR-open route stamps
+    // events.org_id directly rather than via the prior derive-from-project subquery.
     `SELECT
        r.run_id,
        r.spec_id,
        r.project_id,
+       r.org_id,
        r.branch,
        r.ancestor_stack,
        p.repo_url,
@@ -314,6 +324,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     runId: row.run_id,
     specId: row.spec_id,
     projectId: row.project_id,
+    orgId: row.org_id,
     branch: row.branch,
     ...(ancestorStack.length > 0 && { ancestorStack }),
     repoUrl: row.repo_url,
@@ -351,13 +362,20 @@ function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string |
 }
 
 function eventContext(input: PublishDraftPullRequestInput) {
-  return { runId: input.runId, specId: input.specId, projectId: input.projectId };
+  return {
+    runId: input.runId,
+    specId: input.specId,
+    projectId: input.projectId,
+    orgId: input.appendEventOrgId,
+  };
 }
 
 interface DraftPrRunContext {
   runId: string;
   specId: string;
   projectId: string;
+  /** v68 fix: the run's tenant key (NOT NULL on runs.org_id). */
+  orgId: string;
   branch: string;
   /** §3.1: the ordered ancestor stack (the stacked-PR base source), when speculative. */
   ancestorStack?: AncestorStack;
@@ -378,6 +396,7 @@ interface DraftPrRunRow {
   run_id: string;
   spec_id: string;
   project_id: string;
+  org_id: string;
   branch: string;
   ancestor_stack: unknown;
   repo_url: string;

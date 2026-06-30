@@ -156,10 +156,12 @@ export async function runStageBodyWithFinalizeGuard<T>(opts: {
   taskId: string;
   taskKind: string;
   // Lineage for the ATOMIC terminal-row + `task.failed` pair (task #39): the
-  // event's projectId is mandatory for `PgEventStore.append`'s org-derivation;
-  // runId + specId are the run-lineage columns. The eventEnvelope groups them
-  // so adding new fields to the atomic terminal pair only touches ONE place.
-  eventLineage: { runId: string; specId: string; projectId: string };
+  // event's tenant key (orgId) + project/run/spec ids ride together on the
+  // envelope so adding new fields to the atomic terminal pair only touches ONE
+  // place. v68 fix: orgId is now required — the prior derive-from-project
+  // subquery dropped NULLs into events.org_id and tripped RLS (see
+  // {@link AppendEventInput.orgId}).
+  eventLineage: { runId: string; specId: string; projectId: string; orgId: string };
   body: () => Promise<T>;
 }): Promise<T> {
   try {
@@ -170,6 +172,7 @@ export async function runStageBodyWithFinalizeGuard<T>(opts: {
       runId: opts.eventLineage.runId,
       specId: opts.eventLineage.specId,
       projectId: opts.eventLineage.projectId,
+      orgId: opts.eventLineage.orgId,
       taskKind: opts.taskKind,
     };
     // ATOMIC terminal-row + terminal-event pair (task #39): the

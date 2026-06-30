@@ -123,6 +123,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
+    orgId: context.orgId,
     taskId,
     eventType: "task.started",
     payload: { taskKind: "review" },
@@ -136,6 +137,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
+    orgId: context.orgId,
     taskId,
     eventType: "github.pr.ready",
     payload: { prUrl: context.prUrl, prNumber: pr.pullNumber },
@@ -144,6 +146,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
+    orgId: context.orgId,
     taskId,
     eventType: "review.requested",
     payload: { prUrl: context.prUrl, prNumber: pr.pullNumber },
@@ -161,6 +164,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
       runId: context.runId,
       specId: context.specId,
       projectId: context.projectId,
+      orgId: context.orgId,
       taskId,
       eventType: "review.auto_approved",
       payload: { prUrl: context.prUrl, prNumber: pr.pullNumber },
@@ -296,6 +300,8 @@ async function finalizeReviewTask(
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
+    // org_id is the run's explicit tenant key (v68 fix) the eventStore.append stamps directly.
+    orgId: context.orgId,
     taskId: result.taskId,
   };
   if (result.verdict === "approved" || result.verdict === "changes_requested") {

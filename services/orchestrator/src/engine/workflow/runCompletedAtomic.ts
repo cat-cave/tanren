@@ -16,13 +16,18 @@ export async function finalizeRunCompletedAtomic(
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
 ): Promise<void> {
   const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
-  const evt = {
+  // events.org_id is NOT NULL + AppendEventInput requires explicit `orgId` (v68
+  // fix): both atomic-applier paths below carry it on the event so the row lands
+  // tenant-scoped. The unit-test fallback at the bottom (no-org / no-pool) emits
+  // via the appendEvent closure, which adds orgId itself.
+  const evt = (eventOrgId: string) => ({
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
+    orgId: eventOrgId,
     eventType: "run.completed" as const,
     payload: { status: "completed", outcome: "ok" },
-  };
+  });
   if (input.runStateWriter !== undefined && orgId !== undefined) {
     await input.runStateWriter.finalizeRunWithEvent({
       finalize: {
@@ -32,7 +37,7 @@ export async function finalizeRunCompletedAtomic(
         outcome: "ok",
         fromStatuses: ["running", "queued"],
       },
-      event: evt,
+      event: evt(orgId),
     });
     return;
   }
@@ -45,7 +50,7 @@ export async function finalizeRunCompletedAtomic(
       fromStatuses: ["running", "queued"],
     };
     await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
-      await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: evt });
+      await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: evt(orgId) });
     });
     return;
   }
@@ -56,5 +61,5 @@ export async function finalizeRunCompletedAtomic(
     "UPDATE runs SET status = 'completed', outcome = 'ok', ended_at = now() WHERE run_id = $1",
     [context.runId],
   );
-  await appendEvent(evt.eventType, evt.payload);
+  await appendEvent("run.completed", { status: "completed", outcome: "ok" });
 }

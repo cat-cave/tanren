@@ -42,6 +42,9 @@ const finalizeRunWithEventRouteShape = z
         taskId: z.string().min(1).optional(),
         specId: z.string().optional(),
         projectId: z.string(),
+        // v68 fix: AppendEventInput now carries an explicit orgId — accept it on
+        // the route shape so HttpRunStateWriter's payload doesn't trip strict.
+        orgId: z.string().optional(),
         eventType: z.string().min(1),
         payload: z.record(z.string(), z.unknown()),
       })
@@ -68,6 +71,8 @@ const updateSpecWithEventRouteShape = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
+        // v68 fix: AppendEventInput now carries explicit orgId.
+        orgId: z.string().optional(),
         eventType: z.string().min(1),
         payload: z.record(z.string(), z.unknown()),
       })
@@ -213,6 +218,8 @@ const resumePausedRunAtomicRouteShape = z
         taskId: z.string().min(1).optional(),
         specId: z.string().optional(),
         projectId: z.string(),
+        // v68 fix: AppendEventInput now carries explicit orgId.
+        orgId: z.string().optional(),
         eventType: z.string().min(1),
         payload: z.record(z.string(), z.unknown()),
       })
@@ -231,6 +238,8 @@ const resumePausedRunAtomicRouteShape = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
+        // v68 fix: AppendEventInput now carries explicit orgId.
+        orgId: z.string().optional(),
         eventType: z.string().min(1),
         payload: z.record(z.string(), z.unknown()),
       })

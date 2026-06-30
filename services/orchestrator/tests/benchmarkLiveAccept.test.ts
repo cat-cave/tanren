@@ -131,9 +131,9 @@ function fakePool(opts: { mergeSha?: string; runVisible?: boolean }): {
       // raw INSERT phrase, which the single-event-writer architecture check
       // (correctly) forbids outside the event store itself.
       if (/events \(run_id/u.test(sql)) {
-        // params: [runId, taskId, specId, projectId, eventType, payloadJson]
-        const eventType = String(params?.[4]);
-        const payload = JSON.parse(String(params?.[5]));
+        // v68: [runId, taskId, specId, projectId, orgId, eventType, payloadJson]
+        const eventType = String(params?.[5]);
+        const payload = JSON.parse(String(params?.[6]));
         eventInserts.push({ eventType, payload });
         return { rows: [], rowCount: 1 };
       }

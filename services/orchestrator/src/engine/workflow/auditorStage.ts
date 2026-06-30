@@ -135,7 +135,12 @@ export async function runAuditorStage(args: AuditorStageInput): Promise<AuditorS
     writer: args.writer,
     taskId: auditorTaskId,
     taskKind: "audit",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: {
+      runId: args.runId,
+      specId: args.costCtx.specId,
+      projectId: args.costCtx.projectId,
+      orgId: args.costCtx.orgId,
+    },
     body: () => runAuditorTerminalBlock(args, auditorTaskId, result, startedAt),
   });
 }
@@ -184,6 +189,10 @@ function auditorEventEnvelope(args: AuditorStageInput) {
     runId: args.runId,
     specId: args.costCtx.specId,
     projectId: args.costCtx.projectId,
+    // The run's tenant key (from the CostRecordContext; NOT NULL on `runs.org_id`).
+    // Required on TerminalTaskEventEnvelope so every routed terminal event carries
+    // org_id explicitly (v68 fix; see {@link AppendEventInput.orgId}).
+    orgId: args.costCtx.orgId,
     taskKind: "audit",
   };
 }

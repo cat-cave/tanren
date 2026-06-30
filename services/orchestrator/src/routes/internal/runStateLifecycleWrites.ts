@@ -182,6 +182,8 @@ const priorEventRouteShape = z
     taskId: z.string().min(1).optional(),
     specId: z.string().min(1).optional(),
     projectId: z.string().min(1),
+    // v68 fix: AppendEventInput now carries explicit orgId.
+    orgId: z.string().optional(),
     eventType: z.string().min(1),
     payload: z.record(z.string(), z.unknown()),
     idempotencyKey: z.string().min(1),
@@ -206,6 +208,8 @@ const updateTaskWithEventRouteShape = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
+        // v68 fix: AppendEventInput now carries explicit orgId.
+        orgId: z.string().optional(),
         eventType: z.string().min(1),
         payload: z.record(z.string(), z.unknown()),
       })

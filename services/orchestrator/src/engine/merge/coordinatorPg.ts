@@ -450,7 +450,7 @@ export class PgMergeSettleTransaction implements MergeSettleTransaction {
       throw new Error(`cannot settle merge queue for project ${projectId}: no resolvable org`);
     }
     await runWithOrgScope(this.pool, orgId, async (client) => {
-      const events = new ClientBoundMergeQueueEventEmitter(new PgEventStore(client));
+      const events = new ClientBoundMergeQueueEventEmitter(new PgEventStore(client), orgId);
       // A queue facade that delegates to the model but routes the ONE settle write
       // (`markDequeued`) onto THIS transaction's client. Every other method delegates
       // verbatim — none is invoked inside the settle unit, but delegating keeps the

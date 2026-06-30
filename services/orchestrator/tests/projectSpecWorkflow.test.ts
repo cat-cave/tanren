@@ -265,12 +265,10 @@ class ContractPool {
       this.projects.set(project.projectId, project);
       return { rows: [], rowCount: 1 };
     }
-    if (sql.startsWith("SELECT project_id FROM projects")) {
+    if (sql.startsWith("SELECT project_id FROM projects") || sql.startsWith("SELECT org_id FROM projects")) {
       const project = this.projects.get(String(params[0]));
-      return {
-        rows: project === undefined ? [] : [{ project_id: project.projectId }],
-        rowCount: project === undefined ? 0 : 1,
-      };
+      const col = sql.startsWith("SELECT org_id") ? { org_id: "org_test" } : { project_id: project?.projectId };
+      return { rows: project === undefined ? [] : [col], rowCount: project === undefined ? 0 : 1 };
     }
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id = $1 AND spec_id = ANY")) {
       return this.selectSpecsForProject(String(params[0]), params[1] as string[]);
@@ -353,27 +351,25 @@ class ContractPool {
     if (spec === undefined || project === undefined) {
       return { rows: [], rowCount: 0 };
     }
-    return {
-      rows: [
-        {
-          project_id: project.projectId,
-          name: project.name,
-          repo_url: project.repoUrl,
-          default_branch: project.defaultBranch,
-          runner_image: project.runnerImage,
-          allocator: project.allocator,
-          config: project.config,
-          spec_id: spec.specId,
-          title: spec.title,
-          description: spec.description,
-          acceptance_criteria: spec.acceptanceCriteria,
-          depends_on: spec.dependsOn,
-          status: spec.status,
-          priority: spec.priority,
-        },
-      ],
-      rowCount: 1,
+    const row = {
+      project_id: project.projectId,
+      project_org_id: "org_test",
+      spec_org_id: "org_test",
+      name: project.name,
+      repo_url: project.repoUrl,
+      default_branch: project.defaultBranch,
+      runner_image: project.runnerImage,
+      allocator: project.allocator,
+      config: project.config,
+      spec_id: spec.specId,
+      title: spec.title,
+      description: spec.description,
+      acceptance_criteria: spec.acceptanceCriteria,
+      depends_on: spec.dependsOn,
+      status: spec.status,
+      priority: spec.priority,
     };
+    return { rows: [row], rowCount: 1 };
   }
 }
 
@@ -448,12 +444,12 @@ function specFromParams(params: unknown[]): SpecRow {
   return {
     specId: String(params[0]),
     projectId: String(params[1]),
-    title: String(params[2]),
-    description: String(params[3]),
-    acceptanceCriteria: JSON.parse(String(params[4])) as string[],
-    dependsOn: params[5] as string[],
-    status: String(params[6]),
-    priority: String(params[7]),
+    title: String(params[3]),
+    description: String(params[4]),
+    acceptanceCriteria: JSON.parse(String(params[5])) as string[],
+    dependsOn: params[6] as string[],
+    status: String(params[7]),
+    priority: String(params[8]),
   };
 }
 
@@ -462,8 +458,8 @@ function runFromParams(params: unknown[]): RunRow {
     runId: String(params[0]),
     specId: String(params[1]),
     projectId: String(params[2]),
-    trigger: String(params[3]),
-    branch: String(params[4]),
+    trigger: String(params[4]),
+    branch: String(params[5]),
     status: "queued",
   };
 }
@@ -494,7 +490,7 @@ function eventFromParams(params: unknown[]): EventRow {
     taskId: params[1] === null ? undefined : String(params[1]),
     specId: String(params[2]),
     projectId: String(params[3]),
-    eventType: String(params[4]),
-    payload: JSON.parse(String(params[5])) as unknown,
+    eventType: String(params[5]),
+    payload: JSON.parse(String(params[6])) as unknown,
   };
 }

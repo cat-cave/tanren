@@ -86,6 +86,12 @@ export function stubPool(): {
         ? { rows: [{ project_id: params[0] }], rowCount: 1 }
         : { rows: [], rowCount: 0 };
     }
+    // v68 fix: createSpec calls loadProjectOrgId for the spec's NOT NULL org_id.
+    if (sql.startsWith("SELECT org_id FROM projects")) {
+      return state.projects.has(String(params[0]))
+        ? { rows: [{ org_id: "org_test" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
     // ensureProjectAccess membership lookup → always allow (platform admin).
     if (sql.includes("FROM project_members")) return { rows: [{ role: "admin" }], rowCount: 1 };
     if (sql.startsWith("SELECT spec_id FROM specs WHERE project_id")) {
@@ -96,12 +102,12 @@ export function stubPool(): {
     }
     if (sql.startsWith("INSERT INTO specs")) {
       const specId = String(params[0]);
-      // Column order: specId, projectId, title, description, acceptance_criteria(json),
-      // depends_on, status, priority (see projectSpec.ts createSpec).
-      const title = String(params[2]);
-      const description = String(params[3]);
-      const acceptanceCriteria = typeof params[4] === "string" ? (JSON.parse(params[4]) as string[]) : [];
-      const dependsOn = (params[5] as string[]) ?? [];
+      // Column order (v68 fix): specId, projectId, org_id, title, description,
+      // acceptance_criteria(json), depends_on, status, priority (see projectSpec.ts createSpec).
+      const title = String(params[3]);
+      const description = String(params[4]);
+      const acceptanceCriteria = typeof params[5] === "string" ? (JSON.parse(params[5]) as string[]) : [];
+      const dependsOn = (params[6] as string[]) ?? [];
       state.specs.set(specId, { dependsOn, title, description, acceptanceCriteria });
       return { rows: [], rowCount: 1 };
     }

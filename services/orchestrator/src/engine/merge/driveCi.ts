@@ -160,6 +160,7 @@ async function publishReGateVerdict(
         runId: deps.runId,
         specId: deps.specId,
         projectId: deps.projectId,
+        orgId: deps.orgId,
         eventType: "gate.publish_failed",
         payload: { when, headSha: sha, passed: verdictPassed, reason },
       });

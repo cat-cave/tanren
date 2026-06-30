@@ -70,6 +70,7 @@ export class PgSpecEscalator implements SpecEscalator {
       runId: input.entry.runId,
       specId: input.entry.specId,
       projectId: input.projectId,
+      orgId,
       eventType: "dag.spec.needs_attention" as const,
       payload: {
         source: "merge_conflict",

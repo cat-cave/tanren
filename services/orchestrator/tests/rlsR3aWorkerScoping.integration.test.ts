@@ -150,6 +150,7 @@ describeDb("RLS R3a-worker — per-job WORKFLOW tenant writes carry org context"
         runId: RUN,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "run.started",
         payload: { status: "running" },
       });

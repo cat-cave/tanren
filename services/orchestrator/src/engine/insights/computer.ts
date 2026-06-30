@@ -65,6 +65,11 @@ export const INSIGHT_KINDS: ReadonlyArray<ReadThroughInsightKind> = [
 
 export interface LoadInsightsOptions {
   projectId: string;
+  /** The project's tenant key — REQUIRED when `eventStore` is supplied so the
+   * emitted `ci.flaky.*` / `ci.test.quarantined` events carry org_id directly
+   * (v68 fix; see {@link AppendEventInput.orgId}). Optional when no eventStore
+   * is supplied (read-only callers fire no events). */
+  orgId?: string;
   now?: Date;
   thresholds?: Partial<InsightThresholds>;
   cacheFreshnessMs?: number;
@@ -93,8 +98,14 @@ export async function loadInsightsForProject(
     out.push(...result.insights);
   }
   if (options.eventStore !== undefined) {
+    if (options.orgId === undefined) {
+      throw new Error(
+        "loadInsightsForProject: `orgId` is required when `eventStore` is supplied — the emitted ci.flaky.* events must carry an explicit tenant key (v68 fix; see {@link AppendEventInput.orgId})",
+      );
+    }
     const flaky = await detectAndQuarantineFlaky(pool, {
       projectId: options.projectId,
+      orgId: options.orgId,
       now: options.now,
       thresholds: options.thresholds,
       eventStore: options.eventStore,

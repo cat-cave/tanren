@@ -128,6 +128,7 @@ export async function runDesignOracleLoopStage(
       runId: args.runId,
       specId: args.costCtx.specId,
       projectId: args.costCtx.projectId,
+      orgId: args.costCtx.orgId,
       taskKind: "designOracle",
     },
     outcome: "passed",

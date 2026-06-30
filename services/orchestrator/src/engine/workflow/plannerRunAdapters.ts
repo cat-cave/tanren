@@ -41,6 +41,7 @@ export {
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
+  requireContextOrgId,
 } from "./plannerRunSeams.js";
 import type { PlannerRunAdapterContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { AppendEvent, SubtaskLoopAdapters } from "./subtaskLoop.js";
@@ -358,7 +359,9 @@ function buildResolver(
 ): ConflictResolverHook {
   const context = input.context;
   const routing = requireRouting(context.routing);
-  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  // v68 fix: the conflict resolver's writes carry an explicit org_id; tests using
+  // FakeEventStore pass with an empty sentinel, production always sets it.
+  const orgId = typeof context.orgId === "string" ? context.orgId : "";
   return buildDefaultConflictResolver({
     applier,
     pool: input.pool,
@@ -371,7 +374,7 @@ function buildResolver(
     baseSha: deps.baseSha,
     runId: context.runId,
     projectId: context.projectId,
-    ...(orgId !== undefined && { orgId }),
+    orgId,
     specId: context.specId,
     specTitle: context.specTitle,
     specDescription: context.specDescription,

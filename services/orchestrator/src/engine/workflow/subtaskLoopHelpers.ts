@@ -15,7 +15,8 @@ import type { RoutedWorkItem } from "./loopPolicy.js";
 export interface PlannerTerminalContextSource {
   /** REQUIRED (audit finding H3 sweep — no fallback arm). */
   runStateWriter: RunStateWriter;
-  context: { runId: string; specId: string; projectId: string };
+  /** v68 fix: tenant key carried on the context for the atomic terminal lineage. */
+  context: { runId: string; specId: string; projectId: string; orgId: string };
 }
 
 /** task #46: builds the planner-task atomic-terminal context bag once per run. */
@@ -23,11 +24,8 @@ export function buildPlannerTerminalContext(
   input: PlannerTerminalContextSource,
   plannerTaskId: string,
 ): PlannerTerminalContext {
-  return {
-    writer: input.runStateWriter,
-    taskId: plannerTaskId,
-    lineage: { runId: input.context.runId, specId: input.context.specId, projectId: input.context.projectId },
-  };
+  const { runId, specId, projectId, orgId } = input.context;
+  return { writer: input.runStateWriter, taskId: plannerTaskId, lineage: { runId, specId, projectId, orgId } };
 }
 
 /**

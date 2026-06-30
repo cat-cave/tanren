@@ -227,6 +227,11 @@ function normalizeTestOutcome(raw: string): CiTestObservation["outcome"] {
 
 export interface DetectFlakyContext {
   projectId: string;
+  /** The tenant key the emitted `ci.flaky.detected` / `ci.test.quarantined` events
+   * carry directly (the column is NOT NULL; explicit `orgId` is now required on
+   * eventStore appends — v68 fix). The caller resolves it (the worker loop passes
+   * the project's `org_id`). */
+  orgId: string;
   now?: Date;
   thresholds?: Partial<InsightThresholds>;
   eventStore: EventStore;
@@ -377,11 +382,13 @@ async function recordQuarantine(
     input.activeTargets.add(input.target);
     await context.eventStore.append({
       projectId: context.projectId,
+      orgId: context.orgId,
       eventType: "ci.flaky.detected",
       payload: input.evidence,
     });
     await context.eventStore.append({
       projectId: context.projectId,
+      orgId: context.orgId,
       eventType: "ci.test.quarantined",
       payload: { ...input.evidence, quarantineId },
     });

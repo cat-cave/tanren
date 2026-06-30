@@ -52,7 +52,9 @@ export interface DefaultConflictResolverDeps {
   runId: string;
   // The run's spec + project + org + intent (the MERGING spec).
   projectId: string;
-  orgId?: string;
+  /** REQUIRED tenant key (v68 fix). The resolver's eventStore.append + the routers'
+   * spec writes all stamp this directly rather than re-derive via a SELECT-join. */
+  orgId: string;
   specId: string;
   specTitle: string;
   specDescription: string;
@@ -112,6 +114,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
 
   return buildIntentPreservingConflictResolver({
     projectId: deps.projectId,
+    orgId: deps.orgId,
     mergingSpecIntent: {
       specId: deps.specId,
       title: deps.specTitle,
@@ -129,7 +132,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // product yields an empty vision the prompt omits (a real empty state).
     productVision: new PgProductVisionReader({
       client: deps.pool,
-      ...(deps.orgId !== undefined && { orgId: deps.orgId }),
+      orgId: deps.orgId,
     }),
     // The workspace mechanism: the jj applier the live wiring sites build.
     applier: deps.applier,
@@ -160,7 +163,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     replan: new SpecStatusReplanRouter({
       pool: deps.pool,
       runStateWriter: deps.runStateWriter,
-      ...(deps.orgId !== undefined && { orgId: deps.orgId }),
+      orgId: deps.orgId,
       eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,
@@ -181,7 +184,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     gateRework: new SpecStatusGateReworkRouter({
       pool: deps.pool,
       runStateWriter: deps.runStateWriter,
-      ...(deps.orgId !== undefined && { orgId: deps.orgId }),
+      orgId: deps.orgId,
       eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,

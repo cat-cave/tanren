@@ -126,7 +126,7 @@ export const runPairSchema = z
     finalize: z
       .object({
         runId: z.string().min(1),
-        orgId: z.string().min(1),
+        orgId: z.string().optional(),
         status: z.string().min(1),
         outcome: z.enum(TERMINAL_RUN_OUTCOMES),
         fromStatuses: z.array(z.string().min(1)),
@@ -139,6 +139,8 @@ export const runPairSchema = z
         // specId / projectId may be empty (Site C/D deferral to RETURNING).
         specId: z.string().optional(),
         projectId: z.string(),
+        // v68 fix: events.org_id NOT NULL; explicit on the input.
+        orgId: z.string().optional(),
         eventType: z.enum(TERMINAL_RUN_EVENT_TYPES),
         payload: z.record(z.string(), z.unknown()),
       })
@@ -210,7 +212,7 @@ export const specPairSchema = z
     spec: z
       .object({
         specId: z.string().min(1),
-        orgId: z.string().min(1),
+        orgId: z.string().optional(),
         status: z.enum(SPEC_STATUS_TRANSITIONS),
         notFromStatuses: z.array(z.string().min(1)).optional(),
       })
@@ -221,6 +223,8 @@ export const specPairSchema = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
+        // v68 fix: events.org_id NOT NULL; explicit on the input.
+        orgId: z.string().optional(),
         eventType: z.enum(SPEC_DISPOSITION_EVENT_TYPES),
         payload: z.record(z.string(), z.unknown()),
       })
@@ -349,7 +353,7 @@ export const resumePausedRunPairSchema = z
     finalize: z
       .object({
         runId: z.string().min(1),
-        orgId: z.string().min(1),
+        orgId: z.string().optional(),
         status: z.literal("halted"),
         outcome: z.literal("window_paused"),
         fromStatuses: z.array(z.literal("paused")).min(1),
@@ -361,6 +365,8 @@ export const resumePausedRunPairSchema = z
         taskId: z.string().min(1).optional(),
         specId: z.string().optional(),
         projectId: z.string(),
+        // v68 fix: events.org_id NOT NULL.
+        orgId: z.string().optional(),
         eventType: z.literal("run.resumed"),
         payload: z.record(z.string(), z.unknown()),
       })
@@ -368,7 +374,7 @@ export const resumePausedRunPairSchema = z
     spec: z
       .object({
         specId: z.string().min(1),
-        orgId: z.string().min(1),
+        orgId: z.string().optional(),
         status: z.literal("open"),
         notFromStatuses: z.array(z.string().min(1)).optional(),
       })
@@ -379,6 +385,8 @@ export const resumePausedRunPairSchema = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
+        // v68 fix: events.org_id NOT NULL.
+        orgId: z.string().optional(),
         eventType: z.literal("dag.spec.redriven"),
         payload: z.record(z.string(), z.unknown()),
       })

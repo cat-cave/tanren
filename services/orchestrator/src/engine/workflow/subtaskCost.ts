@@ -53,6 +53,9 @@ export interface SubtaskCostContext {
   runId: string;
   specId: string;
   projectId: string;
+  /** The run's tenant key (NOT NULL on `runs.org_id`); stamped on the derived
+   *  cost-timeline event (v68 fix; see {@link CostRecordContext.orgId}). */
+  orgId: string;
   // MANAGED-run real-cost capture: given the OpenRouter generation id a managed
   // adapter surfaced (TokenUsage.openRouterGenerationId), resolve the REAL platform
   // `usage.cost` so cost_usd is recorded as a metered FACT (`provider_response`).
@@ -182,6 +185,7 @@ export async function recordAnswererCost<TOutput>(input: AnswererCostInput<TOutp
         taskId: input.taskId,
         specId: input.ctx.specId,
         projectId: input.ctx.projectId,
+        orgId: input.ctx.orgId,
         cli: input.adapter.cli,
         model: input.model,
         authRef: input.adapter.authRef,
@@ -222,6 +226,7 @@ export async function recordWriterCost(input: WriterCostInput): Promise<void> {
         taskId: input.taskId,
         specId: input.ctx.specId,
         projectId: input.ctx.projectId,
+        orgId: input.ctx.orgId,
         cli: input.adapter.cli,
         model: "tanren-writer",
         authRef: input.adapter.authRef,
@@ -285,6 +290,8 @@ export function buildSubtaskCostContext(
     runId: string;
     specId: string;
     projectId: string;
+    /** v68 fix: stamped on every derived cost-timeline event (NOT NULL on `events.org_id`). */
+    orgId: string;
     captureRealProviderCost?: RealProviderCostCapturer;
   },
   appendEvent: AppendEvent,
@@ -294,6 +301,7 @@ export function buildSubtaskCostContext(
     runId: core.runId,
     specId: core.specId,
     projectId: core.projectId,
+    orgId: core.orgId,
     ...(core.captureRealProviderCost !== undefined && { captureRealProviderCost: core.captureRealProviderCost }),
     emitTokenAccountingFailed: async ({ role, cli, model, taskId }) => {
       await appendEvent(

@@ -46,10 +46,13 @@ export async function appendIntegrationRebaseEvent(
   // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.
   runStateWriter: RunStateWriter,
 ): Promise<void> {
+  const orgId = await resolveProjectOrg(pool, input.projectId);
+  if (orgId === null) return;
   const event = {
     runId: input.runId,
     specId: input.specId,
     projectId: input.projectId,
+    orgId,
     eventType: "integration.rebase" as const,
     payload: {
       specId: input.specId,
@@ -62,8 +65,6 @@ export async function appendIntegrationRebaseEvent(
       decision: input.decision,
     },
   };
-  const orgId = await resolveProjectOrg(pool, input.projectId);
-  if (orgId === null) return;
   await runWithJobOrgId(orgId, () => runStateWriter.append(event));
 }
 

@@ -322,6 +322,7 @@ export class PostMergeWatcher {
       runId,
       specId: context.specId,
       projectId: context.projectId,
+      orgId,
     };
     // The watcher runs with NO ambient org scope (it wakes on the run-activity bus,
     // and the inner system-scoped reads above already closed), so these two tenant

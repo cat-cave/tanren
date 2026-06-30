@@ -43,12 +43,12 @@ export function reGateGateReworkSeam(
     return { reGateGateRework: input.reGateGateRework };
   }
   const context = input.context;
-  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  const orgId = typeof context.orgId === "string" ? context.orgId : "";
   return {
     reGateGateRework: new SpecStatusGateReworkRouter({
       pool: input.pool,
       runStateWriter: input.runStateWriter,
-      ...(orgId !== undefined && { orgId }),
+      orgId,
       eventStore: deps.eventStore,
       runId: context.runId,
       projectId: context.projectId,
@@ -111,6 +111,11 @@ export function baseShiftRebaseSeam(
       runStateWriter: input.runStateWriter,
     })
   );
+}
+
+/** v68 fix: the planner-loop's context-orgId resolver. */
+export function requireContextOrgId(context: PlannerRunContext): string {
+  return typeof context.orgId === "string" ? context.orgId : "";
 }
 
 // WS-D4 native design subsystem — the actor identity the in-loop design ORACLE reads the

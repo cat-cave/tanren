@@ -67,6 +67,10 @@ export interface StageBase {
   appendEvent: StageAppendEvent;
 }
 
+/** v68 fix: atomic terminal-pair envelope lineage builder. */
+function lineage(a: StageBase) {
+  return { runId: a.runId, specId: a.costCtx.specId, projectId: a.costCtx.projectId, orgId: a.costCtx.orgId };
+}
 // ---- DEMO-RUN (optional) --------------------------------------------------
 
 export interface DemoRunStageInput extends StageBase, SpecContext {
@@ -103,7 +107,7 @@ export async function runDemoRunStage(args: DemoRunStageInput): Promise<{ findin
     writer: args.writer,
     taskId: demoTaskId,
     taskKind: "demo",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: lineage(args),
     body: () => runDemoRunStageBody(args, demoTaskId),
   });
 }
@@ -275,7 +279,7 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
     writer: args.writer,
     taskId: triageTaskId,
     taskKind: "triage",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: lineage(args),
     body: () => runTriageStageBody(args, triageTaskId),
   });
 }
@@ -393,7 +397,7 @@ export async function runConvergenceStage(args: ConvergenceStageInput): Promise<
     writer: args.writer,
     taskId: convergenceTaskId,
     taskKind: "convergence",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: lineage(args),
     body: () => runConvergenceStageBody(args, convergenceTaskId),
   });
 }
@@ -490,7 +494,7 @@ async function loopStageTaskDone(
   await markTaskDoneWithEvent({
     writer: args.writer,
     taskId,
-    envelope: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId, taskKind },
+    envelope: { ...lineage(args), taskKind },
     outcome: "passed",
   });
 }

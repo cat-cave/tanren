@@ -60,7 +60,7 @@ export async function rebaseBehindBranch(
  * `MergeDispatcher`; passed to the extracted path so it does not re-derive any of it.
  */
 export interface LandOps {
-  base(): { runId: string; specId: string; projectId: string; taskId: string };
+  base(): { runId: string; specId: string; projectId: string; orgId: string; taskId: string };
   prFields(): { prUrl: string; prNumber: number };
   auditEnvelope(): AuditEnvelope;
   mergeLabel(): "direct_merge" | "native_queue";

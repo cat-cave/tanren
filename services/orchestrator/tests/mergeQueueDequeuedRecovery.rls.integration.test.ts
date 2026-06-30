@@ -98,6 +98,7 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
         runId: RUN,
         specId: SPEC,
         projectId: PROJECT,
+        orgId: ORG,
         eventType: "merge.dequeued",
         payload: {
           integration: "native_queue",
@@ -264,6 +265,7 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
         runId: parentRun,
         specId: parentSpec,
         projectId: project,
+        orgId: ORG,
         eventType: "merge.speculative_held",
         payload: {
           prUrl: `${PR_URL}-held-parent`,
@@ -289,6 +291,7 @@ describeDb("merge queue dequeued recovery under data-plane RLS (real PG)", () =>
         runId: parentRun,
         specId: parentSpec,
         projectId: project,
+        orgId: ORG,
         eventType: "merge.completed",
         payload: {
           prUrl: `${PR_URL}-held-parent`,

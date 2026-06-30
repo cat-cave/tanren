@@ -78,7 +78,12 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
     writer: args.writer,
     taskId: args.plannerTaskId,
     taskKind: "plan",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: {
+      runId: args.runId,
+      specId: args.costCtx.specId,
+      projectId: args.costCtx.projectId,
+      orgId: args.costCtx.orgId,
+    },
     body: () => runPlannerStageBody(args),
   });
 }
@@ -264,7 +269,12 @@ export async function runCheckerStage(args: CheckerStageInput): Promise<CheckerD
     writer: args.writer,
     taskId: args.checkerTaskId,
     taskKind: "check",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: {
+      runId: args.runId,
+      specId: args.costCtx.specId,
+      projectId: args.costCtx.projectId,
+      orgId: args.costCtx.orgId,
+    },
     body: () => runCheckerStageBody(args),
   });
 }
@@ -380,11 +390,14 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
     }) ?? { role: "checker", subtaskIndex: args.subtask.index },
   });
   // Lineage for the checker's atomic terminal-pair events (task #39): the
-  // costCtx already carries the run lineage at this stage.
+  // costCtx already carries the run lineage at this stage. v68 fix: org_id is
+  // now required on the envelope so every routed terminal event carries the
+  // tenant key directly (see {@link AppendEventInput.orgId}).
   const eventEnvelope = {
     runId: args.runId,
     specId: args.costCtx.specId,
     projectId: args.costCtx.projectId,
+    orgId: args.costCtx.orgId,
     taskKind: "check",
   };
   if (decision.kind === "reject") {

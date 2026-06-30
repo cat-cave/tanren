@@ -24,7 +24,8 @@ class MemoryEventPool {
         runId: params[0] as string,
         specId: params[2] as string,
         projectId: params[3] as string,
-        eventType: params[4] as string,
+        // v68 fix: param[4] is now org_id (was eventType pre-fix); eventType moved to param[5].
+        eventType: params[5] as string,
       });
     }
     return { rows: [], rowCount: 0 };
@@ -84,6 +85,7 @@ describe("PgEventStore run-activity NOTIFY", () => {
       runId: "run_notify",
       specId: "spec_1",
       projectId: "project_1",
+      orgId: "org_test",
       eventType: "hello.started",
       payload: {},
     });

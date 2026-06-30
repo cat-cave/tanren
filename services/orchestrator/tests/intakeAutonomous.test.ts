@@ -148,11 +148,12 @@ function stubPool(opts: { existingSpecIds?: string[] } = {}): {
     if (sql.startsWith("SELECT project_id FROM projects")) return { rows: [{ project_id: params[0] }], rowCount: 1 };
     if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_a" }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
+      // v68 fix: explicit org_id at $3 shifts title→$4, depends_on→$7, priority→$9.
       specInserts.push({
         specId: String(params[0]),
-        title: String(params[2]),
-        dependsOn: (params[5] as string[]) ?? [],
-        priority: String(params[7]),
+        title: String(params[3]),
+        dependsOn: (params[6] as string[]) ?? [],
+        priority: String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }

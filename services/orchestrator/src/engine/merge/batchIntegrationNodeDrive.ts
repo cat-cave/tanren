@@ -189,6 +189,7 @@ async function verdictForIntegrated(
       await deps.eventStore.append({
         projectId: facts.projectId,
         specId: facts.tailSpecId,
+        orgId: facts.orgId,
         eventType: "integration.proof.reused",
         payload: { ...payload, verdict: "passed" },
       });

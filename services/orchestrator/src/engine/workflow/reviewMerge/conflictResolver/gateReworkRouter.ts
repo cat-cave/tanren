@@ -45,13 +45,12 @@ export interface SpecStatusGateReworkRouterDeps {
   /**
    * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
    * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
-   * in production; the prior optional slot was a split-write hazard. The router resolves
-   * org-scoped operations through the writer when `orgId` is wired (production); the
-   * degenerate no-org test path uses the writer for the bare `setSpecStatus` flip too.
+   * in production; the prior optional slot was a split-write hazard.
    */
   runStateWriter: RunStateWriter;
-  /** The org scope every write rides; absent ⇒ degenerate path (no `parkSpecAtomic`/`enqueuer`). */
-  orgId?: string;
+  /** REQUIRED tenant key (v68 fix). Every eventStore.append stamps this directly
+   * rather than re-derive via a SELECT-join — a null org_id row trips RLS. */
+  orgId: string;
   eventStore: EventStore;
   runId: string;
   projectId: string;
@@ -76,7 +75,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
   constructor(private readonly deps: SpecStatusGateReworkRouterDeps) {}
 
   async routeGateFailToRework(input: { specId: string; gateError: string }): Promise<void> {
-    const orgId = this.deps.orgId ?? "";
+    const orgId = this.deps.orgId;
     const priorSignatures = this.deps.priorReworks ? await this.deps.priorReworks({ specId: input.specId, orgId }) : [];
     const currentSignature = gateErrorSignature(input.gateError);
     // FIXED-POINT (no count): a spec whose re-gate error keeps CHANGING is making progress
@@ -89,9 +88,9 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     }
 
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
-    if (this.deps.enqueuer === undefined || this.deps.orgId === undefined) {
-      // Degenerate/test path (no enqueuer/orgId wired): production ALWAYS wires them. Flip
-      // the status so the spec is re-drivable; never silently merge.
+    if (this.deps.enqueuer === undefined) {
+      // Degenerate/test path (no enqueuer wired): production ALWAYS wires it. Flip the
+      // status so the spec is re-drivable; never silently merge.
       await this.setSpecStatus(input.specId, "open");
       return;
     }
@@ -139,6 +138,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
+      orgId: this.deps.orgId,
       eventType: "merge.regate.gate_rework_routed",
       payload: {
         integration: "native_queue",
@@ -157,6 +157,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         runId: this.deps.runId,
         specId: input.specId,
         projectId: this.deps.projectId,
+        orgId: this.deps.orgId,
         eventType: "recovery.replan_queued",
         payload: {
           runId: this.deps.runId,
@@ -181,6 +182,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
+      orgId: this.deps.orgId,
       eventType: "merge.regate.gate_rework_routed",
       payload: {
         integration: "native_queue",
@@ -196,6 +198,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
+      orgId: this.deps.orgId,
       eventType: "dag.spec.needs_attention",
       payload: {
         source: "strand",
@@ -220,6 +223,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
+      orgId: this.deps.orgId,
       eventType: "merge.regate.gate_rework_routed",
       payload: {
         integration: "native_queue",
@@ -235,6 +239,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
+      orgId: this.deps.orgId,
       eventType: "dag.spec.needs_attention",
       payload: {
         source: "strand",
@@ -253,7 +258,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
    * branch in `routeGateFailToRework` that needs only a bare status flip (no paired
    * event), not the atomic seam. */
   private async setSpecStatus(specId: string, status: string): Promise<void> {
-    await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId ?? "", status });
+    await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId, status });
   }
 
   /** Task #48 Site J: ATOMIC spec park to `needs_attention` + the matching
@@ -264,7 +269,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     await this.deps.runStateWriter.updateSpecWithEvent({
       spec: {
         specId,
-        orgId: this.deps.orgId ?? "",
+        orgId: this.deps.orgId,
         status: "needs_attention",
         notFromStatuses: ["merged", "needs_attention"],
       },

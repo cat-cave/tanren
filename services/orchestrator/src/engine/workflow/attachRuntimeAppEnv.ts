@@ -136,6 +136,7 @@ export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Prom
   // (5) Record the attachment — KEY NAMES only, never a value.
   await input.events.append({
     projectId: input.projectId,
+    orgId: input.orgId,
     eventType: "app_env.runtime_attached",
     payload: { provider: input.deployRef.provider, appId: input.deployRef.appId, keys },
   });

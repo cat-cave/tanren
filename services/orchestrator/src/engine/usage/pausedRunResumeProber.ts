@@ -222,6 +222,7 @@ async function resumeOne(deps: PausedRunResumeProberDeps, row: PausedRunRow): Pr
     runId: row.runId,
     specId: row.specId,
     projectId: row.projectId,
+    orgId: row.orgId,
     eventType: "run.resumed" as const,
     payload: {
       provider: "agent",
@@ -234,6 +235,7 @@ async function resumeOne(deps: PausedRunResumeProberDeps, row: PausedRunRow): Pr
     runId: row.runId,
     specId: row.specId,
     projectId: row.projectId,
+    orgId: row.orgId,
     eventType: "dag.spec.redriven" as const,
     payload: {
       specId: row.specId,

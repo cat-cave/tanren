@@ -37,6 +37,7 @@ export async function applyFinalizeLand(client: LandQueryClient, input: Finalize
     runId: input.runId,
     specId: input.specId,
     projectId: input.projectId,
+    orgId: input.orgId,
     taskId: input.taskId,
     eventType: "merge.completed",
     payload: {

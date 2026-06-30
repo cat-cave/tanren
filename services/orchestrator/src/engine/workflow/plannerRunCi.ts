@@ -128,11 +128,15 @@ export async function publishCleanedDraftPr(
     bootstrapSha: shas.bootstrapSha,
   });
   try {
+    // v68 fix: events.org_id NOT NULL on the table; stamp via the run's org_id
+    // (NOT NULL on runs). Tests using FakeEventStore pass with an empty sentinel.
+    const appendEventOrgId = typeof context.orgId === "string" ? context.orgId : "";
     const pullRequest = await publishDraftPullRequest({
       pool: input.pool,
       eventStore: ctx.eventStore,
       runStateWriter: input.runStateWriter,
       orgId: context.orgId,
+      appendEventOrgId,
       secrets: input.secrets,
       githubHttp: input.githubHttp,
       ssh: input.ssh,
@@ -326,11 +330,22 @@ async function publishMergeVerdict(
       runId: context.runId,
       reason,
     });
+    // v68 fix: events.org_id is NOT NULL on the events row; AppendEventInput now
+    // carries `orgId` explicitly. The run's org is propagated through PlannerRunContext;
+    // when absent (a unit-path probe with no org context) skip the audit append
+    // entirely — the publish failure is already logged above, and the row-without-org
+    // would just be denied by RLS.
+    const orgId = typeof context.orgId === "string" && context.orgId !== "" ? context.orgId : undefined;
+    if (orgId === undefined) {
+      log.warn("skipping gate.publish_failed audit append — context.orgId is unset", { runId: context.runId });
+      return;
+    }
     await ctx.eventStore
       .append({
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
+        orgId,
         eventType: "gate.publish_failed",
         payload: { when: "pre_merge", headSha: prHeadSha ?? "", passed: outcome.passed, reason },
       })
@@ -378,6 +393,12 @@ async function doPublishMergeVerdict(
   });
   const repo = parseGitHubRepository(context.repoUrl);
   const { visibility } = buildProjectHostSeams(input.githubHttp, async () => token);
+  // v68 fix: events.org_id is NOT NULL; AppendEventInput requires explicit `orgId`.
+  // The publish only runs under a real run (token / installation gate already
+  // returned above on null-org public-repo runs), and PlannerRunContext.orgId
+  // propagates the run's org_id (NOT NULL). Narrow once + skip the audit append
+  // on a missing org (defensive — the gate has no row to scope the event under).
+  const auditOrgId = typeof context.orgId === "string" && context.orgId !== "" ? context.orgId : undefined;
   await publishGateVerdictBestEffort(
     {
       visibility,
@@ -392,10 +413,15 @@ async function doPublishMergeVerdict(
         runId: context.runId,
         reason,
       });
+      if (auditOrgId === undefined) {
+        log.warn("skipping gate.publish_failed audit append — context.orgId is unset", { runId: context.runId });
+        return;
+      }
       await ctx.eventStore.append({
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
+        orgId: auditOrgId,
         eventType: "gate.publish_failed",
         payload: { when, headSha: sha, passed, reason },
       });

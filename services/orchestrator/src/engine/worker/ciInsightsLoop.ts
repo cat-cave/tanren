@@ -142,6 +142,10 @@ export class CiInsightsLoop {
       runWithOrgScope(this.deps.pool, project.org_id, async (client) => {
         await detectAndQuarantineFlaky(client, {
           projectId: project.project_id,
+          // Tenant key from the project row — projects.org_id is NOT NULL; threads
+          // explicitly through to the emitted ci.flaky.* events (v68 fix; see
+          // {@link AppendEventInput.orgId}).
+          orgId: project.org_id,
           now: nowDate,
           ...(this.deps.thresholds !== undefined && { thresholds: this.deps.thresholds }),
           eventStore: this.deps.runStateWriter ?? new PgEventStore(client),

@@ -479,6 +479,7 @@ function buildDriveGate(
           runId: deps.facts.runId,
           specId: deps.facts.specId,
           projectId: deps.facts.projectId,
+          orgId: deps.facts.orgId,
           ...(eventTaskId !== undefined && { taskId: eventTaskId }),
           eventType,
           payload,

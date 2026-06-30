@@ -117,6 +117,8 @@ export interface SubtaskLoopInput {
     runId: string;
     specId: string;
     projectId: string;
+    // v68: runs.org_id (NOT NULL); stamped on every loop event + cost record.
+    orgId: string;
     workspacePath: string;
     baseSha?: string;
     // WS-D2 (native design subsystem): the rendered design block for the project's HEAD
@@ -226,23 +228,18 @@ export interface AppendEvent {
 }
 
 export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLoopOutcome> {
+  const { runId, specId, projectId, orgId } = input.context;
   const appendEvent: AppendEvent = async (eventType, payload, taskId) => {
-    await input.eventStore.append({
-      runId: input.context.runId,
-      specId: input.context.specId,
-      projectId: input.context.projectId,
-      taskId,
-      eventType,
-      payload,
-    });
+    await input.eventStore.append({ runId, specId, projectId, orgId, taskId, eventType, payload });
     input.onEvent?.({ eventType, taskId });
   };
   const costCtx: SubtaskCostContext = buildSubtaskCostContext(
     {
       recorder: input.recorder,
-      runId: input.context.runId,
-      specId: input.context.specId,
-      projectId: input.context.projectId,
+      runId,
+      specId,
+      projectId,
+      orgId,
       captureRealProviderCost: input.captureRealProviderCost,
     },
     appendEvent,

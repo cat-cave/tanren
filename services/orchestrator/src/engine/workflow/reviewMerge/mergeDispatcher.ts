@@ -41,7 +41,15 @@ export class MergeDispatcher implements LandOps {
 
   base() {
     const { context, taskId } = this.deps;
-    return { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId };
+    // org_id is the run's explicit tenant key (v68 fix): every eventStore.append
+    // built off `base()` stamps it directly rather than re-derive via a SELECT-join.
+    return {
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      orgId: context.orgId,
+      taskId,
+    };
   }
 
   prFields() {

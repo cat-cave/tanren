@@ -42,6 +42,7 @@ import {
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
+  requireContextOrgId,
   resolveConflictResolverHook,
   resolveManagedCapturer,
   resolveRunAdaptersWithBudgetPreflight,
@@ -265,12 +266,11 @@ export interface PlannerRunResult {
 export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Promise<PlannerRunResult> {
   const eventStore = rawInput.eventStore ?? new PgEventStore(rawInput.pool);
   const context = rawInput.context;
+  const orgId = requireContextOrgId(context);
   const workspacePath = rawInput.workspacePath ?? workspaceRepoPathForRun(context.runId);
   const recorder = rawInput.recorder ?? new CostRecorder(rawInput.pool, eventStore);
-  const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
-    const { runId, specId, projectId } = context;
-    await eventStore.append({ runId, specId, projectId, taskId, eventType, payload });
-  };
+  const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) =>
+    eventStore.append({ ...context, orgId, taskId, eventType, payload });
 
   // Dimension D: de-privilege the run behind a per-run scoped Vault child token
   // BEFORE any credential read ({@link applyScopedRunCredentials}).
@@ -365,6 +365,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           runId: context.runId,
           specId: context.specId,
           projectId: context.projectId,
+          orgId,
           workspacePath,
           baseSha,
           ...(context.designContextBlock !== undefined && { designContextBlock: context.designContextBlock }),

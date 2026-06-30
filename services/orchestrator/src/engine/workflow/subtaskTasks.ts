@@ -150,6 +150,8 @@ export interface TerminalTaskEventEnvelope {
   runId: string;
   specId: string;
   projectId: string;
+  /** v68 fix: events.org_id is NOT NULL + AppendEventInput requires explicit `orgId`. */
+  orgId: string;
   taskKind: string;
 }
 
@@ -192,6 +194,7 @@ export async function markTaskDoneWithEvent(
       taskId,
       specId: envelope.specId,
       projectId: envelope.projectId,
+      orgId: envelope.orgId,
       eventType: "task.completed",
       // Payload is registry-typed downstream by `PgEventStore.append`'s Zod
       // parse; the cast crosses the generic-payload seam (the runtime decode
@@ -229,6 +232,7 @@ export async function markTaskFailedWithEvent(
       taskId,
       specId: envelope.specId,
       projectId: envelope.projectId,
+      orgId: envelope.orgId,
       eventType: "task.failed",
       // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
       payload: payload as never,
@@ -272,6 +276,7 @@ export async function markTaskFailedIfRunningWithEvent(
       taskId,
       specId: envelope.specId,
       projectId: envelope.projectId,
+      orgId: envelope.orgId,
       eventType: "task.failed",
       // Payload is registry-typed downstream (see `markTaskDoneWithEvent`).
       payload: payload as never,
@@ -301,6 +306,8 @@ export interface PlannerTaskLineage {
   runId: string;
   specId: string;
   projectId: string;
+  /** v68 fix: events.org_id is NOT NULL + AppendEventInput requires explicit `orgId`. */
+  orgId: string;
 }
 
 /** Shared opts for both planner-task atomic-terminal-pair wrappers (task #46 + H3). */

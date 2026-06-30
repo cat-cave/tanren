@@ -238,6 +238,9 @@ export class ReviewMergePool {
       run_id: "run_1",
       spec_id: "spec_1",
       project_id: "project_1",
+      // v68 fix: runs.org_id (NOT NULL) — every run carries a tenant key.
+      org_id: "org_1",
+      branch: "feat/x",
       pr_url: "https://github.com/cat-cave/fix/pull/7",
     },
   ];
@@ -295,32 +298,29 @@ export class ReviewMergePool {
     }
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {
       const run = this.runs.find((r) => r.run_id === params[0]);
-      return {
-        rows:
-          run === undefined
-            ? []
-            : [
-                {
-                  run_id: run.run_id,
-                  spec_id: run.spec_id,
-                  project_id: run.project_id,
-                  pr_url: run.pr_url,
-                  config: {
-                    version: 1,
-                    mergeIntegration: this.mergeIntegration,
-                    governancePosture: this.governancePosture,
-                    reviewPolicy: this.reviewPolicy,
-                    ...(this.governancePlatformLogins !== undefined && {
-                      governancePlatformLogins: this.governancePlatformLogins,
-                    }),
-                    credentials: { githubCredentialRef: "credential/github/dev" },
-                  },
-                  default_branch: "main",
-                  org_config: null,
-                },
-              ],
-        rowCount: run === undefined ? 0 : 1,
+      if (run === undefined) return { rows: [], rowCount: 0 };
+      // v68 fix: surface runs.org_id (NOT NULL) on the review/merge context row.
+      const row = {
+        run_id: run.run_id,
+        spec_id: run.spec_id,
+        project_id: run.project_id,
+        org_id: run.org_id,
+        pr_url: run.pr_url,
+        branch: run.branch,
+        config: {
+          version: 1,
+          mergeIntegration: this.mergeIntegration,
+          governancePosture: this.governancePosture,
+          reviewPolicy: this.reviewPolicy,
+          ...(this.governancePlatformLogins !== undefined && {
+            governancePlatformLogins: this.governancePlatformLogins,
+          }),
+          credentials: { githubCredentialRef: "credential/github/dev" },
+        },
+        default_branch: "main",
+        org_config: null,
       };
+      return { rows: [row], rowCount: 1 };
     }
     if (sql.includes("FROM tasks") && sql.includes("LIMIT 1")) {
       // the ensure-system-task SELECT now binds kind as a
@@ -353,7 +353,8 @@ export class ReviewMergePool {
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith(`INSERT INTO ${eventsTableName}`)) {
-      this.events.push({ event_type: params[4], payload: JSON.parse(String(params[5])) });
+      // v68 fix: org_id at index 4; event_type + payload shift to 5/6.
+      this.events.push({ event_type: params[5], payload: JSON.parse(String(params[6])) });
       return { rows: [], rowCount: 1 };
     }
     throw new Error(`unexpected SQL: ${sql}`);

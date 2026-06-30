@@ -334,11 +334,11 @@ export interface PgPercolationEventEmitterDeps {
 export class PgPercolationEventEmitter implements PercolationEventEmitter {
   constructor(private readonly deps: PgPercolationEventEmitterDeps) {}
 
-  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
-    const orgId = await resolveProjectOrg(this.deps.pool, projectId);
+  private async withScopedStore(pid: string, work: (s: EventStore, o: string) => Promise<void>): Promise<void> {
+    const orgId = await resolveProjectOrg(this.deps.pool, pid);
     if (orgId === null) return;
     const writer = this.deps.runStateWriter;
-    await runWithJobOrgId(orgId, () => work(writer));
+    await runWithJobOrgId(orgId, () => work(writer, orgId));
   }
 
   async emitPercolating(input: {
@@ -350,11 +350,12 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
     toAncestorSha: string;
     severity: ImmediateSeverity;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.percolating",
         payload: {
           specId: input.specId,
@@ -376,11 +377,12 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
     integratedAncestorSha: string;
     viaResolver: boolean;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.percolated",
         payload: {
           specId: input.specId,
@@ -401,11 +403,12 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
     pendingAncestorSha: string;
     severity: LazySeverity;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.percolation_deferred",
         payload: {
           specId: input.specId,
@@ -426,11 +429,12 @@ export class PgPercolationEventEmitter implements PercolationEventEmitter {
     ancestorSha: string;
     reason: string;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.percolation_replan",
         payload: {
           specId: input.specId,

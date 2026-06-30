@@ -21,6 +21,10 @@ export interface RedactionAuditInput {
   runId: string;
   specId: string;
   projectId: string;
+  /** The tenant key of the event being audited (the `events.org_id` of the row
+   * the actor read). The audit row carries it directly — required on
+   * eventStore appends (v68 fix). */
+  orgId: string;
   taskId?: string;
   eventReadId: string;
   // A known event name (autocomplete-friendly) OR any string — the read event
@@ -45,6 +49,7 @@ export async function emitRedactionAudit(input: RedactionAuditInput): Promise<vo
     taskId: input.taskId,
     specId: input.specId,
     projectId: input.projectId,
+    orgId: input.orgId,
     eventType: "redaction.raw_access",
     payload: {
       actorUserId: input.actor.userId,

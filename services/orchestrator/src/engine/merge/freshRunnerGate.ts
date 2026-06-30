@@ -277,6 +277,7 @@ function gateEventAppender(deps: FreshRunnerGateDeps, ctx: FreshRunnerGateContex
     await deps.eventStore.append({
       runId: ctx.runId,
       projectId: ctx.projectId,
+      orgId: ctx.orgId,
       ...(ctx.specId !== undefined && { specId: ctx.specId }),
       ...(taskId !== undefined && { taskId }),
       eventType,

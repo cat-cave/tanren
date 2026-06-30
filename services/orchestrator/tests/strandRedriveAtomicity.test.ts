@@ -89,7 +89,7 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
   it("a spec with a queued/running SUCCESSOR run is SKIPPED entirely (re-drive in flight, not orphaned)", async () => {
     const client = new RecordingClient({ hasSuccessor: true, occupying: true });
 
-    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_A", INTERNAL_FAILURE);
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_A", "org_test", INTERNAL_FAILURE);
 
     // Skipped: no spec UPDATE, no event — but the successor probe DID run.
     expect(client.attemptedSpecUpdate()).toBe(false);
@@ -101,7 +101,7 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
     // No successor + no prior same-failures ⇒ first of its kind ⇒ RE-DRIVE (not a strand).
     const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 0 });
 
-    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", INTERNAL_FAILURE);
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", "org_test", INTERNAL_FAILURE);
 
     // The spec returned to `open` (the walker re-enqueues) — NEVER the old terminal needs_attention.
     expect(client.specUpdateTarget()).toBe("open");
@@ -116,7 +116,7 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
     // recurring once. The corrected doctrine re-drives (the disguised-K=2 the audit flagged is gone).
     const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 1 });
 
-    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", INTERNAL_FAILURE);
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", "org_test", INTERNAL_FAILURE);
 
     expect(client.specUpdateTarget()).toBe("open");
     expect(client.emittedEventType("dag.spec.redriven")).toBe(true);
@@ -128,7 +128,7 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
     // hardcoded attempt cap — the cycle detection itself is the loop-breaker, routed through the judge.
     const client = new RecordingClient({ hasSuccessor: false, occupying: true, priorSameFailures: 2 });
 
-    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", INTERNAL_FAILURE);
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_dead", "org_test", INTERNAL_FAILURE);
 
     // At the proven cycle the orphan is genuinely stuck — it parks `needs_attention`, not re-drives.
     expect(client.specUpdateTarget()).toBe("needs_attention");
@@ -139,7 +139,7 @@ describe("orphan reconciler — a genuine orphan RE-DRIVES (crash = transient), 
   it("a spec already past occupancy (merged/open) with no successor is a no-op — no duplicate disposition", async () => {
     const client = new RecordingClient({ hasSuccessor: false, occupying: false });
 
-    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_x", INTERNAL_FAILURE);
+    await parkStrandedSpecInProcess(client.asClient(), "spec_1", "project_1", "run_x", "org_test", INTERNAL_FAILURE);
 
     // The guarded UPDATE was attempted (the idempotency boundary) but matched nothing ⇒ no event.
     expect(client.attemptedSpecUpdate()).toBe(true);

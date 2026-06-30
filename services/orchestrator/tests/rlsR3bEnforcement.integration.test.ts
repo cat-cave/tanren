@@ -237,6 +237,7 @@ async function seedTenant(owner: Pool, org: string): Promise<void> {
       taskId: task,
       specId: spec,
       projectId: project,
+      orgId: org,
       eventType: "run.started",
       payload: { status: "running" },
     }),
