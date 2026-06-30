@@ -32,6 +32,7 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
   buildAncestorPhaseReader,
+  buildAtomicNativeQueueEnqueuer,
   buildBootstrapStackHeadShaWriteBack,
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
@@ -317,9 +318,10 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // never logged, distinct from Tanren creds). Empty ⇒ field omitted.
         ...(Object.keys(appEnv).length === 0 ? {} : { appEnv }),
         ciPollDelayMs: deps.ciPollDelayMs ?? DEFAULT_CI_POLL_DELAY_MS,
-        // under `native_queue` the merge stage enters the ready run into the native merge queue (the
-        // coordinator drives the actual merge). Built from the worker's real pool so the write is RLS-scoped.
+        // under `native_queue` the merge stage enters the ready run into the queue (RLS-scoped).
+        // The atomic variant is the seam's post-PR-open 3-write block (PR #724 follow-up).
         nativeQueueEnqueuer: buildNativeQueueEnqueuer(deps.pool),
+        nativeQueueOnClientEnqueuer: buildAtomicNativeQueueEnqueuer(deps.pool),
         // WS-A PR-8: OBSERVE-ONLY — the jj-local dependent bootstrap records its `eager_base` integration
         // node (the proof-reuse substrate) through this org-scoped UPSERT over the pool. Never gates the run.
         eagerBaseNodeUpsert: buildEagerBaseNodeUpsert(deps.pool),

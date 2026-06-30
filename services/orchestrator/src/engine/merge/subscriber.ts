@@ -13,6 +13,7 @@ import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
 import { boundedRetryDelayMs, serializedRetryAfterMs } from "./mergeSerializedRetry.js";
+import { discoverOrphanedPrs } from "./orphanedPrSweep.js";
 import { LIST_PROJECTS_WITH_QUEUE_SQL } from "./subscriberQueueDiscoverySql.js";
 import { createLogger } from "../observability/logger.js";
 
@@ -195,7 +196,23 @@ export class MergeCoordinatorSubscriber {
   // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
     void this.subscribeInBackground();
-    void this.driveAllProjects();
+    // DEFENSE-IN-DEPTH (PR #724 follow-up — apex v67/v69 root cause #2): sweep orphaned
+    // PRs (a `github.pr.created` event with no merge_queue row) BEFORE driving the
+    // existing queue. `driveAllProjects` only enumerates projects that ALREADY have queue
+    // rows (LIST_PROJECTS_WITH_QUEUE_SQL), so an orphan from before the atomicity fix —
+    // or a hypothetical escape past it — would never recover without this sweep. The
+    // sweep itself is atomic per-orphan (one transaction per row); a failure on one
+    // does not abort the others.
+    void this.sweepOrphanedPrsThenDrive();
+  }
+
+  private async sweepOrphanedPrsThenDrive(): Promise<void> {
+    try {
+      await discoverOrphanedPrs(this.deps.pool);
+    } catch (error) {
+      log.error("orphaned-PR startup sweep failed (continuing with queue drive)", {}, error);
+    }
+    await this.driveAllProjects();
   }
 
   private async subscribeInBackground(): Promise<void> {

@@ -55,6 +55,7 @@ import {
   type MergeOutcomeKind,
   type MergeProbe,
   type NativeQueueEnqueuer,
+  type NativeQueueOnClientEnqueuer,
   type ReGateCiHook,
 } from "./mergeDispatchTypes.js";
 
@@ -70,6 +71,7 @@ export {
   type MergeOutcomeKind,
   type MergeProbe,
   type NativeQueueEnqueuer,
+  type NativeQueueOnClientEnqueuer,
   type ReGateCiHook,
 };
 
