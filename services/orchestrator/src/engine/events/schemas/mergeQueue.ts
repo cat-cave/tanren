@@ -19,6 +19,25 @@ import { MergeIntegrationMode } from "./integrations.js";
 //
 // (merge.queued — the entry event — reuses MergeQueuedPayload with the
 // `native_queue` integration; merge.completed reuses MergeCompletedPayload.)
+//
+//   - merge.scheduled       → a NEW PR was pushed (github.pr.created just fired) and the
+//                             native-queue enqueue happened IMMEDIATELY at PR-create time
+//                             (apex v67/v69 loop-close fix). DURABLE pre-merge signal that
+//                             the merge coordinator now owns this PR; distinct from
+//                             merge.queued (which fires when the writer's outer loop
+//                             reaches the late-path enqueueNative — fragile to halt/throw
+//                             in the intervening review/gate chain). The coordinator's
+//                             `MergeAuthority.authorizeLand` still enforces every gate
+//                             before the actual land, so an early-scheduled entry HOLDS
+//                             until gate+review+mergeability+everything clears.
+
+export const MergeScheduledPayload = z
+  .object({
+    prUrl: z.string(),
+    prNumber: z.number().int(),
+    integration: MergeIntegrationMode,
+  })
+  .strict();
 
 export const MergeQueueAdvancedPayload = z
   .object({

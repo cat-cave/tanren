@@ -9,6 +9,7 @@ import type {
   AuditPostureConfig,
   ConvergencePolicyConfig,
   GovernancePosture,
+  MergeIntegration,
   RoutingChainEntry,
   RoutingTable,
 } from "../config/shared.js";
@@ -113,8 +114,7 @@ export interface PlannerRunContext {
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
-  // Part 2: the org's GitHub App installation, when installed. Clone/push/PR/CI/merge mint the token
-  // App-first through the seam, else the static `githubCredentialRef`.
+  // Part 2: the org's GitHub App installation (when installed) — clone/push/PR/CI/merge mint App-first through the seam, else the static `githubCredentialRef`.
   installation?: OrgGithubAppInstallation;
   // Resolved DEFAULT LLM entry {cli, model, authRef} — heads every empty loop-role chain (provider-agnostic). Tests may omit.
   defaultLlm?: RoutingChainEntry;
@@ -124,6 +124,8 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
+  /** apex v67/v69 loop-close: resolved merge integration; gates the EARLY-PATH enqueue in `publishCleanedDraftPr` (`mergeQueueEarlyEnqueueSeam`). */
+  mergeIntegration?: MergeIntegration;
   // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy (the SOLE loop bound).
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
@@ -220,10 +222,9 @@ export interface RunPlannerLoopInput {
   reGateGateRework?: MergeForRunInput["reGateGateRework"];
   // native_queue: enters a ready run into the native merge queue (→ mergeForRun).
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
-  // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the port
-  // the jj-local dependent bootstrap UPSERTs its `eager_base` integration node through (the
-  // proof-reuse substrate the batch `merge_batch` node shares). NEVER gates the run; a
-  // failure is loud-logged + swallowed. Built by the worker (`buildEagerBaseNodeUpsert`).
+  // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the port the jj-local
+  // dependent bootstrap UPSERTs its `eager_base` integration node through (the proof-reuse substrate the
+  // batch `merge_batch` node shares). NEVER gates the run; failure is loud-logged + swallowed.
   eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
   /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (percolation's divergence key); see plannerRunJjLocalBootstrap. */
   bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
@@ -232,10 +233,9 @@ export interface RunPlannerLoopInput {
   // dependent BENIGN-WAIT (re-driven) rather than terminally strand. Built by the worker
   // (`buildAncestorPhaseReader`); absent on no-DB unit paths ⇒ the assembly's fail-closed loud default.
   ancestorPhaseReader?: AncestorPhaseReader;
-  // apex v35 ROBUSTNESS: the consecutive-same-failure reader the run-failure boundary uses to decide
-  // RE-DRIVE (a random/transient fault) vs ESCALATE (the SAME classified failure K times — a stuck
-  // spec). Built by the worker (`buildRedriveHistoryReader`); absent on a no-DB unit path ⇒ treat as
-  // the first failure of its kind (re-drive), so a unit run never spuriously escalates.
+  // apex v35 ROBUSTNESS: the consecutive-same-failure reader the run-failure boundary uses to decide RE-DRIVE
+  // (transient fault) vs ESCALATE (SAME classified failure K times). Built by `buildRedriveHistoryReader`;
+  // absent on a no-DB unit path ⇒ treat as the first failure of its kind (never spuriously escalates).
   redriveHistoryReader?: RedriveHistoryReader;
   // (removed — apex v35) `maxReviewReworks` / `maxMergeGateReworks`: the review-rework + pre_merge-gate
   // self-heal loops are convergence-gated, not count-bounded (FIXED POINT halt via convergenceDetector).

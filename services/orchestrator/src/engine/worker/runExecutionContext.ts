@@ -264,6 +264,11 @@ export async function loadRunExecutionContext(
     // from the resolved project config so a greenfield `lenient` project lands
     // functional-but-weak code instead of stalling the gate.
     governancePosture: projectConfig.governancePosture,
+    // apex v67/v69 loop-close fix: thread the resolved merge integration so
+    // `publishCleanedDraftPr` can wire the EARLY-PATH merge_queue enqueue (the
+    // PR is durable the instant github.pr.created fires; the merge coordinator
+    // must own it without waiting for the writer chain to reach mergeForRun).
+    mergeIntegration: projectConfig.mergeIntegration,
     // The project's audit posture (blockReviewAt / p2p3Handling / autonomousRemediation).
     // Threaded so `assertAuditPostureReentersFindings` at the planner-run boundary
     // sees what the operator PUT via the governance API — an autonomous run on the

@@ -27,6 +27,68 @@ export function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueu
 }
 
 /**
+ * apex v67/v69 loop-close fix — the EARLY-PATH merge_queue enqueue seam.
+ *
+ * `publishCleanedDraftPr` folds this into `publishDraftPullRequest`'s input so the
+ * merge_queue INSERT + `merge.scheduled` event fire RIGHT AFTER `github.pr.created`,
+ * not at the end of the writer chain. The chain `runPublishGateStage → pollReview
+ * → applyReviewVerdict → mergeForRun → enqueueNative` halts on the slightest snag
+ * (gate fixed-point halt, review polling halt, transient exception in
+ * `finalizeWorkflowThrow`), and apex v67/v69 each watched 4/2 PRs push to GitHub
+ * with ZERO merge_queue rows materialize — the walker just re-walked the spec and
+ * created a NEW run, abandoning the live PR. Now the merge coordinator owns the
+ * PR the instant it exists; `MergeAuthority.authorizeLand` still enforces every
+ * land precondition (gate/review/mergeability/etc.) so an early-scheduled entry
+ * HOLDS until those clear — never a premature land.
+ *
+ * Returns `{}` (no hook) unless:
+ *   - the project is `native_queue` (direct_merge / external_reviewer / not_configured
+ *     have NO queue concept — they would race the coordinator), AND
+ *   - the worker wired `input.nativeQueueEnqueuer` (the production
+ *     `buildNativeQueueEnqueuer(pool)`; a no-DB unit run omits it).
+ *
+ * Idempotency: `PgMergeQueueModel.enqueue` dedups by `run_id` via the partial
+ * unique index (`merge_queue_active_run_unique`), so the late-path
+ * `mergeForRun → enqueueNative` becomes a no-op on the second call (`created: false`)
+ * — the writer chain still records its own observable `merge.queued` at the
+ * mergeForRun call site. `merge.scheduled` is emitted ONLY when the early-path call
+ * actually created the row, so a re-published PR (the writer-rework loop publishes
+ * once per iteration) does not double-emit.
+ */
+export function mergeQueueEarlyEnqueueSeam(
+  input: RunPlannerLoopInput,
+  context: PlannerRunContext,
+  eventStore: EventStore,
+  appendEventOrgId: string,
+): { enqueueAfterCreate?: (info: { prUrl: string; prNumber: number }) => Promise<void> } {
+  const enqueue = input.nativeQueueEnqueuer;
+  if (enqueue === undefined || context.mergeIntegration !== "native_queue") {
+    return {};
+  }
+  return {
+    enqueueAfterCreate: async ({ prUrl, prNumber }) => {
+      const { created } = await enqueue({
+        projectId: context.projectId,
+        runId: context.runId,
+        specId: context.specId,
+        prUrl,
+        prNumber,
+      });
+      if (created) {
+        await eventStore.append({
+          runId: context.runId,
+          specId: context.specId,
+          projectId: context.projectId,
+          orgId: appendEventOrgId,
+          eventType: "merge.scheduled",
+          payload: { prUrl, prNumber, integration: "native_queue" },
+        });
+      }
+    },
+  };
+}
+
+/**
  * The AUTO-REBASE re-gate gate-fail → WRITER REWORK seam (#594 extended to the merge dispatcher's
  * clean-rebase re-gate path). A post-auto-rebase `pre_merge` gate that FAILS a deterministic tier
  * on a CLEANLY-rebased branch (no conflict) is the WRITER's to fix on the new base — route it to

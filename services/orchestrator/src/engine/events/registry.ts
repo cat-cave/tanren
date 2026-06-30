@@ -113,6 +113,7 @@ import {
   MergeQueueAdvancedPayload,
   MergeQueueInfraBlockedPayload,
   MergeReGateGateReworkRoutedPayload,
+  MergeScheduledPayload,
 } from "./schemas/mergeQueue.js";
 import {
   CiFlakyDetectedPayload,
@@ -310,6 +311,7 @@ export const EventRegistry = {
   "review.auto_approved": ReviewAutoApprovedPayload,
   "review.changes_requested": ReviewChangesRequestedPayload,
   // merge stage: per-repo integration dispatch + conflict scaffolding
+  "merge.scheduled": MergeScheduledPayload,
   "merge.queued": MergeQueuedPayload,
   "merge.completed": MergeCompletedPayload,
   "merge.failed": MergeFailedPayload,
@@ -364,20 +366,13 @@ export const EventRegistry = {
   // or bound from the org grant (refs only, never secret values).
   "integration.provisioned": IntegrationProvisionedPayload,
 
-  // Deploy-on-merge ("a deploy happened"): a run's merge triggered a real build + release
-  // onto the deploy app (Vercel/Fly). The deploy target + resolved URL + deployment id (non-secret).
+  // Deploy lifecycle (deploy-on-merge): triggered (a deploy happened) → verified (DeployAdapter
+  // polled a READY terminal + smoke-checked the URL) / failed (bounded-retry exhausted; LOUD
+  // terminal vs a silent triggered-but-unverified stall) / skipped (pre-resolution failure on
+  // merge — incomplete deploy config / missing mergeSha — recorded DURABLY for the operator).
   "deploy.triggered": DeployTriggeredPayload,
-
-  // Deploy VERIFIED ("the deploy is PROVEN live"): the DeployAdapter polled the provider to
-  // a READY terminal + smoke-checked the URL — proof a triggered deploy became reachable.
   "deploy.verified": DeployVerifiedPayload,
-
-  // Deploy FAILED ("could NOT be proven live"): verification failed on every attempt of the
-  // bounded retry — the LOUD terminal (vs a silent triggered-but-unverified stall).
   "deploy.failed": DeployFailedPayload,
-
-  // Deploy SKIPPED: a PRE-resolution failure on merge (incomplete deploy config / a missing
-  // mergeSha) recorded DURABLY (vs a console-only log) so the operator + timeline see it.
   "deploy.skipped": DeploySkippedPayload,
 
   // Demos-as-evidence (design doc § "Native Deployment And Demos"): a verified

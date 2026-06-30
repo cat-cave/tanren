@@ -40,7 +40,7 @@ import type { EventStore } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { publishDraftPullRequest, type PublishedDraftPullRequest } from "./githubDraftPr.js";
 import { NoCommitsBetweenBaseAndHeadError } from "../providers/githubPullRequestReuse.js";
-import { appTokenSeam } from "./plannerRunSeams.js";
+import { appTokenSeam, mergeQueueEarlyEnqueueSeam } from "./plannerRunSeams.js";
 import { finalizeMergeOutcome, type FinalizeRunState } from "./plannerRunFinalize.js";
 import { applyFailedMergeGate, mergeGateSelfHeal, type MergeGateBudget } from "./plannerRunSelfHeal.js";
 import type { ReGateCiHook } from "./reviewMerge/index.js";
@@ -156,6 +156,13 @@ export async function publishCleanedDraftPr(
       body: context.specDescription,
       githubCredentialRef: context.githubCredentialRef,
       ...appTokenSeam(context, input),
+      // apex v67/v69 loop-close: when this project is `native_queue` AND the worker
+      // wired the enqueuer, fire the merge_queue INSERT + `merge.scheduled` event
+      // RIGHT AFTER `github.pr.created`. The PR is durable on GitHub the moment we
+      // get here; the merge coordinator must own it whether the writer's downstream
+      // gate/review chain succeeds, halts, or throws. The hook is idempotent (the
+      // late-path `mergeForRun → enqueueNative` becomes a no-op on the second call).
+      ...mergeQueueEarlyEnqueueSeam(input, context, ctx.eventStore, appendEventOrgId),
     });
     return { kind: "published", pushSource, pullRequest };
   } catch (error) {
