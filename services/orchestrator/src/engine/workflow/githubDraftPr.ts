@@ -71,6 +71,20 @@ export interface PublishDraftPullRequestInput {
    * so the PR excludes bootstrap-generated artifacts.
    */
   sourceRef?: string;
+  /**
+   * apex v67/v69 loop-close fix: fired immediately AFTER `github.pr.created` is
+   * appended. The PR's existence is the durable signal it should be tracked by the
+   * native merge queue; deferring the enqueue to the end of the writer chain
+   * (`mergeForRun → enqueueNative`) stranded PRs whenever the intervening
+   * gate/review steps halted (the apex v67 = 4 PRs / 0 queue rows + v69 = 2 PRs /
+   * 0 queue rows blocker). When provided, the caller (`publishCleanedDraftPr`) has
+   * resolved the project's `mergeIntegration === "native_queue"` AND wired the
+   * `nativeQueueEnqueuer`; this hook performs the idempotent `merge_queue` INSERT
+   * + emits `merge.scheduled`. The `MergeAuthority.authorizeLand` truth table still
+   * enforces every land precondition (gate/review/mergeability), so an early-
+   * scheduled entry HOLDS in the queue until those clear — never a premature land.
+   */
+  enqueueAfterCreate?: (input: { prUrl: string; prNumber: number }) => Promise<void>;
 }
 
 export interface PublishedDraftPullRequest {
@@ -209,6 +223,18 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
         prNumber: pr.number,
       },
     });
+    // apex v67/v69 loop-close: the merge_queue enqueue happens HERE (right after
+    // github.pr.created), not at the end of the writer chain. The PR is durable on
+    // GitHub the moment we get here; the merge coordinator must own it whether the
+    // intervening gate/review steps succeed, halt, or throw. A failure inside the
+    // hook propagates (loud, never silent): the hook itself is idempotent
+    // (`PgMergeQueueModel.enqueue` dedups by `run_id` via a partial unique index),
+    // so a retried PR-open call is safe; a genuine DB failure is the operator
+    // signal, never a silently-stranded PR. Absent (the caller resolved the
+    // project's `mergeIntegration !== "native_queue"`) ⇒ no-op.
+    if (input.enqueueAfterCreate !== undefined) {
+      await input.enqueueAfterCreate({ prUrl: pr.url, prNumber: pr.number });
+    }
     return { branch, prUrl: pr.url, prNumber: pr.number };
   } catch (error) {
     await eventStore.append({

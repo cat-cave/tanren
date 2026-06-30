@@ -194,9 +194,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["disposition", "public"],
   ]),
 
-  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts (500-line cap).
-
-  // reviews
+  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts (500-line cap). reviews:
   ...rulesFor("review.requested", [
     ["prUrl", "public"],
     ["prNumber", "public"],
@@ -218,12 +216,14 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reviewer", "public"],
     ["message", "public"],
   ]),
-  // merge stage — PR identifiers + integration mode + prose, all public
-  ...rulesFor("merge.queued", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["integration", "public"],
-  ]),
+  // merge stage — PR identifiers + integration mode + prose, all public. `merge.scheduled` (v67/v69) shares the merge.queued shape.
+  ...["merge.scheduled", "merge.queued"].flatMap((n) =>
+    rulesFor(n, [
+      ["prUrl", "public"],
+      ["prNumber", "public"],
+      ["integration", "public"],
+    ]),
+  ),
   ...rulesFor("merge.completed", [
     ["prUrl", "public"],
     ["prNumber", "public"],
