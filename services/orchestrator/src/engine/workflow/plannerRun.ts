@@ -86,6 +86,7 @@ import {
   type MergeForRunResult,
   type MergeProbe,
   type NativeQueueEnqueuer,
+  type NativeQueueOnClientEnqueuer,
   type PollReviewForRunResult,
   type ReviewProbe,
 } from "./reviewMerge/index.js";
@@ -124,7 +125,7 @@ export interface PlannerRunContext {
   endpointBaseUrl?: string;
   // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
   governancePosture?: GovernancePosture;
-  /** apex v67/v69 loop-close: resolved merge integration; gates the EARLY-PATH enqueue in `publishCleanedDraftPr` (`mergeQueueEarlyEnqueueSeam`). */
+  /** apex v67/v69 loop-close: resolved merge integration; gates the EARLY-PATH enqueue (`mergeQueueEarlyEnqueueSeam`). */
   mergeIntegration?: MergeIntegration;
   // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy (the SOLE loop bound).
   auditPosture?: AuditPostureConfig;
@@ -220,8 +221,9 @@ export interface RunPlannerLoopInput {
   resolveConflict?: ConflictResolverHook;
   // TEST SEAM: the auto-rebase re-gate gate-fail → writer-rework router (production → seam).
   reGateGateRework?: MergeForRunInput["reGateGateRework"];
-  // native_queue: enters a ready run into the native merge queue (→ mergeForRun).
+  // native_queue: enters a ready run into the merge queue (on-client is the seam's atomic 3-write block; PR #724 follow-up).
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
+  nativeQueueOnClientEnqueuer?: NativeQueueOnClientEnqueuer;
   // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the port the jj-local
   // dependent bootstrap UPSERTs its `eager_base` integration node through (the proof-reuse substrate the
   // batch `merge_batch` node shares). NEVER gates the run; failure is loud-logged + swallowed.
@@ -237,8 +239,6 @@ export interface RunPlannerLoopInput {
   // (transient fault) vs ESCALATE (SAME classified failure K times). Built by `buildRedriveHistoryReader`;
   // absent on a no-DB unit path ⇒ treat as the first failure of its kind (never spuriously escalates).
   redriveHistoryReader?: RedriveHistoryReader;
-  // (removed — apex v35) `maxReviewReworks` / `maxMergeGateReworks`: the review-rework + pre_merge-gate
-  // self-heal loops are convergence-gated, not count-bounded (FIXED POINT halt via convergenceDetector).
   // Plane B: the PROJECT's dev+test app env — env vars + secrets the product Tanren is BUILDING needs to
   // run+test its app. Resolved by the worker from `project_app_env`, materialized over the runner into the
   // building agent's command env (gate + bootstrap), NEVER logged + DISTINCT from Tanren's creds. Undefined ⇒ no env.

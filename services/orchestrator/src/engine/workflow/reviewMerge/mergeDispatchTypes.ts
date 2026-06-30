@@ -240,6 +240,34 @@ export type NativeQueueEnqueuer = (input: {
 }) => Promise<{ created: boolean }>;
 
 /**
+ * ATOMICITY (PR #724 follow-up — `apex` v67/v69 root cause #2): the on-client merge_queue
+ * INSERT the writer-seam's post-PR-open atomic block uses. The CALLER (the seam) opens the
+ * `runWithOrgScope` BEGIN/COMMIT and threads its scoped client + the run's `orgId` through
+ * here, so the queue INSERT JOINS the same transaction as the companion `github.pr.created`
+ * + `merge.scheduled` event appends — all three commit or all three roll back together.
+ *
+ * Distinct from {@link NativeQueueEnqueuer} (which opens its OWN scope) because the seam
+ * needs the writes to co-commit, not three independent transactions that the original
+ * PR #724 split across (the orphan-PR bug it was meant to fix could still occur on a crash
+ * BETWEEN any two of those independent commits).
+ *
+ * Type-erased on the client to avoid leaking `pg` into the seam abstraction; the production
+ * impl casts it to `pg.PoolClient` (it always is — the seam built the scope), tests pass
+ * a stub.
+ */
+export type NativeQueueOnClientEnqueuer = (
+  client: unknown,
+  orgId: string,
+  input: {
+    projectId: string;
+    runId: string;
+    specId: string;
+    prUrl: string;
+    prNumber: number;
+  },
+) => Promise<{ created: boolean }>;
+
+/**
  * Injectable FRESHNESS probe (real `CodeHost`-derived by default; mocked in tests).
  * NOT a land path — the land is the unconditional `MergeAuthority` + `CodeHost` CAS.
  *

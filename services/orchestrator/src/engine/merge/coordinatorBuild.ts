@@ -36,7 +36,11 @@ import {
   PercolationOwnsSpecError,
 } from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
-import type { MergeForRunInput, NativeQueueEnqueuer } from "../workflow/reviewMerge/index.js";
+import type {
+  MergeForRunInput,
+  NativeQueueEnqueuer,
+  NativeQueueOnClientEnqueuer,
+} from "../workflow/reviewMerge/index.js";
 import { buildDriveReGateGateRework } from "./driveReGateRework.js";
 import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
 import type { DriveMergeForQueuedRun } from "./coordinator.js";
@@ -376,6 +380,30 @@ export function buildNativeQueueEnqueuer(pool: pg.Pool): NativeQueueEnqueuer {
   const model = new PgMergeQueueModel(pool);
   return async (input) => {
     const { created } = await model.enqueue(input);
+    return { created };
+  };
+}
+
+/**
+ * ATOMICITY (PR #724 follow-up — `apex` v67/v69 root cause #2): build the on-client
+ * native-queue enqueuer the writer-seam's post-PR-open atomic block uses. The seam owns
+ * the `runWithOrgScope` BEGIN/COMMIT; this closure JOINS that transaction so the
+ * merge_queue INSERT co-commits with the companion `github.pr.created` + `merge.scheduled`
+ * appends — all three commit together or all three roll back together. PR #724 fixed the
+ * WHEN (enqueue right after `github.pr.created`) but left the writes in 3 separate
+ * transactions; the seam's atomic block closes the gap. Wired alongside
+ * {@link buildNativeQueueEnqueuer} from the worker boot so both the late-path enqueue
+ * (own-scope) and the early-path atomic enqueue (caller-scope) share the SAME underlying
+ * `PgMergeQueueModel` — one source of truth for the INSERT semantics.
+ */
+export function buildAtomicNativeQueueEnqueuer(pool: pg.Pool): NativeQueueOnClientEnqueuer {
+  const model = new PgMergeQueueModel(pool);
+  return async (client, orgId, input) => {
+    // The seam always passes a pg.PoolClient (it opened the runWithOrgScope to obtain
+    // it). The `unknown` in the signature exists so the seam abstraction does not leak
+    // `pg` into the wider planner-loop type graph; the cast here is the only place that
+    // narrowing lives.
+    const { created } = await model.enqueueOnClient(client as pg.PoolClient, orgId, input);
     return { created };
   };
 }

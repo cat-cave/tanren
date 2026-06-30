@@ -83,8 +83,29 @@ export interface PublishDraftPullRequestInput {
    * + emits `merge.scheduled`. The `MergeAuthority.authorizeLand` truth table still
    * enforces every land precondition (gate/review/mergeability), so an early-
    * scheduled entry HOLDS in the queue until those clear — never a premature land.
+   *
+   * MUTUALLY EXCLUSIVE with {@link postPrCreatedAtomicWrites}: the seam picks ONE
+   * (the atomic one when its on-client enqueuer is wired — the production path; this
+   * legacy one otherwise — tests / no-DB runs).
    */
   enqueueAfterCreate?: (input: { prUrl: string; prNumber: number }) => Promise<void>;
+  /**
+   * ATOMICITY (PR #724 follow-up — apex v67/v69 root cause #2): when wired (the
+   * production native_queue path through `mergeQueueEarlyEnqueueSeam`), this callback
+   * owns the FULL post-PR-open atomic-write block: appends `github.pr.created`,
+   * INSERTs the merge_queue row, and appends `merge.scheduled` — all inside ONE
+   * `runWithOrgScope` so they commit or roll back as ONE unit. `publishDraftPullRequest`
+   * SKIPS its inline `github.pr.created` append when this is wired (the callback owns
+   * it), closing the crash-between-writes split brain where the durable event landed
+   * but the queue row did not (PR #724's 3-separate-txn implementation leaked here).
+   * MUTUALLY EXCLUSIVE with {@link enqueueAfterCreate}.
+   */
+  postPrCreatedAtomicWrites?: (input: {
+    prUrl: string;
+    prNumber: number;
+    branch: string;
+    baseBranch: string;
+  }) => Promise<void>;
 }
 
 export interface PublishedDraftPullRequest {
@@ -212,28 +233,33 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
     } else {
       await input.pool.query("UPDATE runs SET pr_url = $2 WHERE run_id = $1", [input.runId, pr.url]);
     }
-    await eventStore.append({
-      ...context,
-      eventType: "github.pr.created",
-      payload: {
-        repoUrl: input.repoUrl,
-        branch,
-        targetBranch: baseBranch,
-        prUrl: pr.url,
-        prNumber: pr.number,
-      },
-    });
-    // apex v67/v69 loop-close: the merge_queue enqueue happens HERE (right after
-    // github.pr.created), not at the end of the writer chain. The PR is durable on
-    // GitHub the moment we get here; the merge coordinator must own it whether the
-    // intervening gate/review steps succeed, halt, or throw. A failure inside the
-    // hook propagates (loud, never silent): the hook itself is idempotent
-    // (`PgMergeQueueModel.enqueue` dedups by `run_id` via a partial unique index),
-    // so a retried PR-open call is safe; a genuine DB failure is the operator
-    // signal, never a silently-stranded PR. Absent (the caller resolved the
-    // project's `mergeIntegration !== "native_queue"`) ⇒ no-op.
-    if (input.enqueueAfterCreate !== undefined) {
-      await input.enqueueAfterCreate({ prUrl: pr.url, prNumber: pr.number });
+    // ATOMICITY FIX (PR #724 follow-up — apex v67/v69 root cause #2): when the seam wired
+    // the atomic 3-write block (`postPrCreatedAtomicWrites`), DELEGATE the `github.pr.created`
+    // append to it so all three post-PR-open writes share ONE transaction (append + INSERT +
+    // append). PR #724 fired this inline append BEFORE the enqueue's separate transaction —
+    // a crash/pool blip between them resurrected the original apex v67/v69 bug (durable PR
+    // event + zero queue row + orphan PR). The `else` keeps the legacy non-atomic path for
+    // tests / non-native-queue projects that have no queue write to co-commit with.
+    if (input.postPrCreatedAtomicWrites === undefined) {
+      await eventStore.append({
+        ...context,
+        eventType: "github.pr.created",
+        payload: {
+          repoUrl: input.repoUrl,
+          branch,
+          targetBranch: baseBranch,
+          prUrl: pr.url,
+          prNumber: pr.number,
+        },
+      });
+      // LEGACY non-atomic path: the merge_queue enqueue happens HERE (right after the
+      // inline github.pr.created append). Used only when the seam injected the legacy
+      // `enqueueAfterCreate` (test / no-DB run); the production path takes the atomic branch.
+      if (input.enqueueAfterCreate !== undefined) {
+        await input.enqueueAfterCreate({ prUrl: pr.url, prNumber: pr.number });
+      }
+    } else {
+      await input.postPrCreatedAtomicWrites({ prUrl: pr.url, prNumber: pr.number, branch, baseBranch });
     }
     return { branch, prUrl: pr.url, prNumber: pr.number };
   } catch (error) {

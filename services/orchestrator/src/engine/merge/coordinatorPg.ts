@@ -161,26 +161,44 @@ export class PgMergeQueueModel implements MergeQueueModel {
     if (orgId === null) {
       throw new Error(`cannot enqueue run ${input.runId}: project ${input.projectId} has no resolvable org`);
     }
-    return runWithOrgScope(this.pool, orgId, async (client) => {
-      // Idempotency: a run already queued/merging keeps its existing entry. The
-      // partial unique index (merge_queue_active_run_unique) is the hard guarantee;
-      // we check first so we can report `created` (emit merge.queued only once).
-      const existing = await client.query<{ queue_id: string }>(
-        "SELECT queue_id FROM merge_queue WHERE run_id = $1 AND status IN ('queued','merging') LIMIT 1",
-        [input.runId],
-      );
-      const found = existing.rows[0];
-      if (found !== undefined) {
-        return { queueId: found.queue_id, created: false };
-      }
-      const queueId = `mq_${randomUUID()}`;
-      await client.query(
-        `INSERT INTO merge_queue (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number)
-         VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7)`,
-        [queueId, input.runId, input.specId, input.projectId, orgId, input.prUrl, String(input.prNumber)],
-      );
-      return { queueId, created: true };
-    });
+    return runWithOrgScope(this.pool, orgId, async (client) => this.enqueueOnClient(client, orgId, input));
+  }
+
+  /**
+   * ATOMICITY (PR #724 follow-up — apex v67/v69 root cause #2): the same SELECT-then-INSERT as
+   * {@link enqueue} but on a CALLER-SUPPLIED already-scoped client + `orgId` — joins the
+   * caller's `runWithOrgScope` so the merge_queue INSERT commits/rolls-back with the companion
+   * `github.pr.created` + `merge.scheduled` event appends as ONE unit. Closes PR #724's
+   * 3-separate-txn gap. Used by `mergeQueueEarlyEnqueueSeam` + `discoverOrphanedPrs`.
+   * Idempotent via the partial unique index `merge_queue_active_run_unique`; the prefetch
+   * SELECT reports `created: false` on a re-published PR so the seam skips a duplicate emit.
+   */
+  async enqueueOnClient(
+    client: pg.PoolClient,
+    orgId: string,
+    input: {
+      projectId: string;
+      runId: string;
+      specId: string;
+      prUrl: string;
+      prNumber: number;
+    },
+  ): Promise<{ queueId: string; created: boolean }> {
+    const existing = await client.query<{ queue_id: string }>(
+      "SELECT queue_id FROM merge_queue WHERE run_id = $1 AND status IN ('queued','merging') LIMIT 1",
+      [input.runId],
+    );
+    const found = existing.rows[0];
+    if (found !== undefined) {
+      return { queueId: found.queue_id, created: false };
+    }
+    const queueId = `mq_${randomUUID()}`;
+    await client.query(
+      `INSERT INTO merge_queue (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number)
+       VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7)`,
+      [queueId, input.runId, input.specId, input.projectId, orgId, input.prUrl, String(input.prNumber)],
+    );
+    return { queueId, created: true };
   }
 
   async loadSnapshot(projectId: string): Promise<MergeQueueSnapshot> {

@@ -12,7 +12,8 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { TriageSpecValidator } from "./loopFindings.js";
 import type { MergeForRunInput, NativeQueueEnqueuer } from "./reviewMerge/index.js";
-import type { EventStore } from "../eventStore.js";
+import { type EventStore, PgEventStore } from "../eventStore.js";
+import { runWithOrgScope } from "@tanren/db";
 import type { GateReworkRouter } from "../contracts/conflictResolution.js";
 import { buildInLoopBaseShiftRebaseHook } from "../merge/inLoopBaseShift.js";
 import { SpecStatusGateReworkRouter } from "./reviewMerge/conflictResolver/gateReworkRouter.js";
@@ -60,9 +61,72 @@ export function mergeQueueEarlyEnqueueSeam(
   context: PlannerRunContext,
   eventStore: EventStore,
   appendEventOrgId: string,
-): { enqueueAfterCreate?: (info: { prUrl: string; prNumber: number }) => Promise<void> } {
+): {
+  enqueueAfterCreate?: (info: { prUrl: string; prNumber: number }) => Promise<void>;
+  postPrCreatedAtomicWrites?: (info: {
+    prUrl: string;
+    prNumber: number;
+    branch: string;
+    baseBranch: string;
+  }) => Promise<void>;
+} {
+  if (context.mergeIntegration !== "native_queue") {
+    return {};
+  }
+  // ATOMICITY (PR #724 follow-up — apex v67/v69 root cause #2): the production path. The
+  // worker wires `nativeQueueOnClientEnqueuer`, so we open ONE runWithOrgScope and do ALL
+  // THREE post-PR-open writes on its scoped client — the `github.pr.created` append, the
+  // merge_queue INSERT, the `merge.scheduled` append — so all three COMMIT together or all
+  // three ROLL BACK together. PR #724 fixed the WHEN of the enqueue but left the writes in
+  // three separate transactions; a crash/pool-blip between them still left an orphan event
+  // with no queue row (the exact apex v67/v69 blocker PR #724 was meant to close).
+  // `publishDraftPullRequest` skips its inline `github.pr.created` append when this callback
+  // is wired (the callback owns it).
+  const atomicEnqueue = input.nativeQueueOnClientEnqueuer;
+  if (atomicEnqueue !== undefined) {
+    return {
+      postPrCreatedAtomicWrites: async ({ prUrl, prNumber, branch, baseBranch }) => {
+        await runWithOrgScope(input.pool as pg.Pool, appendEventOrgId, async (client) => {
+          // The events on this client share the transaction with the INSERT below (PgEventStore
+          // ride the in-tx client directly). Tests injecting a FakeEventStore use the legacy
+          // non-atomic branch below (atomicEnqueue absent), so atomicity is proven only on the
+          // real-PG integration test — exactly where it must be proven.
+          const scopedStore = new PgEventStore(client);
+          await scopedStore.append({
+            runId: context.runId,
+            specId: context.specId,
+            projectId: context.projectId,
+            orgId: appendEventOrgId,
+            eventType: "github.pr.created",
+            payload: { repoUrl: context.repoUrl, branch, targetBranch: baseBranch, prUrl, prNumber },
+          });
+          const { created } = await atomicEnqueue(client, appendEventOrgId, {
+            projectId: context.projectId,
+            runId: context.runId,
+            specId: context.specId,
+            prUrl,
+            prNumber,
+          });
+          if (created) {
+            await scopedStore.append({
+              runId: context.runId,
+              specId: context.specId,
+              projectId: context.projectId,
+              orgId: appendEventOrgId,
+              eventType: "merge.scheduled",
+              payload: { prUrl, prNumber, integration: "native_queue" },
+            });
+          }
+        });
+      },
+    };
+  }
+  // LEGACY non-atomic path (test / no-DB run): only `nativeQueueEnqueuer` is wired, so the
+  // 3 writes happen in 3 separate transactions — same behavior PR #724 shipped. Used by the
+  // existing unit test (`mergeQueueEarlyEnqueue.test.ts`) which injects a `RecordingPool` +
+  // FakeEventStore. Production never takes this branch (the worker wires both enqueue ports).
   const enqueue = input.nativeQueueEnqueuer;
-  if (enqueue === undefined || context.mergeIntegration !== "native_queue") {
+  if (enqueue === undefined) {
     return {};
   }
   return {
