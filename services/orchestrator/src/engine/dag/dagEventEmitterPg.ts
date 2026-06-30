@@ -28,7 +28,10 @@ export class PgDagEventEmitter implements DagEventEmitter {
     private readonly runStateWriter?: RunStateWriter,
   ) {}
 
-  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
+  private async withScopedStore(
+    projectId: string,
+    work: (store: EventStore, orgId: string) => Promise<void>,
+  ): Promise<void> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
         "SELECT org_id FROM projects WHERE project_id = $1",
@@ -42,10 +45,10 @@ export class PgDagEventEmitter implements DagEventEmitter {
     // the duration of the append. Absent, append in-process under a short org scope.
     if (this.runStateWriter !== undefined) {
       const writer = this.runStateWriter;
-      await runWithJobOrgId(orgId, () => work(writer));
+      await runWithJobOrgId(orgId, () => work(writer, orgId));
       return;
     }
-    await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client)));
+    await runWithOrgScope(this.pool, orgId, (client) => work(new PgEventStore(client), orgId));
   }
 
   async emitSpecEnqueued(input: {
@@ -56,11 +59,12 @@ export class PgDagEventEmitter implements DagEventEmitter {
     inFlightBefore: number;
     concurrencyCeiling: number;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.enqueued",
         payload: {
           specId: input.specId,
@@ -80,11 +84,12 @@ export class PgDagEventEmitter implements DagEventEmitter {
     unmergedAncestors: string[];
     threshold: SpeculationThreshold;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.speculative",
         payload: {
           specId: input.specId,
@@ -103,10 +108,11 @@ export class PgDagEventEmitter implements DagEventEmitter {
     depth: number;
     depthCap: number;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.speculation_held",
         payload: {
           specId: input.specId,
@@ -124,10 +130,11 @@ export class PgDagEventEmitter implements DagEventEmitter {
     ancestorSpecId: string;
     ancestorPhase: "pending" | "in_flight";
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         specId: input.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "dag.spec.ancestor_not_ready",
         payload: {
           specId: input.specId,
@@ -142,9 +149,10 @@ export class PgDagEventEmitter implements DagEventEmitter {
 
   async emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     const { doneCount, inFlightCount, blockedCount } = input.plan;
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         projectId: input.projectId,
+        orgId,
         eventType: "dag.drained",
         payload: { doneCount, inFlightCount, blockedCount },
       }),
@@ -160,9 +168,10 @@ export class PgDagEventEmitter implements DagEventEmitter {
     reason?: "unpriced_spend" | "unparseable_config";
   }): Promise<void> {
     const { projectId, ceilingUsd, spentUsd, period, readyHeldBack, reason } = input;
-    await this.withScopedStore(projectId, (store) =>
+    await this.withScopedStore(projectId, (store, orgId) =>
       store.append({
         projectId,
+        orgId,
         eventType: "dag.budget.paused",
         payload: { ceilingUsd, spentUsd, period, readyHeldBack, ...(reason !== undefined && { reason }) },
       }),
@@ -206,6 +215,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
       const append = () =>
         store.append({
           projectId: input.projectId,
+          orgId,
           eventType: "dag.budget.milestone",
           payload: {
             band: input.band,
@@ -225,9 +235,10 @@ export class PgDagEventEmitter implements DagEventEmitter {
 
   async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     const { readyHeldBack, inFlightCount, concurrencyCeiling } = input.plan;
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         projectId: input.projectId,
+        orgId,
         eventType: "dag.concurrency.saturated",
         payload: { readyHeldBack, inFlightCount, concurrencyCeiling },
       }),
@@ -235,8 +246,8 @@ export class PgDagEventEmitter implements DagEventEmitter {
   }
 
   async emitConfigCorrupt({ projectId, ...payload }: ConfigCorruptInput): Promise<void> {
-    await this.withScopedStore(projectId, (store) =>
-      store.append({ projectId, eventType: "dag.config.corrupt", payload }),
+    await this.withScopedStore(projectId, (store, orgId) =>
+      store.append({ projectId, orgId, eventType: "dag.config.corrupt", payload }),
     );
   }
 }

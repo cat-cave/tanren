@@ -60,6 +60,7 @@ export async function appendDeployFailed(
     await ctx.eventStore.append({
       runId: args.runId,
       projectId: args.projectId,
+      orgId: args.target.orgId,
       eventType: "deploy.failed",
       payload: {
         provider: args.target.provider,
@@ -95,6 +96,7 @@ export async function appendDeploySkipped(
     await ctx.eventStore.append({
       runId: args.runId,
       projectId: args.projectId,
+      orgId: args.orgId,
       eventType: "deploy.skipped",
       payload: { projectId: args.projectId, reason: args.reason, detail: args.detail },
     });
@@ -136,6 +138,7 @@ export async function verifyDeploy(
     await ctx.eventStore.append({
       runId: args.runId,
       projectId: args.projectId,
+      orgId: target.orgId,
       eventType: "deploy.verified",
       payload: {
         provider: target.provider,

@@ -221,6 +221,9 @@ export class RecoveryMemoryPool {
         rows: [
           {
             project_id: project.project_id,
+            // v68 fix: loader surfaces the NOT NULL org_id on both rows.
+            project_org_id: "org_fake",
+            spec_org_id: "org_fake",
             name: project.name,
             repo_url: project.repo_url,
             default_branch: project.default_branch,
@@ -243,14 +246,14 @@ export class RecoveryMemoryPool {
     if (/FROM specs WHERE project_id = \$1 AND status = 'done'/u.test(t)) {
       return { rows: [], rowCount: 0 };
     }
-    // INSERT runs
+    // INSERT runs (v68 fix: explicit org_id at $4 shifts trigger→$5, branch→$6).
     if (t.startsWith("INSERT INTO runs")) {
       this.runs.set(String(params[0]), {
         run_id: String(params[0]),
         spec_id: String(params[1]),
         project_id: String(params[2]),
-        trigger: String(params[3]),
-        branch: String(params[4]),
+        trigger: String(params[4]),
+        branch: String(params[5]),
         status: "queued",
         outcome: null,
       });
@@ -284,14 +287,15 @@ export class RecoveryMemoryPool {
     // single-event-writer architecture guard, which scans for the bare
     // table-write literal outside eventStore.ts.
     if (/INSERT\s+INTO\s+events\b/iu.test(t)) {
+      // v68 fix: explicit org_id at $5 shifts event_type→$6 (params[5]) + payload→$7 (params[6]).
       this.events.push({
         id: ++this.eventSeq,
         run_id: params[0] === null ? null : String(params[0]),
         task_id: params[1] === null ? null : String(params[1]),
         spec_id: params[2] === null ? null : String(params[2]),
         project_id: params[3] === null ? null : String(params[3]),
-        event_type: String(params[4]),
-        payload: JSON.parse(String(params[5])),
+        event_type: String(params[5]),
+        payload: JSON.parse(String(params[6])),
         ts: new Date(this.now.getTime() + this.eventSeq * 1000),
       });
       return { rows: [], rowCount: 1 };

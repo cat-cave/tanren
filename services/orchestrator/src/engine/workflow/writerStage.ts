@@ -104,7 +104,12 @@ export async function runWriterStage(args: WriterStageInput): Promise<WriterStag
     writer: args.writer,
     taskId: args.writeTaskId,
     taskKind: "write",
-    eventLineage: { runId: args.runId, specId: args.costCtx.specId, projectId: args.costCtx.projectId },
+    eventLineage: {
+      runId: args.runId,
+      specId: args.costCtx.specId,
+      projectId: args.costCtx.projectId,
+      orgId: args.costCtx.orgId,
+    },
     body: () => runWriterStageBody(args),
   });
 }
@@ -228,6 +233,10 @@ function writerEventEnvelope(args: WriterStageInput) {
     runId: args.runId,
     specId: args.costCtx.specId,
     projectId: args.costCtx.projectId,
+    // The run's tenant key (from the CostRecordContext; NOT NULL on `runs.org_id`).
+    // Required on TerminalTaskEventEnvelope so every routed terminal event carries
+    // org_id explicitly (v68 fix; see {@link AppendEventInput.orgId}).
+    orgId: args.costCtx.orgId,
     taskKind: "write",
   };
 }

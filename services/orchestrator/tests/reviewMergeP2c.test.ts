@@ -239,6 +239,8 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
           runId: "run_1",
           specId: "spec_1",
           projectId: "project_1",
+          // v68 fix: events.org_id (NOT NULL) is stamped from the run context.
+          orgId: "org_1",
           taskId: expect.any(String),
           eventType: "task.completed",
           payload: { taskKind: "merge", status: "native_queue" },

@@ -97,6 +97,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
+    orgId: context.orgId,
     taskId,
     eventType: "task.started",
     payload: { taskKind: "merge" },
@@ -140,6 +141,7 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
         runId: context.runId,
         specId: context.specId,
         projectId: context.projectId,
+        orgId: context.orgId,
         taskId,
         eventType: "merge.speculative_held",
         payload: {
@@ -160,7 +162,13 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
         // `mergeTaskTerminalFallback.ts` split-write fallback are GONE.
         await markMergeTaskDoneWithEvent({
           writer: input.runStateWriter,
-          base: { runId: context.runId, specId: context.specId, projectId: context.projectId, taskId },
+          base: {
+            runId: context.runId,
+            specId: context.specId,
+            projectId: context.projectId,
+            orgId: context.orgId,
+            taskId,
+          },
           integration,
         });
         return {

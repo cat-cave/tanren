@@ -107,22 +107,19 @@ function fakeDrivePool(): DrivePoolHandle {
     // loadReviewMergeRunContext: the merge-stage run context join — the FIRST tenant
     // read inside mergeForRun, where the bug threw ReviewMergeRunNotFoundError.
     if (/FROM runs r/u.test(sql) && /default_branch/u.test(sql)) {
-      return admitted
-        ? {
-            rows: [
-              {
-                run_id: RUN_ID,
-                spec_id: SPEC_ID,
-                project_id: PROJECT_ID,
-                pr_url: PR_URL,
-                config: projectConfig(),
-                default_branch: "main",
-                org_config: null,
-              },
-            ],
-            rowCount: 1,
-          }
-        : denied;
+      // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context row.
+      const row = {
+        run_id: RUN_ID,
+        spec_id: SPEC_ID,
+        project_id: PROJECT_ID,
+        org_id: ORG_ID,
+        pr_url: PR_URL,
+        branch: "feat/x",
+        config: projectConfig(),
+        default_branch: "main",
+        org_config: null,
+      };
+      return admitted ? { rows: [row], rowCount: 1 } : denied;
     }
     // resolveSpeculativeState: not speculative (empty ancestor_stack).
     if (/SELECT ancestor_stack, spec_id, project_id FROM runs/u.test(sql)) {
@@ -146,9 +143,9 @@ function fakeDrivePool(): DrivePoolHandle {
     if (/FROM events/u.test(sql) && /review\.approved/u.test(sql)) {
       return admitted ? { rows: [], rowCount: 0 } : denied;
     }
-    // event appends — record the type (param index 4 is event_type).
+    // event appends — record the type (v68: param index 5 is event_type; orgId at 4).
     if (text.startsWith(EVENTS_INSERT_PREFIX)) {
-      events.push(String(params[4]));
+      events.push(String(params[5]));
       return { rows: [], rowCount: 1 };
     }
     throw new Error(`unexpected SQL in drive fake: ${text}`);

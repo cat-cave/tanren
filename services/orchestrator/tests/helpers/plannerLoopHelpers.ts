@@ -479,6 +479,7 @@ export function defaultLoopInput(overrides: Partial<SubtaskLoopInput> = {}): {
       runId: "run_test",
       specId: "spec_test",
       projectId: "project_test",
+      orgId: "org_test",
       specTitle: "Test spec",
       specDescription: "exercise the spec loop",
       acceptanceCriteria: ["README mentions ok"],

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { getSystemPool, notifyDagChanged, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import { type ProjectConfigV1, defaultProjectConfigV1, migrateProjectConfig } from "../config/index.js";
+import { type ProjectConfigV1, defaultProjectConfigV1 } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import { DEFAULT_SPEC_MODE, DEFAULT_SPEC_PRIORITY, type SpecMode, type SpecPriority } from "../state/spec.js";
 import { assertProjectCreateConfigAllowed, type ProjectConfigWriteProof } from "./projectConfigWriteGuards.js";
@@ -13,7 +13,7 @@ import {
   SpecNotFoundError,
   SpecNotRunnableError,
 } from "./projectSpecErrors.js";
-import { SpecProjectRowSchema } from "./projectSpecRowSchema.js";
+import { loadProjectOrgId, loadSpecWithProject } from "./projectSpecRowSchema.js";
 import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
 
@@ -42,6 +42,8 @@ export interface CreateProjectOptions {
 
 export interface ProjectContract {
   projectId: string;
+  // v68 fix: projects.org_id (NOT NULL); see {@link AppendEventInput.orgId}.
+  orgId: string;
   name: string;
   repoUrl: string;
   defaultBranch: string;
@@ -65,6 +67,8 @@ export interface CreateSpecInput {
 export interface SpecContract {
   specId: string;
   projectId: string;
+  // v68 fix: specs.org_id (NOT NULL).
+  orgId: string;
   title: string;
   description: string;
   acceptanceCriteria: string[];
@@ -97,6 +101,8 @@ export interface SpecRunContract {
   runId: string;
   specId: string;
   projectId: string;
+  // v68 fix: runs.org_id (NOT NULL).
+  orgId: string;
   trigger: string;
   branch: string;
   status: "queued";
@@ -127,6 +133,8 @@ export async function createProject(
   const projectId = `project_${randomUUID()}`;
   const project: ProjectContract = {
     projectId,
+    // null-org system seeding widens to "" (non-production path).
+    orgId: _actor?.orgId ?? "",
     name: input.name,
     repoUrl: input.repoUrl,
     defaultBranch: input.defaultBranch ?? defaultBranch,
@@ -187,9 +195,11 @@ async function createSpecOnClient(
   await ensureProjectExists(client, input.projectId);
   await ensureProjectAccess(client, input.projectId, actor);
   await ensureSpecDependenciesExist(client, input.projectId, input.dependsOn ?? []);
+  const projectOrgId = await loadProjectOrgId(client, input.projectId);
   const spec: SpecContract = {
     specId: `spec_${randomUUID()}`,
     projectId: input.projectId,
+    orgId: projectOrgId,
     title: input.title,
     description: input.description,
     acceptanceCriteria: input.acceptanceCriteria,
@@ -199,13 +209,13 @@ async function createSpecOnClient(
     mode: input.mode ?? DEFAULT_SPEC_MODE,
   };
 
-  // org_id derived in-statement from the parent project (tanren tenancy).
   await client.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status, priority, mode)
-     VALUES ($1, $2, (SELECT org_id FROM projects WHERE project_id = $2), $3, $4, $5::jsonb, $6::text[], $7, $8, $9)`,
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::text[], $8, $9, $10)`,
     [
       spec.specId,
       spec.projectId,
+      spec.orgId,
       spec.title,
       spec.description,
       JSON.stringify(spec.acceptanceCriteria),
@@ -320,6 +330,7 @@ async function createQueuedRunFromSpecOnClient(
     runId: `run_${randomUUID()}`,
     specId: loaded.spec.specId,
     projectId: loaded.project.projectId,
+    orgId: loaded.project.orgId,
     trigger: input.trigger ?? "cli",
     branch: input.branch ?? defaultRunBranch(loaded.spec),
     status: "queued",
@@ -332,15 +343,16 @@ async function createQueuedRunFromSpecOnClient(
   // Percolation columns set only on a speculative start; jj-local writes ONLY
   // `ancestor_stack` (the SOLE base truth post-WS-B PR-12).
   const spec = input.speculative;
+  // v68: explicit org_id replaces the prior derive-from-project subquery.
   await client.query(
-    // org_id derived in-statement from the parent project (tanren tenancy).
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status,
                        verified_ancestor_shas, percolation_pending, ancestor_stack)
-     VALUES ($1, $2, $3, (SELECT org_id FROM projects WHERE project_id = $3), $4, $5, 'queued', $6, $7, $8)`,
+     VALUES ($1, $2, $3, $4, $5, $6, 'queued', $7, $8, $9)`,
     [
       run.runId,
       run.specId,
       run.projectId,
+      run.orgId,
       run.trigger,
       run.branch,
       jsonbOrNull(spec?.verifiedAncestorShas),
@@ -372,6 +384,7 @@ async function createQueuedRunFromSpecOnClient(
     runId: run.runId,
     specId: run.specId,
     projectId: run.projectId,
+    orgId: run.orgId,
     eventType: "run.queued",
     payload: {
       trigger: run.trigger,
@@ -396,6 +409,7 @@ async function createQueuedRunFromSpecOnClient(
     taskId: run.plannerTaskId,
     specId: run.specId,
     projectId: run.projectId,
+    orgId: run.orgId,
     eventType: "task.queued",
     payload: { taskKind: "plan", jobId: run.plannerJobId },
   });
@@ -427,47 +441,6 @@ async function ensureSpecDependenciesDone(client: pg.PoolClient, spec: SpecContr
   if (blocked.length > 0) {
     throw new SpecDependenciesBlockedError(spec.specId, blocked);
   }
-}
-
-async function loadSpecWithProject(
-  pool: QueryClient,
-  specId: string,
-): Promise<{ project: ProjectContract; spec: SpecContract }> {
-  const result = await pool.query(
-    `SELECT p.project_id, p.name, p.repo_url, p.default_branch, p.runner_image, p.allocator, p.config,
-            s.spec_id, s.title, s.description, s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode
-       FROM specs s JOIN projects p ON p.project_id = s.project_id
-      WHERE s.spec_id = $1`,
-    [specId],
-  );
-  const row = result.rows[0];
-  if (row === undefined) {
-    throw new SpecNotFoundError(specId);
-  }
-  const decoded = SpecProjectRowSchema.parse(row);
-  return {
-    project: {
-      projectId: decoded.project_id,
-      name: decoded.name,
-      repoUrl: decoded.repo_url,
-      defaultBranch: decoded.default_branch,
-      runnerImage: decoded.runner_image,
-      allocator: decoded.allocator,
-      // migrateProjectConfig fails LOUD on missing/unknown `version` — no silent default.
-      config: migrateProjectConfig(decoded.config),
-    },
-    spec: {
-      specId: decoded.spec_id,
-      projectId: decoded.project_id,
-      title: decoded.title,
-      description: decoded.description,
-      acceptanceCriteria: decoded.acceptance_criteria,
-      dependsOn: decoded.depends_on,
-      status: decoded.status,
-      priority: decoded.priority,
-      mode: decoded.mode,
-    },
-  };
 }
 
 async function ensureClientProjectAccess(

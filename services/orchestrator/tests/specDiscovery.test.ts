@@ -52,11 +52,14 @@ function stubPool(existingSpecs: Array<{ spec_id: string; title: string; status:
     if (sql.startsWith("SELECT project_id FROM projects")) {
       return { rows: [{ project_id: params[0] }], rowCount: 1 };
     }
+    // v68 fix: createSpec calls loadProjectOrgId for the spec's NOT NULL org_id.
+    if (sql.startsWith("SELECT org_id FROM projects")) {
+      return { rows: [{ org_id: "org_a" }], rowCount: 1 };
+    }
     if (sql.startsWith("INSERT INTO specs")) {
       const specId = String(params[0]);
-      // params[7] is the `priority` bind (§1b): capture it so the accept test can
-      // assert the proposal's priority is persisted onto the spec.
-      specs.set(specId, { metadata: {}, priority: String(params[7]) });
+      // params[8] is the `priority` bind (§1b, v68 fix: org_id at $3 shifts +1).
+      specs.set(specId, { metadata: {}, priority: String(params[8]) });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("SELECT metadata FROM specs")) {

@@ -4,7 +4,63 @@
 // max-lines cap; behavior is unchanged (a plain re-home of the schemas).
 
 import { z } from "zod";
+import type pg from "pg";
+import { migrateProjectConfig } from "../config/index.js";
 import { SpecMode, SpecPriority } from "../state/spec.js";
+import { ProjectNotFoundError, SpecNotFoundError } from "./projectSpecErrors.js";
+import type { ProjectContract, SpecContract } from "./projectSpec.js";
+
+type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+/** Load `projects.org_id` (NOT NULL); v68 fix. */
+export async function loadProjectOrgId(pool: QueryClient, projectId: string): Promise<string> {
+  const r = await pool.query<{ org_id: string }>("SELECT org_id FROM projects WHERE project_id = $1", [projectId]);
+  const row = r.rows[0];
+  if (row === undefined) throw new ProjectNotFoundError(projectId);
+  return row.org_id;
+}
+
+/** Load the spec + project pair, surfacing the NOT NULL org_id on each (v68 fix). */
+export async function loadSpecWithProject(
+  pool: QueryClient,
+  specId: string,
+): Promise<{ project: ProjectContract; spec: SpecContract }> {
+  const result = await pool.query(
+    `SELECT p.project_id, p.org_id AS project_org_id, p.name, p.repo_url, p.default_branch, p.runner_image,
+            p.allocator, p.config, s.spec_id, s.org_id AS spec_org_id, s.title, s.description,
+            s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode
+       FROM specs s JOIN projects p ON p.project_id = s.project_id WHERE s.spec_id = $1`,
+    [specId],
+  );
+  const row = result.rows[0];
+  if (row === undefined) throw new SpecNotFoundError(specId);
+  const decoded = SpecProjectRowSchema.parse(row);
+  return {
+    project: {
+      projectId: decoded.project_id,
+      orgId: decoded.project_org_id,
+      name: decoded.name,
+      repoUrl: decoded.repo_url,
+      defaultBranch: decoded.default_branch,
+      runnerImage: decoded.runner_image,
+      allocator: decoded.allocator,
+      // migrateProjectConfig fails LOUD on missing/unknown `version` — no silent default.
+      config: migrateProjectConfig(decoded.config),
+    },
+    spec: {
+      specId: decoded.spec_id,
+      projectId: decoded.project_id,
+      orgId: decoded.spec_org_id,
+      title: decoded.title,
+      description: decoded.description,
+      acceptanceCriteria: decoded.acceptance_criteria,
+      dependsOn: decoded.depends_on,
+      status: decoded.status,
+      priority: decoded.priority,
+      mode: decoded.mode,
+    },
+  };
+}
 
 /** A jsonb object column → a record, defaulting non-objects (incl. arrays/null) to `{}`. */
 const RecordOrEmpty = z
@@ -21,6 +77,14 @@ const StringArrayOrEmpty = z
 /** The joined `specs s JOIN projects p` row `loadSpecWithProject` decodes. */
 export const SpecProjectRowSchema = z.object({
   project_id: z.string(),
+  // projects.org_id / specs.org_id are both NOT NULL on the table, so a loaded
+  // row always carries a real org. Surfaced on the ProjectContract / SpecContract
+  // the decoder hands back so downstream tenant writes (event-store append,
+  // integration upserts) can stamp the row directly — see {@link ProjectContract.orgId}
+  // (v68 fix; the prior eventStore SELECT-join subquery resolved NULL when given
+  // no projectId and tripped RLS).
+  project_org_id: z.string(),
+  spec_org_id: z.string(),
   name: z.string(),
   repo_url: z.string(),
   default_branch: z.string(),

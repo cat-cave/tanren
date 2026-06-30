@@ -427,22 +427,20 @@ export class PlannerRunPool {
       }
       return { rows: [], rowCount: 1 };
     }
-    if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.pr_url")) {
-      return {
-        rows: [
-          {
-            run_id: this.runContext.runId,
-            spec_id: this.runContext.specId,
-            project_id: this.runContext.projectId,
-            pr_url: this.prUrl,
-            config: this.projectConfig,
-            // review/merge context columns (shares this SELECT prefix).
-            default_branch: "main",
-            org_config: null,
-          },
-        ],
-        rowCount: 1,
+    if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.")) {
+      // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
+      const row = {
+        run_id: this.runContext.runId,
+        spec_id: this.runContext.specId,
+        project_id: this.runContext.projectId,
+        org_id: "org_planner_test",
+        pr_url: this.prUrl,
+        branch: this.runContext.runBranch,
+        config: this.projectConfig,
+        default_branch: "main",
+        org_config: null,
       };
+      return { rows: [row], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE specs SET status = 'in_flight'")) {
       // The review-rework re-entry sets the spec back in_flight (status inline,

@@ -33,16 +33,17 @@ import { registerRunStateCreateRoutes } from "./runStateCreateWrites.js";
 export type { RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
 const appendEventSchema = z.object({
-  // run_id / spec_id are NULLABLE on the events table: a PROJECT-scoped event
-  // (the DagWalker's `dag.drained` / `dag.budget.paused` / `dag.concurrency.saturated`,
-  // which describe the project's DAG, not a single run) carries only projectId +
-  // orgId. So these are OPTIONAL here, mirroring `PgEventStore.append` (the direct
-  // path), which inserts NULL run_id/spec_id for a project-only append. A run-scoped
-  // event still supplies both, byte-identically.
+  // run_id / spec_id / project_id are NULLABLE on the events table: a PROJECT-scoped
+  // event (the DagWalker's `dag.drained` / `dag.budget.paused` / `dag.concurrency.saturated`)
+  // carries only projectId + orgId; an ORG-SCOPED event (F2 per-fragment authoring
+  // — fires BEFORE a project exists; v68 fix) carries only orgId. The store's
+  // INSERT stamps the explicit orgId directly (replacing the prior
+  // `(SELECT org_id FROM projects WHERE project_id = $4)` subquery that landed
+  // NULL when given no projectId).
   runId: z.string().min(1).optional(),
   taskId: z.string().optional(),
   specId: z.string().min(1).optional(),
-  projectId: z.string(),
+  projectId: z.string().min(1).optional(),
   orgId: z.string().min(1),
   eventType: z.string().min(1),
   payload: z.unknown(),
@@ -55,6 +56,7 @@ const recordCostSchema = z.object({
       taskId: z.string(),
       specId: z.string(),
       projectId: z.string(),
+      orgId: z.string().min(1),
       cli: z.string(),
       model: z.string(),
       authRef: z.string(),
@@ -135,19 +137,20 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     if (!parsed.success) {
       return c.json({ error: "invalid_append_event", issues: parsed.error.issues }, 400);
     }
-    const { orgId, runId, taskId, specId, ...event } = parsed.data;
+    const { orgId, runId, taskId, specId, projectId, ...event } = parsed.data;
     try {
       await runWithOrgScope(deps.pool, orgId, async (client) => {
         // The SAME PgEventStore.append the worker ran — only the client (and thus
-        // the DB access) is the control plane's, scoped to the run's org. run/spec
-        // are passed only when present: a project-scoped event (dag.drained etc.)
-        // omits both, so the store inserts NULL run_id/spec_id — byte-identical to
-        // the direct path.
+        // the DB access) is the control plane's, scoped to the run's org. run /
+        // spec / project are passed only when present: a project-scoped event
+        // (dag.drained etc.) omits run/spec, and an ORG-SCOPED event (F2 per-fragment
+        // authoring; v68 fix) omits projectId too — byte-identical to the direct path.
         await new PgEventStore(client).append({
           ...(runId === undefined ? {} : { runId }),
           ...(taskId === undefined ? {} : { taskId }),
           ...(specId === undefined ? {} : { specId }),
-          projectId: event.projectId,
+          ...(projectId === undefined ? {} : { projectId }),
+          orgId,
           // The event name + payload are validated by the store's own registry parser.
           eventType: event.eventType as never,
           payload: event.payload as never,

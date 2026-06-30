@@ -118,7 +118,8 @@ function stubPool(projectConfig: unknown): {
     if (sql.startsWith("SELECT metadata FROM specs")) return { rows: [{ metadata: {} }], rowCount: 1 };
     if (sql.startsWith("UPDATE specs SET metadata")) return { rows: [{ spec_id: params[0] }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
-      specInserts.push({ specId: String(params[0]), title: String(params[2]) });
+      // v68 fix: explicit org_id at $3 shifts title→$4 (params[3]).
+      specInserts.push({ specId: String(params[0]), title: String(params[3]) });
       return { rows: [], rowCount: 1 };
     }
 

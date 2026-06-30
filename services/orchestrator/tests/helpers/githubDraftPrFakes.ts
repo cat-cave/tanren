@@ -86,6 +86,8 @@ export class RecordingRunPool extends RecordingPool {
             run_id: "run_123",
             spec_id: "spec_123",
             project_id: "project_123",
+            // v68 fix: the loader now selects runs.org_id (NOT NULL on the table).
+            org_id: "org_fake",
             branch: "tanren/run_123",
             ancestor_stack: this.ancestorStack,
             repo_url: "https://github.com/cat-cave/repo.git",

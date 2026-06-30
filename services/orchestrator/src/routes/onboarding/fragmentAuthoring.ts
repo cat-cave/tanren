@@ -100,11 +100,18 @@ export function buildLiveRunFragmentAuthoring(
           : event.kind === "fragment.authoring.succeeded"
             ? { orgId: event.orgId, fragmentId: event.fragmentId, attempts: event.attempts }
             : { orgId: event.orgId, fragmentId: event.fragmentId, reason: event.reason, attempts: event.attempts };
+      // ORG-SCOPED append (no project): the F2 per-fragment authoring DAG fires
+      // BEFORE `createProject` in derive (services/orchestrator/src/engine/forge/
+      // interview/derive.ts), so there is no project row to derive `org_id` from.
+      // Pass the ambient scoped `orgId` explicitly — the event store's INSERT
+      // uses it directly (the prior project_id → org_id subquery would resolve
+      // NULL here and trip RLS; that was apex v68's halt).
       await eventStore.append({
+        orgId,
         runId: "fragment-authoring",
         eventType: event.kind,
         payload,
-      } as Parameters<typeof eventStore.append>[0]);
+      });
     },
   };
 

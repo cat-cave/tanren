@@ -37,6 +37,8 @@ describe("§3.8 verdict-publish prep is internally non-throwing", () => {
         runId: "run_1",
         specId: "spec_1",
         projectId: "proj_1",
+        // v68 fix: gate.publish_failed audit-append is SKIPPED when context.orgId is unset.
+        orgId: "org_publish",
         repoUrl: "https://github.com/o/r",
         githubCredentialRef: "credential/github_token/proj_1",
       },

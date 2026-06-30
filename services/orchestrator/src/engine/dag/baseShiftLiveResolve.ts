@@ -331,6 +331,7 @@ function buildBaseShiftReGate(
           runId: ctx.runId,
           specId: ctx.specId,
           projectId: ctx.projectId,
+          orgId: ctx.orgId,
           ...(eventTaskId !== undefined && { taskId: eventTaskId }),
           eventType,
           payload,

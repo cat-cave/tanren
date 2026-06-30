@@ -63,14 +63,18 @@ function stubPool(config: unknown): {
     if (sql.startsWith("SELECT project_id FROM projects")) {
       return { rows: [{ project_id: params[0] }], rowCount: 1 };
     }
+    // v68 fix: createSpec calls loadProjectOrgId for the spec's NOT NULL org_id.
+    if (sql.startsWith("SELECT org_id FROM projects")) {
+      return { rows: [{ org_id: "org_a" }], rowCount: 1 };
+    }
     if (sql.startsWith("INSERT INTO specs")) {
       const specId = String(params[0]);
-      // createSpec binds: spec_id, project_id, title, description, acceptance_criteria, …
+      // createSpec binds (v68): spec_id, project_id, org_id, title, description, acceptance_criteria, …
       insertedSpecs.push({
         specId,
-        title: String(params[2]),
-        description: String(params[3]),
-        acceptance: params[4],
+        title: String(params[3]),
+        description: String(params[4]),
+        acceptance: params[5],
       });
       specMeta.set(specId, {});
       return { rows: [], rowCount: 1 };

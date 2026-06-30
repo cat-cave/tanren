@@ -308,15 +308,16 @@ export class RoutesPool {
       }
     }
     if (trimmed.startsWith("INSERT INTO specs")) {
+      // v68 fix: explicit org_id at $3; every subsequent column shifts by 1.
       this.seedSpec({
         spec_id: String(params[0]),
         project_id: String(params[1]),
-        title: String(params[2]),
-        description: String(params[3]),
-        acceptance_criteria: JSON.parse(String(params[4])) as unknown,
-        depends_on: params[5] as string[],
-        status: String(params[6]),
-        priority: String(params[7]),
+        title: String(params[3]),
+        description: String(params[4]),
+        acceptance_criteria: JSON.parse(String(params[5])) as unknown,
+        depends_on: params[6] as string[],
+        status: String(params[7]),
+        priority: String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }

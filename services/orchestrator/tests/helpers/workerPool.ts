@@ -97,19 +97,25 @@ export class WorkerPool {
     if (trimmed.startsWith("SELECT project_id FROM projects")) {
       return single(this.projects.has(String(params[0])) ? { project_id: String(params[0]) } : undefined);
     }
+    // v68 fix: createSpec calls loadProjectOrgId to stamp the spec's NOT NULL org_id.
+    if (trimmed.startsWith("SELECT org_id FROM projects")) {
+      const project = this.projects.get(String(params[0]));
+      return single(project === undefined ? undefined : { org_id: project.org_id ?? "org_fake" });
+    }
     if (trimmed.startsWith("INSERT INTO project_members")) {
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO specs")) {
+      // v68 fix: explicit org_id at $3; every subsequent column shifts by 1.
       this.specs.set(String(params[0]), {
         spec_id: String(params[0]),
         project_id: String(params[1]),
-        title: String(params[2]),
-        description: String(params[3]),
-        acceptance_criteria: JSON.parse(String(params[4])) as unknown,
-        depends_on: params[5] as string[],
-        status: String(params[6]),
-        priority: String(params[7]),
+        title: String(params[3]),
+        description: String(params[4]),
+        acceptance_criteria: JSON.parse(String(params[5])) as unknown,
+        depends_on: params[6] as string[],
+        status: String(params[7]),
+        priority: String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -120,6 +126,9 @@ export class WorkerPool {
       const project = this.projects.get(spec.project_id)!;
       return single({
         project_id: project.project_id,
+        // v68 fix: the loader now surfaces the NOT NULL org_id on both rows.
+        project_org_id: project.org_id ?? "org_fake",
+        spec_org_id: project.org_id ?? "org_fake",
         name: "p",
         repo_url: project.repo_url,
         default_branch: project.default_branch,
@@ -173,11 +182,12 @@ export class WorkerPool {
       return single(this.runs.get(runId) === undefined ? undefined : { ok: 1 });
     }
     if (trimmed.startsWith("INSERT INTO runs")) {
+      // v68 fix: org_id at $4 shifts branch→$6 (params[5]).
       this.runs.set(String(params[0]), {
         run_id: String(params[0]),
         spec_id: String(params[1]),
         project_id: String(params[2]),
-        branch: String(params[4]),
+        branch: String(params[5]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -190,13 +200,14 @@ export class WorkerPool {
     // event_type ($5 → params[4]) is recorded so finalize-path emission is
     // observable without a real DB.
     if (/^INSERT\s+INTO\s+events/u.test(trimmed)) {
-      const eventType = String(params[4] ?? "");
+      // v68 fix: org_id at $5 shifts event_type→$6 (params[5]) + payload→$7 (params[6]).
+      const eventType = String(params[5] ?? "");
       this.eventTypes.push(eventType);
-      // params[5] ($6) is the payload bind — a JSON string (PgEventStore stringifies
-      // before the `$6::jsonb` cast). Parse it so a test can assert the public payload.
+      // params[6] ($7) is the payload bind — a JSON string (PgEventStore stringifies
+      // before the `$7::jsonb` cast). Parse it so a test can assert the public payload.
       let payload: Record<string, unknown> = {};
       try {
-        const raw = params[5];
+        const raw = params[6];
         payload = typeof raw === "string" ? (JSON.parse(raw) as Record<string, unknown>) : {};
       } catch {
         payload = {};
@@ -317,7 +328,10 @@ export class WorkerPool {
     // branch); the top-level githubCredentialRef is preserved for the CI-poll
     // cred read. A run whose project carries no mergeIntegration migrates to the
     // not_configured → external_reviewer hand-off as before.
-    if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.pr_url")) {
+    if (
+      trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.pr_url") ||
+      trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url")
+    ) {
       const runId = String(params[0]);
       const run = this.runs.get(runId)!;
       const project = this.projects.get(run.project_id);
@@ -329,7 +343,10 @@ export class WorkerPool {
         run_id: run.run_id,
         spec_id: run.spec_id,
         project_id: run.project_id,
+        // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
+        org_id: this.forcedProjectOrgId ?? project?.org_id ?? "org_fake",
         pr_url: this.prUrl,
+        branch: run.branch,
         config: storedConfig,
         // review/merge context columns (shares this SELECT prefix).
         default_branch: "main",

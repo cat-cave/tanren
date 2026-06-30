@@ -37,10 +37,16 @@ export async function redactEventRows(input: RedactEventRowsInput): Promise<{
       rawView,
     });
     if (rawView && output.rawAccessedPaths.length > 0 && hasElevatedScope(actor)) {
+      // org_id is NOT NULL on the events row we just read — surfacing it here so
+      // the emitted `redaction.raw_access` audit event carries the tenant key
+      // directly (v68 fix; see {@link AppendEventInput.orgId}). Fall back to the
+      // actor's org when the row column was projected away by a fixture.
+      const rowOrgId = scalarTextOr(row["org_id"], actor.orgId ?? "");
       auditEmissions.push(
         emitRedactionAudit({
           store: eventStoreForAudit,
           actor,
+          orgId: rowOrgId,
           runId: scalarTextOr(row["run_id"], runId),
           specId: scalarTextOr(row["spec_id"], ""),
           projectId: scalarTextOr(row["project_id"], ""),

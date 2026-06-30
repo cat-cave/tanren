@@ -168,7 +168,8 @@ function stubPool(testRows: TestRowSeed[]): {
     if (sql.startsWith("SELECT project_id FROM projects")) return { rows: [{ project_id: params[0] }], rowCount: 1 };
     if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: ORG }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
-      specInserts.push({ specId: String(params[0]), title: String(params[2]) });
+      // v68 fix: org_id at $3, title shifts to $4 (params[3]).
+      specInserts.push({ specId: String(params[0]), title: String(params[3]) });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("SELECT metadata FROM specs")) return { rows: [{ metadata: {} }], rowCount: 1 };

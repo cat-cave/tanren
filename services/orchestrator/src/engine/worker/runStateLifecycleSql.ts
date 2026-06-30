@@ -404,6 +404,8 @@ const priorEventShape = z
     taskId: z.string().min(1).optional(),
     specId: z.string().min(1).optional(),
     projectId: z.string().min(1),
+    // v68 fix: events.org_id is NOT NULL + AppendEventInput requires explicit orgId.
+    orgId: z.string().optional(),
     eventType: z
       .string()
       .min(1)
@@ -423,7 +425,7 @@ export const terminalPairSchema = z
         taskId: z.string().min(1),
         // The row UPDATE accepts only the four terminal transitions on this seam.
         transition: z.enum(TERMINAL_TASK_TRANSITIONS),
-        orgId: z.string().min(1).optional(),
+        orgId: z.string().optional(),
         outcome: z.string().min(1).optional(),
         failureKind: z.string().min(1).optional(),
         attempt: z.number().int().optional(),
@@ -435,6 +437,8 @@ export const terminalPairSchema = z
         taskId: z.string().min(1).optional(),
         specId: z.string().min(1).optional(),
         projectId: z.string().min(1),
+        // v68 fix: events.org_id is NOT NULL + AppendEventInput requires explicit orgId.
+        orgId: z.string().optional(),
         eventType: z.enum(TERMINAL_TASK_EVENT_TYPES),
         // The payload is parsed downstream by `PgEventStore.append` against the
         // event-registry schema for the named type — keep it permissive here

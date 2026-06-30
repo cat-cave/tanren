@@ -203,7 +203,8 @@ function stubPool(opts: StubOpts = {}): {
     if (sql.startsWith("SELECT project_id FROM projects")) return { rows: [{ project_id: params[0] }], rowCount: 1 };
     if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_a" }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
-      const dependsOn = (params[5] as string[]) ?? [];
+      // v68 fix: explicit org_id at $3; title→$4, depends_on→$7, priority→$9.
+      const dependsOn = (params[6] as string[]) ?? [];
       // L1: emulate `ensureSpecDependenciesExist` — a dependsOn id not in `existing`
       // throws SpecNotFoundError (the engine drops the edge + retries with []).
       const missing = dependsOn.filter((id) => !existing.has(id));
@@ -214,9 +215,9 @@ function stubPool(opts: StubOpts = {}): {
       }
       specInserts.push({
         specId: String(params[0]),
-        title: String(params[2]),
+        title: String(params[3]),
         dependsOn,
-        priority: String(params[7]),
+        priority: String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }

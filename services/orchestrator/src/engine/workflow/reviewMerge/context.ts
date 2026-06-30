@@ -24,6 +24,16 @@ export interface ReviewMergeRunContext {
   runId: string;
   specId: string;
   projectId: string;
+  /**
+   * The run's tenant key (`runs.org_id`, NOT NULL on the table — every loaded run
+   * resolves a real org). Surfaced on the context so every downstream tenant write
+   * (event-store append, integration upserts, etc.) stamps `org_id` directly rather
+   * than re-derive it via a SELECT-join subquery. v68 fix: the prior eventStore
+   * shape derived org_id from `(SELECT org_id FROM projects WHERE project_id = $4)`
+   * — an org-scoped append with no project, or a project lookup that returned no
+   * rows, landed `org_id` NULL and RLS denied. Explicit `orgId` eliminates that.
+   */
+  orgId: string;
   prUrl: string;
   /** The PR's base branch (project default), for conflict-event payloads. */
   baseBranch: string;
@@ -121,7 +131,9 @@ export async function loadReviewMergeRunContext(
   options: LoadReviewMergeRunContextOptions = {},
 ): Promise<ReviewMergeRunContext> {
   const result = await pool.query(
-    `SELECT r.run_id, r.spec_id, r.project_id, r.pr_url, r.branch, p.config, p.default_branch, o.config AS org_config
+    // org_id is the run's tenant key (NOT NULL on `runs`); surfaced on the context so
+    // every downstream tenant write (event-store append) stamps it directly (v68 fix).
+    `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url, r.branch, p.config, p.default_branch, o.config AS org_config
      FROM runs r
      JOIN projects p ON p.project_id = r.project_id
      LEFT JOIN organizations o ON o.id = p.org_id
@@ -143,6 +155,7 @@ export async function loadReviewMergeRunContext(
     runId: row.run_id,
     specId: row.spec_id,
     projectId: row.project_id,
+    orgId: row.org_id,
     prUrl: row.pr_url,
     baseBranch: row.default_branch ?? "main",
     headBranch: row.branch ?? "",
@@ -204,6 +217,8 @@ const ReviewMergeRunRow = z.object({
   run_id: z.string(),
   spec_id: z.string(),
   project_id: z.string(),
+  // runs.org_id is NOT NULL on the table — every loaded run resolves a real org.
+  org_id: z.string(),
   pr_url: z.string().nullable(),
   branch: z.string().nullish(),
   config: z.unknown(),

@@ -27,7 +27,7 @@ export interface EventStoreConformanceHarness {
   make(): { store: EventStore; readBack(): Promise<ObservedEvent[]> };
 }
 
-const base = { specId: "spec_1", projectId: "project_1" } as const;
+const base = { specId: "spec_1", projectId: "project_1", orgId: "org_test" } as const;
 
 /**
  * Behavior spec every EventStore implementation must pass. Call once per impl:

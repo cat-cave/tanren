@@ -64,7 +64,9 @@ describe("job reaper", () => {
     const events = new FakeEventStore();
 
     const result = await reapExpiredJobs({
-      pool: new ReaperPool().asPgPool(),
+      // v68 fix: events.org_id is NOT NULL; a null-org reaped job SKIPS event emit.
+      // The test asserts events fire → seed a tenant org on the run lineage.
+      pool: new ReaperPool({ orgId: "org_reaper" }).asPgPool(),
       jobQueue,
       eventStore: events,
       now: new Date(Date.now() + 1_000),
@@ -87,7 +89,8 @@ describe("job reaper", () => {
     const jobQueue = new FakeJobQueue();
     await jobQueue.enqueue({ runId: "run_loop", taskKind: "plan", payload: {} });
     const events = new FakeEventStore();
-    const pool = new ReaperPool().asPgPool();
+    // v68 fix: events.org_id is NOT NULL; a null-org reaped job SKIPS event emit.
+    const pool = new ReaperPool({ orgId: "org_reaper" }).asPgPool();
 
     // Burn through far more re-claims than any old cap (DEFAULT_MAX_ATTEMPTS was 5):
     // every lease-expiry must requeue, never give up. A crashing worker is loud
@@ -134,7 +137,8 @@ describe("reapExpiredJobs — lineage + event scoping", () => {
     const events = new FakeEventStore();
 
     await reapExpiredJobs({
-      pool: new ReaperPool().asPgPool(),
+      // v68 fix: events.org_id is NOT NULL; a null-org reaped job SKIPS event emit.
+      pool: new ReaperPool({ orgId: "org_reaper" }).asPgPool(),
       jobQueue,
       eventStore: events,
       now: new Date(Date.now() + 1_000),

@@ -112,7 +112,7 @@ describe("createSpec — `mode` ROUND-TRIP through INSERT INTO specs (audit find
     // The INSERT names `mode` as the last column — positional $9 (after spec_id,
     // project_id, title, description, acceptance_criteria, depends_on, status, priority).
     expect(insert.sql).toContain("mode");
-    expect(insert.params[8]).toBe("specialize_seed");
+    expect(insert.params[9]).toBe("specialize_seed");
   });
 
   // Omitting the field defaults to `from_scratch` — the brownfield/legacy backward-
@@ -122,7 +122,7 @@ describe("createSpec — `mode` ROUND-TRIP through INSERT INTO specs (audit find
     const pool = newPool();
     await createSpec(pool.asPgPool(), baseInput(), ACTOR);
     expect(pool.specInserts).toHaveLength(1);
-    expect(pool.specInserts[0]!.params[8]).toBe("from_scratch");
+    expect(pool.specInserts[0]!.params[9]).toBe("from_scratch");
   });
 
   // The end-to-end proof: drive `scaffoldSpecsFor()`'s real output through `createSpec`,
@@ -161,7 +161,7 @@ describe("createSpec — `mode` ROUND-TRIP through INSERT INTO specs (audit find
       );
     }
     // All three foundation specs ride `specialize_seed`. The titles + $9 modes:
-    const rows = pool.specInserts.map((i) => ({ title: i.params[2], mode: i.params[8] }));
+    const rows = pool.specInserts.map((i) => ({ title: i.params[3], mode: i.params[9] }));
     expect(rows).toEqual([
       { title: "scaffold", mode: "specialize_seed" },
       { title: "build", mode: "specialize_seed" },

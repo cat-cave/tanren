@@ -13,10 +13,11 @@ function parseEventPayload<N extends EventName>(eventType: N, payload: unknown):
 }
 
 export interface RecordedEvent<N extends EventName = EventName> {
-  runId: string;
+  runId?: string;
   taskId?: string;
-  specId: string;
-  projectId: string;
+  specId?: string;
+  projectId?: string;
+  orgId: string;
   eventType: N;
   payload: EventPayload<N>;
 }
@@ -32,6 +33,7 @@ export class FakeEventStore implements EventStore {
       taskId: input.taskId,
       specId: input.specId,
       projectId: input.projectId,
+      orgId: input.orgId,
       eventType: input.eventType,
       payload: parsed,
     } as RecordedEvent<N>);

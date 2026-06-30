@@ -341,6 +341,7 @@ async function emitCredentialConfiguredForOrgProjects(
     projects.rows.map((project) =>
       events.append({
         projectId: project.project_id,
+        orgId,
         eventType: "credential.configured",
         payload,
       }),

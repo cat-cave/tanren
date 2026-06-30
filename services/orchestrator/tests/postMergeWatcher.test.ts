@@ -109,20 +109,19 @@ function fakePool(state: FakePoolState): pg.Pool {
         };
       }
       if (/FROM runs r/u.test(sql)) {
-        return {
-          rows: [
-            {
-              run_id: RUN_ID,
-              spec_id: SPEC_ID,
-              project_id: PROJECT_ID,
-              pr_url: PR_URL,
-              config: state.projectConfig ?? { version: 1 },
-              default_branch: BASE_BRANCH,
-              org_config: state.orgConfig ?? defaultOrgConfig(),
-            },
-          ],
-          rowCount: 1,
+        // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context row.
+        const row = {
+          run_id: RUN_ID,
+          spec_id: SPEC_ID,
+          project_id: PROJECT_ID,
+          org_id: ORG_ID,
+          pr_url: PR_URL,
+          branch: "feat/x",
+          config: state.projectConfig ?? { version: 1 },
+          default_branch: BASE_BRANCH,
+          org_config: state.orgConfig ?? defaultOrgConfig(),
         };
+        return { rows: [row], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     },

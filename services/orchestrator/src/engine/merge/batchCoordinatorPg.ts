@@ -28,7 +28,10 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     private readonly runStateWriter: RunStateWriter,
   ) {}
 
-  private async withScopedStore(projectId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
+  private async withScopedStore(
+    projectId: string,
+    work: (store: EventStore, orgId: string) => Promise<void>,
+  ): Promise<void> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null }>(
         "SELECT org_id FROM projects WHERE project_id = $1",
@@ -37,8 +40,10 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) return;
+    // v68 fix: thread the resolved orgId into the work callback so the event
+    // append stamps the explicit tenant key (no derive-from-project subquery).
     const writer = this.runStateWriter;
-    await runWithJobOrgId(orgId, () => work(writer));
+    await runWithJobOrgId(orgId, () => work(writer, orgId));
   }
 
   async emitChecking(input: {
@@ -48,10 +53,11 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     maxBatchSize: number;
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.checking",
         payload: {
           integration: "native_queue",
@@ -70,10 +76,11 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     integrationBranch: string;
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.passed",
         payload: {
           integration: "native_queue",
@@ -90,10 +97,11 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     message: string;
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.bisecting",
         payload: {
           integration: "native_queue",
@@ -114,10 +122,11 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     kind?: "missing_required_credential" | "ambiguous_merge_state";
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.infra_blocked",
         payload: {
           integration: "native_queue",
@@ -140,11 +149,12 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     checks: number;
     message: string;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store) =>
+    await this.withScopedStore(input.projectId, (store, orgId) =>
       store.append({
         runId: input.culprit.runId,
         specId: input.culprit.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.culprit",
         payload: {
           integration: "native_queue",

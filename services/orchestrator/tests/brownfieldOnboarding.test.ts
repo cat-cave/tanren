@@ -338,6 +338,8 @@ function seedStubPool(): { pool: pg.Pool; specs: Map<string, unknown> } {
       const present = ids.filter((id) => specs.has(id)).map((id) => ({ spec_id: id }));
       return { rows: present, rowCount: present.length };
     }
+    // v68 fix: createSpec now loads org_id off projects (NOT NULL).
+    if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_test" }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
       specs.set(String(params[0]), { id: params[0] });
       return { rows: [], rowCount: 1 };

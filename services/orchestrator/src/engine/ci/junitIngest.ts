@@ -94,6 +94,7 @@ export async function ingestJunitResults(input: IngestJunitInput): Promise<Inges
   await input.eventStore.append({
     runId: run.runId,
     projectId: run.projectId,
+    orgId: run.orgId,
     eventType: "ci.tests.reported",
     payload: {
       headSha,

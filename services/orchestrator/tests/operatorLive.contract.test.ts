@@ -221,12 +221,13 @@ class SpecRunPool {
       return { rows: [], rowCount: 0 };
     }
     if (sql.startsWith("INSERT INTO runs")) {
+      // v68 fix: org_id at $4 shifts trigger→$5 (params[4]) and branch→$6 (params[5]).
       this.runs.push({
         runId: String(params[0]),
         specId: String(params[1]),
         projectId: String(params[2]),
-        trigger: String(params[3]),
-        branch: String(params[4]),
+        trigger: String(params[4]),
+        branch: String(params[5]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -240,10 +241,11 @@ class SpecRunPool {
       return { rows: [{ id: String(id) }], rowCount: 1 };
     }
     if (sql.startsWith(`INSERT INTO ${"events"}`)) {
+      // v68 fix: org_id at index 4; eventType + payload shift to 5/6.
       this.events.push({
         runId: String(params[0]),
-        eventType: String(params[4]),
-        payload: JSON.parse(String(params[5])) as unknown,
+        eventType: String(params[5]),
+        payload: JSON.parse(String(params[6])) as unknown,
       });
       return { rows: [], rowCount: 1 };
     }
@@ -282,39 +284,39 @@ class SpecRunPool {
     if (spec === undefined || project === undefined) {
       return { rows: [], rowCount: 0 };
     }
-    return {
-      rows: [
-        {
-          project_id: project.projectId,
-          name: "Live project",
-          repo_url: "https://github.com/cat-cave/tanren-fixture-easy",
-          default_branch: "main",
-          runner_image: "ghcr.io/cat-cave/tanren-runner:v0",
-          allocator: "local-docker",
-          config: { version: 1 },
-          spec_id: spec.specId,
-          title: spec.title,
-          description: spec.description,
-          acceptance_criteria: spec.acceptanceCriteria,
-          depends_on: spec.dependsOn,
-          status: spec.status,
-          priority: spec.priority,
-        },
-      ],
-      rowCount: 1,
+    // v68 fix: loader surfaces NOT NULL org_id on both project + spec rows.
+    const row = {
+      project_id: project.projectId,
+      project_org_id: project.orgId,
+      spec_org_id: project.orgId,
+      name: "Live project",
+      repo_url: "https://github.com/cat-cave/tanren-fixture-easy",
+      default_branch: "main",
+      runner_image: "ghcr.io/cat-cave/tanren-runner:v0",
+      allocator: "local-docker",
+      config: { version: 1 },
+      spec_id: spec.specId,
+      title: spec.title,
+      description: spec.description,
+      acceptance_criteria: spec.acceptanceCriteria,
+      depends_on: spec.dependsOn,
+      status: spec.status,
+      priority: spec.priority,
     };
+    return { rows: [row], rowCount: 1 };
   }
 }
 
 function specFromParams(params: unknown[]): SpecRow {
+  // v68 fix: explicit org_id at $3 shifts every subsequent column by 1.
   return {
     specId: String(params[0]),
     projectId: String(params[1]),
-    title: String(params[2]),
-    description: String(params[3]),
-    acceptanceCriteria: JSON.parse(String(params[4])) as string[],
-    dependsOn: params[5] as string[],
-    status: String(params[6]),
-    priority: String(params[7]),
+    title: String(params[3]),
+    description: String(params[4]),
+    acceptanceCriteria: JSON.parse(String(params[5])) as string[],
+    dependsOn: params[6] as string[],
+    status: String(params[7]),
+    priority: String(params[8]),
   };
 }

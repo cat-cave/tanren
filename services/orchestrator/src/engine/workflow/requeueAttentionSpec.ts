@@ -108,9 +108,13 @@ export async function requeueAttentionSpec(
 
     // The actor-stamped resolution audit event (non-secret: spec id + enum label +
     // user id). Through the org-scoped event store (the same seam every spec event uses).
+    // orgId is the actor's (validated non-null above) — events.org_id is NOT NULL
+    // (v68 fix; AppendEventInput requires explicit orgId rather than the prior
+    // derive-from-project subquery).
     await new PgEventStore(client).append({
       specId: input.specId,
       projectId,
+      orgId,
       eventType: "dag.spec.attention_resolved",
       payload: { specId: input.specId, fromSource, resolvedBy: actor.userId },
     });

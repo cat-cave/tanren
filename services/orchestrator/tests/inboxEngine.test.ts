@@ -105,6 +105,8 @@ function stubPool(): {
       return { rows: [candidateRow(String(cid))], rowCount: 1 };
     }
     if (sql.startsWith("SELECT project_id FROM projects")) return { rows: [{ project_id: params[0] }], rowCount: 1 };
+    // v68 fix: createSpec now loads org_id off projects (NOT NULL).
+    if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_test" }], rowCount: 1 };
     if (sql.startsWith("INSERT INTO specs")) {
       specs.set(String(params[0]), { metadata: {} });
       return { rows: [], rowCount: 1 };

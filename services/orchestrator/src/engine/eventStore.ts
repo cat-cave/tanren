@@ -9,6 +9,19 @@ type EventStoreClient = Pick<pg.Pool | pg.PoolClient, "query">;
 // that the payload matches the registered Zod schema for that event. The
 // constructor also accepts a bare `string` name for callers that build the
 // name dynamically; the runtime parser rejects unknown names and bad payloads.
+//
+// `orgId` is REQUIRED and is the tenant-isolation key the row carries directly
+// (the column is NOT NULL; the RLS WITH CHECK is
+// `org_id = current_setting('app.current_org_id', true)` so an explicit value
+// must be supplied — there is no derive-from-project subquery anymore).
+// `projectId` is OPTIONAL: an org-scoped event (e.g. the F2 per-fragment
+// authoring events that fire BEFORE the project row exists, or any other
+// org-scoped engine signal) carries `orgId` alone. A project-scoped event still
+// passes both. Apex v68 halted because the prior shape silently derived `org_id`
+// via `(SELECT org_id FROM projects WHERE project_id = $4)` — when a caller
+// (the F2 emitter) had no project, the subquery returned no rows, `org_id`
+// landed NULL, and RLS denied. The explicit `orgId` parameter eliminates that
+// failure mode at the source; v68 fix.
 export type AppendEventInput<N extends EventName = EventName> = {
   // run_id / spec_id are nullable on the events table: a PROJECT-scoped event
   // (e.g. the DagWalker's `dag.drained` / `dag.budget.paused`, which describe the
@@ -18,7 +31,8 @@ export type AppendEventInput<N extends EventName = EventName> = {
   runId?: string;
   taskId?: string;
   specId?: string;
-  projectId: string;
+  projectId?: string;
+  orgId: string;
   eventType: N;
   payload: EventPayload<N>;
 };
@@ -90,18 +104,21 @@ export class PgEventStore implements EventStore {
     // in-transaction client, use it as-is — the caller owns that transaction.
     const client = resolveWritableClient(this.pool);
     const inserted = await client.query<{ id: string }>(
-      // org_id is the mandatory tenant-isolation key (tanren tenancy hardening),
-      // derived in-statement from the event's project so every event row carries
-      // its org directly rather than relying on a route-layer gate or a nullable
-      // project_id → projects.org_id hop.
+      // org_id is the mandatory tenant-isolation key (tanren tenancy hardening) —
+      // it now comes from the caller's explicit `orgId` parameter so every event
+      // row carries its org directly. The prior shape derived it via a
+      // `(SELECT org_id FROM projects WHERE project_id = $4)` subquery; an
+      // org-scoped append (e.g. F2 per-fragment authoring) had no project, the
+      // subquery returned no rows, `org_id` landed NULL, and RLS denied (v68 halt).
       `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload)
-       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
        RETURNING id::text AS id`,
       [
         input.runId ?? null,
         input.taskId ?? null,
         input.specId ?? null,
-        input.projectId,
+        input.projectId ?? null,
+        input.orgId,
         input.eventType,
         JSON.stringify(parsed),
       ],
@@ -211,16 +228,18 @@ export class PgEventStore implements EventStore {
       // ON CONFLICT (task_id, event_type) WHERE ... is INFERRED via the partial
       // unique index `events_task_terminal_unique`; an unqualified
       // `ON CONFLICT DO NOTHING` is sufficient and lets PG pick the matching
-      // arbiter index by the index-predicate it already has.
+      // arbiter index by the index-predicate it already has. `org_id` is the
+      // explicit caller-supplied tenant key (v68 fix; see {@link PgEventStore.append}).
       `INSERT INTO events (run_id, task_id, spec_id, project_id, org_id, event_type, payload)
-       VALUES ($1, $2, $3, $4, (SELECT org_id FROM projects WHERE project_id = $4), $5, $6::jsonb)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
        ON CONFLICT DO NOTHING
        RETURNING id::text AS id`,
       [
         input.runId ?? null,
         input.taskId ?? null,
         input.specId ?? null,
-        input.projectId,
+        input.projectId ?? null,
+        input.orgId,
         input.eventType,
         JSON.stringify(parsed),
       ],

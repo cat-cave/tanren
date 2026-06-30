@@ -115,6 +115,7 @@ export async function cancelSpec(
     const run = await cancelActiveRun(client, eventStore, {
       specId: input.specId,
       projectId,
+      orgId,
       cancelledBy: actor.userId,
     });
 
@@ -122,12 +123,16 @@ export async function cancelSpec(
     const dependentsParked = await parkLiveDependents(client, eventStore, {
       specId: input.specId,
       projectId,
+      orgId,
     });
 
-    // The actor-stamped spec.cancelled audit event.
+    // The actor-stamped spec.cancelled audit event. `orgId` is the actor's (validated
+    // non-null above) — events.org_id is NOT NULL (v68 fix; AppendEventInput requires
+    // explicit orgId rather than the prior derive-from-project subquery).
     await eventStore.append({
       specId: input.specId,
       projectId,
+      orgId,
       eventType: "spec.cancelled",
       payload: {
         specId: input.specId,
@@ -163,7 +168,7 @@ export async function cancelSpec(
 async function cancelActiveRun(
   client: pg.PoolClient,
   eventStore: PgEventStore,
-  ctx: { specId: string; projectId: string; cancelledBy: string },
+  ctx: { specId: string; projectId: string; orgId: string; cancelledBy: string },
 ): Promise<CancelledRun | undefined> {
   // Read the (at most one) active run's id + status BEFORE the flip, locking the row so
   // a concurrent worker transition can't race the cancel (FOR UPDATE serializes the two
@@ -203,6 +208,7 @@ async function cancelActiveRun(
     runId: row.run_id,
     specId: ctx.specId,
     projectId: ctx.projectId,
+    orgId: ctx.orgId,
     eventType: "run.cancelled",
     payload: {
       runId: row.run_id,
@@ -227,7 +233,7 @@ async function cancelActiveRun(
 async function parkLiveDependents(
   client: pg.PoolClient,
   eventStore: PgEventStore,
-  ctx: { specId: string; projectId: string },
+  ctx: { specId: string; projectId: string; orgId: string },
 ): Promise<string[]> {
   const parked = await client.query<{ spec_id: string }>(
     `UPDATE specs SET status = 'needs_attention'
@@ -241,6 +247,7 @@ async function parkLiveDependents(
     await eventStore.append({
       specId: dependentId,
       projectId: ctx.projectId,
+      orgId: ctx.orgId,
       eventType: "dag.spec.needs_attention",
       payload: {
         source: "cancelled_ancestor",

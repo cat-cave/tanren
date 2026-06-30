@@ -340,6 +340,7 @@ async function emitGithubConfiguredForOrgProjects(
     projects.rows.map((project) =>
       events.append({
         projectId: project.project_id,
+        orgId,
         eventType: "credential.github.configured",
         payload,
       }),

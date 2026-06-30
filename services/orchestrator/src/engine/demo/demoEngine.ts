@@ -90,6 +90,7 @@ export class DemoEngine {
           runId: target.runId,
           specId: target.specId,
           projectId: target.projectId,
+          orgId: target.orgId,
           eventType: "demo.evidence.recorded",
           payload: {
             behaviorId: entry.behaviorId,
@@ -104,6 +105,7 @@ export class DemoEngine {
         runId: target.runId,
         specId: target.specId,
         projectId: target.projectId,
+        orgId: target.orgId,
         eventType: "demo.completed",
         payload: { surfaceKind: surface.kind, behaviorCount: evidence.length, passed, failed },
       });

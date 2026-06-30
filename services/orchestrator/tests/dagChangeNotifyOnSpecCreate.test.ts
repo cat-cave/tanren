@@ -30,6 +30,10 @@ function recordingPool(projectId: string): { pool: pg.Pool; notifies: string[] }
     if (text.startsWith("SELECT project_id FROM projects")) {
       return { rows: [{ project_id: projectId }], rowCount: 1 };
     }
+    // v68 fix: loadProjectOrgId reads org_id off the project row.
+    if (text.startsWith("SELECT org_id FROM projects")) {
+      return { rows: [{ org_id: "org_test" }], rowCount: 1 };
+    }
     // INSERT INTO specs + any other read default to a benign empty result.
     return { rows: [], rowCount: 0 };
   };
@@ -54,6 +58,10 @@ function orgScopedRecordingPool(projectId: string): { pool: pg.Pool; notifies: s
       }
       if (text.startsWith("SELECT project_id FROM projects")) {
         return { rows: [{ project_id: projectId }], rowCount: 1 };
+      }
+      // v68 fix: loadProjectOrgId reads org_id off the project row.
+      if (text.startsWith("SELECT org_id FROM projects")) {
+        return { rows: [{ org_id: "org_test" }], rowCount: 1 };
       }
       return { rows: [], rowCount: 0 };
     },

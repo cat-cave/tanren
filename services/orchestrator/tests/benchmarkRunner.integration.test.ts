@@ -199,7 +199,7 @@ describeDb("BenchmarkRunner — runs trials end-to-end under RLS + the accept st
               timeoutMs: 1000,
               taskId,
               appendEvent: (eventType, payload, evTaskId) =>
-                store.append({ runId, taskId: evTaskId, specId: spec, projectId: project, eventType, payload }),
+                store.append({ runId, taskId: evTaskId, specId: spec, projectId: project, orgId, eventType, payload }),
             });
             return acceptResult;
           }),

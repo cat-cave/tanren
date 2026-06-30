@@ -22,6 +22,8 @@ export interface ReviewTaskTerminalBase {
   runId: string;
   specId: string;
   projectId: string;
+  /** v68 fix: required tenant key stamped onto every event in this atomic triplet. */
+  orgId: string;
   taskId: string;
 }
 

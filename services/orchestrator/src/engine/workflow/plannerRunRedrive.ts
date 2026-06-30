@@ -171,6 +171,19 @@ function resolveProjectId(ctx: DispositionContext): string {
   return typeof projectId === "string" ? projectId : "";
 }
 
+/**
+ * Resolve the run's `orgId` from `ctx.context` for the spec/run-disposition events
+ * (v68 fix: AppendEventInput requires explicit `orgId` rather than the prior
+ * derive-from-project subquery; runs.org_id is NOT NULL on the table, propagated
+ * through the workflow's `PlannerRunContext.orgId`). Fail loud on absence — the
+ * applier is reached only on a real workflow throw where the run row exists, so a
+ * missing org is a wiring bug that must NEVER silently drop org_id (the apex v68
+ * RLS-deny mode the fix exists to close).
+ */
+function resolveOrgId(ctx: DispositionContext): string {
+  return typeof ctx.context.orgId === "string" ? ctx.context.orgId : "";
+}
+
 /** Apply a RE-DRIVE: halt the run recoverable, return the spec to `open`, emit `dag.spec.redriven`.
  *
  * Task #48 Site A: the spec flip + `dag.spec.redriven` event are atomic
@@ -208,6 +221,7 @@ async function applyRedrive(
       runId: ctx.context.runId,
       specId: ctx.context.specId,
       projectId: resolveProjectId(ctx),
+      orgId: resolveOrgId(ctx),
       eventType: "run.failed",
       payload: {
         // Mirrors `runFinalize.ts`'s worker-orphan `run.failed` shape so a
@@ -228,6 +242,7 @@ async function applyRedrive(
       runId: ctx.context.runId,
       specId: ctx.context.specId,
       projectId: resolveProjectId(ctx),
+      orgId: resolveOrgId(ctx),
       eventType: "dag.spec.redriven",
       payload: {
         specId: ctx.context.specId,
@@ -277,10 +292,12 @@ async function applyGenuineHalt(
   seams: DispositionSeams,
   disposition: Extract<RunDisposition, { bucket: "genuine_halt" }>,
 ): Promise<void> {
+  const orgId = resolveOrgId(ctx);
   await seams.finalizeGenuineHaltAtomic({
     runId: ctx.context.runId,
     specId: ctx.context.specId,
     projectId: resolveProjectId(ctx),
+    orgId,
     eventType: "run.failed",
     payload: {
       status: "failed",
@@ -325,6 +342,7 @@ async function applyGenuineHalt(
       runId: ctx.context.runId,
       specId: ctx.context.specId,
       projectId: resolveProjectId(ctx),
+      orgId,
       eventType: "dag.spec.needs_attention",
       payload: needsAttentionPayload,
     },
@@ -361,6 +379,7 @@ async function applyPauseForCapacity(
     runId: ctx.context.runId,
     specId: ctx.context.specId,
     projectId: resolveProjectId(ctx),
+    orgId: resolveOrgId(ctx),
     eventType: "run.paused",
     payload: {
       provider: snapshot.provider,

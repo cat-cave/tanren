@@ -31,6 +31,7 @@ export interface CostRecordContext {
   taskId: string;
   specId: string;
   projectId: string;
+  orgId: string;
   cli: "codex" | "claude" | "opencode" | "aider" | "pi" | "reasonix" | "fake";
   model: string;
   authRef: string;
@@ -299,6 +300,7 @@ export class CostRecorder {
         taskId: context.taskId,
         specId: context.specId,
         projectId: context.projectId,
+        orgId: context.orgId,
         eventType: event.eventType,
         payload: event.payload,
       });
@@ -475,26 +477,24 @@ export class CostRecorder {
     basis: "ccusage" | "credits",
     reason: "no_rows" | "zero_token_denominator",
   ): Promise<void> {
-    const run = await client.query<{ project_id: string; spec_id: string | null }>(
-      "SELECT project_id, spec_id FROM runs WHERE run_id = $1",
+    const r = await client.query<{ project_id: string; org_id: string; spec_id: string | null }>(
+      "SELECT project_id, org_id, spec_id FROM runs WHERE run_id = $1",
       [runId],
     );
-    const projectId = run.rows[0]?.project_id ?? "";
-    const specId = run.rows[0]?.spec_id ?? undefined;
+    const { project_id: projectId = "", org_id: orgId = "", spec_id: specId } = r.rows[0] ?? {};
     await this.eventStore.append({
       runId,
-      ...(specId !== undefined && specId !== null ? { specId } : {}),
+      ...(specId === null || specId === undefined ? {} : { specId }),
       projectId,
+      orgId,
       eventType: "cost.reconcile_failed",
-      payload: {
-        basis,
-        totalCostUsd,
-        reason,
-        reasonText:
-          reason === "no_rows"
-            ? "a positive real cost total was resolved but the run has no cost_records rows to receive it; observed real spend would otherwise silently vanish"
-            : "a positive real cost total was resolved but the run's cost_records carry zero total tokens, so it cannot be apportioned; observed real spend would otherwise silently vanish",
-      },
+      payload: { basis, totalCostUsd, reason, reasonText: reconcileFailedReasonText(reason) },
     });
   }
+}
+
+function reconcileFailedReasonText(reason: "no_rows" | "zero_token_denominator"): string {
+  return reason === "no_rows"
+    ? "a positive real cost total was resolved but the run has no cost_records rows to receive it; observed real spend would otherwise silently vanish"
+    : "a positive real cost total was resolved but the run's cost_records carry zero total tokens, so it cannot be apportioned; observed real spend would otherwise silently vanish";
 }

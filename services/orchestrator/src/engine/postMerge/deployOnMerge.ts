@@ -279,6 +279,7 @@ export class DeployOnMergeWatcher {
       await this.eventStore.append({
         runId,
         projectId: merged.projectId,
+        orgId: target.orgId,
         eventType: "deploy.triggered",
         payload: {
           provider: target.provider,

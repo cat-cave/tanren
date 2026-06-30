@@ -113,10 +113,13 @@ export async function finalizeRunRecoverable(
   // rolls back the row UPDATE too, so a transient hiccup is naturally idempotent
   // (the next attempt re-tries the whole pair); the partial unique index
   // `events_run_terminal_unique` + `appendIfAbsent` dedup any retried commit.
+  const runOrgId = orgId ?? (await loadRunOrgId(pool, runId, log));
+  if (runOrgId === undefined) return;
   const runFailedEvent = (specId: string, projectId: string) => ({
     runId,
     specId,
     projectId,
+    orgId: runOrgId,
     eventType: "run.failed" as const,
     payload: { status: "halted", failureCode: failure.code, stage: failure.stage, message: failure.summary },
   });
@@ -190,10 +193,18 @@ export async function finalizeRunRecoverable(
     // re-attempts — or genuine-halt at the consecutive-same-failure cap. The spec is never
     // left `in_flight` with a dead run, and a crash is TRANSIENT (re-driven, not parked). A
     // park FAILURE is LOGGED LOUDLY (a stranded spec must never vanish silently), not swallowed.
-    await parkStrandedSpecInProcess(client, specId, projectId, runId, failure).catch((error: unknown) =>
+    await parkStrandedSpecInProcess(client, specId, projectId, runId, runOrgId, failure).catch((error: unknown) =>
       logFinalizeSwallow("stranded-spec park (in-process)", { runId, specId }, error),
     );
   });
+}
+
+async function loadRunOrgId(pool: pg.Pool, runId: string, l: typeof log): Promise<string | undefined> {
+  const r = await runWithSystemScope(pool, (c) =>
+    c.query<{ org_id: string }>("SELECT org_id FROM runs WHERE run_id = $1", [runId]),
+  );
+  if (r.rows[0]?.org_id === undefined) l.warn("finalizeRunRecoverable: runs row not found — skipping", { runId });
+  return r.rows[0]?.org_id;
 }
 
 // UNIFIED RUN-FINALIZE (apex v35): a GENUINELY orphaned slot (a crashed run whose
@@ -325,6 +336,7 @@ async function parkStrandedSpecRemote(
         runId,
         specId,
         projectId,
+        orgId,
         eventType: "dag.spec.redriven",
         payload: orphanRedrivenPayload(runId, specId, failure, slot.consecutive),
       },
@@ -338,6 +350,7 @@ async function parkStrandedSpecRemote(
       runId,
       specId,
       projectId,
+      orgId,
       eventType: "dag.spec.needs_attention",
       payload: orphanPersistentPayload(runId, specId, failure, slot.consecutive),
     },
@@ -355,6 +368,7 @@ export async function parkStrandedSpecInProcess(
   specId: string,
   projectId: string,
   runId: string,
+  orgId: string,
   failure: ClassifiedRunFailure,
 ): Promise<void> {
   // RE-DRIVE ↔ ORPHAN ATOMICITY (apex v35 Bug 1): a fresh queued/running SUCCESSOR run ⇒
@@ -388,13 +402,10 @@ export async function parkStrandedSpecInProcess(
         eventType: "dag.spec.needs_attention" as const,
         payload: orphanPersistentPayload(runId, specId, failure, consecutive),
       };
-  // Use a sentinel `orgId` for the in-process direct applier path — the caller
-  // (`finalizeRunRecoverable`'s `withRunFinalizeScope`) already owns the GUC
-  // scope; the applier's input field is unused by the row UPDATE (the runs row
-  // is the truth) and the event INSERT scopes off the project row's `org_id`.
+  // Sentinel `orgId` for the applier (caller owns the GUC scope); v68: EVENT carries the real org_id.
   await applyUpdateSpecWithEvent(client, {
     spec: { specId, orgId: "in-process", status: targetStatus, notFromStatuses },
-    event: { runId, specId, projectId, ...event },
+    event: { runId, specId, projectId, orgId, ...event },
   });
 }
 

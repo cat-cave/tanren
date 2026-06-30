@@ -172,6 +172,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         runId: input.culprit.runId,
         specId: input.culprit.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.gate_rework_routed",
         payload: {
           integration: "native_queue",
@@ -190,6 +191,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           runId: input.culprit.runId,
           specId: input.culprit.specId,
           projectId: input.projectId,
+          orgId,
           eventType: "recovery.replan_queued",
           payload: {
             runId: input.culprit.runId,
@@ -223,6 +225,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         runId: input.culprit.runId,
         specId: input.culprit.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.gate_rework_routed",
         payload: {
           integration: "native_queue",
@@ -240,6 +243,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       runId: input.culprit.runId,
       specId: input.culprit.specId,
       projectId: input.projectId,
+      orgId,
       eventType: "dag.spec.needs_attention",
       payload: {
         source: "strand",
@@ -269,6 +273,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         runId: input.culprit.runId,
         specId: input.culprit.specId,
         projectId: input.projectId,
+        orgId,
         eventType: "merge.batch.gate_rework_routed",
         payload: {
           integration: "native_queue",
@@ -285,6 +290,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       runId: input.culprit.runId,
       specId: input.culprit.specId,
       projectId: input.projectId,
+      orgId,
       eventType: "dag.spec.needs_attention",
       payload: {
         source: "strand",

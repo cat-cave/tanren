@@ -139,6 +139,7 @@ export async function reviseSpec(pool: pg.Pool, ctx: HaltedRunContext, orgId: st
       runId: ctx.runId,
       specId: ctx.specId,
       projectId: ctx.projectId,
+      orgId,
       eventType: "recovery.revise_routed",
       payload: { runId: ctx.runId, specId: ctx.specId, action: "revise_spec", editHref },
     });
@@ -192,6 +193,7 @@ export async function replanWithSteering(
       runId: ctx.runId,
       specId: ctx.specId,
       projectId: ctx.projectId,
+      orgId,
       eventType: "recovery.replan_queued",
       payload: {
         runId: ctx.runId,
@@ -257,6 +259,7 @@ export async function rollbackToCommit(
       runId: ctx.runId,
       specId: ctx.specId,
       projectId: ctx.projectId,
+      orgId,
       eventType: "recovery.rollback_queued",
       payload: {
         runId: ctx.runId,
@@ -317,6 +320,7 @@ export async function openInspectionThread(
       runId: ctx.runId,
       specId: ctx.specId,
       projectId: ctx.projectId,
+      orgId,
       eventType: "recovery.inspection_opened",
       payload: {
         runId: ctx.runId,

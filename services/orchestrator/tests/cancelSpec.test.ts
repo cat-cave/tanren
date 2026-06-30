@@ -52,10 +52,10 @@ class FakePool {
       }
       // Event appends go through the PgEventStore INSERT — capture them for assertions.
       // Identified by its column list (NOT the literal table-insert string the
-      // single-event-writer architecture guard scans for). Params:
-      // [runId, taskId, specId, projectId, eventType, payloadJson].
+      // single-event-writer architecture guard scans for). Params (v68 fix):
+      // [runId, taskId, specId, projectId, orgId, eventType, payloadJson].
       if (/\(run_id, task_id, spec_id, project_id, org_id, event_type, payload\)/u.test(trimmed)) {
-        this.appended.push({ eventType: String(params[4]), payload: parsePayload(params[5]) });
+        this.appended.push({ eventType: String(params[5]), payload: parsePayload(params[6]) });
         return { rows: [{ id: "1" }], rowCount: 1 };
       }
       if (/^(UPDATE|INSERT|DELETE)/u.test(trimmed)) {

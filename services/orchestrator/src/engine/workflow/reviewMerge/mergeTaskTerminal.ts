@@ -12,6 +12,8 @@ export interface MergeTaskTerminalBase {
   runId: string;
   specId: string;
   projectId: string;
+  /** Explicit tenant key the eventStore.append stamps directly (v68 fix). */
+  orgId: string;
   taskId: string;
 }
 
