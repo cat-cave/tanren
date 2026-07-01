@@ -2,7 +2,9 @@
 // GOLDEN-BASE COVERAGE check that short-circuits JIT env-image creation.
 //
 // P2's golden base ships a WARM BASELINE (runner/mise.baseline.toml — node 24 /
-// pnpm 11 / python 3.14 / go 1.26 / ruby 3.4). If a project's declared toolchain is a
+// pnpm 11 / python 3.14 / go 1.26; ruby 3.4 is TEMPORARILY dropped — upstream
+// mise 403 on the jdx/ruby endpoint, 2026-07-01; see the runner/mise.baseline.toml
+// comment). If a project's declared toolchain is a
 // SUBSET of that baseline (every tool present AND its declared version-spec already
 // served by the baseline), the golden base ALREADY IS a valid, validated environment
 // for it — there is NOTHING off-baseline to bake, so a JIT build would be pure waste
@@ -42,7 +44,10 @@ export const GOLDEN_BASELINE_TOOLCHAIN: Readonly<Record<string, string>> = Objec
   pnpm: "11",
   python: "3.14",
   go: "1.26",
-  ruby: "3.4",
+  // ruby: "3.4" — TEMPORARILY dropped in lockstep with runner/mise.baseline.toml
+  // (upstream mise 403 on jdx/ruby endpoint, 2026-07-01). RESTORE this line when the
+  // baseline toml restores `ruby = "3.4"`. See runner/mise.baseline.toml for the
+  // durable-fix follow-up plan.
 });
 
 /**

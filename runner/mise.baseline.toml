@@ -35,4 +35,10 @@ node = "24"
 pnpm = "11"
 python = "3.14"
 go = "1.26"
-ruby = "3.4"
+# BLOCKED: upstream mise 403 on jdx/ruby endpoint (2026-07-01) breaks the warm
+# install (precompiled tarball 403s, ruby-build fallback hits /tmp/mise-ruby-build
+# EACCES). Ruby is not on apex's current path (TypeScript), so drop it from the
+# baseline until the durable fix lands. See the follow-up plan in the PR that
+# introduced this comment. DO NOT delete the line — restore + un-comment as the
+# durable fix (bump mise / rbenv+pre-cloned ruby-build / pinned ruby-lang.org tarball).
+# ruby = "3.4"
