@@ -90,11 +90,20 @@ export async function runPlannerStage(args: PlannerStageInput): Promise<PlanAnsw
 
 async function runPlannerStageBody(args: PlannerStageInput): Promise<PlanAnswer> {
   const startedAt = Date.now();
-  const result = await invokePlanner(args.adapter, {
-    spec: args.spec,
-    workspace: args.workspacePath,
-    rejectionHistory: args.rejectionHistory,
-  });
+  // STAGE-LOCAL stall recovery (apex v70 fix): a transient plan-Answerer stall re-drives
+  // THIS call in place — sibling progress from the enclosing subtask loop (writer diff,
+  // checker/auditor verdicts, designOracle) is PRESERVED. A genuinely-wedged planner (a
+  // stall on EVERY re-drive) escalates loudly via `StageStallEscalationError` — never a
+  // count. Every other loop stage (checker, auditor, designOracle, triage, convergence,
+  // demoRun) already runs through the same wrapper; the plan stage was the only gap.
+  // The stage signature `"plan"` matches the `taskKind` convention.
+  const result = await runAnswererStageWithRecovery("plan", () =>
+    invokePlanner(args.adapter, {
+      spec: args.spec,
+      workspace: args.workspacePath,
+      rejectionHistory: args.rejectionHistory,
+    }),
+  );
   const runtimeSeconds = secondsSince(startedAt);
   // stage-transition latency as a structured timing log (no schema).
   emitStageTiming("plan", Date.now() - startedAt, { runId: args.runId, attempt: args.attempt });
