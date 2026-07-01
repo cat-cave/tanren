@@ -21,13 +21,19 @@ describe("toolchainCoveredByGoldenBaseline — the golden-base short-circuit", (
   });
 
   it("the FULL baseline is covered (every tool at its baseline spec)", () => {
-    expect(
-      toolchainCoveredByGoldenBaseline(tc({ node: "24", pnpm: "11", python: "3.14", go: "1.26", ruby: "3.4" })),
-    ).toBe(true);
+    // Ruby is TEMPORARILY dropped from the baseline (upstream mise 403 on the
+    // jdx/ruby endpoint, 2026-07-01) — restore `ruby: "3.4"` here in lockstep
+    // when runner/mise.baseline.toml restores the line.
+    expect(toolchainCoveredByGoldenBaseline(tc({ node: "24", pnpm: "11", python: "3.14", go: "1.26" }))).toBe(true);
   });
 
-  it("a Ruby-only project on the baseline spec is COVERED (apex v58 #65 — Rails stack warm hit)", () => {
-    expect(toolchainCoveredByGoldenBaseline(tc({ ruby: "3.4" }))).toBe(true);
+  it("a Ruby-only project is NOT covered while ruby is dropped from the baseline (2026-07-01 workaround)", () => {
+    // FLIPPED from covered → not-covered while ruby is out of the baseline. A Ruby
+    // project now takes the JIT-build path instead of the warm short-circuit; the
+    // build itself would still trip the same upstream 403, so a Ruby project cannot
+    // run end-to-end until the durable fix ships (see runner/mise.baseline.toml).
+    // Flip this back to `.toBe(true)` when the baseline restores `ruby = "3.4"`.
+    expect(toolchainCoveredByGoldenBaseline(tc({ ruby: "3.4" }))).toBe(false);
   });
 
   it("an EMPTY toolchain is trivially covered (asks for nothing off-baseline)", () => {
