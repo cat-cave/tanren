@@ -2,30 +2,16 @@
 //
 // When `selectFragmentConfig` returns `{ kind: "missing-fragments", missing }`,
 // the derive spawns ONE authoring run PER missing fragment. Each authoring run
-// produces a validated `Fragment` that the org's `fragments` table persists, and
-// the unified library loader picks it up on the retry.
+// produces a validated `Fragment` the org's `fragments` table persists; the
+// unified library loader picks it up on the retry.
 //
-// THE DAG SHAPE per fragment (three logical stages, each a writer-rework loop):
-//   1. PLAN — the `FragmentSpec` itself IS the plan (the kind + label + required
-//      contract). No separate planner stage: a missing fragment is already
-//      specified by what the lifecycle requires. (Planning gives us no leverage
-//      here — the spec carries all that's needed.)
-//   2. WRITE — the `FragmentAuthorer` seam produces a TS body for the spec. The
-//      writer loop iterates on the body: each rejection from VALIDATE feeds back
-//      as a `previousAttempt` carrying the failing body + the rejection reason,
-//      so the next attempt is informed by why the prior failed. Unbounded while
-//      making PROGRESS (the body or the rejection keeps changing); stops at a
-//      FIXED POINT (identical body + identical rejection) — never a flat
-//      iteration cap (the timeout-eradication doctrine).
-//   3. VALIDATE — parse the body via `interpretOrgFragment` (a structural parse
-//      that rejects out-of-subset code at registration time), then run a SMOKE
-//      COMPOSITION (PR-D's isolation harness inline): assemble a minimal config
-//      that exercises the new fragment in its phase slot, call `composeTemplate`,
-//      assert the post-process invariants. Pass ⇒ persist + done.
-//
-// ON FIXED-POINT FAILURE: the run terminalizes with the failing rejection; the
-// returned `failedIds` list lets `resolveFragmentConfig` halt loud with
-// `FragmentAuthoringFailedError`. The doctrine is NEVER silent-skip.
+// THE DAG SHAPE per fragment: PLAN (the `FragmentSpec` IS the plan) → WRITE (the
+// `FragmentAuthorer` seam iterates on a body; each VALIDATE rejection feeds back
+// as `previousAttempt`; UNBOUNDED while making progress, halts at a FIXED POINT
+// — no iteration cap, per the timeout-eradication doctrine) → VALIDATE (parse
+// body via `interpretOrgFragment`, run a smoke composition; pass ⇒ persist).
+// On fixed-point failure `failedIds` lets `resolveFragmentConfig` halt loud
+// with `FragmentAuthoringFailedError` — NEVER silent-skip.
 
 import type { ActorContext } from "../../../auth/schemas.js";
 import { composeTemplate } from "./compose.js";
@@ -35,6 +21,7 @@ import {
   RUNTIME_NODE_PNPM_ID,
   RUNTIME_RUBY_BUNDLER_ID,
 } from "./library/index.js";
+import { deriveRuntimeLanguage, unsupportedRuntimeLanguageReason } from "./runtimeLanguage.js";
 import {
   assertComposedCiYmlParsesAsCiConfigV1,
   assertScaffoldBootstrapsFromFreshCheckout,
@@ -195,6 +182,16 @@ type AuthorOneOutcome = { kind: "ok"; source: OrgFragmentSource } | { kind: "fai
 
 async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome> {
   const { spec, lifecycle, orgId, deps } = args;
+
+  // FAIL-FAST language check (apex v72 fix). A runtime fragment whose target
+  // language has no test-file recognizer will never pass the smoke composition —
+  // halt LOUD with `unsupported_runtime_language` BEFORE the first LLM call.
+  if (spec.kind === "runtime" && deriveRuntimeLanguage(spec.label) === null) {
+    const reason = unsupportedRuntimeLanguageReason(spec.label);
+    await deps.events.emit({ kind: "fragment.authoring.failed", orgId, fragmentId: spec.id, reason, attempts: 0 });
+    return { kind: "failed", reason };
+  }
+
   await deps.events.emit({ kind: "fragment.authoring.started", orgId, fragmentId: spec.id, spec });
 
   // UNBOUNDED writer-rework loop while the writer is making PROGRESS (the body or

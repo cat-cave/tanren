@@ -242,6 +242,78 @@ describe("buildFragmentAuthoring — audit finding #12 (live smoke runs runtime 
   });
 });
 
+// An authorer that would happily succeed if invoked — used to prove the
+// fail-fast unsupported_runtime_language check rejects a runtime BEFORE the
+// authorer is ever called.
+let neverCalledInvocations = 0;
+const neverCalledAuthorer: FragmentAuthorer = async () => {
+  neverCalledInvocations += 1;
+  return { bodyTs: "(this authorer body must never be requested)" };
+};
+
+describe("buildFragmentAuthoring — fail-fast unsupported_runtime_language (apex v72 fix)", () => {
+  it("rejects a runtime spec whose label does not map to a supported language, BEFORE calling the authorer", async () => {
+    neverCalledInvocations = 0;
+    const { events, calls } = recordingEvents();
+    const { persistence, created } = inMemoryPersistence();
+    const runner = buildFragmentAuthoring({ authorer: neverCalledAuthorer, persistence, events });
+    const result = await runner({
+      orgId: "org_a",
+      actor: { userId: "u", orgId: "org_a", projectId: null, scopes: ["platform:admin"], source: "session" },
+      // "haskell" is not in the smoke-recognizer allowlist — the fail-fast fires.
+      missing: [spec("runtime", "haskell")],
+      lifecycle: lifecycle(),
+    });
+    expect(result.failedIds).toEqual(["runtime-haskell"]);
+    // The authorer is NEVER called; the fail-fast fires at kick-off.
+    expect(neverCalledInvocations).toBe(0);
+    // Nothing persists.
+    expect(created).toHaveLength(0);
+    // The failed event carries the reason so the derive halts with the right
+    // 409 body (unsupported_runtime_language).
+    const failed = calls.find((c) => (c as { kind: string }).kind === "fragment.authoring.failed") as
+      | { reason: string; attempts: number }
+      | undefined;
+    expect(failed).toBeDefined();
+    expect(failed?.reason).toContain("unsupported_runtime_language");
+    expect(failed?.reason).toContain("haskell");
+    // Zero attempts — nothing was tried.
+    expect(failed?.attempts).toBe(0);
+    // failureReasons carries the same reason so the derive 409 body embeds it.
+    expect(result.failureReasons["runtime-haskell"]).toContain("unsupported_runtime_language");
+  });
+
+  it("allows a runtime spec whose label DOES map to a supported language (go passes fail-fast)", async () => {
+    // The fail-fast does NOT fire for `runtime-go` (go is supported). The
+    // authorer IS called (and fails at parse time here) — proving the check is
+    // language-scoped, not a blanket runtime block.
+    const { events, calls } = recordingEvents();
+    const { persistence } = inMemoryPersistence();
+    const runner = buildFragmentAuthoring({ authorer: failingAuthorer, persistence, events });
+    const result = await runner({
+      orgId: "org_a",
+      actor: { userId: "u", orgId: "org_a", projectId: null, scopes: ["platform:admin"], source: "session" },
+      missing: [spec("runtime", "go")],
+      lifecycle: lifecycle(),
+    });
+    // The authoring still fails (the failingAuthorer returns un-parsable body),
+    // but the FAILURE REASON must NOT be `unsupported_runtime_language` —
+    // that would indicate the fail-fast incorrectly rejected a supported label.
+    expect(result.failedIds).toEqual(["runtime-go"]);
+    const failed = calls.find((c) => (c as { kind: string }).kind === "fragment.authoring.failed") as
+      | { reason: string; attempts: number }
+      | undefined;
+    expect(failed).toBeDefined();
+    expect(failed?.reason ?? "").not.toContain("unsupported_runtime_language");
+    // The started event fires (the authorer path was entered) — confirms the
+    // fail-fast returned without firing.
+    const kinds = calls.map((c) => (c as { kind: string }).kind);
+    expect(kinds).toContain("fragment.authoring.started");
+    // Attempts is > 0 (the authorer was invoked at least once).
+    expect((failed?.attempts ?? 0) > 0).toBe(true);
+  });
+});
+
 describe("loadUnifiedFragmentLibrary — bundled + org-scoped shadowing", () => {
   it("returns the bundled library verbatim when no org fragments load", async () => {
     const library = await loadUnifiedFragmentLibrary("org_a", async () => []);
