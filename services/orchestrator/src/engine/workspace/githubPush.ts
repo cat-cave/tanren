@@ -164,12 +164,21 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       "writer_tree=$(git rev-parse HEAD^{tree})",
       `provenance=$(git log --reverse --format='- %s' ${quoteSshShellArg(`${input.bootstrapSha}..HEAD`)})`,
       `composed_msg=$(printf %s ${quoteSshShellArg(composedMessage)}; printf '\\n%s\\n' "$provenance")`,
-      `composed=$(GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit-tree "$writer_tree" -p ${quoteSshShellArg(input.bootstrapSha)} -m "$composed_msg")`,
+      // Explicit author + committer identity on the commit-tree invocation: `git commit-tree`
+      // fails hard if `user.name`/`user.email` aren't resolvable (the workspace bootstrap DOES
+      // set them on the live runner, but a substrate test path — or a runner whose bootstrap
+      // silently skipped the identity step — would hit `fatal: empty ident name` without this).
+      // The "Tanren Composer" identity is honest: this commit is Tanren's SYNTHESIS of the
+      // writer's per-subtask drafts, not the writer's own authored commit (those stay on the
+      // working HEAD, with their original identity, for local forensics).
+      `composed=$(${COMPOSER_GIT_IDENT_ENV} git commit-tree "$writer_tree" -p ${quoteSshShellArg(input.bootstrapSha)} -m "$composed_msg")`,
       // Detach at the composed tip, then rebase the ONE composed commit onto the clone
       // HEAD — dropping the bootstrap commit. `--autostash` handles dirty per-iteration
-      // gate artifacts (rspec `reports/`, rubocop autocorrects — apex v65).
+      // gate artifacts (rspec `reports/`, rubocop autocorrects — apex v65). The same composer
+      // identity is threaded through the rebase (rebase writes a NEW commit with the composed
+      // commit's tree; it needs `user.name`/`user.email` for the SAME reason as commit-tree).
       'git checkout --quiet --detach "$composed"',
-      `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git rebase --autostash --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
+      `${COMPOSER_GIT_IDENT_ENV} git rebase --autostash --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
       // Capture the cleaned tip into the push ref, then restore the working HEAD.
       `git update-ref ${quoteSshShellArg(PR_CLEAN_REF)} HEAD`,
       'git checkout --quiet --detach "$orig_head"',
@@ -180,6 +189,17 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
   });
   return { ref: PR_CLEAN_REF, headSha: validateResolvedSha(result.stdout.trim()) };
 }
+
+// The composer git identity + fixed dates, threaded onto BOTH the `git commit-tree`
+// (writes the composed object) AND the `git rebase` (rebase authors a new commit with
+// the composed commit's tree). Both commands need `user.name`/`user.email` resolvable
+// or they fail hard with `fatal: empty ident name`. Held as a shared constant so a
+// future edit can't drift them apart (identity mismatch on rebase would produce a
+// commit whose author differs from the composed object we built).
+const COMPOSER_GIT_IDENT_ENV =
+  "GIT_AUTHOR_NAME='Tanren Composer' GIT_AUTHOR_EMAIL='composer@tanren.invalid' " +
+  "GIT_COMMITTER_NAME='Tanren Composer' GIT_COMMITTER_EMAIL='composer@tanren.invalid' " +
+  "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z'";
 
 // The composed-commit message header. The runId anchors provenance back to the run
 // whose writer produced this change; the shell prelude appends the per-subtask
