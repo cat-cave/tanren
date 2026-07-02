@@ -83,6 +83,13 @@ export {
   type FragmentAuthorerOutput,
   type FragmentPersistence,
 } from "./fragmentAuthoringRun.js";
+export { deriveRuntimeLanguage, type SupportedRuntimeLanguage } from "./runtimeLanguage.js";
+export {
+  BASE_SKELETON_TEST_PATHS,
+  hasMeaningfulAssertion,
+  isCandidateTestPath,
+  SCENARIO_HEADER,
+} from "./functionalTestRecognizer.js";
 export { buildFragmentAuthorerPrompt, wrapProviderFragmentAuthorer } from "./providerFragmentAuthorer.js";
 export {
   assertComposedCiYmlParsesAsCiConfigV1,
