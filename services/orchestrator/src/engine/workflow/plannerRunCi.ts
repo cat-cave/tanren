@@ -126,6 +126,9 @@ export async function publishCleanedDraftPr(
     workspacePath: ctx.workspacePath,
     cloneHeadSha: shas.cloneHeadSha,
     bootstrapSha: shas.bootstrapSha,
+    // Stamped into the composed commit's message so the PR head carries provenance
+    // back to the run whose writer produced it (apex v71 squash-then-rebase).
+    runId: context.runId,
   });
   try {
     // v68 fix: events.org_id NOT NULL on the table; stamp via the run's org_id

@@ -114,12 +114,14 @@ describe("bootstrap-artifact isolation", () => {
     expect(state.diff).not.toContain("package-lock.json");
   });
 
-  it("(b) prepares the PR branch by dropping the bootstrap commit, keeping the writer's", async () => {
-    // prepareCleanPrBranch replays the writer commits (bootstrapSha..HEAD) onto
-    // the clone HEAD into PR_CLEAN_REF, so the pushed branch carries only the
-    // writer's changes — the bootstrap commit (and its artifacts) is dropped. The
-    // trailing `git rev-parse PR_CLEAN_REF` echoes the cleaned tip (the future PR
-    // head) as the command's stdout — the COMMIT-BINDING sha the merge gate anchors on.
+  it("(b) prepares the PR branch by squashing writer commits into ONE composed commit and rebasing that onto the clone HEAD (apex v71 fix)", async () => {
+    // prepareCleanPrBranch squashes the writer commit range (`bootstrapSha..HEAD`) into
+    // ONE composed commit (tree = HEAD tree, parent = bootstrapSha) via `git commit-tree`,
+    // then rebases that single commit onto the clone HEAD into PR_CLEAN_REF. This drops
+    // the bootstrap commit AND eliminates inter-writer-commit self-conflicts (the apex v71
+    // halt: 22 writer subtasks touching the same lines → linear rebase "could not apply").
+    // The trailing `git rev-parse PR_CLEAN_REF` echoes the cleaned tip (the future PR head)
+    // as the command's stdout — the COMMIT-BINDING sha the merge gate anchors on.
     const CLEAN_SHA = "4".repeat(40);
     const ssh = new ScriptedSsh([{ match: "git rebase", stdout: `${CLEAN_SHA}\n` }]);
     const pushSource = await prepareCleanPrBranch({
@@ -128,6 +130,7 @@ describe("bootstrap-artifact isolation", () => {
       workspacePath,
       cloneHeadSha: CLONE_HEAD,
       bootstrapSha: BOOTSTRAP_SHA,
+      runId: "run_apex_v71",
       timeoutMs,
     });
 
@@ -135,10 +138,19 @@ describe("bootstrap-artifact isolation", () => {
     expect(pushSource.ref).toBe(PR_CLEAN_REF);
     expect(pushSource.headSha).toBe(CLEAN_SHA);
     const cmd = ssh.commands[0] ?? "";
-    // Replay writer commits onto the clone HEAD, dropping the bootstrap commit.
+    // The SQUASH step: read the writer HEAD tree, gather provenance from the writer commit
+    // range, and stamp ONE commit whose parent is bootstrapSha. `git commit-tree` writes
+    // the object directly — no working-tree touch, no dirty-tree interaction.
+    expect(cmd).toContain("writer_tree=$(git rev-parse HEAD^{tree})");
+    expect(cmd).toContain(`git log --reverse --format='- %s' '${BOOTSTRAP_SHA}..HEAD'`);
+    expect(cmd).toContain(`git commit-tree "$writer_tree" -p '${BOOTSTRAP_SHA}'`);
+    // The composed message carries provenance: the runId anchors + the per-subtask
+    // subjects (the provenance shell var) are appended.
+    expect(cmd).toContain("run_apex_v71");
+    // Then rebase the ONE composed commit onto cloneHead — no inter-writer conflict possible.
     // `--autostash` (apex v65) stashes per-iteration gate artifacts (rspec `reports/`,
-    // rubocop autocorrects, etc.) before the rebase so `cannot rebase: You have
-    // unstaged changes` cannot block the cleanup, and pops them back after.
+    // rubocop autocorrects, etc.) so `cannot rebase: You have unstaged changes` cannot block.
+    expect(cmd).toContain('git checkout --quiet --detach "$composed"');
     expect(cmd).toContain(`git rebase --autostash --onto '${CLONE_HEAD}' '${BOOTSTRAP_SHA}'`);
     // Capture the cleaned tip into the push ref, then restore the working HEAD
     // (so a review-rework re-entry keeps its bootstrapSha diff base intact).
@@ -157,7 +169,8 @@ describe("bootstrap-artifact isolation", () => {
     // captured in the gate's `gate.verdict` event payload and is never something we
     // want in the PR commit. `--autostash` is git's native fix: stash dirty tracked +
     // untracked changes before the rebase, pop them back after, leaving PR_CLEAN_REF
-    // resolved to the cleaned tip regardless.
+    // resolved to the cleaned tip regardless. The v71 squash keeps this invariant: the
+    // rebase is now over the ONE composed commit, but --autostash still runs first.
     const CLEAN_SHA = "5".repeat(40);
     const ssh = new ScriptedSsh([{ match: "git rebase", stdout: `${CLEAN_SHA}\n` }]);
     await prepareCleanPrBranch({
@@ -166,6 +179,7 @@ describe("bootstrap-artifact isolation", () => {
       workspacePath,
       cloneHeadSha: CLONE_HEAD,
       bootstrapSha: BOOTSTRAP_SHA,
+      runId: "run_apex_v65",
       timeoutMs,
     });
     const cmd = ssh.commands[0] ?? "";
@@ -189,6 +203,7 @@ describe("bootstrap-artifact isolation", () => {
       workspacePath,
       cloneHeadSha: "",
       bootstrapSha: "",
+      runId: "run_fake",
       timeoutMs,
     });
     // No real workspace on a fake SSH ⇒ "" sha (the gate emits no verdict).
@@ -202,6 +217,7 @@ describe("bootstrap-artifact isolation", () => {
       workspacePath,
       cloneHeadSha: CLONE_HEAD,
       bootstrapSha: CLONE_HEAD,
+      runId: "run_no_bootstrap",
       timeoutMs,
     });
     // No bootstrap commit to drop, but the working HEAD IS the PR head — its sha is

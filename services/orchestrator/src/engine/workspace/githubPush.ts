@@ -45,6 +45,10 @@ export interface PrepareCleanPrBranchInput {
   cloneHeadSha: string;
   // The synthetic bootstrap commit (the writer's diff base) to drop.
   bootstrapSha: string;
+  // The run id — stamped into the composed commit's message so the PR head carries
+  // provenance back to the run whose writer produced it (the per-subtask event trail
+  // lives in `writer.subtask.completed`; the commit message carries the pointer).
+  runId: string;
 }
 
 /**
@@ -69,15 +73,33 @@ export interface CleanedPushSource {
   headSha: string;
 }
 
-// Builds a ref ({@link PR_CLEAN_REF}) holding the writer's commits replayed onto
-// the clone HEAD — i.e. with the synthetic bootstrap commit (and its install
-// artifacts: lockfiles, node_modules) dropped — and points the push branch at
-// it. Returns the gitref the caller pushes from instead of the working HEAD.
+// Builds a ref ({@link PR_CLEAN_REF}) holding the writer's cumulative diff SQUASHED
+// onto a single commit whose parent is the clone HEAD — i.e. with the synthetic
+// bootstrap commit (and its install artifacts: lockfiles, node_modules) dropped AND
+// the writer's per-subtask draft history collapsed into one composed commit. Points
+// the push branch at that ref; returns the gitref the caller pushes from instead of
+// the working HEAD.
+//
+// SQUASH-THEN-REBASE (apex v71 fix): earlier revisions replayed the writer commit
+// range (`bootstrapSha..HEAD`) linearly onto the clone HEAD. When two writer
+// subtasks touched the same lines (successive drafts of the same file — the common
+// case when the writer refines its output), the linear replay hit "could not apply
+// <sha> ... Resolve all conflicts manually" — a self-conflict between drafts that
+// no strategy flag rescues because the LATER draft's context is not present in the
+// EARLIER draft. apex v71 halted here on run 3 after the entire writer → gate →
+// checker → auditor → designOracle → plan loop closed clean (22 writer commits,
+// junit 12/12, findings empty). The doctrine-aligned fix: the PR carries ONE
+// composed change, not the writer's local debugging trail. We build the composed
+// commit BEFORE the rebase (its tree = the writer HEAD tree, its parent =
+// bootstrapSha), then rebase THAT one commit onto the clone HEAD. Rebasing exactly
+// one commit cannot self-conflict; the writer's draft-vs-draft collisions are
+// eliminated by construction. The per-subtask history stays on the writer branch
+// for local forensics (auditor `git diff HEAD~N`); only the PR head is squashed.
 //
 // This does NOT move the working HEAD: the writer's diff base (bootstrapSha)
 // stays an ancestor of HEAD so a review-rework re-entry can keep diffing/
-// committing vs it. We rebase a detached copy and capture its sha into
-// PR_CLEAN_REF.
+// committing vs it. We stage the composed commit in a detached checkout, rebase it,
+// capture the tip into PR_CLEAN_REF, then restore the working HEAD.
 //
 // The rebase runs with `--autostash` so dirty working-tree artifacts from the
 // per-iteration gates (rspec `reports/`, rubocop autocorrects, etc.) don't
@@ -115,6 +137,7 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
     });
     return { ref: "HEAD", headSha: validateResolvedSha(head.stdout.trim()) };
   }
+  const composedMessage = buildComposedCommitMessage(input.runId);
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "prepare clean PR branch",
     cwd: input.workspacePath,
@@ -126,13 +149,26 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
     }),
     command: [
       "set -eu",
-      // Remember where the working HEAD sits so we can restore it after rebasing
-      // a detached copy (the writer's base must stay reachable for reworks).
+      // Remember where the working HEAD sits so we can restore it after squashing +
+      // rebasing off a detached copy (the writer's base must stay reachable for reworks).
       "orig_head=$(git rev-parse HEAD)",
-      // Detach at the writer tip, then replay the writer commits
-      // (bootstrapSha..HEAD) onto the clone HEAD — dropping the bootstrap commit.
-      // The working branch ref is untouched (we are detached).
-      'git checkout --quiet --detach "$orig_head"',
+      // SQUASH FIRST (apex v71 fix): build a single composed commit whose tree IS the
+      // writer HEAD tree and whose parent IS bootstrapSha. Reading the tree via
+      // `HEAD^{tree}` inspects the object DB — no working-tree checkout, no dirty-tree
+      // interaction. `git commit-tree` writes the object and echoes its sha; we bind that
+      // to a shell var so the rebase below can replay exactly ONE commit onto the clone
+      // HEAD. Any inter-writer-commit self-conflict (successive subtask drafts editing
+      // the same lines) is eliminated by construction — there is only one commit.
+      // Provenance from the per-subtask commit range is appended to the composed message
+      // so the PR head carries `- <subject>` bullets back to the writer's draft trail.
+      "writer_tree=$(git rev-parse HEAD^{tree})",
+      `provenance=$(git log --reverse --format='- %s' ${quoteSshShellArg(`${input.bootstrapSha}..HEAD`)})`,
+      `composed_msg=$(printf %s ${quoteSshShellArg(composedMessage)}; printf '\\n%s\\n' "$provenance")`,
+      `composed=$(GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git commit-tree "$writer_tree" -p ${quoteSshShellArg(input.bootstrapSha)} -m "$composed_msg")`,
+      // Detach at the composed tip, then rebase the ONE composed commit onto the clone
+      // HEAD — dropping the bootstrap commit. `--autostash` handles dirty per-iteration
+      // gate artifacts (rspec `reports/`, rubocop autocorrects — apex v65).
+      'git checkout --quiet --detach "$composed"',
       `GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' git rebase --autostash --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
       // Capture the cleaned tip into the push ref, then restore the working HEAD.
       `git update-ref ${quoteSshShellArg(PR_CLEAN_REF)} HEAD`,
@@ -143,6 +179,18 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
     ].join(" && "),
   });
   return { ref: PR_CLEAN_REF, headSha: validateResolvedSha(result.stdout.trim()) };
+}
+
+// The composed-commit message header. The runId anchors provenance back to the run
+// whose writer produced this change; the shell prelude appends the per-subtask
+// commit subjects (`git log --format='- %s'`) as a bullet list below the header.
+// The message is deliberately terse — the detailed writer trail lives in the events
+// table (`writer.subtask.completed`), not the PR head.
+export function buildComposedCommitMessage(runId: string): string {
+  if (runId === "") {
+    throw new Error("prepareCleanPrBranch requires a non-empty runId for the composed commit message");
+  }
+  return `Tanren composed change (${runId})\n\nSquashed writer subtask commits into a single PR head; per-subtask trail:`;
 }
 
 // Guards the sha echoed from the clean-PR prep: a real runner returns a 40-hex sha;
