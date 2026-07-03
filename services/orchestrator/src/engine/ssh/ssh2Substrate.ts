@@ -361,7 +361,7 @@ export class SshCommandSubstrate implements CommandSubstrate {
     // workspace advance across successive checks) is a WEDGE — dead/zombied OR busy-but-not-
     // advancing (an infinite loop spewing identical lines / a CPU-burn touching nothing) — and
     // surfaces a stall. The decision is signature IDENTITY, never a duration.
-    if (!isWedgedNonAdvancing(state.workSignatures)) {
+    if (!isWedgedNonAdvancing(state.workSignatures, { minNonAdvancingRepeats: watchdog.minNonAdvancingRepeats })) {
       return;
     }
     // The work signature is at a fixed point: no NEW distinct work across the checks.

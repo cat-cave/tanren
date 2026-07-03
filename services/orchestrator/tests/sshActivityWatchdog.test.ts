@@ -317,6 +317,64 @@ describe("SSH activity watchdog (progress-based hang detection)", () => {
     expect(c.state.destroyCount).toBe(0);
   });
 
+  // Class-specific streak floor (apex v76/v77). The agent-class watchdog widens
+  // `minNonAdvancingRepeats` to 5 (~75s at the 15s probe cadence) to tolerate Codex's
+  // think-then-stream burst pattern — a 2-neighbor floor false-positive-wedged legitimately-
+  // generating agents at ~60% rate. These tests pin that the substrate HONORS the watchdog's
+  // `minNonAdvancingRepeats` field (proving the wiring), and that a widened floor DOES tolerate
+  // a plateau the default vcs floor would have fired on.
+  it("HONORS the watchdog's minNonAdvancingRepeats: a widened floor tolerates the default-firing plateau", async () => {
+    vi.useFakeTimers();
+    const c = createControllableClient();
+    const substrate = await makeSubstrate(c.client);
+    // A plateau of 3 identical work signatures (streak=2 identical-neighbor pairs) — enough
+    // to fire the default 2-neighbor floor, NOT enough to fire the widened 5-neighbor floor.
+    // With minNonAdvancingRepeats=5 the substrate MUST tolerate this plateau (the Codex
+    // silent-generation window), then continue when new output finally arrives.
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:flat"),
+      probeIntervalMs: 1_000,
+      minNonAdvancingRepeats: 5,
+    };
+
+    const runPromise = substrate.run(target, { command: "codex --json", watchdog });
+    await vi.advanceTimersByTimeAsync(0);
+    // 3 silent probe ticks (would fire under the default vcs floor of 2 pairs).
+    await vi.advanceTimersByTimeAsync(3_000);
+    // Then genuinely-new output — proves the run was still alive, not stalled.
+    c.emitStdout('{"token":"finally"}\n');
+    await vi.advanceTimersByTimeAsync(1_000);
+    c.emitClose(0);
+    const result = await runPromise;
+
+    expect(result.stalled).toBeFalsy();
+    expect(result.exitCode).toBe(0);
+    expect(c.state.destroyCount).toBe(0);
+  });
+
+  it("HONORS the watchdog's minNonAdvancingRepeats: a widened floor STILL fires once the streak is reached", async () => {
+    vi.useFakeTimers();
+    const c = createControllableClient();
+    const substrate = await makeSubstrate(c.client);
+    // A genuinely dead agent — no output, flat workspace, indefinitely. The widened floor is
+    // still a STREAK ceiling on signature identity, not a green card: once the streak reaches
+    // 5 identical-neighbor pairs the wedge fires and the substrate surfaces the stall.
+    const watchdog: ActivityWatchdog = {
+      livenessProbe: () => Promise.resolve("ws:flat"),
+      probeIntervalMs: 1_000,
+      minNonAdvancingRepeats: 5,
+    };
+
+    const runPromise = substrate.run(target, { command: "codex --json", watchdog });
+    // 8 silent probe ticks — well past the 5-neighbor streak (6 identical signatures suffice).
+    await vi.advanceTimersByTimeAsync(8_000);
+    const result = await runPromise;
+
+    expect(result.stalled).toBe(true);
+    expect(result.failure).toBeUndefined();
+    expect(c.state.destroyCount).toBe(1);
+  });
+
   it("KILLS with an in-band failure when onQuiet is 'kill' and the work signature is fixed", async () => {
     vi.useFakeTimers();
     const c = createControllableClient();

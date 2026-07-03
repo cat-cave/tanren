@@ -27,6 +27,10 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { ActivityWatchdog, CommandSubstrate, WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
 import { quoteSshShellArg } from "./command.js";
+import {
+  MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT,
+  MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS,
+} from "./watchdogProgress.js";
 
 // How often a watchdog consults its `livenessProbe` between output chunks. A poll
 // INTERVAL (cadence), NOT a total-duration budget — every tick that finds life
@@ -153,6 +157,13 @@ export function buildActivityWatchdog(input: WatchdogInput): ActivityWatchdog {
   const watchdog: ActivityWatchdog = {
     probeIntervalMs: PROBE_CADENCE_MS,
     onQuiet: "surface",
+    // CLASS-SPECIFIC identical-neighbor STREAK floor (apex v76/v77). The agent class widens
+    // the floor to tolerate Codex's think-then-stream burst pattern (~9k bytes, then 30-60s
+    // silent generation, then more streaming — a 2-neighbor floor fires a false-positive
+    // wedge mid-generation). vcs/infra keep the historic 2-neighbor floor. STILL a streak
+    // ceiling on signature identity, NEVER an elapsed-time budget.
+    minNonAdvancingRepeats:
+      input.cls === "agent" ? MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT : MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS,
   };
   if (wantsProbe) {
     watchdog.livenessProbe = buildWorkspaceLivenessProbe(input.substrate, input.target, input.workspace as string);
