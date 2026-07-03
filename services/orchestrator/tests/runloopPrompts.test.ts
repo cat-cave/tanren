@@ -83,8 +83,12 @@ describe("buildPlannerPrompt — full rendered contract", () => {
     expect(prompt).toContain("- AC-two: fail() exists\n\nDeclared behaviors");
     // behaviors block → blank → grading-criteria block (spec-loop redesign §PLANNER).
     expect(prompt).toContain("- B1: ok exists — module exports ok\n\nHow the resulting work is graded");
-    // grading-criteria block → blank → rejection block.
-    expect(prompt).toContain("produce that observable behavior so the demo can exercise it.\n\nThis is the first plan");
+    // grading-criteria block → blank → subtask-sizing block (apex-v76 mega-intent fix).
+    expect(prompt).toContain("produce that observable behavior so the demo can exercise it.\n\nSUBTASK SIZING RULE:");
+    // subtask-sizing block → blank → rejection block.
+    expect(prompt).toContain(
+      "unrelated surfaces or introduce multiple new endpoints/pages, split it.\n\nThis is the first plan",
+    );
   });
 
   it("renders every footer requirement line", () => {
@@ -135,6 +139,52 @@ describe("buildPlannerPrompt — full rendered contract", () => {
       ],
     });
     expect(prompt).toContain("  behaviorIdsFailed: (none reported)");
+  });
+
+  // apex-v76 mega-intent fix: v76's spec (a link-shortener) got wedged when the planner
+  // emitted a SINGLE subtask bundling four product concerns (shortener form + redirect
+  // route + analytics page + Slack handler). The writer stalled on that mega-intent 20+
+  // times because a single Codex CLI call could not finish four concerns before its
+  // sign-of-life window elapsed. The FIX is at the planner prompt: explicit guidance
+  // that each subtask must touch exactly ONE concern, with concrete good/bad examples.
+  // Assert every line of that steering renders so a drift catches this class of stall.
+  it("renders the apex-v76 SUBTASK SIZING RULE — one concern per subtask, no bundling", () => {
+    const prompt = buildPlannerPrompt(base);
+    // The rule opener + core constraint.
+    expect(prompt).toContain("SUBTASK SIZING RULE: each subtask must touch exactly ONE concern that a single");
+    expect(prompt).toContain("writer call can complete before the sign-of-life window.");
+    // The "emit multiple subtasks — one per concern" directive, quoting v76's concerns.
+    expect(prompt).toContain("If a spec describes");
+    expect(prompt).toContain("multiple product concerns (e.g. 'shorten form + redirect route + analytics page");
+    expect(prompt).toContain("+ Slack handler'), emit MULTIPLE subtasks — one per concern. Do NOT bundle");
+    // The good-example list (one concern per bullet) that the planner should model.
+    expect(prompt).toContain("Examples of ONE concern (good subtasks):");
+    expect(prompt).toContain("- 'Add a URL shortener form + shorten action + result display + copy button'");
+    expect(prompt).toContain("- 'Add the /r/<slug> redirect route + click counter increment'");
+    expect(prompt).toContain("- 'Add a passcode-protected owner analytics view + per-link click count list'");
+    expect(prompt).toContain("- 'Add Slack milestone handling: on 100-click, post one message'");
+    // The bad-example list (the exact v76 mega-intent shape) that the planner MUST NOT emit.
+    expect(prompt).toContain("Examples of a TOO-BIG subtask (BAD — do NOT emit):");
+    expect(prompt).toContain(
+      "- 'Implement the entire URL shortener + redirect + analytics + Slack handler' (four concerns)",
+    );
+    expect(prompt).toContain("- 'Build the whole feature end-to-end' (unbounded)");
+    // The split criterion (LOC ballpark + surfaces/endpoints heuristic).
+    expect(prompt).toContain("A concern maps to ~50-500 LOC of change.");
+    expect(prompt).toContain("If a subtask would touch multiple files");
+    expect(prompt).toContain("across unrelated surfaces or introduce multiple new endpoints/pages, split it.");
+  });
+
+  it("places the SUBTASK SIZING RULE between the grading-criteria block and the rejection block", () => {
+    const prompt = buildPlannerPrompt(base);
+    // The sizing rule follows the grading-criteria block (spec-loop redesign) so the
+    // planner sees the sizing constraint alongside the grading-bar guidance.
+    expect(prompt).toContain("produce that observable behavior so the demo can exercise it.\n\nSUBTASK SIZING RULE:");
+    // The sizing rule precedes the first-plan rejection line — the sizing rule steers
+    // the initial decomposition, not just re-plans after rejection.
+    expect(prompt).toContain(
+      "unrelated surfaces or introduce multiple new endpoints/pages, split it.\n\nThis is the first plan",
+    );
   });
 });
 
@@ -350,6 +400,12 @@ describe("invoke* forwards prompt, workspace, and the canonical schema", () => {
     });
     expect(seen?.workspace).toBe("/ws/plan");
     expect(seen?.prompt).toContain("You are the Tanren Planner Answerer");
+    // apex-v76: the SUBTASK SIZING RULE + one-concern-per-subtask examples flow
+    // through the adapter — the planner adapter (Codex CLI in production) receives
+    // the sizing constraint on every invocation, not just the direct-render path.
+    expect(seen?.prompt).toContain("SUBTASK SIZING RULE:");
+    expect(seen?.prompt).toContain("Examples of ONE concern (good subtasks):");
+    expect(seen?.prompt).toContain("Examples of a TOO-BIG subtask (BAD — do NOT emit):");
     expect(result.plan).toBe(plan);
     expect(result.schemaId).toContain("plan");
   });
