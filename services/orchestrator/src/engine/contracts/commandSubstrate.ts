@@ -83,10 +83,11 @@ export type OnQuiet = "surface" | "kill";
 //     new output AND no workspace advance. That covers BOTH a dead / zombied / deadlocked
 //     process (no signal) AND a WEDGED-BUT-BUSY process (alive — an infinite loop emitting
 //     BYTE-IDENTICAL output forever, or burning CPU touching nothing — but making NO new
-//     work). The fixed-point verdict comes from the SHARED convergence detector
-//     (assessStructuralProgress over the work-signature sequence) — signature IDENTITY, not
-//     a duration. A process producing genuinely-new output / advancing the workspace is
-//     NEVER flagged.
+//     work). The fixed-point verdict is a pure STREAK read over the work-signature sequence
+//     (the trailing count of consecutive identical signatures reaching the class-specific
+//     `minNonAdvancingRepeats` floor — see `isWedgedNonAdvancing` in ssh/watchdogProgress.ts) —
+//     signature IDENTITY, not a duration. A process producing genuinely-new output / advancing
+//     the workspace is NEVER flagged.
 //
 // `livenessProbe` is the PRIMARY mechanism, not an afterthought: the interface returns a
 // WORK SIGNATURE (a fingerprint of the remote work state), NOT a duration. A bare "no output
@@ -109,10 +110,20 @@ export interface ActivityWatchdog {
   // progress — so a legitimately slow writer turn whose work signature plateaus across a
   // single mid-IO-burst probe (the `pnpm install` case) cannot age out the breaker while
   // the watchdog itself correctly tolerates the plateau (via the substrate-internal
-  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` streak floor). The two fixes solve different
+  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor). The two fixes solve different
   // layers — neither alone is sufficient. The callback is FIRE-AND-FORGET (sync); a throw
   // is caught by the substrate so an event-emit failure cannot bubble into the tick.
   onProgress?: (signal: WatchdogProgressSignal) => void;
+  // The CLASS-SPECIFIC identical-neighbor STREAK floor the substrate applies before declaring
+  // the work signature at a fixed point (apex v76/v77). NOT an elapsed-time budget: it is the
+  // minimum count of consecutive identical-neighbor probe pairs required before the wedge
+  // fires. The `buildActivityWatchdog` factory sets this per-class:
+  //   - vcs / infra → the historic 2-neighbor floor (a `pnpm install` plateau tolerated)
+  //   - agent      → the widened 5-neighbor floor (Codex's think-then-stream burst pattern:
+  //                  ~9k bytes then 30-60s silent generation — a 2 floor false-positives)
+  // Optional; the substrate defaults to the vcs floor when omitted.
+  // arch-allow: timeout-class — STREAK ceiling on signature identity, not elapsed time.
+  minNonAdvancingRepeats?: number;
 }
 
 // The sign-of-life signal the substrate emits to `onProgress` on every probe tick the

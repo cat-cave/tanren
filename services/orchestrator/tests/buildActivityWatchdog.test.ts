@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import { buildActivityWatchdog, outputOnlyWatchdog } from "../src/engine/ssh/activityWatchdog.js";
+import {
+  MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT,
+  MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS,
+} from "../src/engine/ssh/watchdogProgress.js";
 
 // The shared `buildActivityWatchdog` factory is the SOLE constructor of the per-call
 // ActivityWatchdog (feedback_no_timeouts_progress_based): every class is UNBOUNDED in
@@ -156,5 +160,34 @@ describe("buildActivityWatchdog (the shared per-call-class factory)", () => {
     expect(wd.onQuiet).toBe("surface");
     expect(wd.livenessProbe).toBeUndefined();
     expect(wd).not.toHaveProperty("timeoutMs");
+  });
+
+  it("class-specific streak floor: agent widens to MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT (apex v76/v77)", () => {
+    // The apex v77 root cause: Codex's think-then-stream burst pattern (~9k bytes, then 30-60s
+    // silent generation, then more) false-positive-wedged under the 2-neighbor vcs floor at
+    // ~60% rate on tiny subtasks. The agent watchdog widens the floor to 5 (~75s of signature
+    // identity at the 15s probe cadence) — still a STREAK ceiling on signature identity, never
+    // an elapsed-time budget.
+    const { substrate } = scriptedSubstrate([]);
+    const wd = buildActivityWatchdog({ substrate, target, cls: "agent", workspace: "/ws" });
+    expect(wd.minNonAdvancingRepeats).toBe(MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT);
+    expect(wd.minNonAdvancingRepeats).toBe(5);
+  });
+
+  it("class-specific streak floor: vcs keeps the historic 2-neighbor floor (`pnpm install` case)", () => {
+    // The vcs floor is unchanged — the apex-v50 `pnpm install` case still requires the same
+    // tolerance of a single mid-IO-burst identical probe.
+    const { substrate } = scriptedSubstrate([]);
+    const wd = buildActivityWatchdog({ substrate, target, cls: "vcs", workspace: "/ws" });
+    expect(wd.minNonAdvancingRepeats).toBe(MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS);
+    expect(wd.minNonAdvancingRepeats).toBe(2);
+  });
+
+  it("class-specific streak floor: infra keeps the vcs floor (output-only side-op)", () => {
+    // Infra is a side/IO op (a usage read, a small capture). Same 2-neighbor floor as vcs —
+    // there is nothing about a side op that needs the widened agent burst window.
+    const { substrate } = scriptedSubstrate([]);
+    const wd = buildActivityWatchdog({ substrate, target, cls: "infra" });
+    expect(wd.minNonAdvancingRepeats).toBe(MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS);
   });
 });

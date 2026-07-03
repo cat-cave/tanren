@@ -9,30 +9,31 @@
 // This module adds a PROGRESS assessment LAYERED over liveness — using the convergence
 // philosophy, NOT a clock. On the existing probe poll CADENCE (a legitimate interval, never a
 // deadline) the substrate snapshots a WORK SIGNATURE of the exec (a fold of the NEW DISTINCT
-// OUTPUT since the prior snapshot and the remote WORKSPACE signature) and feeds the SEQUENCE
-// of signatures into the SAME fixed-point notion the rest of the engine uses
-// (assessStructuralProgress, the convergenceDetector). A signature that keeps CHANGING (new
-// distinct output OR an advancing workspace) is genuine progress -> continue UNBOUNDED (the
-// common case — never kill working work). A signature that is a FIXED POINT (no new distinct
-// output AND no workspace advance across successive checks — no NEW distinct work) is a
-// genuine wedge -> SURFACE a recoverable stall.
+// OUTPUT since the prior snapshot and the remote WORKSPACE signature) and folds the SEQUENCE
+// of signatures into a pure STREAK read: the trailing count of CONSECUTIVE identical
+// signatures at the trailing edge. A signature that keeps CHANGING (new distinct output OR
+// an advancing workspace) is genuine progress -> continue UNBOUNDED (the common case — never
+// kill working work). A signature that stays FIXED across enough successive checks (the
+// class-specific `minNonAdvancingRepeats` streak floor) is a genuine wedge -> SURFACE a
+// recoverable stall.
 //
 // KEY (so a reviewer and the architecture-timeouts lint both see it): the trigger is
 // signature IDENTITY (non-advancement of a work signature), NOT elapsed time. A process
 // emitting genuinely-new output / advancing the workspace resets it forever, no matter how
 // long it has run. The poll cadence is a legitimate interval. There is no quiet-window, no
-// duration threshold, no attempt cap — the decision is purely the convergence detector's
-// structural read over the work-signature history.
+// duration threshold, no attempt cap — the decision is purely a structural read (a streak
+// count) over the work-signature history.
 
 import { createHash } from "node:crypto";
-import { type AttemptSignature, assessStructuralProgress } from "../workflow/convergenceDetector.js";
 
-// The trailing window of work signatures the fixed-point read scans, bounded to the
-// convergence detector's own cycle window. NOT an attempt cap and NOT a give-up budget: the
-// command runs UNBOUNDED while the signature advances regardless of how many checks elapse;
-// the window only bounds how far back a RECURRENCE counts as evidence of a wedge (so a single
-// ancient identical snapshot, long before later genuine advancement, never spuriously fires).
-// A still-advancing signature trajectory of any length is always progress.
+// The trailing window of work signatures kept in memory — a bound on the in-memory history,
+// large enough to accommodate the widest class-specific streak floor with margin. NOT an
+// attempt cap and NOT a give-up budget: the command runs UNBOUNDED while the signature
+// advances regardless of how many checks elapse; the window only bounds how far back the
+// trailing STREAK count can look (a still-advancing signature trajectory of any length is
+// always progress). Must be strictly greater than MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT + 1
+// (the widest floor requires that many identical signatures) so a wedge is always
+// representable — currently 5 + 1 = 6 signatures suffice; the window keeps 8 for headroom.
 export const WORK_SIGNATURE_WINDOW = 8;
 
 // Fold the recent OUTPUT CONTENT and the remote WORKSPACE signature into one stable work-state
@@ -72,45 +73,77 @@ export function appendWorkSignature(history: ReadonlyArray<string>, signature: s
   return next.length > WORK_SIGNATURE_WINDOW ? next.slice(next.length - WORK_SIGNATURE_WINDOW) : next;
 }
 
-// Map a raw work-signature history (oldest->newest, the just-snapshotted latest included) onto
-// the convergence detector's `AttemptSignature` shape. The work signature IS both the failure
-// axis and the observable "work" axis: an IDENTICAL signature across a poll-cadence-spaced
-// check is observed-identical work (the detector's strongest fixed-point evidence — no NEW
-// distinct work), and a DIFFERENT signature is genuinely different observable output
-// (progress). There is no magnitude — the work either advances (new fingerprint) or repeats.
-function toAttemptHistory(signatures: ReadonlyArray<string>): AttemptSignature[] {
-  return signatures.map((signature) => ({ failureSignature: signature, workSignature: signature }));
+// The count of CONSECUTIVE identical work signatures at the trailing edge of the history —
+// i.e. how many of the most recent immediate-neighbor pairs are byte-identical. A pair that
+// genuinely advances (a distinct new signature) breaks the run. PURE (no I/O, no clock): the
+// verdict is signature IDENTITY, never elapsed time. Returns 0 when the trailing pair is
+// itself advancing. This is the SOLE fixed-point diagnostic the watchdog uses — cycle
+// detection (an A→B→A→B oscillation across intervening attempts) is deliberately NOT applied
+// here because the convergence-detector cycle branch double-fires on pure identical sequences
+// (an all-identical history reads as both an immediate-neighbor identity streak AND a cycle
+// with itself as the intervening state), which would collapse the widened AGENT streak floor
+// back onto the historic 3-identical wedge point and defeat the whole apex v76/v77 fix. The
+// watchdog's stall semantic IS "no new distinct work for N consecutive probe ticks" — the
+// streak count directly encodes that, no convergence-detector layering required.
+function trailingIdenticalPairStreak(signatures: ReadonlyArray<string>): number {
+  let streak = 0;
+  for (let i = signatures.length - 1; i >= 1; i -= 1) {
+    if (signatures[i] !== signatures[i - 1]) break;
+    streak += 1;
+  }
+  return streak;
 }
 
 // The MINIMUM trailing run of CONSECUTIVE identical work-signature probes the watchdog
 // requires before declaring a fixed point. NOT an elapsed-time budget and NOT an attempt cap
-// — it is a STREAK ceiling on the SHARED convergence detector's immediate-neighbor identity
-// branch (apex v50): a 1-neighbor floor killed legitimate writers running `pnpm install`
-// because codex is silent while the bash subprocess runs (its stdout captured by codex, not
-// streamed) AND the workspace count+bytes probe can read identical signature across a single
-// 15s probe tick mid-IO-burst (the filesystem batches flushes, the install resolves before
-// extracting). The 2-neighbor floor requires TWO consecutive identical probes (≈30s of
-// signature identity) before declaring a wedge — still progress / sign-of-life-based (a
-// genuinely-advancing process resets it forever regardless of length), just a more honest
-// floor for tool-invoking agent execs whose work signature legitimately holds flat across a
-// single tick. The cycle-detection branch of the convergence detector is unaffected (it
-// already requires a recurrence ACROSS an intervening attempt — a 3+ element pattern).
+// — it is a STREAK ceiling on the trailing identical-neighbor-pair count. The floor is
+// CLASS-SPECIFIC (apex v76/v77) because different call classes have different LEGITIMATE
+// flat-signature windows:
+//
+//   - VCS (git/jj/gate; the `pnpm install` case — apex v50): a 1-neighbor floor killed
+//     legitimate writers running `pnpm install` because codex is silent while the bash
+//     subprocess runs (its stdout captured BY codex, not streamed) AND the workspace
+//     count+bytes probe can read identical signature across a single 15s probe tick
+//     mid-IO-burst (the filesystem batches flushes, the install resolves before extracting).
+//     The 2-neighbor floor (≈30s of signature identity) is the honest floor for a vcs op
+//     whose work signature legitimately holds flat across a single tick.
+//
+//   - AGENT (LLM writer/answerer — codex/claude/opencode; apex v76/v77): the vcs 2-neighbor
+//     floor was ALSO killing legitimate agent execs, at ~60% rate on tiny 350-char subtasks
+//     in apex v77 (10 failed / 6 completed). Root cause: Codex CLI is a BURST-STREAM — it
+//     emits ~9k bytes in one tick, then goes internally silent for 30-60s while generating
+//     the next chunk, then emits more. During the silent-generation phase distinctRecentOutput
+//     is empty (no new distinct lines) AND the workspace is unchanged, so the work signature
+//     holds flat across 2 consecutive probe ticks (~30s) → the vcs floor fires a false-positive
+//     wedge → writer.subtask.failed with failureKind="timeout". A 5-neighbor floor (≈75s of
+//     signature identity, streak of 5 pairs across the 15s cadence) tolerates the burst-stream
+//     cycle with margin, still surfacing a wedge on a genuinely dead agent — still progress /
+//     sign-of-life-based (a genuinely-advancing signature resets it forever regardless of
+//     length), just tuned for the empirical Codex think-then-stream pattern.
+//
 // arch-allow: timeout-class — STREAK ceiling on signature identity, not elapsed time.
-export const MIN_NON_ADVANCING_NEIGHBOR_REPEATS = 2;
+export const MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS = 2;
+// arch-allow: timeout-class — STREAK ceiling on signature identity, not elapsed time.
+// EMPIRICAL BASIS (apex v77): Codex CLI streams ~9k bytes in one tick, then generates silently
+// for 30-60s, then streams more. A 2-neighbor floor (30s) fires a false-positive wedge mid
+// silent-generation; a 5-neighbor floor (75s) tolerates the burst-stream cycle with margin.
+// DO NOT tighten this back to 2 without new evidence — the Codex burst pattern has not changed.
+export const MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT = 5;
 
 // Is the exec WEDGED — its work signature at a FIXED POINT (non-advancing) across the trailing
 // checks? Given the work-signature history (oldest->newest, the latest snapshot included),
-// returns `true` iff the SHARED convergence detector reads a fixed point: the identical work
-// signature persisting / cycling with no new distinct work, AND the trailing identical-neighbor
-// streak has reached MIN_NON_ADVANCING_NEIGHBOR_REPEATS (the watchdog's streak floor — a
-// single mid-IO-burst identical probe is not yet a wedge; see the constant above). A first
-// snapshot, or a CHANGING (advancing) signature, reads as progress -> `false` (continue
-// UNBOUNDED). PURE (no I/O, no clock) so it is reproducible + property-testable — the
-// decision is signature identity, never elapsed time.
-export function isWedgedNonAdvancing(history: ReadonlyArray<string>): boolean {
-  return (
-    assessStructuralProgress(toAttemptHistory(history), {
-      minNonAdvancingRepeats: MIN_NON_ADVANCING_NEIGHBOR_REPEATS,
-    }) === "fixed_point"
-  );
+// returns `true` iff the trailing identical-neighbor streak has reached the caller-supplied
+// `minNonAdvancingRepeats` floor (defaulting to the vcs value — a single mid-IO-burst
+// identical probe is not yet a wedge; see the constants above). The agent-class watchdog
+// passes the widened `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_AGENT` to tolerate Codex's
+// think-then-stream burst pattern; vcs/infra keep the default. A first snapshot, or a
+// CHANGING (advancing) signature, reads as progress -> `false` (continue UNBOUNDED). PURE
+// (no I/O, no clock) so it is reproducible + property-testable — the decision is signature
+// IDENTITY, never elapsed time.
+export function isWedgedNonAdvancing(
+  history: ReadonlyArray<string>,
+  opts?: { minNonAdvancingRepeats?: number },
+): boolean {
+  const floor = Math.max(1, opts?.minNonAdvancingRepeats ?? MIN_NON_ADVANCING_NEIGHBOR_REPEATS_VCS);
+  return trailingIdenticalPairStreak(history) >= floor;
 }
