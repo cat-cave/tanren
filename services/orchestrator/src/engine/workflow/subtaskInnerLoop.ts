@@ -457,6 +457,13 @@ export function failedStepOutputTail(failure: Extract<GateOutcome, { passed: fal
 // re-attempting the whole subtask from scratch. A crash gets a plain note (re-run, the
 // detector converges a recurring identical crash). Stack-agnostic — no tool/scope hints
 // baked in; the writer decides the smaller increment from the subtask intent.
+//
+// apex-v76 EXTENSION (mega-intent split-recovery): the planner now enforces one concern
+// per subtask (see planner.ts SUBTASK SIZING RULE), but a stale plan can still hand the
+// writer a bundled multi-concern intent. On timeout, tell the writer: if the intent
+// describes MULTIPLE concerns, tackle ONE concern completely this attempt and let the
+// next planner iteration split off the rest. Doctrinal reinforcement — no mechanical
+// splitter, just clearer guidance to the LLM.
 export function writerFailureReason(failureKind: "crashed" | "timeout"): string {
   if (failureKind === "timeout") {
     return (
@@ -464,7 +471,11 @@ export function writerFailureReason(failureKind: "crashed" | "timeout"): string 
       "one writer call. CHANGE APPROACH this time: COMMIT the partial progress you already " +
       "made, then do the SMALLEST next increment toward the subtask intent (do NOT restart " +
       "from scratch and do NOT re-attempt the whole subtask at once). Build it up incrementally " +
-      "across attempts so each attempt commits real forward progress before it can time out."
+      "across attempts so each attempt commits real forward progress before it can time out. " +
+      "If this subtask intent describes MULTIPLE product concerns (e.g. a form + a route + " +
+      "an analytics page + a webhook handler), tackle ONLY ONE concern in this attempt. " +
+      "Commit that ONE concern completely, then let the next planner iteration split off " +
+      "the remaining concerns into their own subtasks."
     );
   }
   return "the previous attempt CRASHED mid-subtask before finishing — re-attempt it, committing progress as you go.";

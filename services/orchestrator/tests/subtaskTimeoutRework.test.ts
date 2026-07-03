@@ -77,6 +77,30 @@ describe("writerFailureReason — actionable, stack-agnostic timeout/crash steer
     expect(reason.toLowerCase()).not.toContain("npm");
   });
 
+  // apex-v76 EXTENSION: when a stale plan hands the writer a mega-intent bundling
+  // multiple product concerns (v76's shortener form + redirect route + analytics
+  // page + Slack handler stalled 20+ times), the timeout steering must ALSO tell
+  // the writer to tackle ONE concern per attempt and let the next planner iteration
+  // split off the remaining concerns. The doctrinal reinforcement rides on the
+  // same steering string — no separate seam.
+  it("a TIMEOUT also carries the apex-v76 split-recovery hint for multi-concern mega-intents", () => {
+    const reason = writerFailureReason("timeout");
+    // Both the original commit+increment steering AND the new one-concern hint
+    // must be present — the split-recovery hint reinforces, not replaces.
+    expect(reason).toContain("COMMIT the partial progress");
+    expect(reason).toContain("SMALLEST next increment");
+    // The apex-v76 one-concern-per-attempt hint.
+    expect(reason).toContain("MULTIPLE product concerns");
+    expect(reason).toContain("ONLY ONE concern in this attempt");
+    expect(reason).toContain("next planner iteration");
+    expect(reason).toContain("split off the remaining concerns");
+    // Still stack-agnostic — the example list is illustrative, not a baked-in
+    // tool/language literal that couples the steering to a stack.
+    expect(reason.toLowerCase()).not.toContain("prettier");
+    expect(reason.toLowerCase()).not.toContain("pnpm");
+    expect(reason.toLowerCase()).not.toContain("npm ");
+  });
+
   it("a CRASH steers a re-attempt that commits progress as it goes", () => {
     const reason = writerFailureReason("crashed");
     expect(reason).toContain("CRASHED mid-subtask");

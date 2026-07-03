@@ -114,6 +114,35 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
     "  produce that observable behavior so the demo can exercise it.",
     "",
   ];
+  // SUBTASK SIZING RULE (apex-v76 mega-intent fix): the writer stalled 20+ times on a
+  // single subtask that bundled four product concerns (shortener form + redirect route
+  // + analytics page + Slack handler) because it could not finish all four in one
+  // Codex CLI invocation before the sign-of-life window elapsed. The FIX is at the
+  // planner: emit MULTIPLE subtasks (one per concern) instead of one omnibus subtask.
+  // A concern maps to ~50-500 LOC that a single writer call can complete before its
+  // sign-of-life window. Bundling multiple unrelated concerns into one subtask does
+  // NOT save subtasks — it just guarantees repeated timeouts and stalls the run.
+  const subtaskSizing = [
+    "SUBTASK SIZING RULE: each subtask must touch exactly ONE concern that a single",
+    "writer call can complete before the sign-of-life window. If a spec describes",
+    "multiple product concerns (e.g. 'shorten form + redirect route + analytics page",
+    "+ Slack handler'), emit MULTIPLE subtasks — one per concern. Do NOT bundle",
+    "concerns.",
+    "",
+    "Examples of ONE concern (good subtasks):",
+    "- 'Add a URL shortener form + shorten action + result display + copy button'",
+    "- 'Add the /r/<slug> redirect route + click counter increment'",
+    "- 'Add a passcode-protected owner analytics view + per-link click count list'",
+    "- 'Add Slack milestone handling: on 100-click, post one message'",
+    "",
+    "Examples of a TOO-BIG subtask (BAD — do NOT emit):",
+    "- 'Implement the entire URL shortener + redirect + analytics + Slack handler' (four concerns)",
+    "- 'Build the whole feature end-to-end' (unbounded)",
+    "",
+    "A concern maps to ~50-500 LOC of change. If a subtask would touch multiple files",
+    "across unrelated surfaces or introduce multiple new endpoints/pages, split it.",
+    "",
+  ];
   const footer = [
     "Every subtask MUST be an actionable change that modifies the workspace and",
     "produces a git diff advancing the acceptance criteria. Do NOT emit read-only",
@@ -131,7 +160,7 @@ export function buildPlannerPrompt(input: PlannerInvokeInput): string {
     "- estimatedTokens: integer estimate or null when unknown",
     "Provide a top-level rationale explaining the decomposition.",
   ];
-  return [...header, ...behaviors, ...gradingCriteria, ...rejectionBlocks, ...footer].join("\n");
+  return [...header, ...behaviors, ...gradingCriteria, ...subtaskSizing, ...rejectionBlocks, ...footer].join("\n");
 }
 
 function renderRejectionHistory(history: ReadonlyArray<PlannerRejectionFeedback>): string[] {
