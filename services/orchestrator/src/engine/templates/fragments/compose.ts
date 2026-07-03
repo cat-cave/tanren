@@ -71,6 +71,9 @@ import {
   type TemplateConfig,
   VirtualFileSystem,
 } from "./types.js";
+import { createLogger } from "../../observability/logger.js";
+
+const log = createLogger("template-fragments-compose");
 
 /** The deploy fragment id pattern. The composer derives the id from `config.deploy`
  * (e.g. `"deploy-fly"`) — the registry registers each deploy fragment under that key. */
@@ -224,11 +227,32 @@ async function applyPhase(
   applied: Fragment[],
 ): Promise<void> {
   for (const fragment of fragments) {
+    // Attribution seam (task #148 apex v75 fix): mark the current fragment on
+    // the VFS so any `addEnvVar` reconciliation records the winner id — the
+    // warn log below then names both origins.
+    const reconciliationsBefore = vfs.envReconciliations().length;
+    vfs.beginFragment(fragment.id);
     try {
       await fragment.apply(vfs, config);
     } catch (cause) {
       if (cause instanceof TemplateComposeError) throw cause;
       throw new TemplateComposeError(phase, `fragment ${fragment.id} threw: ${String(cause)}`, fragment.id, { cause });
+    } finally {
+      vfs.endFragment();
+    }
+    // Emit ONE warn line per new reconciliation this fragment triggered. The
+    // trail is inspectable post-compose (isolation/dogfood tests), but the log
+    // line is where an operator sees "later-wins picked up a conflict".
+    const newReconciliations = vfs.envReconciliations().slice(reconciliationsBefore);
+    for (const record of newReconciliations) {
+      log.warn(`addEnvVar reconciled ${record.key} — later declaration wins`, {
+        key: record.key,
+        previousExample: record.previousExample,
+        previousFragment: record.previousDeclaringFragment,
+        currentExample: record.currentExample,
+        currentFragment: record.currentDeclaringFragment ?? fragment.id,
+        phase,
+      });
     }
     applied.push(fragment);
   }
