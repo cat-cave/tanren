@@ -1,31 +1,22 @@
 // TEMPLATE-FRAGMENT TYPES — the foundation of the matrix-hit composition path
 // (docs/roadmap/templating-system.md §FRAGMENTS / PR-A).
 //
-// WHY: today every project DAG seeds from a freshly AUTHORED scaffold spec (the agent
-// path). apex v55-v59 spent 1-8h per run on scaffold work that is structurally the
-// same boilerplate. This module is the foundation of the matrix-hit alternative —
-// pre-built composable FRAGMENTS that a deterministic COMPOSER assembles into a
-// VirtualFileSystem in seconds, modeled on BTS (create-better-t-stack).
+// WHY: apex v55-v59 spent 1-8h per run on scaffold work that is structurally the
+// same boilerplate; pre-built composable FRAGMENTS + a deterministic COMPOSER
+// assemble a VirtualFileSystem in seconds (modeled on BTS / create-better-t-stack).
 //
-// THE LOAD-BEARING CONSTRAINT (user): "Just because we want to take advantage of
-// templates does not mean we want to allow users to sidestep all of the things that
-// Tanren is opinionated on, like green CI, strong behavior tie-ins to tests, and
-// functional demos." The `base/` fragment is ALWAYS injected and STRUCTURAL —
-// fragments FILL hooks, never REPLACE base scaffolding. Compose-time post-processors
-// throw LOUDLY on any attempt to overwrite a base target wholesale (see
-// compose.ts § processJustfile).
+// LOAD-BEARING CONSTRAINT: templates must NOT let users sidestep Tanren's opinions
+// on green CI, strong test tie-ins, and functional demos. The `base/` fragment is
+// ALWAYS injected and STRUCTURAL — fragments FILL hooks, never REPLACE base
+// scaffolding. Post-processors throw LOUDLY on wholesale base overwrites.
 //
 // FAIL-LOUD by construction:
-//   - Every TemplateConfig field is a CLOSED enum (a typo cannot silently widen).
-//   - VFS.write throws on a re-write that collides; merges go through the explicit
-//     `mergeJson` / `appendToJustfileTarget` / `addPackageJsonDep` / `addEnvVar`
-//     surface so the intent is named (no "last writer wins" silent overwrites).
-//   - Fragment apply() returning a corrupted VFS is caught by the composer's
-//     post-process assertions (compose.ts) — never a silent half-built tree.
-//
-// AGENT FALLBACK: a TemplateConfig the registry does NOT carry triggers the existing
-// agent template-build child path (no change in this PR). The matrix-hit/miss split is
-// PR-C; this module is the foundation.
+//   - Every TemplateConfig field is a CLOSED enum.
+//   - VFS.write throws on collision; merges go through the typed surface
+//     (`mergeJson` / `appendToJustfileTarget` / `addPackageJsonDep` / `addEnvVar`).
+//   - `addEnvVar` is the ONE reconciled exception (task #148 v75 fix — see the
+//     method's docstring). Every other conflict throws.
+//   - Corrupted VFS is caught by the composer's post-process assertions.
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -85,43 +76,39 @@ export type TemplateConfig = z.infer<typeof TemplateConfig>;
 // ---- Virtual file system ---------------------------------------------------
 
 /**
- * The in-memory representation of a composed template. Fragments call into the typed
- * MUTATION surface (`write`, `mergeJson`, `appendToJustfileTarget`, …) rather than
- * stamping arbitrary strings — the named methods make the merge intent explicit and
- * give the post-processors deterministic hooks to assemble final files (the justfile,
- * `.tanren/ci.yml`, `.env.example`, `package.json` deps).
+ * The in-memory representation of a composed template. Fragments call into the
+ * typed MUTATION surface (`write`, `mergeJson`, `appendToJustfileTarget`, …)
+ * rather than stamping arbitrary strings.
  *
- * DETERMINISM: `toFlatMap` returns entries sorted by path; `hash` SHA-256s over that
- * sorted projection. Two compose runs over the same config + fragment library yield
- * byte-identical hashes (the dogfood snapshot invariant).
+ * DETERMINISM: `toFlatMap` returns entries sorted by path; `hash` SHA-256s over
+ * that sorted projection — two compose runs over the same config + fragment
+ * library yield byte-identical hashes.
  */
 export class VirtualFileSystem {
-  // The raw file tree. Methods below are the ONLY supported mutation surface — direct
-  // mutation by a caller bypasses the merge contracts (deps dedupe, justfile
-  // hook-fill, env collection) and is treated as a bug.
+  // The raw file tree. Methods below are the ONLY supported mutation surface —
+  // direct mutation bypasses the merge contracts + is a bug.
   readonly #files = new Map<string, string>();
-  // Just-target hook lines collected by `appendToJustfileTarget`. The base/ fragment's
-  // justfile names the targets; runtime/frontend/etc fragments fill HOOK INSERTION
-  // POINTS via this map; `processJustfile` (compose.ts) splices them in before the
-  // VFS finalizes. Keyed by target name (`bootstrap`/`tier-1`/`tier-2`/`tier-3`/`build`).
+  // Just-target hook lines collected by `appendToJustfileTarget`. `processJustfile`
+  // splices these into the base/ justfile before the VFS finalizes.
   readonly #justHooks = new Map<string, string[]>();
-  // Collected env declarations (key → example value) — emitted as `.env.example` by
-  // `processEnvVars`. A second declaration of the same key with a DIFFERENT example
-  // throws (a fragment lying about a shared key's example value is a bug).
+  // Env declarations (key → example) — emitted as `.env.example` by `processEnvVars`.
+  // Same key + DIFFERENT example RECONCILES (task #148 v75 fix): later wins + the
+  // conflict is appended to `#envReconciliations`. Idempotent same-example is a no-op.
   readonly #envVars = new Map<string, string>();
-  // Collected package.json deps (name → version). Runtime fragments seed the
-  // base package.json; downstream fragments add deps via this map; `processDeps`
-  // merges + dedupes + sorts before writing the final package.json. A conflicting
-  // version range for the same dep throws.
+  // Reconciliation trail — `compose.ts` reads this per-fragment (before/after slice
+  // around `fragment.apply`) and emits a warn log naming both origins.
+  readonly #envReconciliations: EnvReconciliation[] = [];
+  // Origin attribution — populated by `addEnvVar` when the composer set
+  // `#currentFragmentId` via `beginFragment(id)`. Absent for isolated-apply callers.
+  readonly #envDeclaringFragment = new Map<string, string>();
+  #currentFragmentId: string | undefined;
+  // package.json deps (name → version) — `processDeps` merges + dedupes + sorts
+  // before writing the final package.json. Conflicting version throws.
   readonly #pkgDeps = new Map<string, string>();
-  // Same shape for devDependencies.
   readonly #pkgDevDeps = new Map<string, string>();
 
-  /**
-   * Write a brand-new file. Throws on collision — overwriting a file is ALWAYS a bug
-   * (a fragment racing the base, or two fragments declaring the same path). To merge
-   * structured content (json, justfile, env), use the typed merge methods below.
-   */
+  /** Write a brand-new file. Throws on collision — use `overwrite` or the typed
+   * merge methods for structured content. */
   write(path: string, content: string): void {
     if (this.#files.has(path)) {
       throw new VfsCollisionError(path);
@@ -129,38 +116,26 @@ export class VirtualFileSystem {
     this.#files.set(path, content);
   }
 
-  /**
-   * Overwrite a file the CALLER owns (a fragment re-emitting its own file after a
-   * mutation, or the composer's post-processors writing the final justfile/env/etc).
-   * Use sparingly — `write` is the default; this is the explicit override marker.
-   */
+  /** Overwrite a file the caller owns (fragment re-emit, or post-processor
+   * writing the final justfile/env/etc). `write` is the default. */
   overwrite(path: string, content: string): void {
     this.#files.set(path, content);
   }
 
-  /**
-   * Remove a path. Returns true if the path was present, false otherwise. Fragments
-   * SHOULD NOT use this on base-owned files — the composer's `assertBaseInvariantsHeld`
-   * re-checks `BASE_PROTECTED_FILES` post-compose and throws on a missing one.
-   */
+  /** Remove a path. `assertBaseInvariantsHeld` re-checks `BASE_PROTECTED_FILES`
+   * post-compose and throws on a missing one — fragments must not delete those. */
   delete(path: string): boolean {
     return this.#files.delete(path);
   }
 
-  /**
-   * True iff the path is currently in the VFS. Tests + post-processors read this; a
-   * fragment SHOULD NOT branch on it (the dependency model is `dependsOn`, not the
-   * file-presence side-channel — `dependsOn` is the explicit, ordered contract).
-   */
+  /** True iff the path is present. Fragments should NOT branch on this —
+   * `dependsOn` is the explicit ordering contract. */
   has(path: string): boolean {
     return this.#files.has(path);
   }
 
-  /**
-   * Read a file's content. Throws when absent — the absent-vs-empty distinction is
-   * load-bearing for the post-processors, so a silent `""` fallback would mask a
-   * fragment-ordering bug.
-   */
+  /** Read a file's content. Throws when absent (absent-vs-empty distinction is
+   * load-bearing for the post-processors). */
   read(path: string): string {
     const content = this.#files.get(path);
     if (content === undefined) {
@@ -169,64 +144,83 @@ export class VirtualFileSystem {
     return content;
   }
 
-  /**
-   * Merge a json file with a caller-supplied merger. The merger receives the parsed
-   * JSON (or `{}` when the file does not yet exist) and returns the merged value; the
-   * VFS re-serializes with two-space indent + trailing newline (a deterministic shape
-   * the snapshot can compare against). A parse failure throws LOUDLY — a malformed
-   * json file from an earlier fragment is a bug, not something to absorb.
-   */
+  /** Merge a json file with a caller-supplied merger. Receives parsed JSON (or
+   * `{}` when absent); VFS re-serializes with two-space indent + trailing newline.
+   * Parse failure throws LOUDLY. */
   mergeJson(path: string, merger: (current: Record<string, unknown>) => Record<string, unknown>): void {
     const current = this.#files.has(path) ? this.#parseJsonOrThrow(path) : {};
     const merged = merger(current);
     this.#files.set(path, `${JSON.stringify(merged, null, 2)}\n`);
   }
 
-  /**
-   * Append one or more lines to a justfile TARGET's hook list. The base/ fragment owns
-   * the justfile RECIPE structure (the target names + insertion-point markers); a
-   * runtime/etc fragment fills the recipe body by calling this — never by re-writing
-   * the justfile. `processJustfile` assembles the final file. A target name not
-   * recognized by `processJustfile` is a LOUD failure at compose time (the writer
-   * mis-named the hook).
-   */
+  /** Append lines to a justfile target's hook list. base/ owns the recipe
+   * structure; a fragment fills the body via this (never re-writes the justfile).
+   * `processJustfile` throws LOUDLY on an unknown target. */
   appendToJustfileTarget(target: string, lines: string[]): void {
     const existing = this.#justHooks.get(target) ?? [];
     existing.push(...lines);
     this.#justHooks.set(target, existing);
   }
 
-  /**
-   * Register a runtime dependency a fragment requires. A second declaration of the
-   * SAME dep with a different version throws — version pinning across fragments must
-   * be reconciled at AUTHORING time, not via a silent "last writer wins" race.
-   */
+  /** Register a runtime dep. A second declaration of the SAME dep with a
+   * different version throws — version pinning must be reconciled at authoring
+   * time, not via a silent "last writer wins" race. */
   addPackageJsonDep(name: string, version: string): void {
     this.#registerDep(this.#pkgDeps, "dependencies", name, version);
   }
 
-  /**
-   * Register a devDependency. Same conflict policy as `addPackageJsonDep`.
-   */
+  /** Same as `addPackageJsonDep` for devDependencies. */
   addPackageJsonDevDep(name: string, version: string): void {
     this.#registerDep(this.#pkgDevDeps, "devDependencies", name, version);
   }
 
   /**
-   * Register an env var the runtime needs (e.g. `DATABASE_URL`). `processEnvVars`
-   * collects these into `.env.example`. A second declaration with a DIFFERENT example
-   * throws (the example is the operator's first read of what the var is FOR; two
-   * fragments disagreeing means a real coordination bug).
+   * Register an env var (e.g. `DATABASE_URL`). `processEnvVars` collects these
+   * into `.env.example`.
+   *
+   * CONFLICT POLICY (task #148 apex v75 fix): idempotent same-example is a
+   * no-op; same key with DIFFERENT example → LATER wins + a record is appended
+   * to `#envReconciliations`, and the composer emits a per-fragment warn log
+   * naming both fragments. Replaces throw-on-conflict which halted compose
+   * before the writer loop could ever repair it — the db-* / deploy-* / notify-*
+   * fragments own the shape of their URL/token, so later-wins is the correct
+   * default. The writer prompt (providerFragmentAuthorer.ts) also names those
+   * keys as OWNED so a JIT-authored runtime stops declaring them.
    */
   addEnvVar(key: string, exampleValue: string): void {
     const existing = this.#envVars.get(key);
     if (existing !== undefined && existing !== exampleValue) {
-      throw new Error(
-        `VirtualFileSystem.addEnvVar: ${key} declared twice with conflicting examples ` +
-          `(${JSON.stringify(existing)} vs ${JSON.stringify(exampleValue)})`,
-      );
+      this.#envReconciliations.push({
+        key,
+        previousExample: existing,
+        previousDeclaringFragment: this.#envDeclaringFragment.get(key),
+        currentExample: exampleValue,
+        currentDeclaringFragment: this.#currentFragmentId,
+      });
     }
     this.#envVars.set(key, exampleValue);
+    if (this.#currentFragmentId !== undefined) {
+      this.#envDeclaringFragment.set(key, this.#currentFragmentId);
+    }
+  }
+
+  /** OPTIONAL attribution seam (task #148) — the composer's `applyPhase` wraps
+   * each `fragment.apply` in `beginFragment(id)` / `endFragment()` so
+   * reconciliations carry the winner id + the warn log names both origins.
+   * Never nested (one fragment at a time); tests may skip. */
+  beginFragment(fragmentId: string): void {
+    this.#currentFragmentId = fragmentId;
+  }
+
+  endFragment(): void {
+    this.#currentFragmentId = undefined;
+  }
+
+  /** The trail of env-var conflicts the composer reconciled by later-wins. Empty
+   * when every `addEnvVar` call was either the first for its key or an idempotent
+   * same-example repeat. */
+  envReconciliations(): readonly EnvReconciliation[] {
+    return this.#envReconciliations;
   }
 
   /**
@@ -322,6 +316,17 @@ export class VfsCollisionError extends Error {
     super(`VirtualFileSystem.write: ${path} already present (use a typed merge or overwrite)`);
     this.name = "VfsCollisionError";
   }
+}
+
+/** A single env-var conflict the VFS reconciled by later-wins (task #148 apex
+ * v75 fix). Origin ids may be `undefined` when the caller skipped
+ * `beginFragment(id)` attribution — the example pair is still recorded. */
+export interface EnvReconciliation {
+  readonly key: string;
+  readonly previousExample: string;
+  readonly previousDeclaringFragment: string | undefined;
+  readonly currentExample: string;
+  readonly currentDeclaringFragment: string | undefined;
 }
 
 // ---- Fragment shape --------------------------------------------------------

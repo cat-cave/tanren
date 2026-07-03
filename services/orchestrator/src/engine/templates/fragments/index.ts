@@ -13,6 +13,7 @@ export {
   BackendId,
   DbId,
   DeployId,
+  type EnvReconciliation,
   ExampleId,
   type Fragment,
   type FragmentContract,
