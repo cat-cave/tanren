@@ -65,6 +65,7 @@ import {
 } from "../src/engine/templates/index.js";
 import {
   assertComposedCiYmlParsesAsCiConfigV1,
+  assertPnpmInstallIsNonInteractive,
   assertScaffoldBootstrapsFromFreshCheckout,
 } from "../src/engine/templates/fragments/runtimeValidation.js";
 
@@ -409,6 +410,16 @@ describe("template-fragment isolation — every registered fragment composes aga
       // regression to `--frozen-lockfile`) here with the fragment id in the
       // failure message.
       assertScaffoldBootstrapsFromFreshCheckout(fragment.id, vfs);
+
+      // (h) every pnpm install runs non-interactively — the tanren-bootstrap SSH
+      // tier / docker build has no PTY, so pnpm 11 otherwise halts with
+      // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY (task #141 — apex v71/v78 halt
+      // class). Base fragment exports CI=true at justfile file scope; addon-docker
+      // emits ENV CI=true in the Dockerfile. Per-fragment isolation surfaces a
+      // future single-fragment regression (a runtime that overrides the base
+      // justfile without carrying the export forward) with the fragment id in the
+      // failure message.
+      assertPnpmInstallIsNonInteractive(fragment.id, vfs);
 
       // Pin the test as assertion-bearing (vitest's no-standalone-expectations
       // rule + the suite's `--passWithNoTests`-style guard). Every meaningful

@@ -24,6 +24,7 @@ import {
 import { deriveRuntimeLanguage, unsupportedRuntimeLanguageReason } from "./runtimeLanguage.js";
 import {
   assertComposedCiYmlParsesAsCiConfigV1,
+  assertPnpmInstallIsNonInteractive,
   assertScaffoldBootstrapsFromFreshCheckout,
 } from "./runtimeValidation.js";
 import { type Fragment, type FragmentLibrary, type TemplateConfig, type VirtualFileSystem } from "./types.js";
@@ -426,27 +427,28 @@ async function runSmokeComposition(
 
   // POST-COMPOSE RUNTIME VALIDATORS (audit finding #12). The same checks the
   // static matrix + isolation harnesses run — lifted to the runtime module so
-  // the live smoke pipeline catches the same v62 (malformed `.tanren/ci.yml`)
-  // + v63 (frozen-install on fresh checkout, justfile OR Dockerfile) halt
+  // the live smoke pipeline catches the same v62 (malformed `.tanren/ci.yml`),
+  // v63 (frozen-install on fresh checkout — justfile OR Dockerfile), and v71/
+  // v78 (pnpm install without a non-interactive signal — task #141) halt
   // classes. A failing validator rejects the fragment with the specific reason
   // so the writer's next rework iteration sees it.
-  try {
-    assertComposedCiYmlParsesAsCiConfigV1(spec.id, vfs);
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `runtime validator (ci.yml schema) rejected: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  try {
-    assertScaffoldBootstrapsFromFreshCheckout(spec.id, vfs);
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `runtime validator (fresh-checkout bootstrap) rejected: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    };
+  const validators: readonly {
+    readonly label: string;
+    readonly assert: (label: string, vfs: VirtualFileSystem) => void;
+  }[] = [
+    { label: "ci.yml schema", assert: assertComposedCiYmlParsesAsCiConfigV1 },
+    { label: "fresh-checkout bootstrap", assert: assertScaffoldBootstrapsFromFreshCheckout },
+    { label: "pnpm non-interactive", assert: assertPnpmInstallIsNonInteractive },
+  ];
+  for (const { label, assert } of validators) {
+    try {
+      assert(spec.id, vfs);
+    } catch (err) {
+      return {
+        kind: "failed",
+        reason: `runtime validator (${label}) rejected: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
 
   return { kind: "ok", dependsOn: derivedDependsOn };

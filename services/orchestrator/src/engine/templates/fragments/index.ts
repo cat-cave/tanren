@@ -94,6 +94,7 @@ export {
 export { buildFragmentAuthorerPrompt, wrapProviderFragmentAuthorer } from "./providerFragmentAuthorer.js";
 export {
   assertComposedCiYmlParsesAsCiConfigV1,
+  assertPnpmInstallIsNonInteractive,
   assertScaffoldBootstrapsFromFreshCheckout,
 } from "./runtimeValidation.js";
 export {
