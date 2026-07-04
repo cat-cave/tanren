@@ -41,6 +41,30 @@ export function buildTriagePrompt(input: TriagePromptInput): string {
     "- `kind: spec`  — a coherent, demo-able unit big enough to be its own DAG spec.",
     "- `severity`    — the WORST severity among the findings this item subsumes.",
     "- `findingIds`  — the ids of the findings this item resolves (the dedup trail).",
+    "",
+    // apex v79 FIX: on v79, triage kept CROSS-SCOPE findings in-spec (e.g. an
+    // "entrypoint-not-deployed" finding on a `scaffold` spec — a deploy concern),
+    // so each iteration surfaced a NEW out-of-scope finding, the auditor findings
+    // ROTATED across 5 iterations (leftover-rails-cta → entrypoint-not-deployed →
+    // linkly-env-not-consumed → identity-linkly-instead-of-scaffold → pnpm-workspace-
+    // toolchain-edited), findings.length never reached 0, and the subtask loop never
+    // returned "passed" — zero github.pr.created events after 5h runtime. The fix is
+    // to ROUTE OUT-OF-SCOPE work OUT as `kind: spec`, so this spec's findings can
+    // converge to 0 and the loop can publish. This routing rule is the primary
+    // convergence lever — a `kind: task` on an out-of-scope finding will never close.
+    "SCOPE ROUTING RULE (critical):",
+    "- The spec you are triaging for has a specific TITLE and DESCRIPTION (below).",
+    "- If a finding's SCOPE is CLEARLY out-of-band for this spec's title/description",
+    '  — e.g. a "deploy is missing" finding on a "scaffold identity" spec, or an',
+    '  "analytics view not implemented" finding on a "redirect route" spec — emit',
+    "  it as `kind: spec`. It becomes a NEW DAG spec so THIS spec can converge.",
+    "- Only findings that are IN-SCOPE for THIS spec's stated purpose should be",
+    "  `kind: task`.",
+    "- The rotating-findings anti-pattern: if each iteration surfaces a NEW",
+    "  out-of-scope finding, this spec will NEVER converge. Route the cross-scope",
+    "  work OUT as `kind: spec` — that lets this spec's findings.length reach 0 and",
+    '  lets the loop return "passed" to publish.',
+    "",
     "Render NO pass/fail verdict: the loop routes each item by severity + project posture.",
     "",
     // WORKSTREAM 1 — a `kind: spec` item becomes a NEW DAG spec, so it must meet the
