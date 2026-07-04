@@ -34,7 +34,13 @@ function nodeDockerfile(): string {
 # Install line uses --no-frozen-lockfile so the first build (no committed lockfile
 # yet) succeeds; pnpm generates the lockfile and still respects it on subsequent runs.
 # See addon-docker.ts header comment for the audit-finding-#10 rationale.
+# ENV CI=true mirrors the base justfile's \`export CI := "true"\` — pnpm 11 respects
+# it and skips the modules-directory purge confirmation that otherwise HALTS with
+# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY inside a docker build (task #141 —
+# apex v71/v78 halt class). Downstream tools (next.js build, turborepo) key off
+# CI=true too.
 FROM node:24-alpine AS builder
+ENV CI=true
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-lock.yaml* ./
@@ -54,8 +60,11 @@ CMD ["node", "dist/index.js"]
 function rubyDockerfile(): string {
   return `# Ruby-bundler build — installs gems, exposes the rake-built artifact.
 # Plain \`bundle install\` (no --deployment / --frozen) — generates Gemfile.lock on
-# first run, matches the runtime fragment's \`just bootstrap\` recipe.
+# first run, matches the runtime fragment's \`just bootstrap\` recipe. ENV CI=true
+# mirrors the base justfile's \`export CI := "true"\` — a non-interactive signal
+# that build tools respect (task #141).
 FROM ruby:3.4-alpine
+ENV CI=true
 RUN apk add --no-cache build-base
 WORKDIR /app
 COPY Gemfile Gemfile.lock* ./

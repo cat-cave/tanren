@@ -32,7 +32,7 @@
 import type { Fragment, TemplateConfig, VirtualFileSystem } from "../types.js";
 
 export const BASE_FRAGMENT_ID = "base" as const;
-export const BASE_FRAGMENT_VERSION = "1.1.0" as const;
+export const BASE_FRAGMENT_VERSION = "1.2.0" as const;
 
 /** The set of justfile targets the base fragment declares. `processJustfile` rejects
  * a fragment fill against an unknown target name. The `mutation` target was added in
@@ -63,6 +63,17 @@ const JUSTFILE = `# Tanren template — DO NOT remove or rename targets. Fragmen
 # composer's processJustfile splices them in. Wholesale target replacement
 # throws at compose time (the user's load-bearing constraint).
 set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# NON-INTERACTIVE CI SIGNAL (task #141 — apex v71/v78 halt class).
+# Every recipe inherits CI=true — the industry-standard signal that a build is
+# running unattended (no TTY, no prompts). pnpm 11 respects it and skips the
+# modules-directory purge confirmation that otherwise HALTS with
+# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY on the tanren-bootstrap SSH tier
+# (which runs \`just bootstrap\` over an SSH channel with no PTY). Downstream
+# tools (turborepo, husky, next.js build) also key off CI=true — a single top-
+# level export applies to bootstrap + tier-1 + tier-2 + tier-3 + build +
+# mutation, and to every stack, not just node-pnpm.
+export CI := "true"
 
 default:
   just --list

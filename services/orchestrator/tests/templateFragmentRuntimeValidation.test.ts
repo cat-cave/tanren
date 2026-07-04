@@ -22,7 +22,10 @@
 //     honest.
 
 import { describe, expect, it } from "vitest";
-import { assertScaffoldBootstrapsFromFreshCheckout } from "../src/engine/templates/fragments/runtimeValidation.js";
+import {
+  assertPnpmInstallIsNonInteractive,
+  assertScaffoldBootstrapsFromFreshCheckout,
+} from "../src/engine/templates/fragments/runtimeValidation.js";
 import { VirtualFileSystem } from "../src/engine/templates/fragments/types.js";
 
 function vfsWith(files: Record<string, string>): VirtualFileSystem {
@@ -155,5 +158,143 @@ describe("assertScaffoldBootstrapsFromFreshCheckout — justfile scope (regressi
     expect(() => assertScaffoldBootstrapsFromFreshCheckout("no-justfile", vfs)).toThrow(
       /no justfile.*base-protected-files/u,
     );
+  });
+});
+
+describe("assertPnpmInstallIsNonInteractive — task #141 (apex v71/v78 halt class)", () => {
+  it('REJECTS a justfile with a bare `pnpm install` and no `export CI := "true"` at file scope', () => {
+    // The regression this pins: a future writer overrides the base justfile,
+    // drops the `export CI := "true"` line, but still runs pnpm install. Over
+    // SSH (no PTY) pnpm 11 halts with ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY.
+    const vfs = vfsWith({
+      justfile: `set shell := ["bash", "-euo", "pipefail", "-c"]
+
+bootstrap:
+  pnpm install --no-frozen-lockfile
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-no-signal", vfs)).toThrow(
+      /pnpm install.*non-interactive signal/u,
+    );
+  });
+
+  it('ACCEPTS a justfile that declares `export CI := "true"` at file scope', () => {
+    // The base fragment's fix: file-scope export covers every recipe.
+    const vfs = vfsWith({
+      justfile: `set shell := ["bash", "-euo", "pipefail", "-c"]
+export CI := "true"
+
+bootstrap:
+  pnpm install --no-frozen-lockfile
+
+tier-2:
+  pnpm test
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-file-scope-ci", vfs)).not.toThrow();
+  });
+
+  it("ACCEPTS an inline `CI=true` prefix on the pnpm install invocation", () => {
+    const vfs = vfsWith({
+      justfile: `bootstrap:
+  CI=true pnpm install --no-frozen-lockfile
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-inline-ci", vfs)).not.toThrow();
+  });
+
+  it("ACCEPTS an inline `--config.confirmModulesPurge=false` flag on the pnpm install invocation", () => {
+    // The Option B fallback documented in the task #141 fix: the surgical flag
+    // instead of the industry-standard env var.
+    const vfs = vfsWith({
+      justfile: `bootstrap:
+  pnpm install --no-frozen-lockfile --config.confirmModulesPurge=false
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-inline-flag", vfs)).not.toThrow();
+  });
+
+  it("REJECTS a Dockerfile RUN pnpm install line without ENV CI=true above it", () => {
+    // The regression this pins: an addon-docker regression that drops the
+    // `ENV CI=true` line but still runs `pnpm install` inside `docker build`.
+    // Docker's build container also has no PTY.
+    const vfs = vfsWith({
+      justfile: `export CI := "true"
+
+bootstrap:
+  echo skip
+`,
+      Dockerfile: `FROM node:24-alpine
+WORKDIR /app
+COPY package.json ./
+RUN pnpm install --no-frozen-lockfile
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("docker-no-env", vfs)).toThrow(
+      /Dockerfile.*non-interactive signal/u,
+    );
+  });
+
+  it("ACCEPTS a Dockerfile with `ENV CI=true` above the pnpm install RUN line", () => {
+    // The addon-docker fix: ENV CI=true at file scope covers every subsequent
+    // RUN line in the same build stage.
+    const vfs = vfsWith({
+      justfile: `export CI := "true"
+
+bootstrap:
+  echo skip
+`,
+      Dockerfile: `FROM node:24-alpine
+ENV CI=true
+WORKDIR /app
+COPY package.json ./
+RUN pnpm install --no-frozen-lockfile
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("docker-env-ci", vfs)).not.toThrow();
+  });
+
+  it("does not flag non-install pnpm invocations (`pnpm test`, `pnpm build`, `pnpm stryker run`)", () => {
+    // The narrow scope of PNPM_INSTALL_REGEX: only `pnpm install` / `pnpm i`
+    // triggers the modules-purge prompt. `pnpm test` etc. never do; flagging
+    // them would force ceremonial `CI=true` prefixes everywhere for no reason.
+    const vfs = vfsWith({
+      justfile: `set shell := ["bash", "-euo", "pipefail", "-c"]
+
+bootstrap:
+  echo bootstrap
+
+tier-2:
+  pnpm test
+
+tier-3:
+  pnpm build
+
+mutation:
+  pnpm stryker run
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-non-install", vfs)).not.toThrow();
+  });
+
+  it("does not flag comment-only lines that mention `pnpm install`", () => {
+    // Task #103 stripping doctrine: `# ...` to end-of-line is a comment.
+    const vfs = vfsWith({
+      justfile: `bootstrap:
+  # historical: pnpm install used to run here
+  echo bootstrap
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-comment-only", vfs)).not.toThrow();
+  });
+
+  it("ACCEPTS `pnpm i` short form under the same signal", () => {
+    // A writer might use the terse form. Same halt class applies.
+    const vfs = vfsWith({
+      justfile: `bootstrap:
+  CI=true pnpm i
+`,
+    });
+    expect(() => assertPnpmInstallIsNonInteractive("justfile-short-form", vfs)).not.toThrow();
   });
 });

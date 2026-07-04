@@ -37,6 +37,7 @@ import {
 } from "../src/engine/templates/index.js";
 import {
   assertComposedCiYmlParsesAsCiConfigV1,
+  assertPnpmInstallIsNonInteractive,
   assertScaffoldBootstrapsFromFreshCheckout,
 } from "../src/engine/templates/fragments/runtimeValidation.js";
 import {
@@ -472,6 +473,13 @@ describe("template-fragment matrix coverage — every supported stack composes",
       // v63 ERR_PNPM_NO_LOCKFILE halt class; audit finding #10 extends the scope
       // to Dockerfile so the docker addon's build surface is covered too).
       assertScaffoldBootstrapsFromFreshCheckout(slug, vfs);
+      // (9) every pnpm install invocation carries a non-interactive signal — the
+      // tanren-bootstrap tier runs `just bootstrap` over SSH (no PTY), so pnpm 11
+      // otherwise aborts the modules-directory purge with
+      // ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY (task #141 — apex v71/v78 halt
+      // class). Base fragment covers this at file scope via `export CI := "true"`;
+      // addon-docker mirrors it in the Dockerfile via `ENV CI=true`.
+      assertPnpmInstallIsNonInteractive(slug, vfs);
 
       // Pin the test as assertion-bearing (vitest's no-standalone-expectations
       // rule). Every meaningful assertion above throws on failure.

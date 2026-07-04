@@ -225,3 +225,114 @@ function assertNoFrozenPrimitives(
     }
   }
 }
+
+// ── NON-INTERACTIVE PNPM INSTALL CHECK (task #141 — apex v71/v78 halt class) ──
+//
+// pnpm 11 aborts a modules-directory purge on a TTY-less environment with
+// `[ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY] Aborted removal of modules
+// directory due to no TTY`. The tanren-bootstrap tier runs `just bootstrap`
+// over SSH (no PTY), so any pnpm install that would trigger a modules purge
+// halts the outer loop. apex v71 hit this on run 1 (task #141 filed); apex v78
+// hit it again after task #732's writer watchdog widening pushed the loop into
+// the same halt class 18 iterations in a row — the halt is the outer-loop
+// wedge, not a writer failure.
+//
+// The doctrine fix: EVERY surface that runs `pnpm install` (justfile recipe,
+// Dockerfile RUN line) must carry a non-interactive signal — either
+//   (a) `CI=true` exported into the invocation's env (industry-standard signal;
+//       pnpm respects it and skips the purge confirmation, and downstream tools
+//       like next.js/turborepo/husky key off it too), OR
+//   (b) `--config.confirmModulesPurge=false` on the pnpm invocation itself.
+//
+// The base fragment's justfile top-level `export CI := "true"` covers every
+// recipe (bootstrap + tier-* + build + mutation) — the assertion below checks
+// that both the file-scope signal AND the invocation-level signal are honored
+// per-line so a future writer that overrides the base justfile without carrying
+// the export forward fails the check loudly instead of reproducing the halt.
+
+/** True when `line` carries a non-interactive signal for pnpm install — either
+ * `CI=true` inline prefix, or the `--config.confirmModulesPurge=false` flag. */
+function lineHasInlineNonInteractiveSignal(line: string): boolean {
+  return (
+    /\bCI\s*=\s*(?:true|1|"true"|'true')\b/u.test(line) || /--config\.confirmModulesPurge\s*=\s*false\b/u.test(line)
+  );
+}
+
+/** True when the file (justfile / Dockerfile) declares CI=true at file scope so
+ * every recipe or subsequent RUN line inherits it. Covers just's
+ * `export CI := "true"` directive and Dockerfile's `ENV CI=true` / `ENV CI true`. */
+function fileHasFileScopeCiExport(content: string): boolean {
+  // just: `export CI := "true"` (with optional whitespace variants).
+  if (/^\s*export\s+CI\s*:=\s*"true"\s*$/mu.test(content)) return true;
+  // Dockerfile: `ENV CI=true` or `ENV CI true`.
+  if (/^\s*ENV\s+CI\s*[=\s]\s*(?:true|1|"true")\s*$/mu.test(content)) return true;
+  return false;
+}
+
+/** A `pnpm install` — the invocation that triggers the modules-purge prompt.
+ * Matches `pnpm install`, `pnpm i`, and `pnpm i <deps>`; deliberately narrow so
+ * `pnpm test` / `pnpm build` / `pnpm stryker run` (which don't purge modules)
+ * don't get flagged. */
+const PNPM_INSTALL_REGEX = /\bpnpm\s+(?:i|install)\b/u;
+
+/**
+ * Assert every `pnpm install` invocation the composed scaffold emits will run
+ * NON-INTERACTIVELY on a TTY-less environment (the tanren-bootstrap SSH tier's
+ * surface + any Dockerfile RUN line inside `docker build`). Throws an `Error`
+ * whose message names the `label` + broken surface + broken line so the failure
+ * points at the specific entry that broke.
+ *
+ * A surface passes when the pnpm install line carries an inline signal
+ * (`CI=true` prefix or `--config.confirmModulesPurge=false` flag) OR the file
+ * scope declares one (just: `export CI := "true"`, Dockerfile: `ENV CI=true`).
+ * The base fragment covers this at file scope for the justfile; the addon-docker
+ * fragment covers it for the Dockerfile. A live-authored runtime that overrides
+ * either without carrying the signal forward fails here loudly instead of
+ * reproducing the v71/v78 halt in the outer loop.
+ */
+export function assertPnpmInstallIsNonInteractive(label: string, vfs: VirtualFileSystem): void {
+  // Justfile surface. Every non-comment line in every recipe is a potential
+  // pnpm install site; the file-scope `export CI := "true"` covers all of them.
+  if (vfs.has("justfile")) {
+    const justfile = vfs.read("justfile");
+    const fileScope = fileHasFileScopeCiExport(justfile);
+    for (const rawLine of justfile.split("\n")) {
+      // Strip trailing comment (task #103 doctrine): `# ...` to end-of-line.
+      const line = rawLine.replace(/#.*$/u, "").trim();
+      if (line.length === 0) continue;
+      if (!PNPM_INSTALL_REGEX.test(line)) continue;
+      if (fileScope) continue;
+      if (lineHasInlineNonInteractiveSignal(line)) continue;
+      throw new Error(
+        `"${label}" composed justfile contains a pnpm install line ${JSON.stringify(line)} ` +
+          `that lacks a non-interactive signal — the tanren-bootstrap tier runs \`just bootstrap\` ` +
+          `over SSH (no PTY), and pnpm 11 aborts a modules-directory purge with ` +
+          `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY on the first inconsistent-state re-run ` +
+          `(apex v71/v78 halt class — see task #141). Fix by either (a) declaring ` +
+          `\`export CI := "true"\` at the top of the justfile (the base fragment does this ` +
+          `unconditionally) OR (b) prefixing the invocation with \`CI=true\` OR (c) passing ` +
+          `\`--config.confirmModulesPurge=false\` on the pnpm call.`,
+      );
+    }
+  }
+
+  // Dockerfile surface — same signal, different vocabulary (`ENV CI=true`).
+  for (const path of dockerfilePaths(vfs)) {
+    const dockerfile = vfs.read(path);
+    const fileScope = fileHasFileScopeCiExport(dockerfile);
+    for (const run of parseDockerfileRunLines(dockerfile)) {
+      if (!PNPM_INSTALL_REGEX.test(run)) continue;
+      if (fileScope) continue;
+      if (lineHasInlineNonInteractiveSignal(run)) continue;
+      throw new Error(
+        `"${label}" composed Dockerfile ${path} contains a pnpm install RUN line ` +
+          `${JSON.stringify(run)} that lacks a non-interactive signal — a \`docker build\` ` +
+          `runs without a PTY, and pnpm 11 aborts the modules-directory purge with ` +
+          `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY (task #141). Fix by declaring ` +
+          `\`ENV CI=true\` above the RUN line (the addon-docker fragment does this) ` +
+          `OR prefixing the invocation with \`CI=true\` OR passing ` +
+          `\`--config.confirmModulesPurge=false\`.`,
+      );
+    }
+  }
+}
