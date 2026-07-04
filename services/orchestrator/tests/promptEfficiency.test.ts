@@ -3,9 +3,23 @@
 //     `demo-not-exercisable` info finding rather than fabricate failures);
 //   - the interview prompt puts the STATIC block FIRST (variable round/answer/capture
 //     LAST) and compacts the capture JSON.
+//
+// apex v79 — the SCOPE ROUTING RULE for the triage prompt + the IN-SCOPE FOCUS
+// guidance for the auditor prompt. On v79 the writer completed 27 subtasks and the
+// gate passed 21× but zero github.pr.created events fired, because the auditor's
+// findings ROTATED across 5 iterations (leftover-rails-cta → entrypoint-not-deployed
+// → linkly-env-not-consumed → identity-linkly-instead-of-scaffold →
+// pnpm-workspace-toolchain-edited). Root cause: the triage prompt kept CROSS-SCOPE
+// findings in-spec as `kind: task` when they belonged in a NEW spec (`kind: spec`).
+// Fix: (1) triage prompt gains an explicit SCOPE ROUTING RULE that routes clearly
+// out-of-band findings OUT as `kind: spec`, so this spec's findings.length can
+// reach 0; (2) auditor prompt gains a parallel IN-SCOPE FOCUS block so it either
+// omits cross-scope observations or names them out-of-scope explicitly, so triage
+// routes them correctly.
 
 import { describe, expect, it } from "vitest";
-import { buildDemoRunPrompt } from "../src/engine/workflow/loopStagePrompts.js";
+import { buildDemoRunPrompt, buildTriagePrompt } from "../src/engine/workflow/loopStagePrompts.js";
+import { buildAuditorPrompt } from "../src/engine/workflow/answererPrompts.js";
 import { buildInterviewPrompt } from "../src/engine/forge/interview/prompt.js";
 import { emptyCapture } from "../src/engine/forge/interview/types.js";
 
@@ -67,5 +81,86 @@ describe("buildInterviewPrompt — cache-friendly static-first (§7.8)", () => {
     expect(prompt.toLowerCase()).toMatch(/fresh repo|clean checkout|cold checkout/u);
     expect(prompt.toLowerCase()).toMatch(/writes the lockfile|generate the lockfile|generates the lockfile/u);
     expect(prompt.toLowerCase()).toContain("do not use a frozen");
+  });
+});
+
+describe("buildTriagePrompt — SCOPE ROUTING RULE (apex v79)", () => {
+  const ctx = {
+    specTitle: "Scaffold identity for a Rails app",
+    specDescription: "Rename the scaffold's placeholders to the product identity.",
+    findings: [],
+    baselineSha: "abc123",
+  };
+
+  // On v79 the triage prompt did not explicitly steer the agent to distinguish
+  // IN-SCOPE from OUT-OF-SCOPE findings — so cross-scope findings (deploy on a
+  // scaffold spec) were kept in-spec as `kind: task`, and each iteration surfaced a
+  // NEW out-of-scope finding, the rotating-findings loop that never converged. The
+  // SCOPE ROUTING RULE is the primary fix: it must be PRESENT in the prompt.
+  it("renders the explicit SCOPE ROUTING RULE header (out-of-scope findings become `kind: spec`)", () => {
+    const prompt = buildTriagePrompt(ctx);
+    expect(prompt).toContain("SCOPE ROUTING RULE");
+  });
+
+  it("names the out-of-scope-becomes-`kind: spec` routing so this spec can converge", () => {
+    const prompt = buildTriagePrompt(ctx);
+    // The rule must EXPLICITLY route cross-scope work OUT as `kind: spec` — a
+    // `kind: task` on an out-of-scope finding is the anti-pattern that killed v79.
+    // The routing rule spans wrapped lines in the prompt; the regex tolerates
+    // whitespace/newlines between the tokens.
+    expect(prompt).toMatch(/cross-scope\s+work OUT as `kind: spec`/u);
+    // The rule must NAME the rotating-findings anti-pattern so the agent recognizes
+    // the failure mode and applies the routing.
+    expect(prompt).toContain("rotating-findings anti-pattern");
+    // The rule must call out that the win-condition is findings.length reaching 0
+    // → the loop returns "passed" and publishes.
+    expect(prompt).toMatch(/findings\.length reach 0/u);
+    expect(prompt).toMatch(/return "passed"/u);
+  });
+
+  it("cites a concrete cross-scope example the agent can pattern-match on", () => {
+    const prompt = buildTriagePrompt(ctx);
+    // A concrete example makes the routing rule actionable — the agent must be able
+    // to recognize the SHAPE of an out-of-scope finding. v79's canonical example: a
+    // deploy concern surfaced by a scaffold spec.
+    expect(prompt.toLowerCase()).toContain("deploy");
+    expect(prompt.toLowerCase()).toContain("scaffold");
+  });
+});
+
+describe("buildAuditorPrompt — IN-SCOPE FOCUS (apex v79 parallel guidance)", () => {
+  const ctx = {
+    specTitle: "Scaffold identity for a Rails app",
+    acceptanceCriteria: ["AC1: manifest renamed"],
+    baselineSha: "b".repeat(40),
+    outputInstructions: ["CLOSING"],
+  };
+
+  // The auditor is the UPSTREAM of triage — the parallel fix is to steer the
+  // auditor so its findings either OMIT out-of-scope concerns or NAME them
+  // out-of-scope explicitly, so downstream triage routes them correctly.
+  it("renders the IN-SCOPE FOCUS header naming the apex v79 finding", () => {
+    const prompt = buildAuditorPrompt(ctx);
+    expect(prompt).toContain("IN-SCOPE FOCUS");
+    expect(prompt).toContain("apex v79");
+  });
+
+  it("names the cross-scope → new-spec routing (triage's `kind: spec`, not `kind: task`)", () => {
+    const prompt = buildAuditorPrompt(ctx);
+    // The auditor must be told cross-scope concerns belong in a NEW spec — the same
+    // routing target triage uses. Without this, the auditor emits cross-scope
+    // findings with generic titles/bodies and triage mis-routes them.
+    expect(prompt.toLowerCase()).toContain("cross-scope");
+    expect(prompt).toMatch(/`kind: spec`/u);
+    expect(prompt).toMatch(/`kind: task`/u);
+    expect(prompt.toLowerCase()).toContain("out-of-scope");
+  });
+
+  it("names the rotating-findings anti-pattern so the auditor understands the failure mode", () => {
+    const prompt = buildAuditorPrompt(ctx);
+    // The auditor's block mirrors the triage rule's motivation: rotating findings
+    // that never converge to findings.length === 0.
+    expect(prompt).toContain("rotating-findings anti-pattern");
+    expect(prompt).toMatch(/findings\.length never reaches 0/u);
   });
 });
