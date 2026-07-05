@@ -45,15 +45,17 @@ CI-gating). A working agent runs **unbounded**; kill only on evidence of death.
 _disguised_ survivors the initial lint missed — (a) the ssh2 connect-config `timeout:`
 socket idle-timeout (#638), (b) the `ActivityWatchdog` liveness probe reading
 newest-mtime, which a lock-file heartbeat defeated (#640). Both are now fixed and the
-lint extended to flag ssh2 `timeout:`. **apex v49 surfaced the doctrine's next
-extension — task #21**: derive's synchronous wait on the template-build child run
+lint extended to flag ssh2 `timeout:`. apex v49 surfaced the doctrine's next
+extension — task #21: derive's synchronous wait on the template-build child run
 had no inner-failure circuit breaker, so a downstream runner-INSERT retry loop
-presented as an 8-hour curl hang. Task #21A (runner-INSERT idempotency) shipped;
-the #21B child-run progress breaker was OBVIATED by PR-F #693, which collapsed
-templating to fragment-only composition + the in-process F2 authoring loop — the
-template-build child run + its synchronous-wait surface no longer exist. The
-doctrine stands; disguised survivors are caught and fixed (or obviated) as found.
-See `docs/roadmap/timeout-eradication.md`. (2) **The
+presented as an 8-hour curl hang. Task #21A (runner-INSERT idempotency) shipped
+as PR #705; the #21B child-run progress breaker was OBVIATED by PR-F #693, which
+collapsed templating to fragment-only composition + the in-process F2 authoring
+loop — the template-build child run + its synchronous-wait surface no longer
+exist. The lint was further extended by PR #702 to close the audit-#672 evasion
+paths (`cutoff/until/endsAt` families). The doctrine stands; disguised survivors
+are caught and fixed (or obviated) as found. See
+`docs/roadmap/timeout-eradication.md`. (2) **The
 native DESIGN subsystem is BUILT + wired** (WS-D1..D4): a domain-general persisted
 `DesignContract` injected into the writer + a domain-aware design oracle re-driving
 the writer in the same DAG (no handoff seam), bound to first-class personas +
@@ -96,18 +98,20 @@ credentials (GitHub App + Slack + a deploy target;
 real credits under the $50 ceiling.
 
 **Be honest about the proof state — do NOT overclaim.** Successive apex trials —
-v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-NixOS host on 2026-06-23 — each flushed real engine bugs now fixed on `main`. **No
-run has yet closed the full autonomous loop** (issue → triage → fix → merge →
-deploy → a working product, no human in the inner loop). v49 drove past this
-session's env + code cleanups into the live writer-checker-auditor LLM loop running
-real scaffold work and halted on a **legitimate pre-session tanren-code finding**:
-a runner-INSERT retry loop
-(`duplicate key value violates unique constraint "runners_pkey"`) between the
-run-executor and the job-reaper, compounded by derive's synchronous wait having no
-inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes —
-runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker for
-derive's synchronous wait. That close is exactly what apex still has to prove.
+v37–v46 ran on the previous WSL host through 2026-06-19; v47–v79 have run on the
+new NixOS host from 2026-06-23 through 2026-07-04, roughly a trial a day since
+2026-06-28 — each flushed real engine bugs now fixed on `main`. **No run has yet
+closed the full autonomous loop** (issue → triage → fix → merge → deploy → a
+working product, no human in the inner loop). The v49-era infra halts (task #21
+runner-INSERT PK race + derive synchronous-wait breaker) are gone; the frontier
+as of v79 sits inside the product-build loop itself — writer subtask sizing (PR
+#731), plan stall recovery (PR #726), template composition semantics (the
+fragment-based composer, PR-A #688 → PR-G #699), PR-enqueue timing (PR #724 +
+#725 atomic 3-write seam + orphaned-PR startup sweep), and issue-triage routing.
+The **v79 fix (PR #734) enables triage → new-spec insertion on real out-of-scope
+findings** — the closest we've come to the issue-loop half of the apex proof
+firing autonomously, without yet closing the loop end-to-end. That close is
+exactly what apex still has to prove.
 
 **To drive the next apex run, a fresh agent reads, in order:**
 

@@ -26,18 +26,21 @@
 > both **CLOSED** (#602 wires the oracle into the loop; #600 makes a
 > missing/dangling contract a LOUD halt).
 >
-> **Live exercise state (updated 2026-06-23).** The subsystem is
+> **Live exercise state (updated 2026-07-04).** The subsystem is
 > **code-complete + wired**. The **first live design-phase elaboration ran in apex
-> v45/v46 (and again in v47-v49)**: the interview captured a real `designContract`
-> and `runDesignPhase` elaborated it live on real credentials. v45/v46 (previous
-> WSL host, through 2026-06-19) was interrupted by a planned reboot before the
-> product build + design-oracle verification completed; v47-v49 (new NixOS host,
-> 2026-06-23) carried the contract deeper but v49 halted on the task-#21
-> runner-INSERT retry loop + derive synchronous-wait circuit-breaker finding
-> before deploy → oracle verification. The **full verify→re-drive loop has not
-> yet closed** (no deployed product verified against its contract). The remaining
-> validation step is a complete apex run that carries a real `designContract`
-> through to deployment and oracle verification (WS-D8).
+> v45/v46 (and again in v47-v49)**: the interview captures a real `designContract`
+> and `runDesignPhase` elaborates it live on real credentials.
+> **PR #713 (audit round-2 finding H1) closed the last mode-blindness in the
+> subsystem**: the designOracle prompt + triage seam are now `specMode`-aware, so
+> a seeded-scaffold spec does not receive coverage-gap findings against the
+> pre-existing seed surface. The apex frontier has moved past the v49 derive-halt
+> class (task #21 resolved via #703/#705) and is now inside the product-build
+> loop; a captured `designContract` from the interview reaches the writer prompt
+> on every generation via the seam wired in #602. The **full verify→re-drive
+> loop has not yet closed on a real deployed product** — no run has reached
+> deploy → oracle verification → merged design-driven rework in one autonomous
+> pass. The remaining validation step is a complete apex run that carries a real
+> `designContract` through to deployment and oracle verification (WS-D8).
 >
 > The remaining plan below — **WS-D5..D8** — is what is left. WS-D5 is **assessed
 > as SUBSUMED** by the domain-general D1/D3/D4 implementation (verdict + evidence
@@ -264,22 +267,26 @@ platform is held to — see `docs/roadmap/dogfooding.md`).
 ## Apex integration (unblocked — close the live loop)
 
 WS-D1..D4 are testable; the gate (WS-D8) is satisfied. The design-phase
-elaboration first ran live in apex v45/v46 (and again in v47-v49). **Design is an added requirement of
-the apex fixture**: the built product must carry a real `DesignContract` and pass
-the design oracle. The apex bar **gains a design dimension** — the deployed product
-is judged on behavior AND design fidelity against its own contract. The remaining
-validation step is a complete apex run where the oracle verifies the built product
-(see WS-D8).
+elaboration first ran live in apex v45/v46 (and again in v47-v49); trials since
+have advanced past the derive halt into the product-build loop. **Design is an
+added requirement of the apex fixture**: the built product must carry a real
+`DesignContract` and pass the design oracle. The apex bar **gains a design
+dimension** — the deployed product is judged on behavior AND design fidelity
+against its own contract. The remaining validation step is a complete apex run
+where the oracle verifies the built product (see WS-D8).
 
 ## e2e readiness — the design loop is wired + closes (first live elaboration exercised in apex v45/v46 — and again in v47-v49)
 
-**Verdict: code-complete + wired, first live elaboration exercised.** WS-D1..D4 are
-merged and the full loop **closes end-to-end** with no live LLM, proven by a durable,
-CI-gated eval harness (`services/orchestrator/tests/designLoopE2E.test.ts`). In apex
-v45/v46 the design-phase elaboration ran live for the first time (interview captured a
-real contract; `runDesignPhase` elaborated it on real credentials), and apex v47-v49
-re-exercised the same path on the new NixOS host. The verify→re-drive
-loop has not yet closed on a completed run. The harness drives the
+**Verdict: code-complete + wired, first live elaboration exercised.** WS-D1..D4
+are merged and the full loop **closes end-to-end** with no live LLM, proven by a
+durable, CI-gated eval harness
+(`services/orchestrator/tests/designLoopE2E.test.ts`). In apex v45/v46 the
+design-phase elaboration ran live for the first time (interview captured a real
+contract; `runDesignPhase` elaborated it on real credentials), and apex v47-v49
+re-exercised the same path on the new NixOS host; every trial since has
+threaded a captured contract into the writer prompt via the seam wired in #602.
+The verify→re-drive loop has not yet closed on a completed run (no deployed
+product has yet been verified against its contract). The harness drives the
 WHOLE loop over **one stateful in-memory entity graph**, so the contract literally
 flows through the persistence seam — the design **phase**'s `DesignContractStore.create`
 persists the version that the **writer-context** and the **oracle** then read via
@@ -433,17 +440,24 @@ Ordered, each a CI-gated PR-sized unit. Dependencies noted.
 - **WS-D8 — apex integration (HEADLINE remaining work — close the live loop).**
   Add the **design dimension** to the apex fixture's requirements — the built product
   must carry a real `DesignContract` and pass the design oracle. D1..D4 are testable
-  (the gate above), so this is unblocked. **Live state (updated 2026-06-23):** the
-  design-phase elaboration first ran live in apex v45/v46 (and again in v47-v49) —
-  interview captured a real contract; `runDesignPhase` elaborated it on real
-  credentials. v45/v46 was interrupted by a planned reboot; **v49 carried the
-  contract deeper but did not close the deploy → oracle leg** — it halted on the
-  task-#21 runner-INSERT retry loop + derive synchronous-wait circuit-breaker
-  finding before the product build + oracle verification completed. The **full
-  verify→re-drive loop has not yet closed** on a real deployed product. The
-  remaining validation step is a complete apex run that carries a real
-  `designContract` through to deployment and oracle verification. _(Gated on
-  WS-D1..D4 being testable — satisfied; gated on task-#21 unblocking deploy.)_
+  (the gate above), so this is unblocked. **Live state (updated 2026-07-04):** the
+  design-phase elaboration first ran live in apex v45/v46 (and again in v47-v49);
+  the interview captures a real contract and threads it into the writer prompt
+  via the seam wired in #602. Task-#21 (the runner-INSERT retry loop + derive
+  synchronous-wait circuit breaker that halted v49) is resolved (batch PR #705
+  with the sister allocator lane #703), so the deploy leg is no longer blocked by
+  that class. Round-2 audit finding H1 also made the designOracle prompt +
+  triage `specMode`-aware (PR #713) — a seeded scaffold no longer surfaces
+  coverage-gap findings against the pre-existing seed surface. Successive trials
+  through v79 have surfaced halts inside the product-build loop (writer subtask
+  sizing, plan stall recovery, template composition semantics, PR-enqueue timing,
+  triage → new-spec routing on out-of-scope findings — the frontier fixed by v79
+  / PR #734), each closer to but not yet at the deploy leg. The **full
+  verify→re-drive loop has not yet closed** on a real deployed product — no run
+  has yet reached deploy → oracle verification → merged design-driven rework in
+  one autonomous pass. The remaining validation step is a complete apex run that
+  carries a real `designContract` through to deployment and oracle verification.
+  _(Gated on WS-D1..D4 being testable — satisfied; deploy-leg blockers cleared.)_
 
 ## Where this fits
 

@@ -22,7 +22,13 @@ const patterns = [
 ];
 const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
 // Long-running narrative docs (gain sections as the plan evolves) — the 500-line source cap doesn't fit.
-const roadmapDocs = ["PROJECT_BRIEF.md", "ROADMAP.md", "docs/architecture/autonomy-engine.md"];
+const roadmapDocs = [
+  "PROJECT_BRIEF.md",
+  "ROADMAP.md",
+  "docs/architecture/autonomy-engine.md",
+  "docs/operator-guide/apex-run-playbook.md",
+  "docs/roadmap/timeout-eradication.md",
+];
 // DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot + cspell.json word-list (both grow with the codebase).
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
 const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);

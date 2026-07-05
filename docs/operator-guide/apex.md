@@ -11,9 +11,10 @@ contract for the human/orchestrator driving the run.**
 > **[apex-run-playbook.md](./apex-run-playbook.md)**. Read THIS doc first (the role
 > and the rhythm below), then drive from the playbook.
 
-> **Where the trials stand (through v49).** Successive apex trials — v37–v46 ran
+> **Where the trials stand (through v79).** Successive apex trials — v37–v46 ran
 > on the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host
-> on 2026-06-23. The chain has surfaced a long list of real bugs — all fixed on
+> on 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
+> 2026-07-04. The chain has surfaced a long list of real bugs — all fixed on
 > `main`: the never-discard re-drive paths (#585–#594), the intelligent
 > non-convergence detection that replaced hardcoded attempt caps (#593), merge
 > re-gating that routes a gate failure to writer rework instead of bricking the
@@ -24,24 +25,37 @@ contract for the human/orchestrator driving the run.**
 > socket idle-timeout killing long codex runs (#638), descendant
 > `ancestor_not_ready` hot-loop (#639), and the job-stall watchdog gap where a
 > lock-heartbeat fooled a mtime-only probe (#640 — structural file-count+bytes
-> probe + progress-based backstop), and the v47–v49 cluster: the apex-mode
-> env-var eradicated so apex now configures its autonomous posture via the same
+> probe + progress-based backstop); the v47–v49 cluster: the apex-mode env-var
+> eradicated so apex now configures its autonomous posture via the same
 > governance API any operator uses (#646), `.env.validation.local` bash-source
 > breaking on unquoted commas (#656), Fly link route required-`orgSlug` (#658),
-> and the template-build child project born without the autonomous audit posture
-> (Lane T1, #659 — synthetic child now gets `AUTONOMOUS_AUDIT_POSTURE` +
-> `insightThresholds.ciInsightFlakyMinShas: 1`). **v47** (dry run, 2026-06-23)
-> drove §1-§4 cleanly on the new env; **v48** (real run, 2026-06-23) drove
-> §1-§5; **v49** drove past this session's env + code cleanups into the live
-> writer-checker-auditor LLM loop running real scaffold work and halted on a
-> **legitimate pre-session tanren-code finding**: a runner-INSERT retry loop
-> (`duplicate key value violates unique constraint "runners_pkey"`) between the
-> run-executor and the job-reaper, compounded by derive's synchronous wait having
-> no inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes
-> — runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker for
-> derive's synchronous wait. The full autonomy loop has **STILL NOT closed
-> end-to-end** — no merged spec, no product build, no issue→triage→fix, no deploy
-> yet; those remain to demonstrate live.
+> the template-build child project born without the autonomous audit posture
+> (#659 — synthetic child now gets `AUTONOMOUS_AUDIT_POSTURE` +
+> `insightThresholds.ciInsightFlakyMinShas: 1`), the runner-INSERT PK race +
+> derive synchronous-wait circuit breaker (task #21, #705); and the v65–v79
+> cluster which moved past infra hangs into the product-build loop: autostash
+> gate artifacts on clean-PR rebase + `WorkspaceCommandError` classification
+> (v65, #715), F2 fragment-authoring observability wiring `eventStore` +
+> propagating 409 reasons (v66, #719), re-drive halt observability (`run.failed`
+>
+> - persisted `job_queue.failure_message`, v67, #720) **plus** the wandering-halt
+>   convergence detector that caps re-drives making no deliverable progress (v67,
+>   #721 — a `dag.spec.needs_attention` with `source: "wandering_halt"`, distinct
+>   from the same-failure `"strand"` case), the `eventStore` accepting org-scoped
+>   events (v68, #723), enqueue pushed PR into `merge_queue` at `github.pr.created`
+> - atomic 3-write seam + orphaned-PR startup sweep (v67/v69, #724, #725),
+>   plan-stage answerer wrapped in stall-recovery (v70, #726), writer commits
+>   squashed before clean-PR rebase (v71, #728), compose smoke recognizing
+>   Go/Python/Rust tests (v72, #729), duplicate `addEnvVar` reconcile across
+>   fragments (v75, #730), planner one-concern-per-subtask sizing (v76, #731),
+>   `ActivityWatchdog` neighbor-floor widened to 5 for agent-class execs (v76/v77,
+>   #732), pnpm bootstrap non-interactive with `CI=true` (v71/v78, #733), and —
+>   the freshest — triage routing out-of-scope findings to new specs (v79, #734:
+>   the issue-triage → new-spec insertion mechanic firing on real out-of-scope
+>   findings; the closest the issue-loop half of the apex proof has come to firing
+>   autonomously). The full autonomy loop has **STILL NOT closed end-to-end** — no
+>   single run has produced merged spec → product build → issue→triage→fix →
+>   deploy → a working URL; those remain to demonstrate live.
 >
 > The **native design subsystem** is part of the build: WS-D1..D4 are merged
 > and the design loop (author → inject → verify → re-drive) closes end-to-end
@@ -195,10 +209,12 @@ autonomous software org**. The proofs:
   only (the playbook is written to make it reproducible).
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
-The runs **through v49** advanced the autonomy-loop (DAG-build, walker
+The runs **through v79** advanced the autonomy-loop (DAG-build, walker
 auto-execution, just-in-time template materialization — pre-PR-F #693, via the
 now-collapsed creation meta-flow; post-PR-F, via fragment composition + F2
 per-fragment authoring — and the never-discard re-drive + recovery paths),
-run-discipline, and code-integrity proofs. The loops **past a CI-green merged PR**
-(deploy → issue-loop → audits → CI-intelligence → notifications) remain to
-demonstrate live in the next run.
+run-discipline, and code-integrity proofs, and — with v79 — the closest the
+**issue-triage → new-spec insertion** mechanic has come to firing autonomously
+(on real out-of-scope findings surfaced during the run). The loops **past a
+CI-green merged PR** (deploy → the full issue-loop firing end-to-end → audits →
+CI-intelligence → notifications) remain to demonstrate live in the next run.

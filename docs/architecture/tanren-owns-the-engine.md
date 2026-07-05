@@ -47,12 +47,15 @@
 > end-to-end by an apex run that reaches a merge** — none has yet (apex v32 halted
 > at scaffold-bootstrap before a merge; v36 recovered to 10/11 on template creation
 > but did not close the product→deploy loop; successive trials — v37–v46 ran on
-> the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host in
-> 2026-06-23 — surfaced and fixed real engine issues, with v49 halting on the
-> task-#21 runner-INSERT retry loop + derive synchronous-wait circuit-breaker
-> finding, but the full loop has not yet closed), so a real merge through the
-> jj/`MergeAuthority` path is the open live-validation item (the engine is the
-> single path on `main` regardless).
+> the previous WSL host through 2026-06-19; v47–v64 ran on the new NixOS host and
+> drove real engine bugs to fixes; the 2026-06-30 → 2026-07-04 apex-daily cadence
+> carried the frontier through v65–v79 — each halt producing a fix-on-`main` merge,
+> the v79 frontier landing triage → new-spec routing on real out-of-scope findings
+> (PR #734). The task-#21 runner-INSERT + derive synchronous-wait circuit-breaker
+> class is merged (PR #705); the current frontier lives in the product-build loop,
+> not v49-era infra hangs. The full loop has not yet closed), so a real merge
+> through the jj/`MergeAuthority` path is the open live-validation item (the engine
+> is the single path on `main` regardless).
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -266,11 +269,14 @@ so "(flag-on)" below means "merged then made the single path." A real merge thro
 the live jj/`MergeAuthority` path is the open live-validation item (no apex run has
 reached a merge — v32 halted at scaffold-bootstrap, v36 recovered to 10/11 on
 template creation without closing the product→deploy loop, successive trials —
-v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-NixOS host on 2026-06-23 — surfaced and fixed real engine issues but the full loop
-has not yet closed, with v49 halting on the task-#21 runner-INSERT retry loop +
-derive synchronous-wait circuit-breaker finding), but the engine is the single
-path regardless (see the status header).
+v37–v46 ran on the previous WSL host through 2026-06-19; v47–v64 ran on the new
+NixOS host and drove real engine bugs to fixes; the 2026-06-30 → 2026-07-04
+apex-daily cadence carried the frontier through **v65–v79**, each halt producing a
+fix-on-`main` merge — v79's frontier landed triage → new-spec routing on real
+out-of-scope findings (PR #734). The task-#21 runner-INSERT + derive
+synchronous-wait circuit-breaker class is merged (PR #705); the current frontier
+lives in the product-build loop, not v49-era infra hangs. The full loop has not
+yet closed), but the engine is the single path regardless (see the status header).
 
 **Wave 0 — lock the design (this doc). DONE.** The four seam contracts +
 `integration_nodes` schema + `auditPosture` policy shape + the guaranteed/best-effort
@@ -324,13 +330,24 @@ drive the autonomy loops. apex is the single path's first end-to-end exercise, a
 **no apex run has reached a merge yet**: v32 halted at scaffold-bootstrap; v36
 recovered to 10/11 on template creation but did not close the product→deploy loop;
 successive trials — v37–v46 ran on the previous WSL host through 2026-06-19;
-v47–v49 ran on the new NixOS host on 2026-06-23 — surfaced and fixed real engine
-issues (timeout-eradication survivors #638, #640, ancestor-backoff #639,
-apex-mode env-var eradicated #646, Lane T1 #659), with v49 halting on a
-legitimate pre-session tanren-code finding — a runner-INSERT retry loop
-(`duplicate key value violates unique constraint "runners_pkey"`) compounded by
-derive's synchronous wait having no inner-failure circuit breaker (8-hour curl
-hang); task #21 tracks both fixes. The full loop has not yet closed. So a real
-merge through the live jj/`MergeAuthority` path is still the open validation
-item. The cutover itself is complete — the engine is the single path whether or
-not a given apex run reaches a merge.
+v47–v64 ran on the new NixOS host and drove real engine bugs to fixes
+(timeout-eradication survivors #638, #640, ancestor-backoff #639, apex-mode
+env-var eradicated #646, Lane T1 #659, then the audit-round-2/round-3 landings
+2026-06-29 — writer-seam doctrine sweep #708–#714, priorEvents discipline
+#715–#718, task-#21 runner-INSERT + derive circuit breaker #705). The
+2026-06-30 → 2026-07-04 apex-daily cadence then carried the frontier through
+**v65–v79**, each halt producing a fix-on-`main` merge (autostash gate artifacts
+#715; F2 fragment-authoring observability #719; re-drive halt observability +
+wandering-halt convergence detector #720/#721; enqueue pushed PR into
+`merge_queue` #724 + atomic 3-write seam #725; eventStore accepts org-scoped
+events #723; plan-stage answerer stall-recovery #726; squash writer commits
+before clean-PR rebase #728; pnpm bootstrap non-interactive #733; compose smoke
+recognizes Go/Python/Rust tests #729; reconcile duplicate `addEnvVar` across
+fragments #730; planner one-concern-per-subtask sizing #731; `ActivityWatchdog`
+neighbor-floor widened to 5 for agent-class execs #732; **v79** — triage routes
+out-of-scope findings to new specs #734, the issue-triage → new-spec insertion
+mechanic firing on real out-of-scope findings). The current frontier is inside
+the product-build loop, not v49-era infra hangs. The full loop has not yet
+closed. So a real merge through the live jj/`MergeAuthority` path is still the
+open validation item. The cutover itself is complete — the engine is the single
+path whether or not a given apex run reaches a merge.

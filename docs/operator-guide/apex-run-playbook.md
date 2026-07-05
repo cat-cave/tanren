@@ -14,8 +14,9 @@ is the mechanical "how to drive a single run" half.
 
 > **Run naming.** Each trial is `vN`, with its worktree at
 > `/scratch/worktrees/tanren/v<N>`. Successive apex trials — v37–v46 ran on the
-> previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host in
-> 2026-06-23 — see `apex.md` for the honest proof state; the full autonomy loop
+> previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host on
+> 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
+> 2026-07-04 — see `apex.md` for the honest proof state; the full autonomy loop
 > has not yet closed end-to-end. Runs are **disposable** — `main` only moves
 > forward; you never patch a run or its generated repo (see `apex.md`).
 >
@@ -452,14 +453,15 @@ parallel agent waves to lift the platform a quality tier, then rebuild from fres
 
 ---
 
-## What the trials have proven so far (through v49)
+## What the trials have proven so far (through v79)
 
 The trials (driven over this exact playbook, BYOK Codex, $0) have proven **live**:
 DAG-build from a real Forge interview (rough notes → a multi-spec DAG), walker
 auto-execution, the writer authoring a scaffold, JIT template materialization
-(pre-PR-F #693), cost-discipline (loud NULL costs), `needs_attention` escalation +
-clean runner release, and the never-discard re-drive + recovery paths. Each halt
-root-caused a real bug fixed on `main` — early ones (bootstrap frozen-lockfile #496,
+(pre-PR-F #693; post-PR-F, fragment composition + F2 per-fragment authoring),
+cost-discipline (loud NULL costs), `needs_attention` escalation + clean runner
+release, and the never-discard re-drive + recovery paths. Each halt root-caused
+a real bug fixed on `main` — early ones (bootstrap frozen-lockfile #496,
 runner-sweeper #497, templating re-architecture #498), the non-convergence /
 merge-re-gate / timeout-eradication chain (#585–#609), and the v37–v46 cluster:
 runner-release org-scope leak (#636), writer must regenerate+commit derived
@@ -473,20 +475,39 @@ across an env migration: **v47** (dry run) drove §1-§4 cleanly on the new env 
 surfaced #656 (`.env.validation.local` bash-source breaking on unquoted commas).
 **v48** (real run) drove §1-§5, surfaced #658 (Fly `orgSlug`) plus operator-side
 Fly billing + GitHub repo-conflicts pruning, and halted on the audit-posture
-preflight on the template-build child project (→ Lane T1, #659 — the synthetic
-child is now born with `auditPosture: AUTONOMOUS_AUDIT_POSTURE` +
+preflight on the template-build child project (#659 — the synthetic child is now
+born with `auditPosture: AUTONOMOUS_AUDIT_POSTURE` +
 `insightThresholds.ciInsightFlakyMinShas: 1`). **v49** drove past those cleanups
-into the live writer-checker-auditor LLM loop running real scaffold work and
-halted on a **legitimate pre-session tanren-code finding**: a runner-INSERT retry
-loop (`duplicate key value violates unique constraint "runners_pkey"`) between
-the run-executor and the job-reaper, compounded by derive's synchronous wait
-having no inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both
-fixes — runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker
-for derive's synchronous wait.
+into the live writer-checker-auditor LLM loop and halted on a runner-INSERT PK
+retry loop compounded by derive's synchronous wait having no inner-failure
+circuit breaker — both fixed under task #21 (#705).
 
-**What is NOT yet proven:** the full autonomy loop **with a live deploy**. No run
-has yet produced a merged spec, a product build, an issue→triage→fix cycle, or a
-deploy. The loops past a CI-green merged PR — deploy → issue-loop → audits →
+The v65–v79 cluster (2026-06-28 → 2026-07-04) moved past infra hangs into
+**deeper product-build-loop mechanics**: autostash gate artifacts on clean-PR
+rebase + `WorkspaceCommandError` classification (v65, #715); F2
+fragment-authoring observability wiring `eventStore` + propagating 409 rejection
+reasons (v66, #719); re-drive halt observability (`run.failed` emit + persisted
+`job_queue.failure_message`, v67, #720) **plus** the wandering-halt convergence
+detector that caps re-drives making no deliverable progress (v67, #721 — routed
+as `dag.spec.needs_attention` with `source: "wandering_halt"`, distinct from the
+same-failure `"strand"` case); `eventStore` accepting org-scoped events (v68,
+#723); enqueue pushed PR into `merge_queue` at `github.pr.created` + atomic
+3-write seam + orphaned-PR startup sweep (v67/v69, #724, #725); plan-stage
+answerer wrapped in stall-recovery (v70, #726); writer commits squashed before
+clean-PR rebase (v71, #728); compose smoke recognizing Go/Python/Rust tests
+(v72, #729); duplicate `addEnvVar` reconcile across fragments (v75, #730);
+planner one-concern-per-subtask sizing (v76, #731); `ActivityWatchdog`
+neighbor-floor widened to 5 for agent-class execs (v76/v77, #732); pnpm
+bootstrap non-interactive with `CI=true` (v71/v78, #733); and — the freshest —
+**triage routing out-of-scope findings to new specs** (v79, #734): the
+issue-triage → new-spec insertion mechanic firing on real out-of-scope findings.
+That is the closest observed firing of the issue-loop half of the apex proof
+to date.
+
+**What is NOT yet proven:** the full autonomy loop end-to-end. No single run
+has yet produced merged spec → product build → planted-issue auto-triaged →
+merged fix → live deploy → a working product URL. The loops past a CI-green
+merged PR — deploy → the full issue-loop firing on real symptoms → audits →
 CI-intelligence → notifications — **remain to demonstrate live**. The native
 **design subsystem** is wired into derive (a `DesignContract` is captured and
 verified against the build); see `apex.md` for the full honest proof state.
