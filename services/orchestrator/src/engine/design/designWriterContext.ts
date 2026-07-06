@@ -294,8 +294,13 @@ export async function loadDesignContextBlock(input: {
 }): Promise<string | undefined> {
   if (input.orgScope.kind !== "org") return undefined;
   const actor = designResolverActor(input.orgScope.orgId, input.projectId);
-  const record = await DesignContractStore.getLatest(input.client, input.projectId, { kind: "operator" });
-  if (record === undefined) return undefined;
-  const context = await resolveDesignContext(input.client, record, actor);
+  // Use the TYPED-STATE lookup so a CORRUPT persisted row throws loud (Codex
+  // critic #7) rather than the prior `undefined` return that made it
+  // indistinguishable from a legitimate "no design phase ran yet" project.
+  // Only `absent` legitimately omits the writer block; `corrupt` MUST propagate.
+  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, { kind: "operator" });
+  if (lookup.kind === "corrupt") throw lookup.error;
+  if (lookup.kind === "absent") return undefined;
+  const context = await resolveDesignContext(input.client, lookup.record, actor);
   return renderDesignContractBlock(context);
 }

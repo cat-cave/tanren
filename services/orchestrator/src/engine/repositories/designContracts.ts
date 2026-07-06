@@ -24,6 +24,51 @@ import { type DesignContractV1, designContractToJson, parseDesignContract } from
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
+/**
+ * A persisted `design_contracts` row was PRESENT but its jsonb `contract` payload
+ * failed the {@link DesignContractV1} schema parse — a corrupt / legacy-shaped row we
+ * refuse to silently degrade. Distinct from the ABSENT case (no row for the project)
+ * so a caller can DISTINGUISH "no design phase ran yet" from "the persisted contract
+ * is malformed and must not be used" — the corrupt payload is a hard fault the
+ * caller propagates loudly (Codex critic #7). The typed class mirrors the neighbor
+ * convention (`MalformedAncestorStackError` in `engine/dag/ancestorStack.ts`,
+ * landed by PR #740): a data-corruption throw is never a `crashed` opaque default.
+ */
+export class DesignContractCorruptError extends Error {
+  constructor(
+    /** The project whose HEAD row failed to parse. */
+    readonly projectId: string,
+    /** The rejected raw jsonb payload (for diagnostics — a corrupt row). */
+    readonly rawValue: unknown,
+    /** The underlying parse error (Zod issue text). */
+    readonly detail: string,
+  ) {
+    super(`design_contracts row for project '${projectId}' failed schema parse: ${detail}`);
+    this.name = "DesignContractCorruptError";
+  }
+}
+
+/**
+ * Typed lookup state for the HEAD-contract read (Codex critic #7). The store's
+ * read has THREE distinguishable outcomes, and the SILENT-FALLBACK bug was
+ * collapsing them all to `undefined` — a caller could not tell a legit "no
+ * contract yet" project apart from an off-scope actor / RLS block / corrupt row,
+ * so it skipped the design ring cleanly in every case. This discriminated union
+ * makes each outcome explicit:
+ *
+ *   - `found`   — the HEAD contract row parsed cleanly.
+ *   - `absent`  — the SELECT returned zero rows (a real empty state OR an
+ *     off-scope RLS block; the two are indistinguishable at the SQL level and
+ *     the CALLER is responsible for guarding against the off-scope shape
+ *     upstream — see the `actor.orgId === null` pre-check in the design oracle).
+ *   - `corrupt` — the row was present but `parseDesignContract` failed; the
+ *     caller MUST throw / emit a blocking finding, never silently skip.
+ */
+export type DesignContractLookup =
+  | { kind: "found"; record: DesignContractRecord }
+  | { kind: "absent" }
+  | { kind: "corrupt"; error: DesignContractCorruptError };
+
 /** A `design_contracts` row, in domain shape (contract re-parsed through the schema). */
 export interface DesignContractRecord {
   id: string;
@@ -70,6 +115,25 @@ function mapRow(row: DesignContractRow): DesignContractRecord {
   };
 }
 
+/**
+ * Same shape as {@link mapRow} but classifies a parse failure into a typed
+ * {@link DesignContractCorruptError} rather than a raw Error (Codex critic #7).
+ * Used by {@link DesignContractStore.getLatestState} so a corrupt row surfaces
+ * as the `corrupt` lookup variant — the caller decides throw vs. blocking
+ * finding, but never silently skips.
+ */
+function mapRowOrCorrupt(row: DesignContractRow, projectId: string): DesignContractLookup {
+  try {
+    return { kind: "found", record: mapRow(row) };
+  } catch (cause) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    return {
+      kind: "corrupt",
+      error: new DesignContractCorruptError(projectId, row.contract, detail),
+    };
+  }
+}
+
 const COLUMNS = "id, org_id, project_id, version, domain, contract";
 
 export const DesignContractStore = {
@@ -109,7 +173,10 @@ export const DesignContractStore = {
   /**
    * Read the HEAD (highest-version) contract for a project — the one the build
    * currently builds against. Undefined when the project has no contract yet (a
-   * real empty state — never a defaulted contract).
+   * real empty state — never a defaulted contract). Throws (via `mapRow` →
+   * `parseDesignContract`) on a corrupt persisted row — callers that need to
+   * DISTINGUISH the corrupt case from absent should use {@link getLatestState}
+   * instead (Codex critic #7).
    */
   async getLatest(client: QueryClient, projectId: string, _actor: ActorRef): Promise<DesignContractRecord | undefined> {
     const result = await client.query<DesignContractRow>(
@@ -118,6 +185,31 @@ export const DesignContractStore = {
     );
     const row = result.rows[0];
     return row === undefined ? undefined : mapRow(row);
+  },
+
+  /**
+   * The TYPED-STATE variant of {@link getLatest} (Codex critic #7). Returns a
+   * discriminated {@link DesignContractLookup} so a caller can distinguish
+   * `found` from `absent` from `corrupt` — the silent-fallback bug was
+   * collapsing all three to `undefined`, letting an off-scope actor / RLS
+   * block / corrupt row skip the design ring cleanly (indistinguishable from a
+   * legit no-contract project). Callers on the safety-critical path (the
+   * design oracle) MUST use this variant — `absent` legitimately skips;
+   * `corrupt` is a hard fault the caller propagates loudly (never a silent
+   * skip). "Inaccessible" (off-scope actor / null orgId) is the CALLER's
+   * responsibility to detect upstream — RLS makes it indistinguishable from
+   * `absent` at the SQL level, and the primary detectable form (actor.orgId
+   * === null) is caught by a pre-store check in the design oracle before this
+   * method is called.
+   */
+  async getLatestState(client: QueryClient, projectId: string, _actor: ActorRef): Promise<DesignContractLookup> {
+    const result = await client.query<DesignContractRow>(
+      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 ORDER BY version DESC LIMIT 1`,
+      [projectId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return { kind: "absent" };
+    return mapRowOrCorrupt(row, projectId);
   },
 
   /** All versions of a project's contract, newest first (the version history). */

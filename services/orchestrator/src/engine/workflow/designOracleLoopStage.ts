@@ -10,7 +10,11 @@ import type { DesignOracleAnswer } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
-import { runDesignOracleStage, type DesignOracleStageResult } from "./designOracle/designOracle.js";
+import {
+  MalformedDesignOracleResultError,
+  runDesignOracleStage,
+  type DesignOracleStageResult,
+} from "./designOracle/designOracle.js";
 import type { LoopQueryClient, StageBase } from "./loopStages.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
@@ -119,19 +123,14 @@ async function runDesignOracleLoopStageBody(
   startedAt: number,
 ): Promise<{ findings: Finding[]; designOracleTaskId: string }> {
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  await wrapEventAppend(() =>
-    args.appendEvent(
-      "designOracle.verdict",
-      {
-        runId: args.runId,
-        contractVersion: result.contractVersion ?? 0,
-        verificationMode: result.verificationMode ?? "",
-        summary: result.summary ?? "",
-        findings: result.findings,
-      },
-      designOracleTaskId,
-    ),
-  );
+  // Codex critic #6 — a `hasContract: true` result MUST carry `contractVersion` +
+  // `verificationMode` + `summary`. The prior `?? 0` / `?? ""` fallbacks silently
+  // coerced a malformed oracle result (a schema regression, an adapter mock miss,
+  // etc.) into plausible-looking empty metadata on the `designOracle.verdict`
+  // event, hiding the regression on the run timeline. Assert loud and let the
+  // finalize guard close the task row on the typed error.
+  const verdictPayload = assertDesignOracleVerdictPayload(result, args.runId);
+  await wrapEventAppend(() => args.appendEvent("designOracle.verdict", verdictPayload, designOracleTaskId));
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,
@@ -156,4 +155,29 @@ async function runDesignOracleLoopStageBody(
     outcome: "passed",
   });
   return { findings: result.findings, designOracleTaskId };
+}
+
+/**
+ * Validate the `hasContract: true` oracle result's timeline-observable fields and
+ * return the strongly-typed `designOracle.verdict` payload (Codex critic #6). A
+ * missing/empty field throws {@link MalformedDesignOracleResultError} so the
+ * finalize guard closes the task row loud + emits a deterministic `task.failed`
+ * — never the prior `?? 0` / `?? ""` silent coercion that hid the regression.
+ *
+ * Exported for direct unit-testing — the same assertion runs on every clean-path
+ * `hasContract: true` result inside the loop-stage body.
+ */
+export function assertDesignOracleVerdictPayload(
+  result: DesignOracleStageResult,
+  runId: string,
+): { runId: string; contractVersion: number; verificationMode: string; summary: string; findings: Finding[] } {
+  const missing: string[] = [];
+  const { contractVersion, verificationMode, summary } = result;
+  if (contractVersion === undefined || contractVersion === null) missing.push("contractVersion");
+  if (verificationMode === undefined || verificationMode === "") missing.push("verificationMode");
+  if (summary === undefined || summary === "") missing.push("summary");
+  if (missing.length > 0 || contractVersion === undefined || verificationMode === undefined || summary === undefined) {
+    throw new MalformedDesignOracleResultError(`missing/empty field(s): ${missing.join(", ")}`);
+  }
+  return { runId, contractVersion, verificationMode, summary, findings: result.findings };
 }

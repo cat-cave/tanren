@@ -66,6 +66,57 @@ import {
   type ResolvedPersona,
 } from "./designOraclePrompt.js";
 
+/**
+ * The design oracle was called with an actor that CANNOT enumerate the project's
+ * behaviors — the primary detectable form is `actor.orgId === null`, a caller
+ * misconfiguration that would otherwise silently suppress the re-elaboration-gap
+ * finding path AND make the store's `absent` state indistinguishable from an
+ * off-scope RLS block (Codex critic #7 / #8). A typed class so the finalize guard
+ * classifier maps it deterministically and it is never a `crashed` opaque default.
+ * Mirrors the neighbor convention (`MalformedAncestorStackError` in
+ * `engine/dag/ancestorStack.ts`, PR #740): a caller-config fault throws loud.
+ */
+export class DesignOracleActorConfigError extends Error {
+  constructor(
+    /** The project the oracle was invoked against (for diagnostics). */
+    readonly projectId: string,
+    /** The concrete misconfiguration (e.g. "actor.orgId is null"). */
+    readonly reason: string,
+  ) {
+    super(
+      `design oracle: actor cannot enumerate project '${projectId}' — ${reason}. ` +
+        "A design run REQUIRES a tenant-scoped actor; a null orgId silently suppresses the " +
+        "re-elaboration gap detection AND makes the contract-store `absent` state " +
+        "indistinguishable from an off-scope RLS block (Codex critic #7 / #8).",
+    );
+    this.name = "DesignOracleActorConfigError";
+  }
+}
+
+/**
+ * The oracle's answerer returned a `hasContract: true` result but at least one of
+ * the timeline-observable fields (`contractVersion`, `verificationMode`, `summary`)
+ * was missing or empty. Under the previous silent-fallback shape the loop-stage
+ * body coerced these to `0` / `""` on the `designOracle.verdict` event payload,
+ * so a malformed oracle result was indistinguishable from a legitimate empty
+ * verdict on the run timeline (Codex critic #6). Typed so the finalize guard
+ * emits a deterministic `task.failed` + the operator can search for it on the
+ * timeline, rather than the `crashed` opaque default.
+ */
+export class MalformedDesignOracleResultError extends Error {
+  constructor(
+    /** The specific field(s) that were missing / empty. */
+    readonly detail: string,
+  ) {
+    super(
+      `design oracle: hasContract=true result is malformed — ${detail}. The verdict event ` +
+        "would otherwise record plausible-looking empty metadata (contractVersion=0, " +
+        "verificationMode='', summary='') and hide the oracle regression (Codex critic #6).",
+    );
+    this.name = "MalformedDesignOracleResultError";
+  }
+}
+
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface DesignOracleStageInput {
@@ -107,20 +158,44 @@ export interface DesignOracleStageResult {
 
 /**
  * Run the design oracle against a project's HEAD design contract. Reads the contract
- * (loud on a malformed persisted row — the store re-parses through the schema),
- * RESOLVES every persona/behavior ref the contract names against the entity graph
- * (loud when a ref does not resolve — malformed graph state, never a silent skip),
- * builds the domain-aware oracle prompt, invokes the answerer in the read-only
- * workspace, and returns the normalized findings + the declared verification mode.
+ * via the TYPED-STATE lookup (Codex critic #7 — a `corrupt` row throws loud, never a
+ * silent skip; only `absent` legitimately no-ops), RESOLVES every persona/behavior
+ * ref the contract names against the entity graph (loud when a ref does not
+ * resolve — malformed graph state, never a silent skip), builds the domain-aware
+ * oracle prompt, invokes the answerer in the read-only workspace, and returns the
+ * normalized findings + the declared verification mode.
  *
- * When the project has NO contract, returns `{ hasContract: false, findings: [] }` —
- * an explicit empty state the caller branches on, never a defaulted contract.
+ * PRE-STORE ACTOR CHECK (Codex critic #7 / #8): a `null` `actor.orgId` throws
+ * {@link DesignOracleActorConfigError} BEFORE the store read — a tenant-less actor
+ * cannot enumerate the project's behaviors, so the re-elaboration-gap detector
+ * would silently return `[]` AND the store's `absent` state would be
+ * indistinguishable from an off-scope RLS block. The upstream check turns both
+ * silent-suppression paths into one loud fault.
+ *
+ * When the project has NO contract (the typed-state `absent` variant), returns
+ * `{ hasContract: false, findings: [] }` — an explicit empty state the caller
+ * branches on, never a defaulted contract.
  */
 export async function runDesignOracleStage(input: DesignOracleStageInput): Promise<DesignOracleStageResult> {
-  const record = await DesignContractStore.getLatest(input.client, input.projectId, input.actorRef);
-  if (record === undefined) {
+  // Pre-store actor check: without a tenant scope we cannot enumerate the project's
+  // behaviors (re-elaboration-gap detector needs listForProject) AND the store's
+  // absent-vs-off-scope collision becomes indistinguishable. Fail loud upstream so
+  // the finalize guard emits `DesignOracleActorConfigError` — not a `crashed` opaque
+  // default AND not a silent skip (Codex critic #7 / #8).
+  if (input.actor.orgId === null) {
+    throw new DesignOracleActorConfigError(input.projectId, "actor.orgId is null");
+  }
+  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, input.actorRef);
+  if (lookup.kind === "corrupt") {
+    // Never a silent skip — a corrupt persisted contract is a hard fault the
+    // finalize guard closes the task row on and the operator sees on the
+    // timeline (Codex critic #7). Re-throw the typed error the store built.
+    throw lookup.error;
+  }
+  if (lookup.kind === "absent") {
     return { hasContract: false, findings: [] };
   }
+  const record = lookup.record;
   const contract = record.contract;
 
   // Resolve persona refs STRICTLY: a ref with no row (or off-scope under RLS) is
@@ -194,9 +269,19 @@ async function detectReElaborationGap(
 ): Promise<Finding[]> {
   const covered = new Set(behaviorRefs);
   // The project's behavior set is enumerated org-scoped; an actor with no org has no
-  // tenant to enumerate against (mirrors the writer-context's no-org guard) — there is
-  // no project behavior set to diff, so no re-elaboration gap to surface.
-  if (input.actor.orgId === null) return [];
+  // tenant to enumerate against. The prior fallback returned `[]` on `orgId === null`,
+  // silently converting "cannot enumerate project behaviors" into "no re-elaboration
+  // gaps" — a misconfigured design actor suppressed the ENTIRE re-elaboration-finding class
+  // (Codex critic #8). The tenant-scope invariant is upheld here as a defense-in-depth
+  // typed throw; the primary check runs upstream in `runDesignOracleStage` before the
+  // store read, so this branch is unreachable under the normal call path — but if a
+  // future caller invokes `detectReElaborationGap` directly, it still fails loud.
+  if (input.actor.orgId === null) {
+    throw new DesignOracleActorConfigError(
+      input.projectId,
+      "actor.orgId is null (re-elaboration-gap detector requires a tenant-scoped actor)",
+    );
+  }
   const personaRows = await PersonaStore.listForProject(
     input.client,
     { orgId: input.actor.orgId, projectId: input.projectId },
