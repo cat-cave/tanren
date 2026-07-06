@@ -22,7 +22,11 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
 import type { CostRecorder } from "../src/engine/costs/index.js";
 import { parseDesignContract } from "../src/engine/design/designContract.js";
-import { runDesignOracleLoopStage } from "../src/engine/workflow/designOracleLoopStage.js";
+import {
+  assertDesignOracleVerdictPayload,
+  runDesignOracleLoopStage,
+} from "../src/engine/workflow/designOracleLoopStage.js";
+import { MalformedDesignOracleResultError } from "../src/engine/workflow/designOracle/designOracle.js";
 import type { SubtaskCostContext } from "../src/engine/workflow/subtaskCost.js";
 import { makeDesignOracle } from "./helpers/plannerLoopHelpers.js";
 import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
@@ -226,5 +230,70 @@ describe("runDesignOracleLoopStage: WIDER finalize-guard contract (Codex critic 
     const taskId = observedDesignOracleTaskId(h);
     expect(h.events.filter((e) => e.eventType === "task.failed" && e.taskId === taskId)).toHaveLength(0);
     expect(h.events.filter((e) => e.eventType === "task.completed" && e.taskId === taskId)).toHaveLength(1);
+  });
+});
+
+// Codex critic #6 — assert malformed hasContract=true results (missing/empty
+// timeline-observable fields) throw a typed `MalformedDesignOracleResultError`
+// rather than silently coercing to plausible-looking empty metadata on the
+// `designOracle.verdict` event. The finalize guard (above) then closes the task
+// row loud on the deterministic throw; here we pin the assertion itself.
+describe("assertDesignOracleVerdictPayload — malformed hasContract=true throws loud (Codex critic #6)", () => {
+  const clean = {
+    hasContract: true as const,
+    contractVersion: 3,
+    verificationMode: "static-surface-inspection",
+    summary: "inspected the routes",
+    findings: [],
+  };
+
+  it("the clean path returns the strongly-typed payload (no silent coercion)", () => {
+    const payload = assertDesignOracleVerdictPayload(clean, "run_ok");
+    expect(payload).toEqual({
+      runId: "run_ok",
+      contractVersion: 3,
+      verificationMode: "static-surface-inspection",
+      summary: "inspected the routes",
+      findings: [],
+    });
+  });
+
+  it("throws MalformedDesignOracleResultError when contractVersion is missing (was silently coerced to 0)", () => {
+    const missing = { ...clean, contractVersion: undefined };
+    expect(() => assertDesignOracleVerdictPayload(missing, "run_1")).toThrow(MalformedDesignOracleResultError);
+    expect(() => assertDesignOracleVerdictPayload(missing, "run_1")).toThrow(/contractVersion/u);
+  });
+
+  it("throws MalformedDesignOracleResultError when verificationMode is empty (was silently coerced to '')", () => {
+    const emptyMode = { ...clean, verificationMode: "" };
+    expect(() => assertDesignOracleVerdictPayload(emptyMode, "run_1")).toThrow(MalformedDesignOracleResultError);
+    expect(() => assertDesignOracleVerdictPayload(emptyMode, "run_1")).toThrow(/verificationMode/u);
+  });
+
+  it("throws MalformedDesignOracleResultError when summary is missing (was silently coerced to '')", () => {
+    const missingSummary = { ...clean, summary: undefined };
+    expect(() => assertDesignOracleVerdictPayload(missingSummary, "run_1")).toThrow(MalformedDesignOracleResultError);
+    expect(() => assertDesignOracleVerdictPayload(missingSummary, "run_1")).toThrow(/summary/u);
+  });
+
+  it("the thrown error surfaces ALL missing/empty fields (searchable on the timeline)", () => {
+    const allMissing = {
+      hasContract: true as const,
+      contractVersion: undefined,
+      verificationMode: undefined,
+      summary: undefined,
+      findings: [],
+    };
+    let caught: unknown;
+    try {
+      assertDesignOracleVerdictPayload(allMissing, "run_bad");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(MalformedDesignOracleResultError);
+    const message = (caught as MalformedDesignOracleResultError).message;
+    expect(message).toContain("contractVersion");
+    expect(message).toContain("verificationMode");
+    expect(message).toContain("summary");
   });
 });
