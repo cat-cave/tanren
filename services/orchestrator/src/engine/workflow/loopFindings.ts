@@ -144,22 +144,29 @@ export async function gateTriagedSpecs(
 
 /**
  * Map a triaged work item onto the `NewSpecRequest` the caller materializes as a DAG spec.
+ * The optional `originTriageTaskId` stamps the routing provenance (Claude RA2) — the
+ * `task_id` of the triage stage that emitted the item, so the created spec's
+ * `origin_triage_task_id` column carries the routing trail.
  */
-export function routedToNewSpec(r: {
-  item: {
-    id: string;
-    title: string;
-    body: string;
-    severity: NewSpecRequest["severity"];
-    findingIds: ReadonlyArray<string>;
-  };
-}): NewSpecRequest {
+export function routedToNewSpec(
+  r: {
+    item: {
+      id: string;
+      title: string;
+      body: string;
+      severity: NewSpecRequest["severity"];
+      findingIds: ReadonlyArray<string>;
+    };
+  },
+  originTriageTaskId?: string,
+): NewSpecRequest {
   return {
     id: r.item.id,
     title: r.item.title,
     body: r.item.body,
     severity: r.item.severity,
     findingIds: [...r.item.findingIds],
+    ...(originTriageTaskId !== undefined && { originTriageTaskId }),
   };
 }
 

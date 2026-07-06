@@ -16,10 +16,13 @@
 // `answerer_schema_invalid` for a parse miss. An unrecognized error falls
 // CLOSED to `crashed` (the writer-stage's existing default).
 
+import { MalformedAncestorStackError } from "../dag/ancestorStack.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { AnswererSchemaValidationError, AnswererStalledError } from "../providers/answererSchemaError.js";
 import { CodexUsageLimitError } from "../providers/codex.js";
 import { ClaudeUsageLimitError } from "../providers/claude.js";
+import { DesignContractCorruptError } from "../repositories/designContracts.js";
+import { DesignOracleActorConfigError, MalformedDesignOracleResultError } from "./designOracle/designOracle.js";
 import { StageStallEscalationError } from "./loopStageRecovery.js";
 import { markTaskFailedIfRunningWithEvent, type TerminalTaskEventEnvelope } from "./subtaskTasks.js";
 
@@ -30,6 +33,20 @@ export type StageFailureKind =
   | "answerer_schema_invalid"
   | "cost_record_failed"
   | "event_append_failed"
+  // Data-corruption family: a persisted JSONB payload failed its schema parse
+  // and the resolver threw fail-closed rather than silently degrading. Distinct
+  // from `crashed` so the operator sees WHAT was corrupt on the timeline (task
+  // #21-style disguised-survivor prevention). See `MalformedAncestorStackError`
+  // (runs.ancestor_stack), `DesignContractCorruptError` (design_contracts row).
+  | "malformed_ancestor_stack"
+  | "design_contract_corrupt"
+  // Design-oracle stage families (PR #745). Actor-config faults (a null-org
+  // actor) throw BEFORE any store read; malformed oracle results (a
+  // `hasContract:true` answer missing required timeline-observable fields)
+  // throw AFTER the answerer returns. Both were opaque-`crashed` before — the
+  // typed arms preserve the diagnosis on `task.failed.failureKind`.
+  | "design_oracle_actor_config"
+  | "malformed_design_oracle_result"
   | "crashed";
 
 /**
@@ -85,6 +102,23 @@ export class EventAppendError extends Error {
  *   would land as `crashed` and the row would strand `running`)
  * - `EventAppendError` → `event_append_failed`
  *   (task #35 — a pre-terminal event append failed mid-stage)
+ * - `MalformedAncestorStackError` → `malformed_ancestor_stack`
+ *   (PR #740 — the `runs.ancestor_stack` jsonb failed its schema parse; the
+ *   resolver fails closed rather than silently downgrading a speculative run to
+ *   non-speculative and merging it against the wrong base. Preserves the typed
+ *   diagnosis so `task.failed` carries WHAT was corrupt, not `crashed`.)
+ * - `DesignContractCorruptError` → `design_contract_corrupt`
+ *   (PR #740 — the `design_contracts` row failed `parseDesignContract`;
+ *   distinct from ABSENT so a caller can tell "no design phase yet" apart from
+ *   "the persisted contract is malformed and must not be used".)
+ * - `DesignOracleActorConfigError` → `design_oracle_actor_config`
+ *   (PR #745 — the design oracle was invoked with a null-org actor that cannot
+ *   enumerate behaviors; thrown BEFORE any store read so the finalize guard
+ *   emits a specific class rather than aliasing under `crashed`.)
+ * - `MalformedDesignOracleResultError` → `malformed_design_oracle_result`
+ *   (PR #745 — the oracle answerer returned `hasContract:true` but a required
+ *   field was missing/empty; distinct from the silent-fallback shape that
+ *   coerced these to `0`/`""` and hid the regression on the timeline.)
  * - default → `crashed` (the writer-stage's existing default for an unclassified throw)
  */
 export function classifyStageFailureKind(error: unknown): StageFailureKind {
@@ -102,6 +136,18 @@ export function classifyStageFailureKind(error: unknown): StageFailureKind {
   }
   if (error instanceof EventAppendError) {
     return "event_append_failed";
+  }
+  if (error instanceof MalformedAncestorStackError) {
+    return "malformed_ancestor_stack";
+  }
+  if (error instanceof DesignContractCorruptError) {
+    return "design_contract_corrupt";
+  }
+  if (error instanceof DesignOracleActorConfigError) {
+    return "design_oracle_actor_config";
+  }
+  if (error instanceof MalformedDesignOracleResultError) {
+    return "malformed_design_oracle_result";
   }
   return "crashed";
 }

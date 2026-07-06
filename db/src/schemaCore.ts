@@ -36,16 +36,12 @@ export const projects = pgTable(
     defaultBranch: text("default_branch").notNull().default("main"),
     runnerImage: text("runner_image").notNull().default("ghcr.io/cat-cave/tanren-runner:v0"),
     allocator: text("allocator").notNull().default("local-docker"),
-    // The project's versioned `ProjectConfigV1` blob. The column default is the
-    // MINIMAL VALID versioned config (`{"version":1}`), NOT a bare `{}`: every
-    // config READ parses through `migrateProjectConfig`, which fail-HARD rejects an
-    // unversioned row (no silent upgrade-to-defaults shim). A bare `{}` default
-    // would therefore poison a direct/admin/migration insert that omits the column
-    // into a latent runtime 500 on the next config read. `{"version":1}` parses to
-    // the fully-defaulted V1 shape (identical to `defaultProjectConfigV1()`), so a
-    // read is ALWAYS parseable. Application inserts (`createProject`) still supply a
-    // full `defaultProjectConfigV1()` explicitly; this default only backstops a
-    // column-omitting insert with a valid-and-versioned value rather than poison.
+    // Versioned `ProjectConfigV1` blob. Column default is the MINIMAL VALID versioned config
+    // (`{"version":1}`), NOT bare `{}`: reads parse through `migrateProjectConfig` (fail-HARD on
+    // unversioned rows), so `{}` would poison a column-omitting insert into a latent runtime 500.
+    // `{"version":1}` parses to the fully-defaulted V1 (identical to `defaultProjectConfigV1()`).
+    // Application inserts (`createProject`) still supply a full default explicitly; this only
+    // backstops a column-omitting insert with a valid-and-versioned value.
     config: jsonb("config")
       .notNull()
       .default(sql`'{"version":1}'::jsonb`),
@@ -81,25 +77,27 @@ export const specs = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     status: text("status").notNull().default("open"),
-    // Execution priority (autonomy-engine.md §1b): the DagWalker orders the ready
-    // set by this (P0 first … `tbd` last) before the deterministic tiebreak. It
-    // originates on a discovery/triage `ProposedSpec` and is persisted at create
-    // time. NOT a state-machine value — these literals mirror the `SpecPriority`
-    // Zod enum in services/orchestrator/src/engine/state/spec.ts.
+    // Execution priority (autonomy-engine.md §1b): DagWalker orders the ready set (P0
+    // first … `tbd` last) before the deterministic tiebreak. Originates on a
+    // discovery/triage `ProposedSpec`, persisted at create time. Literals mirror
+    // `SpecPriority` in engine/state/spec.ts.
     priority: text("priority").notNull().default("tbd"),
-    // WRITER-PROMPT MODE (task #86 — v64 root cause): selects which standing
-    // instructions `writerPromptFor()` emits for this spec's writer iterations.
-    // `from_scratch` (default) → today's brownfield/legacy authoring guidance
-    // ("Build everything ELSE — manifest/lockfile, sources, configs, tests"); the
-    // greenfield SCAFFOLD spec sets `specialize_seed` so the writer is told the
-    // composed seed is already in place + proven green and only product-identity
-    // surfaces should change. NOT a state-machine value — these literals mirror
-    // the `SpecMode` Zod enum in services/orchestrator/src/engine/state/spec.ts.
+    // WRITER-PROMPT MODE (task #86 — v64 root cause): selects `writerPromptFor()` standing
+    // instructions. `from_scratch` (default) → brownfield/legacy authoring; the greenfield
+    // SCAFFOLD spec sets `specialize_seed` so the writer is told the composed seed is in
+    // place + proven green and only product-identity surfaces should change. NOT a
+    // state-machine value — literals mirror `SpecMode` in engine/state/spec.ts.
     mode: text("mode").notNull().default("from_scratch"),
     metadata: jsonb("metadata")
       .notNull()
       // P3-0014: discovery provenance under `discovery` key
       .default(sql`'{}'::jsonb`),
+    // Triage-routing PROVENANCE (Claude RA2 — apex GAP 1): nullable trail for a routed spec
+    // (`plannerRunTriageNewSpecs.ts`); operator/discovery/seed pass null. Enables re-drive DEDUPE.
+    parentSpecId: text("parent_spec_id"),
+    sourceFindingIds: text("source_finding_ids").array(),
+    originTriageTaskId: text("origin_triage_task_id"),
+    originRunId: text("origin_run_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

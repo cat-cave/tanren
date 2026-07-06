@@ -27,9 +27,22 @@ import type { NotificationRouteRow, NotificationTargetRow } from "./schemas.js";
 export const DEFAULT_ROUTE_TARGET_LABEL = "default route (onboarding)";
 
 // The apex-critical MILESTONE events the default route delivers. Every entry is a
-// `warn`-severity event (eventDefaultSeverity.ts) — the exact escalations a live
+// warn+-severity event (eventDefaultSeverity.ts) — the exact escalations a live
 // apex run must surface to a human (budget burn, the genuine pause, the
-// proven-live deploy + its failures, and a needs_attention human-decision hold).
+// proven-live deploy + its failures, a needs_attention human-decision hold, the
+// operator-actionable demo/accounting failures).
+//
+// `demo.failed` (warn — PR #742) rides here because a demo that cannot even
+// SURFACE (unresolvable surface / unsupported kind / provider read fail) blocks
+// the full autonomous loop from proving out — apex must see it. Without the
+// seed the event would only fire on the env-default belt-and-suspenders, never
+// on the per-org matrix operators actually browse.
+//
+// `usage.accounting_failed` (fail — PR #754) rides here because a run-end
+// accounting failure means a run finished with no persisted usage row (an audit
+// hole under the plane-split; a fail-closed signal that budget deltas may have
+// been skipped). Apex must see it for the same reason — visible on the matrix,
+// not just carried via the env-default.
 export const DEFAULT_ROUTE_EVENTS: readonly string[] = [
   "dag.budget.milestone",
   "dag.budget.paused",
@@ -37,6 +50,8 @@ export const DEFAULT_ROUTE_EVENTS: readonly string[] = [
   "deploy.failed",
   "deploy.skipped",
   "dag.spec.needs_attention",
+  "demo.failed",
+  "usage.accounting_failed",
 ] as const;
 
 export interface EnsureDefaultRouteInput {

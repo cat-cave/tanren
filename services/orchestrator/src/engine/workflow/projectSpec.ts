@@ -52,6 +52,18 @@ export interface ProjectContract {
   config: ProjectConfigV1;
 }
 
+/**
+ * Triage-routing PROVENANCE (Claude RA2 — schemaCore.ts specs' new columns). A triage
+ * decision that routes an out-of-scope finding into a new spec stamps these on the
+ * created spec so the routing trail is queryable; operator/discovery/seed specs omit.
+ */
+export interface SpecTriageProvenance {
+  parentSpecId: string;
+  sourceFindingIds: ReadonlyArray<string>;
+  originTriageTaskId: string;
+  originRunId: string;
+}
+
 export interface CreateSpecInput {
   projectId: string;
   title: string;
@@ -62,6 +74,8 @@ export interface CreateSpecInput {
   priority?: SpecPriority;
   /** Writer-prompt MODE (task #86); omitted ⇒ `from_scratch`. See `engine/state/spec.ts`. */
   mode?: SpecMode;
+  /** Triage routing provenance (Claude RA2); present only for a triage-routed spec. */
+  triageProvenance?: SpecTriageProvenance;
 }
 
 export interface SpecContract {
@@ -77,6 +91,8 @@ export interface SpecContract {
   priority: SpecPriority;
   /** Writer-prompt MODE (task #86). */
   mode: SpecMode;
+  /** Triage routing provenance (Claude RA2); undefined for a non-routed spec. */
+  triageProvenance?: SpecTriageProvenance;
 }
 
 export interface CreateSpecRunInput {
@@ -207,11 +223,17 @@ async function createSpecOnClient(
     status: "open",
     priority: input.priority ?? DEFAULT_SPEC_PRIORITY,
     mode: input.mode ?? DEFAULT_SPEC_MODE,
+    ...(input.triageProvenance !== undefined && { triageProvenance: input.triageProvenance }),
   };
 
+  // Triage-routing PROVENANCE (Claude RA2): four nullable columns on the same
+  // INSERT — a non-routed spec passes null across the board.
+  const provenance = input.triageProvenance;
   await client.query(
-    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on, status, priority, mode)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::text[], $8, $9, $10)`,
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on,
+                         status, priority, mode,
+                         parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::text[], $8, $9, $10, $11, $12::text[], $13, $14)`,
     [
       spec.specId,
       spec.projectId,
@@ -223,6 +245,10 @@ async function createSpecOnClient(
       spec.status,
       spec.priority,
       spec.mode,
+      provenance?.parentSpecId ?? null,
+      provenance === undefined ? null : [...provenance.sourceFindingIds],
+      provenance?.originTriageTaskId ?? null,
+      provenance?.originRunId ?? null,
     ],
   );
   // Wake the DagWalker (notifyDagChanged): a fresh DAG's run channel never fires on its own.
