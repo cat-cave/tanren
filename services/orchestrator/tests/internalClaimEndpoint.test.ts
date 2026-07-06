@@ -148,3 +148,89 @@ describe("plane-split P2 — claim clients", () => {
     await expect(client.claimJob({ taskKind: "plan" })).resolves.toBeUndefined();
   });
 });
+
+// Audit C2 §8: parse-on-receive at the HTTP boundary. Assert a malformed 2xx
+// body from the control plane surfaces as `JobClaimTransportError` (kind:
+// "schema_drift") rather than silently returning "no work" (undefined) — which
+// was the pre-fix behavior when `parsed.job` was undefined on schema drift and
+// idled every worker.
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
+const invalidJsonFetch: MtlsFetch = async () =>
+  new Response("not json at all", { status: 200, headers: { "content-type": "application/json" } });
+
+describe("HttpJobClaimClient — audit C2 §8 parse-on-receive", () => {
+  it("throws JobClaimTransportError on a malformed 2xx body (missing job field)", async () => {
+    const fetchImpl: MtlsFetch = async () => jsonResponse({ notAJobField: true });
+    const client = new HttpJobClaimClient("https://control-plane.internal:3110", fetchImpl);
+
+    let caught: unknown;
+    try {
+      await client.claimJob({ taskKind: "plan" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(JobClaimTransportError);
+    expect((caught as JobClaimTransportError).kind).toBe("schema_drift");
+    expect((caught as JobClaimTransportError).issues?.length ?? 0).toBeGreaterThan(0);
+    // Redacted preview shows the offending key WITHOUT its value (no leak).
+    expect((caught as JobClaimTransportError).payloadPreview).toContain("notAJobField");
+    expect((caught as JobClaimTransportError).payloadPreview).not.toContain("true");
+  });
+
+  it("throws JobClaimTransportError on a wrong-shape job (missing required fields)", async () => {
+    // `job` is present, but the envelope is missing required fields like id
+    // and taskKind — the old unchecked cast would let `job.id` be undefined,
+    // silently propagating a broken envelope into the worker.
+    const fetchImpl: MtlsFetch = async () => jsonResponse({ job: { runId: "run_x" } });
+    const client = new HttpJobClaimClient("https://control-plane.internal:3110", fetchImpl);
+
+    await expect(client.claimJob({ taskKind: "plan" })).rejects.toBeInstanceOf(JobClaimTransportError);
+  });
+
+  it("throws JobClaimTransportError.invalidJson on a body that fails JSON parse", async () => {
+    const client = new HttpJobClaimClient("https://control-plane.internal:3110", invalidJsonFetch);
+
+    let caught: unknown;
+    try {
+      await client.claimJob({ taskKind: "plan" });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(JobClaimTransportError);
+    expect((caught as JobClaimTransportError).kind).toBe("schema_drift");
+  });
+
+  it("parses a well-formed { job: null } as an empty queue (undefined)", async () => {
+    const fetchImpl: MtlsFetch = async () => jsonResponse({ job: null });
+    const client = new HttpJobClaimClient("https://control-plane.internal:3110", fetchImpl);
+    await expect(client.claimJob({ taskKind: "plan" })).resolves.toBeUndefined();
+  });
+
+  it("parses a well-formed envelope reply and returns it unchanged", async () => {
+    const envelope = {
+      id: "job_1",
+      runId: "run_1",
+      taskId: "task_1",
+      taskKind: "plan",
+      payload: { arbitrary: "opaque" },
+      attempts: 1,
+      orgId: "org_a",
+    };
+    const fetchImpl: MtlsFetch = async () => jsonResponse({ job: envelope });
+    const client = new HttpJobClaimClient("https://control-plane.internal:3110", fetchImpl);
+    const job = await client.claimJob({ taskKind: "plan" });
+    expect(job).toMatchObject(envelope);
+  });
+
+  it("http_error variant carries the status + body for non-2xx replies", () => {
+    const err = JobClaimTransportError.httpError(502, "bad gateway");
+    expect(err).toBeInstanceOf(JobClaimTransportError);
+    expect(err.kind).toBe("http_error");
+    expect(err.status).toBe(502);
+    expect(err.body).toBe("bad gateway");
+    expect(err.issues).toBeUndefined();
+  });
+});
