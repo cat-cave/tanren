@@ -16,8 +16,10 @@
 //   (a) total-duration KILL timers — `setTimeout(() => { … kill/fail/throw/reject/destroy/
 //       abort … }, …)` (a wall-clock budget that terminates work).
 //   (b) fixed LOOP CAPS — `for (… < maxAttempts/maxPolls/maxIter …)`, `while (attempt < N)`,
-//       and identifiers matching /max.*(attempt|iter|poll|retr|tries|stall)/i used to
-//       terminally give up.
+//       and identifiers matching
+//       /max.*(attempt|iter|poll|retr|tries|stall|pages|rounds|turns|cycles|passes|reworks)/i
+//       used to terminally give up (the `pages/rounds/turns/cycles/passes/reworks` stems added
+//       audit lane C3 F1 — `VERCEL_MAX_PROJECT_PAGES` in `vercelDeployProvisioner`).
 //   (c) whole-op DEADLINES — `Date.now() + … (deadline|budget)` style expiries; also
 //       LHS-name deadline ASSIGNMENTS (`const deadline = Date.now() + readyTimeoutMs;`)
 //       and wall-clock kill COMPARISONS (`Date.now() >= deadline`) on their own lines.
@@ -91,11 +93,35 @@ const killVerb = /\b(kill|destroy|abort|reject|throw|fail|timedOut|terminate)\b/
 const loopCapPatterns = [
   /\bfor\s*\([^)]*<\s*(max[A-Za-z]*|[A-Za-z_$][A-Za-z0-9_$]*(?:Attempts|Polls|Iter\w*|Tries|Retries))\b[^)]*\)/gu,
   /\bwhile\s*\(\s*[A-Za-z_$][A-Za-z0-9_$]*\s*<\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\)/gu,
+  // SCREAMING_CASE / camelCase loop bounds using the new give-up stems (audit lane C3 F1).
+  // The two patterns above only catch the `max*` and `*Attempts|*Polls|*Iter*|*Tries|*Retries`
+  // families case-sensitively — so `for (page < VERCEL_MAX_PROJECT_PAGES)` (the real-world
+  // survivor in `vercelDeployProvisioner.listApps`) fell through. This pattern is
+  // case-insensitive on the new stems (PAGES|ROUNDS|TURNS|CYCLES|PASSES|REWORKS), catches
+  // both SCREAMING_CASE and camelCase RHS bounds, and its captured group is the whole bound
+  // identifier so the allowlist / dedup / span-suppression all work uniformly.
+  /\bfor\s*\([^)]*<\s*([A-Za-z_$][A-Za-z0-9_$]*(?:pages|rounds|turns|cycles|passes|reworks)[A-Za-z0-9_$]*)\b[^)]*\)/giu,
 ];
 // Give-up identifiers used to terminally bound a loop (the /max.*(…)/i family). The CAPTURED
 // group is the WHOLE identifier (so the allowlist + dedup see e.g. `maxRetriesPerTransient`,
-// not a sub-span).
-const giveUpIdentifier = /\b(max[A-Za-z0-9_$]*(?:attempt|iter|poll|retr|tries|stall)[A-Za-z0-9_$]*)/giu;
+// not a sub-span). The stem set is extended (audit lane C3 F1 — `VERCEL_MAX_PROJECT_PAGES`
+// disguised the loop cap in `vercelDeployProvisioner`'s project pager for the same reason the
+// prior stem set missed the ssh2 `timeout:` and `staticRunnerAllocator.ts` multi-line survivor):
+// a page/round/turn/cycle/pass/rework counter used as a loop bound is a give-up count under
+// another name, so extend the taxonomy to catch it at the source. The `i` flag keeps this
+// case-insensitive (so both `MAX_PROJECT_PAGES` and `maxPages` are caught).
+//
+// WHOLE-IDENTIFIER CAPTURE: `\b` fails to fire between two word chars (an underscore + a
+// letter both count as word chars in JS regex), so a leading-qualifier form like
+// `VERCEL_MAX_PROJECT_PAGES` has no `\b` between `L` and `_M`. The lookbehind
+// `(?<![A-Za-z0-9_$])` uses whitespace / punctuation / start-of-string as the identifier
+// left boundary; an OPTIONAL prefix group `(?:[A-Za-z_$][A-Za-z0-9_$]*_)?` (any word chars
+// ending in `_`) then absorbs a leading qualifier so the CAPTURED group is the WHOLE
+// identifier — critical for the enumerated allowlist (`KEYGEN_MAX_ATTEMPTS`) to work: the
+// allowlist keys on the full identifier, so capturing only the `max*` suffix would over-
+// flag every allowlisted qualified identifier.
+const giveUpIdentifier =
+  /(?<![A-Za-z0-9_$])((?:[A-Za-z_$][A-Za-z0-9_$]*_)?max[A-Za-z0-9_$]*(?:attempt|iter|poll|retr|tries|stall|pages|rounds|turns|cycles|passes|reworks)[A-Za-z0-9_$]*)/giu;
 
 // (c) whole-op deadline: a `Date.now() + …` (or `performance.now() + …`) stored as a
 // deadline/budget/expiry the op checks to give up. Heuristic: the additive now-expression

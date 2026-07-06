@@ -275,6 +275,85 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
       "const MAX_ATTEMPTS = 1; // arch-allow: timeout-class — external API allows exactly 1 attempt, fact not budget\n";
     expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
   });
+
+  // Audit lane C3 F1 — the disguised loop-cap-under-a-different-noun family. The prior
+  // give-up-identifier stem set (`attempt|iter|poll|retr|tries|stall`) missed
+  // `VERCEL_MAX_PROJECT_PAGES = 100` in `vercelDeployProvisioner.listApps` because
+  // "pages" is not in the taxonomy — but a page/round/turn/cycle/pass/rework counter used as
+  // a for-loop upper bound with a throw on the exhaust branch IS a give-up count under
+  // another name (a Vercel team with >100 projects would spuriously fail here). Pin each
+  // new stem with a positive test + a bless test so a regression is loud.
+  it("(give-up+) flags a MAX_*_PAGES identifier (audit C3 F1 — VERCEL_MAX_PROJECT_PAGES survivor)", () => {
+    // The exact real-world shape the audit flagged — SCREAMING_CASE with a `_PAGES` suffix
+    // AND a leading qualifier (`VERCEL_MAX_...`). The optional-prefix capture group grabs
+    // the WHOLE identifier so the allowlist / dedup keys on `VERCEL_MAX_PROJECT_PAGES`, not
+    // a sub-span (the naming stays specific).
+    const text = "const VERCEL_MAX_PROJECT_PAGES = 100;\nif (page > VERCEL_MAX_PROJECT_PAGES) throw new Error('x');\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.length).toBeGreaterThanOrEqual(1);
+    expect(flagged[0]?.message).toContain("VERCEL_MAX_PROJECT_PAGES");
+    expect(flagged[0]?.message).toContain("intelligent non-convergence");
+  });
+
+  it("(give-up+) flags a MAX_*_PAGES used as the RHS of a for-loop upper bound", () => {
+    // The disguised loop-cap shape: a SCREAMING_CASE `_PAGES` bound as the loop RHS. The
+    // loop head fires the fixed-loop-cap detector via the extended `for (… < <ident>)`
+    // pattern; the identifier itself also matches the extended stem set — both are
+    // legitimate findings.
+    const text =
+      "const VERCEL_MAX_PROJECT_PAGES = 100;\n" +
+      "for (let page = 0; page < VERCEL_MAX_PROJECT_PAGES; page++) { doWork(); }\n" +
+      "throw new Error('exceeded pages');\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged.length).toBeGreaterThanOrEqual(1);
+    expect(flagged.some((d) => d.message.includes("retryUntilConverged"))).toBe(true);
+  });
+
+  it("(give-up+) flags the new stem family — _ROUNDS / _TURNS / _CYCLES / _PASSES / _REWORKS", () => {
+    // Each of the new stems on its own: they are ALL the same class as `_PAGES` (a
+    // structural counter of work units that shouldn't be bounded on a fixed number).
+    const text =
+      "const MAX_TRIAGE_ROUNDS = 5;\n" +
+      "const MAX_PLAN_TURNS = 4;\n" +
+      "const MAX_REWORK_CYCLES = 3;\n" +
+      "const MAX_AUDIT_PASSES = 2;\n" +
+      "const MAX_FIX_REWORKS = 6;\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged).toHaveLength(5);
+    const messages = flagged.map((d) => d.message);
+    // The whole-identifier capture names each identifier in full — no qualifier stripped.
+    expect(messages[0]).toContain("MAX_TRIAGE_ROUNDS");
+    expect(messages[1]).toContain("MAX_PLAN_TURNS");
+    expect(messages[2]).toContain("MAX_REWORK_CYCLES");
+    expect(messages[3]).toContain("MAX_AUDIT_PASSES");
+    expect(messages[4]).toContain("MAX_FIX_REWORKS");
+  });
+
+  it("(give-up+) flags the camelCase forms — maxPages / maxTurns / maxRounds", () => {
+    // The stem set is case-insensitive, so the camelCase variants are caught too.
+    const text = "const cap = maxPages;\nconst a = maxTurns;\nconst b = maxRounds;\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: srcFile, text }]);
+    expect(flagged).toHaveLength(3);
+  });
+
+  it("(give-up+) does NOT flag adjacent but doctrinally-legitimate identifiers", () => {
+    // Negatives: a page-SIZE (a request tuning knob, not a give-up cap) and a page-INDEX
+    // (a loop variable, not a bound) don't carry the give-up shape (no `max` stem + no
+    // suffix match). These MUST NOT trip — they'd be false positives on legitimate pager
+    // code. Same for a bare `pageCount` (an observability count) and a `pageSize`
+    // constant (the batch size, not a give-up bound).
+    const text = "const pageSize = 100;\nconst pageCount = 0;\nconst pageIndex = 0;\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
+
+  it("(give-up+) honors `// arch-allow: timeout-class` on a MAX_*_PAGES line", () => {
+    // A hypothetical LEGITIMATE bless (a page-cap dictated by an external contract, not a
+    // safety budget). The per-line annotation exempts the line — same mechanism as every
+    // other timeout-class shape.
+    const text =
+      "const MAX_UPSTREAM_PAGES = 3; // arch-allow: timeout-class — Vercel v9 caps team-list requests at 3 pages, external fact not budget\n";
+    expect(checkNoArbitraryTimeouts([{ file: srcFile, text }])).toEqual([]);
+  });
 });
 
 // ENFORCEMENT wiring (Phase-1 SEAL): the lint is no longer report-only — it is part of
