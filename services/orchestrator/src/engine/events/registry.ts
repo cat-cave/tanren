@@ -57,6 +57,7 @@ import {
   UsageTokenAccountingFailedPayload,
   UsageWindowObservedPayload,
   UsageWindowPressurePayload,
+  UsageAccountingFailedPayload,
   WorkspaceBootstrapDeferredPayload,
   WorkspaceFailedPayload,
   WorkspaceGitCapturedPayload,
@@ -180,10 +181,9 @@ import {
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
 
-// Single source of truth mapping event names → typed Zod payload schemas.
-// To add a new event: (1) Zod schema under events/schemas/, (2) wire here,
-// (3) Sensitivity tags in sensitivityRules.ts, (4) regenerate
-// events.event_type CHECK via codegen:events + db:generate.
+// Single source of truth mapping event names → typed Zod payload schemas. To add: (1)
+// Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
+// sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
@@ -279,9 +279,10 @@ export const EventRegistry = {
   "usage.window.observed": UsageWindowObservedPayload,
   "usage.window.pressure": UsageWindowPressurePayload,
   "usage.accounting.observed": UsageAccountingObservedPayload,
-  // silent-fallback hardening: a usage READ failed (loud, never empty), and a real CLI call recorded its cost with no token telemetry (mandatory accounting, loud).
+  // silent-fallback hardening: loud usage READ failure, per-CLI token telemetry drift, and RUN-END mandatory-accounting seam throw (Codex critic #18 — outcome-demoting).
   "usage.read_failed": UsageReadFailedPayload,
   "usage.token_accounting_failed": UsageTokenAccountingFailedPayload,
+  "usage.accounting_failed": UsageAccountingFailedPayload,
 
   // GitHub integration
   "github.branch.pushed": GithubBranchPushedPayload,
@@ -489,8 +490,7 @@ export interface RawEventRow {
   payload: unknown;
 }
 
-// decodeEvent parses a database row's payload through the registered Zod schema (a
-// defense-in-depth pass for replay/import; write-time producers are already validated).
+// decodeEvent parses a DB row payload through the registered Zod schema (defense-in-depth for replay/import; write-time producers are already validated).
 export function decodeEvent(row: RawEventRow): TypedEvent {
   if (!isEventName(row.event_type)) {
     throw new UnknownEventTypeError(row.event_type);

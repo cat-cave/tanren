@@ -164,6 +164,7 @@ export const eventTypeNames = [
   "triage.completed",
   "triage.started",
   "usage.accounting.observed",
+  "usage.accounting_failed",
   "usage.read_failed",
   "usage.token_accounting_failed",
   "usage.window.observed",

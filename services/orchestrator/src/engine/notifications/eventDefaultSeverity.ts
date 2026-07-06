@@ -115,6 +115,11 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // is mandatory-accounting drift the operator must fix; warn.
   "usage.read_failed": "fail",
   "usage.token_accounting_failed": "warn",
+  // Codex critic #18: the RUN-END mandatory accounting seam THREW — a hard
+  // mandatory-accounting invariant violation the operator MUST see; `fail` so it
+  // clears the default-route floor and reaches the org's channels even without a
+  // per-event route (the terminal-outcome demotion pairs with the fail-tier event).
+  "usage.accounting_failed": "fail",
 
   // GitHub integration
   "github.branch.pushed": "info",

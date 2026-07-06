@@ -493,3 +493,7 @@ export const CostReconcileFailedPayload = z
     reasonText: z.string(),
   })
   .strict();
+
+// Codex critic #18 usage.accounting_failed — peeled off to schemas/usage.ts for
+// the 500-line cap, re-exported here so registry.ts imports through one path.
+export { UsageAccountingFailedPayload } from "./usage.js";

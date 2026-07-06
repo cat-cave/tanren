@@ -115,7 +115,7 @@ export const infraSensitivityRules: SensitivityRule[] = [
   // cost / cost-safety — extracted to ./sensitivityRules.cost.ts (500-line cap).
   ...costSensitivityRules,
 
-  // usage monitoring — percent-of-window + token counts are non-sensitive operational telemetry; all public.
+  // usage monitoring — telemetry (window %, token counts) + silent-fallback-hardening loud-failure events; all fields public (no secret values).
   ...rulesFor("usage.window.observed", [
     ["provider", "public"],
     ["windows[].slot", "public"],
@@ -144,7 +144,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["costUsd", "public"],
     ["capturedAt", "public"],
   ]),
-  // usage.read_failed (silent-fallback hardening) — tool/target/reason/exitCode + bounded stderr tail; all public.
   ...rulesFor("usage.read_failed", [
     ["tool", "public"],
     ["target", "public"],
@@ -153,7 +152,6 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["detail", "public"],
     ["reasonText", "public"],
   ]),
-  // usage.token_accounting_failed (silent-fallback hardening) — role/cli/model secret-free, reason a fixed diagnosis; all public.
   ...rulesFor("usage.token_accounting_failed", [
     ["role", "public"],
     ["cli", "public"],

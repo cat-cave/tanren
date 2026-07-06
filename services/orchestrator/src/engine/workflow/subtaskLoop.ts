@@ -252,16 +252,52 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
   const posture = input.auditPosture ?? DEFAULT_AUDIT_POSTURE;
   const convergencePolicy = input.convergencePolicy ?? DEFAULT_CONVERGENCE_POLICY;
 
-  // finalize: run-end accounting + cost reconcile through EVERY return — the terminal
-  // outcome is preserved on a best-effort reconcile blip (audit §3.7d).
+  // finalize: run-end accounting + cost reconcile through EVERY return — token
+  // accounting is a MANDATORY invariant (docs/architecture/autonomy-engine.md —
+  // "disjoint typed buckets"), so a THROWN accounting seam MUST NOT be silently
+  // swallowed. Codex critic #18: the prior implementation logged and preserved the
+  // outcome, so a run that would have PASSED could complete `passed` with a broken
+  // accounting seam — a silent-pass violating the invariant. The fix:
+  //   1. Emit the LOUD durable `usage.accounting_failed` event (fail-tier severity
+  //      — reaches operator channels via the default route) with the runId + the
+  //      pre-transform outcome + a bounded, secret-free detail.
+  //   2. DEMOTE a `passed` outcome to `halted` so downstream `nonPassDetailFor`
+  //      routes the run through the non-pass finalize path — a re-drive, not a
+  //      silent complete. Every other kind is already non-pass (halted /
+  //      convergence_stalled / budget_paused / window_exhausted) — preserve it,
+  //      but the loud event still fires so the accounting gap is visible.
   const finalize = async (outcome: SubtaskLoopOutcome): Promise<SubtaskLoopOutcome> => {
     try {
       await observeRunAccounting(input, appendEvent, plannerTaskId, creditState);
+      return outcome;
     } catch (error) {
-      const ctx = { runId: input.context.runId, outcomeKind: outcome.kind };
-      log.error("run-end cost reconcile failed; outcome preserved, only spend back-fill missing", ctx, error);
+      const detail = boundedErrorDetail(error);
+      const demoted = outcome.kind === "passed";
+      await appendEvent(
+        "usage.accounting_failed",
+        {
+          runId: input.context.runId,
+          priorOutcomeKind: outcome.kind,
+          outcomeDemoted: demoted,
+          detail,
+          reason: "run-end accounting seam threw",
+        },
+        plannerTaskId,
+      );
+      log.error(
+        "run-end mandatory accounting seam THREW; outcome demoted to halted (no silent-pass)",
+        { runId: input.context.runId, outcomeKind: outcome.kind, demoted },
+        error,
+      );
+      if (demoted) {
+        return {
+          kind: "halted",
+          loopCount: outcome.loopCount,
+          reason: `accounting_failed: ${detail}`,
+        };
+      }
+      return outcome;
     }
-    return outcome;
   };
 
   await insertPlannerTask(input.pool, input.context.runId, plannerTaskId, input.adapters.planner, input.runStateWriter);
@@ -306,4 +342,13 @@ export async function runSubtaskLoop(input: SubtaskLoopInput): Promise<SubtaskLo
     priorFindings = result.priorFindings;
     loopCount += 1;
   }
+}
+
+// Codex critic #18: shape a caught accounting error into a bounded, secret-free
+// diagnostic tail for the `usage.accounting_failed` payload — `Error.message` when
+// available, else a stringified fallback, capped at 500 chars so an accidentally
+// verbose message never bloats the durable event.
+function boundedErrorDetail(error: unknown): string {
+  const raw = error instanceof Error && error.message !== "" ? error.message : String(error);
+  return raw.length > 500 ? `${raw.slice(0, 500)}...` : raw;
 }
