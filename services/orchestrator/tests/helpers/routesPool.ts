@@ -362,9 +362,10 @@ export class RoutesPool {
     if (trimmed.startsWith("INSERT INTO spec_milestones")) return { rows: [], rowCount: 1 };
 
     // design_contracts (native design subsystem, WS-D1) — the derive persists the
-    // captured design contract as a first-class version-1 row. Params:
-    // [id, org_id, project_id, domain, contract_json]. The version is COALESCE'd in the
-    // real SQL; the stub returns version 1 (the first contract for a fresh project).
+    // captured design contract as a first-class version-1 row. Post-Codex-RA1
+    // params: [id, org_id, project_id, mode, domain, contract_json]. The version
+    // is COALESCE'd in the real SQL; the stub returns version 1 (the first
+    // contract for a fresh project on the given mode).
     if (trimmed.startsWith("INSERT INTO design_contracts")) {
       return {
         rows: [
@@ -373,8 +374,9 @@ export class RoutesPool {
             org_id: String(params[1]),
             project_id: String(params[2]),
             version: 1,
-            domain: String(params[3]),
-            contract: JSON.parse(String(params[4])) as unknown,
+            mode: String(params[3]),
+            domain: String(params[4]),
+            contract: JSON.parse(String(params[5])) as unknown,
           },
         ],
         rowCount: 1,

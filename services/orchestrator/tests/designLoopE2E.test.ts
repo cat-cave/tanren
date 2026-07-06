@@ -81,7 +81,7 @@ describe("design loop e2e — the loop CLOSES (canned model responses, stateful 
       "behavior_stats",
     ]);
     // It really landed in the store as HEAD version 1 (read back through getLatest).
-    const head = await DesignContractStore.getLatest(graph as never, PROJECT, actorRef);
+    const head = await DesignContractStore.getLatest(graph as never, PROJECT, "from_scratch", actorRef);
     expect(head?.version).toBe(1);
     expect(head?.contract.behaviorRefs.length).toBe(3);
 
@@ -230,14 +230,14 @@ describe("design loop e2e — the loop CLOSES (canned model responses, stateful 
     };
     await expect(author(graph, dropped)).rejects.toThrow(/does not cover/u);
     // Nothing persisted — the loud throw fired BEFORE any contract version landed.
-    const head = await DesignContractStore.getLatest(graph as never, PROJECT, actorRef);
+    const head = await DesignContractStore.getLatest(graph as never, PROJECT, "from_scratch", actorRef);
     expect(head).toBeUndefined();
   });
 
   it("the persisted contract round-trips through the schema (a valid, re-parseable HEAD)", async () => {
     const graph = newGraph();
     await author(graph);
-    const head = await DesignContractStore.getLatest(graph as never, PROJECT, actorRef);
+    const head = await DesignContractStore.getLatest(graph as never, PROJECT, "from_scratch", actorRef);
     expect(head).toBeDefined();
     expect(() => parseDesignContract(head!.contract)).not.toThrow();
   });

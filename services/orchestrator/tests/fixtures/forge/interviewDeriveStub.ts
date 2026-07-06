@@ -112,9 +112,10 @@ export function stubPool(): {
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO design_contracts")) {
-      // Column params: id, org_id, project_id, domain, contract(json text). The
-      // `version` is computed in-statement (COALESCE(MAX)+1) → stub it as 1.
-      const rawContract = params[4];
+      // Column params (post-Codex-RA1): id, org_id, project_id, mode, domain,
+      // contract(json text). The `version` is computed in-statement
+      // (COALESCE(MAX)+1) → stub it as 1.
+      const rawContract = params[5];
       const contract = typeof rawContract === "string" ? (JSON.parse(rawContract) as Record<string, unknown>) : {};
       state.designContracts.push(contract);
       return {
@@ -124,7 +125,8 @@ export function stubPool(): {
             org_id: params[1],
             project_id: params[2],
             version: 1,
-            domain: params[3],
+            mode: params[3],
+            domain: params[4],
             contract,
           },
         ],

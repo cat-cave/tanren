@@ -111,18 +111,20 @@ class FakeGraphClient {
       const pid = String(params[0]);
       return rows(this.seed.behaviors.filter((b) => b.personaId === pid).map((b) => this.behaviorRow(b)));
     }
-    // DesignContractStore.create INSERT.
+    // DesignContractStore.create INSERT — the store now passes `mode` as $4
+    // and shifts domain/contract to $5/$6 (Codex RA1: mode dimension added).
     if (text.includes("INSERT INTO design_contracts")) {
       const version = this.inserted.length + 1;
-      this.inserted.push({ domain: String(params[3]), contract: JSON.parse(String(params[4])), version });
+      this.inserted.push({ domain: String(params[4]), contract: JSON.parse(String(params[5])), version });
       return rows([
         {
           id: `design_${version}`,
           org_id: params[1],
           project_id: params[2],
           version,
-          domain: params[3],
-          contract: JSON.parse(String(params[4])),
+          mode: params[3],
+          domain: params[4],
+          contract: JSON.parse(String(params[5])),
         },
       ]);
     }

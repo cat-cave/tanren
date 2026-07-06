@@ -7,7 +7,10 @@
 //       getLatest reads the head; listVersions returns newest-first;
 //   (c) ORG SCOPE under RLS: org A sees its own contracts but NEVER org B's; an
 //       UNSCOPED runtime-pool read sees ZERO rows (deny-by-default empty GUC);
-//   (d) WRITES stay org-scoped: org A cannot INSERT a row owned by org B.
+//   (d) WRITES stay org-scoped: org A cannot INSERT a row owned by org B;
+//   (e) Codex RA1 (mode dimension) — two contracts with the same (project_id,
+//       version) but different modes COEXIST, versioning is per-(project, mode),
+//       and getLatest/listVersions return the right row per mode.
 //
 // Gated behind TANREN_RLS_DB_TEST=1 + a superuser DATABASE_URL (the migration
 // owner), exactly like the templates / R1 / R2 cohort tests.
@@ -121,12 +124,13 @@ describeDb("design_contracts DAL — versioned, org-scoped", () => {
     const created = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       DesignContractStore.create(
         client,
-        { orgId: ORG_A, projectId: PROJECT_A, contract: contract("saas-web", "console") },
+        { orgId: ORG_A, projectId: PROJECT_A, mode: "from_scratch", contract: contract("saas-web", "console") },
         ACTOR,
       ),
     );
     expect(created.orgId).toBe(ORG_A);
     expect(created.version).toBe(1);
+    expect(created.mode).toBe("from_scratch");
     expect(created.domain).toBe("saas-web");
     expect(created.contract.dimensions[0]?.key).toBe("tokens");
     // THE MOAT — the persona/behavior id links survive the jsonb round-trip.
@@ -144,20 +148,20 @@ describeDb("design_contracts DAL — versioned, org-scoped", () => {
     const v2 = await runWithOrgScope(runtimePool, ORG_A, (client) =>
       DesignContractStore.create(
         client,
-        { orgId: ORG_A, projectId: PROJECT_A, contract: contract("saas-web", "console-v2") },
+        { orgId: ORG_A, projectId: PROJECT_A, mode: "from_scratch", contract: contract("saas-web", "console-v2") },
         ACTOR,
       ),
     );
     expect(v2.version).toBe(2);
 
     const latest = await runWithOrgScope(runtimePool, ORG_A, (client) =>
-      DesignContractStore.getLatest(client, PROJECT_A, ACTOR),
+      DesignContractStore.getLatest(client, PROJECT_A, "from_scratch", ACTOR),
     );
     expect(latest?.version).toBe(2);
     expect(latest?.contract.identity).toBe("console-v2");
 
     const versions = await runWithOrgScope(runtimePool, ORG_A, (client) =>
-      DesignContractStore.listVersions(client, PROJECT_A, ACTOR),
+      DesignContractStore.listVersions(client, PROJECT_A, "from_scratch", ACTOR),
     );
     expect(versions.map((v) => v.version)).toEqual([2, 1]);
   });
@@ -166,7 +170,7 @@ describeDb("design_contracts DAL — versioned, org-scoped", () => {
     const bContract = await runWithOrgScope(runtimePool, ORG_B, (client) =>
       DesignContractStore.create(
         client,
-        { orgId: ORG_B, projectId: PROJECT_B, contract: contract("mobile-game", "cozy") },
+        { orgId: ORG_B, projectId: PROJECT_B, mode: "from_scratch", contract: contract("mobile-game", "cozy") },
         ACTOR,
       ),
     );
@@ -179,12 +183,12 @@ describeDb("design_contracts DAL — versioned, org-scoped", () => {
 
     // Org A's getLatest for org B's project sees nothing (RLS denies the rows).
     const crossLatest = await runWithOrgScope(runtimePool, ORG_A, (client) =>
-      DesignContractStore.getLatest(client, PROJECT_B, ACTOR),
+      DesignContractStore.getLatest(client, PROJECT_B, "from_scratch", ACTOR),
     );
     expect(crossLatest).toBeUndefined();
 
     // An UNSCOPED runtime-pool read (empty GUC) sees ZERO rows — every row is denied.
-    const unscoped = await DesignContractStore.listVersions(runtimePool, PROJECT_A, ACTOR);
+    const unscoped = await DesignContractStore.listVersions(runtimePool, PROJECT_A, "from_scratch", ACTOR);
     expect(unscoped).toEqual([]);
   });
 
@@ -193,11 +197,76 @@ describeDb("design_contracts DAL — versioned, org-scoped", () => {
       runWithOrgScope(runtimePool, ORG_A, (client) =>
         DesignContractStore.create(
           client,
-          { orgId: ORG_B, projectId: PROJECT_A2, contract: contract("saas-web", "spoof") },
+          { orgId: ORG_B, projectId: PROJECT_A2, mode: "from_scratch", contract: contract("saas-web", "spoof") },
           ACTOR,
         ),
       ),
       // The RLS WITH CHECK rejects an INSERT whose org_id ≠ the scoped org.
     ).rejects.toThrow(/row-level security|violates|new row/iu);
+  });
+
+  // Codex RA1 — the fix's core assertions: two contracts with the same
+  // (project_id, version) but different modes COEXIST, and getLatest returns
+  // the head per mode. Prior to the fix the unique index was on (project_id,
+  // version), so a second create for a project silently versioned across
+  // modes and getLatest read whichever version happened to be highest.
+  it("(e) Codex RA1: contracts with the same (project, version) but different modes coexist", async () => {
+    // Use PROJECT_A2 (unused by earlier tests) for a clean per-mode versioning surface.
+    const fromScratch = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.create(
+        client,
+        { orgId: ORG_A, projectId: PROJECT_A2, mode: "from_scratch", contract: contract("saas-web", "fs-v1") },
+        ACTOR,
+      ),
+    );
+    const specializeSeed = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.create(
+        client,
+        { orgId: ORG_A, projectId: PROJECT_A2, mode: "specialize_seed", contract: contract("saas-web", "ss-v1") },
+        ACTOR,
+      ),
+    );
+    // Both are version 1 (the versioning is (project, mode)-scoped), but they
+    // coexist because the unique index is on (project_id, mode, version).
+    expect(fromScratch.version).toBe(1);
+    expect(specializeSeed.version).toBe(1);
+    expect(fromScratch.mode).toBe("from_scratch");
+    expect(specializeSeed.mode).toBe("specialize_seed");
+
+    // getLatest returns the right row per mode.
+    const fsHead = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.getLatest(client, PROJECT_A2, "from_scratch", ACTOR),
+    );
+    const ssHead = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.getLatest(client, PROJECT_A2, "specialize_seed", ACTOR),
+    );
+    expect(fsHead?.contract.identity).toBe("fs-v1");
+    expect(ssHead?.contract.identity).toBe("ss-v1");
+
+    // Versioning is per-(project, mode): a second from_scratch mints v2 for the
+    // from_scratch head only; the specialize_seed head stays at v1.
+    const fsV2 = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.create(
+        client,
+        { orgId: ORG_A, projectId: PROJECT_A2, mode: "from_scratch", contract: contract("saas-web", "fs-v2") },
+        ACTOR,
+      ),
+    );
+    expect(fsV2.version).toBe(2);
+    const ssStill = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.getLatest(client, PROJECT_A2, "specialize_seed", ACTOR),
+    );
+    expect(ssStill?.version).toBe(1);
+    expect(ssStill?.contract.identity).toBe("ss-v1");
+
+    // listVersions is per-mode (no cross-mode bleed).
+    const fsVersions = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.listVersions(client, PROJECT_A2, "from_scratch", ACTOR),
+    );
+    const ssVersions = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      DesignContractStore.listVersions(client, PROJECT_A2, "specialize_seed", ACTOR),
+    );
+    expect(fsVersions.map((v) => v.version)).toEqual([2, 1]);
+    expect(ssVersions.map((v) => v.version)).toEqual([1]);
   });
 });

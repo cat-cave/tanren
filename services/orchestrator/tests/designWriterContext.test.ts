@@ -65,12 +65,16 @@ class FakeDesignClient {
     const id = typeof params[0] === "string" ? params[0] : "";
     if (text.includes("FROM design_contracts")) {
       if (this.seed.contract === undefined) return rows([]);
+      // Post-Codex-RA1: the store SELECT filters on `mode = $2`. The requested
+      // mode is echoed back on the row so a mode-aware caller sees its own head.
+      const requestedMode = typeof params[1] === "string" ? params[1] : "from_scratch";
       return rows([
         {
           id: "design_1",
           org_id: ORG,
           project_id: PROJECT,
           version: 1,
+          mode: requestedMode,
           domain: this.seed.contract.domain,
           contract: this.seed.contract,
         },
@@ -247,6 +251,49 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
     expect(block).toBeUndefined();
   });
 
+  // Codex RA1 — the writer-context threads the spec's mode into the store's
+  // head lookup. Prove both:
+  //   (i) the requested mode is passed to the store (the fake echoes $2 back
+  //       onto the row's `mode` column);
+  //   (ii) two loads with different modes each read a mode-specific head.
+  it("Codex RA1: threads the spec mode into the head lookup (per-mode head)", async () => {
+    // The fake echoes the requested mode back onto the returned row. If the
+    // caller passes no mode, the writer-context falls back to DEFAULT_SPEC_MODE
+    // (`from_scratch`) — the same default the DB column carries.
+    const modeSeenByStore: string[] = [];
+    const spyFakeClient = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async query(text: string, params: unknown[] = []): Promise<any> {
+        if (text.includes("FROM design_contracts")) {
+          modeSeenByStore.push(String(params[1]));
+          return rows([
+            {
+              id: "design_1",
+              org_id: ORG,
+              project_id: PROJECT,
+              version: 1,
+              mode: String(params[1]),
+              domain: saasContract.domain,
+              contract: saasContract,
+            },
+          ]);
+        }
+        // Persona/behavior reads route through the pre-existing fake shape.
+        return new FakeDesignClient({ contract: saasContract, personas, behaviors }).query(text, params);
+      },
+    };
+    // Default (no specMode) ⇒ from_scratch reaches the store.
+    await loadDesignContextBlock({ client: spyFakeClient, orgScope: { kind: "org", orgId: ORG }, projectId: PROJECT });
+    // Explicit specialize_seed reaches the store.
+    await loadDesignContextBlock({
+      client: spyFakeClient,
+      orgScope: { kind: "org", orgId: ORG },
+      projectId: PROJECT,
+      specMode: "specialize_seed",
+    });
+    expect(modeSeenByStore).toEqual(["from_scratch", "specialize_seed"]);
+  });
+
   it("THROWS LOUD on a dangling persona ref (parity with the design oracle — no silent drop)", async () => {
     const danglingPersona = parseDesignContract({
       version: 1,
@@ -293,6 +340,7 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
               org_id: ORG,
               project_id: PROJECT,
               version: 1,
+              mode: "from_scratch",
               domain: "saas-web",
               contract: { version: 1, domain: "saas-web", identity: "x" },
             },
@@ -327,6 +375,7 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
         orgId: ORG,
         projectId: PROJECT,
         version: 1,
+        mode: "from_scratch",
         domain: saasContract.domain,
         contract: saasContract,
       },
