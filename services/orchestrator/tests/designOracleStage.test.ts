@@ -59,6 +59,10 @@ function fakeClient(opts: {
     async query(text: string, params?: unknown[]) {
       if (text.includes("FROM design_contracts")) {
         if (opts.contract === undefined) return { rows: [] };
+        // Post-Codex-RA1: the store filters on `mode = $2` and expects a
+        // `mode` column on the returned row. Echo the requested mode so the
+        // fake supports both `from_scratch` and `specialize_seed` reads.
+        const requestedMode = typeof params?.[1] === "string" ? String(params[1]) : "from_scratch";
         return {
           rows: [
             {
@@ -66,6 +70,7 @@ function fakeClient(opts: {
               org_id: ORG,
               project_id: "project_1",
               version: opts.contractVersion ?? 1,
+              mode: requestedMode,
               domain: opts.contract.domain,
               contract: opts.contract,
             },
@@ -336,6 +341,9 @@ describe("runDesignOracleStage", () => {
     const client = {
       async query(text: string, params?: unknown[]) {
         if (text.includes("FROM design_contracts")) {
+          // Post-Codex-RA1: echo the requested mode ($2) so the fake row
+          // parses under the store's Zod-enforced `mode` column.
+          const requestedMode = typeof params?.[1] === "string" ? String(params[1]) : "from_scratch";
           return {
             rows: [
               {
@@ -343,6 +351,7 @@ describe("runDesignOracleStage", () => {
                 org_id: ORG,
                 project_id: "project_1",
                 version: 1,
+                mode: requestedMode,
                 domain: "saas-web",
                 contract: webContract(),
               },

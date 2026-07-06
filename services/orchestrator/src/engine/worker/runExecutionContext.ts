@@ -213,10 +213,15 @@ export async function loadRunExecutionContext(
   // runWithOrgScope), so the read is RLS-scoped + actor-authorized. ABSENT (undefined) ⇒ the
   // project has no design contract (a real empty state) ⇒ the writer gets no block — NEVER a
   // fabricated default. A malformed persisted contract fails LOUDLY in the store's re-parse.
+  //
+  // Codex RA1 — thread the spec's writer-prompt MODE so the head lookup keys on
+  // `(project_id, mode, version)` and a `specialize_seed` spec reads its own
+  // head rather than the project's `from_scratch` head (or vice versa).
   const designContextBlock = await loadDesignContextBlock({
     client: pool,
     orgScope,
     projectId: decoded.project_id,
+    specMode: decoded.mode,
   });
 
   const context: PlannerRunContext = {

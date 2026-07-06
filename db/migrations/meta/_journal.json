@@ -169,6 +169,13 @@
       "when": 1783609600000,
       "tag": "0025_specs_triage_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1783377327989,
+      "tag": "0026_design_contracts_mode",
+      "breakpoints": true
     }
   ]
 }

@@ -75,9 +75,18 @@ class DesignOraclePool extends FakePool {
     if (trimmed.includes("FROM design_contracts")) {
       if (!this.hasContract) return { rows: [], rowCount: 0 };
       const contract = webContract();
+      const requestedMode = typeof params[1] === "string" ? String(params[1]) : "from_scratch";
       return {
         rows: [
-          { id: "design_1", org_id: ORG, project_id: "project_test", version: 2, domain: contract.domain, contract },
+          {
+            id: "design_1",
+            org_id: ORG,
+            project_id: "project_test",
+            version: 2,
+            mode: requestedMode,
+            domain: contract.domain,
+            contract,
+          },
         ],
         rowCount: 1,
       };

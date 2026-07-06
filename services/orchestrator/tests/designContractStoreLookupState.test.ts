@@ -61,20 +61,22 @@ describe("DesignContractStore.getLatestState — typed lookup (Codex critic #7)"
       org_id: ORG,
       project_id: PROJECT,
       version: 3,
+      mode: "from_scratch",
       domain: contract.domain,
       contract,
     });
-    const state = await DesignContractStore.getLatestState(client, PROJECT, ACTOR);
+    const state = await DesignContractStore.getLatestState(client, PROJECT, "from_scratch", ACTOR);
     expect(state.kind).toBe("found");
     if (state.kind !== "found") throw new Error("unreachable");
     expect(state.record.version).toBe(3);
     expect(state.record.projectId).toBe(PROJECT);
+    expect(state.record.mode).toBe("from_scratch");
     expect(state.record.contract.identity).toBe("calm ops console");
   });
 
   it("returns { kind: 'absent' } when the SELECT returns zero rows (the legit empty state)", async () => {
     const client = fakeClient(null);
-    const state = await DesignContractStore.getLatestState(client, PROJECT, ACTOR);
+    const state = await DesignContractStore.getLatestState(client, PROJECT, "from_scratch", ACTOR);
     expect(state.kind).toBe("absent");
   });
 
@@ -88,10 +90,11 @@ describe("DesignContractStore.getLatestState — typed lookup (Codex critic #7)"
       org_id: ORG,
       project_id: PROJECT,
       version: 1,
+      mode: "from_scratch",
       domain: "saas-web",
       contract: { totally: "wrong", shape: 42 },
     });
-    const state = await DesignContractStore.getLatestState(client, PROJECT, ACTOR);
+    const state = await DesignContractStore.getLatestState(client, PROJECT, "from_scratch", ACTOR);
     expect(state.kind).toBe("corrupt");
     if (state.kind !== "corrupt") throw new Error("unreachable");
     expect(state.error).toBeInstanceOf(DesignContractCorruptError);
@@ -108,13 +111,76 @@ describe("DesignContractStore.getLatestState — typed lookup (Codex critic #7)"
       org_id: ORG,
       project_id: PROJECT,
       version: 7,
+      mode: "from_scratch",
       domain: "novel",
       contract: null,
     });
-    const state = await DesignContractStore.getLatestState(client, PROJECT, ACTOR);
+    const state = await DesignContractStore.getLatestState(client, PROJECT, "from_scratch", ACTOR);
     expect(state.kind).toBe("corrupt");
     if (state.kind !== "corrupt") throw new Error("unreachable");
     expect(state.error.message).toContain(PROJECT);
     expect(state.error.name).toBe("DesignContractCorruptError");
+  });
+
+  // Codex RA1 — the mode dimension is a SQL filter, not just a returned column.
+  // Prove the read filters by mode: a fake client that echoes the requested
+  // mode param demonstrates the store threads it into the WHERE clause and
+  // the returned record carries the mode.
+  it("Codex RA1: getLatestState filters by mode — the requested mode is echoed on the record", async () => {
+    const contract = contractFixture();
+    // A mode-aware fake: returns a row shaped with whatever mode was requested,
+    // so a caller asking for `specialize_seed` never sees a `from_scratch` row
+    // (mirroring the real store's `WHERE project_id = $1 AND mode = $2` filter).
+    const modeAwareClient = {
+      async query(sql: unknown, params: readonly unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
+        if (String(sql).includes("FROM design_contracts") && String(sql).includes("mode = $2")) {
+          const requestedMode = String(params[1]);
+          return {
+            rows: [
+              {
+                id: `design_${requestedMode}`,
+                org_id: ORG,
+                project_id: PROJECT,
+                version: 1,
+                mode: requestedMode,
+                domain: contract.domain,
+                contract,
+              },
+            ],
+            rowCount: 1,
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const fs = await DesignContractStore.getLatestState(modeAwareClient, PROJECT, "from_scratch", ACTOR);
+    const ss = await DesignContractStore.getLatestState(modeAwareClient, PROJECT, "specialize_seed", ACTOR);
+    if (fs.kind !== "found" || ss.kind !== "found") throw new Error("unreachable: expected both found");
+    expect(fs.record.mode).toBe("from_scratch");
+    expect(ss.record.mode).toBe("specialize_seed");
+    // Ids differ ⇒ they are distinct rows the store fetched under distinct mode filters.
+    expect(fs.record.id).not.toBe(ss.record.id);
+  });
+
+  it("Codex RA1: a persisted mode that falls outside the SpecMode enum is malformed and throws loud", async () => {
+    const contract = contractFixture();
+    // The DB CHECK rejects an out-of-enum mode on write, so this shape is
+    // defense-in-depth: `mapRow` re-parses via the Zod enum and throws loud
+    // rather than a silent `as SpecMode` cast that would leak an invalid
+    // literal into downstream lookups.
+    const client = fakeClient({
+      id: "design_bad_mode",
+      org_id: ORG,
+      project_id: PROJECT,
+      version: 1,
+      mode: "not-a-real-mode",
+      domain: contract.domain,
+      contract,
+    });
+    // getLatestState routes malformed rows through the corrupt classifier — a
+    // caller distinguishes "malformed row" from "absent" the same way it
+    // handles a broken contract jsonb.
+    const state = await DesignContractStore.getLatestState(client, PROJECT, "from_scratch", ACTOR);
+    expect(state.kind).toBe("corrupt");
   });
 });
