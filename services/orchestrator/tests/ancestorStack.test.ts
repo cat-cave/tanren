@@ -1,7 +1,11 @@
 // walker-jj-local-integration-design.md §2.3: the typed `AncestorStack` + the pure
 // `resolveAncestorStack` reader over the SOLE base source `runs.ancestor_stack`:
 //   (1) reads the column when present + well-formed;
-//   (2) a non-speculative run (no column / malformed) resolves to an EMPTY stack.
+//   (2) a non-speculative run (no column / null) resolves to an EMPTY stack;
+//   (3) a PRESENT but MALFORMED column throws `MalformedAncestorStackError` (Codex
+//       critic #9): a corrupt payload must NEVER silently degrade to `[]` — that
+//       would flip a speculative run non-speculative and merge it against the wrong
+//       base.
 //
 // §2.1: the WRITE-side `resolveDependentAncestorStack` — the DAG-ordered, org-scoped
 // (RLS-safe) resolver. Proves DAG ordering, the diamond/N-ancestor case, org-scope
@@ -14,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ancestorStackSchema,
+  MalformedAncestorStackError,
   resolveAncestorStack,
   resolveDependentAncestorStack,
   type AncestorStack,
@@ -41,14 +46,46 @@ describe("resolveAncestorStack — the ancestor_stack column reader", () => {
     expect(resolveAncestorStack({ ancestorStack: stack })).toEqual(stack);
   });
 
-  it("(2) a non-speculative run (no column) resolves to an EMPTY stack", () => {
-    expect(resolveAncestorStack({ ancestorStack: null })).toEqual([]);
-    expect(resolveAncestorStack({})).toEqual([]);
+  it("(2) a well-formed empty column returns [] (a run whose stack fully drained via the retarget walk)", () => {
     expect(resolveAncestorStack({ ancestorStack: [] })).toEqual([]);
   });
 
-  it("a malformed ancestor_stack column resolves to an EMPTY stack (never partial)", () => {
-    expect(resolveAncestorStack({ ancestorStack: [{ specId: "spec_a" }] })).toEqual([]);
+  it("(3) ABSENT column ⇒ [] — null, undefined, and missing all resolve as non-speculative", () => {
+    expect(resolveAncestorStack({ ancestorStack: null })).toEqual([]);
+    expect(resolveAncestorStack({ ancestorStack: undefined })).toEqual([]);
+    expect(resolveAncestorStack({})).toEqual([]);
+  });
+
+  // Codex critic #9: a MALFORMED payload must NEVER silently degrade to `[]` — that
+  // would flip a speculative run non-speculative and merge it against the wrong base.
+  it("(4) MALFORMED column throws MalformedAncestorStackError (never a silent [])", () => {
+    expect(() => resolveAncestorStack({ ancestorStack: [{ specId: "spec_a" }] })).toThrow(MalformedAncestorStackError);
+  });
+
+  it("(4a) other malformed shapes also throw — a non-array payload is corruption", () => {
+    expect(() => resolveAncestorStack({ ancestorStack: "not-an-array" })).toThrow(MalformedAncestorStackError);
+    expect(() => resolveAncestorStack({ ancestorStack: { specId: "spec_a" } })).toThrow(MalformedAncestorStackError);
+    // A member with wrong-typed fields (e.g. numeric branch) is corruption too.
+    expect(() =>
+      resolveAncestorStack({ ancestorStack: [{ specId: "spec_a", runId: "r", branch: 42, headSha: "s" }] }),
+    ).toThrow(MalformedAncestorStackError);
+  });
+
+  it("(4b) the thrown error carries the zod issues + raw value for triage", () => {
+    const raw = [{ specId: "spec_a" }];
+    // Capture the thrown error via a plain wrapper so the assertions live outside the
+    // try/catch (avoids the `no-conditional-expect` lint).
+    let caught: unknown;
+    try {
+      resolveAncestorStack({ ancestorStack: raw });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MalformedAncestorStackError);
+    const mErr = caught as MalformedAncestorStackError;
+    expect(mErr.name).toBe("MalformedAncestorStackError");
+    expect(mErr.issues.length).toBeGreaterThan(0);
+    expect(mErr.rawValue).toBe(raw);
   });
 });
 

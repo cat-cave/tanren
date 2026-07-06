@@ -13,6 +13,12 @@
 // `githubDraftPr`, `resolveSpeculativeState`, `percolationPg`) resolves the stack from it
 // via `resolveAncestorStack`. The legacy `speculative_base` + `integrated_ancestor_shas`
 // columns were dropped (WS-B PR-12's migration) — `ancestor_stack` is the only truth.
+//
+// The resolver DISTINGUISHES ABSENT FROM MALFORMED (Codex critic #9): an absent column
+// (`null` / `undefined`) resolves to `[]` (a non-speculative run); a PRESENT value that
+// fails `ancestorStackSchema` throws `MalformedAncestorStackError` — data corruption
+// must NEVER silently degrade to `[]` (that would flip a speculative run non-speculative
+// and merge it against the wrong base).
 
 import { z } from "zod";
 import type { IntegrationNodeMember } from "../contracts/integrationNodes.js";
@@ -45,13 +51,52 @@ export interface AncestorStackRunRow {
 }
 
 /**
+ * A persisted `runs.ancestor_stack` value was PRESENT but failed the
+ * {@link ancestorStackSchema} parse. Distinct from the ABSENT case (a null/undefined
+ * column ⇒ a non-speculative run ⇒ an empty stack): a malformed PRESENT value is data
+ * corruption we refuse to silently degrade — silently returning `[]` here would flip
+ * a corrupted speculative run to non-speculative and merge it against the wrong base.
+ * Fail-closed: the resolver throws this class so callers propagate it up as a real
+ * fault (Codex critic #9). Retriable is CALLER's concern — the underlying jsonb
+ * doesn't self-heal, so treat as a hard fault unless the caller has evidence otherwise.
+ */
+export class MalformedAncestorStackError extends Error {
+  constructor(
+    /** The zod issues from the failed parse, for internal triage. */
+    readonly issues: z.ZodIssue[],
+    /** The rejected raw value (for diagnostics — a corrupt jsonb payload). */
+    readonly rawValue: unknown,
+  ) {
+    super(
+      `runs.ancestor_stack failed schema parse: ${issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    );
+    this.name = "MalformedAncestorStackError";
+  }
+}
+
+/**
  * Resolve the ordered {@link AncestorStack} for a run from its `runs.ancestor_stack`
- * column (the SOLE base source). Returns an EMPTY stack for a non-speculative run (no
- * column / not a well-formed non-empty list).
+ * column (the SOLE base source).
+ *
+ * Distinguishes ABSENT from MALFORMED (Codex critic #9):
+ *  - ABSENT (`null` / `undefined` / no column) ⇒ returns `[]` (a non-speculative run).
+ *  - PRESENT + parses ⇒ returns the parsed stack (an empty array is legal — a run whose
+ *    stack has fully drained via the retarget walk).
+ *  - PRESENT + fails {@link ancestorStackSchema} ⇒ throws
+ *    {@link MalformedAncestorStackError}. A corrupt payload MUST NOT silently degrade
+ *    to `[]` — that flips a speculative run to non-speculative and merges it against
+ *    the wrong base.
  */
 export function resolveAncestorStack(run: AncestorStackRunRow): AncestorStack {
+  // ABSENT column ⇒ a non-speculative run.
+  if (run.ancestorStack === null || run.ancestorStack === undefined) return [];
+  // PRESENT column ⇒ MUST parse; a malformed payload is a hard fault, never a silent
+  // downgrade to an empty (non-speculative) stack.
   const fromColumn = ancestorStackSchema.safeParse(run.ancestorStack);
-  return fromColumn.success ? fromColumn.data : [];
+  if (!fromColumn.success) {
+    throw new MalformedAncestorStackError(fromColumn.error.issues, run.ancestorStack);
+  }
+  return fromColumn.data;
 }
 
 // ---------------------------------------------------------------------------
