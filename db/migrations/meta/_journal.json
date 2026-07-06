@@ -155,6 +155,13 @@
       "when": 1783367649969,
       "tag": "0023_dag_walker_stable_order",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1783369540988,
+      "tag": "0024_usage_accounting_failed_event",
+      "breakpoints": true
     }
   ]
 }

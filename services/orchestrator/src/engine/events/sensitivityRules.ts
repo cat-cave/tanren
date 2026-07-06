@@ -1,5 +1,6 @@
 import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
+import { usageAccountingFailedSensitivityRules } from "./sensitivityRules.usage.js";
 import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
 import { strandSensitivityRules } from "./sensitivityRules.strand.js";
 import { ciIntelSensitivityRules } from "./sensitivityRules.ciIntel.js";
@@ -476,8 +477,9 @@ export const sensitivityRules: SensitivityRule[] = [
   ...gateSensitivityRules,
   // Tanren-native templating (wave 1): registry lifecycle events — non-secret (public).
   ...templatesSensitivityRules,
-  // task #82 — window-pause auto-resume: run.paused / run.resumed / usage.window.refreshed.
+  // task #82 window-pause auto-resume (run.paused/resumed/window.refreshed) + Codex critic #18 (usage.accounting_failed).
   ...windowPauseSensitivityRules,
+  ...usageAccountingFailedSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

@@ -86,11 +86,14 @@ describe("spec loop — per-iteration budget gate (audit §3.7a)", () => {
   });
 });
 
-describe("spec loop — guarded finalize (audit §3.7d)", () => {
-  it("a run-end reconcile FAILURE does NOT discard the finished run's outcome", async () => {
-    // A usage probe whose run-end accounting read THROWS — a control-plane/probe blip.
-    // The finished run's outcome (passed) MUST still return; only the best-effort spend
-    // back-fill is lost. Without the guard, the throw would propagate and discard both.
+describe("spec loop — mandatory run-end accounting (Codex critic #18)", () => {
+  it("a run-end accounting THROW demotes the run's outcome (no silent-pass) + emits usage.accounting_failed", async () => {
+    // Token accounting is a MANDATORY invariant
+    // (docs/architecture/autonomy-engine.md — "disjoint typed buckets"), so a
+    // THROWN run-end accounting seam MUST NOT be silently swallowed. Prior to
+    // Codex critic #18 this preserved the `passed` outcome (a silent-pass); the
+    // fix DEMOTES to `halted` so the non-pass finalize path re-drives + surfaces
+    // the accounting gap via the durable `usage.accounting_failed` event.
     const throwingProbe: UsageProbe = {
       // eslint-disable-next-line @typescript-eslint/require-await
       async observeWindow() {
@@ -101,13 +104,19 @@ describe("spec loop — guarded finalize (audit §3.7d)", () => {
       },
     };
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { input } = defaultLoopInput({ usageProbe: throwingProbe });
+    const { input, events } = defaultLoopInput({ usageProbe: throwingProbe });
 
     const outcome = await runSubtaskLoop(input);
 
-    // The run outcome PERSISTS despite the reconcile throw.
-    expect(outcome.kind).toBe("passed");
-    // The failure was surfaced LOUD (not silently swallowed).
+    // The would-be `passed` outcome is DEMOTED to `halted` — the run cannot
+    // complete as passed with a broken mandatory-accounting seam.
+    expect(outcome).toMatchObject({ kind: "halted", reason: expect.stringContaining("accounting_failed") });
+    // The loud durable event fires — the operator + re-drive convergence
+    // detector see the accounting gap (not just a log line).
+    const failedEvent = events.events.find((event) => event.eventType === "usage.accounting_failed");
+    expect(failedEvent).toBeDefined();
+    expect(failedEvent!.payload).toMatchObject({ priorOutcomeKind: "passed", outcomeDemoted: true });
+    // The failure was also surfaced LOUD via the logger.
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
   });

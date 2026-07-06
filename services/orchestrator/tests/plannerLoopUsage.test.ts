@@ -387,4 +387,70 @@ describe("subtask loop — usage probe wiring", () => {
     expect(outcome.kind).toBe("passed");
     expect(events.events.map((event) => event.eventType)).not.toContain("cost.overage_unobservable");
   });
+
+  // Codex critic #18 — mandatory-accounting invariant: `observeRunAccounting`
+  // throwing must NEVER silently pass the run. The finalize path emits the loud
+  // `usage.accounting_failed` event and DEMOTES a `passed` outcome to `halted`
+  // (an already-non-pass outcome is preserved; the loud event still fires).
+  describe("Codex critic #18 — mandatory run-end accounting seam", () => {
+    // A UsageProbe whose ccusage read succeeds at run-end but whose observeAccounting
+    // instead throws. We can't reach into observeRunAccounting directly, so we throw
+    // from the probe: the seam calls `input.usageProbe.observeAccounting()` at the
+    // top of observeRunAccounting, so a thrown probe reproduces the invariant path.
+    function throwingAccountingProbe(): UsageProbe {
+      return {
+        async observeWindow() {
+          return healthyWindow();
+        },
+        async observeAccounting(): Promise<never> {
+          throw new Error("ccusage crashed: EPIPE");
+        },
+      };
+    }
+
+    it("emits usage.accounting_failed (durable, fail-severity) when the run-end accounting seam throws", async () => {
+      const { input, events } = defaultLoopInput({ usageProbe: throwingAccountingProbe() });
+      await runSubtaskLoop(input);
+
+      const failed = events.events.find((event) => event.eventType === "usage.accounting_failed");
+      expect(failed).toBeDefined();
+      const payload = failed!.payload as {
+        runId: string;
+        priorOutcomeKind: string;
+        outcomeDemoted: boolean;
+        detail: string;
+        reason: string;
+      };
+      expect(payload.runId).toBe("run_test");
+      expect(payload.priorOutcomeKind).toBe("passed");
+      expect(payload.outcomeDemoted).toBe(true);
+      expect(payload.detail).toContain("ccusage crashed");
+      expect(payload.reason).toContain("run-end accounting");
+    });
+
+    it("DEMOTES a would-be passed outcome to halted (no silent-pass violation)", async () => {
+      const { input } = defaultLoopInput({ usageProbe: throwingAccountingProbe() });
+      const outcome = await runSubtaskLoop(input);
+
+      // The critical invariant: token accounting is MANDATORY, so a broken
+      // accounting seam MUST NOT allow the run to complete as `passed`.
+      expect(outcome.kind).not.toBe("passed");
+      expect(outcome.kind).toBe("halted");
+      if (outcome.kind !== "halted") return;
+      expect(outcome.reason).toContain("accounting_failed");
+      expect(outcome.reason).toContain("ccusage crashed");
+    });
+
+    it("clean-path unchanged: a healthy run keeps its passed outcome and emits NO accounting_failed event", async () => {
+      const { input, events } = defaultLoopInput({
+        usageProbe: fakeProbe(healthyWindow(), accounting(0.6)),
+      });
+      const outcome = await runSubtaskLoop(input);
+
+      expect(outcome.kind).toBe("passed");
+      expect(events.events.map((event) => event.eventType)).not.toContain("usage.accounting_failed");
+      // The healthy-run event chain the pre-fix path already emitted is preserved.
+      expect(events.events.map((event) => event.eventType)).toContain("usage.accounting.observed");
+    });
+  });
 });
