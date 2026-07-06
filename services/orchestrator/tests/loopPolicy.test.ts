@@ -58,10 +58,10 @@ function run(
 }
 
 describe("applyConvergencePolicy — intelligent escalation, no count bound", () => {
-  it("PROGRESS continues + resets the stall diagnostic; a velocity_defer passes; the escalation verdict is ignored while progressing", () => {
-    // No blocking finding (`none`) ⇒ the overall assessment drives. PROGRESS continues even if
-    // the agent (irrelevantly) said escalate — a progressing loop is NEVER halted.
-    expect(run("progress", "none", "escalate", { consecutiveStalls: 5 }, DEFAULT_VELOCITY_POLICY)).toEqual({
+  it("PROGRESS with keep_going continues + resets the stall diagnostic; a velocity_defer passes", () => {
+    // No blocking finding (`none`) ⇒ the overall assessment drives. With keep_going the loop
+    // continues, unbounded.
+    expect(run("progress", "none", "keep_going", { consecutiveStalls: 5 }, DEFAULT_VELOCITY_POLICY)).toEqual({
       state: { consecutiveStalls: 0 },
       decision: "continue",
     });
@@ -164,15 +164,17 @@ describe("applyConvergencePolicy — intelligent escalation, no count bound", ()
       expect(r).toEqual({ state: { consecutiveStalls: 1 }, decision: "continue" });
     });
 
-    it("a blocking root cause being RETIRED resets the diagnostic and continues (real progress, escalation ignored)", () => {
-      expect(run("progress", "retired", "escalate", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P1")).toEqual({
-        state: { consecutiveStalls: 0 },
-        decision: "continue",
-      });
+    it("a blocking root cause being RETIRED with keep_going resets the diagnostic and continues (real progress)", () => {
+      expect(run("progress", "retired", "keep_going", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P1")).toEqual(
+        {
+          state: { consecutiveStalls: 0 },
+          decision: "continue",
+        },
+      );
     });
 
-    it("a blocking root cause REDUCED (lower severity) resets the diagnostic and continues", () => {
-      expect(run("stalled", "reduced", "escalate", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P2")).toEqual({
+    it("a blocking root cause REDUCED with keep_going resets the diagnostic and continues", () => {
+      expect(run("stalled", "reduced", "keep_going", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P2")).toEqual({
         state: { consecutiveStalls: 0 },
         decision: "continue",
       });
@@ -182,6 +184,57 @@ describe("applyConvergencePolicy — intelligent escalation, no count bound", ()
       expect(
         run("velocity_defer", "retired", "keep_going", { consecutiveStalls: 1 }, DEFAULT_VELOCITY_POLICY, "P3"),
       ).toEqual({ state: { consecutiveStalls: 0 }, decision: "pass" });
+    });
+  });
+
+  // ---- Codex critic #17: escalate ALWAYS halts, even alongside a progress signal --------
+  // The prompt binds `escalate` to "human input would genuinely CHANGE the outcome" (a real
+  // decision/blocker/dead-end); the prompt also explicitly forbids escalate on "slow / hard /
+  // many-attempts" grounds. So an escalate paired with a progress signal is NOT the v24
+  // trajectory case — it is an answerer legitimately flagging a human-decision (e.g. a
+  // missing credential) while peripheral work still moves. Peripheral progress does NOT
+  // unblock the reason for escalating.
+  describe("critic #17: escalate takes precedence over ANY progress signal", () => {
+    it("assessment=progress + escalate HALTS (no blocking finding; overall progress)", () => {
+      expect(run("progress", "none", "escalate", { consecutiveStalls: 5 }, DEFAULT_VELOCITY_POLICY)).toEqual({
+        state: { consecutiveStalls: 0 },
+        decision: "halt",
+      });
+    });
+
+    it("blocker RETIRED + escalate HALTS (blocker advanced, but the escalate reason stands)", () => {
+      // The exact critic #17 shape: the answerer retired the writer-side blocker BUT still
+      // reports escalate (say, a missing credential the writer cannot obtain). Pre-fix this
+      // returned `continue` because `blockerAdvanced || assessment === "progress"` short-
+      // circuited past the escalation check.
+      expect(run("progress", "retired", "escalate", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P1")).toEqual({
+        state: { consecutiveStalls: 0 },
+        decision: "halt",
+      });
+    });
+
+    it("blocker REDUCED + escalate HALTS (peripheral movement does not clear the escalation)", () => {
+      expect(run("stalled", "reduced", "escalate", { consecutiveStalls: 2 }, DEFAULT_VELOCITY_POLICY, "P2")).toEqual({
+        state: { consecutiveStalls: 0 },
+        decision: "halt",
+      });
+    });
+
+    it("velocity_defer + escalate HALTS (a defer never masks a legitimate escalation)", () => {
+      expect(
+        run("velocity_defer", "none", "escalate", { consecutiveStalls: 3 }, DEFAULT_VELOCITY_POLICY, "P3"),
+      ).toEqual({ state: { consecutiveStalls: 0 }, decision: "halt" });
+    });
+
+    it("progress + keep_going still continues (pre-existing behavior on non-escalate cases is preserved)", () => {
+      // The v24 trajectory case (1000→1) — the answerer says `keep_going`; the loop keeps going.
+      expect(run("progress", "none", "keep_going", { consecutiveStalls: 5 }, DEFAULT_VELOCITY_POLICY)).toEqual({
+        state: { consecutiveStalls: 0 },
+        decision: "continue",
+      });
+      expect(run("progress", "retired", "keep_going", { consecutiveStalls: 4 }, DEFAULT_VELOCITY_POLICY, "P1")).toEqual(
+        { state: { consecutiveStalls: 0 }, decision: "continue" },
+      );
     });
   });
 
