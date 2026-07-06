@@ -251,8 +251,6 @@ function harness(opts: {
   reGate?: ReGateVerdict;
   reGateError?: string;
   resolution?: ConflictResolution;
-  /** Omit the gate-rework router to exercise the degenerate replan fallback (legacy conformance). */
-  noGateRework?: boolean;
 }): Harness {
   const workspace = new RecordingWorkspaceCore(opts.conflictOnRebase ?? false);
   const opener = new RecordingOpener();
@@ -262,6 +260,8 @@ function harness(opts: {
   const nodes = recordingNodeReader();
   const events = new RecordingEventEmitter();
   const gateRework = recordingGateRework();
+  // gateRework is REQUIRED on BaseShiftCoordinatorDeps (Codex critic #15) — every construction
+  // site MUST wire it; there is no degenerate-replan fallback to conform against.
   const coord = new BaseShiftCoordinator({
     workspace,
     opener,
@@ -270,7 +270,7 @@ function harness(opts: {
     persistence,
     nodes,
     events,
-    ...(opts.noGateRework === true ? {} : { gateRework }),
+    gateRework,
   });
   return { coord, workspace, opener, reGate, resolver, persistence, nodes, events, gateRework };
 }
@@ -374,14 +374,18 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
   });
 
-  it("DEGENERATE WIRING (no gate-rework router) ⇒ a clean-rebase gate-fail falls back to replan (never stranded)", async () => {
-    // Back-compat / conformance fallback: with NO gate-rework router wired, a clean-rebase
-    // gate-fail falls back to `recordReplan` (the pre-fix behavior) so the spec is never
-    // stranded — production ALWAYS wires the router (the test above).
-    const h = harness({ conflictOnRebase: false, reGate: "failed", noGateRework: true });
+  it("Codex critic #15: a clean-rebase gate-fail ALWAYS routes to writer rework, NEVER to replan (no fallback)", async () => {
+    // THE ERADICATED REGRESSION: `gateRework` used to be OPTIONAL; when absent, a clean-rebase
+    // gate failure fell back to `recordReplan`, silently violating the "writer rework, not
+    // replan" doctrine (PR #682 / merge re-gate design). The fix makes gateRework REQUIRED
+    // and drops the fallback branch — the routing is unconditional.
+    const gateError = "base-shift re-gate failed at tier tier-3: step 'build' (exit 2)";
+    const h = harness({ conflictOnRebase: false, reGate: "failed", reGateError: gateError });
     await reexec(h);
-    expect(h.gateRework.calls).toEqual([]);
-    expect(h.persistence.replanned).toHaveLength(1);
+    // ROUTED to writer rework carrying the real gate error — the doctrine's landing point.
+    expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
+    // NEVER falls back to replan (eradicated) and NEVER stamps keep-run (the gate did not pass).
+    expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
     const event = h.events.rawEvents[0];
     expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
