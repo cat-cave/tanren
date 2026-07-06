@@ -49,13 +49,18 @@ function fakePool(rows: { failureCode: string; workSignature?: string; source?: 
   } as never;
 }
 
-/** The reader now returns `{ priorSameFixedPoint, wandering }`. The existing matrix asserts
- * only the fixed-point count; this helper unwraps it so the assertions stay readable. */
+/** The reader now returns a discriminated union `{ kind: "ok", priorSameFixedPoint, wandering }
+ * | { kind: "read_failed", error }` (audit C2 #3 — silent-fallback hardening). The existing
+ * matrix asserts only the fixed-point count on the ok branch; this helper narrows so the
+ * assertions stay readable + throws loudly if a happy-path fixture returns read_failed. */
 async function fixedPointCount(
   reader: ReturnType<typeof buildRedriveHistoryReader>,
   facts: { orgId: string; specId: string; code: "internal" | "merge"; workSignature?: string },
 ): Promise<number> {
   const result = await reader({ ...facts, stage: "run" });
+  if (result.kind !== "ok") {
+    throw new Error(`expected an ok read but got ${result.kind}`);
+  }
   return result.priorSameFixedPoint;
 }
 
@@ -163,5 +168,57 @@ describe("buildRedriveHistoryReader — the fixed-point read (0 = progress / re-
       ]),
     );
     expect(await fixedPointCount(reader, { orgId: "org_1", specId: "spec_1", code: "internal" })).toBe(0);
+  });
+});
+
+/** A pool whose scoped connection throws on `SELECT payload ...` — simulating a DB
+ * read failure (RLS mis-scope, transient hiccup, corrupt row payload). The `SET LOCAL`
+ * / `BEGIN` / `COMMIT` control queries succeed so the transaction opens as normal;
+ * the domain query is the one that blows up. */
+function throwingPool(error: Error) {
+  return {
+    connect: async () => ({
+      query: async (sql: string) => {
+        if (sql.includes("SET LOCAL") || sql.startsWith("SET") || sql.startsWith("BEGIN") || sql.startsWith("COMMIT")) {
+          return { rows: [], rowCount: 0 };
+        }
+        throw error;
+      },
+      release: () => {},
+    }),
+  } as never;
+}
+
+describe("audit C2 #3 — buildRedriveHistoryReader surfaces read_failed instead of silently returning progress", () => {
+  it("a DB read failure returns `read_failed` with the caught error — never `{ priorSameFixedPoint: 0 }`", async () => {
+    // The audit invariant: a persistent DB read failure must NOT silently disable the
+    // persistent-failure escalation. Before the fix the reader returned facts
+    // structurally identical to a fresh spec (priorSameFixedPoint: 0, wandering: false),
+    // and the disposition-decider would forever re-drive a genuinely-stuck spec while
+    // the DB was broken.
+    const dbError = new Error("connection reset while reading dag.spec.redriven history");
+    const reader = buildRedriveHistoryReader(throwingPool(dbError));
+    const result = await reader({ orgId: "org_1", specId: "spec_stuck", code: "internal", stage: "run" });
+
+    expect(result.kind).toBe("read_failed");
+    if (result.kind !== "read_failed") throw new Error("expected read_failed");
+    expect(result.error).toBe(dbError);
+  });
+
+  it("a wandering-halt CANNOT falsely say `wandering: false` on a read failure — the discriminant surfaces", async () => {
+    // On a broken read the reader must NOT return `{ wandering: false }` (that would be
+    // indistinguishable from "no re-drives yet — obviously not wandering"). Instead, it
+    // surfaces `read_failed`, so the caller (`readConvergenceFacts`) defers the wandering
+    // assessment to the next tick. This is the audit invariant for the wandering-halt
+    // escalation: it must not be silently disabled by a DB blip.
+    const dbError = new Error("db read timed out");
+    const reader = buildRedriveHistoryReader(throwingPool(dbError));
+    const result = await reader({ orgId: "org_1", specId: "spec_1", code: "internal", stage: "run" });
+
+    // The result is NOT a "wandering: false" shape — the discriminant is `read_failed`,
+    // so the caller CANNOT be tricked into believing the wandering assessment succeeded.
+    expect(result.kind).toBe("read_failed");
+    expect(result).not.toHaveProperty("wandering");
+    expect(result).not.toHaveProperty("priorSameFixedPoint");
   });
 });

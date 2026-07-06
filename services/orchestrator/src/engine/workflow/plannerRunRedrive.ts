@@ -34,8 +34,16 @@ export { finalizeRedriveAtomicSeam } from "./plannerRunRedriveSeam.js";
 // The Pg-backed convergence-facts reader + its types live in their own modules
 // (file-size cap) — re-exported here so existing import sites keep working.
 export { buildRedriveHistoryReader } from "./redriveHistoryReader.js";
-export type { RedriveConvergenceFacts, RedriveHistoryFacts, RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
+export type {
+  RedriveConvergenceFacts,
+  RedriveHistoryFacts,
+  RedriveHistoryReader,
+  RedriveHistoryReadResult,
+} from "./plannerRunRedriveTypes.js";
 import type { RedriveHistoryReader } from "./plannerRunRedriveTypes.js";
+import { createLogger } from "../observability/logger.js";
+
+const log = createLogger("run-redrive-applier");
 
 /** The append-event seam the applier emits its observable timeline events through. */
 type AppendEvent = <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
@@ -416,10 +424,18 @@ function extractPauseSnapshot(outcome: TerminalOutcome): PauseSnapshot {
 }
 
 /**
- * Read the CONVERGENCE FACTS (the fixed-point streak) via the wired reader. `0` ⇒ progress /
- * first of its kind / no reader / no fault (⇒ ALWAYS re-drive). The reader returns 1 only at
- * a proven fixed point (the prior attempt was structurally identical), which is when the
- * authority escalates — no hardcoded count.
+ * Read the CONVERGENCE FACTS (the fixed-point streak + the wandering-halt verdict) via
+ * the wired reader. `priorSameFixedPoint: 0` ⇒ progress / first of its kind / no reader
+ * / no fault (⇒ ALWAYS re-drive). The reader returns 1 only at a proven fixed point (the
+ * prior attempt was structurally identical), which is when the authority escalates — no
+ * hardcoded count.
+ *
+ * READ FAILURE ≠ NO HISTORY (audit C2 #3 — silent-fallback hardening). The reader's
+ * `read_failed` discriminant is treated EXPLICITLY here: we DEFER escalation for this
+ * tick (return facts that force a RE-DRIVE — priorSameFixedPoint: 0 + no wandering),
+ * log LOUDLY with the runId/specId/orgId + the caught error, and let the NEXT tick's
+ * read retry. A genuinely-stuck spec still escalates once the read recovers; a
+ * transient DB blip does NOT silently disable persistent-failure OR wandering-halt.
  */
 async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOutcome): Promise<ConvergenceFacts> {
   // Only an error / non-pass outcome carries a counted failure code; probe a disposition at
@@ -434,6 +450,20 @@ async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOu
   if (reader === undefined || orgId === undefined || code === undefined || stage === undefined) {
     return { priorSameFixedPoint: 0 };
   }
-  const facts = await reader({ orgId, specId: ctx.context.specId, code, stage });
-  return { priorSameFixedPoint: facts.priorSameFixedPoint, wandering: facts.wandering };
+  const result = await reader({ orgId, specId: ctx.context.specId, code, stage });
+  if (result.kind === "read_failed") {
+    // Audit C2 #3: DEFER escalation on a broken read. The reader has already logged
+    // the raw error at its layer; log again HERE with the disposition context
+    // (runId/specId/orgId) so the operator can trace which run's escalation was
+    // deferred. Return facts that force a RE-DRIVE (never a genuine-halt on unknown
+    // facts) — the next tick's read will retry the escalation decision.
+    log.warn(
+      "convergence-facts read failed at disposition site — DEFERRING escalation this tick " +
+        "(forcing re-drive; retry on next tick)",
+      { runId: ctx.context.runId, specId: ctx.context.specId, orgId },
+      result.error,
+    );
+    return { priorSameFixedPoint: 0, wandering: { wandering: false } };
+  }
+  return { priorSameFixedPoint: result.priorSameFixedPoint, wandering: result.wandering };
 }

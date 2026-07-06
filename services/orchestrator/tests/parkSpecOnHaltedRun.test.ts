@@ -76,9 +76,16 @@ function harness(pool: RecordingPool, redriveHistoryReader?: RedriveHistoryReade
 
 /** A fixed FIXED-POINT reader (0 ⇒ progress / re-drive; 1 ⇒ a fixed point / escalate — no count).
  * Always reports `wandering: false` so the wandering-halt detector (apex v67 #122) is a no-op
- * in these tests — the fixture exercises the fixed-point disposition. */
+ * in these tests — the fixture exercises the fixed-point disposition. Wraps in the `ok`
+ * discriminant so the fixture works with the audit-C2-#3 discriminated-union reader. */
 function readerReturning(fixedPointStreak: number): RedriveHistoryReader {
-  return async () => ({ priorSameFixedPoint: fixedPointStreak, wandering: { wandering: false } });
+  return async () => ({ kind: "ok", priorSameFixedPoint: fixedPointStreak, wandering: { wandering: false } });
+}
+
+/** A reader whose durable-log read FAILS — surfaces `read_failed` per the audit's
+ * discriminated-union contract. Hoisted so oxlint's `consistent-function-scoping` is happy. */
+function readerReadFailed(error: Error): RedriveHistoryReader {
+  return async () => ({ kind: "read_failed", error });
 }
 
 /** The `dag.spec.redriven` event the re-drive emitted (asserts an OBSERVABLE retry, not a strand). */
@@ -281,5 +288,60 @@ describe("finalizeWorkflowError — a RANDOM / TRANSIENT failure is RE-DRIVEN, n
     expect(pool.specStatusWritten()).toBe("open");
     expect(redriven(events)?.consecutiveSameFailure).toBe(1);
     expect(needsAttention(events)).toBeUndefined();
+  });
+});
+
+describe("audit C2 #3 — a convergence-facts read failure never silently disables persistent-failure escalation", () => {
+  it("a `read_failed` reader forces RE-DRIVE — never GENUINE-HALT — on a transient DB blip", async () => {
+    // The critical audit invariant: before the fix, the reader's `catch` returned facts
+    // structurally identical to a fresh spec (priorSameFixedPoint: 0, wandering: false),
+    // and the disposition-decider had no way to KNOW the read had failed. This test asserts
+    // the fix: even under a broken read, the disposition is RE-DRIVE and the spec is NOT
+    // parked at `needs_attention` this tick.
+    const pool = new RecordingPool();
+    const dbError = new Error("connection reset while reading dag.spec.redriven history");
+    const { events, appendEvent, finalizeRunState, input } = harness(pool, readerReadFailed(dbError));
+
+    const disposition = await finalizeWorkflowError(new Error("the run failed with an internal error"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    // The spec re-drives, NOT genuine-halts — never `needs_attention` on unknown facts.
+    expect(disposition).toBe("re_drive");
+    expect(pool.specStatusWritten()).toBe("open");
+    expect(needsAttention(events)).toBeUndefined();
+    // And the re-drive event still fires so the operator can trace the deferral (an
+    // upstream `log.warn` in `readConvergenceFacts` also surfaces the read failure).
+    expect(redriven(events)?.failureCode).toBe("internal");
+  });
+
+  it("a `read_failed` reader does NOT falsely apply a `wandering: false` verdict — the wandering-halt escalation is DEFERRED", async () => {
+    // Distinct from the fixed-point case: even if the caller's outcome would OTHERWISE
+    // trigger wandering-halt (a varied-failure history), a broken read must not let the
+    // disposition-decider believe wandering was assessed and returned false. The
+    // read_failed sentinel forces re-drive without falsely reporting a wandering verdict.
+    const pool = new RecordingPool();
+    const { events, appendEvent, finalizeRunState, input } = harness(
+      pool,
+      readerReadFailed(new Error("db read timed out")),
+    );
+
+    const disposition = await finalizeWorkflowError(new Error("some new failure class"), {
+      finalizeRunState,
+      appendEvent,
+      workspacePath: "/workspace/runs/run_1",
+      input,
+      context: ctx(),
+    });
+
+    expect(disposition).toBe("re_drive");
+    // Never a wandering-halt genuine-halt on unknown facts — the spec re-drives.
+    const na = needsAttention(events);
+    expect(na?.source).not.toBe("wandering_halt");
+    expect(na).toBeUndefined();
   });
 });
