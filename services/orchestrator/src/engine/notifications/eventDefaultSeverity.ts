@@ -184,6 +184,22 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // (deploy.triggered stays `info`: routine lifecycle, not the proven-live milestone.)
   "deploy.verified": "warn",
 
+  // demo.evidence.recorded ("a behavior was exercised on the live surface"): routine
+  // per-behavior verdict lifecycle — the summary (demo.completed) carries the pass/fail
+  // tally the operator acts on, so keep the per-behavior grain at `info` (no matrix spam).
+  "demo.evidence.recorded": "info",
+  // demo.completed ("the demo finished"): routine `info` summary when every behavior
+  // passed. The dispatcher promotes to `warn` when `failed > 0` (apex's "deploy verified
+  // but a planted issue makes behaviors fail" signal) so the fail-tier summary reaches
+  // the operator via the default route, even without a per-event route configured.
+  "demo.completed": "info",
+  // demo.failed ("the demo could NOT record its evidence"): the operator-actionable
+  // signal that a verified deploy could not be demoed (grant lost mid-flight, an
+  // unsupported surface kind, a provider read failure). Mirrors `deploy.failed` at
+  // `warn` so it clears the default-route floor and reaches the operator rather than
+  // a subscriber-swallowed `log.error`.
+  "demo.failed": "warn",
+
   // Review
   "review.requested": "info",
   "review.approved": "ok",

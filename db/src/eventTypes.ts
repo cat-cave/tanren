@@ -63,6 +63,7 @@ export const eventTypeNames = [
   "dag.spec.speculative",
   "demo.completed",
   "demo.evidence.recorded",
+  "demo.failed",
   "demoRun.started",
   "demoRun.verdict",
   "deploy.failed",

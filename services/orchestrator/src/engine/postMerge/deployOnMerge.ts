@@ -151,6 +151,16 @@ export class DeployOnMergeWatcher {
     // scope) lives on `.orgId` (incomplete) or `.target.orgId` (configured).
     const orgId = resolved.kind === "configured" ? resolved.target.orgId : resolved.orgId;
 
+    // Idempotent on ANY terminal outcome — GATE EARLY so the pre-resolution `deploy.skipped`
+    // branches below cannot self-loop the run-activity bus. `deploy.skipped` NOTIFYs the same
+    // wake path (per `eventStore.ts`), so without this gate a merge with no_sha /
+    // config_incomplete would re-wake into the same branch, re-append, and storm at every
+    // `warn`. A VERIFIED / FAILED deploy is likewise terminal (the FAILED verify-retry append
+    // wakes the subscriber; without the gate it would re-verify + re-append). One append per
+    // merge suffices — the throw at the pre-resolution branches is fail-loud, not a signal
+    // to re-drive.
+    if (await this.alreadyTerminal(runId)) return;
+
     // A merge with NO mergeSha cannot deploy — DURABLE `deploy.skipped` then fail LOUD.
     if (merged.kind === "no_sha") {
       const detail = `run ${runId} merge.completed carries no mergeSha — cannot determine the merged commit to deploy`;
@@ -181,11 +191,6 @@ export class DeployOnMergeWatcher {
     }
     const target = resolved.target;
     const mergedInfo = merged.info;
-
-    // Idempotent on a TERMINAL outcome: a VERIFIED deploy is done, and a FAILED
-    // deploy (verify exhausted OR a trigger failure) must NOT be re-run — both gate to
-    // a no-op so a `deploy.failed` append can't self-loop the run-activity bus.
-    if (await this.alreadyTerminal(runId)) return;
 
     // FAIL-CLOSED + LOUD + DURABLE: a deploy is now genuinely EXPECTED (a target
     // resolved). ANY throw — denied egress, a missing/lost grant, the provider
@@ -406,15 +411,17 @@ export class DeployOnMergeWatcher {
   }
 
   /**
-   * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live) OR
-   * `deploy.failed` (verify retry exhausted). Both gate `check()` to a no-op: a FAILED deploy
-   * must NOT be re-verified — its run-scoped append wakes the subscriber, so without the
-   * terminal gate the next pass would re-verify + re-append, self-looping.
+   * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live),
+   * `deploy.failed` (verify retry exhausted / trigger failure), OR `deploy.skipped`
+   * (pre-resolution failure — no_sha / config_incomplete). All three gate `check()` to a
+   * no-op: their run-scoped append fires a `tanren_run` NOTIFY that wakes the subscriber, so
+   * without the terminal gate the next pass would re-enter the same branch, re-append, and
+   * self-loop (a per-merge `warn` storm to the operator). One terminal append per merge.
    */
   private async alreadyTerminal(runId: string): Promise<boolean> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ id: string }>(
-        "SELECT id FROM events WHERE run_id = $1 AND event_type IN ('deploy.verified', 'deploy.failed') LIMIT 1",
+        "SELECT id FROM events WHERE run_id = $1 AND event_type IN ('deploy.verified', 'deploy.failed', 'deploy.skipped') LIMIT 1",
         [runId],
       );
       return result.rows[0] !== undefined;

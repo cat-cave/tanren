@@ -394,6 +394,38 @@ describe("effectiveSeverityFor", () => {
       effectiveSeverityFor({ eventType: "run.completed", payload: { status: "succeeded", outcome: "ci-fail" } }),
     ).toBe("info");
   });
+
+  it("keeps demo.completed at info when every behavior passed (routine ok summary)", () => {
+    // The all-passing demo summary is routine — it must NOT clear the default-route
+    // warn floor (no matrix spam on a successful deploy+demo).
+    expect(
+      effectiveSeverityFor({
+        eventType: "demo.completed",
+        payload: { surfaceKind: "web_url", behaviorCount: 3, passed: 3, failed: 0 },
+      }),
+    ).toBe("info");
+  });
+
+  it("promotes demo.completed to warn when any behavior FAILED on the live deploy", () => {
+    // The apex "deploy verified but the planted issue makes behaviors fail" signal —
+    // demo.completed with `failed > 0` must promote (info → warn) so the fail-tier
+    // summary clears the default-route floor and reaches the operator, even without a
+    // per-event route configured. Previously fell through to `info` and silently
+    // dropped at `handleNoMatch`.
+    expect(
+      effectiveSeverityFor({
+        eventType: "demo.completed",
+        payload: { surfaceKind: "web_url", behaviorCount: 3, passed: 0, failed: 3 },
+      }),
+    ).toBe("warn");
+    // One-behavior-failed still promotes (the threshold is `> 0`, not a majority).
+    expect(
+      effectiveSeverityFor({
+        eventType: "demo.completed",
+        payload: { surfaceKind: "web_url", behaviorCount: 4, passed: 3, failed: 1 },
+      }),
+    ).toBe("warn");
+  });
 });
 
 function baseRegistry(

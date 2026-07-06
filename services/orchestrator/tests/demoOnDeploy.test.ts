@@ -210,4 +210,28 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
       run({ verified: true, behaviors: [{ id: "b", title: "B", surfacePath: "/b" }] }, scriptedProbe({}), events),
     ).rejects.toThrow(/no matching grant/u);
   });
+
+  it("records a DURABLE demo.failed when resolveSurface throws (grant lost mid-flight)", async () => {
+    // Mirrors the deploy.failed durable-failure discipline: a demo that reached the
+    // watcher (verified deploy, not yet demoed) but died in resolveSurface must record
+    // a DURABLE `demo.failed` under the org scope BEFORE re-throwing, so the operator
+    // + run timeline SEE the demo failure rather than a subscriber-swallowed log.error.
+    // (No grant seeded → resolveSurface throws the "no matching grant" hard error.)
+    const events = new RecordingEventStore();
+    await expect(
+      run({ verified: true, behaviors: [{ id: "b", title: "B", surfacePath: "/b" }] }, scriptedProbe({}), events),
+    ).rejects.toThrow(/no matching grant/u);
+    const failed = events.appends.find((a) => a.eventType === "demo.failed");
+    expect(failed).toBeDefined();
+    expect(failed!.ambientOrgId).toBe(ORG_ID);
+    expect(failed!.payload["reason"]).toBe("resolve_surface_failed");
+    // The detail is a FIXED non-secret summary — NOT the raw error (which can carry
+    // provider text). The full error is preserved in the run logs via the re-throw.
+    expect(failed!.payload["detail"]).toContain("resolve the deployed exercise surface");
+    expect(failed!.payload["provider"]).toBe("deploy.vercel");
+    // A resolve-surface throw never got a kind — surfaceKind is honestly absent.
+    expect(failed!.payload["surfaceKind"]).toBeUndefined();
+    // No secret material reached the event.
+    expect(JSON.stringify(failed)).not.toContain("deploy_token");
+  });
 });

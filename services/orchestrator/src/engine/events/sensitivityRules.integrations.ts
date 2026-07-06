@@ -74,4 +74,12 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "demo.completed", path: "behaviorCount", tag: "public" },
   { eventName: "demo.completed", path: "passed", tag: "public" },
   { eventName: "demo.completed", path: "failed", tag: "public" },
+
+  // demo.failed: a durable demo-failure record — a fixed reason code + a bounded
+  // non-secret detail summary + the optional provider/surface kind. No token or
+  // response body ever reaches here; the full error stays in the run logs.
+  { eventName: "demo.failed", path: "reason", tag: "public" },
+  { eventName: "demo.failed", path: "detail", tag: "public" },
+  { eventName: "demo.failed", path: "provider", tag: "public" },
+  { eventName: "demo.failed", path: "surfaceKind", tag: "public" },
 ];
