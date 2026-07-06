@@ -1,9 +1,8 @@
 // The SPEC-LOOP REDESIGN stages (docs/roadmap/spec-loop-redesign.md): DEMO-RUN,
 // TRIAGE, and CONVERGENCE. Each owns a single answerer invocation (task row, event
 // append, cost record) + maps the answer onto the deterministic loop decision. Split
-// out of subtaskLoop.ts so every module stays under the 500-line architecture cap.
-// All three answerers are READ-ONLY + strict-JSON-schema: a malformed answer throws
-// AnswererSchemaValidationError (loud); cost + event + task-row accounting preserved.
+// out of subtaskLoop.ts so every module stays under the 500-line cap. All three
+// answerers are READ-ONLY + strict-JSON-schema (malformed ⇒ AnswererSchemaValidationError).
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
@@ -41,7 +40,7 @@ import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
-import { gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
+import { ensureFindingCoverage, gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
 
 export type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -151,8 +150,7 @@ async function runDemoRunStageBody(
   return { findings, demoTaskId };
 }
 
-// ---- POST-AUDIT FINDING STAGES (demo-run + design-oracle) ------------------
-
+// ---- POST-AUDIT FINDING STAGES (demo-run + design-oracle) -----------------
 export interface PostAuditFindingStagesInput extends StageBase {
   specTitle: string;
   specDescription: string;
@@ -226,7 +224,6 @@ export async function runPostAuditFindingStages(args: PostAuditFindingStagesInpu
 }
 
 // ---- TRIAGE ---------------------------------------------------------------
-
 export interface TriageStageInput extends StageBase {
   adapter: AnswererAdapter<TriageAnswer>;
   specTitle: string;
@@ -299,7 +296,10 @@ async function runTriageStageBody(args: TriageStageInput, triageTaskId: string):
   );
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  const routed: RoutedWorkItem[] = routeTriageItems(answer.workItems, args.posture);
+  // apex v79/v80 loop closure — FAIL-CLOSED on empty triage on non-empty findings
+  // (`summarizeTriageRouting` would falsely return "passed"). See `ensureFindingCoverage`.
+  const effectiveWorkItems = ensureFindingCoverage(answer.workItems, args.findings, triageTaskId);
+  const routed: RoutedWorkItem[] = routeTriageItems(effectiveWorkItems, args.posture);
   const routing = summarizeTriageRouting(routed);
   // WORKSTREAM 1 ↔ 2 SEAM — gate every NEW-spec routed item against the spec-quality
   // contract before it materializes. A persistently-invalid spec throws loud

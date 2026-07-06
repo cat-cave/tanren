@@ -1,21 +1,16 @@
-// the dequeue→execute seam. `executeNextPlanJob` atomically claims one
-// queued `plan` job, re-hydrates its `PlannerRunContext`, and runs the real
+// the dequeue→execute seam. `executeNextPlanJob` atomically claims one queued
+// `plan` job, re-hydrates its `PlannerRunContext`, and runs the real
 // plan→write→check→audit→draft-PR→CI workflow to completion.
 //
-// The workflow (`runPlannerLoopWorkflow`) owns its own run finalization: it
-// lands `done/ok` on a pass, `halted/<reason>` on a non-pass loop outcome, and
-// (for a generic mid-run throw) `failed/failed`. The worker-level catch here
-// does only two extra things the workflow can't:
-//   1. fail the claimed job row (so the queue reflects the failure), and
-//   2. re-finalize a run the workflow left in a NON-recoverable terminal state
-//      (`failed`) or still `running` (a crash) into a recoverable `halted`
-//      outcome, so the run surfaces on the recovery surface rather
-//      than disappearing or looking stuck.
+// The workflow (`runPlannerLoopWorkflow`) owns its own run finalization:
+// `done/ok` on pass, `halted/<reason>` on non-pass, `failed/failed` on mid-run
+// throw. The worker-level catch does the two extra things the workflow can't:
+// (1) fail the claimed job row, and (2) re-finalize a run stuck `failed` or
+// `running` (crash) into a recoverable `halted` — so nothing disappears.
 //
 // Idempotency: the claim is atomic (`FOR UPDATE SKIP LOCKED` → CAS to
 // `running`), so a job is handed to exactly one worker. A crash between claim
-// and finalize leaves the job `running`; the recovery surface + a future
-// reaper own re-queueing — the worker never double-executes a claimed job.
+// and finalize leaves `running`; the recovery surface + reaper re-queue it.
 
 import { runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
@@ -37,7 +32,9 @@ import {
   buildEagerBaseNodeUpsert,
   buildNativeQueueEnqueuer,
   buildRedriveHistoryReader,
+  buildTriageNewSpecsMaterializer,
   DirectRunStateWriter,
+  triageMaterializerSystemActor,
 } from "./runWorkflowPorts.js";
 import { createLogger, finalizeRunRecoverable, rawCauseOf } from "./runFinalize.js";
 import { classifyRunFailure } from "./runFailureClassifier.js";
@@ -56,12 +53,9 @@ import { runPlannerLoopWorkflow, type PlannerRunResult, type RunPlannerLoopInput
 
 const log = createLogger("run-executor");
 
-// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based): there is NO per-stage
-// wall-clock kill anymore. Every agent/SSH command is governed by an ActivityWatchdog
-// (output/telemetry + a workspace liveness probe) — a process showing ANY sign of life
-// runs UNBOUNDED, never killed for elapsed time ("10 minutes is nothing to an AI
-// agent"). The old `DEFAULT_TIMEOUT_MS` ceiling is gone; the only legitimate time bound
-// left in the SSH path is the connect-ESTABLISHMENT handshake (engine/ssh/ssh2Substrate.ts).
+// TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based): no per-stage wall-clock
+// kill; ActivityWatchdog governs, unbounded on sign-of-life. The only legit time bound
+// is SSH connect-establishment (engine/ssh/ssh2Substrate.ts).
 export const DEFAULT_CI_POLL_DELAY_MS = 10_000;
 
 // queue lease recovery. While a claimed job executes, the worker
@@ -74,19 +68,11 @@ export const DEFAULT_LEASE_MS = 60_000;
 export interface RunExecutorDeps {
   pool: pg.Pool;
   jobQueue: JobQueue;
-  // How this worker CLAIMS a job. Defaults to a
-  // `DirectJobClaimClient` over `jobQueue` (the unchanged DB-CAS) so the
-  // in-process / single-process path is behavior-identical. The cross-process
-  // `worker` container injects an `HttpJobClaimClient` that claims over the mTLS
-  // control-plane endpoint instead of touching `job_queue` directly. The rest of
-  // the queue surface (fail/complete/heartbeat) still uses `jobQueue`; the
-  // control-plane routing moves the CLAIM and the run-state WRITES separately.
+  // Job CLAIM seam. Default `DirectJobClaimClient` over `jobQueue`; cross-process
+  // worker container injects an `HttpJobClaimClient` (mTLS control-plane endpoint).
   claimClient?: JobClaimClient;
-  // REQUIRED (audit D3/H3 sweep): every workflow stage's terminal row +
-  // event pair rides the atomic seam through this writer. Default is the
-  // in-process `DirectRunStateWriter`; an `HttpRunStateWriter` (under
-  // TANREN_DATA_PLANE_REMOTE_WRITES=1) routes writes through the
-  // control-plane `/internal/*` endpoints over mTLS.
+  // REQUIRED (audit D3/H3 sweep): every workflow stage's terminal row + event pair
+  // rides this writer. Direct default; HttpRunStateWriter under remote-writes.
   runStateWriter: RunStateWriter;
   allocator: Allocator;
   ssh: CommandSubstrate;
@@ -338,6 +324,14 @@ export async function executeNextPlanJob(deps: RunExecutorDeps): Promise<Execute
         // instead of stranding, bounded by this consecutive-same-failure reader (SAME failure K times
         // escalates loudly). Org-scoped read over the pool.
         redriveHistoryReader: buildRedriveHistoryReader(deps.pool),
+        // apex v79/v80 loop closure: MATERIALIZE the triage-emitted `kind: spec`
+        // items as real DAG specs via `acceptProposals` under the run's org scope
+        // (the workflow otherwise emits `outcome.newSpecs` and drops them).
+        materializeTriageNewSpecs: buildTriageNewSpecsMaterializer({
+          pool: deps.pool,
+          runStateWriter: writer,
+          resolveActor: triageMaterializerSystemActor,
+        }),
       }),
     );
     await deps.jobQueue.complete(job.id);
