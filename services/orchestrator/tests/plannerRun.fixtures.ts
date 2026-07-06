@@ -1,8 +1,5 @@
-/**
- * plannerRun.fixtures — shared fakes, scripted clients, and helper builders for
- * the runPlannerLoopWorkflow integration tests. Extracted from plannerRun.test.ts
- * to keep that file under the 500-line architecture cap.
- */
+// plannerRun.fixtures — shared fakes/scripted clients/builders for the
+// runPlannerLoopWorkflow integration tests (extracted for the 500-line cap).
 import type {
   AllocationRequest,
   Allocator,
@@ -382,18 +379,16 @@ export class PlannerRunPool {
   private nextCostId = 1;
   private ciTask: { taskId: string; attempt: number } | undefined;
 
-  // The project config row the review/merge tail loads. Defaults to the
-  // not_configured hand-off; tests pass { mergeIntegration: "direct_merge",
-  // governancePosture: "open", ... } to exercise the direct-merge branches.
+  // The project config the review/merge tail loads. Defaults to the not_configured
+  // hand-off; tests override to exercise direct_merge / other branches.
   private readonly projectConfig: Record<string, unknown>;
 
   constructor(
     private readonly runContext: PlannerRunContext,
     projectConfig?: Record<string, unknown>,
   ) {
-    // A valid version:1 project config — migrateProjectConfig now fails hard on
-    // an unversioned/`{}` row (the migration shim is deleted). The static
-    // GitHub credential ref lives under `credentials` (strict V1 schema).
+    // A valid version:1 project config (migrateProjectConfig fails hard on `{}`);
+    // the static GitHub credential ref lives under strict-V1 `credentials`.
     this.projectConfig = projectConfig ?? {
       version: 1,
       ...(runContext.githubCredentialRef === undefined
@@ -411,10 +406,9 @@ export class PlannerRunPool {
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("INSERT INTO cost_records")) {
-      // total_tokens $12 (idx 11); billing_mode $15 (idx 14, after notional_cost_usd $14).
-      const id = String(this.nextCostId++);
+      // total_tokens = $12 (idx 11); billing_mode = $15 (idx 14, after notional_cost_usd $14).
       this.costRows.push({
-        id,
+        id: String(this.nextCostId++),
         total_tokens: Number(params[11] ?? 0),
         billing_mode: String(params[14] ?? "self_hosted"),
       });
@@ -427,6 +421,13 @@ export class PlannerRunPool {
       }
       return { rows: [], rowCount: 1 };
     }
+    // PgBudgetGate (Codex critic #11): synthesize owner+zero-spend so the fail-closed gate does not pause workflows.
+    if (trimmed.startsWith("SELECT org_id, config FROM projects WHERE project_id = $1"))
+      return { rows: [{ org_id: "org_planner_test", config: this.projectConfig }], rowCount: 1 };
+    if (trimmed.startsWith("SELECT config FROM organizations WHERE id = $1"))
+      return { rows: [{ config: { version: 1 } }], rowCount: 1 };
+    if (trimmed.startsWith("SELECT COALESCE(SUM(cost_usd"))
+      return { rows: [{ total: "0", notional: "0", unpriced: "0" }], rowCount: 1 };
     if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.")) {
       // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
       const row = {
@@ -443,13 +444,12 @@ export class PlannerRunPool {
       return { rows: [row], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE specs SET status = 'in_flight'")) {
-      // The review-rework re-entry sets the spec back in_flight (status inline,
-      // $1 = spec_id) before re-running the loop against the reviewer feedback.
+      // review-rework re-entry sets the spec back in_flight ($1 = spec_id).
       this.specStatuses.push("in_flight");
       return { rows: [], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE specs SET status = $2")) {
-      // The merged / handed-off tail sets the final spec status ($2 = status).
+      // merged / handed-off tail sets the final spec status ($2).
       this.specStatuses.push(String(params[1]));
       return { rows: [], rowCount: 1 };
     }

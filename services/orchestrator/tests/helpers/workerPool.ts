@@ -102,6 +102,25 @@ export class WorkerPool {
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { org_id: project.org_id ?? "org_fake" });
     }
+    // PgBudgetGate.resolveBudget (§3 proof 6): read the project's org + raw
+    // config in one shot. Codex critic #11: the gate now FAILS CLOSED on a
+    // missing project row / null org_id, so the fixture must synthesize an
+    // owner + config (unlimited-budget default via the seeded config) — else
+    // every workflow drives to `budget_paused` here.
+    if (trimmed.startsWith("SELECT org_id, config FROM projects WHERE project_id = $1")) {
+      const project = this.projects.get(String(params[0]));
+      return single(
+        project === undefined
+          ? undefined
+          : { org_id: this.forcedProjectOrgId ?? project.org_id ?? "org_fake", config: project.config },
+      );
+    }
+    // PgBudgetGate.sumSpend: COALESCE(SUM(cost_usd)) org-scoped. This fixture
+    // never seeds cost_records with a project ceiling; return zeros so the
+    // walker's genuine-ceiling gate never trips inside the workflow tests.
+    if (trimmed.startsWith("SELECT COALESCE(SUM(cost_usd")) {
+      return { rows: [{ total: "0", notional: "0", unpriced: "0" }], rowCount: 1 };
+    }
     if (trimmed.startsWith("INSERT INTO project_members")) {
       return { rows: [], rowCount: 1 };
     }

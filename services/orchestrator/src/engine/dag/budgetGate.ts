@@ -78,13 +78,21 @@ export class PgBudgetGate implements BudgetGate {
       return row === undefined ? null : { orgId: row.org_id, projectConfig: row.config };
     });
     if (owner === null || owner.orgId === null) {
-      // No resolvable project/org ⇒ no budget the walker can enforce (and the
-      // cost-sum read would be denied by RLS anyway). Treat as unlimited.
+      // BUDGET-SAFETY (Codex critic #11): a MISSING project row OR a NULL org_id
+      // is NOT "no budget configured" (which would silently fail OPEN to
+      // unlimited — the intended ceiling would be bypassed by an
+      // ownership-corruption / in-flight-migration read failure). "Budget is the
+      // only run gate" — an ordinary read failure must never let spend run past
+      // the operator's intended ceiling. Fail CLOSED: the walker pauses on budget
+      // with `unresolvable_project_org` so operators can distinguish it from an
+      // intentional ceiling-reached pause. The cost-sum read is genuinely skipped
+      // (there is no org to scope it to; an off-scope read would see zero rows).
       return {
         ceilingUsd: undefined,
         period: DEFAULT_BUDGET_PERIOD,
         spentUsd: 0,
         notionalUsd: 0,
+        failClosed: "unresolvable_project_org",
       };
     }
     const orgConfig = await runWithSystemScope(this.pool, async (client) => {

@@ -119,9 +119,32 @@ describeDb("PgBudgetGate against a real Postgres (§6.2)", () => {
     expect(state.ceilingUsd).toBeUndefined();
   });
 
-  it("treats an unresolvable project as unlimited (no ceiling the walker can enforce)", async () => {
+  it("FAILS CLOSED on an unresolvable project row (Codex critic #11 — never silent-unlimited)", async () => {
+    // A missing project row must NOT silently degrade to "no budget configured"
+    // (which would fall OPEN to unlimited spend past whatever ceiling the operator
+    // intended). "Budget is the only run gate" — an ownership-corruption /
+    // in-flight-migration read failure must fail CLOSED so the walker pauses.
     const state = await gate.resolveBudget("proj_does_not_exist");
+    expect(state.failClosed).toBe("unresolvable_project_org");
     expect(state.ceilingUsd).toBeUndefined();
+    expect(state.spentUsd).toBe(0);
+  });
+
+  it("FAILS CLOSED on a project row whose org_id is NULL (Codex critic #11)", async () => {
+    // The same safety invariant as the missing-row case: a corrupt project row
+    // with a NULL `org_id` is unreadable ownership, not "no budget configured".
+    // The gate cannot resolve an org to sum the cost records under, so the true
+    // spend is UNKNOWN — assume the ceiling is reached and fail CLOSED.
+    const PROJECT_NULL_ORG = "proj_budget_null_org";
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, org_id, config)
+       VALUES ($1, 'p', 'https://example.com/r.git', NULL, $2::jsonb)`,
+      [PROJECT_NULL_ORG, JSON.stringify({ version: 1, budget: { ceilingUsd: 50, period: "total" } })],
+    );
+    const state = await gate.resolveBudget(PROJECT_NULL_ORG);
+    expect(state.failClosed).toBe("unresolvable_project_org");
+    expect(state.ceilingUsd).toBeUndefined();
+    expect(state.spentUsd).toBe(0);
   });
 });
 

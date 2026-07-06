@@ -342,8 +342,16 @@ export interface DagEnqueuer {
  *     true spend may already exceed the ceiling; assume the ceiling is reached.
  *   - `unparseable_config` — a PRESENT-but-undecodable project/org budget config
  *     blob. We will not fail OPEN to unlimited on a config we cannot read.
+ *   - `unresolvable_project_org` — the project row is missing OR its `org_id` is
+ *     NULL (a corrupt/deleted row, an in-flight ownership migration). "The budget
+ *     is the only run gate" (safety invariant) means we cannot silently degrade to
+ *     `ceilingUsd: undefined` (which reads as UNLIMITED) on a project we cannot
+ *     read: an ordinary budget-enforcement read failure would then become "no
+ *     budget configured" and let spend run past whatever ceiling the operator
+ *     intended. Fail CLOSED instead — the walker pauses on budget with this reason
+ *     so operators can distinguish it from an intentional ceiling-reached pause.
  */
-export type BudgetFailClosedReason = "unpriced_spend" | "unparseable_config";
+export type BudgetFailClosedReason = "unpriced_spend" | "unparseable_config" | "unresolvable_project_org";
 
 /**
  * A project's resolved budget state at walk time: the configured ceiling (project
