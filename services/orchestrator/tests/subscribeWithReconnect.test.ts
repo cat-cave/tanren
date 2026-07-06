@@ -6,6 +6,11 @@
 //   - a live connection-lost signal (the fake's `fireConnectionError`) re-drives
 //     the subscribe (idempotent w.r.t. the handler Set on the real listener),
 //   - `stop()` tears the loop down + unsubscribes exactly once,
+//   - `await stop()` drains the in-flight subscribe BEFORE returning so a
+//     restart cannot race a stale handler onto the shared listener (Codex RA1,
+//     Bug 2 regression pin),
+//   - `subscribe()` throws are ATOMIC — a repeated retry never leaks a fresh
+//     handler into the underlying listener's set (Codex RA1, Bug 1 regression pin),
 //   - the progress-spaced backoff shape is a legitimate cadence (1s → 2s → 4s
 //     → 8s → 16s → 30s capped), not a give-up budget — the timeout-eradication
 //     lint at `scripts/check-architecture-timeouts.mjs` blesses this shape.
@@ -66,6 +71,9 @@ class FakeNotifyListener {
   hasHandler(channel: string): boolean {
     return (this.handlers.get(channel)?.size ?? 0) > 0;
   }
+  handlerCount(channel: string): number {
+    return this.handlers.get(channel)?.size ?? 0;
+  }
 }
 
 const flush = async (): Promise<void> => {
@@ -125,7 +133,7 @@ describe("subscribeWithReconnect", () => {
     listener.fire(CHANNEL, "payload_1");
     expect(seen).toEqual(["payload_1"]);
 
-    handle.stop();
+    await handle.stop();
     expect(listener.unsubscribeCount).toBe(1);
   });
 
@@ -165,7 +173,7 @@ describe("subscribeWithReconnect", () => {
     listener.fire(CHANNEL, "payload_after_reconnect");
     expect(seen).toEqual(["payload_after_reconnect"]);
 
-    handle.stop();
+    await handle.stop();
   });
 
   it("retries with progress-spaced backoff when the reconnect itself fails", async () => {
@@ -202,7 +210,7 @@ describe("subscribeWithReconnect", () => {
     // 1-indexed anew — 1s, 2s).
     expect(sleeps).toEqual([1_000, 2_000]);
 
-    handle.stop();
+    await handle.stop();
   });
 
   it("stop() tears down the loop and unsubscribes exactly once", async () => {
@@ -220,9 +228,9 @@ describe("subscribeWithReconnect", () => {
     await flush();
     expect(listener.subscribeAttempts).toBe(1);
 
-    handle.stop();
+    await handle.stop();
     // Idempotent: a second stop() is a no-op.
-    handle.stop();
+    await handle.stop();
 
     expect(listener.unsubscribeCount).toBe(1);
     // A post-stop connection wake is ignored (no fresh subscribe).
@@ -261,15 +269,151 @@ describe("subscribeWithReconnect", () => {
     await flush();
     expect(subscribeAttempts).toBe(1);
 
-    // Stop before the stalled subscribe returns.
-    handle.stop();
+    // Stop before the stalled subscribe returns — do NOT await yet (the loop is
+    // parked on the stalled subscribe, so `await stop()` would hang forever
+    // per the Codex RA1 contract; the test resolves the stall next).
+    const stopPromise = handle.stop();
     // Now let the stalled subscribe resolve — the helper must unsubscribe it
     // immediately (never install it as a live subscription).
     resolveSubscribe?.(() => {
       unsubCalled += 1;
     });
-    await flush();
+    // Awaiting `stop()` now MUST resolve — the loop's stalled subscribe just
+    // completed, the loop unsub'd it and exited (Bug 2 regression pin).
+    await stopPromise;
 
     expect(unsubCalled).toBe(1);
+  });
+
+  // Codex RA1, Bug 2 regression pin — `await stop()` DRAINS the in-flight
+  // subscribe before returning. Prior to the fix, `stop()` returned
+  // synchronously while the underlying `PgNotifyListener.subscribe(…)` promise
+  // could still resolve (installing a handler) or throw (interacting with
+  // Bug 1's handler leak) AFTER stop() observably returned — a subsequent
+  // `start()` would then race a stale handler set.
+  it("await stop() returns AFTER the current subscribe has resolved (Bug 2)", async () => {
+    let resolveSubscribe: ((unsub: () => void) => void) | undefined;
+    let subscribeReturned = false;
+    let unsubCalled = 0;
+    const stallingListener = {
+      subscribe: (): Promise<() => void> => {
+        return new Promise<() => void>((resolve) => {
+          resolveSubscribe = resolve;
+        });
+      },
+      onConnectionError: () => () => {},
+    } satisfies Pick<PgNotifyListener, "subscribe" | "onConnectionError">;
+
+    const handle = subscribeWithReconnect({
+      listener: stallingListener as unknown as PgNotifyListener,
+      channel: CHANNEL,
+      handler: () => {},
+      sleep: async () => {
+        await Promise.resolve();
+      },
+    });
+
+    await flush();
+    expect(resolveSubscribe).toBeDefined();
+
+    // Kick off stop() BEFORE the subscribe resolves.
+    let stopResolved = false;
+    const stopPromise = handle.stop().then(() => {
+      stopResolved = true;
+    });
+
+    await flush();
+    // stop() must NOT have resolved yet — the loop is still awaiting the
+    // stalled subscribe promise.
+    expect(stopResolved).toBe(false);
+
+    // Now let the subscribe resolve — the loop unsub's and exits.
+    resolveSubscribe?.(() => {
+      subscribeReturned = true;
+      unsubCalled += 1;
+    });
+    await stopPromise;
+
+    expect(stopResolved).toBe(true);
+    expect(subscribeReturned).toBe(true);
+    expect(unsubCalled).toBe(1);
+  });
+
+  // Codex RA1, Bug 2 regression pin — a `await stop(); await start()`-shaped
+  // sequence (running a second helper against the SAME `PgNotifyListener`
+  // after draining the first) produces exactly ONE active handler on the
+  // shared listener at any time. Without the drain, the first helper's
+  // in-flight subscribe could still resolve into the listener's handler Set
+  // AFTER `stop()` returned, coexisting with the second helper's handler for
+  // a tick.
+  it("await stop(); await restart on the same listener never leaves two handler sets active (Bug 2)", async () => {
+    const listener = new FakeNotifyListener();
+
+    const handleA = subscribeWithReconnect({
+      listener: listener as unknown as PgNotifyListener,
+      channel: CHANNEL,
+      handler: () => {},
+      sleep: async () => {
+        await Promise.resolve();
+      },
+    });
+
+    await flush();
+    expect(listener.handlerCount(CHANNEL)).toBe(1);
+
+    // Drain the first helper's loop; the drain awaits the in-flight subscribe
+    // + unsub, so post-stop there is exactly zero handlers on the shared
+    // listener.
+    await handleA.stop();
+    expect(listener.handlerCount(CHANNEL)).toBe(0);
+
+    // A restart re-installs exactly one handler — never a lingering second one.
+    const handleB = subscribeWithReconnect({
+      listener: listener as unknown as PgNotifyListener,
+      channel: CHANNEL,
+      handler: () => {},
+      sleep: async () => {
+        await Promise.resolve();
+      },
+    });
+
+    await flush();
+    expect(listener.handlerCount(CHANNEL)).toBe(1);
+
+    await handleB.stop();
+    expect(listener.handlerCount(CHANNEL)).toBe(0);
+  });
+
+  // Codex RA1, Bug 1 regression pin — the reconnect helper's UNBOUNDED retry
+  // loop must NOT leak a handler on repeated subscribe failures. Prior to the
+  // Bug 1 fix in `db/src/notify.ts`, every failed `PgNotifyListener.subscribe`
+  // left the handler in the underlying Set, so the retry loop grew the Set
+  // unboundedly. With the fix, a real `PgNotifyListener`'s Set stays clean;
+  // this test exercises the invariant end-to-end via a fake that mirrors the
+  // real listener's atomicity contract.
+  it("repeated subscribe failures never grow the underlying handler Set (Bug 1 x Bug 2 compose)", async () => {
+    const listener = new FakeNotifyListener();
+    // Fail the first three attempts before letting the fourth succeed.
+    listener.failCount = 3;
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {
+      await Promise.resolve();
+    });
+    const handle = subscribeWithReconnect({
+      listener: listener as unknown as PgNotifyListener,
+      channel: CHANNEL,
+      handler: () => {},
+      sleep,
+    });
+
+    await flush();
+    await flush();
+
+    // Four subscribe attempts made, but ONLY the successful (fourth) attempt
+    // installed a handler — the three failures left the handler Set unchanged.
+    expect(listener.subscribeAttempts).toBe(4);
+    expect(listener.handlerCount(CHANNEL)).toBe(1);
+
+    await handle.stop();
+    expect(listener.handlerCount(CHANNEL)).toBe(0);
   });
 });

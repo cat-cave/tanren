@@ -259,10 +259,12 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   });
   log.info("paused-run resume prober started (task #82 — window-pause auto-resume)");
   const stop = async (): Promise<void> => {
-    dagWalker.stop();
-    mergeCoordinator.stop();
-    postMerge.stop();
-    notifications.stop();
+    // Codex RA1 (Bug 2 stop() race): the four notify subscribers' `stop()` now
+    // returns a promise that drains the underlying `subscribeWithReconnect`
+    // loop (any in-flight `PgNotifyListener.subscribe(…)` resolves/throws
+    // BEFORE the promise settles) — await them so a subsequent restart or
+    // teardown never races a still-in-flight subscribe from the prior lifetime.
+    await Promise.all([dagWalker.stop(), mergeCoordinator.stop(), postMerge.stop(), notifications.stop()]);
     intake.stop();
     ciInsights.stop();
     pausedRunResumeProber.stop();

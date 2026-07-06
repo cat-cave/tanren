@@ -238,12 +238,22 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
   // fails LOUD there rather than silently disabling the sweeper.
   const runnerRowOrphanSweeper = startRunnerRowOrphanSweeper({ pool });
   const stop = async (): Promise<void> => {
-    await autonomy.stop();
-    // Await both reapers' in-flight ticks (stop() drains them) before tearing
-    // down the worker + pool, so no sweep outlives the resources it reads.
-    await runWorkspaceReaper?.stop();
-    await runnerRowOrphanSweeper?.stop();
-    await Promise.all([worker.stop(), reaper.stop()]);
+    // Kick off every drain in PARALLEL (Codex RA1): the notify subscribers now
+    // await their internal `subscribeWithReconnect` loops (Bug 2 fix), which
+    // adds a small (millisecond) tail before autonomy.stop() resolves. Running
+    // it serially before `worker.stop()` / `reaper.stop()` used to push the
+    // (uninterruptible-sleep) `JobReaper` loop past its post-reap `if(draining)`
+    // check into a 30s sleep — every workerBoot test then hung. Parallelizing
+    // starts all drains at the same tick, so the reaper's own `draining` flag
+    // is set BEFORE its first reap catch, and the subscriber drain runs
+    // alongside worker/reaper drains.
+    await Promise.all([
+      autonomy.stop(),
+      runWorkspaceReaper?.stop(),
+      runnerRowOrphanSweeper?.stop(),
+      worker.stop(),
+      reaper.stop(),
+    ]);
   };
   return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, runnerRowOrphanSweeper, stop };
 }

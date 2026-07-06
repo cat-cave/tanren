@@ -190,6 +190,15 @@ export class PgNotifyListener {
    * `LISTEN`ing on it. Returns an unsubscribe function; when the last handler
    * for a channel unsubscribes the channel is `UNLISTEN`ed. Safe to call before
    * the connection is established — it lazily connects on first subscribe.
+   *
+   * FAILURE ATOMICITY (Codex RA1): if `ensureConnected` or the `LISTEN` query
+   * throws, the just-registered handler is removed from the Set (and the Set
+   * dropped when it is now empty) BEFORE the error is re-thrown. Prior code
+   * registered the handler up front and returned the unsubscribe closure only
+   * on success, so a throw left the handler stuck in the Set forever — and
+   * `subscribeWithReconnect`'s progress-spaced retry (which catches the throw
+   * as transient) leaked a fresh handler on every retry attempt, growing the
+   * handler Set unboundedly across reconnect cycles.
    */
   async subscribe(channel: string, handler: NotifyHandler): Promise<() => void> {
     let set = this.handlers.get(channel);
@@ -198,8 +207,20 @@ export class PgNotifyListener {
       this.handlers.set(channel, set);
     }
     set.add(handler);
-    await this.ensureConnected();
-    await this.client?.query(`LISTEN ${quoteIdent(channel)}`);
+    try {
+      await this.ensureConnected();
+      await this.client?.query(`LISTEN ${quoteIdent(channel)}`);
+    } catch (error) {
+      // The connect / LISTEN failed: drop the just-registered handler so a
+      // caller-driven retry (e.g. `subscribeWithReconnect`) cannot compound a
+      // fresh handler leak on every attempt. Drop the channel Set too when it
+      // is now empty so a stale channel entry does not persist across retries.
+      set.delete(handler);
+      if (set.size === 0) {
+        this.handlers.delete(channel);
+      }
+      throw error;
+    }
     return () => {
       const current = this.handlers.get(channel);
       if (current === undefined) return;

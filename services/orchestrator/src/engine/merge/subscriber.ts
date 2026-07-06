@@ -245,8 +245,11 @@ export class MergeCoordinatorSubscriber {
       },
     });
     if (this.stopped) {
-      runHandle.stop();
-      eventHandle.stop();
+      // stop() raced the wiring: drain both helpers in the background — the
+      // outer `stop()` promise is the authoritative drain for a stop that was
+      // awaited BEFORE we got here. Fire-and-forget is safe (idempotent).
+      void runHandle.stop();
+      void eventHandle.stop();
       return;
     }
     this.runActivityHandle = runHandle;
@@ -262,16 +265,24 @@ export class MergeCoordinatorSubscriber {
     }
   }
 
-  /** Stop listening. Idempotent; in-flight passes finish on their own. */
-  stop(): void {
+  /**
+   * Stop listening. Idempotent; in-flight passes finish on their own. Returns
+   * a promise that resolves AFTER both reconnect helpers' own drains settle
+   * (each waits for its in-flight `PgNotifyListener.subscribe(…)` to
+   * resolve/throw), so a `await stop(); await start();` sequence never leaves
+   * two live handler sets on the shared listener for a tick (Codex RA1).
+   */
+  async stop(): Promise<void> {
     this.stopped = true;
-    this.runActivityHandle?.stop();
+    const drains: Promise<void>[] = [];
+    if (this.runActivityHandle !== undefined) drains.push(this.runActivityHandle.stop());
     this.runActivityHandle = undefined;
-    this.eventHandle?.stop();
+    if (this.eventHandle !== undefined) drains.push(this.eventHandle.stop());
     this.eventHandle = undefined;
     for (const timer of this.retryTimers.values()) clearTimeout(timer);
     this.retryTimers.clear();
     this.pendingHoldUntil.clear();
+    await Promise.all(drains);
   }
 
   /**

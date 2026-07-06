@@ -78,8 +78,19 @@ export interface SubscribeWithReconnectDeps {
 
 /** The running helper handle. `stop()` tears down the loop + the current subscription. */
 export interface SubscribeWithReconnectHandle {
-  /** Stop the retry loop + unsubscribe from `PgNotifyListener`. Idempotent. */
-  stop(): void;
+  /**
+   * Stop the retry loop + unsubscribe from `PgNotifyListener`. Idempotent.
+   *
+   * Returns a promise that resolves AFTER the internal `runLoop` has exited,
+   * i.e. AFTER any in-flight `PgNotifyListener.subscribe(…)` has resolved /
+   * thrown and the loop has UNLISTENed anything it had installed. Callers that
+   * intend to `stop(); start();` (or drop the helper on shutdown) MUST await
+   * this — otherwise a still-in-flight subscribe resolve can install a stale
+   * handler on the underlying listener AFTER `stop()` observably returned, and
+   * a subsequent `start()` would run alongside the drained-but-not-yet-exited
+   * loop for a tick. Codex RA1: deterministic drain, no restart race.
+   */
+  stop(): Promise<void>;
 }
 
 /**
@@ -100,6 +111,10 @@ export function subscribeWithReconnect(deps: SubscribeWithReconnectDeps): Subscr
   // when the loop enters the post-subscribe wait; fired by the disconnect
   // callback (below) or by `stop()`.
   let wakeReconnect: (() => void) | undefined;
+  // The wake pulse the retry loop parks on while sleeping the progress-spaced
+  // backoff between failing subscribe attempts. `stop()` fires it so a drain
+  // does not have to wait out a full 30s cadence tick.
+  let wakeSleep: (() => void) | undefined;
 
   // Register the connection-error hook eagerly (before the first subscribe
   // attempt) so a drop while the FIRST subscribe was in flight still drives a
@@ -116,13 +131,23 @@ export function subscribeWithReconnect(deps: SubscribeWithReconnectDeps): Subscr
     wakeReconnect = undefined;
   });
 
-  void runLoop({
+  // Retain the runLoop promise so `stop()` can drain it (Codex RA1). A caller
+  // that awaits `stop()` is guaranteed the loop has fully exited — no in-flight
+  // `PgNotifyListener.subscribe(…)` can still resolve into a stale handler
+  // registration after `stop()` returns, so a subsequent `start()` never races
+  // a lingering subscribe from the prior lifetime.
+  const runLoopPromise = runLoop({
     deps,
     log,
     sleep,
     isStopped: () => stopped,
     setCurrentUnsub: (unsub) => {
       currentUnsub = unsub;
+    },
+    takeCurrentUnsub: () => {
+      const held = currentUnsub;
+      currentUnsub = undefined;
+      return held;
     },
     parkForReconnect: () =>
       new Promise<void>((resolve) => {
@@ -132,16 +157,52 @@ export function subscribeWithReconnect(deps: SubscribeWithReconnectDeps): Subscr
         }
         wakeReconnect = resolve;
       }),
+    // Sleep + a stop-wake pulse race, so a `stop()` during a backoff wait
+    // drains promptly rather than blocking the whole cadence tick. The paced
+    // backoff is still the CADENCE (unchanged when no stop fires) — the wake
+    // only fires on shutdown, so a live-running loop's cadence is unaffected.
+    // This keeps the drain bounded by the subscribe attempt itself (subscribe
+    // throw is fast; a subscribe that HANGS is a different problem the
+    // underlying pool controls, and stop() still awaits it per contract).
+    interruptibleSleep: (ms: number): Promise<void> =>
+      new Promise<void>((resolve) => {
+        if (stopped) {
+          resolve();
+          return;
+        }
+        wakeSleep = resolve;
+        void sleep(ms).then(() => {
+          // Clear the wake reference so `stop()` does not fire into a stale
+          // resolver after the sleep concluded naturally.
+          if (wakeSleep === resolve) wakeSleep = undefined;
+          resolve();
+        });
+      }),
   });
 
+  // Cache the drain promise so repeated `stop()` calls return the SAME resolved
+  // (or in-flight) drain — idempotent + safe to await from many callers.
+  let stopPromise: Promise<void> | undefined;
   return {
-    stop(): void {
+    stop(): Promise<void> {
+      if (stopPromise !== undefined) return stopPromise;
       stopped = true;
       disconnectUnsub();
+      // Wake both the reconnect park AND the sleep wait so the loop condition
+      // re-checks and exits promptly. An in-flight `subscribe(…)` is NOT
+      // awoken — a subscribe that HANGS is bounded by the underlying pool
+      // (production timeouts, socket idle-close). stop() still awaits per the
+      // spec: no drop of the atomicity guarantee.
       wakeReconnect?.();
       wakeReconnect = undefined;
-      currentUnsub?.();
-      currentUnsub = undefined;
+      wakeSleep?.();
+      wakeSleep = undefined;
+      // Drain the loop so any in-flight subscribe resolves/throws BEFORE the
+      // returned promise settles. The loop itself invokes any installed unsub
+      // on its way out (via `takeCurrentUnsub` in `runLoop`), so we do NOT
+      // race an external unsub call against the loop's own path.
+      stopPromise = runLoopPromise;
+      return stopPromise;
     },
   };
 }
@@ -152,7 +213,22 @@ interface LoopHooks {
   sleep: (ms: number) => Promise<void>;
   isStopped: () => boolean;
   setCurrentUnsub: (unsub: (() => void) | undefined) => void;
+  /**
+   * Consume the currently-installed unsubscribe closure (returns it and clears
+   * the shared reference in one step). Codex RA1: the loop calls this on its
+   * way out of a `parkForReconnect()` wait so it invokes the RIGHT unsub for
+   * the branch that woke it — a disconnect-driven wake has already cleared the
+   * shared reference (the LISTEN is gone with the dropped client), while a
+   * `stop()` wake left the unsub in place for the loop to UNLISTEN cleanly.
+   */
+  takeCurrentUnsub: () => (() => void) | undefined;
   parkForReconnect: () => Promise<void>;
+  /**
+   * Wait `ms` for a paced cadence tick BUT wake immediately on `stop()`. The
+   * cadence itself is unchanged when the loop is live — it only short-circuits
+   * on shutdown, so the drain is not blocked by a full backoff tick (Codex RA1).
+   */
+  interruptibleSleep: (ms: number) => Promise<void>;
 }
 
 /**
@@ -183,10 +259,14 @@ async function runLoop(hooks: LoopHooks): Promise<void> {
         attempt: attemptCount,
         delayMs,
       });
-      await hooks.sleep(delayMs);
+      await hooks.interruptibleSleep(delayMs);
       continue;
     }
     if (hooks.isStopped()) {
+      // stop() raced this in-flight subscribe: unsubscribe immediately so we
+      // never install a live handler for a stopped helper. Codex RA1: the
+      // awaited `stop()` returns only AFTER this branch completes (the drain
+      // resolves this runLoop promise), so a stale handler never survives.
       unsub();
       return;
     }
@@ -198,6 +278,16 @@ async function runLoop(hooks: LoopHooks): Promise<void> {
     // like a first attempt, not resume the pre-connection tail's cadence).
     attemptCount = 0;
     await hooks.parkForReconnect();
+    // Post-park cleanup (Codex RA1): consume the installed unsub in one atomic
+    // step. On a `stop()` wake the shared reference is still set — invoke it
+    // now so the LISTEN is dropped BEFORE the loop returns. On a disconnect
+    // wake the reference has already been cleared (the LISTEN is gone with
+    // the dropped client), so `held` is `undefined` and we loop to re-subscribe.
+    const held = hooks.takeCurrentUnsub();
+    if (hooks.isStopped()) {
+      held?.();
+      return;
+    }
   }
 }
 

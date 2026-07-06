@@ -136,7 +136,7 @@ describe("DagWalkerSubscriber", () => {
     await flush();
 
     expect(new Set(walker.walks)).toEqual(new Set(["project_a", "project_b"]));
-    sub.stop();
+    await sub.stop();
   });
 
   it("a TERMINAL run notification fires the walker for that run's project", async () => {
@@ -157,7 +157,7 @@ describe("DagWalkerSubscriber", () => {
     await flush();
 
     expect(walker.walks).toEqual(["project_x"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("a NON-terminal run notification does NOT fire the walker", async () => {
@@ -176,7 +176,7 @@ describe("DagWalkerSubscriber", () => {
 
     // Mid-flight events do not re-trigger.
     expect(walker.walks).toEqual([]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("a DAG-change (spec-creation) notification walks the carried project", async () => {
@@ -196,7 +196,7 @@ describe("DagWalkerSubscriber", () => {
     await flush();
 
     expect(walker.walks).toEqual(["project_new"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("an empty dag-change payload is ignored (no walk)", async () => {
@@ -211,7 +211,7 @@ describe("DagWalkerSubscriber", () => {
     await flush();
 
     expect(walker.walks).toEqual([]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("coalesces a burst of dag-change notifications into a single re-walk", async () => {
@@ -248,7 +248,7 @@ describe("DagWalkerSubscriber", () => {
 
     // Exactly two walks: the original + ONE coalesced re-walk (not four).
     expect(walker.walks).toEqual(["project_new", "project_new"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("ignores an unknown run id (not yet visible)", async () => {
@@ -263,7 +263,7 @@ describe("DagWalkerSubscriber", () => {
     await flush();
 
     expect(walker.walks).toEqual([]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("coalesces concurrent triggers for one project into a single re-walk", async () => {
@@ -305,7 +305,7 @@ describe("DagWalkerSubscriber", () => {
 
     // Exactly two walks: the original + ONE coalesced re-walk (not three).
     expect(walker.walks).toEqual(["project_x", "project_x"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("runs the change-percolation pass alongside the walk on a terminal notification (P2c-2)", async () => {
@@ -326,7 +326,7 @@ describe("DagWalkerSubscriber", () => {
     // The walk AND the percolation pass both ran for the run's project.
     expect(walker.walks).toEqual(["project_x"]);
     expect(percolation.passes).toEqual(["project_x"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("a percolation failure is non-fatal to the walk loop (logged, swallowed)", async () => {
@@ -350,7 +350,7 @@ describe("DagWalkerSubscriber", () => {
     expect(percolation.passes).toEqual(["project_x"]);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
-    sub.stop();
+    await sub.stop();
   });
 
   it("stop() unsubscribes from the bus", async () => {
@@ -360,7 +360,7 @@ describe("DagWalkerSubscriber", () => {
     await sub.start();
     // Let the background subscribe register before stopping.
     await flush();
-    sub.stop();
+    await sub.stop();
     // Two channels are subscribed (run-activity + dag-change); stop tears both down.
     expect(listener.unsubscribeCount).toBe(2);
   });
@@ -394,6 +394,6 @@ describe("DagWalkerSubscriber", () => {
 
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
-    sub.stop();
+    await sub.stop();
   });
 });

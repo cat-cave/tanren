@@ -196,4 +196,114 @@ describe("PgNotifyListener", () => {
     expect(seen).toEqual([2]);
     await listener.close();
   });
+
+  // Codex RA1, Bug 1 regression pin — a `subscribe()` whose `LISTEN` query
+  // throws MUST NOT leave the handler in the underlying Set. Prior code
+  // registered the handler up front and returned the unsubscribe closure only
+  // on success, so a throw left the handler stranded — and
+  // `subscribeWithReconnect`'s progress-spaced retry (which catches the throw
+  // as transient) would leak a fresh handler on every retry attempt, growing
+  // the Set unboundedly across reconnect cycles.
+  it("subscribe() removes the handler when the LISTEN query throws (Bug 1)", async () => {
+    // A pool whose client's `query` throws on LISTEN (the connect+register
+    // succeeds; LISTEN is the failing async step).
+    const badPool = throwingPool();
+    const listener = new PgNotifyListener(badPool as unknown as pg.Pool);
+
+    const handler = noopHandler;
+    await expect(listener.subscribe(RUN_ACTIVITY_CHANNEL, handler)).rejects.toThrow(/LISTEN failed/u);
+
+    // The handler MUST NOT be in the internal Set. The internal handlers Map
+    // is private; the observable proof is that a fresh listener over a good
+    // pool wires exactly ONE handler that fires once per notification.
+    let callCount = 0;
+    const goodPool = healthyPool();
+    const listener2 = new PgNotifyListener(goodPool as unknown as pg.Pool);
+    await listener2.subscribe(RUN_ACTIVITY_CHANNEL, () => {
+      callCount += 1;
+    });
+    goodPool.clients[0]?.emit("notification", { channel: RUN_ACTIVITY_CHANNEL, payload: "run_1" });
+    expect(callCount).toBe(1);
+    await listener2.close();
+    await listener.close();
+  });
+
+  // Codex RA1, Bug 1 regression pin — the retry loop shape: repeated failed
+  // subscribe() calls against the SAME listener never grow the internal
+  // handler Set. Prior code leaked a handler on every retry attempt.
+  it("repeated failed subscribe() calls never grow the underlying handler Set (Bug 1)", async () => {
+    const badPool = throwingPool();
+    const listener = new PgNotifyListener(badPool as unknown as pg.Pool);
+
+    // 5 failed attempts with the SAME handler — Bug 1 would leak one per attempt.
+    const handler = noopHandler;
+    for (let i = 0; i < 5; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await expect(listener.subscribe(RUN_ACTIVITY_CHANNEL, handler)).rejects.toThrow(/LISTEN failed/u);
+    }
+
+    // Emit a notification against a fresh subscribe on a healthy pool — if the
+    // 5 failed attempts had leaked handlers, this listener's internal Map
+    // would carry stranded entries. The externally observable proof: exactly
+    // ONE handler fires (the fresh probe), no stranded siblings.
+    let fired = 0;
+    const good = healthyPool();
+    const listener2 = new PgNotifyListener(good as unknown as pg.Pool);
+    await listener2.subscribe(RUN_ACTIVITY_CHANNEL, () => {
+      fired += 1;
+    });
+    good.clients[0]?.emit("notification", { channel: RUN_ACTIVITY_CHANNEL, payload: "run_probe" });
+    expect(fired).toBe(1);
+    await listener2.close();
+    await listener.close();
+  });
 });
+
+// Hoisted at file scope so `unicorn/consistent-function-scoping` is satisfied —
+// this handler captures nothing from its callers.
+function noopHandler(): void {}
+
+/**
+ * A tiny factory-built test pool paired with a `queryImpl` — used by the Bug 1
+ * regression pins above. Keeps the file under the max-classes-per-file cap by
+ * reusing one client shape across the failing-LISTEN and healthy-LISTEN tests.
+ */
+interface TestQueryClient extends EventEmitter {
+  released: boolean;
+  query(sql: string): Promise<{ rows: never[]; rowCount: number }>;
+  release(): void;
+}
+
+interface TestQueryPool {
+  clients: TestQueryClient[];
+  connect(): Promise<TestQueryClient>;
+}
+
+function buildQueryPool(queryImpl: (sql: string) => Promise<{ rows: never[]; rowCount: number }>): TestQueryPool {
+  const pool: TestQueryPool = {
+    clients: [],
+    async connect(): Promise<TestQueryClient> {
+      const emitter = new EventEmitter() as TestQueryClient;
+      emitter.released = false;
+      emitter.query = queryImpl;
+      emitter.release = (): void => {
+        emitter.released = true;
+      };
+      pool.clients.push(emitter);
+      return emitter;
+    },
+  };
+  return pool;
+}
+
+function throwingPool(): TestQueryPool {
+  return buildQueryPool((sql: string) => {
+    if (sql.startsWith("LISTEN")) throw new Error("LISTEN failed");
+    throw new Error(`unexpected query: ${sql}`);
+  });
+}
+
+function healthyPool(): TestQueryPool {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  return buildQueryPool(async () => ({ rows: [], rowCount: 0 }));
+}

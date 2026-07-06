@@ -82,7 +82,7 @@ describe("PostMergeSubscriber", () => {
     await flush();
 
     expect(watcher.checks).toEqual(["run_merged"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("an empty run id is ignored", async () => {
@@ -96,7 +96,7 @@ describe("PostMergeSubscriber", () => {
     await flush();
 
     expect(watcher.checks).toEqual([]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("coalesces concurrent triggers for one run into a single re-check", async () => {
@@ -128,7 +128,7 @@ describe("PostMergeSubscriber", () => {
 
     // Exactly two checks: the original + ONE coalesced re-check (not three).
     expect(watcher.checks).toEqual(["run_x", "run_x"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("a check failure is non-fatal: logged, never thrown into the notify pump", async () => {
@@ -145,7 +145,7 @@ describe("PostMergeSubscriber", () => {
     expect(watcher.checks).toEqual(["run_boom"]);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
-    sub.stop();
+    await sub.stop();
   });
 
   it("stop() unsubscribes from the bus", async () => {
@@ -153,7 +153,7 @@ describe("PostMergeSubscriber", () => {
     const sub = makeSubscriber(new RecordingWatcher(), listener);
     await sub.start();
     await flush();
-    sub.stop();
+    await sub.stop();
     expect(listener.unsubscribeCount).toBe(1);
   });
 });
