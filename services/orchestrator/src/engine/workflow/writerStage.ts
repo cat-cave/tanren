@@ -12,11 +12,22 @@ import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { PlanSubtask } from "../answerers/schemas/index.js";
 import { emitStageTiming } from "../observability/index.js";
+import { createLogger } from "../observability/logger.js";
 import type { WriterAdapter, WriterResult } from "../providers/types.js";
 import { recordWriterCost, secondsSince, type SubtaskCostContext } from "./subtaskCost.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { insertChildTask, markTaskDoneWithEvent, markTaskFailedWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
+
+// Structured log seam for the watchdog-progress bridge (Codex critic #1). The
+// `onWatchdogProgress` callback fires-and-forgets `writer.subtask.progress`; a
+// silent swallow of an appendEvent rejection makes the cross-layer sign-of-life
+// bridge invisibly broken (the #21B breaker reads the writer as no-longer-
+// signaling while the actual work signature is still advancing). Route the
+// catch through this logger so an operator investigating "why did the watchdog
+// fire on a spec that was making progress" finds durable evidence of the
+// transport failure, keyed by run/task/subtask.
+const watchdogProgressLog = createLogger("writer-watchdog-progress");
 
 type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -129,6 +140,17 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
     // `onProgress` is synchronous (the substrate already catches any throw, but
     // we double-defend here — a rejected appendEvent must not bubble back into
     // the watchdog tick).
+    //
+    // Codex critic #1: the append is fire-and-forget, but its rejection is NOT
+    // silent. The prior empty `.catch(() => {})` made a broken control-plane
+    // writer invisible — the #21B breaker then reads the writer as no-longer-
+    // signaling while the actual work signature is still advancing, so the
+    // watchdog fires on a run that WAS making progress with zero durable
+    // evidence for the operator. Route through `watchdogProgressLog.warn` so
+    // one structured JSON line (level=warn → console.error) carries the
+    // run/task/subtask lineage + the underlying error, on an entirely different
+    // path from `appendEvent` (the log stream, not the event transport). Still
+    // never re-throws — the watchdog callback contract stands.
     onWatchdogProgress: (signal) => {
       void args
         .appendEvent(
@@ -143,8 +165,16 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
           },
           args.writeTaskId,
         )
-        .catch(() => {
-          // appendEvent failure must not bubble into the watchdog tick.
+        .catch((error: unknown) => {
+          watchdogProgressLog.warn(
+            "writer.subtask.progress append failed — cross-layer sign-of-life bridge broken",
+            {
+              runId: args.runId,
+              taskId: args.writeTaskId,
+              subtaskIndex: args.subtask.index,
+            },
+            error,
+          );
         });
     },
   });
