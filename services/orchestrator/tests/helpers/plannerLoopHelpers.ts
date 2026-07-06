@@ -194,11 +194,14 @@ export function makeStallingThenAnswer<T>(
 export const makePlanner = (plans: ReadonlyArray<PlanAnswer>) => makeAnswerer<PlanAnswer>(plans);
 export const makeChecker = (verdicts: ReadonlyArray<CheckAnswer>) => makeAnswerer<CheckAnswer>(verdicts);
 export const makeAuditor = (verdicts: ReadonlyArray<AuditAnswer>) => makeAnswerer<AuditAnswer>(verdicts);
-export const makeTriage = (answers: ReadonlyArray<TriageAnswer>) => makeAnswerer<TriageAnswer>(answers);
 export const makeConvergence = (answers: ReadonlyArray<ConvergenceAnswer>) => makeAnswerer<ConvergenceAnswer>(answers);
 export const makeDemoRun = (answers: ReadonlyArray<DemoRunAnswer>) => makeAnswerer<DemoRunAnswer>(answers);
 export const makeDesignOracle = (answers: ReadonlyArray<DesignOracleAnswer>) =>
   makeAnswerer<DesignOracleAnswer>(answers);
+
+// makeTriage — see `./makeTriage.ts` (extracted to hold this file's 500-line cap).
+import { makeTriage } from "./makeTriage.js";
+export { makeTriage };
 
 export function makeWriter(
   diffs: ReadonlyArray<string>,
@@ -385,6 +388,9 @@ export const p2Audit: AuditAnswer = {
 };
 
 // ---- TRIAGE fixtures ------------------------------------------------------
+// NOTE: `makeTriage` above auto-extends each returned workItem's `findingIds` with
+// the input finding ids from the prompt, so shared fixtures don't need to hardcode
+// them (coverage-guard is satisfied dynamically). The ["f1"] below is a legibility marker.
 
 // Route every finding to a TASK in this spec (the loop then runs convergence).
 export const triageAllTasks: TriageAnswer = {
