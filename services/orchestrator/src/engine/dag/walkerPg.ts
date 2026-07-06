@@ -92,6 +92,16 @@ function asStringArray(value: unknown): string[] {
  * own DAG. The `priority` column is the primary ordering key (the pure planner's
  * `orderReadySet` sorts P0→tbd first); the `orderKey` (creation order) is the
  * deterministic tiebreak within a priority.
+ *
+ * Codex critic #10 — DETERMINISTIC ORDERING: the `orderKey` is a `row_number()`
+ * over `(created_at, spec_id)`, the stable LOGICAL creation order. It is
+ * emphatically NOT `ctid` (the physical tuple pointer): a VACUUM, table rewrite,
+ * or UPDATE can move a row's `ctid` without touching the DAG, which would flip the
+ * ready-set tiebreak between ticks on byte-identical input. `created_at` is a
+ * `NOT NULL DEFAULT now()` column stamped at insert; `spec_id` is the PK — both
+ * are immutable for the row's lifetime, so the tiebreak is stable across VACUUMs.
+ * The composite `specs_project_created` index (see db/src/schemaCore.ts) supports
+ * this per-project ordered read.
  */
 export class PgDagReadModel implements DagReadModel {
   constructor(private readonly pool: pg.Pool) {}
@@ -112,7 +122,7 @@ export class PgDagReadModel implements DagReadModel {
     const nodes = await runWithOrgScope(this.pool, orgId, async (client) => {
       const result = await client.query<SpecDagRow>(
         `SELECT spec_id, status, depends_on, priority,
-                row_number() OVER (ORDER BY ctid) AS rn
+                row_number() OVER (ORDER BY created_at ASC, spec_id ASC) AS rn
            FROM specs
           WHERE project_id = $1`,
         [projectId],
