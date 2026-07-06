@@ -186,14 +186,22 @@ export function effectiveBlockingProgress(
  * count. The loop is UNBOUNDED while it is PROGRESSING, and halts ONLY when the answerer's
  * intelligent escalation verdict (`escalation`) says a human must act:
  *
- *   - PROGRESS (blocking `retired`/`reduced`, or overall `assessment === "progress"`):
- *     `continue` and RESET the stall diagnostic to 0. A progressing loop is NEVER escalated,
- *     no matter how many attempts (the v24 trajectory case: 1000 → 1 errors keeps going).
- *   - velocity_defer: honor it (→ `pass`) when the policy allows, else `continue`.
+ *   - ESCALATE ALWAYS HALTS (Codex critic #17): the answerer's `escalate` verdict is the
+ *     SEMANTIC signal the prompt binds — "human input would genuinely CHANGE the outcome"
+ *     (ambiguous requirement, missing resource/credential, product/architecture decision,
+ *     exhausted dead-end). It takes PRECEDENCE over any progress signal: peripheral progress
+ *     on OTHER fronts does NOT unblock the reason for escalating (a missing credential is
+ *     still missing even if the writer retired a different P1). The prompt itself instructs
+ *     the answerer that "Slow / hard / many-attempts are NEVER reasons to escalate", so an
+ *     `escalate` verdict paired with progress is a POSITIVE signal that the answerer
+ *     identified a legitimate human-decision — never the v24 trajectory case (1000→1 errors),
+ *     because that prompt path returns `keep_going`.
+ *   - PROGRESS (blocking `retired`/`reduced`, or overall `assessment === "progress"`) with
+ *     `keep_going`: `continue` and RESET the stall diagnostic to 0.
+ *   - velocity_defer with `keep_going`: honor it (→ `pass`) when the policy allows, else
+ *     `continue`.
  *   - SUSPECTED STALL (blocking `unchanged`/`regressed`, or overall `stalled` with no
- *     blocker): consult the agent's `escalation` verdict — the "would a human add value
- *     beyond 'keep going'?" judgment. `escalate` ⇒ `halt` (a genuine human decision/blocker/
- *     dead-end). `keep_going` ⇒ `continue` (slow/hard/a-new-approach — keep iterating,
+ *     blocker) with `keep_going`: `continue` (slow/hard/a-new-approach — keep iterating,
  *     UNBOUNDED). The `consecutiveStalls` diagnostic increments for OBSERVABILITY only — it
  *     never forces a halt.
  *
@@ -235,19 +243,40 @@ export function applyConvergencePolicy(input: ConvergencePolicyInput): {
     { failureSignature: loopBlocking.id, magnitude: loopBlocking.pScore },
   ];
   const effectiveProgress = effectiveBlockingProgress(blockingProgress, blockingHistory);
+  const blockerAdvanced = effectiveProgress === "retired" || effectiveProgress === "reduced";
+  // ESCALATE ALWAYS HALTS (Codex critic #17). The answerer's `escalate` verdict is the
+  // SEMANTIC signal — "human input would genuinely CHANGE the outcome" per the prompt (an
+  // ambiguous requirement, a missing resource/credential, a real product/architecture
+  // choice, or a demonstrably exhausted dead-end). It takes PRECEDENCE over any progress
+  // signal: peripheral progress on OTHER fronts does NOT unblock the reason for escalating
+  // (the missing credential is still missing). Previously, an `assessment === "progress"`
+  // or a `retired`/`reduced` blocker returned `continue` UNCONDITIONALLY without consulting
+  // the escalation verdict — an answerer that correctly flagged a human-decision was
+  // silently ignored the moment any progress showed up. Stall-diagnostic accounting mirrors
+  // the non-escalate branches below (reset when the blocker advanced or overall `progress`;
+  // else increment) purely for observability — the halt is unconditional.
+  if (escalation === "escalate") {
+    // Stall accounting mirrors the keep_going branches below: a stuck blocker OR an overall
+    // `stalled` with no blocker increments the diagnostic; everything else is real progress
+    // and resets it. (The halt itself is unconditional — this is observability.)
+    const isStall = blockingIsStuck(effectiveProgress) || (effectiveProgress === "none" && assessment === "stalled");
+    const consecutiveStalls = isStall ? state.consecutiveStalls + 1 : 0;
+    return { state: { consecutiveStalls, blockingHistory }, decision: "halt" };
+  }
+  // From here down `escalation === "keep_going"` — the intelligent verdict is "no human
+  // action needed". The deterministic policy chooses continue/pass from the assessment.
+  //
   // PRIMARY signal: a stuck blocking root cause is a suspected stall regardless of the overall
   // assessment — peripheral progress NEVER masks a stuck blocker (the v24 fix), and a structural
-  // oscillation NEVER masks as progress (the v40 fix). The agent's intelligent verdict decides
-  // whether to halt; the count is observability only.
+  // oscillation NEVER masks as progress (the v40 fix). With `keep_going`, we re-iterate
+  // UNBOUNDED; the count is observability only.
   if (blockingIsStuck(effectiveProgress)) {
     const consecutiveStalls = state.consecutiveStalls + 1;
-    const decision: ConvergenceDecision = escalation === "escalate" ? "halt" : "continue";
-    return { state: { consecutiveStalls, blockingHistory }, decision };
+    return { state: { consecutiveStalls, blockingHistory }, decision: "continue" };
   }
   // The blocking root cause was retired/reduced (forward motion on the blocker), OR
   // there is no blocking finding. Reset on blocker progress, then honor the overall
   // assessment. (`retired`/`reduced` ⇒ never a stall: the blocker advanced.)
-  const blockerAdvanced = effectiveProgress === "retired" || effectiveProgress === "reduced";
   if (blockerAdvanced || assessment === "progress") {
     if (assessment === "velocity_defer") {
       const decision: ConvergenceDecision = honorsVelocityDefer(velocityPolicy, state, worstLeftoverSeverity)
@@ -265,11 +294,9 @@ export function applyConvergencePolicy(input: ConvergencePolicyInput): {
       : "continue";
     return { state: { consecutiveStalls: 0, blockingHistory }, decision };
   }
-  // overall `stalled` with no blocking finding: the agent's intelligent verdict decides the
-  // halt — `keep_going` re-iterates UNBOUNDED, `escalate` surfaces the human decision.
+  // overall `stalled` with no blocking finding + `keep_going`: re-iterate UNBOUNDED.
   const consecutiveStalls = state.consecutiveStalls + 1;
-  const decision: ConvergenceDecision = escalation === "escalate" ? "halt" : "continue";
-  return { state: { consecutiveStalls, blockingHistory }, decision };
+  return { state: { consecutiveStalls, blockingHistory }, decision: "continue" };
 }
 
 // True iff the velocity policy HONORS a `velocity_defer` for the given state +
