@@ -128,7 +128,7 @@ describe("DagWalkerSubscriber liveness", () => {
 
     // Both projects re-walked by the backstop (startup 2 + tick 2 = 4).
     expect(walker.walks.length).toBe(4);
-    sub.stop();
+    await sub.stop();
     expect(cleared).toBe(true);
   });
 
@@ -159,7 +159,7 @@ describe("DagWalkerSubscriber liveness", () => {
     expect(percolation.passes).toEqual([]);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
-    sub.stop();
+    await sub.stop();
   });
 
   it("a walk THROW does not strand a queued re-walk (audit §3.13d — coalesce flag always drains)", async () => {
@@ -205,6 +205,6 @@ describe("DagWalkerSubscriber liveness", () => {
     expect(call).toBe(2);
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
-    sub.stop();
+    await sub.stop();
   });
 });

@@ -133,7 +133,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     await flush();
 
     expect(coordinator.passes).toEqual([PROJECT]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("credential repair events wake the repaired project's merge queue", async () => {
@@ -167,7 +167,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     await flush();
 
     expect(coordinator.passes).toEqual(["project_codex", PROJECT, "project_app"]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("suppresses a NOTIFY storm during a pending hold (at most one coordinate)", async () => {
@@ -202,7 +202,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
 
     // At most ONE coordinate ran for the storm (not ten) — the hot loop is killed.
     expect(coordinator.passes).toEqual([PROJECT]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("re-checks promptly once the debounce window lapses (no real-completion regress)", async () => {
@@ -240,7 +240,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
     listener.fire(RUN_ACTIVITY_CHANNEL, "run_2");
     await flush();
     expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("a NON-pending pass does NOT suppress the next NOTIFY (debounce spans only a live hold)", async () => {
@@ -270,7 +270,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
 
     // Both NOTIFYs coordinated — a clean pass never throttles the next one.
     expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
-    sub.stop();
+    await sub.stop();
   });
 
   it("suppresses unrelated NOTIFYs during merge_retry backoff; the retry timer re-drives", async () => {
@@ -318,7 +318,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       await flushMicrotasks();
       expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
     } finally {
-      sub?.stop();
+      await sub?.stop();
       vi.useRealTimers();
     }
   });
@@ -369,7 +369,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       await flushMicrotasks();
       expect(passes).toEqual([PROJECT, PROJECT]);
     } finally {
-      sub?.stop();
+      await sub?.stop();
       vi.useRealTimers();
     }
   });
@@ -416,7 +416,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       await flushMicrotasks();
       expect(passes).toEqual([PROJECT, PROJECT]);
     } finally {
-      sub.stop();
+      await sub.stop();
     }
   });
 
@@ -453,7 +453,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       await flushMicrotasks();
       expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
     } finally {
-      sub?.stop();
+      await sub?.stop();
       vi.useRealTimers();
     }
   });
@@ -491,7 +491,7 @@ describe("MergeCoordinatorSubscriber — pending-hold NOTIFY debounce (Bug B)", 
       await flushMicrotasks();
       expect(coordinator.passes).toEqual([PROJECT, PROJECT]);
     } finally {
-      sub?.stop();
+      await sub?.stop();
       consoleError.mockRestore();
       vi.useRealTimers();
     }

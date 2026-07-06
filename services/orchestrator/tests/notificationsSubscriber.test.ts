@@ -178,7 +178,7 @@ describe("NotificationSubscriber", () => {
     expect(slack.calls[0]?.target.destination).toBe("credential/slack-webhook");
     expect(dbClient.dispatches[0]?.status).toBe("sent");
     expect(dbClient.dispatches[0]?.channel).toBe("slack");
-    sub.stop();
+    await sub.stop();
   });
 
   it("an empty payload and an unknown event id are ignored without throwing", async () => {
@@ -198,7 +198,7 @@ describe("NotificationSubscriber", () => {
     await flush();
 
     expect(dbClient.dispatches).toHaveLength(0);
-    sub.stop();
+    await sub.stop();
   });
 
   it("a dispatch failure is non-fatal: logged, never thrown into the notify pump", async () => {
@@ -237,7 +237,7 @@ describe("NotificationSubscriber", () => {
 
     expect(errorSpy).toHaveBeenCalled();
     errorSpy.mockRestore();
-    sub.stop();
+    await sub.stop();
   });
 
   it("stop() unsubscribes from the notify bus", async () => {
@@ -251,7 +251,7 @@ describe("NotificationSubscriber", () => {
     });
     await sub.start();
     await flush();
-    sub.stop();
+    await sub.stop();
     expect(listener.unsubscribeCount).toBe(1);
   });
 });

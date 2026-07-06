@@ -95,17 +95,27 @@ export class NotificationSubscriber {
       },
     });
     if (this.stopped) {
-      handle.stop();
+      // stop() raced the wiring: drain the helper in the background — the
+      // outer `stop()` promise is the authoritative drain. Fire-and-forget is
+      // safe (helper stop is idempotent + cached).
+      void handle.stop();
       return;
     }
     this.reconnectHandle = handle;
   }
 
-  /** Stop listening. Idempotent; an in-flight dispatch finishes on its own. */
-  stop(): void {
+  /**
+   * Stop listening. Idempotent; an in-flight dispatch finishes on its own.
+   * Returns a promise that resolves AFTER the reconnect helper's own drain
+   * settles (it waits for the in-flight `PgNotifyListener.subscribe(…)` to
+   * resolve/throw), so a `await stop(); await start();` sequence never leaves
+   * two live handler sets on the shared listener for a tick (Codex RA1).
+   */
+  async stop(): Promise<void> {
     this.stopped = true;
-    this.reconnectHandle?.stop();
+    const drain = this.reconnectHandle?.stop();
     this.reconnectHandle = undefined;
+    if (drain !== undefined) await drain;
   }
 
   /** Handle one `tanren_notify` wake: read the event row by id and dispatch it. */

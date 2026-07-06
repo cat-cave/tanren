@@ -236,10 +236,12 @@ export class DagWalkerSubscriber {
   /**
    * Record a reconnect handle — or, if stop() raced the wiring, tear it down
    * immediately. The helper's stop() is idempotent, so a double-fire is safe.
+   * The stop() promise is fire-and-forget here: `DagWalkerSubscriber.stop()`
+   * is the authoritative drain and awaits every held handle's stop() promise.
    */
   private track(handle: SubscribeWithReconnectHandle): void {
     if (this.stopped) {
-      handle.stop();
+      void handle.stop();
       return;
     }
     this.reconnectHandles.push(handle);
@@ -255,16 +257,25 @@ export class DagWalkerSubscriber {
     }
   }
 
-  /** Stop listening. Idempotent; in-flight walks finish on their own. */
-  stop(): void {
+  /**
+   * Stop listening. Idempotent; in-flight walks finish on their own. Returns
+   * a promise that resolves AFTER every reconnect helper's own drain settles
+   * (each helper waits for its in-flight `PgNotifyListener.subscribe(…)` to
+   * resolve/throw), so a `await stop(); await start();` sequence never leaves
+   * two live handler sets on the shared listener for a tick (Codex RA1).
+   */
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.reWalkTimer !== undefined) {
       this.clearIntervalFn(this.reWalkTimer);
       this.reWalkTimer = undefined;
     }
+    const drains: Promise<void>[] = [];
     while (this.reconnectHandles.length > 0) {
-      this.reconnectHandles.pop()?.stop();
+      const handle = this.reconnectHandles.pop();
+      if (handle !== undefined) drains.push(handle.stop());
     }
+    await Promise.all(drains);
   }
 
   /** Handle one `tanren_run` wake: walk the run's project only when it terminated. */
