@@ -10,9 +10,10 @@ import type { DesignOracleAnswer } from "../answerers/schemas/index.js";
 import type { Finding } from "../contracts/findings.js";
 import { emitStageTiming } from "../observability/index.js";
 import type { AnswererAdapter } from "../providers/types.js";
-import { runDesignOracleStage } from "./designOracle/designOracle.js";
+import { runDesignOracleStage, type DesignOracleStageResult } from "./designOracle/designOracle.js";
 import type { LoopQueryClient, StageBase } from "./loopStages.js";
 import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
+import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { recordAnswererCost, secondsSince } from "./subtaskCost.js";
 import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 
@@ -51,16 +52,10 @@ export async function runDesignOracleLoopStage(
 ): Promise<{ findings: Finding[]; designOracleTaskId: string | undefined }> {
   // Run the oracle first; only materialize a task row / events / cost when a contract was
   // genuinely verified. A no-contract project produces no task (the explicit empty state),
-  // mirroring how the demo-run slot is simply skipped when there is nothing to do.
-  //
-  // apex v51 per-stage `task.failed` emit-on-throw doctrine sweep — INTENTIONALLY ABSENT
-  // HERE: the design-oracle answerer fires BEFORE any task row materializes (the
-  // hasContract gate runs the oracle then maybe inserts a task), so a throw from the
-  // answerer leaves NO `task` row to strand `running` — there is nothing to mark failed
-  // or to emit `task.failed` against. The throw still propagates to the workflow catch
-  // for run-level disposition. If a future refactor inserts the design-oracle task BEFORE
-  // the answerer fires, add the emit-on-throw pattern then (the conformance test in
-  // subtaskLoopStages.test.ts will fail loud if any stage with a task row omits it).
+  // mirroring how the demo-run slot is simply skipped when there is nothing to do. A throw
+  // BEFORE the task row materializes propagates to the workflow catch — there is no row
+  // to strand `running` yet, so no `task.failed` to emit against.
+  const startedAt = Date.now();
   const result = await runAnswererStageWithRecovery("designOracle", () =>
     runDesignOracleStage({
       client: args.client,
@@ -80,7 +75,6 @@ export async function runDesignOracleLoopStage(
   // A contract WAS verified — record the stage as a task with its verdict + cost, exactly
   // like the demo-run slot. The oracle already invoked the answerer; the cost record below
   // attributes that real call (token telemetry surfaced by the same adapter instance).
-  const startedAt = Date.now();
   const designOracleTaskId = `task_${randomUUID()}`;
   await insertChildTask(
     args.pool,
@@ -98,17 +92,45 @@ export async function runDesignOracleLoopStage(
   );
   await args.appendEvent("task.started", { taskKind: "designOracle" }, designOracleTaskId);
   await args.appendEvent("designOracle.started", { taskKind: "designOracle" }, designOracleTaskId);
-  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  await args.appendEvent(
-    "designOracle.verdict",
-    {
+  // WIDER FINALIZE GUARD (Codex critic #5): wrap the WHOLE post-row body so a recorder /
+  // event-append / terminal-pair throw closes the row loud + emits `task.failed`. This
+  // stage was the outlier — the demo-run / triage / convergence neighbors already wrap
+  // their post-insert bodies; a mid-stage throw here (verdict append / cost recorder /
+  // markTaskDoneWithEvent) previously stranded the row `running` with no `task.failed`
+  // event, defeating DAG-walker re-drive at the row granularity (same shape as #640).
+  return await runStageBodyWithFinalizeGuard({
+    writer: args.writer,
+    taskId: designOracleTaskId,
+    taskKind: "designOracle",
+    eventLineage: {
       runId: args.runId,
-      contractVersion: result.contractVersion ?? 0,
-      verificationMode: result.verificationMode ?? "",
-      summary: result.summary ?? "",
-      findings: result.findings,
+      specId: args.costCtx.specId,
+      projectId: args.costCtx.projectId,
+      orgId: args.costCtx.orgId,
     },
-    designOracleTaskId,
+    body: () => runDesignOracleLoopStageBody(args, designOracleTaskId, result, startedAt),
+  });
+}
+
+async function runDesignOracleLoopStageBody(
+  args: DesignOracleLoopStageInput,
+  designOracleTaskId: string,
+  result: DesignOracleStageResult,
+  startedAt: number,
+): Promise<{ findings: Finding[]; designOracleTaskId: string }> {
+  emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
+  await wrapEventAppend(() =>
+    args.appendEvent(
+      "designOracle.verdict",
+      {
+        runId: args.runId,
+        contractVersion: result.contractVersion ?? 0,
+        verificationMode: result.verificationMode ?? "",
+        summary: result.summary ?? "",
+        findings: result.findings,
+      },
+      designOracleTaskId,
+    ),
   );
   await recordAnswererCost({
     ctx: args.costCtx,
