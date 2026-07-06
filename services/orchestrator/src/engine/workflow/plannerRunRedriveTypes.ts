@@ -28,11 +28,38 @@ export interface RedriveConvergenceFacts {
 }
 
 /**
+ * The reader's read outcome — a discriminated union that DISTINGUISHES a
+ * successful read from a DB read FAILURE (audit C2 #3 — silent-fallback
+ * hardening). Before this fix the reader's `catch` silently returned facts
+ * equivalent to "first attempt of its kind" (priorSameFixedPoint: 0),
+ * CONFLATING a genuinely-empty history with a broken read. Under a repeated DB
+ * blip a genuinely-stuck spec re-drove FOREVER because the persistent-failure +
+ * the wandering-halt escalation branches were SILENTLY DISABLED.
+ *
+ * With the union, the caller (`readConvergenceFacts`) EXPLICITLY distinguishes:
+ *
+ *   • `ok` — the read succeeded; use the returned facts to decide re-drive vs
+ *     genuine-halt via the standard authority.
+ *   • `read_failed` — the read threw; the caller DEFERS escalation for this
+ *     tick, forces a RE-DRIVE (never a genuine-halt on unknown facts), and
+ *     surfaces the failure LOUDLY. The next tick's read will retry — a
+ *     transient DB hiccup does NOT silently disable the escalation semantics.
+ */
+export type RedriveHistoryReadResult =
+  | ({ kind: "ok" } & RedriveConvergenceFacts)
+  | { kind: "read_failed"; error: unknown };
+
+/**
  * Read the convergence facts for a spec (the fixed-point streak + the wandering-halt
  * verdict). Computed via the shared `convergenceDetector` and `wanderingHaltDetector`
  * over the spec's `dag.spec.redriven` history + PR/merge markers. A DIFFERENT failure
  * code OR DIFFERENT produced work (PROGRESS) breaks the fixed-point streak, so the loop
  * is UNBOUNDED while it keeps changing; the wandering-halt detector catches the case
  * where every re-drive's failure differs but no deliverable progress is being made.
+ *
+ * The reader NEVER throws — a DB read failure is surfaced via the `read_failed`
+ * discriminant of {@link RedriveHistoryReadResult} so the caller can apply an
+ * EXPLICIT policy (defer escalation, log observably) rather than silently
+ * degrade to zero-history semantics.
  */
-export type RedriveHistoryReader = (facts: RedriveHistoryFacts) => Promise<RedriveConvergenceFacts>;
+export type RedriveHistoryReader = (facts: RedriveHistoryFacts) => Promise<RedriveHistoryReadResult>;

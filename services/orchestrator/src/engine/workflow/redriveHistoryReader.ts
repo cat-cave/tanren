@@ -4,9 +4,17 @@
 // reader returns BOTH verdicts (fixed-point streak + wandering-halt) in ONE org-scoped
 // pass over the durable event log so the authority has the complete picture per call.
 //
-// FAIL-CLOSED toward RE-DRIVING (not toward stranding): a read failure logs loudly and
-// returns 0 priors + no-wandering — a transient DB hiccup must NOT cause a spurious
-// escalation to `needs_attention`; both detectors still bite once the read recovers.
+// READ FAILURE ≠ NO HISTORY (audit C2 #3 — silent-fallback hardening). Before this fix
+// the reader's `catch` returned facts equivalent to "first attempt of its kind"
+// (priorSameFixedPoint: 0, wandering: false), CONFLATING a genuinely-empty history with a
+// broken read. Under a repeated DB blip a genuinely-stuck spec re-drove FOREVER because
+// the persistent-failure + wandering-halt escalation branches were silently disabled.
+//
+// The fix: the reader surfaces the failure via a `read_failed` discriminant of
+// {@link RedriveHistoryReadResult}. The caller (`readConvergenceFacts`) logs LOUDLY and
+// applies an EXPLICIT deferral policy — force a RE-DRIVE this tick (never a genuine-halt
+// on unknown facts), retry on the next tick. Fail-closed toward re-driving, never
+// silently disable the escalation semantics.
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
@@ -103,17 +111,29 @@ export function buildRedriveHistoryReader(pool: pg.Pool): RedriveHistoryReader {
           mergeCompletedSoFar: firstMergeTs !== null,
         });
         const wandering = assessWanderingHalt(wanderingHistory);
-        return { priorSameFixedPoint, wandering };
+        return { kind: "ok" as const, priorSameFixedPoint, wandering };
       });
     } catch (error) {
+      // Audit C2 #3: NEVER silently return zero-history semantics on a read
+      // failure — that conflates a broken read with a genuinely-empty history
+      // and silently disables persistent-failure + wandering-halt escalation.
+      // Surface the failure via the `read_failed` discriminant + log LOUDLY so
+      // the caller can DEFER escalation this tick (retry on next tick) instead
+      // of falsely reporting progress.
       log.warn(
-        "convergence-facts read failed (fail-closed toward re-drive: treat as progress / first of its kind)",
-        { specId: facts.specId },
+        "convergence-facts read failed — surfacing read_failed sentinel " +
+          "(persistent-failure + wandering-halt DEFERRED to next tick, NOT silently disabled)",
+        { specId: facts.specId, orgId: facts.orgId },
         error,
       );
-      return { priorSameFixedPoint: 0, wandering: { wandering: false } };
+      return { kind: "read_failed", error };
     }
   };
 }
 
-export type { RedriveHistoryFacts, RedriveHistoryReader, RedriveConvergenceFacts } from "./plannerRunRedriveTypes.js";
+export type {
+  RedriveHistoryFacts,
+  RedriveHistoryReader,
+  RedriveConvergenceFacts,
+  RedriveHistoryReadResult,
+} from "./plannerRunRedriveTypes.js";

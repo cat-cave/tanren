@@ -30,10 +30,29 @@ const internalAtRun: ClassifiedRunFailure = {
   summary: "the run failed with an internal error",
 };
 
+/** Assert the read succeeded and narrow to the `ok` branch's consecutive counter. */
+function okConsecutive(result: Awaited<ReturnType<typeof readOrphanConsecutive>>): number {
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error("expected ok read result");
+  return result.consecutive;
+}
+
+/** A `pg.PoolClient` substitute whose query THROWS — simulating a DB read failure (RLS
+ * mis-scope, transient hiccup, corrupt payload). Hoisted so oxlint's
+ * `consistent-function-scoping` is happy. */
+function throwingClient(error: Error): pg.PoolClient {
+  return {
+    query: async (_sql: string) => {
+      throw error;
+    },
+    release: () => {},
+  } as unknown as pg.PoolClient;
+}
+
 describe("readOrphanConsecutive — the orphan-path FIXED-POINT read (0 = progress / re-drive; 1 = stuck / escalate)", () => {
   it("no prior re-drives ⇒ 0 (the first failure of its kind — PROGRESS, re-drive)", async () => {
     const got = await readOrphanConsecutive(fakeClient([]), "spec_1", internalAtRun);
-    expect(got).toBe(0);
+    expect(okConsecutive(got)).toBe(0);
   });
 
   it("two SAME-signature priors ⇒ 1 (a proven cycle — escalate)", async () => {
@@ -45,7 +64,7 @@ describe("readOrphanConsecutive — the orphan-path FIXED-POINT read (0 = progre
       "spec_1",
       internalAtRun,
     );
-    expect(got).toBe(1);
+    expect(okConsecutive(got)).toBe(1);
   });
 
   it("audit finding D1: dag.spec.redriven rows with source:'prober_resume' are FILTERED OUT of the orphan history", async () => {
@@ -68,7 +87,7 @@ describe("readOrphanConsecutive — the orphan-path FIXED-POINT read (0 = progre
       "spec_1",
       internalAtRun,
     );
-    expect(got).toBe(1);
+    expect(okConsecutive(got)).toBe(1);
   });
 
   it("audit finding D1: a HISTORY of ONLY prober_resume rows reads as no structural priors ⇒ 0 (progress)", async () => {
@@ -83,6 +102,31 @@ describe("readOrphanConsecutive — the orphan-path FIXED-POINT read (0 = progre
       "spec_1",
       internalAtRun,
     );
-    expect(got).toBe(0);
+    expect(okConsecutive(got)).toBe(0);
+  });
+});
+
+describe("audit C2 #1 — readOrphanConsecutive surfaces read_failed instead of silently returning 0", () => {
+  it("a DB read failure returns `read_failed` — NOT a silent `consecutive: 0`", async () => {
+    // The audit invariant: a persistent DB read failure must NOT silently disable the
+    // persistent-failure escalation. Before the fix, this test would have observed a bare
+    // `0` and been INDISTINGUISHABLE from a legitimate no-history read.
+    const dbError = new Error("connection reset while reading dag.spec.redriven history");
+    const got = await readOrphanConsecutive(throwingClient(dbError), "spec_stuck", internalAtRun);
+    expect(got.kind).toBe("read_failed");
+    if (got.kind !== "read_failed") throw new Error("expected read_failed");
+    // The caught error is threaded through so the caller can log observably.
+    expect(got.error).toBe(dbError);
+  });
+
+  it("a legitimate no-history is STRUCTURALLY DISTINCT from a read failure", async () => {
+    // Two clients: one returns an EMPTY history (a fresh spec, legitimate 0), the other
+    // THROWS. The results must NOT be structurally equal — the caller must be able to
+    // distinguish them and apply different policies (proceed with disposition vs. defer).
+    const legitimate = await readOrphanConsecutive(fakeClient([]), "spec_1", internalAtRun);
+    const broken = await readOrphanConsecutive(throwingClient(new Error("db down")), "spec_1", internalAtRun);
+    expect(legitimate).toMatchObject({ kind: "ok", consecutive: 0 });
+    expect(broken.kind).toBe("read_failed");
+    expect((broken as { kind: string }).kind).not.toBe(legitimate.kind);
   });
 });

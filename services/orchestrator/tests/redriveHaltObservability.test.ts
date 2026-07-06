@@ -85,14 +85,22 @@ class RecordingSeams implements DispositionSeams {
 }
 
 /** The minimal disposition context the applier reads (runId/specId/projectId/orgId).
- * `redriveHistoryReader` returns 0 (progress / first of its kind) so the disposition is a
- * RE-DRIVE, never a fixed-point escalation. */
+ * `redriveHistoryReader` returns `ok` with priorSameFixedPoint 0 (progress / first of its
+ * kind) so the disposition is a RE-DRIVE, never a fixed-point escalation. Post-audit-C2-#3
+ * the reader returns a discriminated union — the `ok` branch matches the shape here. */
 function ctx() {
   return {
     appendEvent: async () => {
       /* no-op for the unit test — the applier does not read its return */
     },
-    input: { redriveHistoryReader: async () => 0 },
+    input: {
+      redriveHistoryReader: async () =>
+        ({
+          kind: "ok" as const,
+          priorSameFixedPoint: 0,
+          wandering: { wandering: false as const },
+        }) as const,
+    },
     context: { runId: "run_1", specId: "spec_1", projectId: "project_1", orgId: "org_1" },
   } as const;
 }

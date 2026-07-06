@@ -295,6 +295,11 @@ describeDb("updateSpecWithEvent atomic spec-pair (task #48) — real PG, enforce
     // (the seam-as-reader-input contract — Plan §7 step 12).
     const reader = buildRedriveHistoryReader(ownerPool());
     const facts = await reader({ orgId: ORG, specId: SPEC, code: "internal", stage: "run" });
+    // Post-audit-C2-#3 the reader returns a discriminated union — narrow to `ok` for the
+    // durability assertion (a broken read would surface `read_failed` and the test would
+    // fail loudly instead of silently under-counting).
+    expect(facts.kind).toBe("ok");
+    if (facts.kind !== "ok") throw new Error("expected ok read result");
     const priorSameFixedPoint = facts.priorSameFixedPoint;
     expect(typeof priorSameFixedPoint).toBe("number");
     // The harness's pool is the OWNER pool (RLS does not apply to the table

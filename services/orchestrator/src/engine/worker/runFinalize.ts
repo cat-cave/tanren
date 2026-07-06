@@ -18,7 +18,15 @@ import type { ClassifiedRunFailure } from "./runFailureClassifier.js";
 import { createLogger } from "../observability/logger.js";
 import { isWorkflowFinalized, rawCauseOf } from "../workflow/workflowErrorDisposition.js";
 import { decideRunDisposition, redriveBackoffSeconds } from "../workflow/runFinalizeAuthority.js";
-import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
+import {
+  type OrphanConsecutiveReadResult,
+  readOrphanConsecutive,
+  resolveOrphanConsecutive,
+} from "./orphanConsecutiveReader.js";
+
+// Re-export so tests + existing callers keep their imports pointed at `runFinalize`.
+export { readOrphanConsecutive };
+export type { OrphanConsecutiveReadResult };
 // Re-exported so runExecutor (which already imports finalizeRunRecoverable here)
 // gets the logger factory + the WorkflowFinalizedError unwrap WITHOUT separate imports
 // (its dependency cap is at 12). `rawCauseOf` lets the worker classify the raw cause.
@@ -305,55 +313,51 @@ async function parkStrandedSpecRemote(
   failure: ClassifiedRunFailure,
 ): Promise<void> {
   // Read spec occupancy + the SUCCESSOR probe + the consecutive-same-failure count in ONE
-  // org-scoped read. FAIL-CLOSED on a read failure toward re-driving the occupying spec (a
-  // genuine orphan must never vanish silently); treat an unreadable successor as ABSENT.
-  const slot = await runWithOrgScope(pool, orgId, async (client) => {
+  // org-scoped read. Both the outer transaction failure AND the inner readOrphanConsecutive
+  // failure are surfaced via a `read_failed` discriminant on `consecutive` — NEVER silently
+  // zeroed (audit C2 #1, #2). The caller then LOGS LOUDLY + forces a RE-DRIVE (never a
+  // genuine-halt on unknown facts). An unreadable successor is treated as ABSENT so the
+  // safety net still fires; a fresh successor re-drive is separately guarded above.
+  type SlotRead = { occupying: boolean; hasSuccessor: boolean; consecutive: OrphanConsecutiveReadResult };
+  const slot: SlotRead = await runWithOrgScope(pool, orgId, async (client): Promise<SlotRead> => {
     const specStatus = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [specId]);
     const occupying = specStatus.rows[0]?.status === "in_flight" || specStatus.rows[0]?.status === "review";
     const successor = await client.query(SUCCESSOR_RUN_SQL, [specId, runId]);
     const consecutive = await readOrphanConsecutive(client, specId, failure);
     return { occupying, hasSuccessor: (successor.rowCount ?? 0) > 0, consecutive };
-  }).catch((error: unknown) => {
+  }).catch((error: unknown): SlotRead => {
+    // Audit C2 #2: the outer transaction blip previously silently returned
+    // `consecutive: 0` — indistinguishable from a legitimate no-history. Now the
+    // whole read is `read_failed`, so the caller defers escalation this tick.
     logFinalizeSwallow("occupancy/successor read (remote, fail-closed → re-drive)", { runId, specId }, error);
-    return { occupying: true, hasSuccessor: false, consecutive: 0 };
+    return { occupying: true, hasSuccessor: false, consecutive: { kind: "read_failed", error } };
   });
   if (!slot.occupying) return;
   if (slot.hasSuccessor) {
     logStrandSkippedForSuccessor(runId, specId);
     return;
   }
+  // Audit C2 #1/#2 — read_failed sentinel is normalized via `resolveOrphanConsecutive` +
+  // forces RE-DRIVE (never genuine-halt on unknown facts) with a LOUD `log.warn`.
+  const consecutive = resolveOrphanConsecutive(slot.consecutive, { runId, specId, orgId });
+  const redrive = slot.consecutive.kind === "read_failed" || decideOrphan(failure, consecutive) === "re_drive";
   // Task #48 Site E / F: the spec flip + the matching event (`dag.spec.redriven`
   // or `dag.spec.needs_attention`) are now ATOMIC via the writer's
-  // `updateSpecWithEvent` seam (one org-scoped transaction server-side). The
-  // prior split (`setSpecStatus` + `append`) issued two separate writes; the
-  // partial-event landing was a `.catch(logFinalizeSwallow)` best-effort.
-  // Atomicity replaces best-effort.
-  if (decideOrphan(failure, slot.consecutive) === "re_drive") {
-    // RE-DRIVE: return the spec to `open` (the walker re-enqueues) — never a terminal strand.
-    await writer.updateSpecWithEvent({
-      spec: { specId, orgId, status: "open", notFromStatuses: ["merged", "needs_attention"] },
-      event: {
-        runId,
-        specId,
-        projectId,
-        orgId,
-        eventType: "dag.spec.redriven",
-        payload: orphanRedrivenPayload(runId, specId, failure, slot.consecutive),
-      },
-    });
-    return;
-  }
-  // GENUINE-HALT (the cap K reached — a persistently-crashing spec): park `needs_attention`.
+  // `updateSpecWithEvent` seam (one org-scoped transaction server-side).
+  const event = redrive
+    ? { eventType: "dag.spec.redriven" as const, payload: orphanRedrivenPayload(runId, specId, failure, consecutive) }
+    : {
+        eventType: "dag.spec.needs_attention" as const,
+        payload: orphanPersistentPayload(runId, specId, failure, consecutive),
+      };
   await writer.updateSpecWithEvent({
-    spec: { specId, orgId, status: "needs_attention", notFromStatuses: ["merged", "needs_attention"] },
-    event: {
-      runId,
+    spec: {
       specId,
-      projectId,
       orgId,
-      eventType: "dag.spec.needs_attention",
-      payload: orphanPersistentPayload(runId, specId, failure, slot.consecutive),
+      status: redrive ? "open" : "needs_attention",
+      notFromStatuses: ["merged", "needs_attention"],
     },
+    event: { runId, specId, projectId, orgId, ...event },
   });
 }
 
@@ -378,8 +382,12 @@ export async function parkStrandedSpecInProcess(
     logStrandSkippedForSuccessor(runId, specId);
     return;
   }
-  const consecutive = await readOrphanConsecutive(client, specId, failure);
-  const redrive = decideOrphan(failure, consecutive) === "re_drive";
+  const consecutiveResult = await readOrphanConsecutive(client, specId, failure);
+  // Audit C2 #1 — read_failed sentinel is normalized via `resolveOrphanConsecutive`. A read
+  // failure forces a RE-DRIVE this tick (never a genuine-halt on unknown facts) with a
+  // LOUD `log.warn`; a genuinely-stuck spec still escalates once the DB recovers.
+  const consecutive = resolveOrphanConsecutive(consecutiveResult, { runId, specId, orgId });
+  const redrive = consecutiveResult.kind === "read_failed" || decideOrphan(failure, consecutive) === "re_drive";
   // Task #48 Site G: the guarded spec flip + the matching event are now ATOMIC
   // via `applyUpdateSpecWithEvent` (the in-process mirror of the writer's
   // `updateSpecWithEvent`). The prior split (`UPDATE … RETURNING` + a
@@ -407,74 +415,6 @@ export async function parkStrandedSpecInProcess(
     spec: { specId, orgId: "in-process", status: targetStatus, notFromStatuses },
     event: { runId, specId, projectId, orgId, ...event },
   });
-}
-
-/**
- * Read the fixed-point disposition for the orphan/crash path (this failure included), over an
- * already-org-scoped client, and route it through the SHARED `decideConvergence` judge — NOT a
- * raw `=== "fixed_point"` boolean (the disguised-K=2 the audit flagged). Returns the authority's
- * `priorSameFixedPoint`: 1 ⇒ a PROVEN dead-end (the convergence judge escalated) ⇒ genuine-halt;
- * 0 ⇒ progress (a different crash, the first of its kind, OR a single transient recurrence not
- * yet a cycle) ⇒ re-drive, UNBOUNDED.
- *
- * The crash/orphan signature is ENRICHED beyond the bare crash code with the failure STAGE
- * (`code@stage`), so `internal@bootstrap` and `internal@run` are DIFFERENT failures (progress),
- * and a 2nd identical transient crash with no observable work is NOT an instant fixed point — the
- * cycle-aware detector requires a recurrence beyond the immediate neighbor before it bites.
- *
- * There is NO agent at the orphan path (a crashed run produced nothing to assess), so the
- * principled `fixedPointRuleJudgment` is the stand-in: it escalates ONLY at a proven cycle, with
- * a specific human-actionable diagnosis. FAIL-CLOSED toward re-driving: an unreadable history
- * returns 0 (treat as progress — a transient DB hiccup must never strand a genuine orphan).
- */
-export async function readOrphanConsecutive(
-  client: pg.PoolClient,
-  specId: string,
-  failure: ClassifiedRunFailure,
-): Promise<number> {
-  try {
-    const result = await client.query<{
-      payload: { failureCode?: string; stage?: string; workSignature?: string; source?: string };
-    }>(`SELECT payload FROM events WHERE spec_id = $1 AND event_type = 'dag.spec.redriven' ORDER BY ts ASC, id ASC`, [
-      specId,
-    ]);
-    // Assemble the oldest→newest history (each prior re-drive's ENRICHED signature) + the current
-    // crash, then ask the shared convergence judge whether this is a proven cycle or progress.
-    //
-    // Audit finding D1 (mirrors `plannerRunRedrive.ts`'s prober-resume filter — finding #13):
-    // `dag.spec.redriven` rows whose `payload.source === "prober_resume"` are the window-pause
-    // prober's atomic spec flip from `in_flight` → `open`; they carry a synthetic
-    // `failureCode: "usage_limit"` only because the spec pair-schema requires a code for an
-    // `open` flip. Folding them into THIS convergence history defeats cycle detection the
-    // same way the planner reader was vulnerable to (`internal@run, usage_limit@*, internal@run`
-    // reads as "a new state appeared between two structural re-drives"). Filter them out at
-    // assembly time so a paused-resumed spec whose runner crashes is still escalated when the
-    // structural crashes repeat.
-    const history: AttemptSignature[] = result.rows
-      .filter((row) => row.payload.source !== "prober_resume")
-      .map((row) => ({
-        failureSignature: orphanFailureSignature(row.payload.failureCode ?? "", row.payload.stage),
-        ...(row.payload.workSignature !== undefined && { workSignature: row.payload.workSignature }),
-      }));
-    history.push({ failureSignature: orphanFailureSignature(failure.code, failure.stage) });
-    const decision = await decideConvergence(history, (h) =>
-      fixedPointRuleJudgment(
-        h,
-        () =>
-          `the run reached a FIXED POINT (${failure.code} @ ${failure.stage}) — it crashed the identical way ` +
-          `with no new information across re-drives; the spec is genuinely stuck (a bug or mis-spec, not a flake)`,
-      ),
-    );
-    return decision.decision === "escalate" ? 1 : 0;
-  } catch {
-    return 0;
-  }
-}
-
-/** The ENRICHED orphan/crash failure signature: the crash code QUALIFIED by the stage it failed
- * in, so the SAME code in a DIFFERENT stage reads as a different failure (progress). */
-function orphanFailureSignature(code: string, stage: string | undefined): string {
-  return stage === undefined || stage === "" ? code : `${code}@${stage}`;
 }
 
 /**
