@@ -259,7 +259,7 @@ interface DagEventEmitter {
     spentUsd: number;
     period: BudgetPeriod;
     readyHeldBack: number;
-    reason?: "unpriced_spend" | "unparseable_config";
+    reason?: "unpriced_spend" | "unparseable_config" | "unresolvable_project_org";
   }): Promise<void>;
   /**
    * A budget FRACTION milestone (50% / 80% of the ceiling crossed before the terminal

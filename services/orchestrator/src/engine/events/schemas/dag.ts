@@ -131,13 +131,18 @@ export const DagBudgetPausedPayload = z
     period: z.enum(["monthly", "quarterly", "annual", "total"]),
     // How many ready specs the walker held back because the ceiling was reached.
     readyHeldBack: z.number().int().nonnegative(),
-    // BUDGET-SAFETY (C1b / M5): present when the pause is a FAIL-CLOSED safety
-    // pause rather than a genuine ceiling-reached pause. `unpriced_spend` — the
-    // window has unattributed NULL-cost rows (an unrecognized credential ref that
-    // should have priced) so the true spend is unknown and assumed over-ceiling;
-    // `unparseable_config` — a present-but-undecodable budget config. Absent on
-    // the ordinary ceiling-reached pause.
-    reason: z.enum(["unpriced_spend", "unparseable_config"]).optional(),
+    // BUDGET-SAFETY (C1b / M5 / Codex critic #11): present when the pause is a
+    // FAIL-CLOSED safety pause rather than a genuine ceiling-reached pause.
+    // `unpriced_spend` — the window has unattributed NULL-cost rows (an
+    // unrecognized credential ref that should have priced) so the true spend is
+    // unknown and assumed over-ceiling; `unparseable_config` — a present-but-
+    // undecodable budget config; `unresolvable_project_org` — the project row is
+    // missing or its `org_id` is NULL (a corrupt/deleted row, or an in-flight
+    // ownership migration): "budget is the only run gate" means we cannot degrade
+    // to unlimited on an unreadable owner, so the walker pauses on budget with
+    // this reason so operators can distinguish it from an intentional
+    // ceiling-reached pause. Absent on the ordinary ceiling-reached pause.
+    reason: z.enum(["unpriced_spend", "unparseable_config", "unresolvable_project_org"]).optional(),
   })
   .strict();
 export type DagBudgetPausedPayload = z.infer<typeof DagBudgetPausedPayload>;

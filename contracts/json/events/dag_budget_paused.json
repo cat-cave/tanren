@@ -23,7 +23,8 @@
     "reason": {
       "enum": [
         "unpriced_spend",
-        "unparseable_config"
+        "unparseable_config",
+        "unresolvable_project_org"
       ],
       "type": "string"
     },

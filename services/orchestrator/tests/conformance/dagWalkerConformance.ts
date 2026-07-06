@@ -42,8 +42,10 @@ export interface RecordedDagEvent {
   ceilingUsd?: number;
   spentUsd?: number;
   period?: "monthly" | "total";
-  // BUDGET-SAFETY (C1b/M5): the fail-closed reason when the pause is a safety pause.
-  reason?: "unpriced_spend" | "unparseable_config";
+  // BUDGET-SAFETY (C1b/M5/Codex #11): the fail-closed reason when the pause is a
+  // safety pause (`unresolvable_project_org` covers a missing project row / null
+  // `org_id` — the walker must NOT silently degrade to unlimited).
+  reason?: "unpriced_spend" | "unparseable_config" | "unresolvable_project_org";
 }
 
 /** A recorded enqueue (the createQueuedRunFromSpec effect). */
@@ -340,6 +342,29 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       expect(result.enqueuedSpecIds).toEqual([]);
       const paused = h.events.find((e) => e.type === "dag.budget.paused");
       expect(paused?.reason).toBe("unparseable_config");
+    });
+
+    it("BUDGET-SAFETY Codex #11: FAILS CLOSED on an unresolvable project org (never silent-unlimited)", async () => {
+      const h = suite.make(3);
+      // A missing project row / NULL org_id must NOT silently degrade to unlimited
+      // — an ordinary budget-enforcement read failure would then let spend run past
+      // the operator's intended ceiling. The gate signals fail-closed; the walker
+      // must pause on budget with the specific reason so operators can distinguish
+      // it from an intentional ceiling-reached pause.
+      h.setBudget({
+        ceilingUsd: undefined,
+        period: "monthly",
+        spentUsd: 0,
+        failClosed: "unresolvable_project_org",
+      });
+      h.setSpec(node("spec_root", "pending", [], 0));
+      const result = await h.walker.walk(h.projectId);
+
+      expect(result.status).toBe("budget_paused");
+      expect(result.enqueuedSpecIds).toEqual([]);
+      expect(h.enqueues).toEqual([]);
+      const paused = h.events.find((e) => e.type === "dag.budget.paused");
+      expect(paused?.reason).toBe("unresolvable_project_org");
     });
 
     it("is unlimited when no budget is configured (byte-identical to today)", async () => {
