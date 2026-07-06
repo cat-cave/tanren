@@ -36,6 +36,8 @@
 // it. It returns the live deployment id + the resolved deployment URL.
 
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
+import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
+import { retryUntilConverged, type AttemptSignature } from "../workflow/retryUntilConverged.js";
 import {
   DeployProvisioner,
   type DeployApp,
@@ -65,10 +67,6 @@ interface VercelProjectsListResponse {
    */
   pagination?: { next?: number | string | null };
 }
-
-// A hard cap on the project-list pages followed, so a pathological pagination loop
-// (a provider that never returns a null `next`) fails LOUD rather than spinning forever.
-const VERCEL_MAX_PROJECT_PAGES = 100;
 
 /** Read the Vercel team id (if any) from the org grant metadata. */
 function teamId(grant: OrgGrant): string | undefined {
@@ -130,36 +128,83 @@ class VercelDeployApi implements DeployProviderApi {
     // PAGINATED: follow `pagination.next` (passed back as the `from` query token) across
     // every page so a team with more projects than one page returns is fully listed —
     // an unpaginated single page would HIDE the target app and yield a spurious "unknown
-    // app" deploy failure. Bounded by VERCEL_MAX_PROJECT_PAGES (fail LOUD, never spin).
+    // app" deploy failure.
+    //
+    // PROGRESS-BASED, NOT COUNTED (audit C3 F1 + feedback_no_timeouts_progress_based): the
+    // pager runs UNBOUNDED while the cursor ADVANCES. A cursor that changes = progress; a
+    // cursor that repeats byte-identically across attempts = a genuinely stuck provider (a
+    // pathological pagination echo). The fixed-point rule fires on the FIRST repeat via
+    // `retryUntilConverged` + `reproducedIdenticalWork` (both `failureSignature` and
+    // `workSignature` key on the current cursor, so an immediate repeat is proof of no new
+    // information). A legitimately-large team (>100 pages) is fully listed; a broken
+    // pagination surface fails LOUD with the stuck cursor in the diagnostic.
     const apps: DeployApp[] = [];
     let from: string | undefined;
-    for (let page = 0; page < VERCEL_MAX_PROJECT_PAGES; page++) {
-      const path = from === undefined ? "/v9/projects" : `/v9/projects?from=${encodeURIComponent(from)}`;
-      const response = await this.transport.request({
-        method: "GET",
-        url: scoped(grant, path),
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) {
-        throw new Error(`vercel list projects failed: ${response.status} ${response.text}`);
-      }
-      const body = (response.json ?? {}) as VercelProjectsListResponse;
-      for (const project of body.projects ?? []) {
-        apps.push({
-          appId: project.id,
-          name: project.name,
-          previewUrlPattern: previewUrlPattern(grant, project.name),
+    // The next cursor observed on the previous attempt (the input `from` of the next call).
+    // Its identity is the ONLY convergence signal — advancing = progress, repeated = stuck.
+    let previousCursor: string | undefined;
+
+    const outcome = await retryUntilConverged<DeployApp[]>({
+      attempt: async (_history): Promise<{ result: DeployApp[]; signature: AttemptSignature; done: boolean }> => {
+        const path = from === undefined ? "/v9/projects" : `/v9/projects?from=${encodeURIComponent(from)}`;
+        const response = await this.transport.request({
+          method: "GET",
+          url: scoped(grant, path),
+          headers: { authorization: `Bearer ${token}` },
         });
-      }
-      const next = body.pagination?.next;
-      if (next === undefined || next === null || next === "") {
-        return apps;
-      }
-      from = String(next);
+        if (!response.ok) {
+          // A non-2xx from Vercel is a LOUD hard failure (never "failed after N pages") —
+          // thrown out of the loop entirely, before any convergence assessment.
+          throw new Error(`vercel list projects failed: ${response.status} ${response.text}`);
+        }
+        const body = (response.json ?? {}) as VercelProjectsListResponse;
+        for (const project of body.projects ?? []) {
+          apps.push({
+            appId: project.id,
+            name: project.name,
+            previewUrlPattern: previewUrlPattern(grant, project.name),
+          });
+        }
+        const next = body.pagination?.next;
+        if (next === undefined || next === null || next === "") {
+          // Genuine end-of-list: the provider signalled exhaustion. Return DONE.
+          return {
+            result: apps,
+            signature: { failureSignature: "vercel-projects-page", workSignature: "__terminal__" },
+            done: true,
+          };
+        }
+        const nextCursor = String(next);
+        // Key BOTH failure and work signatures on the returned cursor: a byte-identical
+        // repeat across successive attempts trips `reproducedIdenticalWork` (an immediate-
+        // neighbor fixed point — the fastest read of a genuinely stuck pager). A cursor
+        // that changes = progress (the natural pagination advance).
+        const signature: AttemptSignature = {
+          failureSignature: "vercel-projects-page",
+          workSignature: nextCursor,
+        };
+        previousCursor = nextCursor;
+        from = nextCursor;
+        return { result: apps, signature, done: false };
+      },
+      // No agent to consult at a pager fixed point: the rigorous rule stands in — escalate
+      // ONLY at a PROVEN identical-cursor recurrence, with a human-actionable diagnosis
+      // naming the stuck cursor.
+      judge: (history) =>
+        fixedPointRuleJudgment(history, () => {
+          const stuckCursor = history.at(-1)?.workSignature ?? previousCursor ?? "unknown";
+          return `vercel list projects: pagination cursor '${stuckCursor}' did not advance (the provider echoed the same 'next' token — pagination is stuck)`;
+        }),
+      // No backoff: pages are read back-to-back. A paced spacing here would only slow the
+      // list, never bound it.
+    });
+
+    if (outcome.kind === "escalate") {
+      // A PROVEN stuck pager — the cursor never advanced. LOUD, with the stuck cursor as
+      // evidence (the same shape the old cap threw, only sharper: it names the WHY).
+      throw new Error(outcome.reason);
     }
-    throw new Error(
-      `vercel list projects: exceeded ${String(VERCEL_MAX_PROJECT_PAGES)} pages (pagination did not terminate)`,
-    );
+    return outcome.result;
   }
 
   async createApp(grant: OrgGrant, token: string, name: string, _projectCtx: ProjectContext): Promise<DeployApp> {
