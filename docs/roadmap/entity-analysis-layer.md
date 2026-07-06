@@ -7,7 +7,9 @@
 > checker risk-oracle fires from a host-side `sem` producer
 > (`engine/oracle/semEntityProducer.ts`, wired through `engine/oracle/index.ts`);
 > §3.2 the entity-merge deterministic first-pass runs in the base-shift conflict
-> path (`workflow/reviewMerge/conflictResolver/semEntityMerge.ts`,
+> path (the pure splice + disjointness decision in
+> `workflow/reviewMerge/conflictResolver/entityMergeFirstPass.ts`; the `sem` + jj
+> runner-backed seams + first-pass hook in `.../semEntityMerge.ts`; wired at
 > `dag/baseShiftLiveResolve.ts`); §3.3 entity-anchored issue Claims are the
 > `entity_claims` table (`db/src/schemaClaims.ts`) plus
 > `engine/repositories/entityClaims.ts` and the self-validating oracle. The
