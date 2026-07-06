@@ -148,6 +148,13 @@
       "when": 1783363475541,
       "tag": "0022_bright_solo",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1783367649969,
+      "tag": "0023_dag_walker_stable_order",
+      "breakpoints": true
     }
   ]
 }
