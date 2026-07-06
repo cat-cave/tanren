@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SidecarHttpAllocator } from "../src/engine/allocators/sidecarHttpAllocator.js";
+import {
+  SidecarAllocateTransportError,
+  SidecarHttpAllocator,
+  SidecarReleaseTransportError,
+} from "../src/engine/allocators/sidecarHttpAllocator.js";
 import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
 
 class FakeRunnerStore implements RunnerStore {
@@ -13,6 +17,11 @@ class FakeRunnerStore implements RunnerStore {
     this.releases.push(runnerId);
   }
 }
+
+/** Build a 2xx JSON `Response` from a body object — hoisted to module scope so the
+ * lint's `consistent-function-scoping` doesn't fire when several `it` blocks share it. */
+const okResponse = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 /** A fetch stub returning a fixed happy-path /allocate response. */
 const makeAllocateFetch = (): typeof fetch =>
@@ -320,5 +329,135 @@ describe("SidecarHttpAllocator", () => {
         fetchImpl,
       }).release("runner_x"),
     ).rejects.toThrow(/release failed/u);
+  });
+
+  // Audit C2 §9: parse-on-receive at the HTTP boundary. A malformed 2xx body
+  // from the sidecar previously trusted the unchecked `as` cast and silently
+  // propagated undefined fields into a `RunnerAllocation` (SSH-to-`undefined`)
+  // or dropped `released` on /release (mirror row never cleared → runner leak).
+  // These tests pin the FAIL-LOUD behavior at the boundary.
+  describe("audit C2 §9 — parse-on-receive at the HTTP boundary", () => {
+    it("throws SidecarAllocateTransportError on a malformed /allocate 2xx body (missing sshHost)", async () => {
+      const fetchImpl = (async (): Promise<Response> =>
+        okResponse({
+          runnerId: "runner_x",
+          // sshHost missing on purpose — the old cast would leave `body.sshHost`
+          // undefined and propagate that through to the returned target.
+          sshPort: 22,
+          hostKeyFingerprint: "SHA256:y",
+          imageSha: "sha256:z",
+        })) as typeof fetch;
+
+      const runners = new FakeRunnerStore();
+      const allocator = new SidecarHttpAllocator({
+        baseUrl: "http://a:1",
+        authToken: "t",
+        runners,
+        fetchImpl,
+      });
+
+      let caught: unknown;
+      try {
+        await allocator.allocate({
+          runId: "r",
+          projectId: "p",
+          runnerImage: "img",
+          identitySecretRef: "ref",
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SidecarAllocateTransportError);
+      expect((caught as SidecarAllocateTransportError).issues.length).toBeGreaterThan(0);
+      // Redacted preview: keys are visible, values are not.
+      expect((caught as SidecarAllocateTransportError).payloadPreview).toContain("runnerId");
+      expect((caught as SidecarAllocateTransportError).payloadPreview).not.toContain("runner_x");
+      // The claim never wrote the DB mirror because allocation failed loud.
+      expect(runners.claims).toHaveLength(0);
+    });
+
+    it("throws SidecarAllocateTransportError when sshPort is not a number", async () => {
+      const fetchImpl = (async (): Promise<Response> =>
+        okResponse({
+          runnerId: "runner_x",
+          sshHost: "h",
+          sshPort: "not-a-port",
+          hostKeyFingerprint: "SHA256:y",
+          imageSha: "sha256:z",
+        })) as typeof fetch;
+      const allocator = new SidecarHttpAllocator({
+        baseUrl: "http://a:1",
+        authToken: "t",
+        runners: new FakeRunnerStore(),
+        fetchImpl,
+      });
+      await expect(
+        allocator.allocate({
+          runId: "r",
+          projectId: "p",
+          runnerImage: "img",
+          identitySecretRef: "ref",
+        }),
+      ).rejects.toBeInstanceOf(SidecarAllocateTransportError);
+    });
+
+    it("throws SidecarReleaseTransportError on a malformed /release 2xx body (missing released)", async () => {
+      const fetchImpl = (async (): Promise<Response> => okResponse({ notReleased: true })) as typeof fetch;
+      const runners = new FakeRunnerStore();
+      const allocator = new SidecarHttpAllocator({
+        baseUrl: "http://a:1",
+        authToken: "t",
+        runners,
+        fetchImpl,
+      });
+
+      let caught: unknown;
+      try {
+        await allocator.release("runner_leaked");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SidecarReleaseTransportError);
+      expect((caught as SidecarReleaseTransportError).issues.length).toBeGreaterThan(0);
+      expect((caught as SidecarReleaseTransportError).payloadPreview).toContain("notReleased");
+      // The old bug: `body.released` was undefined → `if (body.released)` was
+      // false → the mirror was never cleared → runner leaked as "allocated".
+      // The fix: the boundary throws BEFORE the runners store is touched. In
+      // both the old-bug and the new-throw case the store write is skipped;
+      // the difference is that the throw is now VISIBLE.
+      expect(runners.releases).toEqual([]);
+    });
+
+    it("throws SidecarReleaseTransportError when released is a non-boolean", async () => {
+      const fetchImpl = (async (): Promise<Response> => okResponse({ released: "yes" })) as typeof fetch;
+      await expect(
+        new SidecarHttpAllocator({
+          baseUrl: "http://a:1",
+          authToken: "t",
+          runners: new FakeRunnerStore(),
+          fetchImpl,
+        }).release("runner_x"),
+      ).rejects.toBeInstanceOf(SidecarReleaseTransportError);
+    });
+
+    it("parses a well-formed /allocate reply correctly (regression pin)", async () => {
+      const fetchImpl = (async (): Promise<Response> =>
+        okResponse({
+          runnerId: "runner_ok",
+          sshHost: "ssh-host",
+          sshPort: 22,
+          hostKeyFingerprint: "SHA256:ok",
+          imageSha: "sha256:ok",
+        })) as typeof fetch;
+      const allocation = await new SidecarHttpAllocator({
+        baseUrl: "http://a:1",
+        authToken: "t",
+        runners: new FakeRunnerStore(),
+        fetchImpl,
+      }).allocate({ runId: "r", projectId: "p", runnerImage: "img", identitySecretRef: "ref" });
+      expect(allocation.runnerId).toBe("runner_ok");
+      expect(allocation.target.host).toBe("ssh-host");
+      expect(allocation.target.port).toBe(22);
+    });
   });
 });
