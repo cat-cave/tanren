@@ -9,6 +9,7 @@
  * queues / "no data" states rather than placeholder rows.
  */
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { KpiItem } from "./shared.js";
 import type { ForgeAnswer, InsightSummary, MilestoneSummary, ProjectFeedItem, RunListItem } from "../../api/types.js";
 
@@ -152,7 +153,9 @@ function dagStatusForRun(run: RunListItem): DagNode["status"] {
   if (run.needsReview) return "review";
   if (run.status === "running") return "live";
   if (run.status === "queued") return "queued";
-  if (run.outcome === "halted" || run.outcome === "escape_hatch_hit" || run.outcome === "retry_budget_exhausted") {
+  // HALTED-outcome policy set imported from @tanren/db — the prior inline literal
+  // check was missing `convergence_stalled` + `window_exhausted`.
+  if (run.outcome !== null && RECOVERABLE_OUTCOMES.has(run.outcome)) {
     return "blocked";
   }
   if (run.status === "completed") return "done";

@@ -11,20 +11,25 @@
  * node colour matches its run state across both modes.
  */
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag } from "./dagTypes.js";
 import type { OrchestratorClient } from "./orchestrator.js";
 import type { RunListItem } from "./types.js";
 
 export type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag };
 
-const HALTED = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
+// HALTED-outcome policy set is imported from @tanren/db so the dashboard and the
+// orchestrator's `assertRecoverable` gate read the SAME source-of-truth. The prior
+// private `HALTED` copy here was missing `convergence_stalled` + `window_exhausted`,
+// so runs with those outcomes did not colour the DAG node blocked. See
+// `db/src/recoveryOutcomes.ts` for the drift rationale.
 
 /** Per-spec run state → node status, mirroring `dagStatusForRun`. */
 function statusForSpec(specStatus: string, run: RunListItem | undefined): DagStatus {
   if (run !== undefined) {
     if (run.needsReview) return "review";
     if (run.status === "running") return "live";
-    if (run.outcome !== null && HALTED.has(run.outcome)) return "blocked";
+    if (run.outcome !== null && RECOVERABLE_OUTCOMES.has(run.outcome)) return "blocked";
     if (run.status === "completed") return "done";
     if (run.status === "queued") return "queued";
   }

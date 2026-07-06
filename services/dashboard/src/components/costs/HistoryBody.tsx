@@ -5,6 +5,7 @@
  * title, outcome badge, and elapsed time. Presentation only.
  */
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { RunListItem } from "../../api/types.js";
 import { duration, timestamp, usd } from "./format.js";
 import { COSTS_SCREEN_CSS } from "./styles.js";
@@ -34,7 +35,10 @@ function outcomeBadge(run: RunListItem): { cls: string; label: string } {
   if (run.needsReview && run.prUrl !== null) return { cls: "review", label: "needs review" };
   const o = run.outcome;
   if (o === null) return { cls: "", label: run.status };
-  if (o === "halted" || o === "escape_hatch_hit" || o === "retry_budget_exhausted") {
+  // HALTED-outcome policy set imported from @tanren/db — the prior inline literal
+  // check was missing `convergence_stalled` + `window_exhausted`, so those halted
+  // runs rendered with the neutral badge instead of the halted-red one.
+  if (RECOVERABLE_OUTCOMES.has(o)) {
     return { cls: "halted", label: o.replaceAll("_", " ") };
   }
   // `ok` is the canonical merge-ready success outcome (the synthetic
