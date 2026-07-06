@@ -20,6 +20,7 @@
 import { RUN_ACTIVITY_CHANNEL, type PgNotifyListener } from "@tanren/db";
 import { PostMergeWatcher, type PostMergeWatcherDeps } from "./watcher.js";
 import { createLogger } from "../observability/logger.js";
+import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
 
 const log = createLogger("post-merge");
 
@@ -63,7 +64,7 @@ export class PostMergeSubscriber {
   private readonly watcher: PostMergeWatcher;
   private readonly deployWatcher: RunMergeWatcher | undefined;
   private readonly demoWatcher: RunMergeWatcher | undefined;
-  private unsubscribe: (() => void) | undefined;
+  private reconnectHandle: SubscribeWithReconnectHandle | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly rePending = new Set<string>();
@@ -76,31 +77,40 @@ export class PostMergeSubscriber {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
-    void this.subscribeInBackground();
+    this.subscribeToNotifyBus();
   }
 
-  private async subscribeInBackground(): Promise<void> {
-    try {
-      const unsubscribe = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
+  /**
+   * Subscribe to the run-activity bus via the shared `subscribeWithReconnect`
+   * helper (audit C2 #4-#7): the helper drives an UNBOUNDED progress-spaced
+   * retry on both the initial subscribe AND on a live connection drop, so a
+   * boot-time PG blip no longer silently degrades the post-merge deploy watcher
+   * to permanent silence — merged runs otherwise stayed
+   * `triggered-but-unverified` for the whole process lifetime.
+   */
+  private subscribeToNotifyBus(): void {
+    const handle = subscribeWithReconnect({
+      listener: this.deps.notifyListener,
+      channel: RUN_ACTIVITY_CHANNEL,
+      logger: log,
+      handler: (payload) => {
         void this.onRunActivity(payload).catch((error: unknown) => {
           log.error("run-activity handler failed", { runId: payload }, error);
         });
-      });
-      if (this.stopped) {
-        unsubscribe();
-        return;
-      }
-      this.unsubscribe = unsubscribe;
-    } catch (error) {
-      log.error("failed to subscribe to the run-activity bus (will not auto-track)", {}, error);
+      },
+    });
+    if (this.stopped) {
+      handle.stop();
+      return;
     }
+    this.reconnectHandle = handle;
   }
 
   /** Stop listening. Idempotent; in-flight checks finish on their own. */
   stop(): void {
     this.stopped = true;
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    this.reconnectHandle?.stop();
+    this.reconnectHandle = undefined;
   }
 
   private async onRunActivity(runId: string): Promise<void> {
