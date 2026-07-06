@@ -153,10 +153,37 @@ export type NotifyHandler = (payload: string) => void;
 export class PgNotifyListener {
   private client: PoolClient | undefined;
   private readonly handlers = new Map<string, Set<NotifyHandler>>();
+  /**
+   * Connection-error observers (audit C2 #4-#7): fire whenever the held pg client
+   * emits `error` (a live connection dropped). The listener's internal `reconnect`
+   * covers the sub-second reconnect gap, BUT it can itself fail — in which case
+   * the listener is dead until a fresh `subscribe` is issued. The long-lived
+   * subscribers (`subscribeWithReconnect` at
+   * `services/orchestrator/src/engine/db/notifySubscriber.ts`) register here so
+   * a drop drives them to re-subscribe (idempotent w.r.t. the handler Set; on
+   * failure they re-enter their own unbounded progress-spaced retry loop).
+   * Never used to KILL a subscriber — this is purely a wake pulse.
+   */
+  private readonly connectionErrorHandlers = new Set<() => void>();
   private connecting: Promise<void> | undefined;
   private closed = false;
 
   constructor(private readonly pool: Pool) {}
+
+  /**
+   * Register a callback fired whenever the held pg client emits `error` (a live
+   * connection dropped). The listener itself attempts to reconnect + re-LISTEN
+   * on its own; this hook is for callers that also want to re-drive their
+   * subscribe (the audit C2 #4-#7 no-reconnect-on-boot-blip fix). Returns an
+   * unsubscribe function; a throwing callback is isolated (never poisons the
+   * pump). Safe to register before any subscribe.
+   */
+  onConnectionError(callback: () => void): () => void {
+    this.connectionErrorHandlers.add(callback);
+    return () => {
+      this.connectionErrorHandlers.delete(callback);
+    };
+  }
 
   /**
    * Register `handler` for `channel`, ensuring the listener is connected and
@@ -189,6 +216,7 @@ export class PgNotifyListener {
   close(): Promise<void> {
     this.closed = true;
     this.handlers.clear();
+    this.connectionErrorHandlers.clear();
     const client = this.client;
     this.client = undefined;
     if (client !== undefined) {
@@ -220,9 +248,20 @@ export class PgNotifyListener {
       }
     });
     client.on("error", () => {
-      // Connection dropped: discard it and re-establish + re-LISTEN. The error
-      // backstop (each consumer's long safety-net poll) covers the reconnect
-      // gap, so a dropped LISTEN degrades to poll cadence, never a wedged stream.
+      // Connection dropped: fan the wake pulse to any subscriber that opted into
+      // `onConnectionError` (audit C2 #4-#7 — the long-lived subscribers re-drive
+      // their subscribe on the pulse so a reconnect-failed listener does not stay
+      // dead), THEN discard the client and re-establish + re-LISTEN. Each observer
+      // is isolated so a throwing callback never poisons the pump or blocks the
+      // reconnect. The listener's internal reconnect is still the primary recovery
+      // path — the observers merely cover the case where reconnect itself fails.
+      for (const handler of this.connectionErrorHandlers) {
+        try {
+          handler();
+        } catch {
+          // isolated — never let one subscriber's wake handler block the reconnect
+        }
+      }
       void this.reconnect(client);
     });
     this.client = client;

@@ -33,6 +33,7 @@ import type pg from "pg";
 import { decodeEvent, type TypedEvent } from "../events/index.js";
 import type { NotificationDispatcher, EventContext } from "./dispatcher.js";
 import { createLogger } from "../observability/logger.js";
+import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
 
 const log = createLogger("notifications");
 
@@ -62,40 +63,49 @@ export interface NotificationSubscriberDeps {
  * coalescing — every appended event is dispatched exactly once.
  */
 export class NotificationSubscriber {
-  private unsubscribe: (() => void) | undefined;
+  private reconnectHandle: SubscribeWithReconnectHandle | undefined;
   private stopped = false;
 
   constructor(private readonly deps: NotificationSubscriberDeps) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
-    void this.subscribeInBackground();
+    this.subscribeToNotifyBus();
   }
 
-  private async subscribeInBackground(): Promise<void> {
-    try {
-      const unsubscribe = await this.deps.notifyListener.subscribe(NOTIFICATION_CHANNEL, (payload) => {
+  /**
+   * Subscribe to the notification bus via the shared `subscribeWithReconnect`
+   * helper (audit C2 #4-#7): the helper drives an UNBOUNDED progress-spaced
+   * retry on both the initial subscribe AND on a live connection drop, so a
+   * boot-time PG blip no longer silently collapses the "never silently drop a
+   * fail-severity event" invariant — the escalation path used to log-and-degrade
+   * forever after a single boot-time subscribe throw.
+   */
+  private subscribeToNotifyBus(): void {
+    const handle = subscribeWithReconnect({
+      listener: this.deps.notifyListener,
+      channel: NOTIFICATION_CHANNEL,
+      logger: log,
+      handler: (payload) => {
         // Fire-and-forget: a dispatch failure is logged, never thrown into the
         // notify pump (and the dispatcher itself never throws on a channel error).
         void this.onEventAppended(payload).catch((error: unknown) => {
           log.error("dispatch failed", { eventId: payload }, error);
         });
-      });
-      if (this.stopped) {
-        unsubscribe();
-        return;
-      }
-      this.unsubscribe = unsubscribe;
-    } catch (error) {
-      log.error("failed to subscribe to the notify bus (will not deliver)", {}, error);
+      },
+    });
+    if (this.stopped) {
+      handle.stop();
+      return;
     }
+    this.reconnectHandle = handle;
   }
 
   /** Stop listening. Idempotent; an in-flight dispatch finishes on its own. */
   stop(): void {
     this.stopped = true;
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    this.reconnectHandle?.stop();
+    this.reconnectHandle = undefined;
   }
 
   /** Handle one `tanren_notify` wake: read the event row by id and dispatch it. */

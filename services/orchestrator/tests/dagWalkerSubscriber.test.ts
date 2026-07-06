@@ -21,6 +21,7 @@ import { DagWalkerSubscriber } from "../src/engine/dag/subscriber.js";
 // and lets a test fire a payload to the registered handler.
 class FakeNotifyListener {
   private handlers = new Map<string, Set<(payload: string) => void>>();
+  private connErrObs = new Set<() => void>();
   unsubscribeCount = 0;
   // eslint-disable-next-line @typescript-eslint/require-await
   async subscribe(channel: string, handler: (payload: string) => void): Promise<() => void> {
@@ -34,6 +35,11 @@ class FakeNotifyListener {
       this.unsubscribeCount += 1;
       set?.delete(handler);
     };
+  }
+  // The subscribeWithReconnect helper registers here so a live drop drives re-subscribe.
+  onConnectionError(cb: () => void): () => void {
+    this.connErrObs.add(cb);
+    return () => this.connErrObs.delete(cb);
   }
   fire(channel: string, payload: string): void {
     for (const handler of this.handlers.get(channel) ?? []) handler(payload);

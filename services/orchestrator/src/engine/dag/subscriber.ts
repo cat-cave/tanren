@@ -38,6 +38,7 @@ import { isTerminalStatus } from "../benchmark/runnerDb.js";
 import type { ChangePercolationCoordinator } from "./percolation.js";
 import { buildDagWalker, listWalkableProjectIds } from "./walker.js";
 import { createLogger } from "../observability/logger.js";
+import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
 // Re-exported so autonomyLoops (which already imports startDagWalkerSubscriber here)
 // gets the logger factory WITHOUT a separate import (its dependency cap is at 12).
 export { createLogger };
@@ -129,7 +130,7 @@ async function resolveRunTrigger(
  */
 export class DagWalkerSubscriber {
   private readonly walker: DagWalker;
-  private readonly unsubscribes: Array<() => void> = [];
+  private readonly reconnectHandles: SubscribeWithReconnectHandle[] = [];
   private stopped = false;
   // Per-project walk coalescing: the in-flight walk promise + a "re-walk when it
   // finishes" flag, so concurrent triggers never run two walks of one project at
@@ -164,13 +165,15 @@ export class DagWalkerSubscriber {
    * project — both NON-BLOCKING. The worker boot builds a lazy pool that may not
    * be reachable yet (it connects on first claim), so `start()` must not block on
    * the network: the LISTEN subscribe and the initial drive run in the background.
-   * A subscribe/read failure is logged, never fatal (the PgNotifyListener
-   * reconnects on its own and the next notification re-drives). `start()` resolves
-   * immediately so the boot returns; `stop()` tears down whatever was wired.
+   * The `subscribeWithReconnect` helper drives an UNBOUNDED progress-spaced retry
+   * on both the initial subscribe AND on a live connection drop (audit C2 #4-#7),
+   * so a boot-time PG blip no longer silently degrades the walker to the periodic
+   * backstop cadence for the whole process lifetime. `start()` resolves immediately
+   * so the boot returns; `stop()` tears down whatever was wired.
    */
   // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
-    void this.subscribeInBackground();
+    this.subscribeWithReconnect();
     void this.driveAllProjects();
     this.startPeriodicBackstop();
   }
@@ -191,39 +194,55 @@ export class DagWalkerSubscriber {
     }, this.reWalkIntervalMs);
   }
 
-  /** Subscribe to both wake channels off the boot path; tolerant of a not-yet-ready DB. */
-  private async subscribeInBackground(): Promise<void> {
-    try {
-      const runUnsub = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
-        // Fire-and-forget: the wake handler must not block the LISTEN connection.
-        // A resolve/walk failure is logged, never thrown into the notify pump.
-        void this.onRunActivity(payload).catch((error: unknown) => {
-          log.error("run-activity handler failed", { runId: payload }, error);
-        });
-      });
-      this.track(runUnsub);
-
-      const dagUnsub = await this.deps.notifyListener.subscribe(DAG_CHANGE_CHANNEL, (payload) => {
-        // A spec was inserted for this project: walk it now (the payload IS the
-        // project id). Coalesced through the same per-project in-flight guard, so
-        // a burst of inserts during derive collapses to one follow-up walk.
-        void this.onDagChange(payload).catch((error: unknown) => {
-          log.error("dag-change handler failed", { projectId: payload }, error);
-        });
-      });
-      this.track(dagUnsub);
-    } catch (error) {
-      log.error("failed to subscribe to the LISTEN/NOTIFY bus (will not auto-drive)", {}, error);
-    }
+  /**
+   * Subscribe to both wake channels via the shared `subscribeWithReconnect`
+   * helper (audit C2 #4-#7): the helper drives an UNBOUNDED progress-spaced
+   * retry on both the initial subscribe AND on a live connection drop, so a
+   * boot-time PG blip no longer silently degrades the walker to the periodic
+   * backstop cadence for the whole process lifetime.
+   */
+  private subscribeWithReconnect(): void {
+    this.track(
+      subscribeWithReconnect({
+        listener: this.deps.notifyListener,
+        channel: RUN_ACTIVITY_CHANNEL,
+        logger: log,
+        handler: (payload) => {
+          // Fire-and-forget: the wake handler must not block the LISTEN connection.
+          // A resolve/walk failure is logged, never thrown into the notify pump.
+          void this.onRunActivity(payload).catch((error: unknown) => {
+            log.error("run-activity handler failed", { runId: payload }, error);
+          });
+        },
+      }),
+    );
+    this.track(
+      subscribeWithReconnect({
+        listener: this.deps.notifyListener,
+        channel: DAG_CHANGE_CHANNEL,
+        logger: log,
+        handler: (payload) => {
+          // A spec was inserted for this project: walk it now (the payload IS the
+          // project id). Coalesced through the same per-project in-flight guard, so
+          // a burst of inserts during derive collapses to one follow-up walk.
+          void this.onDagChange(payload).catch((error: unknown) => {
+            log.error("dag-change handler failed", { projectId: payload }, error);
+          });
+        },
+      }),
+    );
   }
 
-  /** Record an unsubscribe — or, if stop() raced the connect, fire it immediately. */
-  private track(unsubscribe: () => void): void {
+  /**
+   * Record a reconnect handle — or, if stop() raced the wiring, tear it down
+   * immediately. The helper's stop() is idempotent, so a double-fire is safe.
+   */
+  private track(handle: SubscribeWithReconnectHandle): void {
     if (this.stopped) {
-      unsubscribe();
+      handle.stop();
       return;
     }
-    this.unsubscribes.push(unsubscribe);
+    this.reconnectHandles.push(handle);
   }
 
   /** Best-effort initial walk of every project with a DAG. */
@@ -243,8 +262,8 @@ export class DagWalkerSubscriber {
       this.clearIntervalFn(this.reWalkTimer);
       this.reWalkTimer = undefined;
     }
-    while (this.unsubscribes.length > 0) {
-      this.unsubscribes.pop()?.();
+    while (this.reconnectHandles.length > 0) {
+      this.reconnectHandles.pop()?.stop();
     }
   }
 

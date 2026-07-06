@@ -148,4 +148,52 @@ describe("PgNotifyListener", () => {
 
     await listener.close();
   });
+
+  it("fires onConnectionError observers when the held client emits `error` (audit C2 #4-#7)", async () => {
+    // The subscribe-with-reconnect helpers register here so a live disconnect
+    // drives them to re-subscribe (the reconnect-failed no-longer-dead invariant).
+    const pool = new FakeNotifyPool();
+    const listener = new PgNotifyListener(pool as unknown as pg.Pool);
+    await listener.subscribe(RUN_ACTIVITY_CHANNEL, () => {});
+
+    const seen: number[] = [];
+    listener.onConnectionError(() => seen.push(1));
+    listener.onConnectionError(() => seen.push(2));
+    // A throwing observer is isolated (never poisons the pump — the throw is
+    // swallowed by the listener's per-observer try/catch, so observer 3 does
+    // not block observer 1 or 2 from firing).
+    listener.onConnectionError(() => {
+      throw new Error("observer blew up");
+    });
+
+    const client = pool.clients[0];
+    // Emit `error` on the held client: every observer fires (in insertion
+    // order), including the throwing one whose throw is swallowed. The
+    // listener's internal reconnect runs on its own; here we only assert the
+    // observer fan-out.
+    client.emit("error", new Error("connection dropped"));
+
+    expect(seen).toEqual([1, 2]);
+
+    await listener.close();
+  });
+
+  it("onConnectionError unsubscribe drops the observer for future drops", async () => {
+    // We register two observers, remove the first, then emit `error` and
+    // observe only the second fires. Only ONE emit — the reconnect's
+    // `removeAllListeners('error')` on the stale client would break a second
+    // emit (unhandled EventEmitter error).
+    const pool = new FakeNotifyPool();
+    const listener = new PgNotifyListener(pool as unknown as pg.Pool);
+    await listener.subscribe(RUN_ACTIVITY_CHANNEL, () => {});
+    const seen: number[] = [];
+    const unsubObs = listener.onConnectionError(() => seen.push(1));
+    listener.onConnectionError(() => seen.push(2));
+    unsubObs();
+
+    const client = pool.clients[0];
+    client.emit("error", new Error("connection dropped"));
+    expect(seen).toEqual([2]);
+    await listener.close();
+  });
 });

@@ -16,6 +16,7 @@ import { boundedRetryDelayMs, serializedRetryAfterMs } from "./mergeSerializedRe
 import { discoverOrphanedPrs } from "./orphanedPrSweep.js";
 import { LIST_PROJECTS_WITH_QUEUE_SQL } from "./subscriberQueueDiscoverySql.js";
 import { createLogger } from "../observability/logger.js";
+import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
 
 const log = createLogger("merge-coordinator");
 
@@ -134,8 +135,8 @@ async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
  */
 export class MergeCoordinatorSubscriber {
   private readonly coordinator: MergeCoordinator;
-  private unsubscribe: (() => void) | undefined;
-  private eventUnsubscribe: (() => void) | undefined;
+  private runActivityHandle: SubscribeWithReconnectHandle | undefined;
+  private eventHandle: SubscribeWithReconnectHandle | undefined;
   private stopped = false;
   private readonly inFlight = new Map<string, Promise<void>>();
   private readonly rePending = new Set<string>();
@@ -195,7 +196,7 @@ export class MergeCoordinatorSubscriber {
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async start(): Promise<void> {
-    void this.subscribeInBackground();
+    this.subscribeToNotifyBus();
     // DEFENSE-IN-DEPTH (PR #724 follow-up — apex v67/v69 root cause #2): sweep orphaned
     // PRs (a `github.pr.created` event with no merge_queue row) BEFORE driving the
     // existing queue. `driveAllProjects` only enumerates projects that ALREADY have queue
@@ -215,28 +216,41 @@ export class MergeCoordinatorSubscriber {
     await this.driveAllProjects();
   }
 
-  private async subscribeInBackground(): Promise<void> {
-    try {
-      const unsubscribe = await this.deps.notifyListener.subscribe(RUN_ACTIVITY_CHANNEL, (payload) => {
+  /**
+   * Subscribe to the run-activity + notification channels via the shared
+   * `subscribeWithReconnect` helper (audit C2 #4-#7): the helper drives an
+   * UNBOUNDED progress-spaced retry on both the initial subscribe AND on a live
+   * connection drop, so a boot-time PG blip no longer silently degrades the
+   * merge queue to a manual-triggers-only cadence for the whole process lifetime.
+   */
+  private subscribeToNotifyBus(): void {
+    const runHandle = subscribeWithReconnect({
+      listener: this.deps.notifyListener,
+      channel: RUN_ACTIVITY_CHANNEL,
+      logger: log,
+      handler: (payload) => {
         void this.onRunActivity(payload).catch((error: unknown) => {
           log.error("run-activity handler failed", { runId: payload }, error);
         });
-      });
-      const eventUnsubscribe = await this.deps.notifyListener.subscribe(NOTIFICATION_CHANNEL, (payload) => {
+      },
+    });
+    const eventHandle = subscribeWithReconnect({
+      listener: this.deps.notifyListener,
+      channel: NOTIFICATION_CHANNEL,
+      logger: log,
+      handler: (payload) => {
         void this.onEventActivity(payload).catch((error: unknown) => {
           log.error("event handler failed", { eventId: payload }, error);
         });
-      });
-      if (this.stopped) {
-        unsubscribe();
-        eventUnsubscribe();
-        return;
-      }
-      this.unsubscribe = unsubscribe;
-      this.eventUnsubscribe = eventUnsubscribe;
-    } catch (error) {
-      log.error("failed to subscribe to the run-activity bus (will not auto-advance)", {}, error);
+      },
+    });
+    if (this.stopped) {
+      runHandle.stop();
+      eventHandle.stop();
+      return;
     }
+    this.runActivityHandle = runHandle;
+    this.eventHandle = eventHandle;
   }
 
   private async driveAllProjects(): Promise<void> {
@@ -251,10 +265,10 @@ export class MergeCoordinatorSubscriber {
   /** Stop listening. Idempotent; in-flight passes finish on their own. */
   stop(): void {
     this.stopped = true;
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
-    this.eventUnsubscribe?.();
-    this.eventUnsubscribe = undefined;
+    this.runActivityHandle?.stop();
+    this.runActivityHandle = undefined;
+    this.eventHandle?.stop();
+    this.eventHandle = undefined;
     for (const timer of this.retryTimers.values()) clearTimeout(timer);
     this.retryTimers.clear();
     this.pendingHoldUntil.clear();
