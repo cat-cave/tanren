@@ -161,6 +161,32 @@ describe("P2A-0014 run-detail API — run list", () => {
     expect(item.lastEventAt).not.toBeNull();
   });
 
+  // Regression pin for the drift-fix that unified `needsReviewFromOutcome` onto
+  // the shared `RECOVERABLE_OUTCOMES` set. Before the fix, the private literal
+  // check enumerated only `halted / escape_hatch_hit / retry_budget_exhausted`,
+  // so a `convergence_stalled` or `window_exhausted` run with a PR URL flipped
+  // needsReview back to false — hiding the run from the review list even though
+  // it had halted with a PR to look at.
+  it.each(["convergence_stalled", "window_exhausted"] as const)(
+    "flags needsReview=true for a %s run with a PR URL (halted family drift-fix)",
+    async (outcome) => {
+      const { app, pool } = buildHarness();
+      const { projectId } = seedRunFixture(pool, { runId: `run_${outcome}` });
+      // Retarget the seeded run's outcome — seedRunFixture set it to "ok"; the
+      // regression is the halted-family cases, so overwrite in-place.
+      const row = pool.runs.find((r) => r.run_id === `run_${outcome}`);
+      if (row === undefined) throw new Error("fixture row not seeded");
+      row.status = "halted";
+      row.outcome = outcome;
+      const response = await app.request(`/orgs/org_acme/projects/${projectId}/runs`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { items: unknown[] };
+      const item = RunListItem.parse(body.items[0]);
+      expect(item.outcome).toBe(outcome);
+      expect(item.needsReview).toBe(true);
+    },
+  );
+
   it("rejects cross-org list with 403", async () => {
     const { app, pool } = buildHarness();
     pool.seedProject({ project_id: "project_other", org_id: "org_other" });

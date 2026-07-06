@@ -19,6 +19,7 @@
  * render a templated acknowledgement.
  */
 
+import { RECOVERABLE_OUTCOMES_LIST } from "@tanren/db";
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import { isRecoverableRun, type RecoveryActionResult, type RunLocation } from "../../api/types.js";
@@ -235,8 +236,14 @@ function HaltedListBody(props: {
           <section class="placeholder-card">
             <p>No halted runs. Everything is moving.</p>
             <p class="placeholder-note">
-              Runs surface here when they halt (<code>halted</code>, <code>escape_hatch_hit</code>,{" "}
-              <code>retry_budget_exhausted</code>, <code>window_exhausted</code>).
+              Runs surface here when they halt (
+              {RECOVERABLE_OUTCOMES_LIST.map((outcome, i) => (
+                <>
+                  {i > 0 ? ", " : ""}
+                  <code>{outcome}</code>
+                </>
+              ))}
+              ).
             </p>
           </section>
         ) : (

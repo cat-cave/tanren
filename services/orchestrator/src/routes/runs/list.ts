@@ -2,6 +2,7 @@
 // here decodes raw pg rows into the contract types from contract.ts. The
 // route layer composes these; no SQL lives in routes/runs/index.ts.
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { CostStore, EventStore, RunStore, SpecStore, TaskStore } from "../../engine/repositories/index.js";
@@ -395,11 +396,12 @@ export async function fetchRunListItems(pool: QueryClient, args: RunListArgs): P
 function needsReviewFromOutcome(outcome: RunListItem["outcome"]): boolean {
   // A run "needs review" when it has an open PR (truthy prUrl) and the outcome
   // indicates the operator must look at it: `ok` is the merge-ready success the
-  // operator reviews/merges; the halt/escape-hatch/exhaustion outcomes name a
-  // run that stopped short. A null outcome also counts as needing review when a
-  // PR is present.
+  // operator reviews/merges; the HALTED family (imported from @tanren/db so it
+  // stays lock-step with `assertRecoverable`) names a run that stopped short.
+  // The prior inline literal check drifted after the SPEC-LOOP REDESIGN added
+  // `convergence_stalled` (a halt whose PR still needs review) and after
+  // `window_exhausted` joined the halted family — routing the shared set fixes
+  // both. A null outcome also counts as needing review when a PR is present.
   if (outcome === null) return true;
-  return (
-    outcome === "ok" || outcome === "halted" || outcome === "escape_hatch_hit" || outcome === "retry_budget_exhausted"
-  );
+  return outcome === "ok" || RECOVERABLE_OUTCOMES.has(outcome);
 }

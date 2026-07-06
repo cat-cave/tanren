@@ -10,6 +10,7 @@
  *   GET /projects/:projectId/specs/:specId          full-page spec view
  */
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { DagStatus } from "../../api/dagTypes.js";
@@ -133,7 +134,9 @@ async function loadSpecDetail(
   return buildSpecDetail({ spec, allSpecs, runs: specRuns, statusBySpecId });
 }
 
-const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
+// HALTED-outcome policy set imported from @tanren/db — the prior private copy
+// was missing `convergence_stalled` + `window_exhausted`, so a dep-chip whose
+// latest run hit those outcomes did not colour blocked.
 
 /** Latest-run → DagStatus for a dependency chip (mirrors the DAG model). */
 function depStatus(
@@ -143,7 +146,7 @@ function depStatus(
   if (run !== undefined) {
     if (run.needsReview) return "review";
     if (run.status === "running") return "live";
-    if (run.outcome !== null && HALTED_OUTCOMES.has(run.outcome)) return "blocked";
+    if (run.outcome !== null && RECOVERABLE_OUTCOMES.has(run.outcome)) return "blocked";
     if (run.status === "completed") return "done";
     if (run.status === "queued") return "queued";
   }

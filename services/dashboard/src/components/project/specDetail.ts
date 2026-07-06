@@ -4,6 +4,7 @@
  * I/O-free so the route handler stays thin and the derivation is testable.
  */
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { DagStatus } from "../../api/projectDag.js";
 import type { RunListItem, SpecSummary } from "../../api/types.js";
 
@@ -53,13 +54,15 @@ const STATUS_META: Record<DagStatus, { label: string; pill: SpecDetail["pill"]; 
   queued: { label: "queued", pill: "cold", glyph: "○" },
 };
 
-const HALTED = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
+// HALTED-outcome policy set imported from @tanren/db — the prior private copy
+// was missing `convergence_stalled` + `window_exhausted`, so a spec whose latest
+// run halted for those reasons did not colour blocked in the drawer.
 
 function statusForSpec(specStatus: string, latest: RunListItem | undefined): DagStatus {
   if (latest !== undefined) {
     if (latest.needsReview) return "review";
     if (latest.status === "running") return "live";
-    if (latest.outcome !== null && HALTED.has(latest.outcome)) return "blocked";
+    if (latest.outcome !== null && RECOVERABLE_OUTCOMES.has(latest.outcome)) return "blocked";
     if (latest.status === "completed") return "done";
     if (latest.status === "queued") return "queued";
   }

@@ -24,6 +24,7 @@
  * three real models are surfaced.
  */
 
+import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { BillingMode, CostBasis, CostRecord } from "../../api/types.js";
 
 /** The three pricing models, in display order, keyed by the real billingMode. */
@@ -419,7 +420,10 @@ export interface ObservedMetrics {
 }
 
 const MERGED_OUTCOMES = new Set(["ok"]);
-const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exhausted"]);
+// HALTED-outcome policy set is imported from @tanren/db so haltRate reads the same
+// source-of-truth as the orchestrator's `assertRecoverable` gate. The prior private
+// copy was missing `convergence_stalled` + `window_exhausted`, so a run halted for
+// those reasons did not count toward haltRate.
 
 /**
  * Observed run metrics for the reported-not-targeted panel. `merged` is keyed
@@ -428,7 +432,7 @@ const HALTED_OUTCOMES = new Set(["halted", "escape_hatch_hit", "retry_budget_exh
  */
 export function observeMetrics(runs: readonly { outcome: string | null }[], totalPricedUsd: number): ObservedMetrics {
   const specsMerged = runs.filter((r) => r.outcome !== null && MERGED_OUTCOMES.has(r.outcome)).length;
-  const halted = runs.filter((r) => r.outcome !== null && HALTED_OUTCOMES.has(r.outcome)).length;
+  const halted = runs.filter((r) => r.outcome !== null && RECOVERABLE_OUTCOMES.has(r.outcome)).length;
   return {
     specsMerged,
     avgCostPerMergedUsd: specsMerged > 0 ? totalPricedUsd / specsMerged : null,
