@@ -49,6 +49,22 @@ describe("ensureDefaultNotificationRoute (Loop 5 onboarding seed)", () => {
     expect(result.routes.every((r) => r.minSeverity === "warn")).toBe(true);
   });
 
+  // Pin the two operator-actionable failure events (PR #742 `demo.failed`, PR
+  // #754 `usage.accounting_failed`) into the seeded default matrix. A regression
+  // that drops either from `DEFAULT_ROUTE_EVENTS` would silently strand the
+  // apex-critical failure off the per-org matrix and only surface via the
+  // env-default belt-and-suspenders — this test is the guard.
+  it("the seed pins the operator-actionable demo/accounting failures on the matrix", async () => {
+    expect(new Set(DEFAULT_ROUTE_EVENTS)).toContain("demo.failed");
+    expect(new Set(DEFAULT_ROUTE_EVENTS)).toContain("usage.accounting_failed");
+    const client = new NotificationMemoryClient();
+    const pool = poolFor(client);
+    const result = await ensureDefaultNotificationRoute({ pool, orgId: "org_a", ntfyTopic: "tanren-org-org_a" });
+    const eventNames = new Set(result.routes.map((r) => r.eventName));
+    expect(eventNames).toContain("demo.failed");
+    expect(eventNames).toContain("usage.accounting_failed");
+  });
+
   it("is idempotent — a re-onboard reuses the target and adds no duplicate routes", async () => {
     const client = new NotificationMemoryClient();
     const pool = poolFor(client);

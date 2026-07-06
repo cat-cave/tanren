@@ -26,7 +26,7 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import { systemActor } from "../../state/actor.js";
 import { DiscoveryStore, type ExistingSpecSummary } from "../../repositories/discovery.js";
-import { createSpec, type SpecContract } from "../../workflow/projectSpec.js";
+import { createSpec, type SpecContract, type SpecTriageProvenance } from "../../workflow/projectSpec.js";
 import { writeProvenance, writeProvenanceViaWriter, type DiscoveryProvenance } from "./provenance.js";
 import {
   DiscoveryInsight,
@@ -93,6 +93,14 @@ export interface AcceptInput {
   placementKind: PlacementKind;
   placementLabel: string;
   actor: ActorContext;
+  /**
+   * Triage routing provenance (Claude RA2). Set by the
+   * `plannerRunTriageNewSpecs.ts` materializer to stamp the new spec with its
+   * origin trail (parent_spec_id / source_finding_ids / origin_triage_task_id /
+   * origin_run_id). Absent on operator-driven accepts from an insight or the
+   * discovery UI.
+   */
+  triageProvenance?: SpecTriageProvenance;
 }
 
 export interface AcceptedSpec {
@@ -140,6 +148,10 @@ export async function acceptProposals(deps: DiscoveryEngineDeps, input: AcceptIn
       // §1b) so the DagWalker orders by it instead of FIFO.
       priority: proposal.priority,
       ...(proposal.dependsOn.length > 0 ? { dependsOn: proposal.dependsOn } : {}),
+      // Triage routing provenance (Claude RA2) — persisted onto the created
+      // spec's first-class columns so the routing trail is queryable, not
+      // only recoverable from the discovery jsonb metadata blob.
+      ...(input.triageProvenance !== undefined && { triageProvenance: input.triageProvenance }),
     };
     // Plane-split: route the spec INSERT + the provenance UPDATE through the control
     // plane when a writer is wired (the autonomous-intake path under remote-writes);

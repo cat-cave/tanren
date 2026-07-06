@@ -182,6 +182,15 @@ export interface NewSpecRequest {
   body: string;
   severity: "P0" | "P1" | "P2" | "P3";
   findingIds: ReadonlyArray<string>;
+  /**
+   * Triage-routing PROVENANCE (Claude RA2): the `task_id` of the triage stage
+   * that emitted this new-spec request. Threaded through the materializer so
+   * the created spec's `origin_triage_task_id` column is stamped and an operator
+   * can trace a routed spec back to the triage decision. Absent for a deferred
+   * kept-here item (velocity-defer), since those don't leave triage — the
+   * materializer still records the parent spec's own routing context.
+   */
+  originTriageTaskId?: string;
 }
 
 export type SubtaskLoopOutcome =

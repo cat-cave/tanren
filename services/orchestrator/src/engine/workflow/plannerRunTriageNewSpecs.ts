@@ -34,6 +34,13 @@ export type TriageNewSpecsMaterializer = (input: TriageNewSpecsMaterializerInput
  * the parent spec. The `runStateWriter` is plane-split-aware (control-plane when
  * remote-writes is on, else direct). The insight body embeds the triaged item's title
  * + body so the created spec's discovery card renders the routing trail.
+ *
+ * Claude RA2 — the four durable provenance columns (`parent_spec_id`,
+ * `source_finding_ids`, `origin_triage_task_id`, `origin_run_id`) are threaded onto
+ * the created spec through `acceptProposals` → `createSpec`. Before this seam, the
+ * routing trail lived ONLY in the discovery jsonb metadata blob (via `source:
+ * "triage:<parentSpecId>"`), which made queryable dedup ("has this triage already
+ * routed this finding?") impossible.
  */
 export function buildTriageNewSpecsMaterializer(deps: {
   pool: pg.Pool;
@@ -41,7 +48,7 @@ export function buildTriageNewSpecsMaterializer(deps: {
   /** Resolve a system actor carrying the run's org so the spec write is RLS-scoped. */
   resolveActor: (orgId: string) => ActorContext;
 }): TriageNewSpecsMaterializer {
-  return async ({ parentSpecId, projectId, orgId, newSpecs }) => {
+  return async ({ runId, parentSpecId, projectId, orgId, newSpecs }) => {
     for (const req of newSpecs) {
       const insight: DiscoveryInsight = {
         variant: "feature",
@@ -73,6 +80,22 @@ export function buildTriageNewSpecsMaterializer(deps: {
           placementKind: "slot_after",
           placementLabel: `auto-routed from triage in ${parentSpecId}`,
           actor: deps.resolveActor(orgId),
+          // Claude RA2 — first-class routing PROVENANCE persisted onto the created
+          // spec's columns so an operator (or a dedupe pass) can trace the routed
+          // spec back to its origin without parsing the discovery jsonb.
+          // `originTriageTaskId` is threaded through the NewSpecRequest from the
+          // triage stage that emitted the item (`runSubtaskIteration.ts`); an
+          // upstream that skipped triage yields the empty string here (a
+          // diagnostic breadcrumb, not a silent success) so the parent/finding
+          // trail still stamps and a re-drive dedupe query keying off
+          // `parent_spec_id` + `source_finding_ids` still identifies the routed
+          // spec.
+          triageProvenance: {
+            parentSpecId,
+            sourceFindingIds: req.findingIds,
+            originTriageTaskId: req.originTriageTaskId ?? "",
+            originRunId: runId,
+          },
         },
       );
     }
