@@ -23,9 +23,11 @@
 // single-finalize invariant (`autonomy-engine.md` §1c): every task row reaches
 // a terminal state with exactly one terminal `task.*` event.
 //
-// The design-oracle stage is intentionally NOT covered here — its task row
-// materializes only after the contract gate (`hasContract`), so there is no
-// row to strand on a guard failure (mirroring the conformance suite's note).
+// The design-oracle stage's WIDER-guard contract is pinned in the sibling
+// `designOracleFinalizeGuard.test.ts` (Codex critic #5 — the stage's task row
+// materializes only after the `hasContract` gate, so its harness needs the
+// design_contracts + personas + behaviors read wiring; the two fault shapes
+// exercised here are covered there against the same guard invariants).
 
 import { describe, expect, it } from "vitest";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";

@@ -24,10 +24,11 @@
 //
 // On the SUCCESS path, exactly one `task.completed` event lands + the row is marked
 // done (`passed`). A future PR that adds a new stage without the emit-on-throw pattern
-// fails this suite. The design-oracle stage is intentionally NOT covered here — its
-// answerer fires BEFORE any task row materializes (the hasContract gate), so there is
-// no task row to strand `running` and nothing to emit `task.failed` against; the
-// production code's comment in `designOracleLoopStage.ts` documents that explicitly.
+// fails this suite. The design-oracle stage is NOT covered here for a different
+// reason: its answerer fires BEFORE the task row materializes (the hasContract gate),
+// so an answerer throw has no row to strand. The stage's POST-insert guard contract
+// (Codex critic #5 — verdict append / cost record / terminal pair) is pinned in
+// `designOracleFinalizeGuard.test.ts` against the same failureKind vocabulary.
 
 import { describe, expect, it } from "vitest";
 import type { EventName, EventPayload } from "../../src/engine/events/index.js";
