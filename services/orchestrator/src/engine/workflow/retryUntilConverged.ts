@@ -45,6 +45,39 @@ export type ConvergenceOutcome<TResult> =
   | { kind: "done"; result: TResult }
   | { kind: "escalate"; reason: string; result: TResult };
 
+/**
+ * The decision reached for ONE iteration of the loop, surfaced to the optional
+ * `onAttempt` observability hook. Fires ONCE per iteration after the attempt
+ * completes AND (on a non-done attempt) after the convergence decision is made:
+ *   - `done`     — this attempt SUCCEEDED; the loop returns `{ kind: "done" }`.
+ *   - `progress` — the loop CONTINUES (structural progress, or the judge said keep going).
+ *                  The next attempt runs after the optional backoff spacing.
+ *   - `escalate` — a PROVEN fixed point; the loop returns `{ kind: "escalate" }`.
+ */
+export type AttemptDecision = "done" | "progress" | "escalate";
+
+/**
+ * The per-iteration observability payload fed to the optional `onAttempt` callback.
+ * A caller (writer stall recovery, plan/checker/auditor stage recovery, deploy verify,
+ * deploy poll-to-terminal, …) hooks this to emit its own `*.retrying` structured log
+ * or metric — the primitive itself remains silent so backward compatibility with
+ * existing callers is unchanged. All fields describe the attempt just observed.
+ */
+export interface AttemptInfo {
+  /** 1-indexed attempt number (`1` on the first attempt; the count of attempts so far, this one included). */
+  attempt: number;
+  /**
+   * The distilled attempt signature that was appended to the history — the caller's
+   * failure identity / work identity / remaining magnitude, whatever it distilled. A
+   * demonstration caller keys its `*.retrying` event's `reason` off `failureSignature`.
+   */
+  signature: AttemptSignature;
+  /** Whether this attempt succeeded (`decision === "done"`). Convenience mirror of the decision. */
+  done: boolean;
+  /** The loop's decision for THIS iteration — see {@link AttemptDecision}. */
+  decision: AttemptDecision;
+}
+
 // The inputs to one unbounded convergence loop.
 export interface RetryUntilConvergedInput<TResult> {
   // Run ONE attempt, given the full prior history (oldest→newest, this attempt not yet
@@ -58,6 +91,21 @@ export interface RetryUntilConvergedInput<TResult> {
   // the delay in ms before the NEXT attempt. NOT a cap — returning 0 means "retry at once".
   // This is the ONLY time-shaped knob, and it never terminates the loop. Optional; default 0.
   backoff?: (history: ReadonlyArray<AttemptSignature>) => number;
+  /**
+   * OPTIONAL per-iteration observability hook (Codex critic #13 — the loop's durable
+   * observability gap). Fires ONCE per attempt after the outcome is known, carrying
+   * the 1-indexed attempt number, the distilled signature, and the loop's decision
+   * (`done`/`progress`/`escalate`). A caller opts in to emit a `*.retrying` structured
+   * log line or metric that lets an operator see WHICH retries are happening — critical
+   * for the loop-STAGE callers (writer/plan/checker/auditor stall recovery, deploy
+   * verify) that visibly stall the DAG during apex.
+   *
+   * OPTIONAL by design: existing callers keep working with NO change — the primitive
+   * emits nothing itself. Never mutates loop state; a throw or rejection propagates
+   * OUT of `retryUntilConverged` (an observability hook should not throw, but the
+   * primitive does NOT silently swallow errors — a broken observer is a bug).
+   */
+  onAttempt?: (info: AttemptInfo) => void | Promise<void>;
 }
 
 /**
@@ -80,15 +128,37 @@ export async function retryUntilConverged<TResult>(
   for (;;) {
     const outcome = await input.attempt(history);
     history.push(outcome.signature);
+    // The 1-indexed attempt number for this iteration (the count of attempts so far, this
+    // one included). Fed to the optional `onAttempt` observability hook so a caller can
+    // emit its own `*.retrying` structured log — the primitive itself remains silent.
+    const attemptNumber = history.length;
     if (outcome.done) {
+      await input.onAttempt?.({
+        attempt: attemptNumber,
+        signature: outcome.signature,
+        done: true,
+        decision: "done",
+      });
       return { kind: "done", result: outcome.result };
     }
     const decision = await decideConvergence(history, input.judge);
     if (decision.decision === "escalate") {
+      await input.onAttempt?.({
+        attempt: attemptNumber,
+        signature: outcome.signature,
+        done: false,
+        decision: "escalate",
+      });
       return { kind: "escalate", reason: decision.reason, result: outcome.result };
     }
     // CONTINUE, unbounded. Space the next attempt by the backoff (a paced interval, not a
     // budget) and loop again — no count, no deadline.
+    await input.onAttempt?.({
+      attempt: attemptNumber,
+      signature: outcome.signature,
+      done: false,
+      decision: "progress",
+    });
     const delayMs = input.backoff?.(history) ?? 0;
     if (delayMs > 0) {
       await sleep(delayMs);
