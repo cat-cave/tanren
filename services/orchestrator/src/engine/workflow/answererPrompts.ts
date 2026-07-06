@@ -265,29 +265,32 @@ export function buildCheckerPrompt(input: CheckerPromptInput): string {
   ].join("\n");
 }
 
-// apex v79 IN-SCOPE FOCUS block. On v79 the auditor emitted CROSS-SCOPE findings
+// apex v79/v80 IN-SCOPE FOCUS block. On v79 the auditor emitted CROSS-SCOPE findings
 // (e.g. `entrypoint-not-deployed` on a `scaffold` spec — a deploy concern) that
 // downstream triage kept in-spec as `kind: task`, so this spec's `findings.length`
 // never reached 0 across 5 iterations, the subtask loop never returned "passed",
 // and zero github.pr.created events fired. The auditor's job is defects that block
 // THIS spec's acceptance criteria — a cross-scope concern belongs in a NEW spec,
-// which triage routes as `kind: spec` from the finding you emit here. To help
-// triage route it correctly (as `spec`, not `task`), name the out-of-scope nature
-// explicitly in the finding's `title`/`body` — otherwise triage will assume it is
-// a bounded fix in this spec and the rotating-findings loop returns.
+// which triage routes as `kind: spec` from the finding you emit here. v80 CLOSURE:
+// the earlier prompt said "either OMIT or emit as OUT-OF-SCOPE" — but OMIT was a
+// black hole (triage never sees the finding; nothing routes it to a new spec; the
+// defect vanishes). So the choice is gone: a real cross-scope defect you observe
+// MUST be emitted (never omitted), with the OUT-OF-SCOPE tag explicit in the title
+// and body so downstream triage routes it as `kind: spec`.
 const auditorInScopeFocusBlock: string[] = [
   "",
-  "IN-SCOPE FOCUS (apex v79): only emit findings that block THIS spec's stated",
+  "IN-SCOPE FOCUS (apex v79/v80): only emit findings that block THIS spec's stated",
   "title/description/acceptance criteria. Cross-scope concerns — e.g. a deploy",
   'defect surfaced by a "scaffold" spec, or an analytics-view defect surfaced by',
-  'a "redirect route" spec — belong in a NEW spec, not on this one. If you notice',
-  "such a cross-scope concern, either OMIT it (triage's job on future runs) OR, if",
-  "you emit it, write the `title` + `body` to explicitly name that it is",
-  "OUT-OF-SCOPE for this spec — so downstream triage routes it as `kind: spec`",
-  "(a new DAG spec) rather than `kind: task` (a bounded fix in this spec). The",
-  "rotating-findings anti-pattern this prevents: cross-scope findings kept in-spec",
-  "as tasks NEVER converge — each iteration surfaces a NEW out-of-scope defect,",
-  'findings.length never reaches 0, and the loop never returns "passed".',
+  'a "redirect route" spec — belong in a NEW spec, not on this one. When you',
+  "observe such a cross-scope defect, you MUST emit it as a finding — DO NOT omit",
+  "it (omission is a black hole: triage never sees it, nothing routes it to a new",
+  "spec, and the defect vanishes). Write the `title` + `body` to explicitly name",
+  "that the finding is OUT-OF-SCOPE for this spec — so downstream triage routes it",
+  "as `kind: spec` (a new DAG spec) rather than `kind: task` (a bounded fix in this",
+  "spec). The rotating-findings anti-pattern this prevents: cross-scope findings",
+  "kept in-spec as tasks NEVER converge — each iteration surfaces a NEW out-of-scope",
+  'defect, findings.length never reaches 0, and the loop never returns "passed".',
 ];
 
 export function buildAuditorPrompt(input: AuditorPromptInput): string {

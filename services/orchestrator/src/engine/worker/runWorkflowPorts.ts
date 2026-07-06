@@ -31,3 +31,10 @@ export {
 // decide RE-DRIVE (a random/transient fault) vs ESCALATE (the SAME failure K times). An
 // org-scoped read of the spec's prior `dag.spec.redriven` events over the worker's real pool.
 export { buildRedriveHistoryReader } from "../workflow/plannerRunRedrive.js";
+// apex v79/v80 loop closure: build the production materializer for triage-emitted
+// `kind: spec` items (routes to `acceptProposals` under the run's org scope, so the
+// "route out" decision actually lands on the DAG instead of vanishing).
+export {
+  buildTriageNewSpecsMaterializer,
+  triageMaterializerSystemActor,
+} from "../workflow/plannerRunTriageNewSpecs.js";

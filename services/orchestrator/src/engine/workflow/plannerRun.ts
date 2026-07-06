@@ -91,14 +91,14 @@ import {
   type ReviewProbe,
 } from "./reviewMerge/index.js";
 import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } from "./subtaskLoop.js";
+import { materializeFreshTriageNewSpecs, type TriageNewSpecsMaterializer } from "./plannerRunTriageNewSpecs.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export interface PlannerRunContext {
   runId: string;
   specId: string;
   projectId: string;
-  // The org the run belongs to (null = unscoped); threaded into allocate so the sidecar allocator
-  // persists its `runners` row under the org's RLS scope.
+  // The run's org (null = unscoped); threaded to allocator for `runners` RLS scope.
   orgId?: string | null;
   repoUrl: string;
   targetBranch: string;
@@ -108,62 +108,57 @@ export interface PlannerRunContext {
   acceptanceCriteria: string[];
   behaviorIds?: string[];
   behaviorContext?: ReadonlyArray<{ id: string; title: string; description: string }>;
-  // WS-D2: HEAD `DesignContract` rendered for the writer prompt (designWriterContext.ts); absent ⇒ no design contract.
+  // WS-D2: HEAD `DesignContract` rendered for the writer prompt (designWriterContext.ts).
   designContextBlock?: string;
-  // Task #86 (v64 root cause): spec writer-prompt MODE; absent ⇒ `from_scratch`. See `engine/state/spec.ts`.
+  // Task #86 (v64 root cause): spec writer-prompt MODE; absent ⇒ `from_scratch`.
   specMode?: SpecMode;
   runnerImage: string;
   identitySecretRef: string;
   githubCredentialRef: string;
-  // Part 2: the org's GitHub App installation (when installed) — clone/push/PR/CI/merge mint App-first through the seam, else the static `githubCredentialRef`.
+  // Part 2: org GitHub App installation — clone/push/PR/CI/merge mint App-first when set.
   installation?: OrgGithubAppInstallation;
-  // Resolved DEFAULT LLM entry {cli, model, authRef} — heads every empty loop-role chain (provider-agnostic). Tests may omit.
+  // Resolved DEFAULT LLM entry {cli, model, authRef} — heads every empty loop-role chain.
   defaultLlm?: RoutingChainEntry;
-  // Effective per-role routing table (project routing over a per-role default from `defaultLlm`) — by DATA, not a hardcode.
+  // Effective per-role routing table (project over `defaultLlm`).
   routing?: RoutingTable;
-  // SaaS Tier-B #5: a MANAGED run's OpenAI-compatible endpoint override (the base URL every adapter is pointed at + the real-cost capturer queries). Absent ⇒ BYOK.
+  // SaaS Tier-B #5: MANAGED run's OpenAI-compatible endpoint override. Absent ⇒ BYOK.
   endpointBaseUrl?: string;
-  // Governance posture (run worker): drives the gate's advisory policy (`lenient` ⇒ lint/typecheck advisory; absent ⇒ strict).
+  // Governance posture — drives gate's advisory policy (`lenient` ⇒ lint/typecheck advisory).
   governancePosture?: GovernancePosture;
-  /** apex v67/v69 loop-close: resolved merge integration; gates the EARLY-PATH enqueue (`mergeQueueEarlyEnqueueSeam`). */
+  /** apex v67/v69 loop-close: resolved merge integration; gates EARLY-PATH enqueue. */
   mergeIntegration?: MergeIntegration;
-  // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy (the SOLE loop bound).
+  // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy.
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
-  // AUDIT-EVIDENCE BASELINE: governance policy version (project config version), stamped onto the `gate.verdict` roll-up. Absent on unit paths with no config.
+  // AUDIT-EVIDENCE BASELINE: governance policy version, stamped onto `gate.verdict` roll-up.
   policyVersion?: number;
   greenfield?: boolean;
   creditUsdRate?: number;
-  // DETERMINISTIC CONTRACT FILES (v27 fix): the `.tanren/ci.yml` + `justfile` workspace-prep materializes VERBATIM (write-iff-absent) from the captured lifecycle BEFORE the writer runs — so they are NEVER LLM-authored (the writer mangled the ci.yml shape on v27). Absent ⇒ no lifecycle (brownfield ships its own) ⇒ no-op. On the greenfield path PR-G's composed-VFS push already landed these files on the default branch, so this materialization is a no-op write-iff-absent guard.
+  // DETERMINISTIC CONTRACT FILES (v27 fix): workspace-prep materializes `.tanren/ci.yml` +
+  // `justfile` VERBATIM (write-iff-absent) BEFORE writer — never LLM-authored.
   contractFiles?: ReadonlyArray<ContractFile>;
-  // WS-A PR-4: the ordered ancestor stack this dependent speculative run is stacked on (from `runs.ancestor_stack`). With `WALKER_JJ_LOCAL_BASE` on + non-empty, the workspace bootstrap jj-assembles the base from these ancestor refs vs the legacy single-ref clone.
+  // WS-A PR-4: ancestor stack for jj-local base assembly (from `runs.ancestor_stack`).
   ancestorStack?: AncestorStack;
 }
 
 export interface PlannerRunAdapterContext {
   runId: string;
   target: RunnerHandle;
-  // The shared per-run CODEX_HOME every Codex role materializes against, so a
-  // single ccusage read at run end sees the whole run and the codexbar window
-  // pre-flight reads the run's account.
+  // Shared per-run CODEX_HOME (single ccusage read covers the run; codexbar pre-flight
+  // reads the run's account).
   codexHome: string;
 }
 
 export interface RunPlannerLoopInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  // The cost recorder the loop persists cost_records through.
-  // Defaults to an in-process `CostRecorder` over `pool` + `eventStore` (today's
-  // direct DB write). The run worker injects a writer-backed recorder so the cost
-  // INSERT routes through the control-plane endpoint when remote-writes is on.
+  // Cost recorder — in-process default over pool+eventStore; worker injects a
+  // writer-backed recorder for remote-writes (control-plane INSERT).
   recorder?: CostRecorder;
-  // How the workflow finalizes the run (the terminal `UPDATE runs`). Defaults to the
-  // in-process org-scoped UPDATE on `pool`; the worker injects a writer-backed
-  // finalizer that routes through the control-plane endpoint when remote-writes is on.
+  // Run terminal finalize — in-process org-scoped UPDATE default; worker injects
+  // a writer-backed finalizer for remote-writes.
   finalizeRun?: (input: { runId: string; status: string; outcome: string; fromStatuses: string[] }) => Promise<void>;
-  // REQUIRED (audit D3/H3 sweep): the workflow's atomic terminal seams ride
-  // through this writer (DirectRunStateWriter default; HttpRunStateWriter via
-  // TANREN_DATA_PLANE_REMOTE_WRITES=1).
+  // REQUIRED (audit D3/H3 sweep): atomic terminal seams ride through this writer.
   runStateWriter: RunStateWriter;
   allocator: Allocator;
   ssh: CommandSubstrate;
@@ -177,72 +172,64 @@ export interface RunPlannerLoopInput {
   githubAppMinter?: GithubAppTokenMinter;
   context: PlannerRunContext;
   workspacePath?: string;
-  // Test seam: a pre-resolved GitHub clone token. Production omits it (prepareRunWorkspace resolves it from secrets + context.githubCredentialRef).
+  // Test seam: pre-resolved GitHub clone token; production resolves in prepareRunWorkspace.
   githubToken?: string;
   ciPollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   pressureThresholdPercent?: number;
-  // explicit install-command override run over SSH after clone. Omitted ⇒ the run
-  // resolves the repo's tanren-ci.yml `bootstrap.run`, else a default (cold bootstrap:
-  // DEFAULT_BOOTSTRAP_COMMAND; in-loop deps-ensure: greenfield-aware, buildDefaultGate).
+  // Bootstrap install-command override over SSH; omitted ⇒ resolve from tanren-ci.yml
+  // `bootstrap.run` else `DEFAULT_BOOTSTRAP_COMMAND` (see `buildDefaultGate`).
   bootstrapCommand?: string;
-  // Test seam: omitted ⇒ real bootstrapWorkspace over SSH; tests inject a no-op (or
-  // scripted failure) so unit runs never depend on a real install.
+  // Test seam: no-op / scripted failure for `bootstrapWorkspace` over SSH.
   runBootstrap?: (input: BootstrapStepInput) => Promise<void>;
-  // Test seam: the mise toolchain provision run BEFORE bootstrap (env-management §3);
-  // omitted ⇒ real `mise trust && mise install` over SSH (no-op when no mise.toml).
+  // Test seam: `mise trust && mise install` before bootstrap (env-management §3).
   provisionMise?: (input: ProvisionMiseToolchainInput) => Promise<void>;
-  // Test seam: omitted ⇒ real commitBootstrapState over SSH (the synthetic
-  // post-bootstrap commit whose sha is the writer's diff base); tests inject a sha.
+  // Test seam: synthetic post-bootstrap commit (the writer's diff base).
   commitBootstrap?: (input: CommitBootstrapStepInput) => Promise<string>;
-  // Test seam: the deterministic gate the loop runs per writer iteration (fast tier)
-  // and before audit (slow tier). Omitted ⇒ the default reads the workspace's
-  // tanren-ci.yml (or the default) and runs the mapped tiers; tests inject a mock.
+  // Test seam: gate for per_iteration (fast) + pre_audit (slow); default reads tanren-ci.yml.
   runGate?: (input: { when: CiWhen; taskId?: string }) => Promise<GateOutcome>;
   // Test seams. Omitted in production → real Codex adapters + SSH usage probe.
   buildAdapters?: (ctx: PlannerRunAdapterContext) => SubtaskLoopAdapters;
   buildUsageProbe?: (ctx: PlannerRunAdapterContext) => UsageProbe | undefined;
   // WS1↔WS2 seam. Omitted → spec-quality validator from project routing; tests inject.
   buildSpecValidator?: (ctx: PlannerRunAdapterContext) => SpecQualityAnswerer;
-  // BUDGET-SAFETY (M6) + §3.7a: the budget-gate seam the ceiling preflight + the loop's
-  // per-iteration in-flight gate share. Defaults to PgBudgetGate over `pool`; tests inject.
+  // BUDGET-SAFETY (M6) + §3.7a: shared preflight + per-iteration gate. Default PgBudgetGate.
   budgetGate?: BudgetGate;
-  // reviewPolicy: "simulated" seam. Omitted in production → the reviewer Answerer is resolved
-  // from the project routing (audit chain head; Codex by default). Only for reviewPolicy "simulated".
+  // reviewPolicy "simulated" seam — reviewer answerer resolved from project routing.
   buildSimulatedReviewer?: (ctx: PlannerRunAdapterContext) => AnswererAdapter<ReviewAnswer>;
-  // review→merge tail seams. Omitted in production → the real GitHub review/merge stages
-  // drive through the resolver. Tests inject mocks so unit runs never hit GitHub.
+  // review→merge tail seams — tests inject to avoid GitHub.
   reviewProbe?: ReviewProbe;
   mergeProbe?: MergeProbe;
-  // TEST SEAM (§5h): the in-loop `behind` rebase hook (production → `baseShiftRebaseSeam`).
+  // TEST SEAM (§5h): `behind` rebase hook (production → `baseShiftRebaseSeam`).
   baseShiftRebase?: MergeForRunInput["baseShiftRebase"];
-  // TEST SEAM: a pre-built bundle (a no-DB unit run injects it; production builds it).
+  // TEST SEAM: pre-built authority bundle (no-DB unit run); production builds it.
   mergeAuthority?: MergeAuthorityBundle;
   resolveConflict?: ConflictResolverHook;
-  // TEST SEAM: the auto-rebase re-gate gate-fail → writer-rework router (production → seam).
+  // TEST SEAM: auto-rebase re-gate gate-fail → writer-rework router.
   reGateGateRework?: MergeForRunInput["reGateGateRework"];
-  // native_queue: enters a ready run into the merge queue (on-client is the seam's atomic 3-write block; PR #724 follow-up).
+  // native_queue enqueue: on-client is PR #724's atomic 3-write block.
   nativeQueueEnqueuer?: NativeQueueEnqueuer;
   nativeQueueOnClientEnqueuer?: NativeQueueOnClientEnqueuer;
-  // WS-A PR-8 (walker-jj-local-integration-design.md §2.3, fork F4): OBSERVE-ONLY — the port the jj-local
-  // dependent bootstrap UPSERTs its `eager_base` integration node through (the proof-reuse substrate the
-  // batch `merge_batch` node shares). NEVER gates the run; failure is loud-logged + swallowed.
+  // WS-A PR-8 (§2.3, fork F4): OBSERVE-ONLY jj-local `eager_base` integration
+  // node UPSERT (proof-reuse substrate). NEVER gates the run.
   eagerBaseNodeUpsert?: EagerBaseNodeUpsert;
-  /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (percolation's divergence key); see plannerRunJjLocalBootstrap. */
+  /** WS-A PR-8c (§2.3): bootstrap → `runs.ancestor_stack[].headSha` write-back (divergence key). */
   bootstrapStackHeadShaWriteBack?: BootstrapStackHeadShaWriteBack;
-  // §3 NEVER-DISCARD (apex v35): reads the ancestor specs' lifecycle buckets at the dependent
-  // bootstrap so a missing-but-not-merged ancestor whose SPEC is still non-terminal makes the
-  // dependent BENIGN-WAIT (re-driven) rather than terminally strand. Built by the worker
-  // (`buildAncestorPhaseReader`); absent on no-DB unit paths ⇒ the assembly's fail-closed loud default.
+  // §3 NEVER-DISCARD (apex v35): reads ancestor lifecycle buckets so a headless
+  // non-terminal ancestor makes the dependent BENIGN-WAIT (never strand).
   ancestorPhaseReader?: AncestorPhaseReader;
-  // apex v35 ROBUSTNESS: the consecutive-same-failure reader the run-failure boundary uses to decide RE-DRIVE
-  // (transient fault) vs ESCALATE (SAME classified failure K times). Built by `buildRedriveHistoryReader`;
-  // absent on a no-DB unit path ⇒ treat as the first failure of its kind (never spuriously escalates).
+  // apex v35 ROBUSTNESS: consecutive-same-failure reader — RE-DRIVE transient, ESCALATE
+  // on SAME classified failure K times.
   redriveHistoryReader?: RedriveHistoryReader;
-  // Plane B: the PROJECT's dev+test app env — env vars + secrets the product Tanren is BUILDING needs to
-  // run+test its app. Resolved by the worker from `project_app_env`, materialized over the runner into the
-  // building agent's command env (gate + bootstrap), NEVER logged + DISTINCT from Tanren's creds. Undefined ⇒ no env.
+  // Plane B: project dev+test app env for the runner (gate+bootstrap), NEVER logged,
+  // DISTINCT from Tanren's own creds.
   appEnv?: Record<string, string>;
+  // apex v79/v80 loop closure: MATERIALIZE the triage-emitted cross-scope work items
+  // as REAL DAG specs so the "route out" decision lands on the DAG (else `newSpecs`
+  // is a value object that vanishes). Wired by `runExecutor.ts` (`acceptProposals`
+  // under the run's org scope); absent on unit paths (the outcome's `newSpecs` is
+  // still observable — nothing is persisted, byte-identical to the pre-fix behavior).
+  materializeTriageNewSpecs?: TriageNewSpecsMaterializer;
 }
 
 export interface PlannerRunResult {
@@ -272,16 +259,13 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) =>
     eventStore.append({ ...context, orgId, taskId, eventType, payload });
 
-  // Dimension D: de-privilege the run behind a per-run scoped Vault child token
-  // BEFORE any credential read ({@link applyScopedRunCredentials}).
+  // Dimension D: de-privilege behind a per-run scoped Vault child token BEFORE any
+  // credential read ({@link applyScopedRunCredentials}).
   const input = await applyScopedRunCredentials(rawInput, appendEvent);
-  // How the run's terminal status is finalized (remote via the
-  // control-plane endpoint, or the byte-identical in-process UPDATE) — see
-  // {@link buildFinalizeRunState}.
+  // Run terminal finalize — remote via control-plane, or byte-identical in-process.
   const finalizeRunState = buildFinalizeRunState(input, context.runId);
 
-  // the `running` transition + the supersede route through the
-  // lifecycle writer when wired (remote), else the byte-identical in-process write.
+  // `running` + supersede route through the lifecycle writer when wired.
   await markRunRunning(input, context);
   await supersedeQueuedPlannerTask(input, context.runId);
   const allocation = await input.allocator.allocate({
@@ -289,8 +273,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     projectId: context.projectId,
     runnerImage: context.runnerImage,
     identitySecretRef: context.identitySecretRef,
-    // The run's org. Threaded so a backend that persists a `runners` row (the sidecar
-    // allocator) writes it under RLS scope. Undefined for system / null-org jobs.
+    // Threaded so `runners` row is RLS-scoped; undefined for null-org jobs.
     orgId: context.orgId ?? undefined,
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
@@ -309,9 +292,8 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       repoUrl: context.repoUrl,
       targetBranch: context.targetBranch,
     });
-    // SELF-HEAL (apex v35): when the workspace-PREP `just bootstrap` deps-install was DEFERRED
-    // to the gate self-heal (a writer-fixable scaffold defect, not a strand) emit the loud
-    // `workspace.bootstrap_deferred` — see {@link emitPrepBootstrapDeferred}.
+    // SELF-HEAL (apex v35): emit `workspace.bootstrap_deferred` when prep's
+    // `just bootstrap` deps-install was deferred to the gate self-heal.
     await emitPrepBootstrapDeferred(appendEvent, workspacePath, prepBootstrapDeferred);
 
     const adapterCtx: PlannerRunAdapterContext = {
@@ -319,29 +301,26 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       target: allocation.target,
       codexHome: codexHomeForRun(context.runId),
     };
-    // Build adapters + usage probe + the spec-quality validator AND run the BUDGET-SAFETY
-    // (M6) ceiling preflight (fail closed on an unreachable ceiling).
+    // Adapters + usage probe + spec-quality validator + BUDGET-SAFETY (M6) preflight.
     const adapterResult = await resolveRunAdaptersWithBudgetPreflight(input, adapterCtx, appendEvent);
     const { adapters, usageProbe, specValidator, budgetGate: iterationBudgetGate } = adapterResult;
-    // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref → EXPLICIT narrated skip (apex v30). See helper.
+    // MANAGED real-`usage.cost` capturer; BYOK has no platform metering ref (apex v30).
     const captureRealProviderCost = await resolveManagedCapturer(input, appendEvent);
-    // The deterministic gate on the just-bootstrapped workspace: resolve the CI config once
-    // (tanren-ci.yml, else default) + run the tiers mapped to each lifecycle point over SSH.
+    // The deterministic gate on the just-bootstrapped workspace (tanren-ci.yml or default).
     const runGate = input.runGate ?? buildDefaultGate(input, allocation.target, workspacePath, eventStore);
-    // The native merge-gate context: the authority runs `runGate` at `pre_merge` on the live
-    // runner + publishes `tanren/gate`. Same context feeds the re-gate hook.
+    // Native merge-gate context: the authority runs `runGate` at `pre_merge` + publishes `tanren/gate`.
     const mergeGateCtx: MergeGateRunContext = { runGate, target: allocation.target, workspacePath, eventStore };
 
-    // The write→gate→PR→CI→review tail re-enters on a changes-requested review. UNBOUNDED
-    // while the reviewer's feedback keeps CHANGING (the writer is addressing it — progress);
-    // it escalates only at a FIXED POINT (the SAME review feedback recurs unchanged) — the
-    // shared `convergenceDetector` over the review-feedback signatures, NOT a count.
+    // write→gate→PR→CI→review tail: re-enters on changes_requested UNBOUNDED while feedback
+    // KEEPS CHANGING; escalates at a FIXED POINT (shared `convergenceDetector`, NOT a count).
     const reviewReworkAttempts: GateAttempt[] = [];
-    // SELF-HEAL (apex v35): the pre_merge-gate→writer self-heal state — also UNBOUNDED while
-    // the gate error changes OR its error count shrinks, halting only at a genuine fixed point
-    // (see `mergeGateSelfHeal`).
+    // SELF-HEAL (apex v35): pre_merge→writer self-heal state — UNBOUNDED while gate error
+    // changes or count shrinks; halts at a fixed point (see `mergeGateSelfHeal`).
     const mergeGateBudget: MergeGateBudget = { used: 0, attempts: [] };
     const seedRejections: PlannerRejectionFeedback[] = [];
+    // apex v79/v80 loop closure: track which triage-emitted new-spec ids we already
+    // materialized so a rework/re-plan iteration is idempotent (same items may recur).
+    const materializedNewSpecIds = new Set<string>();
     const entityRiskProducer = buildEntityRiskProducer(input, allocation.target, workspacePath);
     let outcome: SubtaskLoopOutcome | undefined, pullRequest: PublishedDraftPullRequest | undefined;
     let mergeGate: GateOutcome | undefined, review: PollReviewForRunResult | undefined;
@@ -394,6 +373,15 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         releaseReason = "failed";
         return { runId: context.runId, workspacePath, outcome };
       }
+
+      // apex v79/v80 loop closure: materialize the fresh triage-emitted `kind: spec`
+      // items as REAL DAG specs so triage's "route out" decision actually lands.
+      await materializeFreshTriageNewSpecs(input.materializeTriageNewSpecs, outcome, materializedNewSpecIds, {
+        runId: context.runId,
+        parentSpecId: context.specId,
+        projectId: context.projectId,
+        orgId,
+      });
 
       // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate
       // (`runPublishGateStage`): `rework`/`halt`/`merged`/`converged_empty` (v35).

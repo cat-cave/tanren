@@ -1,5 +1,5 @@
-// Spec-implementation loop integration tests (docs/roadmap/spec-loop-redesign.md). Each test
-// wires the loop with in-memory adapters and asserts the event timeline — covering the
+// Spec-implementation loop integration tests (docs/roadmap/spec-loop-redesign.md) —
+// wires the loop with in-memory adapters + asserts the event timeline; covers the
 // INTELLIGENT convergence HALT (NOT a count) among the redesign's core behaviors.
 import { describe, expect, it } from "vitest";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
@@ -210,19 +210,19 @@ describe("spec loop — TRIAGE routing", () => {
     expect((triage.payload as { outcome: string }).outcome).toBe("passed");
   });
 
-  it("routeTriageItems: P0 always → task; below-threshold under route-to-dag → spec", () => {
+  it("routeTriageItems: kind:spec honored FIRST — even a P0; in-scope kind:task P0 stays task", () => {
     const items = [
       { id: "a", kind: "spec" as const, severity: "P0" as const, title: "t", body: "b", findingIds: [] },
       { id: "b", kind: "spec" as const, severity: "P3" as const, title: "t", body: "b", findingIds: [] },
+      { id: "c", kind: "task" as const, severity: "P0" as const, title: "t", body: "b", findingIds: [] },
     ];
     const routed = routeTriageItems(items, { blockReviewAt: "P1", p2p3Handling: "route-to-dag" });
-    // P0 never defers; the below-threshold P3 routes to a new spec under velocity.
-    expect(routed[0]!.route).toBe("task");
-    expect(routed[1]!.route).toBe("spec");
+    expect(routed.map((r) => r.route)).toEqual(["spec", "spec", "task"]);
     const summary = summarizeTriageRouting(routed);
-    // A P0 task was kept in-spec, so the outcome is `kept`, not `passed`.
     expect(summary.outcome).toBe("kept");
+    expect(summary.newSpecs).toHaveLength(2);
   });
+  // Coverage-guard + end-to-end routing tests live in `apexV79LoopClosure.test.ts`.
 });
 
 describe("spec loop — WS1↔WS2 spec-quality gate over triage's new specs", () => {

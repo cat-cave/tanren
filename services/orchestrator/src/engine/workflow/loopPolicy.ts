@@ -26,13 +26,17 @@ export interface RoutedWorkItem {
 
 /**
  * Route each triaged work item to a task-here or a new-DAG-spec, deterministically,
- * from the item severity + the agent's `kind` hint + the project `auditPosture`:
- *   - P0 (at-or-above the always-block bar) ALWAYS routes to a task in THIS spec —
- *     a build-breaking / irrecoverable defect is never deferred to a new spec.
- *   - P1–P3: honor the agent's `kind` hint, BUT under a `route-to-dag` posture a
- *     below-`blockReviewAt` item routes to a new spec (velocity: never block on it
- *     here); under `fix-if-idle` a `spec`-hinted item that is at-or-above
- *     `blockReviewAt` is pulled back to a task (it blocks, so fix it in-spec).
+ * from the agent's `kind` hint + the item severity + the project `auditPosture`:
+ *   - The agent's `kind: spec` hint (a CROSS-SCOPE work item the triage judged belongs
+ *     in a new DAG spec) is honored FIRST, regardless of severity — even a P0. This is
+ *     the apex v79/v80 loop closure: without it, every out-of-scope P0 the auditor
+ *     surfaces is silently re-forced back into this spec by the "P0 → task" rule,
+ *     rotating findings across iterations and preventing convergence. The triage agent
+ *     has more scope context than the deterministic policy; when it EXPLICITLY declares
+ *     an item cross-scope, we defer to that judgment.
+ *   - IN-SCOPE (`kind: task`) items then follow severity: P0 ALWAYS routes to a task
+ *     in THIS spec (build-breaking / irrecoverable), P1 blocking routes to a task, and
+ *     P1–P3 mild items follow `p2p3Handling` (velocity vs. fix-if-idle).
  * The split is total: every item resolves to exactly one route.
  */
 export function routeTriageItems(items: ReadonlyArray<TriageWorkItem>, posture: AuditPostureConfig): RoutedWorkItem[] {
@@ -44,21 +48,30 @@ function atOrAbove(severity: FindingSeverity, threshold: FindingSeverity): boole
 }
 
 function routeOne(item: TriageWorkItem, posture: AuditPostureConfig): TriageRoute {
-  // P0 is never deferrable — always a task in this spec.
+  // apex v79/v80 loop closure: a `kind: spec` hint is HONORED FIRST, before the
+  // severity gates. The triage agent has richer scope context than the deterministic
+  // routing policy — when it declares a work item cross-scope, we defer to that
+  // judgment, even for a P0. The old inverted rule ("P0 → task ALWAYS") re-forced
+  // every out-of-scope P0 back into this spec, silently defeating v79's OUT-OF-SCOPE
+  // routing and rotating findings without convergence.
+  if (item.kind === "spec") {
+    return "spec";
+  }
+  // IN-SCOPE items: P0 is never deferrable — always a task in this spec.
   if (item.severity === "P0") {
     return "task";
   }
   const blocks = atOrAbove(item.severity, posture.blockReviewAt);
   if (blocks) {
-    // A blocking (≥ threshold) item is fixed in-spec regardless of the agent hint.
+    // A blocking (≥ threshold) item is fixed in-spec.
     return "task";
   }
   // Below the block threshold: velocity posture routes to a new DAG spec; otherwise
-  // honor the agent's home hint.
+  // stays as a task-here (the in-scope hint says fix-if-idle in this spec).
   if (posture.p2p3Handling === "route-to-dag") {
     return "spec";
   }
-  return item.kind === "spec" ? "spec" : "task";
+  return "task";
 }
 
 // The terminal outcome of the triage routing step:

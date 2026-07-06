@@ -9,7 +9,7 @@ import {
   validateEmittedSpecs,
   type ValidateEmittedSpecsInput,
 } from "../forge/specQuality/index.js";
-import type { PlanSubtask } from "../answerers/schemas/index.js";
+import type { PlanSubtask, TriageWorkItem } from "../answerers/schemas/index.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { RoutedWorkItem } from "./loopPolicy.js";
 import type { NewSpecRequest } from "./subtaskLoop.js";
@@ -161,6 +161,38 @@ export function routedToNewSpec(r: {
     severity: r.item.severity,
     findingIds: [...r.item.findingIds],
   };
+}
+
+/**
+ * apex v79/v80 loop closure — fail-closed guard on the TRIAGE answer's coverage. If
+ * the triage agent returned NO work items on a non-empty findings list,
+ * `summarizeTriageRouting` would return `outcome: "passed"` (`tasksHere.length === 0`)
+ * even though every input finding was silently dropped into a black hole. Synthesize
+ * a P0 IN-SPEC task-here item that subsumes every input finding so the loop
+ * re-iterates (never falsely passes on dropped findings). Non-empty `workItems` are
+ * returned unchanged; the per-item subsumption trail (`findingIds`) remains the triage
+ * agent's answer. Empty findings ⇒ empty workItems is legal (a clean pass, no coverage
+ * needed).
+ */
+export function ensureFindingCoverage(
+  workItems: ReadonlyArray<TriageWorkItem>,
+  findings: ReadonlyArray<Finding>,
+  triageTaskId: string,
+): ReadonlyArray<TriageWorkItem> {
+  if (findings.length === 0 || workItems.length > 0) return workItems;
+  return [
+    {
+      id: `triage-coverage-gap-${triageTaskId}`,
+      kind: "task" as const,
+      severity: "P0" as const,
+      title: "Triage returned no work items on non-empty findings",
+      body:
+        `Fail-closed synthetic P0: the triage agent produced empty workItems while ${findings.length} finding(s) were present, ` +
+        `which would silently drop them (a black hole). Each finding is subsumed here so the loop re-iterates. ` +
+        `Uncovered findings: ${findings.map((f) => `[${f.severity}] ${f.id}: ${f.title}`).join("; ")}`,
+      findingIds: findings.map((f) => f.id),
+    },
+  ];
 }
 
 // Turn the kept-in-spec triage items into the planner-steering rejection record routed
