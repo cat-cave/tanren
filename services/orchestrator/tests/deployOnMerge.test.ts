@@ -33,6 +33,8 @@ interface PoolState {
   alreadyVerified?: boolean;
   /** A prior deploy.failed exists (TERMINAL — skip entirely, no self-loop). */
   alreadyFailed?: boolean;
+  /** A prior deploy.skipped exists (TERMINAL — a pre-resolution skip must not re-loop). */
+  alreadySkipped?: boolean;
   /** Omit mergeSha from merge.completed (a merge that recorded no SHA — fail loud). */
   noMergeSha?: boolean;
   /** Runtime app-env rows (project_app_env) the attach flow reads. */
@@ -49,9 +51,10 @@ function fakePool(state: PoolState): pg.Pool {
       const payload = state.noMergeSha === true ? { prNumber: 7 } : { prNumber: 7, mergeSha: MERGE_SHA };
       return { rows: [{ payload }], rowCount: 1 };
     }
-    if (/event_type IN \('deploy\.verified', 'deploy\.failed'\)/u.test(sql)) {
-      // The TERMINAL gate (alreadyTerminal): a prior deploy.verified OR deploy.failed.
-      return state.alreadyVerified === true || state.alreadyFailed === true
+    if (/event_type IN \('deploy\.verified', 'deploy\.failed', 'deploy\.skipped'\)/u.test(sql)) {
+      // The TERMINAL gate (alreadyTerminal): a prior deploy.verified / deploy.failed /
+      // deploy.skipped short-circuits check() to a no-op (no re-append, no self-loop).
+      return state.alreadyVerified === true || state.alreadyFailed === true || state.alreadySkipped === true
         ? { rows: [{ id: "t1" }], rowCount: 1 }
         : { rows: [], rowCount: 0 };
     }
@@ -334,6 +337,28 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     const events = new RecordingEventStore();
     await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyFailed: true }, transport, events);
     expect(events.appends).toHaveLength(0);
+    expect(transport.deploysTriggered()).toEqual([]);
+  });
+
+  // deploy.skipped is ALSO run-scoped: its append fires a tanren_run NOTIFY that wakes
+  // the subscriber → without the terminal gate the pre-resolution branch (no_sha /
+  // config_incomplete) would re-fire, re-append deploy.skipped, throw, and self-loop →
+  // a per-merge `warn` storm to the operator. A prior deploy.skipped must gate `check()`
+  // to a silent no-op for BOTH pre-resolution reasons.
+  it.each([
+    { label: "no_sha", state: { noMergeSha: true, config: VERCEL_TARGET, grant: VERCEL_GRANT } },
+    {
+      label: "config_incomplete",
+      state: {
+        config: { version: 1 } as Record<string, unknown>,
+        linkedGrants: [{ provider_kind: "ci.something", capabilities: ["deploy"] }],
+      },
+    },
+  ])("is TERMINAL on deploy.skipped: a re-check after a prior $label skip is a no-op", async ({ state }) => {
+    const transport = scriptedDeployTransport("vercel");
+    const events = new RecordingEventStore();
+    await run({ merged: true, ...state, alreadySkipped: true }, transport, events);
+    expect(events.appends).toEqual([]);
     expect(transport.deploysTriggered()).toEqual([]);
   });
 

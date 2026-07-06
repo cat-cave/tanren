@@ -398,6 +398,9 @@ export class NotificationDispatcher {
 // effectiveSeverityFor: the registry's default-severity map is the base
 // rate; a few payload shapes carry per-instance severity hints we honor:
 //   - run.completed with outcome containing "fail" promotes to warn.
+//   - release.finalized with `cleanedUp=false` promotes (leaked runner).
+//   - demo.completed with `failed > 0` promotes (info → warn) so a demo whose
+//     behaviors failed on a verified deploy clears the default-route floor.
 // This keeps the matrix actionable without proliferating event names.
 // (checker.verdict / auditor.verdict are FINDINGS-ONLY now — no `passed`
 // flag — so they carry no per-instance promotion; they take the base rate.)
@@ -415,6 +418,18 @@ export function effectiveSeverityFor(event: TypedEvent): Severity {
   if (event.eventType === "release.finalized") {
     const payload = event.payload as { cleanedUp?: boolean };
     if (payload.cleanedUp === false) {
+      return promote(base);
+    }
+  }
+  // demos-as-evidence signal: an all-passing demo (`failed === 0`) stays `info`
+  // (routine ok summary — no matrix spam). A demo where ANY behavior failed
+  // (`failed > 0`) is the apex "deploy verified but the planted issue makes
+  // behaviors fail" signal — the one an operator most needs to see — so it
+  // promotes one tier (info → warn), clearing the default-route floor without a
+  // per-event route configured.
+  if (event.eventType === "demo.completed") {
+    const payload = event.payload as { failed?: number };
+    if (typeof payload.failed === "number" && payload.failed > 0) {
       return promote(base);
     }
   }

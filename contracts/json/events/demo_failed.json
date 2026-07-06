@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "detail": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "reason": {
+      "enum": [
+        "resolve_surface_failed",
+        "load_behaviors_failed",
+        "unsupported_surface_kind",
+        "exercise_failed"
+      ],
+      "type": "string"
+    },
+    "surfaceKind": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "reason",
+    "detail"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.demo.failed"
+}

@@ -18,7 +18,7 @@
 // the wrapped provisioner). The evidence events carry only behavior ids/titles +
 // surface kind + outcome + an observable detail — never a token or a response body.
 
-import { runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
@@ -34,6 +34,28 @@ import { DemoEngine, type DemoBehavior } from "../demo/demoEngine.js";
 import { fetchDemoWebProbe } from "../demo/demoWebProbe.js";
 import type { DemoWebProbe } from "../demo/demoEvidence.js";
 import { loadVerifiedDeploy, loadSpecBehaviors, type VerifiedDeploy } from "./demoOnDeployReads.js";
+
+/** The phase a demo failed in — drives the fixed, machine-parseable `demo.failed.reason`. */
+type DemoFailPhase = "resolve_surface_failed" | "load_behaviors_failed" | "exercise_failed";
+
+/**
+ * The FIXED, non-secret `demo.failed.detail` summaries. Deliberately NOT the raw error
+ * (which can embed provider-supplied HTTP response text); the full error is preserved
+ * via the subscriber's `log.error` re-throw. Mirrors `deployOnMergeReads.ts`'s
+ * `DEPLOY_FAILED_REASON` discipline.
+ */
+const DEMO_FAILED_DETAIL: Record<DemoFailPhase, string> = {
+  resolve_surface_failed:
+    "demo could not resolve the deployed exercise surface (grant lost mid-flight, or the DeployAdapter's demoSurface read failed); see the run logs for provider detail",
+  load_behaviors_failed:
+    "demo could not load the spec's behaviors before exercising the surface; see the run logs for the underlying error",
+  exercise_failed:
+    "demo threw while exercising the spec's behaviors against the deployed surface; see the run logs for the underlying error",
+};
+
+/** The engine's unsupported-surface-kind exhaustive throw is a distinct diagnosis — surface it. */
+const UNSUPPORTED_SURFACE_DETAIL =
+  "demo cannot exercise this deployed surface kind — the per-behavior exercise arm is not implemented for non-web surfaces";
 
 export interface DemoOnDeployWatcherDeps {
   /** The runtime (`tanren_app`) pool; the watcher re-reads under the system scope. */
@@ -77,6 +99,14 @@ export class DemoOnDeployWatcher {
    * Exercise the spec's behaviors against the run's verified deploy surface + record
    * per-behavior evidence. Returns without effect when the run's deploy is not
    * verified or this run already ran a demo.
+   *
+   * DURABLE FAILURE (mirrors {@link DeployOnMergeWatcher.check}): once a demo is EXPECTED
+   * (a verified deploy exists and this run has not yet demoed), ANY throw records a
+   * durable `demo.failed` (→ a `warn`) BEFORE re-throwing, never a subscriber-swallowed
+   * `log.error` that leaves the timeline looking "deploy verified, everything fine" while
+   * the demo actually died. The reason category is derived from the failing phase; the
+   * detail is a FIXED non-secret summary (the raw error stays in the run logs via the
+   * re-throw).
    */
   async check(runId: string): Promise<void> {
     if (runId === "") return;
@@ -86,16 +116,64 @@ export class DemoOnDeployWatcher {
     // Idempotent: this run already ran its demo.
     if (verified.alreadyDemoed) return;
 
-    const surface = await this.resolveSurface(verified);
-    const behaviors = await runWithSystemScope(this.deps.pool, (client) =>
-      loadSpecBehaviors(client, verified.specId, verified.orgId, verified.projectId),
-    );
+    let phase: DemoFailPhase = "resolve_surface_failed";
+    let surfaceKind: string | undefined;
+    try {
+      const surface = await this.resolveSurface(verified);
+      surfaceKind = surface.kind;
+      phase = "load_behaviors_failed";
+      const behaviors = await runWithSystemScope(this.deps.pool, (client) =>
+        loadSpecBehaviors(client, verified.specId, verified.orgId, verified.projectId),
+      );
 
-    await this.engine.exercise(
-      { runId, specId: verified.specId, projectId: verified.projectId, orgId: verified.orgId },
-      surface,
-      behaviors satisfies ReadonlyArray<DemoBehavior>,
-    );
+      phase = "exercise_failed";
+      await this.engine.exercise(
+        { runId, specId: verified.specId, projectId: verified.projectId, orgId: verified.orgId },
+        surface,
+        behaviors satisfies ReadonlyArray<DemoBehavior>,
+      );
+    } catch (error) {
+      // The engine's unsupported-surface-kind exhaustive throw fires DURING exercise but
+      // is a distinct operator-diagnosis (the surface DID resolve — the kind just has no
+      // arm yet). Refine the reason so the operator sees "unsupported_surface_kind" rather
+      // than the generic exercise_failed.
+      const isUnsupportedKind = phase === "exercise_failed" && isUnsupportedSurfaceKindError(error);
+      const reason = isUnsupportedKind ? "unsupported_surface_kind" : phase;
+      const detail = isUnsupportedKind ? UNSUPPORTED_SURFACE_DETAIL : DEMO_FAILED_DETAIL[phase];
+      await this.appendDemoFailed(runId, verified, { reason, detail, surfaceKind });
+      throw error;
+    }
+  }
+
+  /**
+   * Append the DURABLE `demo.failed` under the run's org scope so the operator + run
+   * timeline SEE the demo failure instead of a subscriber-swallowed `log.error`. Fixed
+   * non-secret reason + detail; the raw error stays in the run logs.
+   */
+  private async appendDemoFailed(
+    runId: string,
+    verified: VerifiedDeploy,
+    args: {
+      reason: "resolve_surface_failed" | "load_behaviors_failed" | "unsupported_surface_kind" | "exercise_failed";
+      detail: string;
+      surfaceKind: string | undefined;
+    },
+  ): Promise<void> {
+    await runWithJobOrgId(verified.orgId, async () => {
+      await this.eventStore.append({
+        runId,
+        specId: verified.specId,
+        projectId: verified.projectId,
+        orgId: verified.orgId,
+        eventType: "demo.failed",
+        payload: {
+          reason: args.reason,
+          detail: args.detail,
+          provider: verified.provider,
+          ...(args.surfaceKind !== undefined && { surfaceKind: args.surfaceKind }),
+        },
+      });
+    });
   }
 
   /**
@@ -137,4 +215,18 @@ export function buildDemoOnDeployWatcher(deps: {
     transport: fetchDeployTransport(),
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
   });
+}
+
+/**
+ * Recognize the {@link DemoEngine}'s exhaustive unsupported-surface-kind throw so the
+ * `demo.failed.reason` refines from the generic `exercise_failed` to the more actionable
+ * `unsupported_surface_kind`. Keyed on the engine's stable throw message stem — the
+ * engine controls both sides, so this is a coupled but bounded check.
+ */
+function isUnsupportedSurfaceKindError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.startsWith("demoEngine: surface kind '") ||
+    error.message.startsWith("demoEngine: no exercise for surface kind '")
+  );
 }

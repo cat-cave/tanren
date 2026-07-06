@@ -141,6 +141,13 @@
       "when": 1782834240815,
       "tag": "0021_clean_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1783363475541,
+      "tag": "0022_bright_solo",
+      "breakpoints": true
     }
   ]
 }

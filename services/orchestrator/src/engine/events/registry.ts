@@ -124,6 +124,7 @@ import {
 import {
   DemoCompletedPayload,
   DemoEvidenceRecordedPayload,
+  DemoFailedPayload,
   IssueOpenedPayload,
   MergePostMergeFailedPayload,
 } from "./schemas/postMerge.js";
@@ -377,9 +378,13 @@ export const EventRegistry = {
 
   // Demos-as-evidence (design doc § "Native Deployment And Demos"): a verified
   // deploy exercises each spec BEHAVIOR + records evidence per behavior
-  // (demo.evidence.recorded) + a summary tally (demo.completed).
+  // (demo.evidence.recorded) + a summary tally (demo.completed) / a durable
+  // failure event when the demo could not complete (mirrors deploy.failed —
+  // fixed reason category + non-secret detail — so the operator SEES the demo
+  // failure on the timeline instead of a subscriber-swallowed log line).
   "demo.evidence.recorded": DemoEvidenceRecordedPayload,
   "demo.completed": DemoCompletedPayload,
+  "demo.failed": DemoFailedPayload,
 
   // Hello / smoke run
   "hello.started": HelloStartedPayload,

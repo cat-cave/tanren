@@ -4,7 +4,7 @@ import { z } from "zod";
 // re-exported through this post-merge barrel — the demo-on-deploy watcher is itself a
 // post-merge subscriber — so the EventRegistry pulls them off one barrel it already
 // imports (keeps the registry under its dependency cap).
-export { DemoEvidenceRecordedPayload, DemoCompletedPayload } from "./demo.js";
+export { DemoEvidenceRecordedPayload, DemoCompletedPayload, DemoFailedPayload } from "./demo.js";
 
 // Post-merge auto-issue creation (tempering.md dimension A, the last core
 // run-loop item). After a run's PR merges onto `default_branch`, the post-merge
