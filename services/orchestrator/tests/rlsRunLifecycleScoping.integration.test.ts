@@ -138,9 +138,14 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     await migrate(ownerPool);
     appPool = new Pool({ connectionString: withRole(ADMIN_URL, APP_ROLE, APP_PASSWORD, database) });
 
-    // No BYPASSRLS carve-out: the lifecycle must succeed on the restricted app
-    // role alone (the worker's own pool), which is the production data plane.
-    setSystemPool(undefined);
+    // Every TENANT write must succeed on the restricted app role alone (the
+    // worker's own pool = the production data plane). Cross-org SYSTEM reads —
+    // e.g. PgBudgetGate.resolveBudget's `SELECT org_id, config FROM projects` —
+    // legitimately need BYPASSRLS scope (matches prod, where `tanren_system` is
+    // the narrow BYPASSRLS pool). Point the system pool at `ownerPool` so
+    // system-scoped reads land the cross-org row; tenant writes still go
+    // through `appPool` and prove RLS admission.
+    setSystemPool(ownerPool);
 
     await seedCredentialCompleteRun(ownerPool);
   }, 60_000);

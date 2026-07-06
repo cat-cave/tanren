@@ -130,22 +130,12 @@ describeDb("PgBudgetGate against a real Postgres (§6.2)", () => {
     expect(state.spentUsd).toBe(0);
   });
 
-  it("FAILS CLOSED on a project row whose org_id is NULL (Codex critic #11)", async () => {
-    // The same safety invariant as the missing-row case: a corrupt project row
-    // with a NULL `org_id` is unreadable ownership, not "no budget configured".
-    // The gate cannot resolve an org to sum the cost records under, so the true
-    // spend is UNKNOWN — assume the ceiling is reached and fail CLOSED.
-    const PROJECT_NULL_ORG = "proj_budget_null_org";
-    await ownerPool.query(
-      `INSERT INTO projects (project_id, name, repo_url, org_id, config)
-       VALUES ($1, 'p', 'https://example.com/r.git', NULL, $2::jsonb)`,
-      [PROJECT_NULL_ORG, JSON.stringify({ version: 1, budget: { ceilingUsd: 50, period: "total" } })],
-    );
-    const state = await gate.resolveBudget(PROJECT_NULL_ORG);
-    expect(state.failClosed).toBe("unresolvable_project_org");
-    expect(state.ceilingUsd).toBeUndefined();
-    expect(state.spentUsd).toBe(0);
-  });
+  // NOTE: the sibling "null org_id" fail-closed case is not testable at the
+  // pg layer — `projects.org_id` has a NOT NULL constraint, so an INSERT with
+  // NULL is rejected before it can reach the resolver. The `unresolvable_project_org`
+  // branch is exercised at the resolver level via the missing-row case above
+  // (same branch, same event payload) and in the unit tests
+  // (`budgetGate.test.ts`) via an in-memory pool that can return `owner.orgId === null`.
 });
 
 // Seed a project with a given config under the shared org.
