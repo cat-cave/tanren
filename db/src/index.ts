@@ -28,6 +28,7 @@ export {
   RUN_ACTIVITY_CHANNEL,
 } from "./notify.js";
 export type { NotifyHandler } from "./notify.js";
+export { isRecoverableRun, RECOVERABLE_OUTCOMES, RECOVERABLE_OUTCOMES_LIST } from "./recoveryOutcomes.js";
 export * as schema from "./schema.js";
 export { stateEnumLists } from "./stateEnums.js";
 export type { StateEnumName } from "./stateEnums.js";
