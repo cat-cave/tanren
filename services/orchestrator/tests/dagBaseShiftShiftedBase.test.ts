@@ -18,6 +18,7 @@ import {
   BaseShiftCoordinator,
   type BaseShiftConflictResolver,
   type BaseShiftEventEmitter,
+  type BaseShiftGateReworkRouter,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type BaseShiftReGate,
@@ -148,6 +149,12 @@ const noopPersistence: BaseShiftPersistence = {
 const noopEvents: BaseShiftEventEmitter = {
   async emitRebase() {},
 };
+// gateRework is REQUIRED on BaseShiftCoordinatorDeps (Codex critic #15). This file exercises
+// stack/nonSpeculative threading, not the clean-rebase gate-fail arm, so a no-op suffices; the
+// writer-rework routing proofs live in dagBaseShiftCoordinator.test.ts.
+const noopGateRework: BaseShiftGateReworkRouter = {
+  async routeGateFailToRework() {},
+};
 
 const SPEC_OPENER: BaseShiftWorkspaceOpener = {
   async open() {
@@ -180,6 +187,7 @@ describe("BaseShiftCoordinator — threads the re-resolved stack + nonSpeculativ
       persistence: noopPersistence,
       nodes: noNodes,
       events: noopEvents,
+      gateRework: noopGateRework,
     });
     await coord.rebaseOnto({
       projectId: "project_1",
@@ -204,6 +212,7 @@ describe("BaseShiftCoordinator — threads the re-resolved stack + nonSpeculativ
       persistence: noopPersistence,
       nodes: noNodes,
       events: noopEvents,
+      gateRework: noopGateRework,
     });
     await coord.rebaseOnto({
       projectId: "project_1",
@@ -258,6 +267,7 @@ describe("BaseShiftCoordinator — threads the re-resolved ancestor stack to the
       persistence: noopPersistence,
       nodes: noNodes,
       events: noopEvents,
+      gateRework: noopGateRework,
     });
     await coord.rebaseOnto({
       projectId: "project_1",

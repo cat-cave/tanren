@@ -24,6 +24,7 @@ import {
   BaseShiftHeldError,
   type BaseShiftConflictResolver,
   type BaseShiftEventEmitter,
+  type BaseShiftGateReworkRouter,
   type BaseShiftNodeReader,
   type BaseShiftPersistence,
   type BaseShiftReGate,
@@ -142,6 +143,10 @@ class RecordingEvents implements BaseShiftEventEmitter {
   }
 }
 
+const noopGateRework: BaseShiftGateReworkRouter = {
+  async routeGateFailToRework() {},
+};
+
 function coordinator(opts: {
   conflictOnRebase?: boolean;
   reGate?: ReGateVerdict;
@@ -163,6 +168,10 @@ function coordinator(opts: {
     persistence: opts.suppressMarker === true ? new MarkerSuppressedBaseShiftPersistence(persistence) : persistence,
     nodes,
     events,
+    // gateRework is REQUIRED (Codex critic #15) — this file's tests do not exercise the
+    // clean-rebase gate-fail arm, so a no-op suffices; the routing proofs live in
+    // dagBaseShiftCoordinator.test.ts (the `RecordingGateRework` harness).
+    gateRework: noopGateRework,
   });
   return { coord, persistence, events };
 }

@@ -139,11 +139,13 @@ export interface BaseShiftCoordinatorDeps {
   nodes: BaseShiftNodeReader;
   events: BaseShiftEventEmitter;
   /**
-   * Routes a CLEAN-rebase GATE-tier re-gate failure to writer rework (not replan/escalate).
-   * OPTIONAL: when absent (a degenerate / legacy wiring), a clean-rebase gate failure falls
-   * back to `recordReplan` (the pre-fix behavior) — never a silent merge. Production wires it.
+   * Routes a CLEAN-rebase GATE-tier re-gate failure to writer rework (not replan/escalate) —
+   * the doctrine (PR #682 / merge re-gate design): a byte-clean rebase whose fresh gate fails
+   * is the WRITER's to fix, NEVER an irreconcilable-conflict replan. REQUIRED (no silent
+   * degrade): every construction site MUST wire the router. A missing router used to fall
+   * back to `recordReplan` — the regression this fix (Codex critic #15) eradicates.
    */
-  gateRework?: BaseShiftGateReworkRouter;
+  gateRework: BaseShiftGateReworkRouter;
 }
 
 /**
@@ -296,7 +298,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // A CLEAN rebase whose re-gate FAILED a GATE TIER: the tree is byte-clean (no conflict), the
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
-    await this.routeGateFailOrReplan(input, result.gateError);
+    await this.routeGateFailToRework(input, result.gateError);
     await this.emit(input, false, "replanned");
     return { decision: "replanned", headSha: input.rebase.headSha };
   }
@@ -361,9 +363,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       await this.emit({ ...input, rebase: resolved }, true, "rebased_resolved");
       return { decision: "rebased_resolved", headSha: resolution.headSha };
     }
-    // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). A
-    // degenerate wiring (no rework router) falls back to the legacy replan.
-    await this.routeGateFailOrReplan(input, result.gateError);
+    // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). The
+    // rework router is REQUIRED — every construction site wires it (no silent fallback).
+    await this.routeGateFailToRework(input, result.gateError);
     await this.emit(input, true, "replanned");
     return { decision: "replanned", headSha: input.rebase.headSha };
   }
@@ -396,28 +398,24 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   /**
    * A CLEAN-tree (rebased or resolved) GATE-tier re-gate failure → WRITER REWORK: the tree is
    * byte-clean (no conflict), the code just fails a deterministic gate on the shifted base, which
-   * the writer can fix. Carries the gate error as steering (no_silent_fallback). A degenerate
-   * wiring with no rework router falls back to `recordReplan` (never a silent merge). Escalation
-   * is owned by the convergence detector inside the router (a fixed point, no count) — this path
-   * NEVER directly escalates to persistent_failure.
+   * the writer can fix. Carries the gate error as steering (no_silent_fallback). The rework
+   * router is REQUIRED on `BaseShiftCoordinatorDeps` — no degenerate replan fallback (Codex
+   * critic #15): a clean-rebase gate-fail must NEVER route to replan-as-irreconcilable, which
+   * would strand the spec at the wrong tier of the doctrine (writer rework, not replan).
+   * Escalation is owned by the convergence detector inside the router (a fixed point, no count) —
+   * this path NEVER directly escalates to persistent_failure.
    */
-  private async routeGateFailOrReplan(
+  private async routeGateFailToRework(
     input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
     gateError: string | undefined,
   ): Promise<void> {
-    if (this.deps.gateRework !== undefined) {
-      await this.deps.gateRework.routeGateFailToRework({
-        projectId: input.projectId,
-        specId: input.dependent.specId,
-        runId: input.dependent.runId,
-        // no_silent_fallback: carry the REAL gate error; a missing detail is a loud generic note.
-        gateError: gateError ?? "the rebased branch failed its re-gate (gate tier) on the shifted base",
-      });
-      return;
-    }
-    // Degenerate/legacy wiring (no rework router): fall back to replan so the spec is never
-    // stranded — production always wires the rework router.
-    await this.replan(input, "the rebased branch failed its re-gate on the shifted base");
+    await this.deps.gateRework.routeGateFailToRework({
+      projectId: input.projectId,
+      specId: input.dependent.specId,
+      runId: input.dependent.runId,
+      // no_silent_fallback: carry the REAL gate error; a missing detail is a loud generic note.
+      gateError: gateError ?? "the rebased branch failed its re-gate (gate tier) on the shifted base",
+    });
   }
 
   /**
