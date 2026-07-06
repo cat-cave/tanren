@@ -7,7 +7,13 @@ credentials. This records **what each tier proved, the gaps live validation
 found-and-fixed, and the config gotchas** — so a fresh agent can reproduce the
 validated state without rediscovering them.
 
-The single live forward tracker is `ROADMAP.md`.
+The single live forward tracker is `ROADMAP.md`. This doc is the durable
+Phase 3 v0 record of the three-tier acceptance. The autonomy engine's ongoing
+live proof — the whole-product loop, driven end-to-end over the API by a
+non-technical operator — is now carried forward by the **`apex`** trial series
+(through **v79** as of 2026-07-04; see
+[`apex.md`](./apex.md) and [`apex-run-playbook.md`](./apex-run-playbook.md) for
+the honest proof state and the drive-from-zero runbook).
 
 ## What the three tiers proved (each reached a merged PR)
 

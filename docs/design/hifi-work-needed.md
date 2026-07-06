@@ -65,29 +65,42 @@ integrations / merge-queue) — so they are pure "the design vision must catch u
 the engine" work, not build-debt. For each: what the hi-fi lacks + the built
 surface it should reflect.
 
-### 1.1 Tanren-native templating — registry · creation · maintenance · channels
+### 1.1 Tanren-native templating — fragment library + per-fragment authoring runs
 
 - **Hi-fi source**: none — entirely absent. The hi-fi onboarding (`view-onboard-new.jsx`,
   `view-onboard-existing.jsx`) treats scaffolding as an implicit per-run derivation;
-  there is no template object, registry, or channel concept anywhere.
-- **Built code path**: `engine/templates/` (manifest `manifest.ts` — a
-  `.tanren/template.yml` `TemplateManifestV1` with `lts | nightly` channels and a
-  `draft` → validated lifecycle; validation harness `validationHarness.ts` +
-  `negativeControls.ts` + `validationProof.ts` — the "meaningful, not
-  green-by-accident" oracle), the registry store `engine/repositories/templates.ts`,
-  the operator routes `routes/templates/index.ts` (CRUD + `channel` filter), and the
-  lifecycle vocabulary `engine/events/schemas/templates.ts`
-  (`template.registered` / `template.status_changed`). Doctrine:
+  there is no fragment, library, or authoring-run concept anywhere.
+- **Built code path**: the doctrine has collapsed to **fragments as the SINGLE
+  primitive** — there is no template registry, no `.tanren/template.yml` manifest,
+  no `lts | nightly` channels, no template-creation meta-DAG, and no
+  template-maintenance scheduler. The core library ships as bundled fragments
+  (`engine/templates/fragments/library/` — `base`, `runtime-node-pnpm`,
+  `runtime-ruby-bundler`, `frontend-react-router`, `frontend-remix`,
+  `db-postgres-prisma`, `deploy-fly`, `deploy-none`, `addon-biome`, `addon-docker`),
+  overlaid at derive time with per-org fragments from the `fragments` table
+  (`engine/templates/fragments/unifiedLibrary.ts`). Per-project seeding runs
+  `selectFragmentConfig` against that unified library — on a miss, the
+  per-fragment authoring DAG (F2 — `routes/onboarding/fragmentAuthoring.ts` +
+  `engine/templates/fragments/providerFragmentAuthorer.ts` +
+  `fragmentAuthoringRun.ts`) authors the missing fragment via a real LLM,
+  smoke-composes it, and persists it to `fragments` (status `draft` →
+  `validated`); on a fixed-point failure the derive halts loud
+  (`FragmentAuthoringFailedError` → 409 `fragment_authoring_failed`). The
+  composed VFS materializes directly into the project repo — there is no
+  intermediate `tanren-tmpl-<slug>` seed repo (PR-G). Lifecycle events:
+  `fragment.authoring.{started,succeeded,failed}` in
+  `engine/events/schemas/templates.ts`. Doctrine:
   `docs/roadmap/templating-system.md`.
 - **Gap type**: `missing`.
-- **What the new hi-fi should do**: add a **template registry** surface (list of
-  templates by runtime/pkg-mgr/framework/deploy-target, channel = `lts`/`nightly`,
-  status = draft/validated), a **creation** flow (a meta-DAG that builds a template
-  as a validated contract-instance, with the **negative-control validation proof**
-  shown — gates must demonstrably CATCH a planted defect), and a **maintenance**
-  view (the nightly canary that re-validates on a tooling bump; nightly→lts
-  graduation on green). Template selection should appear as an **optional**
-  convenience in the new-project flow, never a hardcoded stack.
+- **What the new hi-fi should do**: add a **fragment library** surface (list of
+  fragments by kind × label — the 9 compose phases and the per-kind labels; core
+  vs. per-org overrides visible) and a **fragment-authoring run** surface (an F2
+  run rendered in the same event timeline as writer runs, with `started` /
+  `succeeded` / `failed` states and the latest rejection text on a fixed-point
+  halt — the derive halts loud on `fragment_authoring_failed`, never a silent
+  skip). Per-project seeding remains an implicit derivation from the captured
+  lifecycle — no operator-picked stack, no template-selection step in
+  onboarding.
 
 ### 1.2 Apex run-rhythm + the dollar budget gate
 
@@ -212,10 +225,10 @@ change** — excluded here. §1.10 is the already-applied running-log — exclud
 
 - **Hi-fi source**: `view-onboard-org.jsx` step 1 (static
   `github.com/apps/tanren/installations` link). **Code**:
-  `routes/auth/githubAppInstall.ts` + `engine/credentials/orgGithubApp.ts` /
-  `githubAppTokenMinter.ts` (orchestrator-driven install minting an auto-rotating
-  installation token; `appInstallHref` wired in `routes/onboarding/index.tsx`).
-  **Type**: `drifted`.
+  `routes/auth/githubAppInstall.ts` + `engine/credentials/orgGithubApp.ts` +
+  `engine/providers/githubAppTokenMinter.ts` (orchestrator-driven install minting
+  an auto-rotating installation token; `appInstallHref` wired in
+  `routes/onboarding/index.tsx`). **Type**: `drifted`.
 - **What the new hi-fi should do**: show the **two-path** auth (orchestrator-driven
   App install minting rotating tokens vs. the manual link) and the auto-rotating
   installation-token vault entry. (See `phase-3-hifi-gaps.md` §1.5.)

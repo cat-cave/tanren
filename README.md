@@ -149,12 +149,15 @@ cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md
   lint is CI-gating. **Note:** apex v44/v45 surfaced two disguised survivors the
   initial lint missed — the ssh2 `timeout:` socket idle-timeout (#638) and a
   newest-mtime liveness probe a lock-heartbeat defeated (#640); both are fixed and the
-  lint extended. **apex v49 surfaced a third doctrine extension**: derive's
+  lint extended. apex v49 surfaced a third doctrine extension — task #21: derive's
   synchronous wait on the template-build child run had no inner-failure circuit
-  breaker, so a downstream stall presented as an 8-hour curl hang — task #21 extends
-  the progress / sign-of-life model into the derive synchronous-wait surface. The
-  doctrine stands; disguised survivors are caught and fixed as found. See
-  `docs/roadmap/timeout-eradication.md`.
+  breaker, so a downstream stall presented as an 8-hour curl hang. Both fixes have
+  landed — #21A (runner-INSERT idempotency) shipped as PR #705, and #21B was
+  OBVIATED by PR-F #693 (templating collapsed to fragment-only composition; the
+  template-build child run + its synchronous-wait surface no longer exist). PR #702
+  further extended the enforcement lint to close the audit-#672 evasion paths. The
+  doctrine stands; disguised survivors are caught and fixed (or obviated) as found.
+  See `docs/roadmap/timeout-eradication.md`.
 - **A native DESIGN subsystem — Tanren owns design the way it owns the engine.** A
   domain-general, persisted, versioned `DesignContract` (`engine/design/`) is
   authored by a native design agent + design phase, **injected into the writer on
@@ -231,25 +234,24 @@ credentials (GitHub App + Slack + a deploy target — see
 credits under the $50 budget ceiling (BYOK Codex runs at $0).
 
 **Honest proof state.** Successive apex trials — v37–v46 ran on the previous WSL
-host through 2026-06-19; v47–v49 ran on the new NixOS host on 2026-06-23 — have
-driven Tanren harder each time and each flushed real engine bugs now fixed on `main`.
-**No live run has yet closed the full autonomous loop** (issue → triage → fix →
-merge → deploy → a working product) — that is precisely what apex still has to prove.
-v49 drove past this session's env + code cleanups into the live writer-checker-auditor
-LLM loop running real scaffold work and halted on a **legitimate pre-session
-tanren-code finding**: a runner-INSERT retry loop
-(`duplicate key value violates unique constraint "runners_pkey"`) between the
-run-executor and the job-reaper, compounded by derive's synchronous wait having no
-inner-failure circuit breaker (8-hour curl hang). Task #21 tracks both fixes —
-runner-INSERT idempotency + a progress/sign-of-life-based circuit breaker for
-derive's synchronous wait. Bugs fixed this session: #636 (runner-release org-scope
-RLS leak), #637 (writer must regenerate derived companions before gate), #638
-(ssh2 socket idle-timeout disguised as a hang), #639 (descendant
-ancestor_not_ready hot-loop), #640 (job-stall watchdog gap — lock-file heartbeat
-defeating newest-mtime probe), #646 (apex-mode env-var eradicated — apex now
-configures the autonomous posture via the same governance API any operator uses),
-#659 (Lane T1 — template-build child project is born with
-`auditPosture: AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas: 1`).
+host through 2026-06-19; v47–v79 have run on the new NixOS host from 2026-06-23
+through 2026-07-04, roughly a trial a day since 2026-06-28 — each flushed real
+engine bugs now fixed on `main`. **No live run has yet closed the full autonomous
+loop** (issue → triage → fix → merge → deploy → a working product) — that is
+precisely what apex still has to prove. The v49-era infra halts (task #21
+runner-INSERT PK race + derive synchronous-wait breaker) are resolved (#21A
+shipped as PR #705; #21B obviated by PR-F #693). The current frontier as of v79
+sits inside the product-build loop itself: writer subtask sizing (PR #731), plan
+stall recovery (PR #726), template composition semantics (fragment-based
+composer PR-A #688 → PR-G #699), PR-enqueue timing (PR #724 + the #725 atomic
+3-write seam + orphaned-PR startup sweep), and issue-triage routing. The v79 fix
+(PR #734) enables triage → new-spec insertion on real out-of-scope findings —
+the closest we've been to the issue-loop half of the apex proof firing
+autonomously, without yet closing the loop end-to-end. Trial-driven fixes
+landed 2026-06-30 → 2026-07-04 also include PRs #715/#719/#720/#721/#723/#728/
+#729/#730/#732/#733 across writer/planner/composer/watchdog/observability, plus
+the audit rounds #708–#718 (writer-seam doctrine sweep, designOracle mode-aware
+re-drive, priorEvents discipline, writer-seam tail cleanup).
 
 Smaller near-term items: the **benchmark seed corpus**, `typify→serde` codegen, and
 the first whole-repo mutation baseline; long-horizon: a second `CodeHost` backend

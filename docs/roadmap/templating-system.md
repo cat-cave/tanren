@@ -6,16 +6,29 @@ This is the doctrine-of-record for Tanren's project templating, and it is
 library). The doctrine is **owner-stated and enforced in code** — it is not
 aspirational.
 
-> **Status (PR-G — task #77, LANDED).** PR-F's fragment-only scaffold path
-> shipped, and PR-G collapsed the remaining intermediate: the per-stack
-> `tanren-tmpl-<slug>` template seed repo is GONE. The composed VFS now lands
-> **directly in the project repo** as its initial content; the run path no
-> longer clones a separate seed repo at workspace-prep. The materializer is a
-> single step (compose → push every composed file to the project repo's
-> default branch via the GitHub contents API), the per-stack template-repo
-> creation is gone, and the `templateRef` persisted on `projects.config` is
-> now a bare opaque identifier (`tanren://composed/<slug>@<contentHash>`) —
-> no GitHub repo exists at this ref.
+> **Status (PR-G — task #77, LANDED; composer + validator hardening keeps
+> ratcheting).** PR-F's fragment-only scaffold path shipped, PR-G collapsed the
+> remaining intermediate: the per-stack `tanren-tmpl-<slug>` template seed repo
+> is GONE. The composed VFS now lands **directly in the project repo** as its
+> initial content; the run path no longer clones a separate seed repo at
+> workspace-prep. The materializer is a single step (compose → push every
+> composed file to the project repo's default branch via the GitHub contents
+> API), the per-stack template-repo creation is gone, and the `templateRef`
+> persisted on `projects.config` is now a bare opaque identifier
+> (`tanren://composed/<slug>@<contentHash>`) — no GitHub repo exists at this
+> ref. Post-PR-G hardening since 2026-06-29 has ratcheted the composer +
+> validator against real apex halts: **#696 (task #80)** every curated stack
+> ships a valid `.tanren/ci.yml` + the harness validates it against
+> `engine/ci/schema.ts`; **#698 (task #72)** the composer fails loud on a
+> cross-runtime `dependsOn` mismatch (a runtime-node fragment that
+> `dependsOn`s a runtime-ruby primitive is a bug, not a warning); **#707**
+> (audit findings #10 #11 #12) Dockerfile lockfile authorship + dependsOn
+> derivation + smoke-validate hardening; **#722** port env overrides for
+> mTLS + allocator (multi-stack pattern); **#729 (v72)** compose smoke
+> recognizes Go / Python / Rust tests, not just node; **#730 (v75)** the
+> composer reconciles duplicate `addEnvVar` declarations across fragments
+> (last-writer-wins with a loud-log on conflict); **#733 (v71/v78)** the
+> composed pnpm bootstrap runs non-interactive (`CI=true`).
 >
 > **Status (PR-F, LANDED — preserved here for context).** The doctrine collapse
 > to a single fragment-only scaffold path is built: the dual `scaffoldOrigin`

@@ -31,12 +31,14 @@ comments reference them, so the anchored sections survive at this path.
 > product→merge→deploy loop** — no such run has landed yet (apex v32 halted at
 > scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11 on
 > template creation but did not close the product→deploy loop; successive trials —
-> v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-> NixOS host on 2026-06-23 — surfaced real engine issues each fixed and baked in,
-> but the full product→merge→deploy loop has not yet closed). A real merge through
-> the jj/`MergeAuthority` path is therefore the open live-validation item — the engine
-> is the single path on `main` regardless. §2b/§2c below are rewritten to the
-> never-discard reality; the
+> v37–v46 ran on the previous WSL host through 2026-06-19; v47–v64 ran on the new
+> NixOS host and drove real engine bugs to fixes; and the 2026-06-30 → 2026-07-04
+> apex-daily cadence carried the frontier through **v65–v79**, each halt producing a
+> fix-on-`main` merge — the current frontier halted on out-of-scope-finding routing
+> (v79 fix: triage → new-spec insertion, PR #734), moving past the earlier
+> infra-hang class entirely). A real merge through the jj/`MergeAuthority` path is
+> therefore still the open live-validation item — the engine is the single path on
+> `main` regardless. §2b/§2c below are rewritten to the never-discard reality; the
 > full rationale, the unified `integration_nodes` run model, and the residual §7
 > simplification are in `docs/architecture/tanren-owns-the-engine.md`.
 
@@ -461,21 +463,35 @@ finished, tested, deployed product **with no human in the per-spec loop**.
 **Proof state (honest):** the end-to-end claim is **not yet closed**. apex v32
 halted at scaffold-bootstrap before a merge; v36 proved the #601 recovery to 10/11
 on template creation but did not reach the product→deploy loop; successive trials —
-v37–v46 ran on the previous WSL host through 2026-06-19; v47–v49 ran on the new
-NixOS host on 2026-06-23 — surfaced and fixed real engine issues (timeout-eradication
-survivors, watchdog probe gap, ancestor backoff, apex-mode env-var eradicated #646,
-Lane T1 autonomous audit posture on the synthetic child #659) but the full rough-notes →
-merged PRs → deployed product loop has not yet closed. v49 drove past this session's
-env + code cleanups into the live writer-checker-auditor LLM loop running real
-scaffold work and halted on a legitimate pre-session tanren-code finding: a
-runner-INSERT retry loop (`duplicate key value violates unique constraint
-"runners_pkey"`) between the run-executor and the job-reaper, compounded by
-derive's synchronous wait having no inner-failure circuit breaker (8-hour curl
-hang). Task #21 tracks both fixes — runner-INSERT idempotency + a
-progress/sign-of-life-based circuit breaker for derive's synchronous wait. Every
-capability is **built and on `main`**; the bar is clear; it has not yet been
-cleared. This section describes the workload apex _forces_ and the bar it _must_
-clear, not a cleared bar.
+v37–v46 ran on the previous WSL host through 2026-06-19; v47–v64 ran on the new
+NixOS host and drove real engine issues to fixes (timeout-eradication survivors,
+watchdog probe gap, ancestor backoff, apex-mode env-var eradicated #646, Lane T1
+autonomous audit posture on the synthetic child #659, and — through the roll-up
+audit-round-2/round-3 landings 2026-06-29, PRs #708–#718 — the writer-seam doctrine
+sweep, designOracle mode-aware, subtaskLoop iteration extraction, priorEvents
+discipline, and specMode plumbing). The 2026-06-30 → 2026-07-04 apex-daily cadence
+carried the frontier through **v65–v79**, each halt producing a fix-on-`main` merge:
+autostash gate artifacts on clean-PR rebase (v65, #715); F2 fragment-authoring
+observability (v66, #719); re-drive halt observability + the wandering-halt
+convergence detector (v67, #720/#721); enqueue pushed PR into `merge_queue` (v67/v69,
+#724) and the atomic 3-write seam + orphaned-PR startup sweep (#725);
+eventStore-accepts-org-scoped-events (v68, #723); plan-stage answerer stall-recovery
+(v70, #726); squash writer commits before clean-PR rebase (v71, #728); pnpm bootstrap
+non-interactive (v71/v78, #733); compose smoke recognizes Go/Python/Rust tests (v72,
+#729); reconcile duplicate `addEnvVar` across fragments (v75, #730); planner
+one-concern-per-subtask sizing (v76, #731); `ActivityWatchdog` neighbor-floor widened
+to 5 for agent-class execs (v76/v77, #732); and the **v79** frontier — triage routes
+out-of-scope findings to new specs (#734), the issue-triage → new-spec insertion
+mechanic firing on real out-of-scope findings, the closest to the issue-loop half
+of the apex proof firing autonomously. The current frontier has moved past the
+v49-era infra-hang class (runner-INSERT PK race + derive synchronous-wait circuit
+breaker, task #21 merged as PR #705) into the product-build loop — writer subtask
+sizing, plan stall recovery, template composition semantics, PR-enqueue timing,
+triage → new-spec routing. Every capability is **built and on `main`**; the bar is
+clear; it has not yet been cleared (no single run has produced: rough notes →
+merged spec → product build → planted issue auto-triaged → merged fix → live deploy
+→ a working product URL). This section describes the workload apex _forces_ and the
+bar it _must_ clear, not a cleared bar.
 
 > **Operating contract:** `docs/operator-guide/apex.md`. It is binding and
 > counterintuitive: apex tests **Tanren**, not the fixture (a disposable URL

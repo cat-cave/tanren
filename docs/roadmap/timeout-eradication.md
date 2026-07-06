@@ -8,15 +8,28 @@ record is the memory `feedback_no_timeouts_progress_based` (Trevor, 2026-06-17,
 emphatic that this class keeps recurring); the existing models it generalizes are
 `workflow/convergenceDetector.ts` and `worker/runHeartbeat.ts`.
 
-> **Status (program COMPLETE — with NINE disguised survivors caught post-program by
-> apex + critic-arc, all fixed).** The full eradication wave landed: #609 (foundation — `ActivityWatchdog`,
-> `retryUntilConverged`, timeout-eradication lint in REPORT mode), #612–#618
-> (M1..Reframe waves), #621 (progress backstop — watchdog surfaces a recoverable
-> stall when work signature stops advancing), and the final wave CI-gated the lint
-> so the class can never reintroduce. The doctrine stands: progress/sign-of-life
-> based; `ActivityWatchdog` is the sole running-command hang detector.
+> **Status (program COMPLETE — with disguised survivors caught post-program by
+> apex + critic-arc, all fixed; the lint's coverage keeps ratcheting up as new
+> evasion shapes surface).** The full eradication wave landed: #609 (foundation —
+> `ActivityWatchdog`, `retryUntilConverged`, timeout-eradication lint in REPORT
+> mode), #612–#618 (M1..Reframe waves), #621 (progress backstop — watchdog
+> surfaces a recoverable stall when work signature stops advancing), and the final
+> wave CI-gated the lint so the class can never reintroduce. **PR #702 (task #41)
+> extended the lint to close the audit-#672 evasion paths** — `AbortSignal.timeout(N)`,
+> `Promise.race(` against a kill verb, and bare `MAX_ATTEMPTS` / `RETRY_LIMIT` /
+> `MAX_TRIES` / `RETRY_CAP` / `RETRY_COUNT` identifiers the earlier suffix-only
+> family scanned past. **PR #705 batched the terminal-atomicity + watchdog +
+> breaker + cadence cleanups (tasks #21 #22 #30 #43 #46 #54)** — planner-stage
+> finalize-guard through the atomic `RunStateWriter.updateTaskWithEvent` seam
+> (parity with writer/checker/auditor), a unified `emitWriterSubtaskTerminalFailure`
+> helper across the three writer-failed exit branches, every planner-terminal
+> site in `runSubtaskLoop` routed through the atomic writer seam, and the
+> `STABLE_CADENCE_FLOOR` prose re-framed as a streak saturation gate (parity with
+> `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2`). The doctrine stands: progress /
+> sign-of-life based; `ActivityWatchdog` is the sole running-command hang
+> detector; every terminal exit is an atomic row + event pair.
 >
-> **NINE DISGUISED survivors the lint missed, found by successive apex trials +
+> **Disguised survivors the lint missed, found by successive apex trials +
 > critic-arc audits and since fixed:**
 >
 > - **#638 — ssh2 `timeout:` connect-config socket option.** In ssh2, the `timeout`
@@ -36,26 +49,31 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 >   job-liveness backstop and reduced `keepaliveCountMax` from 1440 → 40 (≈ 6 h →
 >   10 min of transport-level dead-socket detection; the keepalive is a TCP-layer
 >   ping, not a work-budget).
-> - **Task #21B (apex v49) — derive's synchronous wait on the template-build
->   child run [OBVIATED by PR-F #693].** v49 surfaced derive's synchronous wait
->   having no inner-failure circuit breaker (8-hour curl hang) compounding a
->   runner-INSERT retry loop (`duplicate key … "runners_pkey"`) between the
->   run-executor and the job-reaper. The original fix landed as a child-run
->   progress probe over the template-build child project's `MAX(events.id)`
->   signature. **PR-F #693 then collapsed templating to a single fragment-only
->   scaffold path:** the `engine/templates/creation/` meta-flow (including
->   `childRunProgressProbe.ts`, `ChildRunStalledError`, `TemplateBuildFailedError`,
->   and the `504 template_build_stalled` surface) was DELETED — there is no
->   template-build child run anymore. The replacement synchronous-wait surface
->   in `engine/forge/interview/derive.ts` is the in-process `runFragmentAuthoring`
->   (F2) writer→validate loop, itself progress-based + fixed-point convergent
->   per `docs/roadmap/templating-system.md` §2 (UNBOUNDED while body or
->   rejection advances; loud `FragmentAuthoringFailedError` at the fixed point);
->   surrounding `composeTemplate + materializeTemplate` are fast fs+push ops
->   with no child run to wait on. The disguised-survivor entry stays as
->   historical evidence; the surface that motivated it no longer exists. The
->   sister lane (task #21A — runner-INSERT idempotency in
->   `services/allocator/**`) shipped separately.
+> - \*\*Task #21B (apex v49) — derive's synchronous wait on the template-build
+>   child run [OBVIATED by PR-F #693; sister planner-stage lane RESOLVED by PR
+>   > #705].** v49 surfaced derive's synchronous wait having no inner-failure
+>   > circuit breaker (8-hour curl hang) compounding a runner-INSERT retry loop
+>   > (`duplicate key … "runners_pkey"`) between the run-executor and the
+>   > job-reaper. The original fix landed as a child-run progress probe over the
+>   > template-build child project's `MAX(events.id)` signature. **PR-F #693 then
+>   > collapsed templating to a single fragment-only scaffold path:** the
+>   > `engine/templates/creation/` meta-flow (including `childRunProgressProbe.ts`,
+>   > `ChildRunStalledError`, `TemplateBuildFailedError`, and the
+>   > `504 template_build_stalled` surface) was DELETED — there is no
+>   > template-build child run anymore. The replacement synchronous-wait surface
+>   > in `engine/forge/interview/derive.ts` is the in-process `runFragmentAuthoring`
+>   > (F2) writer→validate loop, itself progress-based + fixed-point convergent
+>   > per `docs/roadmap/templating-system.md` §2 (UNBOUNDED while body or
+>   > rejection advances; loud `FragmentAuthoringFailedError` at the fixed point);
+>   > surrounding `composeTemplate + materializeTemplate` are fast fs+push ops
+>   > with no child run to wait on. The disguised-survivor entry stays as
+>   > historical evidence; the surface that motivated it no longer exists. The
+>   > sister lane (task #21A — runner-INSERT idempotency in
+>   > `services/allocator/**`) shipped separately. **PR #705's task-#21 leg
+additionally routed the planner stage's finalize-guard FAILED terminal pair
+through `RunStateWriter.updateTaskWithEvent` in one org-scoped transaction\*\*
+>   > — parity with the writer / checker / auditor stages the atomic-terminal
+>   > doctrine (task #39) already covered.
 > - **v51 — per-stage `task.failed` emit-on-throw across the subtask-loop stages
 >   [RESOLVED].** v51 surfaced the FIFTH disguised survivor in this family (after
 >   #638 ssh2 socket-idle, #640 lock-file mtime-probe, #21B initial dag-noise

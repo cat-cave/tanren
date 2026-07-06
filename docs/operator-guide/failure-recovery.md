@@ -15,6 +15,19 @@ longer making progress — which is the halt a long-running spec now hits. The
 sidenav **halted runs** row (`/runs/halted`) lists them; each links to its per-run
 recovery surface at `/runs/:runId/recover`.
 
+The convergence signal has two shapes at the spec level, both surfaced as
+`dag.spec.needs_attention` on the halted spec:
+
+- `source: "strand"` — the SAME failure signature repeats across re-drives (the
+  fixed-point detector at `convergenceDetector.ts`).
+- `source: "wandering_halt"` — successive re-drives fail with DIFFERENT
+  signatures **and** make zero deliverable progress (no new max pipeline stage,
+  no `github.pr.created`, no `merge.completed`) across the trailing streak. The
+  detector (apex v67, PR #721 — `engine/workflow/wanderingHaltDetector.ts`) caps
+  the wandering re-drive pattern the fixed-point judge structurally cannot see.
+  The distinct source lets an operator tell the two patterns apart in the
+  event history.
+
 ## The recovery surface
 
 - **Failure context** — four cells: what blocked it (from the planner-feedback
