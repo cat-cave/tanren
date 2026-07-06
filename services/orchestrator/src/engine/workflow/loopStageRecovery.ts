@@ -63,6 +63,16 @@ export class StageStallEscalationError extends Error {
  * `stage` is the stable stall signature (the answerer role) the convergence detector keys
  * the fixed point off — so a genuinely-wedged stage escalates, while a transient stall
  * (which then succeeds) reads as progress (`done`) and never escalates.
+ *
+ * OBSERVABILITY (Codex critic #13): the helper opts in to `retryUntilConverged`'s
+ * `onAttempt` hook so every iteration emits a durable `<stage>.retrying` structured log
+ * line with `{ stage, attempt, decision, failureSignature }`. Previously the wrapper
+ * only logged a warn on the catch branch (visible per stall, but not the attempt count /
+ * decision / eventual success), which left a silently-spinning stage invisible in
+ * production. Now an operator can tail the log stream and see WHICH stage is spinning,
+ * how many re-drives it has taken, and whether the loop is progressing or escalating —
+ * the plan / writer / checker / auditor / triage / convergence / demo / designOracle
+ * stages all route through this wrapper, so each of them inherits the observability.
  */
 export async function runAnswererStageWithRecovery<T>(stage: string, invoke: () => Promise<T>): Promise<T> {
   const outcome = await retryUntilConverged<T | undefined>({
@@ -93,6 +103,19 @@ export async function runAnswererStageWithRecovery<T>(stage: string, invoke: () 
         history,
         () => `the ${stage} answerer stalled (no sign of life) on every re-drive — the runner or provider is wedged`,
       ),
+    // Codex critic #13: emit a `<stage>.retrying` structured log per iteration so an
+    // operator can watch the stall-recovery loop live. `info.attempt` counts every
+    // iteration (including the successful `done` one and the escalating one), so a tail
+    // of this stream directly answers "is a stage silently spinning, and where is it in
+    // the loop?". The primitive stays silent; observability is opt-in at the call site.
+    onAttempt: (info) => {
+      log.info(`${stage}.retrying`, {
+        stage,
+        attempt: info.attempt,
+        decision: info.decision,
+        failureSignature: info.signature.failureSignature,
+      });
+    },
   });
   if (outcome.kind === "escalate") {
     // PROVEN fixed point: the stage stalled on every re-drive. Escalate LOUDLY (the workflow

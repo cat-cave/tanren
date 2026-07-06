@@ -16,6 +16,14 @@ import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deploy
 import type { ProjectDeployTarget } from "./deployOnMerge.js";
 import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
+import { createLogger } from "../observability/logger.js";
+
+// Structured logger for the deploy-verify convergence loop's per-iteration `*.retrying`
+// observability (Codex critic #13). The wrapping helper's own failures + successes fire
+// their own events (`deploy.failed`, `deploy.verified`); the retry observability is a
+// per-attempt breadcrumb that lets an operator SEE the verify loop spinning between
+// those terminals.
+const deployVerifyLog = createLogger("deploy-verify-retry");
 
 // FIXED, non-secret `deploy.failed.reason`s. Deliberately NOT the raw error: it can
 // embed provider-supplied HTTP response text (a potential secret), and this reason is
@@ -206,6 +214,25 @@ export async function verifyDeployUntilConverged(
           `'${deploymentId}': the same verify failure recurred with no new information after ` +
           `${String(attempts)} attempts — ${lastError instanceof Error ? lastError.message : String(lastError)}`,
       ),
+    // Codex critic #13 — per-iteration observability. Emit a `deploy.verify.retrying`
+    // structured log per attempt so an operator can see the verify convergence loop
+    // spinning between the terminal `deploy.verified` / `deploy.failed` events. The
+    // decision (`done` / `progress` / `escalate`) tells the operator whether the loop
+    // is progressing (a transient verify blip that resolved), still working, or has
+    // just proven the fixed point. `retryUntilConverged` itself stays silent — this
+    // primitive is opt-in per caller.
+    onAttempt: (info) => {
+      deployVerifyLog.info("deploy.verify.retrying", {
+        runId,
+        projectId,
+        provider: target.provider,
+        appId: target.appId,
+        deploymentId,
+        attempt: info.attempt,
+        decision: info.decision,
+        failureSignature: info.signature.failureSignature,
+      });
+    },
   });
   if (outcome.kind === "done") return;
   await appendDeployFailed(ctx, { runId, projectId, target, phase: "verify", deploymentId, attempts });

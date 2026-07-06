@@ -11,7 +11,7 @@
 // deterministic error through), and the recovery wired through the real `runSubtaskLoop`
 // (a transient stall on triage / convergence / demo / checker re-drives THAT stage and
 // PRESERVES sibling progress — the planner runs ONCE, never a whole-spec restart).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
 import { runAnswererStageWithRecovery, StageStallEscalationError } from "../src/engine/workflow/loopStageRecovery.js";
 import { AnswererStalledError } from "../src/engine/providers/answererSchemaError.js";
@@ -67,6 +67,60 @@ describe("runAnswererStageWithRecovery — the shared loop-stage stall recovery 
     ).rejects.toThrow(/ssh transport died/u);
     // A deterministic error is NOT a transient stall — it is NOT re-driven (one call only).
     expect(calls).toBe(1);
+  });
+
+  // Codex critic #13: the stage-recovery wrapper opts in to `retryUntilConverged`'s
+  // `onAttempt` hook and emits a `<stage>.retrying` structured info log per iteration
+  // (attempt, decision, failureSignature) — every loop stage that routes through this
+  // wrapper (plan / writer / checker / auditor / triage / convergence / demo /
+  // designOracle) inherits the observability. Previously the wrapper only warned on the
+  // catch branch, so a silently-spinning stage was invisible to production.
+  it("emits a `<stage>.retrying` structured log per iteration (Codex critic #13 observability)", async () => {
+    // Capture the structured info stream (createLogger writes info via console.log).
+    const infoLogs: string[] = [];
+    const infoSpy = vi.spyOn(console, "log").mockImplementation((msg: unknown) => {
+      if (typeof msg === "string") infoLogs.push(msg);
+    });
+    const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // The logger is level-filtered by TANREN_LOG_LEVEL (default "info"), so info fires.
+    let calls = 0;
+    try {
+      const result = await runAnswererStageWithRecovery("triage", async () => {
+        calls += 1;
+        if (calls < 3) throw new AnswererStalledError("Triage");
+        return { ok: true };
+      });
+      expect(result).toEqual({ ok: true });
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
+    // The retry log fires ONCE per iteration — three iterations here (two stalls + one done).
+    const retryingLines = infoLogs.filter((line) => line.includes(`"msg":"triage.retrying"`));
+    expect(retryingLines).toHaveLength(3);
+    // First two iterations are stalls (decision: progress); the third is done.
+    const parsed = retryingLines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(parsed[0]).toMatchObject({
+      msg: "triage.retrying",
+      stage: "triage",
+      attempt: 1,
+      decision: "progress",
+      failureSignature: "triage:stalled",
+    });
+    expect(parsed[1]).toMatchObject({
+      msg: "triage.retrying",
+      stage: "triage",
+      attempt: 2,
+      decision: "progress",
+      failureSignature: "triage:stalled",
+    });
+    expect(parsed[2]).toMatchObject({
+      msg: "triage.retrying",
+      stage: "triage",
+      attempt: 3,
+      decision: "done",
+      failureSignature: "triage:ok",
+    });
   });
 });
 
