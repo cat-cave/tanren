@@ -12,7 +12,7 @@
 // `ForgeThreadStore`; the HTTP shape, Zod validation, and authz live in the
 // route (routes/recovery/index.ts), mirroring the notifications route split.
 
-import { runWithOrgScope } from "@tanren/db";
+import { RECOVERABLE_OUTCOMES, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PgEventStore } from "../eventStore.js";
@@ -20,6 +20,12 @@ import { ForgeThreadStore } from "../forge/index.js";
 import { RecoveryStore } from "../repositories/recovery.js";
 import { systemActor } from "../state/actor.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
+
+// Re-export the shared policy set so callers reading recovery from this module
+// keep their existing import site — the shared source-of-truth lives in
+// @tanren/db so the dashboard client helper reads the SAME set (see
+// `db/src/recoveryOutcomes.ts` for the drift rationale).
+export { RECOVERABLE_OUTCOMES };
 
 /** A halted run's recovery context: the spec, last-good commit, and outcome. */
 export interface HaltedRunContext {
@@ -31,17 +37,6 @@ export interface HaltedRunContext {
   /** Last good commit SHA captured for this run, or null when none exists. */
   lastGoodCommit: string | null;
 }
-
-/** Outcomes that route a run to the recovery surface. */
-export const RECOVERABLE_OUTCOMES = new Set([
-  "halted",
-  "escape_hatch_hit",
-  "retry_budget_exhausted",
-  // SPEC-LOOP REDESIGN: a convergence-stall halt is recoverable (rework the spec /
-  // stronger model / fix the env, then re-run) — surfaced like the other halts.
-  "convergence_stalled",
-  "window_exhausted",
-]);
 
 export class RunNotRecoverableError extends Error {
   constructor(runId: string, outcome: string | null) {

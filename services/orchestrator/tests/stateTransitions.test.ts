@@ -1,4 +1,6 @@
+import { RECOVERABLE_OUTCOMES, RECOVERABLE_OUTCOMES_LIST } from "@tanren/db";
 import { describe, expect, it } from "vitest";
+import { RECOVERABLE_OUTCOMES as RECOVERABLE_OUTCOMES_FROM_ORCHESTRATOR } from "../src/engine/recovery/index.js";
 import {
   ActorKind,
   IllegalJobTransitionError,
@@ -158,5 +160,34 @@ describe("enum membership", () => {
     expect(ActorKind.options).not.toContain("writer_codex");
     // dead-letter terminal state.
     expect(JobStatus.options).toContain("dead_letter");
+  });
+});
+
+describe("RECOVERABLE_OUTCOMES source-of-truth", () => {
+  // These asserts catch the SPECIFIC drift the PR-#735 audit surfaced: a copy of
+  // `RECOVERABLE_OUTCOMES` in the dashboard's `recoveryTypes.ts` diverged from
+  // the orchestrator's set (the SPEC-LOOP REDESIGN added `convergence_stalled`
+  // to the orchestrator only). Now both re-export from `@tanren/db`, so the two
+  // identity checks below make a re-introduction of a private copy impossible.
+
+  it("the orchestrator's re-export is the SAME object as the shared @tanren/db source", () => {
+    expect(RECOVERABLE_OUTCOMES_FROM_ORCHESTRATOR).toBe(RECOVERABLE_OUTCOMES);
+  });
+
+  it("every value routes through a valid RunOutcome vocabulary member", () => {
+    // The shared set is a POLICY subset of the RunOutcome Zod enum; a rename or
+    // removal of the vocabulary should trip this assert rather than silently
+    // leaving a stale string in the recovery-routing gate.
+    const outcomes = new Set<string>(RunOutcome.options);
+    for (const value of RECOVERABLE_OUTCOMES_LIST) {
+      expect(outcomes.has(value)).toBe(true);
+    }
+  });
+
+  it("includes convergence_stalled (the SPEC-LOOP REDESIGN halt)", () => {
+    // Regression pin for the PR-#735 finding — a convergence-stall halt MUST
+    // route through the recovery surface (not silently fall off into "not
+    // recoverable").
+    expect(RECOVERABLE_OUTCOMES.has("convergence_stalled")).toBe(true);
   });
 });
