@@ -442,8 +442,10 @@ cite); the merge-engine cutover rationale is
 - **Entity-analysis layer — BUILT (was native follow-ons).** All of it landed:
   increment 1 (vendor `sem` + answerer wiring), §3.1 the checker risk-oracle from a
   host-side `sem` producer (`engine/oracle/semEntityProducer.ts`), §3.2 the
-  entity-merge native first-pass in the base-shift conflict path
-  (`workflow/reviewMerge/conflictResolver/semEntityMerge.ts`,
+  entity-merge native first-pass in the base-shift conflict path (the pure
+  splice + disjointness decision in
+  `workflow/reviewMerge/conflictResolver/entityMergeFirstPass.ts`; the `sem` + jj
+  runner-backed seams + hook in `.../semEntityMerge.ts`; wired at
   `dag/baseShiftLiveResolve.ts` — a library pre-pass, NOT a git merge driver), and
   §3.3 entity-anchored issue Claims (`entity_claims` /
   `engine/repositories/entityClaims.ts` + the self-validating oracle). See
