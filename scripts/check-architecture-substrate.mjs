@@ -33,6 +33,14 @@ export function checkNoHostProcessSpawn(projectFiles) {
       // engine WORKLOAD spawning, not the host-side image build; this single driver is
       // the only env-creation file permitted to import child_process.
       file === "services/orchestrator/src/engine/environments/creation/liveEnvBuildDriver.ts" ||
+      // The F2 runtime-validity smoke's LIVE invoker (fragment authoring, not workload
+      // execution). It spawns pnpm/bundle on the ORCHESTRATOR HOST to prove an
+      // authored fragment's manifest is runtime-resolvable BEFORE the fragment
+      // persists — analogous in spirit to `liveEnvBuildDriver.ts`: host-side
+      // AUTHORING-TIME validation, not runtime workload execution over SSH. The
+      // production shim + the fake (test-injected) invoker share the seam types
+      // in `runtimeValiditySmoke.ts`; only THIS file imports child_process.
+      file === "services/orchestrator/src/engine/templates/fragments/runtimeValiditySmokeLive.ts" ||
       // Test fixtures may spawn local processes: the ban targets the ENGINE (which
       // must route through the CommandSubstrate seam), not a tests/ fixture that
       // IMPLEMENTS a local CommandSubstrate to drive a real git/jj process in a

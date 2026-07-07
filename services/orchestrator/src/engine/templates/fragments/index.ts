@@ -107,6 +107,18 @@ export {
   type SmokeResult,
 } from "./smokeComposition.js";
 export {
+  type BundleInvoker,
+  type BundleInvokerInput,
+  type BundleInvokerResult,
+  parsePnpmError,
+  type PnpmInvoker,
+  type PnpmInvokerInput,
+  type PnpmInvokerResult,
+  runRuntimeValiditySmoke,
+  type RuntimeValiditySmokeDeps,
+} from "./runtimeValiditySmoke.js";
+export { buildLiveBundleInvoker, buildLivePnpmInvoker } from "./runtimeValiditySmokeLive.js";
+export {
   BASE_SKELETON_TEST_PATHS,
   hasMeaningfulAssertion,
   isCandidateTestPath,
