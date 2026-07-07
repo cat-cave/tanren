@@ -31,6 +31,14 @@ class MemoryRunnerStore implements RunnerStore {
   async release(runnerId: string): Promise<void> {
     this.claimed.delete(runnerId);
   }
+  /**
+   * Codex H3 #13: simulates the persisted-DB fallback the cold-start release
+   * path reads. Returns the metadata captured at claim time; a released row
+   * has been deleted from `claimed` so it correctly returns `undefined`.
+   */
+  async readTeardownDescriptor(runnerId: string) {
+    return this.claimed.get(runnerId)?.providerMetadata ?? undefined;
+  }
 }
 
 function request(runId: string): AllocationRequest {

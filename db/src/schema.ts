@@ -29,9 +29,8 @@ import {
   users,
 } from "./schemaCore.js";
 
-// Core identity + project/spec/run tables live in schemaCore.ts so the split
-// sub-schema files can reference them without importing schema.ts (see
-// schemaCore.ts for the cycle-avoidance rationale). Re-exported here so
+// Core identity + project/spec/run tables live in schemaCore.ts (cycle-avoidance
+// — sub-schemas can reference them without importing schema.ts); re-exported so
 // consumers + the migration generator still see one `schema.*` namespace.
 export {
   enumCheck,
@@ -199,6 +198,7 @@ export const runners = pgTable(
     imageSha: text("image_sha").notNull(),
     containerId: text("container_id"),
     hcloudServerId: text("hcloud_server_id"),
+    providerMetadata: jsonb("provider_metadata"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     releasedAt: timestamp("released_at", { withTimezone: true }),
   },

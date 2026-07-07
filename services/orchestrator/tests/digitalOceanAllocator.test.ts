@@ -8,18 +8,8 @@ import {
   type DigitalOceanDroplet,
 } from "../src/engine/allocators/digitalOceanAllocator.js";
 import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
-import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
-
-class FakeRunnerStore implements RunnerStore {
-  readonly claims: ClaimRunnerInput[] = [];
-  readonly releases: string[] = [];
-  async claim(input: ClaimRunnerInput): Promise<void> {
-    this.claims.push(input);
-  }
-  async release(runnerId: string): Promise<void> {
-    this.releases.push(runnerId);
-  }
-}
+import type { RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { FakeRunnerStore } from "./fakeRunnerStore.helper.js";
 
 /** Mocked DO API: created droplet is "new" then "active" with a public IP. */
 class FakeDigitalOceanClient implements DigitalOceanClient {
@@ -132,6 +122,36 @@ describe("DigitalOceanAllocator", () => {
     const allocator = new DigitalOceanAllocator(baseOpts(client, runners));
     const allocation = await allocator.allocate(req("run_2"));
     await allocator.release(allocation.runnerId, "completed");
+    expect(client.deleted).toEqual([99]);
+    expect(runners.releases).toEqual([allocation.runnerId]);
+  });
+
+  // Codex H3 Surface 5 #13: an orchestrator restart between allocate and release
+  // used to orphan the droplet. `release()` saw an unknown runnerId in its
+  // in-memory `droplets` map and NO-OP'd — the droplet lingered on DO until an
+  // operator hand-reaped it, billing the entire time. The fix persists the
+  // droplet id in `runners.provider_metadata` at claim time so a FRESH allocator
+  // instance (post-restart) can reconstruct the DELETE from the DB. Regression:
+  // share ONE FakeRunnerStore across two allocator instances and confirm the
+  // second one still deletes the droplet the first one allocated.
+  it("release tears down the droplet after a process restart (Codex H3 #13)", async () => {
+    const client = new FakeDigitalOceanClient();
+    const runners = new FakeRunnerStore();
+    // FIRST allocator instance — allocates the droplet, then is dropped as if
+    // the orchestrator crashed. Its in-memory `droplets` map is GONE.
+    const allocator1 = new DigitalOceanAllocator(baseOpts(client, runners));
+    const allocation = await allocator1.allocate(req("run_restart"));
+    // Sanity: the discriminated teardown descriptor is persisted alongside the
+    // row. This is the shape the fresh instance's release reconstructs from.
+    expect(runners.claims[0]?.providerMetadata).toEqual({ kind: "digitalocean", dropletId: 99 });
+
+    // SECOND allocator instance — a brand-new process. Same client (the DO
+    // droplet still exists provider-side), same runners store (durable DB
+    // stand-in), but NO in-memory state carried across.
+    const allocator2 = new DigitalOceanAllocator(baseOpts(client, runners));
+    await allocator2.release(allocation.runnerId, "completed");
+    // The droplet was destroyed on the fresh instance's release. Without the
+    // persistence fix this would be `[]` (silent leak).
     expect(client.deleted).toEqual([99]);
     expect(runners.releases).toEqual([allocation.runnerId]);
   });

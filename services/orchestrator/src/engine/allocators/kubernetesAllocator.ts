@@ -205,6 +205,13 @@ export class KubernetesAllocator implements Allocator {
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
         containerId: podName,
+        // Codex H3 #13: persist BOTH the pod name AND the per-run SSH-key
+        // Secret's name so a fresh allocator instance (post-restart) can
+        // reconstruct both DELETEs — the pod is the compute resource, the
+        // Secret is a per-run credential that must be reaped too or it
+        // accumulates in the namespace. `container_id` alone (the pod name)
+        // would miss the secret and re-introduce the leak on release.
+        providerMetadata: { kind: "kubernetes", podName, secretName },
       });
     } catch (error) {
       await this.cleanup(podName, secretName);
@@ -216,15 +223,35 @@ export class KubernetesAllocator implements Allocator {
   }
 
   async release(runnerId: string, _reason: ReleaseReason = "completed"): Promise<void> {
-    const resource = this.resources.get(runnerId);
+    const resource = await this.resolveResources(runnerId);
     if (resource === undefined) {
-      // Already released or unknown to this allocator: no-op.
+      // Already released, unknown to this allocator AND unpersisted, or the
+      // persisted row belongs to a different provider (kind mismatch). No-op.
       return;
     }
     this.resources.delete(runnerId);
     await this.client.deletePod(resource.pod);
     await this.client.deleteSecret(resource.secret);
     await this.options.runners.release(runnerId);
+  }
+
+  /**
+   * Codex H3 #13: resolve the { pod, secret } pair for a release, tolerating
+   * the process-restart shape. In-memory first (fast path); DB fallback via
+   * `runners.provider_metadata` (durable) when the map has been lost. Both
+   * names are needed — the pod carries the compute, the secret carries the
+   * per-run SSH credential; a partial teardown would leak the secret.
+   */
+  private async resolveResources(runnerId: string): Promise<{ pod: string; secret: string } | undefined> {
+    const cached = this.resources.get(runnerId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const persisted = await this.options.runners.readTeardownDescriptor(runnerId);
+    if (persisted?.kind === "kubernetes") {
+      return { pod: persisted.podName, secret: persisted.secretName };
+    }
+    return undefined;
   }
 
   /** Best-effort delete of a Pod + Secret so a stuck allocation doesn't leak. */

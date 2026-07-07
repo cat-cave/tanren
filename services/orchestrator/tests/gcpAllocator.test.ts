@@ -12,18 +12,8 @@ import {
   PersistentProvisioningOutageError,
   ProvisioningTerminalStateError,
 } from "../src/engine/allocators/readinessConvergence.js";
-import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
-
-class FakeRunnerStore implements RunnerStore {
-  readonly claims: ClaimRunnerInput[] = [];
-  readonly releases: string[] = [];
-  async claim(input: ClaimRunnerInput): Promise<void> {
-    this.claims.push(input);
-  }
-  async release(runnerId: string): Promise<void> {
-    this.releases.push(runnerId);
-  }
-}
+import type { RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { FakeRunnerStore } from "./fakeRunnerStore.helper.js";
 
 /**
  * Mocked GCP API: insert returns a RUNNING op that goes DONE on the next poll;
@@ -131,6 +121,17 @@ describe("GcpAllocator", () => {
     await allocator.release(allocation.runnerId, "completed");
     expect(client.deleted).toEqual(["tanren-run-2"]);
     expect(runners.releases).toEqual([allocation.runnerId]);
+  });
+
+  // Codex H3 #13: restart-then-release still tears down (persisted metadata).
+  it("release tears down the instance after a process restart (Codex H3 #13)", async () => {
+    const client = new FakeGcpComputeClient();
+    const runners = new FakeRunnerStore();
+    const alloc = await new GcpAllocator(baseOpts(client, runners)).allocate(req("run_restart"));
+    expect(runners.claims[0]?.providerMetadata).toEqual({ kind: "gcp", instanceName: "tanren-run-restart" });
+    await new GcpAllocator(baseOpts(client, runners)).release(alloc.runnerId, "completed");
+    expect(client.deleted).toEqual(["tanren-run-restart"]);
+    expect(runners.releases).toEqual([alloc.runnerId]);
   });
 
   it("release is idempotent: releasing twice deletes only once", async () => {

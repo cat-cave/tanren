@@ -198,6 +198,10 @@ export class GcpAllocator implements Allocator {
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
         containerId: name,
+        // Codex H3 #13: persist the GCE instance name so a fresh allocator
+        // instance (post-restart) can reconstruct the DELETE without the
+        // in-memory `instances` map.
+        providerMetadata: { kind: "gcp", instanceName: name },
       });
     } catch (error) {
       await this.client.deleteInstance(name).catch(() => {});
@@ -209,14 +213,32 @@ export class GcpAllocator implements Allocator {
   }
 
   async release(runnerId: string, _reason: ReleaseReason = "completed"): Promise<void> {
-    const instanceName = this.instances.get(runnerId);
+    const instanceName = await this.resolveInstanceName(runnerId);
     if (instanceName === undefined) {
-      // Already released or unknown to this instance: no-op.
+      // Already released, unknown to this instance AND unpersisted, or the
+      // persisted row belongs to a different provider (kind mismatch). No-op.
       return;
     }
     this.instances.delete(runnerId);
     await this.client.deleteInstance(instanceName);
     await this.options.runners.release(runnerId);
+  }
+
+  /**
+   * Codex H3 #13: resolve the GCE instance name for a release, tolerating the
+   * process-restart shape. In-memory first (fast path); DB fallback via
+   * `runners.provider_metadata` (durable) when the map has been lost.
+   */
+  private async resolveInstanceName(runnerId: string): Promise<string | undefined> {
+    const cached = this.instances.get(runnerId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const persisted = await this.options.runners.readTeardownDescriptor(runnerId);
+    if (persisted?.kind === "gcp") {
+      return persisted.instanceName;
+    }
+    return undefined;
   }
 
   /**
