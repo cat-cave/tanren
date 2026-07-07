@@ -275,6 +275,6 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
         deployRef: { provider: "deploy.render", appId: "x" },
         actor: systemActor,
       }),
-    ).rejects.toThrow(/no deploy provisioner/u);
+    ).rejects.toThrow(/is not a deploy provisioner/u);
   });
 });

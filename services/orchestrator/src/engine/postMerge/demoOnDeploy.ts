@@ -32,9 +32,6 @@ import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { systemActor } from "../state/actor.js";
 import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
-import type { PulumiStackRunner } from "../deploy/pulumiDeployAdapter.js";
-import type { PackageRegistryClient } from "../deploy/packageReleaseDeployAdapter.js";
-import type { MobileDistributionClient } from "../deploy/mobileReleaseDeployAdapter.js";
 import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
 import { DemoEngine, type DemoBehavior } from "../demo/demoEngine.js";
 import { fetchDemoWebProbe } from "../demo/demoWebProbe.js";
@@ -104,17 +101,15 @@ export interface DemoOnDeployWatcherDeps {
    */
   appChannelProbe?: DemoAppChannelProbe;
   /**
-   * External drivers the non-`direct_api` DeployAdapters require for their
-   * `demoSurface` reads (mirrors {@link BuildDeployAdapterDeps}). Present only when the
-   * project's deploy provider requires them (a `pulumi` project must wire
-   * `pulumiRunner`, a `package_release` must wire `packageRegistry`, etc.); absent when
-   * the project's provider is `direct_api` (Vercel/Fly) or `manual_external` (in-process
-   * attestations). An unwired driver for a provider that requires one fails LOUD (typed
-   * `DeployAdapterConfigError`) — never a silent skip.
+   * The durable manual-attestation store the `manual_external` adapter class reads
+   * back its recorded rows from. Injected for a project on the `deploy.manual_external`
+   * provider; absent for `direct_api` (Vercel/Fly) — those adapters use the deploy
+   * transport, not this store. Codex H3 #22: the pulumi / package_release /
+   * mobile_release drivers are NOT accepted here anymore (their adapter classes are
+   * fixture-only and cannot be built via `buildDeployAdapter`), so a persisted
+   * `deploy.pulumi` / `deploy.package_release` / `deploy.mobile_release` provider
+   * fails LOUD at surface-resolve time (`resolve_surface_failed`).
    */
-  pulumiRunner?: PulumiStackRunner;
-  packageRegistry?: PackageRegistryClient;
-  mobileDistribution?: MobileDistributionClient;
   manualAttestations?: ManualAttestationStore;
 }
 
@@ -232,14 +227,18 @@ export class DemoOnDeployWatcher {
    * time); its disappearance mid-flight is a LOUD error, never a skipped demo.
    *
    * ADAPTER DISPATCH: the adapter CLASS is derived from the persisted deploy provider
-   * kind (via {@link adapterKindForProviderKind}) — a `deploy.vercel` runs the
-   * `direct_api` adapter, a `deploy.package_release` runs the `package_release`
-   * adapter, a `deploy.manual_external` runs the `manual_external` adapter, etc. The
-   * previous hard-wire to `direct_api` was Bug 2 (Codex H3 #24): a project deployed via
-   * a `package_release` / `mobile_release` / `manual_external` / `pulumi` deploy would
-   * either resolve to the wrong surface (a Vercel/Fly `deploymentStatus` read against
-   * a non-Vercel/Fly provider) or throw the wrong error. Now the DISPATCH is data-driven: the recorded
-   * provider kind selects the right adapter's `demoSurface`.
+   * kind (via {@link adapterKindForProviderKind}) — a `deploy.vercel` / `deploy.flyio`
+   * runs the `direct_api` adapter, a `deploy.manual_external` runs the `manual_external`
+   * adapter. The previous hard-wire to `direct_api` was Bug 2 (Codex H3 #24): a project
+   * deployed via a non-Vercel/Fly provider would resolve to the wrong surface or throw
+   * the wrong error. Now the DISPATCH is data-driven.
+   *
+   * Codex H3 #22: `deploy.pulumi` / `deploy.package_release` / `deploy.mobile_release`
+   * are fixture-only (no concrete production driver on `main`), so a persisted deploy
+   * on one of those provider kinds throws LOUD here — the try/catch in `check` records
+   * the failure as `resolve_surface_failed` on the run's `demo.failed` event, which is
+   * exactly the operator-facing surface for "this adapter is not available in
+   * production yet".
    */
   private async resolveSurface(verified: VerifiedDeploy): Promise<DemoSurface> {
     const grant = await runWithSystemScope(this.deps.pool, (client) =>
@@ -254,9 +253,6 @@ export class DemoOnDeployWatcher {
     const adapterKind = adapterKindForProviderKind(verified.provider);
     const adapter = buildDeployAdapter(adapterKind, {
       provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },
-      ...(this.deps.pulumiRunner !== undefined && { pulumiRunner: this.deps.pulumiRunner }),
-      ...(this.deps.packageRegistry !== undefined && { packageRegistry: this.deps.packageRegistry }),
-      ...(this.deps.mobileDistribution !== undefined && { mobileDistribution: this.deps.mobileDistribution }),
       ...(this.deps.manualAttestations !== undefined && { manualAttestations: this.deps.manualAttestations }),
       // H3 #20/#21: manual_external adapter needs the tenant scope (orgId + projectId)
       // each attestation is recorded under — an unscoped adapter would silently

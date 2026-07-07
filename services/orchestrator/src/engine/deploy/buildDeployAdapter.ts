@@ -1,17 +1,34 @@
 // The DeployAdapter registry + `buildDeployAdapter` factory — the single append
 // point a new adapter CLASS registers at (mirrors `buildIntegrationProvisioner` /
 // `buildAllocator` / `buildVcsProvider`). An adapter class lands as a NEW `case`
-// arm (+ its impl + a conformance entry), not a refactor. The registered classes:
-// `direct_api` (the Vercel/Fly providers, web_url), `pulumi` (an IaC stack up/refresh,
-// web_url), `package_release` (publish to a registry, package), `mobile_release`
-// (submit to an app channel, app_channel), and `manual_external` (operator-attested
-// out-of-band delivery, web_url/download). An UNREGISTERED kind fails LOUD, never a
-// silent default.
+// arm (+ its impl + a conformance entry), not a refactor.
 //
-// EXTERNAL-DRIVER DEPS: the non-`direct_api` classes each run over an injectable
-// external driver (a Pulumi stack runner, a package registry client, a mobile
-// distribution client, a manual-attestation store). The factory requires the relevant
-// driver to be WIRED for the kind being built; an absent driver fails LOUD with a typed
+// PRODUCTION CATALOG (Codex H3 #22 closure): the registered PRODUCTION classes are
+// exactly the two with a CONCRETE driver on `main`:
+//   - `direct_api` — wraps the Vercel + Fly `DeployProvisioner` subclasses (web_url).
+//   - `manual_external` — operator-attested out-of-band delivery over the durable
+//     `PgManualAttestationStore` (web_url / download).
+//
+// FIXTURE-ONLY, NOT PRODUCTION: the `pulumi`, `package_release`, and `mobile_release`
+// adapter CLASSES exist on disk (each with a scripted conformance suite) but their
+// external drivers (`PulumiStackRunner`, `PackageRegistryClient`,
+// `MobileDistributionClient`) have NO concrete production impl — only scripted test
+// fakes. Registering them in the production catalog would produce the exact
+// injectable-seam silent-error surface Codex H3 #22 flagged: `buildDeployAdapter`
+// would succeed at project-create time, then throw `DeployAdapterConfigError` at
+// deploy time when the driver hadn't been wired (because it CAN'T be wired — no
+// impl exists). We refuse them LOUDLY at the factory instead, so a persisted
+// `deploy.pulumi` / `deploy.package_release` / `deploy.mobile_release` provider is
+// diagnosed at project-create rather than turning into a mystery deploy-time crash.
+// Tests that exercise these classes construct them directly via `new
+// PulumiDeployAdapter({...})` / `new PackageReleaseDeployAdapter({...})` / `new
+// MobileReleaseDeployAdapter({...})` (no factory-shaped injection seam). To add one
+// of these classes to production, land the concrete driver + register the case arm
+// in ONE PR — that is the "fragment-only, nothing deferred" doctrine.
+//
+// EXTERNAL-DRIVER DEPS: the `manual_external` class runs over an injectable durable
+// attestation store. The factory requires the relevant driver to be WIRED for the
+// kind being built; an absent driver fails LOUD with a typed
 // {@link DeployAdapterConfigError} (the correct "unconfigured" behavior, NOT a stub
 // default).
 //
@@ -26,24 +43,16 @@ import type { DeployAdapter, UrlReachabilityProbe, VerifyPollPolicy } from "../c
 import type { DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "./directApiDeployAdapter.js";
-import {
-  PulumiDeployAdapter,
-  PULUMI_ADAPTER_KIND,
-  PULUMI_PROVIDER_KIND,
-  type PulumiStackRunner,
-} from "./pulumiDeployAdapter.js";
-import {
-  PackageReleaseDeployAdapter,
-  PACKAGE_RELEASE_ADAPTER_KIND,
-  PACKAGE_RELEASE_PROVIDER_KIND,
-  type PackageRegistryClient,
-} from "./packageReleaseDeployAdapter.js";
-import {
-  MobileReleaseDeployAdapter,
-  MOBILE_RELEASE_ADAPTER_KIND,
-  MOBILE_RELEASE_PROVIDER_KIND,
-  type MobileDistributionClient,
-} from "./mobileReleaseDeployAdapter.js";
+// The pulumi / package_release / mobile_release adapter CLASSES + KIND constants are
+// exported by their modules; the factory intentionally does NOT register them (see
+// the "FIXTURE-ONLY, NOT PRODUCTION" header note). The constants are imported here
+// ONLY so the fixture-only diagnostic in `buildDeployAdapter` can name them precisely
+// when a caller asks for one — a caller that got a stale `deploy.pulumi` from a DB
+// row sees "adapter class 'pulumi' is fixture-only" rather than the generic "not
+// registered", which is the correct operator-facing diagnosis.
+import { PULUMI_ADAPTER_KIND } from "./pulumiDeployAdapter.js";
+import { PACKAGE_RELEASE_ADAPTER_KIND } from "./packageReleaseDeployAdapter.js";
+import { MOBILE_RELEASE_ADAPTER_KIND } from "./mobileReleaseDeployAdapter.js";
 import {
   ManualExternalDeployAdapter,
   MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -53,25 +62,35 @@ import {
 import type { EventStore } from "../eventStore.js";
 import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
 
+/**
+ * The adapter classes whose implementations exist on disk (with a scripted
+ * conformance suite) but whose external drivers have no concrete production impl,
+ * so they are NOT part of the production catalog. Selecting one via
+ * `buildDeployAdapter` throws a clear "fixture-only" diagnostic. Tests exercise
+ * them via direct `new PulumiDeployAdapter({...})` etc. — no factory-shaped
+ * injection seam that would create the same silent-error surface Codex H3 #22
+ * flagged. See the module header for the doctrine + the migration path.
+ */
+const FIXTURE_ONLY_ADAPTER_KINDS: ReadonlySet<string> = new Set<string>([
+  PULUMI_ADAPTER_KIND,
+  PACKAGE_RELEASE_ADAPTER_KIND,
+  MOBILE_RELEASE_ADAPTER_KIND,
+]);
+
 /** The deps a built DeployAdapter draws (the provisioner wiring + the verify seams). */
 export interface BuildDeployAdapterDeps {
-  /** The deploy provisioner deps (transport + secrets) the wrapped providers run over. */
+  /** The deploy provisioner deps (transport + secrets) the `direct_api` class runs over. */
   provisioner: DeployProvisionerDeps;
   /** The URL smoke-check probe verify runs (defaults to the real fetch probe). */
   urlProbe?: UrlReachabilityProbe;
   /** The verify poll cadence (the spacing between polls; defaults to the production cadence). */
   poll?: VerifyPollPolicy;
   /**
-   * The SecretStore the non-`direct_api` classes resolve their provider token from.
-   * Defaults to the provisioner deps' secrets when omitted (they share one store).
+   * The SecretStore the `manual_external` class resolves refs against. Defaults to
+   * the provisioner deps' secrets when omitted (they share one store). Retained as
+   * an override for tests that pass a separate store to assert isolation.
    */
   secrets?: SecretStore;
-  /** The Pulumi stack driver (required to build the `pulumi` class). */
-  pulumiRunner?: PulumiStackRunner;
-  /** The package registry client (required to build the `package_release` class). */
-  packageRegistry?: PackageRegistryClient;
-  /** The mobile distribution client (required to build the `mobile_release` class). */
-  mobileDistribution?: MobileDistributionClient;
   /**
    * The durable manual-attestation store (REQUIRED to build the `manual_external`
    * class — no in-memory default; Codex H3 #20). Production wires
@@ -96,49 +115,36 @@ export interface BuildDeployAdapterDeps {
   manualRunBindings?: { runId?: string };
 }
 
+/** The class kinds the production catalog registers — for the diagnostic below. */
+const PRODUCTION_ADAPTER_KINDS: readonly string[] = [DIRECT_API_ADAPTER_KIND, MANUAL_EXTERNAL_ADAPTER_KIND];
+
 /**
  * Select + construct the DeployAdapter for an adapter-class `kind`. Each registered
- * class wraps its provider surface; an UNREGISTERED kind fails LOUD (never a silent
- * default). The non-`direct_api` classes require their external driver to be wired —
- * an absent driver throws a typed {@link DeployAdapterConfigError}.
+ * class wraps its provider surface. Codex H3 #22 closure: the catalog registers ONLY
+ * the classes with concrete drivers on `main` — `direct_api` (Vercel + Fly) and
+ * `manual_external` (over `PgManualAttestationStore`). Selecting a FIXTURE-ONLY class
+ * (`pulumi` / `package_release` / `mobile_release`) throws a clear diagnostic; an
+ * UNREGISTERED kind fails LOUD too (never a silent default). The `manual_external`
+ * class requires its durable store + tenant scope to be wired — an absent driver
+ * throws a typed {@link DeployAdapterConfigError}.
  */
 export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): DeployAdapter {
   const urlProbe = deps.urlProbe ?? fetchUrlReachabilityProbe();
   const poll = deps.poll ?? defaultVerifyPollPolicy();
-  const secrets = deps.secrets ?? deps.provisioner.secrets;
+  if (FIXTURE_ONLY_ADAPTER_KINDS.has(kind)) {
+    throw new Error(
+      `buildDeployAdapter: adapter class '${kind}' is fixture-only — its external driver ` +
+        `(PulumiStackRunner / PackageRegistryClient / MobileDistributionClient) has no concrete ` +
+        `production impl on 'main', so the class is NOT registered in the production catalog. ` +
+        `Tests exercise it via 'new PulumiDeployAdapter({...})' / 'new PackageReleaseDeployAdapter({...})' / ` +
+        `'new MobileReleaseDeployAdapter({...})' directly. To promote it, land the concrete driver + ` +
+        `register the case arm in ONE PR. Registered production kinds: ` +
+        PRODUCTION_ADAPTER_KINDS.map((k) => `'${k}'`).join(", "),
+    );
+  }
   switch (kind) {
     case DIRECT_API_ADAPTER_KIND:
       return new DirectApiDeployAdapter({ provisioner: deps.provisioner, urlProbe, poll });
-    case PULUMI_ADAPTER_KIND: {
-      if (deps.pulumiRunner === undefined) {
-        throw new DeployAdapterConfigError(
-          PULUMI_ADAPTER_KIND,
-          "pulumiRunner",
-          "wire a PulumiStackRunner (a Pulumi Automation-API / CLI driver over the substrate) into buildDeployAdapter deps",
-        );
-      }
-      return new PulumiDeployAdapter({ runner: deps.pulumiRunner, secrets, urlProbe, poll });
-    }
-    case PACKAGE_RELEASE_ADAPTER_KIND: {
-      if (deps.packageRegistry === undefined) {
-        throw new DeployAdapterConfigError(
-          PACKAGE_RELEASE_ADAPTER_KIND,
-          "packageRegistry",
-          "wire a PackageRegistryClient (a registry publish/read driver) into buildDeployAdapter deps",
-        );
-      }
-      return new PackageReleaseDeployAdapter({ registry: deps.packageRegistry, secrets, poll });
-    }
-    case MOBILE_RELEASE_ADAPTER_KIND: {
-      if (deps.mobileDistribution === undefined) {
-        throw new DeployAdapterConfigError(
-          MOBILE_RELEASE_ADAPTER_KIND,
-          "mobileDistribution",
-          "wire a MobileDistributionClient (an App Store Connect / Play / Firebase driver) into buildDeployAdapter deps",
-        );
-      }
-      return new MobileReleaseDeployAdapter({ distribution: deps.mobileDistribution, secrets, poll });
-    }
     case MANUAL_EXTERNAL_ADAPTER_KIND: {
       if (deps.manualAttestations === undefined) {
         throw new DeployAdapterConfigError(
@@ -166,8 +172,7 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
     default:
       throw new Error(
         `buildDeployAdapter: adapter class '${kind}' is not a registered deploy adapter ` +
-          `(registered: '${DIRECT_API_ADAPTER_KIND}', '${PULUMI_ADAPTER_KIND}', '${PACKAGE_RELEASE_ADAPTER_KIND}', ` +
-          `'${MOBILE_RELEASE_ADAPTER_KIND}', '${MANUAL_EXTERNAL_ADAPTER_KIND}')`,
+          `(registered: ${PRODUCTION_ADAPTER_KINDS.map((k) => `'${k}'`).join(", ")})`,
       );
   }
 }
@@ -177,12 +182,20 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
  * and recorded on `deploy.triggered` / `deploy.verified`) to the DeployAdapter CLASS
  * that owns it — the seam that lets a caller (e.g. the demo-on-deploy watcher) DISPATCH
  * to the RIGHT adapter's `demoSurface` from a persisted provider kind, without hard-wiring
- * to `direct_api`. The registered mapping:
+ * to `direct_api`.
+ *
+ * REGISTERED (production catalog):
  *   • `deploy.vercel` / `deploy.flyio` → `direct_api`
- *   • `deploy.pulumi`                  → `pulumi`
- *   • `deploy.package_release`         → `package_release`
- *   • `deploy.mobile_release`          → `mobile_release`
  *   • `deploy.manual_external`         → `manual_external`
+ *
+ * NOT REGISTERED (fixture-only, Codex H3 #22): `deploy.pulumi`,
+ * `deploy.package_release`, `deploy.mobile_release`. Their adapter classes have no
+ * concrete production driver on `main`, so mapping them here would produce a
+ * "you can select the class, but you can't build it" split — the exact latent-error
+ * shape the #22 fix targets. Any persisted `deploy.pulumi` / `deploy.package_release`
+ * / `deploy.mobile_release` throws LOUD from this seam (the demo-on-deploy watcher
+ * catches the throw + emits `demo.failed` with reason `resolve_surface_failed`).
+ *
  * An UNKNOWN provider kind throws LOUD — never a silent default to `direct_api`.
  */
 export function adapterKindForProviderKind(providerKind: string): string {
@@ -190,19 +203,14 @@ export function adapterKindForProviderKind(providerKind: string): string {
     case "deploy.vercel":
     case "deploy.flyio":
       return DIRECT_API_ADAPTER_KIND;
-    case PULUMI_PROVIDER_KIND:
-      return PULUMI_ADAPTER_KIND;
-    case PACKAGE_RELEASE_PROVIDER_KIND:
-      return PACKAGE_RELEASE_ADAPTER_KIND;
-    case MOBILE_RELEASE_PROVIDER_KIND:
-      return MOBILE_RELEASE_ADAPTER_KIND;
     case MANUAL_EXTERNAL_PROVIDER_KIND:
       return MANUAL_EXTERNAL_ADAPTER_KIND;
     default:
       throw new Error(
         `adapterKindForProviderKind: provider kind '${providerKind}' has no registered DeployAdapter class ` +
-          `(registered: 'deploy.vercel', 'deploy.flyio', '${PULUMI_PROVIDER_KIND}', ` +
-          `'${PACKAGE_RELEASE_PROVIDER_KIND}', '${MOBILE_RELEASE_PROVIDER_KIND}', '${MANUAL_EXTERNAL_PROVIDER_KIND}')`,
+          `(registered: 'deploy.vercel', 'deploy.flyio', '${MANUAL_EXTERNAL_PROVIDER_KIND}'). ` +
+          `The pulumi / package_release / mobile_release provider kinds are fixture-only — their adapter ` +
+          `classes have no concrete production driver on 'main' (Codex H3 #22).`,
       );
   }
 }
