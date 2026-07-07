@@ -384,6 +384,87 @@ describe("subscribeWithReconnect", () => {
     expect(listener.handlerCount(CHANNEL)).toBe(0);
   });
 
+  // Codex round-3 audit finding #1 — the pre-park race. A connection error
+  // emitted AFTER `trySubscribeOnce` returns but BEFORE `parkForReconnect()`
+  // installs `wakeReconnect` used to drop the wake (fired an undefined
+  // resolver), so `runLoop` parked forever on a dead connection (internal
+  // reconnect failures at `db/src/notify.ts` are swallowed). Fix: a boolean
+  // latch (`reconnectRequested`) set by the observer, consumed by park on entry.
+  it("reconnect wake is latched — an error between subscribe and park is not lost (Codex round-3 #1)", async () => {
+    const listener = new FakeNotifyListener();
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {
+      await Promise.resolve();
+    });
+    const onSubscribed = vi.fn<() => void>();
+    let raced = false;
+    const handle = subscribeWithReconnect({
+      listener: listener as unknown as PgNotifyListener,
+      channel: CHANNEL,
+      handler: () => {},
+      sleep,
+      // `onSubscribed` fires synchronously AFTER `setCurrentUnsub` but BEFORE
+      // `parkForReconnect()` installs `wakeReconnect` — the exact race window.
+      onSubscribed: () => {
+        if (!raced) {
+          raced = true;
+          listener.fireConnectionError();
+        }
+        onSubscribed();
+      },
+    });
+
+    await flush();
+    await flush();
+
+    // Latch consumed → park resolves immediately → loop drove a fresh
+    // subscribe. Pre-fix: subscribeAttempts stays at 1 (parked forever).
+    expect(listener.subscribeAttempts).toBe(2);
+    expect(onSubscribed).toHaveBeenCalledTimes(2);
+    expect(listener.handlerCount(CHANNEL)).toBe(1);
+
+    await handle.stop();
+    expect(listener.handlerCount(CHANNEL)).toBe(0);
+  });
+
+  // Codex round-3 #1 — coalesce property. Multiple rapid errors in the same
+  // tick do not lose the wake: observer only latches when wake is undefined,
+  // and the boolean latch is idempotent (already-`true` is a no-op).
+  it("multiple rapid errors during a single park cycle do not lose the wake (Codex round-3 #1)", async () => {
+    const listener = new FakeNotifyListener();
+    const sleep = vi.fn<(ms: number) => Promise<void>>(async () => {
+      await Promise.resolve();
+    });
+    const handle = subscribeWithReconnect({
+      listener: listener as unknown as PgNotifyListener,
+      channel: CHANNEL,
+      handler: () => {},
+      sleep,
+    });
+
+    await flush();
+    expect(listener.subscribeAttempts).toBe(1);
+    const attemptsBeforeBurst = listener.subscribeAttempts;
+
+    // Three rapid errors: the first hits the installed wake; the remaining two
+    // find it undefined and re-latch (idempotently).
+    listener.fireConnectionError();
+    listener.fireConnectionError();
+    listener.fireConnectionError();
+
+    await flush();
+    await flush();
+    await flush();
+
+    // At least one re-subscribe fired (wake not lost), bounded by rapid count.
+    const extraSubscribes = listener.subscribeAttempts - attemptsBeforeBurst;
+    expect(extraSubscribes).toBeGreaterThanOrEqual(1);
+    expect(extraSubscribes).toBeLessThanOrEqual(3);
+    expect(listener.handlerCount(CHANNEL)).toBe(1);
+
+    await handle.stop();
+    expect(listener.handlerCount(CHANNEL)).toBe(0);
+  });
+
   // Codex RA1, Bug 1 regression pin — the reconnect helper's UNBOUNDED retry
   // loop must NOT leak a handler on repeated subscribe failures. Prior to the
   // Bug 1 fix in `db/src/notify.ts`, every failed `PgNotifyListener.subscribe`

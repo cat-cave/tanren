@@ -111,6 +111,18 @@ export function subscribeWithReconnect(deps: SubscribeWithReconnectDeps): Subscr
   // when the loop enters the post-subscribe wait; fired by the disconnect
   // callback (below) or by `stop()`.
   let wakeReconnect: (() => void) | undefined;
+  // Reconnect-request LATCH (Codex round-3 audit finding #1): a boolean set by
+  // the connection-error observer and consumed by `parkForReconnect()` on entry.
+  // Closes the race window between `trySubscribeOnce` resolving and the runLoop
+  // installing `wakeReconnect` — if the listener emits `error` during that gap,
+  // the observer runs while `wakeReconnect` is still `undefined`, and firing an
+  // undefined resolver would silently drop the wake pulse. With the latch,
+  // `parkForReconnect` sees the flag on entry, consumes it, and resolves
+  // immediately — the loop iterates to a fresh subscribe rather than parking
+  // forever on a dead connection. Idempotent: multiple errors in the same
+  // synchronous tick collapse into a single latch set (already `true` is a
+  // no-op), so a rapid-fire error burst does not compound spurious wakes.
+  let reconnectRequested = false;
   // The wake pulse the retry loop parks on while sleeping the progress-spaced
   // backoff between failing subscribe attempts. `stop()` fires it so a drain
   // does not have to wait out a full 30s cadence tick.
@@ -127,8 +139,23 @@ export function subscribeWithReconnect(deps: SubscribeWithReconnectDeps): Subscr
     // LISTEN; drop it so a subsequent stop() does not try to UNLISTEN on a
     // released client. The next successful subscribe will hand back a fresh one.
     currentUnsub = undefined;
-    wakeReconnect?.();
-    wakeReconnect = undefined;
+    if (wakeReconnect === undefined) {
+      // Race path (Codex round-3 #1): the wake resolver is NOT yet installed.
+      // This is the pre-park window — `trySubscribeOnce` has resolved but the
+      // runLoop has not yet reached `parkForReconnect()`, OR the loop is
+      // currently between microtasks after a prior wake fired. Firing an
+      // undefined resolver would silently drop this reconnect intent; instead,
+      // set the latch so `parkForReconnect()` consumes it on entry and
+      // resolves immediately without ever parking on a dead connection.
+      reconnectRequested = true;
+    } else {
+      // Fast path: the loop is parked on a live wake resolver — fire it. The
+      // continuation is queued as a microtask; the loop iterates to a fresh
+      // subscribe on resumption. No latch needed — the wake carries the
+      // reconnect intent.
+      wakeReconnect();
+      wakeReconnect = undefined;
+    }
   });
 
   // Retain the runLoop promise so `stop()` can drain it (Codex RA1). A caller
@@ -152,6 +179,18 @@ export function subscribeWithReconnect(deps: SubscribeWithReconnectDeps): Subscr
     parkForReconnect: () =>
       new Promise<void>((resolve) => {
         if (stopped) {
+          resolve();
+          return;
+        }
+        // Consume the reconnect-request latch on entry (Codex round-3 #1). If
+        // the connection-error observer fired between `trySubscribeOnce`
+        // resolving and this executor running (the pre-park race window), the
+        // wake pulse was dropped on the floor (wakeReconnect was still
+        // undefined) — but the observer left the latch set. Consuming it here
+        // resolves immediately so the loop iterates to a fresh subscribe
+        // rather than parking on a dead connection forever.
+        if (reconnectRequested) {
+          reconnectRequested = false;
           resolve();
           return;
         }
