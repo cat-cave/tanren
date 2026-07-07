@@ -274,6 +274,13 @@ export class ReviewMergePool {
    */
   governancePlatformLogins: string[] | undefined = undefined;
 
+  /**
+   * Codex H3 #11: the run's current `runs.status` + `outcome` — updated by the
+   * review-pause seam when the `human` policy parks the run. Absent (`null`) by
+   * default; a `parked` assertion reads this after `pollReviewForRun` returns.
+   */
+  runStatus: { status: string; outcome: string } | null = null;
+
   async query(sql: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     if (sql.startsWith("SELECT ancestor_stack, spec_id, project_id")) {
       const run = this.runs.find((r) => r.run_id === params[0]);
@@ -355,6 +362,14 @@ export class ReviewMergePool {
     if (sql.startsWith(`INSERT INTO ${eventsTableName}`)) {
       // v68 fix: org_id at index 4; event_type + payload shift to 5/6.
       this.events.push({ event_type: params[5], payload: JSON.parse(String(params[6])) });
+      return { rows: [], rowCount: 1 };
+    }
+    // Codex H3 #11 — the human-review durable-park path: the review-polling stage
+    // flips the run row to `paused` + `awaiting_review` and emits `run.paused` in
+    // ONE unit. The fake pool records the transition + the from-status guard so a
+    // test asserts the park happened.
+    if (sql.startsWith("UPDATE runs SET status = 'paused', outcome = 'awaiting_review'")) {
+      this.runStatus = { status: "paused", outcome: "awaiting_review" };
       return { rows: [], rowCount: 1 };
     }
     throw new Error(`unexpected SQL: ${sql}`);

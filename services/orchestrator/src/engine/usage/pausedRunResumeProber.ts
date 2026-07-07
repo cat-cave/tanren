@@ -72,6 +72,10 @@ interface PausedRunRow {
   projectId: string;
   orgId: string;
   pausedAt: Date;
+  /** The pause `outcome` the run carries — `window_paused` (task #82 usage
+   * pressure) or `awaiting_review` (Codex H3 #11 human-review durable park).
+   * Preserved through resume so the recovery surface keeps the distinct WHY. */
+  outcome: "window_paused" | "awaiting_review";
 }
 
 export interface PausedRunResumeProberDeps {
@@ -187,20 +191,28 @@ async function loadPausedRuns(pool: pg.Pool): Promise<PausedRunRow[]> {
       project_id: string;
       org_id: string;
       ended_at: Date | null;
+      outcome: string | null;
     }>(
-      `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.ended_at
+      // Codex H3 #11: the prober admits BOTH pause outcomes (`window_paused` for
+      // task #82 usage pressure + `awaiting_review` for human-review durable
+      // parking). Each row's outcome is preserved through resume so the recovery
+      // surface (dashboard / operator triage) still distinguishes "waiting on
+      // capacity" from "waiting on a human verdict".
+      `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.ended_at, r.outcome
          FROM runs r
-        WHERE r.status = 'paused'`,
+        WHERE r.status = 'paused' AND r.outcome IN ('window_paused', 'awaiting_review')`,
     );
     const rows: PausedRunRow[] = [];
     for (const row of result.rows) {
       if (row.spec_id === null || row.project_id === null || row.org_id === null) continue;
+      if (row.outcome !== "window_paused" && row.outcome !== "awaiting_review") continue;
       rows.push({
         runId: row.run_id,
         specId: row.spec_id,
         projectId: row.project_id,
         orgId: row.org_id,
         pausedAt: row.ended_at ?? new Date(),
+        outcome: row.outcome,
       });
     }
     return rows;
@@ -267,7 +279,10 @@ async function resumeOne(deps: PausedRunResumeProberDeps, row: PausedRunRow): Pr
     runId: row.runId,
     orgId: row.orgId,
     status: "halted" as const,
-    outcome: "window_paused" as const,
+    // Preserve the paused outcome on resume so the recovery surface keeps the
+    // distinct WHY (`window_paused` for task #82 usage pressure vs
+    // `awaiting_review` for Codex H3 #11 human-review parking).
+    outcome: row.outcome,
     fromStatuses: ["paused"],
   };
   const spec = {

@@ -355,7 +355,11 @@ export const resumePausedRunPairSchema = z
         runId: z.string().min(1),
         orgId: z.string().optional(),
         status: z.literal("halted"),
-        outcome: z.literal("window_paused"),
+        // Codex H3 #11: `awaiting_review` joins `window_paused` as a pause outcome
+        // the resume path admits — the resumed run keeps the distinct WHY (the
+        // recovery surface still tells "window pressure" from "operator approval"
+        // apart on `runs.outcome`).
+        outcome: z.enum(["window_paused", "awaiting_review"]),
         fromStatuses: z.array(z.literal("paused")).min(1),
       })
       .strict(),

@@ -34,6 +34,18 @@ export type RunStatus = z.infer<typeof RunStatus>;
 // the resume flips the run to `halted` with the SAME `window_paused` outcome
 // so the recovery surface keeps the distinct WHY without re-classifying.
 //
+// `awaiting_review` (Codex H3 #11): the outcome stamped on a run that reached
+// the human-review stage under `reviewPolicy: "human"`. The prior polling loop
+// in `reviewPolling.ts` blocked the worker thread indefinitely — a restart
+// discarded the state and pinned a fresh worker on the same run. Runs now
+// PARK on this outcome (durable, worker released) and RESUME via a background
+// prober that reads the PR's review verdict on cadence and, on a terminal
+// verdict, flips the run back to `halted` + spec `open` (`dag.spec.redriven`
+// re-drives — the successor run's `pollReviewForRun` reads the now-terminal
+// verdict and proceeds to merge). Same shape as `window_paused`: distinct WHY
+// on the outcome column, generic `run.paused` / `run.resumed` events on the
+// timeline.
+//
 // No-fallback doctrine: a `paused` → `failed` provider-unhealthy outcome is
 // intentionally NOT enumerated — the orchestrator does not yet run an
 // authoritative provider-health probe, and the existing preflight
@@ -52,6 +64,9 @@ export const RunOutcome = z.enum([
   "convergence_stalled",
   "window_exhausted",
   "window_paused",
+  // Codex H3 #11: the human-review-tier durable park outcome (was: in-process
+  // polling loop that pinned the worker forever).
+  "awaiting_review",
   "cancelled",
   "failed",
 ]);

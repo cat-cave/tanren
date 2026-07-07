@@ -13,7 +13,10 @@ import {
   gateErrorSignature,
   mergeGateRejection,
   outputMagnitude,
+  reviewerRejection,
+  type PollReviewForRunResult,
 } from "./reviewMerge/index.js";
+import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import { type FinalizeRunState, finalizeNonPassOutcome, setSpecStatus } from "./plannerRunFinalize.js";
@@ -155,4 +158,33 @@ export async function applyReviewVerdict(
   // TRANSIENT stall, so the spec RE-DRIVES (the walker re-attempts), not parks.
   await finalizeNonPassOutcome(input, finalizeRunState, context, appendEvent, "review_stalled");
   return "halt";
+}
+
+/**
+ * Codex H3 #11 — dispatch the review-verdict → loop-move mapping. Introduces
+ * the `parked` sentinel (the durable-park path) so the caller SHORT-CIRCUITS
+ * before the verdict-map `applyReviewVerdict`, which would fault-finalize a run
+ * the pause seam has intentionally moved to `paused` + `awaiting_review`. Any
+ * other verdict rides through the existing `applyReviewVerdict`.
+ */
+export async function dispatchReviewVerdict(
+  input: RunPlannerLoopInput,
+  finalizeRunState: FinalizeRunState,
+  context: PlannerRunContext,
+  appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
+  pullRequest: PublishedDraftPullRequest,
+  review: PollReviewForRunResult,
+  seedRejections: PlannerRejectionFeedback[],
+  reviewReworkAttempts: GateAttempt[],
+): Promise<"parked" | "merge" | "rework" | "halt"> {
+  if (review.verdict === "parked") return "parked";
+  return applyReviewVerdict(
+    input,
+    finalizeRunState,
+    context,
+    appendEvent,
+    { verdict: review.verdict, rejection: reviewerRejection(review, pullRequest.branch) },
+    seedRejections,
+    reviewReworkAttempts,
+  );
 }
