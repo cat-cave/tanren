@@ -258,6 +258,10 @@ export class DemoOnDeployWatcher {
       ...(this.deps.packageRegistry !== undefined && { packageRegistry: this.deps.packageRegistry }),
       ...(this.deps.mobileDistribution !== undefined && { mobileDistribution: this.deps.mobileDistribution }),
       ...(this.deps.manualAttestations !== undefined && { manualAttestations: this.deps.manualAttestations }),
+      // H3 #20/#21: manual_external adapter needs the tenant scope (orgId + projectId)
+      // each attestation is recorded under — an unscoped adapter would silently
+      // write cross-tenant rows. The verified deploy carries both.
+      manualOwnerScope: { orgId: verified.orgId, projectId: verified.projectId },
     });
     const ref: DeployRef = { provider: grant.providerKind, appId: verified.appId };
     return adapter.demoSurface(grant, ref, verified.deploymentId);

@@ -193,10 +193,23 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
     const attestations = new InMemoryManualAttestationStore();
     // The operator's out-of-band attestation the manual_external adapter's demoSurface
     // reads back. Same handle the adapter's deploy() would have stamped.
-    await attestations.record("manual:proj_demo@main", {
-      url: "https://attested.example.dev",
-      surfaceKind: "web_url",
-      source: { repo: "acme/web", ref: "main" },
+    await attestations.record({
+      deploymentId: "manual:proj_demo@main",
+      orgId: "org_demo",
+      projectId: "proj_demo",
+      appId: "proj_demo",
+      attestation: {
+        url: "https://attested.example.dev",
+        surfaceKind: "web_url",
+        source: { repo: "acme/web", ref: "main" },
+      },
+    });
+    // demoSurface reads confirmed rows; the test attestation must reflect the
+    // operator-confirmed lifecycle state the adapter enforces.
+    await attestations.confirm({
+      deploymentId: "manual:proj_demo@main",
+      orgId: "org_demo",
+      confirmedBy: "user_demo_operator",
     });
     let webProbeUrl = "";
     const webProbe: DemoWebProbe = {

@@ -14,7 +14,10 @@ import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../../src/engin
 import { PULUMI_ADAPTER_KIND } from "../../src/engine/deploy/pulumiDeployAdapter.js";
 import { PACKAGE_RELEASE_ADAPTER_KIND } from "../../src/engine/deploy/packageReleaseDeployAdapter.js";
 import { MOBILE_RELEASE_ADAPTER_KIND } from "../../src/engine/deploy/mobileReleaseDeployAdapter.js";
-import { MANUAL_EXTERNAL_ADAPTER_KIND } from "../../src/engine/deploy/manualExternalDeployAdapter.js";
+import {
+  InMemoryManualAttestationStore,
+  MANUAL_EXTERNAL_ADAPTER_KIND,
+} from "../../src/engine/deploy/manualExternalDeployAdapter.js";
 import { scriptedDeployTransport, type ScriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
 import {
@@ -327,9 +330,15 @@ describe("buildDeployAdapter (registry/factory)", () => {
         poll,
       }).kind,
     ).toBe(MOBILE_RELEASE_ADAPTER_KIND);
-    expect(buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, { provisioner: base, urlProbe: probe, poll }).kind).toBe(
-      MANUAL_EXTERNAL_ADAPTER_KIND,
-    );
+    expect(
+      buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, {
+        provisioner: base,
+        urlProbe: probe,
+        poll,
+        manualAttestations: new InMemoryManualAttestationStore(),
+        manualOwnerScope: { orgId: "org_test", projectId: "proj_test" },
+      }).kind,
+    ).toBe(MANUAL_EXTERNAL_ADAPTER_KIND);
   });
 
   it("fails LOUD when a non-direct_api class is selected without its external driver wired", () => {
@@ -343,5 +352,18 @@ describe("buildDeployAdapter (registry/factory)", () => {
     expect(() => buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
       /required config 'mobileDistribution' is not set/u,
     );
+    // Codex H3 #20: manual_external MUST supply a durable attestation store — the
+    // in-memory default is gone. Same LOUD posture as the other external-driver classes.
+    expect(() => buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /required config 'manualAttestations' is not set/u,
+    );
+    // Codex H3 #20: manual_external ALSO requires an explicit tenant scope (an
+    // unscoped adapter would silently write cross-tenant rows).
+    expect(() =>
+      buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, {
+        provisioner: base,
+        manualAttestations: new InMemoryManualAttestationStore(),
+      }),
+    ).toThrow(/required config 'manualOwnerScope' is not set/u);
   });
 });

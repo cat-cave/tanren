@@ -38,6 +38,7 @@ import {
 import {
   createAiProviderRoutes,
   type ConfigGateGithubFactory,
+  createDeployRoutes,
   createGithubConnectRoutes,
   createOrgRoutes,
 } from "./routes/orgs/index.js";
@@ -308,6 +309,12 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // configured SecretStore backs the provisioner's transports.
   app.route("/orgs", createIntegrationRoutes({ pool: scopedPool, secrets }));
   app.route("/orgs", createRunRoutes({ pool: scopedPool }));
+  // Codex H3 Surface 7 finding #21: the operator-facing manual_external DEPLOY
+  // CONFIRMATION route. `POST /orgs/:orgId/projects/:projectId/deploys/:deploymentId/confirm`
+  // flips a pending-manual-confirmation attestation → confirmed + emits
+  // `deploy.manual_confirmed`. Org-scoped on the scoped pool (RLS bounds the
+  // confirm to the tenant's own attestation rows).
+  app.route("/orgs", createDeployRoutes({ pool: scopedPool }));
   app.route("/orgs", createRecoveryRoutes({ pool: scopedPool }));
   // Credentials mount at root but every endpoint is `/orgs/:orgId/credentials/*`
   // and reads/writes the org's `config` (RLS-enabled `organizations`), so it gets

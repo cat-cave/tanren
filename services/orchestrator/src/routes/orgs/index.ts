@@ -247,6 +247,11 @@ function messageOf(error: unknown): string {
 // count within the architecture cap). The route is org-scoped + actor-authorized
 // exactly like the org routes above; see routes/aiProvider/index.ts.
 export { createAiProviderRoutes } from "../aiProvider/index.js";
+// Codex H3 #21: the operator-facing manual_external deploy CONFIRMATION route
+// (POST /orgs/:orgId/projects/:projectId/deploys/:deploymentId/confirm) also
+// mounts on `/orgs`, so it re-exports through this barrel to keep the feature-
+// mount table's dependency count within the architecture cap.
+export { createDeployRoutes } from "../deploys/index.js";
 
 interface OrgListRow {
   id: string;

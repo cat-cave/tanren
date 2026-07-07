@@ -13,9 +13,14 @@
 // distribution client, a manual-attestation store). The factory requires the relevant
 // driver to be WIRED for the kind being built; an absent driver fails LOUD with a typed
 // {@link DeployAdapterConfigError} (the correct "unconfigured" behavior, NOT a stub
-// default). The single exception is the manual-attestation store, which defaults to the
-// real in-process {@link InMemoryManualAttestationStore} (a genuine store — manual_external
-// attestations are non-secret and process-local within a check), never a stand-in.
+// default).
+//
+// Codex H3 Surface 7 finding #20 CLOSURE: the `manual_external` class ALSO fails LOUD
+// on an absent attestation store. There is NO in-memory default anymore — the pre-fix
+// default silently sank every operator attestation into a process-local `Map` that
+// lost the row on restart. Production wiring MUST supply a durable
+// `PgManualAttestationStore` PLUS the tenant scope (`ownerScope`) each attestation is
+// keyed under; the in-memory impl is TEST-ONLY.
 
 import type { DeployAdapter, UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import type { DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
@@ -40,12 +45,12 @@ import {
   type MobileDistributionClient,
 } from "./mobileReleaseDeployAdapter.js";
 import {
-  InMemoryManualAttestationStore,
   ManualExternalDeployAdapter,
   MANUAL_EXTERNAL_ADAPTER_KIND,
   MANUAL_EXTERNAL_PROVIDER_KIND,
   type ManualAttestationStore,
 } from "./manualExternalDeployAdapter.js";
+import type { EventStore } from "../eventStore.js";
 import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
 
 /** The deps a built DeployAdapter draws (the provisioner wiring + the verify seams). */
@@ -67,8 +72,28 @@ export interface BuildDeployAdapterDeps {
   packageRegistry?: PackageRegistryClient;
   /** The mobile distribution client (required to build the `mobile_release` class). */
   mobileDistribution?: MobileDistributionClient;
-  /** The manual-attestation store (defaults to the in-process store for `manual_external`). */
+  /**
+   * The durable manual-attestation store (REQUIRED to build the `manual_external`
+   * class — no in-memory default; Codex H3 #20). Production wires
+   * `PgManualAttestationStore`.
+   */
   manualAttestations?: ManualAttestationStore;
+  /**
+   * The tenant scope the `manual_external` adapter records attestations under
+   * (REQUIRED to build that class). An unscoped adapter would silently write
+   * cross-tenant rows / read the wrong rows.
+   */
+  manualOwnerScope?: { orgId: string; projectId: string };
+  /**
+   * The event store the `manual_external` adapter emits `deploy.pending_manual` /
+   * `deploy.manual_confirmed` into. OPTIONAL — omitted only for pure-store /
+   * pure-adapter unit tests that assert the persistence contract without the
+   * event tail; production wiring supplies it so the operator-facing wake reaches
+   * the notification route.
+   */
+  manualEvents?: EventStore;
+  /** The optional per-run bindings the emitted manual_external events carry. */
+  manualRunBindings?: { runId?: string };
 }
 
 /**
@@ -114,12 +139,30 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
       }
       return new MobileReleaseDeployAdapter({ distribution: deps.mobileDistribution, secrets, poll });
     }
-    case MANUAL_EXTERNAL_ADAPTER_KIND:
+    case MANUAL_EXTERNAL_ADAPTER_KIND: {
+      if (deps.manualAttestations === undefined) {
+        throw new DeployAdapterConfigError(
+          MANUAL_EXTERNAL_ADAPTER_KIND,
+          "manualAttestations",
+          "wire a durable PgManualAttestationStore (see services/orchestrator/src/engine/deploy/pgManualAttestationStore.ts) — the in-memory impl is TEST-ONLY, Codex H3 #20 forbids a process-local default",
+        );
+      }
+      if (deps.manualOwnerScope === undefined) {
+        throw new DeployAdapterConfigError(
+          MANUAL_EXTERNAL_ADAPTER_KIND,
+          "manualOwnerScope",
+          "wire the tenant scope (orgId + projectId) each manual_external attestation is recorded under — an unscoped adapter would silently write cross-tenant rows",
+        );
+      }
       return new ManualExternalDeployAdapter({
-        attestations: deps.manualAttestations ?? new InMemoryManualAttestationStore(),
+        attestations: deps.manualAttestations,
         urlProbe,
         poll,
+        ownerScope: deps.manualOwnerScope,
+        ...(deps.manualEvents === undefined ? {} : { events: deps.manualEvents }),
+        ...(deps.manualRunBindings === undefined ? {} : { runBindings: deps.manualRunBindings }),
       });
+    }
     default:
       throw new Error(
         `buildDeployAdapter: adapter class '${kind}' is not a registered deploy adapter ` +
