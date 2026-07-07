@@ -21,21 +21,29 @@ import type { DeployAdapter, UrlReachabilityProbe, VerifyPollPolicy } from "../c
 import type { DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "./directApiDeployAdapter.js";
-import { PulumiDeployAdapter, PULUMI_ADAPTER_KIND, type PulumiStackRunner } from "./pulumiDeployAdapter.js";
+import {
+  PulumiDeployAdapter,
+  PULUMI_ADAPTER_KIND,
+  PULUMI_PROVIDER_KIND,
+  type PulumiStackRunner,
+} from "./pulumiDeployAdapter.js";
 import {
   PackageReleaseDeployAdapter,
   PACKAGE_RELEASE_ADAPTER_KIND,
+  PACKAGE_RELEASE_PROVIDER_KIND,
   type PackageRegistryClient,
 } from "./packageReleaseDeployAdapter.js";
 import {
   MobileReleaseDeployAdapter,
   MOBILE_RELEASE_ADAPTER_KIND,
+  MOBILE_RELEASE_PROVIDER_KIND,
   type MobileDistributionClient,
 } from "./mobileReleaseDeployAdapter.js";
 import {
   InMemoryManualAttestationStore,
   ManualExternalDeployAdapter,
   MANUAL_EXTERNAL_ADAPTER_KIND,
+  MANUAL_EXTERNAL_PROVIDER_KIND,
   type ManualAttestationStore,
 } from "./manualExternalDeployAdapter.js";
 import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
@@ -117,6 +125,41 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
         `buildDeployAdapter: adapter class '${kind}' is not a registered deploy adapter ` +
           `(registered: '${DIRECT_API_ADAPTER_KIND}', '${PULUMI_ADAPTER_KIND}', '${PACKAGE_RELEASE_ADAPTER_KIND}', ` +
           `'${MOBILE_RELEASE_ADAPTER_KIND}', '${MANUAL_EXTERNAL_ADAPTER_KIND}')`,
+      );
+  }
+}
+
+/**
+ * Map a `deploy.<provider>` provider kind (the value stamped onto a `DeployRef.provider`
+ * and recorded on `deploy.triggered` / `deploy.verified`) to the DeployAdapter CLASS
+ * that owns it — the seam that lets a caller (e.g. the demo-on-deploy watcher) DISPATCH
+ * to the RIGHT adapter's `demoSurface` from a persisted provider kind, without hard-wiring
+ * to `direct_api`. The registered mapping:
+ *   • `deploy.vercel` / `deploy.flyio` → `direct_api`
+ *   • `deploy.pulumi`                  → `pulumi`
+ *   • `deploy.package_release`         → `package_release`
+ *   • `deploy.mobile_release`          → `mobile_release`
+ *   • `deploy.manual_external`         → `manual_external`
+ * An UNKNOWN provider kind throws LOUD — never a silent default to `direct_api`.
+ */
+export function adapterKindForProviderKind(providerKind: string): string {
+  switch (providerKind) {
+    case "deploy.vercel":
+    case "deploy.flyio":
+      return DIRECT_API_ADAPTER_KIND;
+    case PULUMI_PROVIDER_KIND:
+      return PULUMI_ADAPTER_KIND;
+    case PACKAGE_RELEASE_PROVIDER_KIND:
+      return PACKAGE_RELEASE_ADAPTER_KIND;
+    case MOBILE_RELEASE_PROVIDER_KIND:
+      return MOBILE_RELEASE_ADAPTER_KIND;
+    case MANUAL_EXTERNAL_PROVIDER_KIND:
+      return MANUAL_EXTERNAL_ADAPTER_KIND;
+    default:
+      throw new Error(
+        `adapterKindForProviderKind: provider kind '${providerKind}' has no registered DeployAdapter class ` +
+          `(registered: 'deploy.vercel', 'deploy.flyio', '${PULUMI_PROVIDER_KIND}', ` +
+          `'${PACKAGE_RELEASE_PROVIDER_KIND}', '${MOBILE_RELEASE_PROVIDER_KIND}', '${MANUAL_EXTERNAL_PROVIDER_KIND}')`,
       );
   }
 }

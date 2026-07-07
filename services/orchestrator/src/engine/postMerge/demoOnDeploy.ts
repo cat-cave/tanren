@@ -31,11 +31,17 @@ import type { DemoSurface, DeployRef } from "../contracts/deployAdapter.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { systemActor } from "../state/actor.js";
-import { buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
-import { DIRECT_API_ADAPTER_KIND } from "../deploy/directApiDeployAdapter.js";
+import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
+import type { PulumiStackRunner } from "../deploy/pulumiDeployAdapter.js";
+import type { PackageRegistryClient } from "../deploy/packageReleaseDeployAdapter.js";
+import type { MobileDistributionClient } from "../deploy/mobileReleaseDeployAdapter.js";
+import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
 import { DemoEngine, type DemoBehavior } from "../demo/demoEngine.js";
 import { fetchDemoWebProbe } from "../demo/demoWebProbe.js";
 import type { DemoWebProbe } from "../demo/demoEvidence.js";
+import { type DemoPackageProbe, fetchDemoPackageProbe } from "../demo/demoPackageArm.js";
+import { type DemoDownloadProbe, fetchDemoDownloadProbe } from "../demo/demoDownloadArm.js";
+import { type DemoAppChannelProbe, surfaceDescriptorAppChannelProbe } from "../demo/demoAppChannelArm.js";
 import { loadVerifiedDeploy, loadSpecBehaviors, type VerifiedDeploy } from "./demoOnDeployReads.js";
 
 /** The phase a demo failed in — drives the fixed, machine-parseable `demo.failed.reason`. */
@@ -58,7 +64,8 @@ const DEMO_FAILED_DETAIL: Record<DemoFailPhase, string> = {
 
 /** The engine's unsupported-surface-kind exhaustive throw is a distinct diagnosis — surface it. */
 const UNSUPPORTED_SURFACE_DETAIL =
-  "demo cannot exercise this deployed surface kind — the per-behavior exercise arm is not implemented for non-web surfaces";
+  "demo cannot exercise this deployed surface kind — either no arm is registered (a new surface kind on the " +
+  "contract) or the arm's probe is not wired in the demo-on-deploy watcher deps";
 
 export interface DemoOnDeployWatcherDeps {
   /** The runtime (`tanren_app`) pool; the watcher re-reads under the system scope. */
@@ -79,6 +86,36 @@ export interface DemoOnDeployWatcherDeps {
    * (a scripted probe); defaults to the production fetch probe when absent.
    */
   webProbe?: DemoWebProbe;
+  /**
+   * The registry-metadata probe a `package` surface is exercised over. Injectable for
+   * tests; defaults to the production `fetch`-backed probe when absent.
+   */
+  packageProbe?: DemoPackageProbe;
+  /**
+   * The streamed-fetch + SHA-256 probe a `download` surface is exercised over.
+   * Injectable for tests; defaults to the production `fetch`-backed streaming probe.
+   */
+  downloadProbe?: DemoDownloadProbe;
+  /**
+   * The presence-reread probe an `app_channel` surface is exercised over. Injectable
+   * for tests; defaults to the surface-descriptor probe (the DeployAdapter's
+   * `demoSurface` already validated the buildRef at surface-resolve time — the base
+   * probe attests to that presence at demo time).
+   */
+  appChannelProbe?: DemoAppChannelProbe;
+  /**
+   * External drivers the non-`direct_api` DeployAdapters require for their
+   * `demoSurface` reads (mirrors {@link BuildDeployAdapterDeps}). Present only when the
+   * project's deploy provider requires them (a `pulumi` project must wire
+   * `pulumiRunner`, a `package_release` must wire `packageRegistry`, etc.); absent when
+   * the project's provider is `direct_api` (Vercel/Fly) or `manual_external` (in-process
+   * attestations). An unwired driver for a provider that requires one fails LOUD (typed
+   * `DeployAdapterConfigError`) — never a silent skip.
+   */
+  pulumiRunner?: PulumiStackRunner;
+  packageRegistry?: PackageRegistryClient;
+  mobileDistribution?: MobileDistributionClient;
+  manualAttestations?: ManualAttestationStore;
 }
 
 /**
@@ -95,6 +132,9 @@ export class DemoOnDeployWatcher {
     this.engine = new DemoEngine({
       events: this.eventStore,
       webProbe: deps.webProbe ?? fetchDemoWebProbe(),
+      packageProbe: deps.packageProbe ?? fetchDemoPackageProbe(),
+      downloadProbe: deps.downloadProbe ?? fetchDemoDownloadProbe(),
+      appChannelProbe: deps.appChannelProbe ?? surfaceDescriptorAppChannelProbe(),
     });
   }
 
@@ -190,6 +230,16 @@ export class DemoOnDeployWatcher {
    * Resolve the deployed EXERCISE SURFACE for the verified deploy via the DeployAdapter
    * — the provider-agnostic seam. The grant must still resolve (it resolved at verify
    * time); its disappearance mid-flight is a LOUD error, never a skipped demo.
+   *
+   * ADAPTER DISPATCH: the adapter CLASS is derived from the persisted deploy provider
+   * kind (via {@link adapterKindForProviderKind}) — a `deploy.vercel` runs the
+   * `direct_api` adapter, a `deploy.package_release` runs the `package_release`
+   * adapter, a `deploy.manual_external` runs the `manual_external` adapter, etc. The
+   * previous hard-wire to `direct_api` was Bug 2 (Codex H3 #24): a project deployed via
+   * a `package_release` / `mobile_release` / `manual_external` / `pulumi` deploy would
+   * either resolve to the wrong surface (a Vercel/Fly `deploymentStatus` read against
+   * a non-Vercel/Fly provider) or throw the wrong error. Now the DISPATCH is data-driven: the recorded
+   * provider kind selects the right adapter's `demoSurface`.
    */
   private async resolveSurface(verified: VerifiedDeploy): Promise<DemoSurface> {
     const grant = await runWithSystemScope(this.deps.pool, (client) =>
@@ -201,8 +251,13 @@ export class DemoOnDeployWatcher {
           `'${verified.orgId}' has no matching grant — cannot resolve the demo surface`,
       );
     }
-    const adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
+    const adapterKind = adapterKindForProviderKind(verified.provider);
+    const adapter = buildDeployAdapter(adapterKind, {
       provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },
+      ...(this.deps.pulumiRunner !== undefined && { pulumiRunner: this.deps.pulumiRunner }),
+      ...(this.deps.packageRegistry !== undefined && { packageRegistry: this.deps.packageRegistry }),
+      ...(this.deps.mobileDistribution !== undefined && { mobileDistribution: this.deps.mobileDistribution }),
+      ...(this.deps.manualAttestations !== undefined && { manualAttestations: this.deps.manualAttestations }),
     });
     const ref: DeployRef = { provider: grant.providerKind, appId: verified.appId };
     return adapter.demoSurface(grant, ref, verified.deploymentId);
@@ -228,15 +283,23 @@ export function buildDemoOnDeployWatcher(deps: {
 }
 
 /**
- * Recognize the {@link DemoEngine}'s exhaustive unsupported-surface-kind throw so the
+ * Recognize a {@link DemoEngine} unsupported-surface-kind throw so the
  * `demo.failed.reason` refines from the generic `exercise_failed` to the more actionable
- * `unsupported_surface_kind`. Keyed on the engine's stable throw message stem — the
- * engine controls both sides, so this is a coupled but bounded check.
+ * `unsupported_surface_kind`. Since the engine now implements ALL four surface arms
+ * (Bug 1 fix), the only remaining sources are:
+ *   • the exhaustive default (a surface kind added to the contract but not to
+ *     `exerciseOne`) — the pre-existing "no exercise for surface kind" stem;
+ *   • a {@link DemoProbeMissingError} (a surface kind IS implemented but its probe
+ *     was not wired into `DemoEngineDeps`) — the new stem "probe for surface kind '…'
+ *     is not wired".
+ * Both are equally actionable as `unsupported_surface_kind` from the operator's
+ * perspective (the surface resolved; the demo could not exercise it), so we map both
+ * to the same refined reason.
  */
 function isUnsupportedSurfaceKindError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
-    error.message.startsWith("demoEngine: surface kind '") ||
-    error.message.startsWith("demoEngine: no exercise for surface kind '")
+    error.message.startsWith("demoEngine: no exercise for surface kind '") ||
+    error.message.startsWith("demoEngine: probe for surface kind '")
   );
 }
