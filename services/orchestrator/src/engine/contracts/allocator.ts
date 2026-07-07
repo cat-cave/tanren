@@ -127,18 +127,71 @@ export function persistedRunnerKeys(request: AllocationRequest): {
 
 export type ReleaseReason = "completed" | "failed" | "abandoned";
 
+/**
+ * The taxonomic class every allocator belongs to. The `Allocator` catalog
+ * historically bundled three distinct concerns behind a single "provisioning"
+ * label (Codex H3 #14/#15/#16) — this taxonomy names them, so consumers that
+ * need to reason about lifecycle (does release destroy? does the runner survive
+ * across runs?) can branch on a typed capability instead of an ad-hoc allowlist
+ * of kinds.
+ *
+ *   - `provisioning` — creates + destroys a real underlying resource on every
+ *     allocate / release. Cloud allocators (hetzner, digitalocean, gcp,
+ *     aws_ec2, kubernetes). Release TEARS DOWN the resource; there is nothing
+ *     to sweep afterwards.
+ *   - `fixed_pool` — leases a pre-existing, long-lived host from a configured
+ *     pool (static, manual_ssh). NEVER provisions; NEVER destroys — release
+ *     only frees the lease. The host survives across releases, so an
+ *     orchestrator crash mid-run leaks the `runners` row (covered by the
+ *     orphan sweeper) and the on-host `/workspace/runs/*` (covered by the
+ *     run-workspace reaper).
+ *   - `delegated` — the orchestrator does not provision the runner itself; it
+ *     HTTP-delegates to a sidecar service that owns container lifecycle. From
+ *     the orchestrator's perspective the resource IS destroyed on release (the
+ *     sidecar tears down); it is "provisioning" in EFFECT but the credentials
+ *     and lifecycle logic live in the sidecar service, not here.
+ *   - `routed` — the router allocator's honest self-description: it dispatches
+ *     each allocate to a backing allocator per label routing, so its own
+ *     taxonomy is "consult the routing config". Consumers that need the
+ *     concrete class for a specific allocation must resolve it per-kind via
+ *     `allocatorTaxonomyFor` in `engine/allocators/poolPolicy.ts`.
+ */
+export type AllocatorTaxonomy = "provisioning" | "fixed_pool" | "delegated" | "routed";
+
+/**
+ * The RUNNER-ALLOCATOR contract. Every implementation hands the orchestrator a
+ * connectable {@link RunnerAllocation} and later frees it via {@link release};
+ * the LIFECYCLE class each impl belongs to is stated up front via the
+ * {@link taxonomy} capability field so consumers can branch on whether release
+ * actually destroys a resource without a per-kind allowlist. See
+ * {@link AllocatorTaxonomy} for the class definitions.
+ */
 export interface Allocator {
+  /**
+   * The lifecycle class this allocator belongs to. Encodes whether allocate /
+   * release provision + destroy a real resource (`provisioning`), lease a
+   * pre-existing pool host (`fixed_pool`), HTTP-delegate to a sidecar service
+   * (`delegated`), or dispatch per-allocate to a backing allocator (`routed`).
+   * Consumers that need to reason about whether release destroys — the orphan
+   * sweeper, the run-workspace reaper — branch on this rather than an ad-hoc
+   * kind list.
+   */
+  readonly taxonomy: AllocatorTaxonomy;
   allocate(request: AllocationRequest): Promise<RunnerAllocation>;
   /**
    * Release the runner. `reason` is best-effort metadata for the allocator's
-   * finalizer log; allocator implementations must always run the same
-   * destroy + wipe path regardless of the reason. Calling release on an
-   * already-released runner is a no-op.
+   * finalizer log; PROVISIONING + DELEGATED allocators tear the resource down,
+   * FIXED-POOL allocators only free the lease (the host survives). Calling
+   * release on an already-released runner is a no-op.
    */
   release(runnerId: string, reason?: ReleaseReason): Promise<void>;
 }
 
 export class FakeAllocator implements Allocator {
+  // Fixed-pool by contract: FakeAllocator's `release()` is a no-op — it does not
+  // destroy the (imaginary) host. That matches the "lease, never destroy" shape
+  // of fixed_pool, which keeps the conformance suite honest.
+  readonly taxonomy: AllocatorTaxonomy = "fixed_pool";
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
     return {
       runnerId: `runner_${request.runId}`,

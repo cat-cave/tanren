@@ -73,6 +73,7 @@ const PLAN_TASK = `task_plan_${ORG}`;
 // (credential resolution throws first), so these adapters are inert stand-ins —
 // present only to satisfy the deps shape.
 const INERT_ALLOCATOR: Allocator = {
+  taxonomy: "fixed_pool" as const,
   async allocate() {
     throw new Error("allocator should not be reached on an early credential failure");
   },

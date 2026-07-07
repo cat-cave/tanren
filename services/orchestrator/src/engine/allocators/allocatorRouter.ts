@@ -1,4 +1,10 @@
-import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import type {
+  AllocationRequest,
+  Allocator,
+  AllocatorTaxonomy,
+  ReleaseReason,
+  RunnerAllocation,
+} from "../contracts/allocator.js";
 import {
   type AllocatorKind,
   type AllocatorRoutingConfig,
@@ -30,6 +36,12 @@ export type AllocatorRegistry = Record<AllocatorKind, Allocator>;
  * call site (worker, hello workflow) unchanged.
  */
 export class AllocatorRouter implements Allocator {
+  // ROUTED: the router does not itself provision, lease, or delegate — each
+  // allocate is dispatched to a backing allocator per the routing config, so
+  // the CONCRETE lifecycle class varies per allocation. Consumers that need
+  // the concrete class must consult `allocatorTaxonomyFor(kind)` on the kind
+  // they know the runner was routed to.
+  readonly taxonomy: AllocatorTaxonomy = "routed";
   /** In-flight runner count per kind, for pool-policy enforcement. */
   private readonly inFlight = new Map<AllocatorKind, number>();
   /** runnerId -> kind, so release routes to the same backing allocator. */

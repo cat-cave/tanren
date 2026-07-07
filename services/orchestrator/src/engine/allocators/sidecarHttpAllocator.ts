@@ -5,6 +5,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -148,6 +149,12 @@ function redactedPayloadPreview(value: unknown): string {
  * HTTP. The sidecar owns container lifecycle and finalizer cleanup.
  */
 export class SidecarHttpAllocator implements Allocator {
+  // DELEGATED: the orchestrator does not create or destroy runner containers
+  // itself; the sidecar service owns full container lifecycle over an HTTP
+  // seam. From the orchestrator's perspective release DOES tear the runner
+  // down (the sidecar destroys), but the credentials + docker-socket access
+  // + finalizer wipes live in the sidecar service — not here.
+  readonly taxonomy: AllocatorTaxonomy = "delegated";
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: SidecarHttpAllocatorOptions) {

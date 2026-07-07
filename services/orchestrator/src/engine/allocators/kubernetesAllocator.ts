@@ -3,6 +3,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -105,6 +106,9 @@ export interface KubernetesAllocatorOptions {
  * doing TOFU, because production runner images bake a known host key.
  */
 export class KubernetesAllocator implements Allocator {
+  // PROVISIONING: allocate() creates a fresh Pod + Secret; release() deletes
+  // both.
+  readonly taxonomy: AllocatorTaxonomy = "provisioning";
   private readonly client: KubernetesClient;
   private readonly sleep: (ms: number) => Promise<void>;
   /** runnerId -> { pod, secret } names, so release can delete the right ones. */

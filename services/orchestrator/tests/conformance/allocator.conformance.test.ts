@@ -262,23 +262,56 @@ const makeKubernetes = (fail = false): Allocator =>
   });
 
 // --- Contract conformance (all 9 impls) -------------------------------------
+// The `expectedTaxonomy` per impl is the SEAM the reclassification rides on
+// (Codex H3 #14/#15/#16): fixed_pool for static + manual_ssh (lease-only, no
+// destroy), delegated for sidecar (the sidecar service owns lifecycle), and
+// provisioning for every real cloud kind (allocate creates + release destroys
+// an underlying resource). FakeAllocator is fixed_pool by design — its
+// `release()` is a no-op, matching lease semantics.
 describeAllocatorConformance("FakeAllocator", {
   make: (): Allocator => new FakeAllocator(),
   request,
+  expectedTaxonomy: "fixed_pool",
 });
-describeAllocatorConformance("StaticRunnerAllocator", { make: makeStatic, request });
-describeAllocatorConformance("ManualSshAllocator", { make: makeManual, request });
-describeAllocatorConformance("SidecarHttpAllocator", { make: makeSidecar, request });
-describeAllocatorConformance("HetznerAllocator", { make: (): Allocator => makeHetzner(), request });
+describeAllocatorConformance("StaticRunnerAllocator", {
+  make: makeStatic,
+  request,
+  expectedTaxonomy: "fixed_pool",
+});
+describeAllocatorConformance("ManualSshAllocator", {
+  make: makeManual,
+  request,
+  expectedTaxonomy: "fixed_pool",
+});
+describeAllocatorConformance("SidecarHttpAllocator", {
+  make: makeSidecar,
+  request,
+  expectedTaxonomy: "delegated",
+});
+describeAllocatorConformance("HetznerAllocator", {
+  make: (): Allocator => makeHetzner(),
+  request,
+  expectedTaxonomy: "provisioning",
+});
 describeAllocatorConformance("DigitalOceanAllocator", {
   make: (): Allocator => makeDigitalOcean(),
   request,
+  expectedTaxonomy: "provisioning",
 });
-describeAllocatorConformance("GcpAllocator", { make: (): Allocator => makeGcp(), request });
-describeAllocatorConformance("AwsEc2Allocator", { make: (): Allocator => makeAws(), request });
+describeAllocatorConformance("GcpAllocator", {
+  make: (): Allocator => makeGcp(),
+  request,
+  expectedTaxonomy: "provisioning",
+});
+describeAllocatorConformance("AwsEc2Allocator", {
+  make: (): Allocator => makeAws(),
+  request,
+  expectedTaxonomy: "provisioning",
+});
 describeAllocatorConformance("KubernetesAllocator", {
   make: (): Allocator => makeKubernetes(),
   request,
+  expectedTaxonomy: "provisioning",
 });
 
 // --- Failure conformance (impls with an injectable failure path) ------------

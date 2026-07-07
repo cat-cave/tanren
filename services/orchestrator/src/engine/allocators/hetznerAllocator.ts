@@ -3,6 +3,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -157,6 +158,8 @@ interface HetznerAllocationResources {
  *    stored private key — nothing leaks past the run.
  */
 export class HetznerAllocator implements Allocator {
+  // PROVISIONING: allocate() creates a Hetzner server + SSH key; release() destroys both.
+  readonly taxonomy: AllocatorTaxonomy = "provisioning";
   private readonly client: HetznerClient;
   private readonly generateKeyPair: KeyPairGenerator;
   private readonly sleep: (ms: number) => Promise<void>;

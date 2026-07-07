@@ -69,6 +69,7 @@ class ScriptedSsh implements CommandSubstrate {
 }
 
 class RecordingAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   allocated: AllocationRequest[] = [];
   released: { runnerId: string; reason?: string }[] = [];
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

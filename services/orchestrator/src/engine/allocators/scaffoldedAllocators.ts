@@ -1,4 +1,12 @@
-import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } from "../contracts/allocator.js";
+import type {
+  AllocationRequest,
+  Allocator,
+  AllocatorTaxonomy,
+  ReleaseReason,
+  RunnerAllocation,
+} from "../contracts/allocator.js";
+import { allocatorTaxonomyFor } from "./poolPolicy.js";
+import { AllocatorKind } from "./poolPolicy.js";
 
 /**
  * Placeholder for a *real* allocator kind that the router registers but the
@@ -12,7 +20,22 @@ import type { AllocationRequest, Allocator, ReleaseReason, RunnerAllocation } fr
  * not opt into via routing rules.
  */
 export class UnconfiguredAllocator implements Allocator {
-  constructor(private readonly kind: string) {}
+  /**
+   * Report the taxonomy of the KIND this stub stands in for — so an operator
+   * inspecting the registry (or a taxonomy-aware consumer) reads the correct
+   * lifecycle class rather than a default. If the stub is ever `allocate()`d,
+   * it throws before the taxonomy matters.
+   */
+  readonly taxonomy: AllocatorTaxonomy;
+
+  constructor(private readonly kind: string) {
+    // Best-effort: if the string is a known AllocatorKind, use its declared
+    // taxonomy; if a caller constructed a stub for something outside the
+    // catalog (an internal test synonym), degrade to `provisioning` — the
+    // conservative default (destroys on release).
+    const parsed = AllocatorKind.safeParse(kind);
+    this.taxonomy = parsed.success ? allocatorTaxonomyFor(parsed.data) : "provisioning";
+  }
 
   private fail(): never {
     throw new Error(

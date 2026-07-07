@@ -1,19 +1,21 @@
 // Boot wiring for the run-sandbox REAPER (layer 2 of the ≈204 GB disk-leak fix).
 // The reaper sweeps a LONG-LIVED runner's `/workspace/runs/*` and removes stale,
-// non-active run dirs. It is wired ONLY where the runner is actually long-lived:
+// non-active run dirs. It is wired ONLY where the runner is actually long-lived
+// AND single-target:
 //
 //   - STATIC (`TANREN_ALLOCATOR_KIND=static`, the dev-compose shared runner): one
 //     reused `/workspace` survives every run — this is the exact leak the incident
-//     hit. The reaper resolves the SAME SSH target the static allocator uses and
-//     sweeps it.
-//   - EPHEMERAL kinds (sidecar / hetzner / cloud): the container + its `/workspace`
-//     volume are DESTROYED on release, so the sandbox dies with the runner — there
-//     is nothing to reap, and sweeping a soon-destroyed runner is wasteful. The
-//     reaper is NOT started for these.
-//   - `manual_ssh` (a pool of pre-provisioned long-lived hosts) DOES leak the same
-//     way, but it is a multi-host pool with no single sweep target — a per-host
-//     reaper is a follow-up. We do not silently pretend to cover it: the boot logs
-//     that the reaper is OFF for the configured kind.
+//     hit. `fixed_pool` taxonomy AND a single host, so the reaper resolves the
+//     SAME SSH target the static allocator uses and sweeps it.
+//   - PROVISIONING + DELEGATED taxonomies (sidecar / hetzner / cloud): the
+//     container + its `/workspace` volume are DESTROYED on release, so the
+//     sandbox dies with the runner — there is nothing to reap, and sweeping a
+//     soon-destroyed runner is wasteful. The reaper is NOT started for these.
+//   - `manual_ssh` (`fixed_pool` taxonomy, but a MULTI-HOST pool) DOES leak the
+//     same way, but has no single sweep target — a per-host reaper is a
+//     follow-up. We do not silently pretend to cover it: the boot logs that
+//     the reaper is OFF for the configured kind. This is the narrower gate
+//     that separates static from the rest of `fixed_pool`.
 //
 // Retention + cadence are governed CONFIG (AllocatorConfig), never env vars — see
 // `resolveRunWorkspaceReaperConfig`.
@@ -77,13 +79,16 @@ export function startRunWorkspaceReaper(deps: BuildRunWorkspaceReaperDeps): RunW
   // Read the allocator kind through the SAME loud parser the allocator builder
   // uses (`resolveBootedAllocatorKind`): UNSET → `sidecar`, a typo'd kind FAILS
   // LOUD here rather than silently failing the `!== "static"` compare and quietly
-  // disabling the reaper (the leak this whole module exists to fix). Only `static`
-  // is a single long-lived runner the reaper can sweep; see the module header.
+  // disabling the reaper (the leak this whole module exists to fix). The gate is
+  // strictly `=== "static"` (not the whole `fixed_pool` taxonomy) because the
+  // reaper needs a SINGLE sweep target — manual_ssh is fixed_pool too, but a
+  // multi-host pool with no single target (see the module header).
   const allocatorKind = resolveBootedAllocatorKind();
   if (allocatorKind !== "static") {
     log.info(
-      "OFF for this allocator kind — an ephemeral runner's sandbox is destroyed with its container on release " +
-        "(no leak), and manual_ssh multi-host pools are a follow-up. The per-run teardown still runs for every kind.",
+      "OFF for this allocator kind — a provisioning / delegated runner's sandbox is destroyed with its " +
+        "container on release (no leak), and manual_ssh multi-host pools (fixed_pool taxonomy) are a follow-up. " +
+        "The per-run teardown still runs for every kind.",
       { allocatorKind },
     );
     return undefined;

@@ -317,6 +317,7 @@ export function passingGitHub(): ScriptedGitHubHttp {
 }
 
 export class RecordingAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   readonly requests: AllocationRequest[] = [];
   readonly releases: string[] = [];
 

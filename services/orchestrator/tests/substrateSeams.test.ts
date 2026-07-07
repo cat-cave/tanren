@@ -57,6 +57,7 @@ describe("ReleaseFinalizer seam (AllocatorReleaseFinalizer)", () => {
 
   it("records a `leaked` outcome (never throws) when release fails — the sweeper reconciles it", async () => {
     const leaking: Allocator = {
+      taxonomy: "provisioning" as const,
       allocate: () => {
         throw new Error("unused");
       },

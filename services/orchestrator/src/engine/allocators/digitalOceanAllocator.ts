@@ -3,6 +3,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -142,6 +143,9 @@ export interface DigitalOceanAllocatorOptions {
  * known host key into the image / cloud-init.
  */
 export class DigitalOceanAllocator implements Allocator {
+  // PROVISIONING: allocate() creates a fresh DigitalOcean droplet; release()
+  // destroys it.
+  readonly taxonomy: AllocatorTaxonomy = "provisioning";
   private readonly client: DigitalOceanClient;
   private readonly sleep: (ms: number) => Promise<void>;
   /** runnerId -> DO droplet id, so release can destroy the right droplet. */

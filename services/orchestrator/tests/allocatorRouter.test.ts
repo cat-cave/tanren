@@ -12,6 +12,7 @@ import type { AllocationRequest, Allocator, RunnerAllocation } from "../src/engi
 
 /** Records which allocator served a request; never actually provisions. */
 class RecordingAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   readonly allocated: AllocationRequest[] = [];
   readonly released: string[] = [];
   constructor(private readonly name: string) {}

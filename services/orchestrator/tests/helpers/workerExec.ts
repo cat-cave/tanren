@@ -286,6 +286,7 @@ export function deps(pool: WorkerPool, secrets: FakeSecretStore, jobQueue: FakeJ
 }
 
 export class RecordingAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   async allocate(_request: AllocationRequest): Promise<RunnerAllocation> {
     return { runnerId: "runner_worker", imageSha: "sha256:worker", target };
   }
