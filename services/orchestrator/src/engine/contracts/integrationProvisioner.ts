@@ -35,11 +35,30 @@
 // providers register here: each adds ONE `case` arm + its dep-slice on
 // `IntegrationProvisionerDeps`, exactly like `buildVcsProvider`'s case arms.
 
+// LAYOUT NOTE (Codex H3 #25 unified registry): the concrete provisioner impls live
+// in provider-specific directories rather than a single `provisioners/` tree,
+// because each provider carries its own transport module + fake:
+//   - `providers/sentryProvisioner.ts` — the Sentry HTTP client is Sentry-specific
+//     (project + client-key API surface), so it co-lives with the runtime Sentry
+//     connector in `providers/`.
+//   - `integrations/slack/slackProvisioner.ts` + `.../slackApiTransport.ts` — the
+//     Slack Web API transport is Slack-specific, so it co-lives with the runtime
+//     Slack integration in `integrations/slack/`.
+//   - `provisioners/{fly,vercel}DeployProvisioner.ts` — Vercel + Fly share ONE
+//     base class (`DeployProvisioner`) so a single `provisioners/` directory hosts
+//     both + the shared `deployProvisioner.ts` + `deployTransport.ts`.
+// The DIRECTORY differs so the transport + fake for each provider sit next to their
+// impl; the REGISTRY below (`PROVISIONER_REGISTRY`) is the SINGLE seam that unifies
+// them — a new provider lands as ONE new entry in the Map (+ its impl wherever it
+// fits), never a refactor of the layout. This is the "single append point" the
+// module header refers to, materialized as a Map instead of a switch.
+
 import { SentryProvisioner, type SentryProvisionerDeps } from "../providers/sentryProvisioner.js";
 
 import type { SecretStore } from "./secretStore.js";
-import { FlyDeployProvisioner } from "../provisioners/flyDeployProvisioner.js";
-import { VercelDeployProvisioner } from "../provisioners/vercelDeployProvisioner.js";
+import { DeployProvisioner } from "../provisioners/deployProvisioner.js";
+import { FlyDeployProvisioner, FLY_PROVIDER_KIND } from "../provisioners/flyDeployProvisioner.js";
+import { VercelDeployProvisioner, VERCEL_PROVIDER_KIND } from "../provisioners/vercelDeployProvisioner.js";
 import { fetchDeployTransport, type DeployHttpTransport } from "../provisioners/deployTransport.js";
 
 /**
@@ -184,21 +203,29 @@ export function resolveSmartDefault(
 }
 
 /**
- * A HARD-THROW provisioner for a provider kind that is named but not yet
- * implemented. Selecting it constructs this and any operation throws loudly — the
- * correct "unconfigured" default (failing loud is not a stand-in), exactly like
- * `UnconfiguredAllocator` / `UnconfiguredVcsProvider`. No provider is registered
- * in this foundation wave, so EVERY kind resolves to this until the providers wire the
- * real impls. The name carries no stub/fake/noop stem, so it is the CORRECT
- * unconfigured default — not a production stub.
+ * A HARD-THROW provisioner for a provider kind the registry does NOT register.
+ * Selecting it constructs this and any operation throws loudly — the correct
+ * "unconfigured" default (failing loud is not a stand-in), exactly like
+ * `UnconfiguredAllocator` / `UnconfiguredVcsProvider`. The name carries no
+ * stub/fake/noop stem, so it is the CORRECT unconfigured default — not a
+ * production stub.
+ *
+ * The throw text is deliberately DIAGNOSTIC — it names the unregistered kind + the
+ * REGISTERED kinds off {@link registeredIntegrationProviderKinds()} — so a
+ * misconfigured provider surfaces as a clear "kind X is not registered, expected
+ * one of …" instead of the generic pre-fix "no provider is registered yet".
  */
 export class UnconfiguredIntegrationProvisioner implements IntegrationProvisioner {
   constructor(private readonly kind: string) {}
 
   private fail(): never {
+    const registered = registeredIntegrationProviderKinds();
+    const listed = registered.length === 0 ? "(none)" : registered.map((kind) => `'${kind}'`).join(", ");
     throw new Error(
-      `Integration provisioner kind '${this.kind}' was selected but is not implemented. ` +
-        `No provider is registered yet (the foundation wave is provider-free; P-INT-1+ wire them).`,
+      `Integration provisioner kind '${this.kind}' is not registered — ` +
+        `no factory for that kind in PROVISIONER_REGISTRY. Registered kinds: ${listed}. ` +
+        `To add a new provider, register a factory in the PROVISIONER_REGISTRY Map ` +
+        `(services/orchestrator/src/engine/contracts/integrationProvisioner.ts).`,
     );
   }
 
@@ -241,12 +268,20 @@ export interface IntegrationProvisionerDeps {
   transport?: DeployHttpTransport;
   /** The SecretStore deploy-token aliases / DSNs are written into. */
   secrets?: SecretStore;
+  /**
+   * Fly-only opt-in flag that flows through to the {@link FlyDeployProvisioner}'s
+   * static-image deploy path. Named on `DeployProvisionerDeps` too; carried here so
+   * the unified registry can propagate the same value the pre-fix
+   * `deployProvisionerFor` used to accept directly. Ignored by every non-Fly
+   * factory in the registry (Sentry / Slack / Vercel).
+   */
+  allowFlyStaticDeploy?: boolean;
 }
 
 /**
  * Construct the real Sentry provisioner. Kept a tiny factory (rather than a bare
- * `new` in the switch) so the concrete provider import is the single line below
- * and a parallel provider PR's case arm never touches this one's wiring.
+ * `new` at the registry entry) so the concrete provider import is the single line
+ * below and a parallel provider PR never touches this one's wiring.
  */
 function makeSentryProvisioner(deps: SentryProvisionerDeps | undefined): IntegrationProvisioner {
   if (deps === undefined) {
@@ -256,41 +291,141 @@ function makeSentryProvisioner(deps: SentryProvisionerDeps | undefined): Integra
 }
 
 /**
- * Select + construct the IntegrationProvisioner for a provider kind. Real
- * project-integration impls slot in as new `case` arms (each pulling
- * its own slice of {@link IntegrationProvisionerDeps}) — exactly like
- * `buildAllocator` / `buildVcsProvider`; an unregistered kind resolves to the
- * hard-throw {@link UnconfiguredIntegrationProvisioner}. Cloud-ALLOCATOR kinds
- * (`allocator.*`) do NOT belong here — they extend the Allocator seam.
+ * Construct one of the two `DeployProvisioner` subclasses (Vercel | Fly). Kept a
+ * shared factory so the deploy registry entries never duplicate the transport /
+ * secret-store wiring — the SAME shape reaches both providers, and the
+ * `providerKind` chooses the subclass.
+ */
+function makeDeployProvisioner(kind: string, deps: IntegrationProvisionerDeps): IntegrationProvisioner {
+  const transport = deps.transport ?? fetchDeployTransport();
+  if (deps.secrets === undefined) {
+    throw new Error(`integration provisioner '${kind}' requires a SecretStore in deps.secrets`);
+  }
+  // `allowFlyStaticDeploy` propagates only when set; the Fly provisioner falls back
+  // to the env-parsed default when omitted. Every non-Fly path ignores it.
+  const deployDeps = {
+    transport,
+    secrets: deps.secrets,
+    ...(deps.allowFlyStaticDeploy === undefined ? {} : { allowFlyStaticDeploy: deps.allowFlyStaticDeploy }),
+  };
+  return kind === VERCEL_PROVIDER_KIND ? new VercelDeployProvisioner(deployDeps) : new FlyDeployProvisioner(deployDeps);
+}
+
+/**
+ * The factory shape every registry entry has: given the shared
+ * {@link IntegrationProvisionerDeps}, construct the concrete provisioner. Each
+ * factory pulls ONLY the slice of deps it uses (sentry pulls `deps.sentry`; the
+ * deploy providers pull `deps.transport` + `deps.secrets`; slack resolves its own
+ * SecretStore). This is the SINGLE seam the registry is built out of.
+ */
+type IntegrationProvisionerFactory = (deps: IntegrationProvisionerDeps) => IntegrationProvisioner;
+
+/**
+ * The UNIFIED provisioner registry: a Map from every registered `IntegrationProviderKind`
+ * to its factory. This replaces the prior scattered selection (a switch here + a hardcoded
+ * `deployProvisionerFor` switch elsewhere) that Codex H3 #25 flagged — every REAL
+ * provisioner (Sentry, Slack, Vercel-deploy, Fly-deploy) now lives in ONE Map, and
+ * both `buildIntegrationProvisioner` (the general seam) and `deployProvisionerFor`
+ * (the deploy-narrow seam) read from it.
+ *
+ * A new provider lands as ONE new entry here — never a refactor of two switches. An
+ * unregistered kind resolves to the hard-throw {@link UnconfiguredIntegrationProvisioner}
+ * (a clear "kind X is not registered" diagnostic, not a silent no-op).
+ *
+ * NB — Cloud-ALLOCATOR kinds (`allocator.hetzner` / `allocator.digitalocean` / …) do
+ * NOT belong here — see the module-header SCOPE note: their SSH/host-key automation
+ * extends the `Allocator` seam (engine/contracts/allocator.ts), not this port.
+ */
+const PROVISIONER_REGISTRY: ReadonlyMap<string, IntegrationProvisionerFactory> = new Map<
+  string,
+  IntegrationProvisionerFactory
+>([
+  ["sentry", (deps) => makeSentryProvisioner(deps.sentry)],
+  [VERCEL_PROVIDER_KIND, (deps) => makeDeployProvisioner(VERCEL_PROVIDER_KIND, deps)],
+  [FLY_PROVIDER_KIND, (deps) => makeDeployProvisioner(FLY_PROVIDER_KIND, deps)],
+  // Plane-A Slack `notify` provisioner (bot `chat.postMessage` model);
+  // `buildSlackProvisioner` resolves the grant's bot-token ref against the
+  // configured SecretStore.
+  ["slack", (_deps) => buildSlackProvisioner()],
+]);
+
+/**
+ * The registered provider kinds. Introspection helper for callers that need to
+ * enumerate registered kinds (the unconfigured-throw diagnostic, the
+ * `deployProvisionerFor` guard, tests). ORDERED as the Map is (registration order),
+ * so the emitted diagnostic is stable.
+ */
+export function registeredIntegrationProviderKinds(): readonly string[] {
+  return [...PROVISIONER_REGISTRY.keys()];
+}
+
+/**
+ * Select + construct the IntegrationProvisioner for a provider kind. Reads from
+ * the shared {@link PROVISIONER_REGISTRY} — a new provider lands as ONE new entry
+ * there. An unregistered kind resolves to the hard-throw
+ * {@link UnconfiguredIntegrationProvisioner}.
  */
 export function buildIntegrationProvisioner(
   kind: IntegrationProviderKind,
   deps: IntegrationProvisionerDeps = {},
 ): IntegrationProvisioner {
-  switch (kind) {
-    case "sentry":
-      return makeSentryProvisioner(deps.sentry);
-    // --- deploy provisioners (Vercel + Fly) --------------------------
-    case "deploy.vercel":
-    case "deploy.flyio": {
-      const transport = deps.transport ?? fetchDeployTransport();
-      if (deps.secrets === undefined) {
-        throw new Error(`integration provisioner '${kind}' requires a SecretStore in deps.secrets`);
-      }
-      const deployDeps = { transport, secrets: deps.secrets };
-      return kind === "deploy.vercel" ? new VercelDeployProvisioner(deployDeps) : new FlyDeployProvisioner(deployDeps);
-    }
-    // Plane-A Slack `notify` provisioner (bot `chat.postMessage` model);
-    // `buildSlackProvisioner` resolves the grant's bot-token ref against the
-    // configured SecretStore.
-    case "slack":
-      return buildSlackProvisioner();
-    // Other real impls (linear, jira) slot in here as new cases. Cloud-allocator
-    // (`allocator.*`) is NOT one of these — it extends the Allocator seam
-    // (see the module-header SCOPE note).
-    default:
-      return new UnconfiguredIntegrationProvisioner(kind);
+  const factory = PROVISIONER_REGISTRY.get(kind);
+  if (factory === undefined) {
+    return new UnconfiguredIntegrationProvisioner(kind);
   }
+  return factory(deps);
+}
+
+/**
+ * Registered kinds that produce a {@link DeployProvisioner} subclass. Derived from
+ * the shared {@link PROVISIONER_REGISTRY} by the `deploy.` naming convention (the
+ * SAME convention the deploy provider kinds are stamped with on `deploy.triggered` /
+ * `deploy.verified`), so a new deploy provider registered in the Map is
+ * automatically visible to `buildDeployProvisioner` — the two seams cannot silently
+ * diverge (Codex H3 #25).
+ */
+function registeredDeployProviderKinds(): readonly string[] {
+  return registeredIntegrationProviderKinds().filter((kind) => kind.startsWith("deploy."));
+}
+
+/**
+ * Narrow the registry to the deploy provisioners: the {@link DeployProvisioner}
+ * subclass for a `deploy.<provider>` kind. Reads from the SAME
+ * {@link PROVISIONER_REGISTRY} that `buildIntegrationProvisioner` uses — the pre-fix
+ * hardcoded switch in `workflow/deployProvisionerFor.ts` (which silently diverged
+ * from `buildIntegrationProvisioner` — Codex H3 #25) is now impossible.
+ *
+ * The kind check runs FIRST (before the factory) so a non-deploy kind (e.g. `sentry`)
+ * fails LOUD with a "not a deploy provisioner" diagnostic — without triggering the
+ * sentry factory's own "requires deps.sentry" error that would obscure the real
+ * misuse. An unregistered kind fails with the same diagnostic (it isn't a deploy
+ * provisioner either).
+ *
+ * SHARED FACTORY, NARROW SEAM: returns the `DeployProvisioner` base type so callers
+ * get `attachRuntimeEnv` / `deploy` / `destroyApp` / `deploymentStatus` without an
+ * extra cast. The `deployProvisionerFor` selector in `workflow/` now delegates here.
+ */
+export function buildDeployProvisioner(kind: string, deps: IntegrationProvisionerDeps): DeployProvisioner {
+  const deployKinds = registeredDeployProviderKinds();
+  if (!deployKinds.includes(kind)) {
+    const listed = deployKinds.length === 0 ? "(none)" : deployKinds.map((k) => `'${k}'`).join(", ");
+    throw new Error(
+      `buildDeployProvisioner: provider kind '${kind}' is not a deploy provisioner ` +
+        `(registered deploy kinds: ${listed})`,
+    );
+  }
+  const provisioner = buildIntegrationProvisioner(kind, deps);
+  // A defensive re-check: the deploy-kinds set was derived from the registry, so a
+  // registered `deploy.*` kind MUST produce a DeployProvisioner. If a future refactor
+  // registers a non-deploy provisioner under a `deploy.*` name (a bug), this throws
+  // rather than silently returning the wrong type.
+  if (!(provisioner instanceof DeployProvisioner)) {
+    throw new Error(
+      `buildDeployProvisioner: registry factory for '${kind}' returned a non-DeployProvisioner ` +
+        `— a 'deploy.*' kind must produce a DeployProvisioner subclass`,
+    );
+  }
+  return provisioner;
 }
 
 /**

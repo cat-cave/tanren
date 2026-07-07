@@ -11,9 +11,15 @@ import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integr
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
 import { buildDeployAdapter } from "../../src/engine/deploy/buildDeployAdapter.js";
 import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../../src/engine/deploy/directApiDeployAdapter.js";
-import { PULUMI_ADAPTER_KIND } from "../../src/engine/deploy/pulumiDeployAdapter.js";
-import { PACKAGE_RELEASE_ADAPTER_KIND } from "../../src/engine/deploy/packageReleaseDeployAdapter.js";
-import { MOBILE_RELEASE_ADAPTER_KIND } from "../../src/engine/deploy/mobileReleaseDeployAdapter.js";
+import { PulumiDeployAdapter, PULUMI_ADAPTER_KIND } from "../../src/engine/deploy/pulumiDeployAdapter.js";
+import {
+  PackageReleaseDeployAdapter,
+  PACKAGE_RELEASE_ADAPTER_KIND,
+} from "../../src/engine/deploy/packageReleaseDeployAdapter.js";
+import {
+  MobileReleaseDeployAdapter,
+  MOBILE_RELEASE_ADAPTER_KIND,
+} from "../../src/engine/deploy/mobileReleaseDeployAdapter.js";
 import {
   InMemoryManualAttestationStore,
   MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -304,32 +310,10 @@ describe("buildDeployAdapter (registry/factory)", () => {
     ).toThrow(/adapter class 'does_not_exist' is not a registered deploy adapter/u);
   });
 
-  it("builds the pulumi / package_release / mobile_release / manual_external classes when wired", () => {
+  it("builds the manual_external class when wired (Codex H3 #22: the only non-direct_api production class)", () => {
     const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
     const probe = scriptedUrlProbe();
     const poll = instantVerifyPollPolicy();
-    expect(
-      buildDeployAdapter(PULUMI_ADAPTER_KIND, {
-        provisioner: base,
-        pulumiRunner: scriptedPulumiRunner(),
-        urlProbe: probe,
-        poll,
-      }).kind,
-    ).toBe(PULUMI_ADAPTER_KIND);
-    expect(
-      buildDeployAdapter(PACKAGE_RELEASE_ADAPTER_KIND, {
-        provisioner: base,
-        packageRegistry: scriptedPackageRegistry(),
-        poll,
-      }).kind,
-    ).toBe(PACKAGE_RELEASE_ADAPTER_KIND);
-    expect(
-      buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, {
-        provisioner: base,
-        mobileDistribution: scriptedMobileDistribution(),
-        poll,
-      }).kind,
-    ).toBe(MOBILE_RELEASE_ADAPTER_KIND);
     expect(
       buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, {
         provisioner: base,
@@ -341,19 +325,10 @@ describe("buildDeployAdapter (registry/factory)", () => {
     ).toBe(MANUAL_EXTERNAL_ADAPTER_KIND);
   });
 
-  it("fails LOUD when a non-direct_api class is selected without its external driver wired", () => {
+  it("fails LOUD when manual_external is selected without its durable attestation store", () => {
     const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
-    expect(() => buildDeployAdapter(PULUMI_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /required config 'pulumiRunner' is not set/u,
-    );
-    expect(() => buildDeployAdapter(PACKAGE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /required config 'packageRegistry' is not set/u,
-    );
-    expect(() => buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /required config 'mobileDistribution' is not set/u,
-    );
     // Codex H3 #20: manual_external MUST supply a durable attestation store — the
-    // in-memory default is gone. Same LOUD posture as the other external-driver classes.
+    // in-memory default is gone.
     expect(() => buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, { provisioner: base })).toThrow(
       /required config 'manualAttestations' is not set/u,
     );
@@ -365,5 +340,54 @@ describe("buildDeployAdapter (registry/factory)", () => {
         manualAttestations: new InMemoryManualAttestationStore(),
       }),
     ).toThrow(/required config 'manualOwnerScope' is not set/u);
+  });
+
+  // Codex H3 #22 closure: the pulumi / package_release / mobile_release adapter CLASSES
+  // exist (with a scripted conformance suite), but their external drivers have no
+  // concrete production impl on `main`. Registering them in the production catalog
+  // would create the exact "class-can-be-selected-but-not-built" split #22 flagged.
+  // The factory refuses them LOUD with a clear "fixture-only" diagnostic; tests exercise
+  // them via direct `new PulumiDeployAdapter({...})` (no factory-shaped seam).
+  it("refuses the fixture-only pulumi / package_release / mobile_release classes with a clear diagnostic", () => {
+    const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
+    expect(() => buildDeployAdapter(PULUMI_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /adapter class 'pulumi' is fixture-only/u,
+    );
+    expect(() => buildDeployAdapter(PACKAGE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /adapter class 'package_release' is fixture-only/u,
+    );
+    expect(() => buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
+      /adapter class 'mobile_release' is fixture-only/u,
+    );
+  });
+
+  // The classes stay CONSTRUCTIBLE via direct injection so their conformance suites
+  // keep running against scripted drivers. This is the "tests can use them via
+  // explicit injection" contract Codex H3 #22 preserves.
+  it("still constructs the fixture-only classes directly (their conformance suites drive them)", () => {
+    const probe = scriptedUrlProbe();
+    const poll = instantVerifyPollPolicy();
+    expect(
+      new PulumiDeployAdapter({
+        runner: scriptedPulumiRunner(),
+        secrets: secrets(),
+        urlProbe: probe,
+        poll,
+      }).kind,
+    ).toBe(PULUMI_ADAPTER_KIND);
+    expect(
+      new PackageReleaseDeployAdapter({
+        registry: scriptedPackageRegistry(),
+        secrets: secrets(),
+        poll,
+      }).kind,
+    ).toBe(PACKAGE_RELEASE_ADAPTER_KIND);
+    expect(
+      new MobileReleaseDeployAdapter({
+        distribution: scriptedMobileDistribution(),
+        secrets: secrets(),
+        poll,
+      }).kind,
+    ).toBe(MOBILE_RELEASE_ADAPTER_KIND);
   });
 });

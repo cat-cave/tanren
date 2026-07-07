@@ -1,9 +1,17 @@
-// Coverage for Bug 2 (Codex H3 #24): the demo-on-deploy watcher DISPATCHES to the
-// deploy adapter CLASS matching the persisted provider kind — no longer hard-wired to
-// `direct_api`. A `deploy.package_release` provider resolves through the
-// `package_release` adapter (surface: `package`); a `deploy.manual_external` resolves
-// through the `manual_external` adapter (surface: `web_url` / `download` from the
-// attestation). Driven over scripted external drivers + a recording event store.
+// Coverage for Bug 2 (Codex H3 #24 + #22): the demo-on-deploy watcher DISPATCHES to
+// the deploy adapter CLASS matching the persisted provider kind — no longer hard-wired
+// to `direct_api`. A `deploy.manual_external` resolves through the `manual_external`
+// adapter (surface: `web_url` / `download` from the attestation). Driven over a
+// scripted attestation store + a recording event store.
+//
+// H3 #22 closure: `deploy.pulumi` / `deploy.package_release` / `deploy.mobile_release`
+// have NO concrete production driver on `main`, so their adapter classes are
+// fixture-only. `adapterKindForProviderKind` now throws LOUD on them (never a silent
+// map to a class the factory cannot build); the watcher's try/catch records the throw
+// as `resolve_surface_failed` on the run's `demo.failed` event — the operator-facing
+// "this adapter is not available in production" surface. The pre-#22 test that
+// expected `deploy.package_release` DISPATCH to succeed is replaced by a test that
+// asserts the fixture-only refusal.
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
@@ -11,15 +19,14 @@ import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { DemoWebProbe } from "../src/engine/demo/demoEvidence.js";
-import type { DemoPackageProbe } from "../src/engine/demo/demoPackageArm.js";
 import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import type { DeployHttpTransport } from "../src/engine/provisioners/deployTransport.js";
 import { adapterKindForProviderKind } from "../src/engine/deploy/buildDeployAdapter.js";
-import { PACKAGE_RELEASE_PROVIDER_KIND } from "../src/engine/deploy/packageReleaseDeployAdapter.js";
-import { MANUAL_EXTERNAL_PROVIDER_KIND } from "../src/engine/deploy/manualExternalDeployAdapter.js";
-import { scriptedPackageRegistry } from "./conformance/fakes/scriptedDeployDrivers.js";
-import { InMemoryManualAttestationStore } from "../src/engine/deploy/manualExternalDeployAdapter.js";
+import {
+  InMemoryManualAttestationStore,
+  MANUAL_EXTERNAL_PROVIDER_KIND,
+} from "../src/engine/deploy/manualExternalDeployAdapter.js";
 
 const RUN_ID = "run_demo";
 const SPEC_ID = "spec_demo";
@@ -130,39 +137,39 @@ describe("adapterKindForProviderKind — provider → adapter class mapping (Bug
     expect(adapterKindForProviderKind("deploy.vercel")).toBe("direct_api");
     expect(adapterKindForProviderKind("deploy.flyio")).toBe("direct_api");
   });
-  it("maps each non-direct provider to its owning adapter class", () => {
-    expect(adapterKindForProviderKind("deploy.pulumi")).toBe("pulumi");
-    expect(adapterKindForProviderKind("deploy.package_release")).toBe("package_release");
-    expect(adapterKindForProviderKind("deploy.mobile_release")).toBe("mobile_release");
+  it("maps deploy.manual_external to the `manual_external` adapter class", () => {
     expect(adapterKindForProviderKind("deploy.manual_external")).toBe("manual_external");
+  });
+  it("throws LOUD on fixture-only providers (pulumi / package_release / mobile_release — H3 #22)", () => {
+    // These providers have no concrete driver on `main`; mapping them to their
+    // adapter class would create the "you can pick it but can't build it" split
+    // the fix targets. The seam refuses them with the same "not a registered
+    // DeployAdapter class" diagnostic the unknown-provider path uses.
+    expect(() => adapterKindForProviderKind("deploy.pulumi")).toThrow(/no registered DeployAdapter class/u);
+    expect(() => adapterKindForProviderKind("deploy.package_release")).toThrow(/no registered DeployAdapter class/u);
+    expect(() => adapterKindForProviderKind("deploy.mobile_release")).toThrow(/no registered DeployAdapter class/u);
   });
   it("throws LOUD on an unknown provider kind — never a silent fallback to direct_api", () => {
     expect(() => adapterKindForProviderKind("deploy.mystery")).toThrow(/no registered DeployAdapter class/u);
   });
 });
 
-describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 2, Codex H3 #24)", () => {
-  it("routes a package_release verified deploy through the `package_release` adapter + package arm", async () => {
-    const registry = scriptedPackageRegistry();
+describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 2, Codex H3 #22 + #24)", () => {
+  it("records a demo.failed with reason 'resolve_surface_failed' when the persisted provider is fixture-only (H3 #22)", async () => {
     const events = new RecordingEventStore();
-    // A scripted package probe: 200 on the coordinate the adapter's demoSurface resolves.
-    let queriedCoordinate = "";
-    const packageProbe: DemoPackageProbe = {
-      // eslint-disable-next-line @typescript-eslint/require-await
-      async resolve({ coordinate }) {
-        queriedCoordinate = coordinate;
-        return { status: 200, url: `https://mock/npm/${coordinate}` };
-      },
-    };
+    // A persisted `deploy.package_release` run: this could only exist if a previous
+    // build of the orchestrator wrote it before #22 was closed. The watcher must
+    // fail LOUD (never silently pretend to demo) — the operator-facing surface is
+    // the durable `demo.failed` event with a clear reason.
     const state: PoolState = {
       verified: true,
-      provider: PACKAGE_RELEASE_PROVIDER_KIND,
+      provider: "deploy.package_release",
       appId: "@acme/web",
       deploymentId: "@acme/web@1.2.3",
       grant: {
-        provider_kind: PACKAGE_RELEASE_PROVIDER_KIND,
+        provider_kind: "deploy.package_release",
         credential_ref: "secret://org/deploy-token",
-        metadata: { packageRegistry: "npm", packageName: "@acme/web" },
+        metadata: {},
       },
       behaviors: [{ id: "beh_install", title: "install the CLI" }],
     };
@@ -172,20 +179,13 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       transport: NULL_TRANSPORT,
       eventStore: events,
       webProbe: stubWebProbe,
-      packageProbe,
-      packageRegistry: registry,
     });
-    await watcher.check(RUN_ID);
-    // The package_release adapter's demoSurface asked the registry — the arm then
-    // exercised the resolved coordinate through the injected package probe.
-    expect(queriedCoordinate).toBe("@acme/web@1.2.3");
-    const summary = events.appends.find((a) => a.eventType === "demo.completed");
-    expect(summary!.payload).toMatchObject({ surfaceKind: "package", passed: 1 });
-    // No demo.failed — dispatch resolved to the right adapter without falling through
-    // to direct_api's Vercel deploymentStatus (which would have thrown).
-    expect(events.appends.find((a) => a.eventType === "demo.failed")).toBeUndefined();
-    // No secret material leaked into the events (the deploy_token stayed inside the
-    // registry client's bearer — the arm's evidence is public shape only).
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/no registered DeployAdapter class/u);
+    const failed = events.appends.find((a) => a.eventType === "demo.failed");
+    expect(failed).toBeDefined();
+    expect(failed!.payload["reason"]).toBe("resolve_surface_failed");
+    expect(failed!.payload["provider"]).toBe("deploy.package_release");
+    // No secret material leaked into the events.
     expect(JSON.stringify(events.appends)).not.toContain("deploy_token");
   });
 

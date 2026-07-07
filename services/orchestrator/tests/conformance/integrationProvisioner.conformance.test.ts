@@ -7,7 +7,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildDeployProvisioner,
   buildIntegrationProvisioner,
+  registeredIntegrationProviderKinds,
   resolveSmartDefault,
   UnconfiguredIntegrationProvisioner,
   type ExistingResource,
@@ -228,18 +230,36 @@ describeIntegrationProvisionerConformance("SlackProvisioner", {
 });
 
 // --- Registry: sentry/deploy.*/slack registered; other kinds still hard-throw ---
-describe("buildIntegrationProvisioner registry", () => {
+describe("buildIntegrationProvisioner registry (Codex H3 #25 unified registry)", () => {
+  it("exposes the registered kinds — the single source of truth for buildIntegrationProvisioner + buildDeployProvisioner", () => {
+    // The pre-fix state had `deployProvisionerFor` maintain its OWN switch of kinds
+    // that could silently diverge from `buildIntegrationProvisioner`'s switch. The
+    // introspection function proves both seams now read from ONE Map.
+    const kinds = registeredIntegrationProviderKinds();
+    expect(kinds).toEqual(expect.arrayContaining(["sentry", "deploy.vercel", "deploy.flyio", "slack"]));
+  });
+
   it("returns the hard-throw UnconfiguredIntegrationProvisioner for an unregistered kind", () => {
     const provisioner = buildIntegrationProvisioner("linear");
     expect(provisioner).toBeInstanceOf(UnconfiguredIntegrationProvisioner);
   });
 
+  it("the unconfigured throw NAMES the unregistered kind + the registered set (a diagnostic, not a generic 'not implemented')", () => {
+    const provisioner = buildIntegrationProvisioner("linear");
+    // The pre-fix message was a generic "No provider is registered yet". The
+    // diagnostic now identifies the missing kind + the registered ones, so an
+    // operator sees which kind was requested and which are available.
+    expect(() => provisioner.capability()).toThrow(/'linear' is not registered/u);
+    expect(() => provisioner.capability()).toThrow(/'sentry'/u);
+    expect(() => provisioner.capability()).toThrow(/'deploy\.vercel'/u);
+  });
+
   it("every operation on the unconfigured provisioner throws loudly (never a silent no-op)", async () => {
     const provisioner = buildIntegrationProvisioner("jira");
-    expect(() => provisioner.capability()).toThrow(/not implemented/u);
-    await expect(provisioner.discover(grant())).rejects.toThrow(/not implemented/u);
-    await expect(provisioner.provision(grant(), projectCtx("p"))).rejects.toThrow(/not implemented/u);
-    await expect(provisioner.bind(grant(), "x", projectCtx("p"))).rejects.toThrow(/not implemented/u);
+    expect(() => provisioner.capability()).toThrow(/not registered/u);
+    await expect(provisioner.discover(grant())).rejects.toThrow(/not registered/u);
+    await expect(provisioner.provision(grant(), projectCtx("p"))).rejects.toThrow(/not registered/u);
+    await expect(provisioner.bind(grant(), "x", projectCtx("p"))).rejects.toThrow(/not registered/u);
   });
 
   it("registers the deploy.vercel + deploy.flyio provisioners (capability ['deploy'])", () => {
@@ -260,6 +280,37 @@ describe("buildIntegrationProvisioner registry", () => {
 
   it("a deploy provisioner without a SecretStore in deps throws (no silent no-op)", () => {
     expect(() => buildIntegrationProvisioner("deploy.vercel")).toThrow(/SecretStore/u);
+  });
+
+  it("buildDeployProvisioner reads from the same registry — Vercel + Fly return their DeployProvisioner subclass", () => {
+    const secrets = deploySecrets();
+    const vercel = buildDeployProvisioner("deploy.vercel", { transport: scriptedDeployTransport("vercel"), secrets });
+    const fly = buildDeployProvisioner("deploy.flyio", { transport: scriptedDeployTransport("fly"), secrets });
+    // The narrower helper returns the DeployProvisioner base class (so callers get
+    // `attachRuntimeEnv` / `deploy` / `destroyApp` without an extra cast). Asserted
+    // via the concrete subclass check + the `providerKind` getter that only exists
+    // on the DeployProvisioner base.
+    expect(vercel).toBeInstanceOf(VercelDeployProvisioner);
+    expect(fly).toBeInstanceOf(FlyDeployProvisioner);
+    expect(vercel.providerKind).toBe("deploy.vercel");
+    expect(fly.providerKind).toBe("deploy.flyio");
+  });
+
+  it("buildDeployProvisioner refuses a non-deploy kind — 'sentry' is registered but not a deploy provisioner", () => {
+    // Codex H3 #25: the SAME registry serves both helpers, so a non-deploy kind is
+    // fetchable (as an IntegrationProvisioner) but rejected here (not a DeployProvisioner).
+    expect(() =>
+      buildDeployProvisioner("sentry", { transport: scriptedDeployTransport("vercel"), secrets: deploySecrets() }),
+    ).toThrow(/is not a deploy provisioner/u);
+  });
+
+  it("buildDeployProvisioner refuses an unregistered kind — 'deploy.mystery' fails LOUD", () => {
+    expect(() =>
+      buildDeployProvisioner("deploy.mystery", {
+        transport: scriptedDeployTransport("vercel"),
+        secrets: deploySecrets(),
+      }),
+    ).toThrow(/is not a deploy provisioner/u);
   });
 
   it("resolves the slack kind to the real SlackProvisioner (notify capability)", () => {

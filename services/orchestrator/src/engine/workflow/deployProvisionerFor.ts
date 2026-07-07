@@ -4,21 +4,25 @@
 // — a deployRef pointing at a provider with no deploy provisioner is a
 // misconfiguration, never a silent skip. Used by both the runtime-env attach flow
 // and the deploy-on-merge trigger.
+//
+// UNIFIED REGISTRY (Codex H3 #25): this file NO LONGER carries a hardcoded switch.
+// Selection delegates to the shared {@link buildDeployProvisioner} which reads from
+// the SAME `PROVISIONER_REGISTRY` that `buildIntegrationProvisioner` uses, so a new
+// deploy provider registered THERE is immediately visible HERE (the two seams
+// cannot silently diverge — the pre-fix state where `deployProvisionerFor` only
+// knew Vercel + Fly while `buildIntegrationProvisioner` also handled Sentry/Slack
+// is now structurally impossible).
 
 import type { DeployProvisioner, DeployProvisionerDeps } from "../provisioners/deployProvisioner.js";
-import { VercelDeployProvisioner, VERCEL_PROVIDER_KIND } from "../provisioners/vercelDeployProvisioner.js";
-import { FlyDeployProvisioner, FLY_PROVIDER_KIND } from "../provisioners/flyDeployProvisioner.js";
+import { buildDeployProvisioner } from "../contracts/integrationProvisioner.js";
 
 export function deployProvisionerFor(providerKind: string, deps: DeployProvisionerDeps): DeployProvisioner {
-  switch (providerKind) {
-    case VERCEL_PROVIDER_KIND:
-      return new VercelDeployProvisioner(deps);
-    case FLY_PROVIDER_KIND:
-      return new FlyDeployProvisioner(deps);
-    default:
-      throw new Error(
-        `deployProvisionerFor: deployRef provider '${providerKind}' has no deploy provisioner ` +
-          `(expected '${VERCEL_PROVIDER_KIND}' or '${FLY_PROVIDER_KIND}')`,
-      );
-  }
+  return buildDeployProvisioner(providerKind, {
+    transport: deps.transport,
+    secrets: deps.secrets,
+    // Fly-only opt-in flows through — the pre-fix path passed the whole `deps` to
+    // `new FlyDeployProvisioner(deps)` directly; the unified registry propagates
+    // the same field so the Fly static-image opt-in still reaches the provisioner.
+    ...(deps.allowFlyStaticDeploy === undefined ? {} : { allowFlyStaticDeploy: deps.allowFlyStaticDeploy }),
+  });
 }
