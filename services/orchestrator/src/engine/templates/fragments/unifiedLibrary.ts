@@ -142,16 +142,33 @@ const STRING_LITERAL_PATTERN = /^"((?:[^"\\]|\\.)*)"$|^`((?:[^`\\]|\\.)*)`$/u;
 function parseStringLiteral(token: string): string {
   const t = token.trim();
   const m = STRING_LITERAL_PATTERN.exec(t);
-  if (m === null) throw new FragmentBodyParseError(`expected string literal, got ${t}`);
+  if (m === null) {
+    throw new FragmentBodyParseError(
+      `expected a string literal (double-quoted "..." or backtick \`...\`), got ${truncateForError(t)}. ` +
+        `Only literal strings are accepted as arguments — no string concatenation, template interpolation, ` +
+        `or identifiers. Example: vfs.write("docs/hello.md", "content"). To include a variable value, ` +
+        `bake it into the literal at authoring time.`,
+    );
+  }
   // Group 1 = double-quoted; group 2 = backtick. Unescape the obvious common escapes.
   const raw = m[1] ?? m[2] ?? "";
   return raw.replaceAll('\\"', '"').replaceAll("\\`", "`").replaceAll("\\n", "\n").replaceAll("\\\\", "\\");
 }
 
+/** Truncate a token for inclusion in an error message so a huge template
+ * literal doesn't drown out the actual guidance. */
+function truncateForError(t: string): string {
+  const MAX = 80;
+  return t.length <= MAX ? t : `${t.slice(0, MAX)}…(${t.length - MAX} more chars)`;
+}
+
 function parseArrayOfStrings(token: string): string[] {
   const t = token.trim();
   if (!t.startsWith("[") || !t.endsWith("]")) {
-    throw new FragmentBodyParseError(`expected array literal, got ${t}`);
+    throw new FragmentBodyParseError(
+      `expected an array literal of string literals like ["line1", "line2"], got ${truncateForError(t)}. ` +
+        `Example: vfs.appendToJustfileTarget("bootstrap", ["pnpm install --frozen-lockfile"]).`,
+    );
   }
   const inner = t.slice(1, -1).trim();
   if (inner === "") return [];
@@ -220,7 +237,20 @@ export function parseFragmentBody(bodyTs: string): FragmentOp[] {
     bodyTs,
   );
   if (applyMatch === null) {
-    throw new FragmentBodyParseError("body does not declare an `apply(vfs, config)` block");
+    throw new FragmentBodyParseError(
+      "body does not declare an `apply(vfs, config)` block. The body MUST default-export a Fragment " +
+        "whose apply signature is `async apply(vfs: VirtualFileSystem, _config: TemplateConfig): Promise<void> { … }`. " +
+        "Example:\n" +
+        "```\n" +
+        "export const fragment: Fragment = {\n" +
+        '  id: "addon-example", version: "1.0.0", kind: "addon", contract: {},\n' +
+        "  async apply(vfs, _config) {\n" +
+        '    vfs.write("docs/example.md", "hello\\n");\n' +
+        "  },\n" +
+        "};\n" +
+        "export default fragment;\n" +
+        "```",
+    );
   }
   const body = applyMatch[1] ?? "";
   // Strip block + line comments before splitting on statements.
@@ -263,38 +293,96 @@ export function parseFragmentBody(bodyTs: string): FragmentOp[] {
   return ops;
 }
 
+/** The allowed constrained-subset ops — surfaced in rejection messages so the
+ * writer sees the accepted vocabulary the first time a call falls outside it. */
+const ALLOWED_OPS_LEGEND = [
+  `  - vfs.write("path", "content")             — create a brand-new file`,
+  `  - vfs.overwrite("path", "content")         — replace an existing file`,
+  `  - vfs.addPackageJsonDep("name", "version") — register a runtime dep`,
+  `  - vfs.addPackageJsonDevDep("name", "version") — register a dev dep`,
+  `  - vfs.addEnvVar("KEY", "example-value")    — declare an env var`,
+  `  - vfs.appendToJustfileTarget("target", ["line1", "line2"]) — fill a justfile hook`,
+].join("\n");
+
+/** Rejection helper: "vfs.${method} expects N args" with a concrete example
+ * for that op — so the writer's next attempt sees the exact accepted shape,
+ * not just an arg-count error. */
+function argCountRejection(method: string, expected: number, got: number): FragmentBodyParseError {
+  const examples: Record<string, string> = {
+    write: `vfs.write("docs/hello.md", "# Hello\\n")`,
+    overwrite: `vfs.overwrite("package.json", "{\\n  \\"name\\": \\"x\\"\\n}\\n")`,
+    addPackageJsonDep: `vfs.addPackageJsonDep("react", "^19.0.0")`,
+    addPackageJsonDevDep: `vfs.addPackageJsonDevDep("vitest", "^4.0.0")`,
+    addEnvVar: `vfs.addEnvVar("DATABASE_URL", "postgres://user:pass@host/db")`,
+    appendToJustfileTarget: `vfs.appendToJustfileTarget("bootstrap", ["pnpm install --frozen-lockfile"])`,
+  };
+  const example = examples[method] ?? `(no example for ${method})`;
+  return new FragmentBodyParseError(
+    `vfs.${method} expects ${expected} arg${expected === 1 ? "" : "s"}, got ${got}. Example: ${example}.`,
+  );
+}
+
 function toOp(method: string, args: string[]): FragmentOp {
   switch (method) {
     case "write": {
-      if (args.length !== 2) throw new FragmentBodyParseError(`vfs.write expects 2 args, got ${args.length}`);
+      if (args.length !== 2) throw argCountRejection(method, 2, args.length);
       return { kind: "write", path: parseStringLiteral(args[0]!), content: parseStringLiteral(args[1]!) };
     }
     case "overwrite": {
-      if (args.length !== 2) throw new FragmentBodyParseError(`vfs.overwrite expects 2 args, got ${args.length}`);
+      if (args.length !== 2) throw argCountRejection(method, 2, args.length);
       return { kind: "overwrite", path: parseStringLiteral(args[0]!), content: parseStringLiteral(args[1]!) };
     }
     case "addPackageJsonDep": {
-      if (args.length !== 2)
-        throw new FragmentBodyParseError(`vfs.addPackageJsonDep expects 2 args, got ${args.length}`);
+      if (args.length !== 2) throw argCountRejection(method, 2, args.length);
       return { kind: "dep", name: parseStringLiteral(args[0]!), version: parseStringLiteral(args[1]!) };
     }
     case "addPackageJsonDevDep": {
-      if (args.length !== 2)
-        throw new FragmentBodyParseError(`vfs.addPackageJsonDevDep expects 2 args, got ${args.length}`);
+      if (args.length !== 2) throw argCountRejection(method, 2, args.length);
       return { kind: "devDep", name: parseStringLiteral(args[0]!), version: parseStringLiteral(args[1]!) };
     }
     case "addEnvVar": {
-      if (args.length !== 2) throw new FragmentBodyParseError(`vfs.addEnvVar expects 2 args, got ${args.length}`);
+      if (args.length !== 2) throw argCountRejection(method, 2, args.length);
       return { kind: "env", key: parseStringLiteral(args[0]!), example: parseStringLiteral(args[1]!) };
     }
     case "appendToJustfileTarget": {
-      if (args.length !== 2)
-        throw new FragmentBodyParseError(`vfs.appendToJustfileTarget expects 2 args, got ${args.length}`);
+      if (args.length !== 2) throw argCountRejection(method, 2, args.length);
       return { kind: "just", target: parseStringLiteral(args[0]!), lines: parseArrayOfStrings(args[1]!) };
     }
     default:
-      throw new FragmentBodyParseError(`unsupported vfs operation: vfs.${method}`);
+      throw new FragmentBodyParseError(
+        `unsupported vfs operation: vfs.${method}(...). The constrained-subset parser accepts ONLY:\n` +
+          `${ALLOWED_OPS_LEGEND}\n` +
+          `To ${suggestReplacementFor(method)}, use one of the ops above. Anything else (fs.*, http.*, ` +
+          `child_process, string interpolation, conditionals, loops) is rejected — the parser reads the ` +
+          `\`apply()\` block statement-by-statement, one call per line, literal-string arguments only.`,
+      );
   }
+}
+
+/** Best-effort hint for a rejected method name — points the writer at the
+ * closest accepted alternative so the next attempt has direction, not just a
+ * refusal. */
+function suggestReplacementFor(method: string): string {
+  const m = method.toLowerCase();
+  if (m.includes("read") || m.includes("get") || m.includes("has") || m.includes("exists")) {
+    return `read or branch on file presence (the parser does NOT support reads — bake the value into the literal at authoring time)`;
+  }
+  if (m.includes("delete") || m.includes("remove") || m.includes("rm")) {
+    return `remove a file (not supported — use vfs.overwrite to replace instead)`;
+  }
+  if (m.includes("dep") || m.includes("package") || m.includes("install")) {
+    return `register a dependency (use vfs.addPackageJsonDep or vfs.addPackageJsonDevDep)`;
+  }
+  if (m.includes("env") || m.includes("var")) {
+    return `declare an env var (use vfs.addEnvVar)`;
+  }
+  if (m.includes("just") || m.includes("target") || m.includes("hook")) {
+    return `fill a justfile hook (use vfs.appendToJustfileTarget)`;
+  }
+  if (m.includes("write") || m.includes("create") || m.includes("mkdir") || m.includes("touch")) {
+    return `create or overwrite a file (use vfs.write or vfs.overwrite)`;
+  }
+  return `perform that side-effect`;
 }
 
 function applyOp(vfs: VirtualFileSystem, op: FragmentOp): void {

@@ -43,17 +43,30 @@ export function deriveRuntimeLanguage(label: string): SupportedRuntimeLanguage |
   return null;
 }
 
+/** The recognized-runtime-language label set (human-readable, kept in sync with
+ * `deriveRuntimeLanguage`). Surfaced in the rejection message so an operator
+ * halts on the real cause instead of chasing the smoke composition's "no
+ * meaningful test" through the writer-rework loop. */
+export const SUPPORTED_RUNTIME_LANGUAGES: readonly string[] = ["ts", "ruby", "go", "python", "rust"];
+
 /** Build the `unsupported_runtime_language` rejection reason for the given
- * runtime label. The message names the label + enumerates the recognized set +
- * points at the extension protocol so an operator halts on the real cause
- * instead of chasing "no meaningful test" through the writer-rework loop. */
+ * runtime label. The message names the label, enumerates the recognized set,
+ * points at the extension protocol, AND names the two files an operator must
+ * touch to add support — so the halt is loud + directly actionable. */
 export function unsupportedRuntimeLanguageReason(label: string): string {
+  const recognized = SUPPORTED_RUNTIME_LANGUAGES.join(", ");
   return (
-    `unsupported_runtime_language: runtime label "${label}" does not map to a language ` +
-    `the smoke-composition test-file recognizer supports (recognized: ts, ruby, go, python, rust). ` +
-    `Extend \`functionalTestRecognizer.ts\` (isCandidateTestPath + hasMeaningfulAssertion) + ` +
-    `\`runtimeLanguage.ts\` (deriveRuntimeLanguage) before authoring this runtime — otherwise every ` +
-    `LLM attempt will fail the smoke composition on "no runtime added a meaningful functional test" ` +
-    `and the writer-rework loop will halt at the fixed point.`
+    `unsupported_runtime_language: the runtime label "${label}" does not map to a language the ` +
+    `Tanren smoke-composition test-file recognizer supports.\n` +
+    `Recognized languages: ${recognized}.\n` +
+    `To add support for "${label}", the operator MUST touch two files IN ORDER:\n` +
+    `  1. services/orchestrator/src/engine/templates/fragments/functionalTestRecognizer.ts\n` +
+    `     — extend isCandidateTestPath + hasMeaningfulAssertion for the language's test-file shape ` +
+    `and assertion form (see the existing Go/Python/Rust entries as templates).\n` +
+    `  2. services/orchestrator/src/engine/templates/fragments/runtimeLanguage.ts\n` +
+    `     — extend deriveRuntimeLanguage's head-token map + the SupportedRuntimeLanguage union.\n` +
+    `Authoring this runtime BEFORE the recognizer knows the language wastes real LLM credits: every ` +
+    `attempt will fail the smoke composition on "no runtime added a meaningful functional test" and ` +
+    `the writer-rework loop will halt at the fixed point with no evidence of what the writer got wrong.`
   );
 }

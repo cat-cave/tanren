@@ -79,7 +79,22 @@ export {
   type FragmentAuthorerOutput,
   type FragmentPersistence,
 } from "./fragmentAuthoringRun.js";
-export { deriveRuntimeLanguage, type SupportedRuntimeLanguage } from "./runtimeLanguage.js";
+export {
+  deriveRuntimeLanguage,
+  SUPPORTED_RUNTIME_LANGUAGES,
+  type SupportedRuntimeLanguage,
+  unsupportedRuntimeLanguageReason,
+} from "./runtimeLanguage.js";
+export { canonicalizeBodySignature, lexicallyNormalize } from "./canonicalizeBody.js";
+export {
+  configForFullLibrarySmoke,
+  configForSmoke,
+  runFullLibrarySmokeComposition,
+  runSmokeComposition,
+  type SmokeFailed,
+  type SmokeOk,
+  type SmokeResult,
+} from "./smokeComposition.js";
 export {
   BASE_SKELETON_TEST_PATHS,
   hasMeaningfulAssertion,

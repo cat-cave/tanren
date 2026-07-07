@@ -62,9 +62,16 @@ export function buildLiveRunFragmentAuthoring(
   }
 
   const persistence: FragmentPersistence = {
-    async create(input) {
+    // ATOMIC insert-as-validated (audit finding H2 — task #150). Prior two-step
+    // `create` (as draft) + `markValidated` (flip) was NOT atomic: a throw
+    // between the two runWithOrgScope calls left an orphaned draft row that the
+    // unified loader silently ignored (it filters on status='validated'), and
+    // the next derive would spawn a fresh authoring run instead of failing loud.
+    // `createValidated` collapses to ONE transaction — the row is either fully
+    // validated or nothing at all.
+    async createValidated(input) {
       return runWithOrgScope(pool, orgId, async (client) => {
-        const row = await FragmentsStore.create(
+        const row = await FragmentsStore.createValidated(
           client,
           {
             orgId: input.orgId,
@@ -78,11 +85,6 @@ export function buildLiveRunFragmentAuthoring(
           { kind: "operator" },
         );
         return { fragmentId: row.fragmentId };
-      });
-    },
-    async markValidated(fragmentId) {
-      await runWithOrgScope(pool, orgId, async (client) => {
-        await FragmentsStore.markValidated(client, fragmentId, { kind: "operator" });
       });
     },
   };
