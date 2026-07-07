@@ -193,16 +193,28 @@ function deriveDbLabel(stackTokens: readonly string[]): string {
 
 // Deploy mapping. The captured `lifecycle.deploy` is a shell command (`fly deploy
 // --remote-only`), so we tokenize THAT, not just the stack.
+//
+// UNKNOWN-DEPLOY DOCTRINE (Codex H3 #1 fix). An unknown deploy verb is NEVER
+// silently degraded to "none" — that treated opaque `heroku push` / `bin/deploy.sh`
+// scripts as no-deploy, silently dropping the entire deploy phase. We now MIRROR
+// the runtime open-world path: return the first deploy token verbatim so the
+// library check raises a `missing-fragments` decision and the per-fragment
+// authoring DAG (F2) fills in a `deploy-<token>` fragment (or the operator
+// expands the bundled library). A legitimate no-deploy project MUST declare
+// `deploy: "none"` (or `no-op` / `noop`) explicitly; an empty deploy verb is a
+// wiring bug (`UnresolvableLifecycleError`).
 function deriveDeployLabel(deployTokens: readonly string[], stackTokens: readonly string[]): string {
   const allTokens = new Set([...deployTokens, ...stackTokens]);
   if (allTokens.has("fly") || allTokens.has("fly.io") || allTokens.has("flyctl")) return "fly";
   if (allTokens.has("vercel")) return "vercel";
   if (allTokens.has("none") || allTokens.has("no-op") || allTokens.has("noop")) return "none";
-  // No deploy target detected — explicit-none is the fail-loud safe default.
-  // A project legitimately without a deploy target declares "none" in its
-  // lifecycle; an opaque command falls into "none" so compose still succeeds
-  // (the operator can audit + change later).
-  return "none";
+  // Unknown deploy — return the first deploy token VERBATIM so the missing-fragments
+  // path spawns per-fragment authoring for the deploy slot. Mirrors the runtime
+  // open-world verbatim behaviour (`deriveRuntimeLabel` above). An empty deploy
+  // verb is caught in `deriveTemplateConfigFromLifecycle` and thrown loud.
+  const head = deployTokens[0] ?? "";
+  if (head === "") return "";
+  return head;
 }
 
 // ── Derivation ──────────────────────────────────────────────────────────────
@@ -245,6 +257,16 @@ export function deriveTemplateConfigFromLifecycle(lifecycle: CaptureLifecycle): 
   const frontend = deriveFrontendLabel(stackTokens);
   const db = deriveDbLabel(stackTokens);
   const deploy = deriveDeployLabel(deployTokens, stackTokens);
+  if (deploy === "") {
+    // Codex H3 #1: no silent "none" fallthrough. Every project MUST declare a
+    // deploy verb — `deploy: "none"` explicitly for no-deploy projects, else
+    // an identifiable deploy target (fly/vercel) or an operator-owned command
+    // whose first token the missing-fragments path can spawn authoring for.
+    throw new UnresolvableLifecycleError(
+      `no deploy token found in stack "${lifecycle.stack}" / deploy "${lifecycle.deploy}"; ` +
+        `declare "none" explicitly for a no-deploy project`,
+    );
+  }
 
   const reasons: string[] = [`runtime:${runtime}`, `deploy:${deploy}`];
   if (frontend !== "") reasons.push(`frontend:${frontend}`);
@@ -272,17 +294,78 @@ export function deriveTemplateConfigFromLifecycle(lifecycle: CaptureLifecycle): 
 // ── Library coverage check ──────────────────────────────────────────────────
 
 /**
+ * Language-family → default test runner. Used by `requiredContractFor` so a
+ * missing runtime fragment's authoring DAG is prompted with a runner that
+ * matches the operator's stack (Ruby → `rspec`, Go → `go-test`, Python →
+ * `pytest`, Rust → `cargo-test`) instead of forcing every runtime to `vitest`
+ * (the Codex H3 #2 bug: non-Node runtimes got a bogus test-runner contract that
+ * either steered the LLM off the language's real test tool or clashed with the
+ * bundled fragment's own declaration — e.g. `library/runtime-ruby-bundler.ts`
+ * declares `rspec`).
+ *
+ * OPEN WORLD. An unrecognized runtime label returns `undefined` — the required
+ * contract carries `reportPath` only and the authoring DAG proposes a runner
+ * matching the language it's about to scaffold. `compose.ts:353` still throws
+ * loud if the produced runtime fragment fails to declare BOTH `testRunner` and
+ * `reportPath`, so the invariant "every runtime declares a test runner" is
+ * preserved regardless of what the required contract seeds.
+ */
+export function defaultTestRunnerForRuntime(runtimeLabel: string): string | undefined {
+  const label = runtimeLabel.toLowerCase();
+  // Node / TypeScript family — matches the `deriveRuntimeLabel` alias table
+  // above (node-pnpm, node, ts, typescript, js, javascript, pnpm).
+  if (
+    label === "node-pnpm" ||
+    label === "node" ||
+    label === "pnpm" ||
+    label === "ts" ||
+    label === "typescript" ||
+    label === "js" ||
+    label === "javascript"
+  ) {
+    return "vitest";
+  }
+  // Ruby family — Rails/Bundler/RSpec all conventionally use RSpec.
+  if (label === "ruby-bundler" || label === "ruby" || label === "rails" || label === "bundler") {
+    return "rspec";
+  }
+  // Go — the standard `go test` runner.
+  if (label === "go" || label === "golang" || label === "go-modules") {
+    return "go-test";
+  }
+  // Python family — pytest is the ecosystem default; poetry/pipenv/pip all wrap it.
+  if (label === "python" || label === "python3" || label === "pip" || label === "pipenv" || label === "poetry") {
+    return "pytest";
+  }
+  // Rust — cargo's built-in test harness.
+  if (label === "rust" || label === "rust-cargo" || label === "cargo") {
+    return "cargo-test";
+  }
+  return undefined;
+}
+
+/**
  * The contract a runtime fragment MUST declare (else `processCiYml` throws at
  * compose time — it can't fill the evidence-block report path without it). The
  * authoring DAG enforces this via the validate stage (PR-D's isolation test).
+ *
+ * Codex H3 #2: `testRunner` is now DERIVED from the runtime label (via
+ * `defaultTestRunnerForRuntime`) instead of hard-coded to `vitest`. An
+ * unrecognized label leaves `testRunner` unset and lets the authoring DAG
+ * propose a language-appropriate runner (still enforced by
+ * `compose.ts:composeCiEvidence` — a runtime fragment that ships with no
+ * runner throws loud at compose time).
  */
-const RUNTIME_REQUIRED_CONTRACT: Partial<FragmentContract> = {
-  testRunner: "vitest",
-  reportPath: "reports/junit.xml",
-};
+function runtimeRequiredContract(runtimeLabel: string): Partial<FragmentContract> {
+  const testRunner = defaultTestRunnerForRuntime(runtimeLabel);
+  return {
+    ...(testRunner === undefined ? {} : { testRunner }),
+    reportPath: "reports/junit.xml",
+  };
+}
 
-function requiredContractFor(kind: FragmentKind): Partial<FragmentContract> {
-  if (kind === "runtime") return RUNTIME_REQUIRED_CONTRACT;
+function requiredContractFor(kind: FragmentKind, label: string): Partial<FragmentContract> {
+  if (kind === "runtime") return runtimeRequiredContract(label);
   // Other kinds carry no compose-time contract requirements (their composeApply
   // is structural — files + deps + hooks). The authoring DAG still validates them
   // via the isolation harness.
@@ -298,7 +381,7 @@ function fragmentSpecsForConfig(config: TemplateConfig): FragmentSpec[] {
     kind,
     label,
     id,
-    requiredContract: requiredContractFor(kind),
+    requiredContract: requiredContractFor(kind, label),
   }));
 }
 
