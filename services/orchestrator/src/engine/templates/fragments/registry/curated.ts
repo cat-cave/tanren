@@ -1,5 +1,5 @@
-// CURATED MATRIX-HIT TEMPLATES (PR-C). The actual list `lookupCurated` indexes by
-// canonical stack key (registry/index.ts:canonicalizeStack).
+// CURATED TEMPLATES. The actual list `lookupCurated` indexes by canonical stack key
+// (registry/index.ts:canonicalizeStack).
 //
 // HOW TO ADD AN ENTRY:
 //   1. Confirm every fragment id the `TemplateConfig` references exists in
@@ -83,7 +83,7 @@ const TS_NODE_REMIX_PRISMA_FLY: CuratedTemplate = {
 };
 
 /**
- * The curated matrix-hit catalog. Add entries above + register them here.
+ * The curated catalog. Add entries above + register them here.
  *
  * Each entry MUST:
  *   - reference only fragment ids registered in `library/index.ts`;

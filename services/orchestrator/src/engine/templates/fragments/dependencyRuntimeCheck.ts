@@ -3,18 +3,18 @@
 // The user's standing doctrine: "no fallback paths or legacy workarounds.
 // Everything in tanren should feel like the single intended way to do things."
 // Silent acceptance of an incompatible (runtime, fragment) pair was the half-measure
-// PR-D's matrix harness surfaced — three combos that composed without throwing but
+// PR-D's coverage harness surfaced — three combos that composed without throwing but
 // produced a structurally-misshaped template (node-only deps dropped because
 // `processDeps` early-returns when `!vfs.has("package.json")`). This pre-flight makes
-// the mismatch a deterministic, payload-bearing throw the registry routing can branch
-// on, never a half-composed VFS.
+// the mismatch a deterministic, payload-bearing throw, never a half-composed VFS.
 //
 // CONTRACT: a non-runtime fragment whose `dependsOn` lists a `kind === "runtime"`
 // fragment OTHER than the active runtime is a mismatch. The walk is order-independent
 // (we check the SET, not the apply order) so we don't need to call `resolveOrder`
 // first. A dep id not in the library is left to `library.require` downstream — this
 // pre-flight only attributes runtime mismatches, never missing deps (those belong to
-// `selectFragmentConfig`'s matrix-miss routing).
+// `selectFragmentConfig`, which spawns the per-fragment authoring DAG (F2) for any
+// missing fragment before compose is called).
 //
 // CALLED FROM: `composeTemplate` (compose.ts), right after the base-fragment-presence
 // check + the `compose(config)` plan, BEFORE the first `applyPhase`. Throws

@@ -106,13 +106,14 @@ export interface ActivityWatchdog {
   // CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53). On every probe tick the
   // watchdog reads the work signature as ADVANCING (new distinct output OR an advancing
   // workspace count+bytes), it invokes `onProgress`. The writer pipeline binds this to a
-  // `writer.subtask.progress` event the #21B child-run progress breaker counts as worker
-  // progress — so a legitimately slow writer turn whose work signature plateaus across a
-  // single mid-IO-burst probe (the `pnpm install` case) cannot age out the breaker while
-  // the watchdog itself correctly tolerates the plateau (via the substrate-internal
-  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor). The two fixes solve different
-  // layers — neither alone is sufficient. The callback is FIRE-AND-FORGET (sync); a throw
-  // is caught by the substrate so an event-emit failure cannot bubble into the tick.
+  // `writer.subtask.progress` event — a durable per-tick advancement signal any parent
+  // progress reader can observe. Composes with the substrate-internal
+  // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (see below): the watchdog tolerates
+  // a legitimately slow writer turn whose work signature briefly plateaus across a single
+  // mid-IO-burst probe (the `pnpm install` case) via the streak floor, and the bridged
+  // event lets any parent reader observe the writer as still advancing across ticks. The
+  // callback is FIRE-AND-FORGET (sync); a throw is caught by the substrate so an
+  // event-emit failure cannot bubble into the tick.
   onProgress?: (signal: WatchdogProgressSignal) => void;
   // The CLASS-SPECIFIC identical-neighbor STREAK floor the substrate applies before declaring
   // the work signature at a fixed point (apex v76/v77). NOT an elapsed-time budget: it is the

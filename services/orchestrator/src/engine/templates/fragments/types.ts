@@ -1,5 +1,5 @@
-// TEMPLATE-FRAGMENT TYPES — the foundation of the matrix-hit composition path
-// (docs/roadmap/templating-system.md §FRAGMENTS / PR-A).
+// TEMPLATE-FRAGMENT TYPES — the primitives of the single fragment-only composition
+// path (docs/roadmap/templating-system.md §1).
 //
 // WHY: apex v55-v59 spent 1-8h per run on scaffold work that is structurally the
 // same boilerplate; pre-built composable FRAGMENTS + a deterministic COMPOSER
@@ -49,7 +49,7 @@ export type ExampleId = z.infer<typeof ExampleId>;
 // ---- TemplateConfig --------------------------------------------------------
 
 /**
- * A matrix-point identity. `slug` is the human label for this config (used as the
+ * A composed-config identity. `slug` is the human label for this config (used as the
  * snapshot file stem + the registry key); every other field is a closed enum.
  *
  * A field set to `undefined` means "this phase is OMITTED" — the composer skips it.
@@ -403,8 +403,9 @@ export interface Fragment {
 /**
  * A typed Map<FragmentId, Fragment>. `register` throws on a duplicate id (a copy-paste
  * bug); `require` throws on a missing id (a config asking for a fragment that was not
- * registered — the matrix-miss case the agent fallback handles separately). The
- * BASE fragment is REQUIRED by compose — `loadFragmentLibrary` registers it
+ * registered — this is upstream of `selectFragmentConfig`'s missing-fragment routing,
+ * which spawns the per-fragment authoring DAG (F2) before compose is ever called).
+ * The BASE fragment is REQUIRED by compose — `loadFragmentLibrary` registers it
  * unconditionally.
  */
 export class FragmentLibrary {

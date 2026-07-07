@@ -75,8 +75,10 @@ export function createReasonixWriter(dependencies: ReasonixWriterDependencies): 
         cwd: opts.workspace,
         // AGENT exec: reasonix streams its output continuously (every line is a sign of
         // life → the watchdog resets), with the workspace as the silent-stretch
-        // liveness probe. NEVER killed for elapsed time. `onWatchdogProgress` bridges
-        // every advancing tick into the #21B child-run progress breaker (task #24).
+        // liveness probe. NEVER killed for elapsed time. `onWatchdogProgress` (task
+        // #24) is the cross-layer sign-of-life bridge — every advancing tick emits
+        // `writer.subtask.progress`; composes with the substrate's
+        // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (ssh/watchdogProgress.ts).
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,

@@ -1,4 +1,5 @@
-// FRAGMENT-LIBRARY REGISTRY (the matrix-hit catalog).
+// FRAGMENT-LIBRARY REGISTRY (the bundled core fragment catalog —
+// docs/roadmap/templating-system.md §1).
 //
 // `loadFragmentLibrary` returns the production registry; `loadFragmentLibraryForTests`
 // is the unit-test seam that ALSO accepts an `extra` array of fragments to register

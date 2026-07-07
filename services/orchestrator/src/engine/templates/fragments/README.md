@@ -1,13 +1,13 @@
-# Template fragments (PR-A foundation)
+# Template fragments
 
-The matrix-hit composition path for Tanren templates. Inspired by
-[`create-better-t-stack`](https://github.com/AmanVarshney01/create-better-t-stack)
+The single, fragment-only scaffold composition path for Tanren templates. See
+`docs/roadmap/templating-system.md` for the doctrine of record: fragments are the
+primitive, the composer is the sole materialization path, and a missing fragment
+spawns the per-fragment authoring DAG (F2) — there is no fallback path, no
+`scaffoldOrigin: "template_build"` mode, and no agent template-build DAG. Inspired
+by [`create-better-t-stack`](https://github.com/AmanVarshney01/create-better-t-stack)
 (BTS): pre-built composable fragments + a deterministic composer assemble a project
-scaffold in seconds, instead of the agent authoring every file from scratch.
-
-The agent template-build path (`engine/templates/creation/**`) is **unchanged** in
-PR-A; fragments are additive. The matrix-miss case (a config the registry does not
-carry) still routes to the agent fallback.
+scaffold in seconds.
 
 ## The 9-phase pipeline
 
@@ -37,7 +37,7 @@ fragment declarations:
   typo).
 - `processCiYml` — fill the evidence block's `reportPath` from the runtime's
   declared contract. **Throws when no fragment declared a test runner.**
-- `processReadme` — write a minimal README naming the matrix point.
+- `processReadme` — write a minimal README naming the composed config.
 - `assertBaseInvariantsHeld` — re-check `BASE_PROTECTED_FILES` are still present.
 
 ## The `base/` fragment (non-negotiable Tanren opinions)
@@ -84,7 +84,7 @@ fragment that silently deleted them is rejected with `TemplateComposeError(
      (`write`, `mergeJson`, `addPackageJsonDep`, `addEnvVar`,
      `appendToJustfileTarget`).
 2. Register the fragment in `library/index.ts`'s `ALL_FRAGMENTS` array.
-3. If the fragment introduces a new matrix-enum value (a new addon, a new deploy
+3. If the fragment introduces a new enum value (a new addon, a new deploy
    target), extend the enum in `types.ts`.
 4. Re-run the dogfood test with `TANREN_UPDATE_FRAGMENT_SNAPSHOTS=1` to refresh the
    snapshots for any curated config the fragment is part of, AND add a new curated
@@ -115,17 +115,19 @@ TANREN_UPDATE_FRAGMENT_SNAPSHOTS=1 pnpm vitest run services/orchestrator/tests/t
 
 Commit the snapshot diff alongside the fragment change. Reviewers read the
 snapshot diff as the review unit (file-by-file content delta of every affected
-matrix point).
+composed config).
 
-## Matrix-hit vs matrix-miss routing
+## Selection: curated vs synthesized
 
-- **Matrix-hit**: a `TemplateConfig` whose every selected fragment id is registered.
-  `composeTemplate` runs and returns a `VirtualFileSystem` in milliseconds.
-- **Matrix-miss**: a `TemplateConfig` whose composer call throws (an unregistered
-  fragment, or — once the validator wave lands — a composed VFS that fails
-  validation). The caller routes to the agent template-build child path (unchanged
-  in PR-A).
+`selectFragmentConfig` (`selectFragmentConfig.ts`) resolves a lifecycle to a
+`TemplateConfig`:
 
-The mapping from a DesignContract to a TemplateConfig (the "which matrix point does
-this design pick?" question) ships in PR-E via the seam at
-`agentSchemaMapper.ts`. PR-A is the foundation only.
+- A curated stack label (`registry/curated.ts` — e.g. _"ts/pnpm + Remix + Prisma +
+  PostgreSQL on Fly.io"_) short-circuits to a known `TemplateConfig`.
+- A no-match synthesizes a config from the captured lifecycle's stack + deploy
+  tokens (open-world: any token maps to a fragment label, no closed enum gates it).
+- The returned `TemplateConfig` is walked: every referenced fragment id is either
+  present in the library (→ `ready`) or absent (→ `missing-fragments` with
+  `FragmentSpec[]`). A missing fragment triggers the per-fragment authoring DAG
+  (F2); a fixed-point failure of authoring raises `FragmentAuthoringFailedError`
+  and halts the derive loud — no silent skip, no fallback path.

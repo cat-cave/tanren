@@ -134,11 +134,13 @@ function buildWorkspaceLivenessProbe(
 //
 // `onProgress` is the optional CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53):
 // on every probe tick the substrate reads the work signature as ADVANCING, it invokes
-// this callback. Writers thread a closure that emits `writer.subtask.progress` so the
-// #21B child-run progress breaker counts the watchdog's tolerance signal as worker
-// progress — see contracts/commandSubstrate.ts WatchdogProgressSignal for the doctrine.
-// No-op when omitted (the default for non-writer call sites — vcs/infra ops do not
-// need the bridge because their start/end is already a meaningful events emission).
+// this callback. Writers thread a closure that emits `writer.subtask.progress` so any
+// parent progress reader observes a durable per-tick advancement signal — see
+// contracts/commandSubstrate.ts WatchdogProgressSignal for the doctrine. Composes with
+// the substrate-internal `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (below)
+// so a legitimately slow writer whose signature briefly plateaus does not trip a
+// spurious wedge. No-op when omitted (the default for non-writer call sites — vcs/infra
+// ops do not need the bridge because their start/end is already a meaningful events emission).
 export interface WatchdogInput {
   substrate: CommandSubstrate;
   target: RunnerHandle;

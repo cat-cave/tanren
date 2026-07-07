@@ -89,11 +89,13 @@ export interface WriterAdapter {
   // `onWatchdogProgress` is the CROSS-LAYER sign-of-life bridge (task #24, apex
   // v52/v53): each writer adapter forwards it to `buildActivityWatchdog` so the
   // substrate invokes it on every probe tick the work signature advances. The
-  // writerStage binds a closure that emits `writer.subtask.progress` — counted by
-  // the #21B child-run progress breaker as worker progress. Without this bridge a
-  // legitimately slow writer (a `pnpm install` window) ages out the breaker while
-  // the watchdog itself correctly tolerates the brief signature plateau. Optional;
-  // fake test adapters ignore it.
+  // writerStage binds a closure that emits `writer.subtask.progress` — a durable
+  // per-tick advancement signal any parent progress reader can observe. Composes
+  // with the substrate-internal `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor
+  // (ssh/watchdogProgress.ts) — a wedge fires only after N consecutive
+  // identical-neighbor probe pairs, so a legitimately slow writer (a `pnpm install`
+  // window) whose signature briefly plateaus does not trip a spurious wedge.
+  // Optional; fake test adapters ignore it.
   runWriter(opts: {
     prompt: string;
     workspace: string;

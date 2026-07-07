@@ -1,9 +1,8 @@
 import type { SensitivityRule } from "./sensitivity.js";
 
-// Templating sensitivity rules (docs/roadmap/templating-system.md). The wave-1
-// template REGISTRY + wave-4 creation + wave-5 maintenance + build-recovery rules
-// are GONE with the doctrine collapse. What remains is the per-fragment authoring
-// run lifecycle (F2) — every payload carries only non-secret descriptors.
+// Templating sensitivity rules (docs/roadmap/templating-system.md). The
+// fragment-authoring lifecycle (F2) is what remains — every payload carries only
+// non-secret descriptors.
 export const templatesSensitivityRules: SensitivityRule[] = [
   ...rulesFor("fragment.authoring.started", [
     ["orgId", "public"],

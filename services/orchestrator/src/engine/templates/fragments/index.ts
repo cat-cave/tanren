@@ -44,11 +44,6 @@ export {
   RUNTIME_RUBY_BUNDLER_ID,
 } from "./library/index.js";
 export {
-  type DesignContract,
-  mapDesignContractToTemplateConfig,
-  type SchemaMappingResult,
-} from "./agentSchemaMapper.js";
-export {
   canonicalizeStack,
   CURATED_TEMPLATES,
   type CuratedTemplate,

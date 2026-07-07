@@ -339,10 +339,12 @@ export class SshCommandSubstrate implements CommandSubstrate {
     // detects work-signature advancement on every probe tick (the negation of the
     // fixed-point read below). On ticks where the signature ADVANCED — either the FIRST
     // ever (no prior) or the new one differs from the previous — invoke `onProgress` so
-    // the writer pipeline can bridge the signal to the #21B child-run progress breaker.
-    // A throw from `onProgress` MUST NOT bubble into the tick (it would crash the probe
-    // loop and look like a stall) — swallow it. The breaker's allowlist gains `writer.%`
-    // so the bridged events keep its streak alive on legitimately slow writer turns.
+    // the writer pipeline can bridge the signal (emitting `writer.subtask.progress`) to
+    // any parent progress reader. A throw from `onProgress` MUST NOT bubble into the tick
+    // (it would crash the probe loop and look like a stall) — swallow it. Composes with
+    // the `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (see watchdogProgress.ts)
+    // so a brief mid-IO-burst signature plateau on a legitimately slow writer does not
+    // trip a spurious wedge.
     const signatureAdvanced = priorSignature === undefined || priorSignature !== signature;
     if (signatureAdvanced && watchdog.onProgress !== undefined) {
       try {

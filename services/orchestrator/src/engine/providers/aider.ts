@@ -92,8 +92,12 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
         // AGENT exec: aider streams its edit/telemetry output continuously (every line
         // is a sign of life → the watchdog resets), with the workspace as the
         // silent-stretch liveness probe. NEVER killed for elapsed time.
-        // `onWatchdogProgress` bridges every advancing tick into the #21B child-run
-        // progress breaker (task #24, apex v52/v53).
+        // `onWatchdogProgress` (task #24, apex v52/v53) is the cross-layer
+        // sign-of-life bridge: every advancing tick emits a `writer.subtask.progress`
+        // row so any parent progress reader sees the writer still advancing.
+        // Composes with the substrate-internal `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*`
+        // streak floor (see ssh/watchdogProgress.ts) — a wedge fires only after N
+        // consecutive identical-neighbor probe pairs, never on elapsed time.
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,
