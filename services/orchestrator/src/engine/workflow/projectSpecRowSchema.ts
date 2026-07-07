@@ -25,10 +25,17 @@ export async function loadSpecWithProject(
   pool: QueryClient,
   specId: string,
 ): Promise<{ project: ProjectContract; spec: SpecContract }> {
+  // Codex H3 #7 — the four triage-routing PROVENANCE columns (`parent_spec_id`,
+  // `source_finding_ids`, `origin_triage_task_id`, `origin_run_id` — Claude RA2,
+  // migration 0025) are SELECT-ed here so every downstream consumer that loads a
+  // spec through this seam (run bootstrap, DAG snapshots, dashboard reads) can
+  // observe the routing origin. Absent from the previous SELECT, they were
+  // write-only outside the dedupe query in `plannerRunTriageNewSpecs.ts`.
   const result = await pool.query(
     `SELECT p.project_id, p.org_id AS project_org_id, p.name, p.repo_url, p.default_branch, p.runner_image,
             p.allocator, p.config, s.spec_id, s.org_id AS spec_org_id, s.title, s.description,
-            s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode
+            s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode,
+            s.parent_spec_id, s.source_finding_ids, s.origin_triage_task_id, s.origin_run_id
        FROM specs s JOIN projects p ON p.project_id = s.project_id WHERE s.spec_id = $1`,
     [specId],
   );
@@ -58,6 +65,21 @@ export async function loadSpecWithProject(
       status: decoded.status,
       priority: decoded.priority,
       mode: decoded.mode,
+      // Codex H3 #7 — decode triage-routing PROVENANCE when the row was routed
+      // (parent_spec_id present). A non-routed spec (operator create / discovery
+      // accept / seed) has null parent_spec_id and no triageProvenance is set.
+      // `source_finding_ids` MAY be null on a legacy row that predates migration
+      // 0025 or on a routed row with the array unset — treat as `[]` in that
+      // case; the parent trail still identifies the routed spec.
+      ...(decoded.parent_spec_id !== null &&
+        decoded.parent_spec_id !== undefined && {
+          triageProvenance: {
+            parentSpecId: decoded.parent_spec_id,
+            sourceFindingIds: decoded.source_finding_ids ?? [],
+            originTriageTaskId: decoded.origin_triage_task_id ?? "",
+            originRunId: decoded.origin_run_id ?? "",
+          },
+        }),
     },
   };
 }
@@ -73,6 +95,26 @@ const RecordOrEmpty = z
 const StringArrayOrEmpty = z
   .unknown()
   .transform((value) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []));
+
+/**
+ * A nullable text[] column → `string[] | null`: null/undefined pass through as
+ * `null` (columns like `source_finding_ids` are NULLABLE, and a legacy test
+ * fixture may omit the column entirely); a present array is filtered to strings;
+ * a non-array is treated as `[]` (defensive — the writer sorts strings only,
+ * but a legacy row could carry mixed values). `z.unknown()` treats undefined as
+ * a REQUIRED value in strict-parse mode, so `.optional()` is required here
+ * to accept the legacy shape.
+ */
+const NullableStringArray = z
+  .unknown()
+  .optional()
+  .transform((value) =>
+    value === null || value === undefined
+      ? null
+      : Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : [],
+  );
 
 /** The joined `specs s JOIN projects p` row `loadSpecWithProject` decodes. */
 export const SpecProjectRowSchema = z.object({
@@ -102,4 +144,15 @@ export const SpecProjectRowSchema = z.object({
   // is NOT NULL with default `from_scratch` (migrated in PR #756), so a real row always
   // carries a value.
   mode: SpecMode,
+  // Codex H3 #7 — the four triage-routing PROVENANCE columns (Claude RA2, migration
+  // 0025). All NULLABLE: a non-routed spec (operator create / discovery accept /
+  // seed) has null across the four; a routed spec has parent_spec_id set (the
+  // load-side sentinel that promotes the trail to `SpecContract.triageProvenance`).
+  // `.nullish()` accepts both null (real DB row) and undefined (a legacy fake test
+  // pool that hasn't been updated to seed the new columns) — either shape maps to
+  // "no triage provenance" without a hard parse failure.
+  parent_spec_id: z.string().nullish(),
+  source_finding_ids: NullableStringArray,
+  origin_triage_task_id: z.string().nullish(),
+  origin_run_id: z.string().nullish(),
 });

@@ -45,6 +45,21 @@ import { priorityRank, type SpecPriority } from "../state/spec.js";
  */
 export type DagSpecPhase = "pending" | "in_flight" | "done" | "terminal_blocked";
 
+/**
+ * Codex H3 #9 — the four triage-routing PROVENANCE columns (Claude RA2, migration
+ * 0025) surfaced on a routed spec. A snapshot node carries `triageProvenance` iff
+ * the spec was auto-routed by triage from a parent spec's finding; operator /
+ * discovery / seed specs omit. Downstream operator surfaces (the DAG view, the
+ * spec-detail routes) render the routing chain from this field so a routed spec's
+ * origin is visible without a second SELECT.
+ */
+export interface DagSpecTriageProvenance {
+  parentSpecId: string;
+  sourceFindingIds: string[];
+  originTriageTaskId: string;
+  originRunId: string;
+}
+
 /** One spec node in the project's DAG, as the walker reasons over it. */
 export interface DagSpecNode {
   specId: string;
@@ -63,6 +78,14 @@ export interface DagSpecNode {
    * tiebreak applied AFTER priority. Lower sorts first.
    */
   orderKey: number;
+  /**
+   * Codex H3 #9 — the triage-routing PROVENANCE trail, present iff this spec was
+   * auto-routed by triage from a parent spec's finding. Undefined for a non-routed
+   * spec (operator create / discovery accept / seed). Scheduling ignores this
+   * field; it is a display-only enrichment that lets the DAG-snapshot consumer
+   * surface the routing chain to operators.
+   */
+  triageProvenance?: DagSpecTriageProvenance;
 }
 
 /** A point-in-time snapshot of a project's spec DAG, loaded under RLS. */

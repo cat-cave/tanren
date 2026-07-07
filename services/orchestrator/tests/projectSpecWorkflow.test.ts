@@ -368,9 +368,12 @@ class ContractPool {
       depends_on: spec.dependsOn,
       status: spec.status,
       priority: spec.priority,
-      // Task #86: `specs.mode` (NOT NULL, default `from_scratch`) is now non-optional in
-      // the row schema. This fake doesn't track mode per spec, so echo the DB default.
+      // Task #86: `mode` default; Codex H3 #7: nullable PROVENANCE columns (non-routed spec).
       mode: "from_scratch",
+      parent_spec_id: null as string | null,
+      source_finding_ids: null as string[] | null,
+      origin_triage_task_id: null as string | null,
+      origin_run_id: null as string | null,
     };
     return { rows: [row], rowCount: 1 };
   }
@@ -405,7 +408,6 @@ interface RunRow {
   branch: string;
   status: string;
 }
-
 interface TaskRow {
   taskId: string;
   runId: string;
@@ -413,7 +415,6 @@ interface TaskRow {
   status: string;
   agentKind: string;
 }
-
 interface JobRow {
   id: number;
   runId: string;
