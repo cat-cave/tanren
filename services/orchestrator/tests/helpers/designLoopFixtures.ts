@@ -46,9 +46,6 @@ interface StoredContractRow {
   org_id: string;
   project_id: string;
   version: number;
-  // Post-Codex-RA1: mode is a first-class column the unique index is keyed on
-  // (see db/src/schemaDesign.ts + migration 0025_design_contracts_mode.sql).
-  mode: string;
   domain: string;
   contract: unknown;
 }
@@ -111,31 +108,29 @@ export class MemoryGraph {
   async query(text: string, params: ReadonlyArray<unknown> = []): Promise<QueryResult> {
     // ---- design_contracts ----
     if (text.includes("INSERT INTO design_contracts")) {
-      // Mirror DesignContractStore.create (post-Codex-RA1): mode is $4, domain
-      // is $5, contract is $6. Version is now (project, mode)-scoped max+1.
+      // Mirror DesignContractStore.create (post-H2 unify — migration 0028): the
+      // store keys the head on `(project_id, version)` alone, so `create` binds
+      // id ($1), org_id ($2), project_id ($3), domain ($4), contract ($5).
       const projectId = String(params[2]);
-      const mode = String(params[3]);
-      const priorForPair = this.contracts.filter((c) => c.project_id === projectId && c.mode === mode);
+      const priorForProject = this.contracts.filter((c) => c.project_id === projectId);
       const row: StoredContractRow = {
         id: String(params[0]),
         org_id: String(params[1]),
         project_id: projectId,
-        version: priorForPair.length + 1,
-        mode,
-        domain: String(params[4]),
-        contract: JSON.parse(String(params[5])),
+        version: priorForProject.length + 1,
+        domain: String(params[3]),
+        contract: JSON.parse(String(params[4])),
       };
       this.contracts.push(row);
       return wrap([row as unknown as Record<string, unknown>]);
     }
     if (text.includes("FROM design_contracts")) {
-      // getLatest/getLatestState: highest version for (project, mode). The
-      // store now passes `mode` as $2 (WHERE project_id = $1 AND mode = $2).
+      // getLatest/getLatestState: highest version for the project. The store
+      // now passes only project_id as $1 (WHERE project_id = $1).
       const projectId = String(params[0]);
-      const mode = String(params[1]);
-      const forPair = this.contracts.filter((c) => c.project_id === projectId && c.mode === mode);
-      if (forPair.length === 0) return wrap([]);
-      const head = forPair.reduce((a, b) => (b.version > a.version ? b : a));
+      const forProject = this.contracts.filter((c) => c.project_id === projectId);
+      if (forProject.length === 0) return wrap([]);
+      const head = forProject.reduce((a, b) => (b.version > a.version ? b : a));
       return wrap([head as unknown as Record<string, unknown>]);
     }
     // ---- personas ----

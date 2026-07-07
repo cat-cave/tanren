@@ -56,7 +56,7 @@ import type { Finding } from "../../contracts/findings.js";
 import { BehaviorStore } from "../../entities/behaviors.js";
 import { PersonaStore } from "../../entities/personas.js";
 import type { ActorRef } from "../../state/actor.js";
-import { DEFAULT_SPEC_MODE, type SpecMode } from "../../state/spec.js";
+import type { SpecMode } from "../../state/spec.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import {
@@ -185,12 +185,14 @@ export async function runDesignOracleStage(input: DesignOracleStageInput): Promi
   if (input.actor.orgId === null) {
     throw new DesignOracleActorConfigError(input.projectId, "actor.orgId is null");
   }
-  // Read the HEAD FOR THIS SPEC'S MODE (Codex RA1) — a `specialize_seed` spec
-  // reads its own head and does NOT accidentally see the project's
-  // `from_scratch` head (or vice versa). Absent `specMode` ⇒ default (matches
-  // the DB column default the store's `create` was seeded with).
-  const contractMode = input.specMode ?? DEFAULT_SPEC_MODE;
-  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, contractMode, input.actorRef);
+  // Read the project's HEAD contract. H2 BLOCKING (unify): the DesignContract
+  // is PROJECT-scoped (shared across every spec type — scaffold specs need
+  // product identity for README naming; feature specs need it for behavior
+  // grading; there is exactly ONE product-level head per project). The prior
+  // per-writer-prompt-mode split silently no-op'd for scaffold/build/deploy
+  // specs — migration 0028 collapsed it. The oracle prompt's `specMode` tail
+  // block (below) remains the v64-load-bearing writer-vs-oracle mode signal.
+  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, input.actorRef);
   if (lookup.kind === "corrupt") {
     // Never a silent skip — a corrupt persisted contract is a hard fault the
     // finalize guard closes the task row on and the operator sees on the

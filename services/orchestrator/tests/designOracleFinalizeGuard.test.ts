@@ -64,7 +64,8 @@ class DesignFakePool implements Pick<pg.Pool, "query"> {
     const now = new Date("2026-01-01T00:00:00Z");
     if (trimmed.includes("FROM design_contracts")) {
       const contract = oracleContract();
-      const requestedMode = typeof params[1] === "string" ? String(params[1]) : "from_scratch";
+      // H2 BLOCKING (unify): one head per project (migration 0028 dropped mode).
+      void params;
       return {
         rows: [
           {
@@ -72,7 +73,6 @@ class DesignFakePool implements Pick<pg.Pool, "query"> {
             org_id: ORG,
             project_id: PROJECT,
             version: 2,
-            mode: requestedMode,
             domain: contract.domain,
             contract,
           },

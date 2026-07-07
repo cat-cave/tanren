@@ -21,7 +21,6 @@ import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } f
 import type { CapturedDesignSeed, DesignAgent } from "../../design/designAgent.js";
 import { runDesignPhase } from "../../design/designPhase.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
-import { DEFAULT_SPEC_MODE } from "../../state/spec.js";
 import type { CaptureDesignContract, InterviewCapture } from "./types.js";
 
 // Thrown when a derive reaches the design step with NO captured design contract.
@@ -194,17 +193,14 @@ export async function persistDesignContract(
   }
 
   // No agent wired (engine-graph test seam) — persist the thin captured contract.
-  // The derive-time contract lands on the DEFAULT spec mode (Codex RA1): the
-  // whole-product design is authored at project creation before any spec-mode
-  // context exists, so it lives at the default head. A per-mode derivative
-  // (e.g. a seed-only re-elaboration) mints its own head via a separate
-  // `create` call on the specialize_seed mode.
+  // The design contract is PROJECT-scoped (H2 BLOCKING unify): the whole-product
+  // contract lives at a single per-project head (migration 0028 collapsed the
+  // broken mode-keying), shared across every spec type in the project.
   const record = await DesignContractStore.create(
     pool,
     {
       orgId: input.orgId,
       projectId: input.projectId,
-      mode: DEFAULT_SPEC_MODE,
       contract: toDesignContract(input.capture, input.personaIdByName, input.behaviorIdByKey),
     },
     { kind: "operator" },

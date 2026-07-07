@@ -1,26 +1,32 @@
 // Tanren-native design subsystem (WS-D1) — the `design_contracts` store on the
 // `Repositories` seam. The durable WRITE/READ surface for the first-class,
 // versioned, org-scoped `DesignContract` entity (migrations
-// 0010_design_contracts + 0025_design_contracts_mode). Pure SQL + row
+// 0010_design_contracts + 0028_design_contracts_drop_mode). Pure SQL + row
 // mapping in the seam shape: every method takes the caller's `QueryClient` (the
 // org-scope carrier) + `ActorRef`, so under RLS an org-scoped client sees only
 // that org's contracts and an off-scope client sees ZERO rows.
 //
-// A project's design contract is VERSIONED AND MODE-KEYED: each `create` mints
-// the next version FOR THE (project, mode) pair (a design change is a new
-// version, not an in-place overwrite — the never-discard posture, and what lets
-// a later workstream re-propagate a design change). `getLatest` reads the head
-// version FOR A GIVEN MODE that the spec builds against. The parsed
-// `DesignContractV1` is persisted verbatim into the `contract` jsonb; a
-// malformed persisted row fails LOUDLY on read (no silent degrade), exactly
-// like the template manifest store.
+// A project's design contract is VERSIONED (per-project): each `create` mints
+// the next version FOR THE PROJECT (a design change is a new version, not an
+// in-place overwrite — the never-discard posture, and what lets a later
+// workstream re-propagate a design change). `getLatest` reads the HEAD
+// version the build builds against. The parsed `DesignContractV1` is persisted
+// verbatim into the `contract` jsonb; a malformed persisted row fails LOUDLY
+// on read (no silent degrade), exactly like the template manifest store.
 //
-// MODE-AWARE (Codex RA1) — PR #713 made the design oracle prompt + triage
-// mode-aware but left the PERSISTENCE layer keyed on `(project_id, version)`
-// only, so a project authoring specs in more than one `SpecMode` silently
-// versioned/overwrote a single contract row across modes. This module keys
-// `create` + `getLatest` + `getLatestState` + `listVersions` on `mode` so a
-// seed-only vs from-scratch spec each reads its own contract head.
+// PROJECT-SCOPED (H2 BLOCKING — unify): the DesignContract describes PRODUCT
+// identity (behaviors, personas, dimensions) which is shared across ALL spec
+// types in the same project. Migration 0026 briefly keyed the head on
+// `(project_id, mode, version)` (per-writer-prompt-mode heads), but no code
+// path ever wrote a row at `specialize_seed` — `persistDesignContract` lands
+// the derive-time contract at `DEFAULT_SPEC_MODE`, so scaffold/build/deploy
+// specs (which run under `specialize_seed`) got `{ kind: 'absent' }` on the
+// head lookup and WS-D2 (writer design block) + WS-D4 (design oracle) silently
+// no-op'd for the three specs the greenfield loop targets. Migration 0028
+// collapses this back to the single per-project head — there is exactly ONE
+// product-level contract per project. The writer prompt's mode-awareness lives
+// in `subtaskWriterPrompt.ts` + `designOraclePrompt.ts` tail blocks (the v64
+// load-bearing fix), NOT here.
 //
 // This store NEVER injects the contract into the writer (WS-D2) or verifies it
 // (WS-D4) — it is the persistence seam those workstreams read from.
@@ -29,7 +35,6 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
 import { type DesignContractV1, designContractToJson, parseDesignContract } from "../design/designContract.js";
-import { SpecMode } from "../state/spec.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -83,14 +88,9 @@ export interface DesignContractRecord {
   id: string;
   orgId: string;
   projectId: string;
-  // The monotonic version for this (project, mode) pair (1-based). A design
-  // change mints the next version rather than overwriting (never-discard).
+  // The monotonic version for this project (1-based). A design change mints
+  // the next version rather than overwriting (never-discard).
   version: number;
-  // The writer-prompt MODE the contract was authored FOR (Codex RA1). Mirrors
-  // `specs.mode` — the unique index is on `(project_id, mode, version)`, so two
-  // contracts with the same version but different modes can coexist and a spec
-  // reads the head for its own mode.
-  mode: SpecMode;
   // The descriptive design domain label (mirrored out of the contract for
   // filtering/observability without parsing the jsonb).
   domain: string;
@@ -101,11 +101,6 @@ export interface DesignContractRecord {
 export interface CreateDesignContractInput {
   orgId: string;
   projectId: string;
-  // The writer-prompt MODE this contract is authored FOR (Codex RA1). The
-  // `(project_id, mode, version)` unique index is keyed on it, so a caller
-  // authoring a `specialize_seed` contract does NOT collide with the same
-  // project's `from_scratch` contract. Mirrors `specs.mode` literals.
-  mode: SpecMode;
   // The parsed contract — its `domain` is mirrored into the column.
   contract: DesignContractV1;
 }
@@ -115,7 +110,6 @@ interface DesignContractRow {
   org_id: string;
   project_id: string;
   version: number | string;
-  mode: string;
   domain: string;
   contract: unknown;
 }
@@ -125,17 +119,11 @@ function mapRow(row: DesignContractRow): DesignContractRecord {
   // legacy-shaped row fails LOUDLY here rather than handing a half-typed contract
   // to a downstream consumer (injection/oracle). No silent degrade.
   const contract = parseDesignContract(row.contract);
-  // Re-parse the mode through the Zod enum — a row whose persisted mode falls
-  // outside the enum is malformed (the DB CHECK rejects it on write, so this
-  // is defense-in-depth) and throws loud rather than a silent `as SpecMode`
-  // cast that would leak an invalid literal into downstream lookups.
-  const mode = SpecMode.parse(row.mode);
   return {
     id: row.id,
     orgId: row.org_id,
     projectId: row.project_id,
     version: typeof row.version === "string" ? Number.parseInt(row.version, 10) : row.version,
-    mode,
     domain: row.domain,
     contract,
   };
@@ -160,43 +148,36 @@ function mapRowOrCorrupt(row: DesignContractRow, projectId: string): DesignContr
   }
 }
 
-const COLUMNS = "id, org_id, project_id, version, mode, domain, contract";
+const COLUMNS = "id, org_id, project_id, version, domain, contract";
 
 export const DesignContractStore = {
   /**
-   * Persist a NEW VERSION of a project's design contract FOR THE GIVEN MODE.
-   * The version is the (project, mode) pair's current max + 1 (1-based),
-   * computed in the same statement so concurrent creates serialize on the
-   * `(project_id, mode, version)` unique index. The `mode` scoping (Codex RA1)
-   * is what lets a project's `specialize_seed` head and its `from_scratch` head
-   * coexist without silently versioning/overwriting one another. The contract
-   * jsonb is persisted verbatim; `domain` is mirrored into its column. Returns
-   * the persisted record.
+   * Persist a NEW VERSION of a project's design contract. The version is the
+   * project's current max + 1 (1-based), computed in the same statement so
+   * concurrent creates serialize on the `(project_id, version)` unique index.
+   * The contract jsonb is persisted verbatim; `domain` is mirrored into its
+   * column. Returns the persisted record.
+   *
+   * H2 BLOCKING (unify): the design contract describes PRODUCT identity
+   * shared across every spec type, so there is exactly ONE product-level head
+   * per project — no per-writer-prompt-mode split (migration 0028 collapsed
+   * the broken mode-keying).
    */
   async create(client: QueryClient, input: CreateDesignContractInput, _actor: ActorRef): Promise<DesignContractRecord> {
     const id = `design_${randomUUID()}`;
     const result = await client.query<DesignContractRow>(
-      `INSERT INTO design_contracts (id, org_id, project_id, version, mode, domain, contract, updated_at)
+      `INSERT INTO design_contracts (id, org_id, project_id, version, domain, contract, updated_at)
        VALUES (
          $1, $2, $3,
-         COALESCE((SELECT MAX(version) FROM design_contracts WHERE project_id = $3 AND mode = $4), 0) + 1,
-         $4, $5, $6::jsonb, now()
+         COALESCE((SELECT MAX(version) FROM design_contracts WHERE project_id = $3), 0) + 1,
+         $4, $5::jsonb, now()
        )
        RETURNING ${COLUMNS}`,
-      [
-        id,
-        input.orgId,
-        input.projectId,
-        input.mode,
-        input.contract.domain,
-        JSON.stringify(designContractToJson(input.contract)),
-      ],
+      [id, input.orgId, input.projectId, input.contract.domain, JSON.stringify(designContractToJson(input.contract))],
     );
     const row = result.rows[0];
     if (row === undefined) {
-      throw new Error(
-        `design_contracts create returned no row for ${input.orgId}/${input.projectId} (mode=${input.mode})`,
-      );
+      throw new Error(`design_contracts create returned no row for ${input.orgId}/${input.projectId}`);
     }
     return mapRow(row);
   },
@@ -209,25 +190,17 @@ export const DesignContractStore = {
   },
 
   /**
-   * Read the HEAD (highest-version) contract for a (project, mode) pair — the
-   * one the spec's build currently builds against. `mode` scopes the head
-   * lookup (Codex RA1) so a `specialize_seed` spec reads its own head and does
-   * NOT accidentally see the project's `from_scratch` head (or vice versa).
-   * Undefined when the (project, mode) pair has no contract yet (a real empty
-   * state — never a defaulted contract). Throws (via `mapRow` →
-   * `parseDesignContract`) on a corrupt persisted row — callers that need to
-   * DISTINGUISH the corrupt case from absent should use {@link getLatestState}
-   * instead (Codex critic #7).
+   * Read the HEAD (highest-version) contract for the project — the one the
+   * build currently builds against. Undefined when the project has no
+   * contract yet (a real empty state — never a defaulted contract). Throws
+   * (via `mapRow` → `parseDesignContract`) on a corrupt persisted row —
+   * callers that need to DISTINGUISH the corrupt case from absent should use
+   * {@link getLatestState} instead (Codex critic #7).
    */
-  async getLatest(
-    client: QueryClient,
-    projectId: string,
-    mode: SpecMode,
-    _actor: ActorRef,
-  ): Promise<DesignContractRecord | undefined> {
+  async getLatest(client: QueryClient, projectId: string, _actor: ActorRef): Promise<DesignContractRecord | undefined> {
     const result = await client.query<DesignContractRow>(
-      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 AND mode = $2 ORDER BY version DESC LIMIT 1`,
-      [projectId, mode],
+      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 ORDER BY version DESC LIMIT 1`,
+      [projectId],
     );
     const row = result.rows[0];
     return row === undefined ? undefined : mapRow(row);
@@ -248,15 +221,10 @@ export const DesignContractStore = {
    * === null) is caught by a pre-store check in the design oracle before this
    * method is called.
    */
-  async getLatestState(
-    client: QueryClient,
-    projectId: string,
-    mode: SpecMode,
-    _actor: ActorRef,
-  ): Promise<DesignContractLookup> {
+  async getLatestState(client: QueryClient, projectId: string, _actor: ActorRef): Promise<DesignContractLookup> {
     const result = await client.query<DesignContractRow>(
-      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 AND mode = $2 ORDER BY version DESC LIMIT 1`,
-      [projectId, mode],
+      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 ORDER BY version DESC LIMIT 1`,
+      [projectId],
     );
     const row = result.rows[0];
     if (row === undefined) return { kind: "absent" };
@@ -264,19 +232,12 @@ export const DesignContractStore = {
   },
 
   /**
-   * All versions of a (project, mode) pair's contract, newest first (the
-   * version history). Mode-scoped (Codex RA1) so a seed-only listing does not
-   * mix in from-scratch versions.
+   * All versions of the project's contract, newest first (the version history).
    */
-  async listVersions(
-    client: QueryClient,
-    projectId: string,
-    mode: SpecMode,
-    _actor: ActorRef,
-  ): Promise<DesignContractRecord[]> {
+  async listVersions(client: QueryClient, projectId: string, _actor: ActorRef): Promise<DesignContractRecord[]> {
     const result = await client.query<DesignContractRow>(
-      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 AND mode = $2 ORDER BY version DESC`,
-      [projectId, mode],
+      `SELECT ${COLUMNS} FROM design_contracts WHERE project_id = $1 ORDER BY version DESC`,
+      [projectId],
     );
     return result.rows.map(mapRow);
   },

@@ -37,7 +37,6 @@ import type { OrgScope } from "../credentials/resolveCredentials.js";
 import { BehaviorStore } from "../entities/behaviors.js";
 import { PersonaStore } from "../entities/personas.js";
 import { DesignContractStore, type DesignContractRecord } from "../repositories/designContracts.js";
-import { DEFAULT_SPEC_MODE, type SpecMode } from "../state/spec.js";
 import type { DesignContractV1, DesignDimension } from "./designContract.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -287,26 +286,25 @@ export async function resolveDesignContext(
  * scope has no tenant to resolve personas/behaviors against, so it yields no block
  * (rather than reading off the wrong scope), mirroring the conflict resolver's
  * no-org guard.
+ *
+ * H2 BLOCKING (unify): the design contract is PROJECT-scoped, shared across all
+ * spec types (scaffold/build/deploy specs need product identity for naming +
+ * grading, exactly like feature specs). Migration 0028 collapsed the broken
+ * per-mode head lookup — the writer prompt's mode-awareness lives in
+ * `subtaskWriterPrompt.ts` tail blocks, NOT here.
  */
 export async function loadDesignContextBlock(input: {
   client: QueryClient;
   orgScope: OrgScope;
   projectId: string;
-  // OPTIONAL spec writer-prompt MODE (Codex RA1) — the store keys the head
-  // lookup on `(project_id, mode, version)`, so the writer for a
-  // `specialize_seed` spec reads its own head and does NOT accidentally see
-  // the project's `from_scratch` head (or vice versa). Absent ⇒ default (the
-  // same default the DB column uses).
-  specMode?: SpecMode;
 }): Promise<string | undefined> {
   if (input.orgScope.kind !== "org") return undefined;
   const actor = designResolverActor(input.orgScope.orgId, input.projectId);
-  const contractMode = input.specMode ?? DEFAULT_SPEC_MODE;
   // Use the TYPED-STATE lookup so a CORRUPT persisted row throws loud (Codex
   // critic #7) rather than the prior `undefined` return that made it
   // indistinguishable from a legitimate "no design phase ran yet" project.
   // Only `absent` legitimately omits the writer block; `corrupt` MUST propagate.
-  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, contractMode, {
+  const lookup = await DesignContractStore.getLatestState(input.client, input.projectId, {
     kind: "operator",
   });
   if (lookup.kind === "corrupt") throw lookup.error;

@@ -76,7 +76,8 @@ function fakeClient(seeds: Seeds): { query: (text: string, params?: unknown[]) =
     async query(text: string, params?: unknown[]) {
       if (text.includes("FROM design_contracts")) {
         if (seeds.contract === undefined) return { rows: [] };
-        const requestedMode = typeof params?.[1] === "string" ? String(params[1]) : "from_scratch";
+        // H2 BLOCKING (unify): one head per project (migration 0028 dropped mode).
+        void params;
         return {
           rows: [
             {
@@ -84,7 +85,6 @@ function fakeClient(seeds: Seeds): { query: (text: string, params?: unknown[]) =
               org_id: ORG,
               project_id: "project_1",
               version: 3,
-              mode: requestedMode,
               domain: "saas-web",
               contract: seeds.contract,
             },

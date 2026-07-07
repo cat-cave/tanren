@@ -214,14 +214,16 @@ export async function loadRunExecutionContext(
   // project has no design contract (a real empty state) ⇒ the writer gets no block — NEVER a
   // fabricated default. A malformed persisted contract fails LOUDLY in the store's re-parse.
   //
-  // Codex RA1 — thread the spec's writer-prompt MODE so the head lookup keys on
-  // `(project_id, mode, version)` and a `specialize_seed` spec reads its own
-  // head rather than the project's `from_scratch` head (or vice versa).
+  // H2 BLOCKING (unify): the design contract is PROJECT-scoped — there is exactly ONE
+  // product-level head per project, shared across every spec type (scaffold specs need
+  // product identity for README naming; feature specs need it for behavior grading).
+  // Migration 0028 collapsed the broken `(project_id, mode, version)` mode-keying that
+  // silently no-op'd for scaffold/build/deploy specs. The writer prompt's mode-awareness
+  // remains where it belongs — `subtaskWriterPrompt.ts` tail blocks (v64 load-bearing).
   const designContextBlock = await loadDesignContextBlock({
     client: pool,
     orgScope,
     projectId: decoded.project_id,
-    specMode: decoded.mode,
   });
 
   const context: PlannerRunContext = {

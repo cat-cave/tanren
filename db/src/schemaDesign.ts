@@ -15,18 +15,22 @@
 //
 // VERSIONED — a design CHANGE mints the NEXT version for the project rather than
 // overwriting (the never-discard posture; what lets a later workstream
-// re-propagate a design change without discarding history). `(project_id, mode,
+// re-propagate a design change without discarding history). `(project_id,
 // version)` is unique; the store computes the next version in the insert.
 //
-// MODE-AWARE — a project's specs may run in more than one writer-prompt MODE
-// (`from_scratch` vs `specialize_seed`, mirroring `specs.mode`), and PR #713
-// made the design ORACLE prompt + triage mode-aware. Without a `mode` dimension
-// on the persistence layer, a second create for the same project SILENTLY
-// versioned/overwrote the single row across modes — the fix (Codex RA1) adds
-// `mode` as a first-class column and keys uniqueness on `(project_id, mode,
-// version)` so a per-mode contract head is preserved. The column mirrors the
-// `SpecMode` Zod enum + `specs.mode` shape (same literals + default), so a
-// row from either seed-only or from-scratch authoring persists cleanly.
+// PROJECT-SCOPED (H2 BLOCKING — unify): the contract describes PRODUCT identity
+// (behaviors, personas, dimensions) which is shared across ALL spec types in the
+// same project — scaffold specs need product identity for README naming, feature
+// specs need it for behavior grading, and there is exactly ONE product-level
+// contract per project. Migration 0026 briefly keyed the head on `(project_id,
+// mode, version)` to give per-writer-prompt-mode heads, but no code path wrote a
+// row at `specialize_seed` (only `persistDesignContract` at derive wrote, at the
+// default `from_scratch`), so the mode-keyed head silently no-op'd for scaffold /
+// build / deploy specs (WS-D2 writer got no design block; WS-D4 oracle returned
+// `{ hasContract: false }`). Migration 0028 collapses this back to a single
+// per-project head. The writer prompt's mode-awareness remains where it belongs
+// (`subtaskWriterPrompt.ts` + `designOraclePrompt.ts` tail blocks — the v64 fix);
+// this table just carries the shared product contract.
 //
 // DOMAIN-GENERAL — the `contract` jsonb is the parsed `DesignContractV1`
 // (designContract.ts): a typed core + a domain-ADAPTIVE dimension set whose shape
@@ -59,15 +63,8 @@ export const designContracts = pgTable(
       .notNull()
       .references(() => projects.projectId),
     // The monotonic 1-based version. A design change mints the next version (the
-    // store computes max+1 in the insert); `(project_id, mode, version)` is unique.
+    // store computes max+1 in the insert); `(project_id, version)` is unique.
     version: integer("version").notNull(),
-    // The WRITER-PROMPT MODE the contract was authored FOR (Codex RA1). Mirrors
-    // `specs.mode` — the same `SpecMode` literals + default (`from_scratch`), so
-    // a project that authors specs in more than one mode gets a per-mode contract
-    // head rather than silently versioning/overwriting a single row across modes.
-    // Tanren never branches on this; the mode is the persistence key the writer
-    // context + design oracle read to fetch the head appropriate for the spec.
-    mode: text("mode").notNull().default("from_scratch"),
     // The descriptive design DOMAIN label ("saas-web", "mobile-game",
     // "novel-translation"), mirrored from the contract jsonb. Human-readable +
     // domain-derived — Tanren NEVER branches on it; it is the signal the design
@@ -81,8 +78,7 @@ export const designContracts = pgTable(
   },
   (table) => [
     check("design_contracts_version_check", sql`${table.version} >= 1`),
-    check("design_contracts_mode_check", sql`${table.mode} IN ('specialize_seed', 'from_scratch')`),
-    uniqueIndex("design_contracts_project_mode_version_unique").on(table.projectId, table.mode, table.version),
+    uniqueIndex("design_contracts_project_version_unique").on(table.projectId, table.version),
     index("design_contracts_org_id").on(table.orgId),
     index("design_contracts_project_id").on(table.projectId),
     index("design_contracts_domain").on(table.domain),

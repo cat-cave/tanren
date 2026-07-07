@@ -36,7 +36,6 @@ import type { ActorRef } from "../state/actor.js";
 import { BehaviorStore } from "../entities/behaviors.js";
 import { PersonaStore } from "../entities/personas.js";
 import { DesignContractStore, type DesignContractRecord } from "../repositories/designContracts.js";
-import { DEFAULT_SPEC_MODE, type SpecMode } from "../state/spec.js";
 import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } from "./designContract.js";
 import type {
   CapturedDesignSeed,
@@ -64,13 +63,6 @@ export interface RunDesignPhaseInput {
   // are NOT trusted as the coverage obligation here — the phase resolves the
   // project's FULL persona + behavior set (the design is responsible for ALL of it).
   seed: CapturedDesignSeed;
-  // OPTIONAL writer-prompt MODE this contract is authored FOR (Codex RA1). The
-  // store keys `(project_id, mode, version)` uniqueness on it — a project that
-  // authors specs in more than one mode gets a per-mode contract head rather
-  // than silently versioning/overwriting one row across modes. Absent ⇒ default
-  // (matches the DB column default; today's derive at project creation lands
-  // the whole-product contract on the default mode).
-  mode?: SpecMode;
 }
 
 export interface RunDesignPhaseResult {
@@ -207,7 +199,6 @@ export async function runDesignPhase(input: RunDesignPhaseInput): Promise<RunDes
     {
       orgId: input.orgId,
       projectId: input.projectId,
-      mode: input.mode ?? DEFAULT_SPEC_MODE,
       contract,
     },
     input.actorRef,
