@@ -69,6 +69,11 @@ export interface CheckerPromptInput {
   // appends the seeded-mode tail block that scopes the checker off the pre-existing
   // seed surfaces. Absent / `from_scratch` ⇒ no block (byte-identical to the legacy
   // checker prompt), so brownfield/legacy specs are unchanged.
+  //
+  // BOTH BRANCHES ARE LOAD-BEARING: `specialize_seed` fires on greenfield's seeded
+  // scaffold spec; `from_scratch` fires on every other spec (the brownfield/legacy
+  // default). Regression-pinned in `tests/checkerAuditorContextMode.test.ts` (which
+  // explicitly asserts `from_scratch` is byte-identical to the absent/legacy prompt).
   specMode?: SpecMode;
 }
 
@@ -92,6 +97,11 @@ export interface AuditorPromptInput {
   // appends the seeded-mode tail block that scopes the auditor off the pre-existing
   // seed surfaces. Absent / `from_scratch` ⇒ no block (byte-identical to the legacy
   // auditor prompt), so brownfield/legacy specs are unchanged.
+  //
+  // BOTH BRANCHES ARE LOAD-BEARING: `specialize_seed` fires on greenfield's seeded
+  // scaffold spec; `from_scratch` fires on every other spec (the brownfield/legacy
+  // default). Regression-pinned in `tests/checkerAuditorContextMode.test.ts` (which
+  // explicitly asserts `from_scratch` is byte-identical to the absent/legacy prompt).
   specMode?: SpecMode;
 }
 

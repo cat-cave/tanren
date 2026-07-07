@@ -90,6 +90,11 @@ export interface DesignOraclePromptInput {
   // false design finding against a seed-owned skeleton wedges merge exactly like a
   // false checker/auditor finding). Absent / `from_scratch` ⇒ no block (byte-
   // identical to the legacy oracle prompt), so brownfield/legacy specs are unchanged.
+  //
+  // BOTH BRANCHES ARE LOAD-BEARING: `specialize_seed` fires on greenfield's seeded
+  // scaffold spec; `from_scratch` fires on every other spec (the brownfield/legacy
+  // default). Regression-pinned in `tests/designOracleStage.test.ts` (which
+  // explicitly asserts `from_scratch` produces NO seeded-mode block — legacy shape).
   specMode?: SpecMode;
 }
 

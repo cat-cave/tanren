@@ -30,8 +30,10 @@ const CADENCE_MS: Record<AuditCadence, number> = {
 
 export interface AuditSchedulerLoopDeps {
   pool: pg.Pool;
-  // The read-only pass runner (no-op default until an SSH-backed pass is wired —
-  // the §8a "absence is honest" case; a clean pass records no findings).
+  // The read-only pass runner. Live wiring: `bootIntake.ts` passes
+  // `createAnswererPassRunner(...)` (the SSH-backed pass over the runner) so the
+  // audit loop runs the real answerer pass; a test/no-DB caller can pass any
+  // `AuditPassRunner` (a no-op still parses cleanly — a clean pass records no findings).
   passRunner: AuditPassRunner;
   // Per-job triage answerer factory — a finding is triaged by the real provider
   // answerer (no §8a fallback). Consulted only when a pass produces a finding.

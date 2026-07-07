@@ -61,7 +61,6 @@ export interface PublishDraftPullRequestInput {
   title: string;
   body?: string;
   githubCredentialRef?: string;
-  projectConfig?: Record<string, unknown>;
   /** org App installation; when set, prefer minting an App token. */
   installation?: OrgGithubAppInstallation;
   githubAppMinter?: GithubAppTokenMinter;
@@ -323,8 +322,11 @@ export async function publishDraftPullRequestForRun(
       (input.title?.trim() ? input.title.trim() : undefined) ??
       (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
     body: input.body ?? context.specDescription,
-    githubCredentialRef: input.githubCredentialRef,
-    projectConfig: context.projectConfig,
+    // The operator route accepts `githubCredentialRef` in the request body but it's
+    // OPTIONAL — when the operator omits it, fall back to the project-config cred
+    // resolved here (the operator-route seam owns this resolve, not the low-level
+    // `publishDraftPullRequest`, which insists callers pass the ref directly).
+    githubCredentialRef: input.githubCredentialRef ?? context.configuredGithubCredentialRef,
     installation: context.installation,
     githubAppMinter: input.githubAppMinter,
   });
@@ -381,7 +383,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     ...(ancestorStack.length > 0 && { ancestorStack }),
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
-    projectConfig: asRecord(row.config),
+    configuredGithubCredentialRef: readGithubCredentialRef(row.config),
     installation: installationFromOrgConfig(row.org_config),
     specTitle: row.spec_title,
     specDescription: row.spec_description,
@@ -397,20 +399,22 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
 }
 
 function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): string {
-  const configured = input.githubCredentialRef ?? input.projectConfig?.["githubCredentialRef"];
-  if (typeof configured !== "string") {
+  // Callers MUST pass `githubCredentialRef` directly — the previous
+  // `input.projectConfig?.["githubCredentialRef"]` fallback branch was removed to keep the
+  // credential resolution on a single seam (the caller resolves credentials before
+  // calling; passing through projectConfig invited drift with `resolveCredentials`).
+  if (typeof input.githubCredentialRef !== "string") {
     throw new TypeError("GitHub credential ref is required");
   }
-  return validateGithubCredentialRef(configured);
+  return validateGithubCredentialRef(input.githubCredentialRef);
 }
 
 function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
-  const configured = input.githubCredentialRef ?? input.projectConfig?.["githubCredentialRef"];
   // App-installed run: the static ref is OPTIONAL. The App sentinel is an
   // EMPTY-STRING ref (a present-but-empty string, not `undefined`) — collapse it
   // (and any whitespace-only value) to "no static ref" so the run mints the App
   // token, NEVER pushing `""` through the grammar validator (apex v30 crash).
-  return normalizeStaticGithubRef(typeof configured === "string" ? configured : undefined);
+  return normalizeStaticGithubRef(input.githubCredentialRef);
 }
 
 function eventContext(input: PublishDraftPullRequestInput) {
@@ -433,7 +437,9 @@ interface DraftPrRunContext {
   ancestorStack?: AncestorStack;
   repoUrl: string;
   defaultBranch: string;
-  projectConfig: Record<string, unknown>;
+  /** Resolved from `projects.config.githubCredentialRef` — the operator route uses this
+   *  to fall back to the project's configured cred when the request body omitted it. */
+  configuredGithubCredentialRef?: string;
   installation?: OrgGithubAppInstallation;
   specTitle: string;
   specDescription: string;
@@ -462,8 +468,10 @@ interface DraftPrRunRow {
   host_key_fingerprint: string | null;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+function readGithubCredentialRef(config: unknown): string | undefined {
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return undefined;
+  const value = (config as Record<string, unknown>)["githubCredentialRef"];
+  return typeof value === "string" ? value : undefined;
 }
 
 function messageFromError(error: unknown): string {

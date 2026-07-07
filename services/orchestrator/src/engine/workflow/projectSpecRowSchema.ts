@@ -98,8 +98,8 @@ export const SpecProjectRowSchema = z.object({
   depends_on: StringArrayOrEmpty,
   status: z.string(),
   priority: SpecPriority,
-  // Task #86: the writer-prompt mode the spec was created with. The DB column is NOT
-  // NULL with default `from_scratch`, so a real row always carries a value; the schema
-  // mirrors that default so a hand-built fixture row missing the field still parses.
-  mode: SpecMode.optional().default("from_scratch"),
+  // Task #86: the writer-prompt mode the spec was created with. The `specs.mode` column
+  // is NOT NULL with default `from_scratch` (migrated in PR #756), so a real row always
+  // carries a value.
+  mode: SpecMode,
 });

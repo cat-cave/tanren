@@ -237,6 +237,9 @@ export class RecoveryMemoryPool {
             depends_on: spec.depends_on,
             status: spec.status,
             priority: spec.priority,
+            // Task #86: `specs.mode` (NOT NULL, default `from_scratch`) is now non-optional
+            // in the row schema. This fake doesn't track mode per spec, so echo the default.
+            mode: "from_scratch",
           },
         ],
         rowCount: 1,

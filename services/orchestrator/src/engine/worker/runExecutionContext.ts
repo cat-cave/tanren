@@ -94,10 +94,9 @@ const RunSpecProjectRowSchema = z.object({
   description: z.string(),
   acceptance_criteria: z.unknown(),
   // Task #86: the spec's writer-prompt MODE (`specialize_seed` for the greenfield scaffold
-  // spec; `from_scratch` otherwise). The DB column is NOT NULL with default `from_scratch`,
-  // so a real row always carries a value; the schema mirrors that default so a missing-
-  // column row (e.g. an older test fixture that hand-builds the join shape) parses cleanly.
-  mode: SpecMode.optional().default("from_scratch"),
+  // spec; `from_scratch` otherwise). The `specs.mode` column is NOT NULL with default
+  // `from_scratch` (migrated in PR #756), so a real row always carries a value.
+  mode: SpecMode,
 });
 
 function stringArray(value: unknown): string[] {

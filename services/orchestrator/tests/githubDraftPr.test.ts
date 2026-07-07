@@ -386,7 +386,7 @@ describe("GitHub draft PR contract", () => {
       targetBranch: "main",
       runBranch: "tanren/run_123",
       title: "Tanren run run_123",
-      projectConfig: { githubCredentialRef: "credential/github/dev" },
+      githubCredentialRef: "credential/github/dev",
       timeoutMs: 500,
     });
 

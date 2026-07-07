@@ -63,6 +63,9 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     title: "Add a marker",
     description: "Create the marker file.",
     acceptance_criteria: ["marker exists", "ci green"],
+    // Task #86: `specs.mode` is NOT NULL in the DB. The row-schema now insists on a
+    // real value (no optional().default() accommodation), so fixtures must carry it.
+    mode: "from_scratch",
     ...overrides,
   };
 }
