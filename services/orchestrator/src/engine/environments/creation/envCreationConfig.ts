@@ -11,8 +11,14 @@
 // validation runner is allocated FROM the built image just like a real run's runner).
 //
 // GATED: the JIT-build path is OFF unless a registry is configured
-// (`TANREN_ENV_REGISTRY`). Off ⇒ `undefined` ⇒ the executor keeps P3's golden-base
-// no-match fallback (byte-identical). On ⇒ an off-baseline no-match builds a real env.
+// (`TANREN_ENV_REGISTRY`). Off ⇒ `undefined` ⇒ the executor's env-refinement seam
+// FAILS LOUD for an off-baseline toolchain (`JitBuildRequiredError`), never a silent
+// golden-base degrade. A baseline-subset toolchain (apex-style node+pnpm) still
+// resolves to the golden base without JIT — it does not need a build. This closes
+// H1 finding #4: an off-baseline toolchain without a configured registry used to
+// silently seed from the golden base, presenting as a mysterious runtime failure
+// rather than a loud config error.
+//
 // This is the one place the env knobs are read (no scattered `process.env`).
 
 import { resolve } from "node:path";
@@ -43,15 +49,32 @@ export interface BuildEnvCreationInput {
 }
 
 /**
+ * Is the JIT env-image registry configured? A `true` return means the operator has
+ * set `TANREN_ENV_REGISTRY` and the JIT-build path is wired; a `false` return means
+ * an off-baseline toolchain will fail-loud at project-create / at run-refine time
+ * (H1 #4 — never a silent golden-base fallback for an off-baseline toolchain).
+ *
+ * The read mirrors `buildEnvCreationFromEnv` (trim + empty-string check), so a
+ * project-create's early-feedback assertion sees the SAME truth the boot wiring
+ * does. Read at the point of assertion (not cached) so a late-set value on the
+ * next call is picked up — a config-surface concern, not a hot path.
+ */
+export function jitEnvRegistryConfigured(): boolean {
+  const registry = process.env["TANREN_ENV_REGISTRY"]?.trim();
+  return registry !== undefined && registry !== "";
+}
+
+/**
  * Build the JIT env-creation seams from the env config surface, or `undefined` when
  * the JIT-build path is not configured (`TANREN_ENV_REGISTRY` unset) — in which case
- * the executor keeps P3's golden-base no-match fallback. Reads the env knobs in ONE
- * place (registry / image name / push / timeouts / script path).
+ * the executor's env-refinement seam FAILS LOUD for an off-baseline toolchain
+ * (`JitBuildRequiredError`), never silently degrading to the golden base. Reads the
+ * env knobs in ONE place (registry / image name / push / timeouts / script path).
  */
 export function buildEnvCreationFromEnv(input: BuildEnvCreationInput): EnvCreationDeps | undefined {
   const registry = process.env["TANREN_ENV_REGISTRY"]?.trim();
   if (registry === undefined || registry === "") {
-    // JIT-build path OFF → P3 golden-base no-match fallback.
+    // JIT-build path OFF → the env-refinement seam fails-loud for off-baseline.
     return undefined;
   }
   const imageName = process.env["TANREN_ENV_IMAGE_NAME"]?.trim();

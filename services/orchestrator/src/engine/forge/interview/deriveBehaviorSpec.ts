@@ -28,6 +28,12 @@ export {
   productVisionConfig,
 } from "./deriveDesignContract.js";
 
+// H1 finding #4 — the greenfield derive's EARLY-FEEDBACK JIT env-image guard
+// (env-management.md §2.2 halt-loud). Re-exported through this same behavior-derive
+// module so `derive.ts` reaches it without a separate module dependency (derive.ts
+// already imports from this module and is at its max-imports cap).
+export { assertJitAvailableForToolchain } from "../../environments/creation/index.js";
+
 // FINDING #1 + task #79: the autonomous greenfield config. When the operator opts
 // into `auto`/`simulated`, the project is created ATOMICALLY with EVERY knob
 // autonomous operation requires — no second governance PUT, no operator race-window.

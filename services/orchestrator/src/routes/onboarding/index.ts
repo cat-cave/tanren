@@ -36,6 +36,7 @@ import {
   DeriveRollbackError,
   FragmentAuthoringFailedError,
   InterviewCapture,
+  JitBuildRequiredError,
   MissingLifecycleError,
   MissingProjectSlugError,
   runRound,
@@ -337,6 +338,22 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       // stack, no derivable runtime). A bad/incomplete capture (400).
       if (error instanceof UnresolvableLifecycleError) {
         return respond({ error: "lifecycle_unresolvable", message: error.message }, 400);
+      }
+      // H1 #4 — the captured toolchain is off the golden baseline AND this
+      // deployment has no `TANREN_ENV_REGISTRY` configured, so the runner would
+      // have no validated env image to seed from. A LOUD config gap surfaced at
+      // project-create time rather than a mysterious runtime failure on the first
+      // run (doctrine env-management.md §2.2 — halt loud).
+      if (error instanceof JitBuildRequiredError) {
+        return respond(
+          {
+            error: "jit_build_required",
+            capability: "environment",
+            toolchain: error.toolchain,
+            message: error.message,
+          },
+          400,
+        );
       }
       // One or more per-fragment authoring runs failed at their fixed point. The
       // derive halts loud per doctrine (no silent skip). Surfaced as 409
