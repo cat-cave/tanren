@@ -30,5 +30,10 @@ const config = {
   tempDirName: "reports/mutation/.stryker-tmp-repos",
   concurrency: 4,
   timeoutMS: 60000,
+  // Stryker's default `dryRunTimeoutMinutes` is 5. The full vitest suite runs
+  // once against every mutated cluster in the initial dry run; on GitHub's
+  // ubuntu-latest runner it now brushes that ceiling (June 8 baseline: 3m43s;
+  // June 15+ runs: >5m timeouts as the codebase grew). Bumped to 15 for headroom.
+  dryRunTimeoutMinutes: 15,
 };
 export default config;
