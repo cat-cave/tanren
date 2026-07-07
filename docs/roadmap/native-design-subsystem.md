@@ -26,21 +26,37 @@
 > both **CLOSED** (#602 wires the oracle into the loop; #600 makes a
 > missing/dangling contract a LOUD halt).
 >
-> **Live exercise state (updated 2026-07-04).** The subsystem is
-> **code-complete + wired**. The **first live design-phase elaboration ran in apex
-> v45/v46 (and again in v47-v49)**: the interview captures a real `designContract`
-> and `runDesignPhase` elaborates it live on real credentials.
-> **PR #713 (audit round-2 finding H1) closed the last mode-blindness in the
-> subsystem**: the designOracle prompt + triage seam are now `specMode`-aware, so
-> a seeded-scaffold spec does not receive coverage-gap findings against the
-> pre-existing seed surface. The apex frontier has moved past the v49 derive-halt
-> class (task #21 resolved via #703/#705) and is now inside the product-build
-> loop; a captured `designContract` from the interview reaches the writer prompt
-> on every generation via the seam wired in #602. The **full verify→re-drive
-> loop has not yet closed on a real deployed product** — no run has reached
-> deploy → oracle verification → merged design-driven rework in one autonomous
-> pass. The remaining validation step is a complete apex run that carries a real
-> `designContract` through to deployment and oracle verification (WS-D8).
+> **Live exercise state (updated 2026-07-07).** The subsystem is
+> **code-complete + wired**. The first live design-phase elaboration ran in
+> apex v45/v46 (and again in v47-v49): the interview captures a real
+> `designContract` and `runDesignPhase` elaborates it live on real
+> credentials. PR #713 (round-2 H1) made the designOracle prompt + triage
+> seam `specMode`-aware so a seeded-scaffold spec doesn't receive
+> coverage-gap findings against the seed surface. **Wave D1..D4 (2026-07-05
+> → 2026-07-07) hardened it further:** PR #738 added the design-oracle
+> finalize guard (a throw between run-finalizer and the terminal event pair
+> cannot strand `running`); PR #745 replaced the silent-fallback tripwires
+> with a typed error union — `DesignContractCorruptError` (persisted-record
+> parse failure) / `DesignOracleActorConfigError` (actor wired without
+> `orgId`) / `MalformedDesignOracleResultError` (missing/malformed
+> `hasContract`) — every corrupt / inaccessible / malformed state now fails
+> LOUD; PR #756 added `design_contracts.mode` (migration 0026) with
+> `(project_id, mode, version)` unique index threaded through all readers.
+> The apex frontier has moved past the v49 derive-halt class (task #21 via
+> #703/#705) and is inside the product-build loop; a captured
+> `designContract` reaches the writer prompt on every generation via the
+> seam wired in #602. The **full verify→re-drive loop has not yet closed
+> on a real deployed product** — no run has reached deploy → oracle
+> verification → merged design-driven rework in one autonomous pass. The
+> remaining step is a complete apex run that carries a real `designContract`
+> through to deployment and oracle verification (WS-D8).
+>
+> **Documented gap (Wave D4 tradeoff):** with `design_contracts.mode`,
+> `deriveDesignContract` only persists on `from_scratch`. Scaffold specs
+> (`specialize_seed` mode) see NO design context by construction — intentional
+> (scaffolds specialize toolchain, not product identity) but widens the
+> silent-skip surface vs pre-#756. Non-scaffold specs still resolve the
+> persisted `from_scratch`-mode contract as before.
 >
 > The remaining plan below — **WS-D5..D8** — is what is left. WS-D5 is **assessed
 > as SUBSUMED** by the domain-general D1/D3/D4 implementation (verdict + evidence

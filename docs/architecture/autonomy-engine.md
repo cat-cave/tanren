@@ -80,7 +80,13 @@ comments reference them, so the anchored sections survive at this path.
    layer reacts to the `run.*` / `merge.completed` events already on the
    `LISTEN/NOTIFY` bus — no new polling for internal state. A spec finishing fires
    the walker; a merge firing re-checks dependents' freshness. (External _intake_
-   adds webhooks — §1d.)
+   adds webhooks — §1d.) Every subscriber shares a single
+   `subscribeWithReconnect` helper (Wave D2, PR #746) that survives boot-time
+   PG blips, connection errors, and rapid-fire wake races — the four consumers
+   (walker, notify-subscriber, orphan-consecutive-reader, redrive-history-reader)
+   all attach through it; the round-3 wake-latch (PR #767) also closes the
+   error-before-park race so a reconnect requested before the parked wake
+   promise resolves is not lost.
 6. **Contracts-as-durable-asset.** Each new capability is a seam with a
    conformance suite (like `Allocator` / `JobQueue` / `Repositories`), so the
    `CodeHost` adapter (GitHub now, GitLab/others later), an optional external-queue
@@ -318,7 +324,21 @@ Design threads through the build loop as first-class stages, not an afterthought
 
 The contract follows the same fail-closed, no-silent-default discipline as the
 template manifest and the `ci.yml` parser: a malformed contract throws; an absent
-contract is an explicit no-contract state, never a defaulted one.
+contract is an explicit no-contract state, never a defaulted one. The typed
+error union is `DesignContractCorruptError` (persisted-record parse failure) /
+`DesignOracleActorConfigError` (actor wired without an `orgId`) /
+`MalformedDesignOracleResultError` (missing/malformed `hasContract` field) —
+each fails LOUD rather than degrading silently (Wave D2, PR #745). The
+`design_contracts.mode` column (migration 0026 — Wave D4, PR #756) scopes
+persistence to `from_scratch` mode with a `(project_id, mode, version)`
+unique index; a scaffold spec (`specialize_seed` mode) sees no contract by
+construction, an intentional gap documented in
+`docs/roadmap/native-design-subsystem.md`. Elsewhere in the engine the
+`MalformedAncestorStackError` (Wave D1, PR #740) classifies a malformed
+ancestor-stack column distinctly from an absent one, and the worker-level
+`runFailureClassifier` (Wave E-fix, PR #766) gains 4 typed arms for
+context-hydration + pre-row paths so a throw before the task row exists
+still classifies loud instead of degrading to `crashed`.
 
 ## 2. Native merge coordination
 

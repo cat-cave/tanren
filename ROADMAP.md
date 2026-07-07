@@ -35,27 +35,73 @@ product loop** (issue → triage → fix → merge → deploy → a working prod
 human in the inner loop). That is exactly what apex still has to prove; do not
 describe it as done. The v49-era infra halts (task #21 runner-INSERT PK race +
 derive synchronous-wait breaker) are resolved (#21A shipped as PR #705; #21B
-obviated by PR-F #693). The frontier as of v79 sits inside the product-build
-loop itself: writer subtask sizing (PR #731), plan stall recovery (PR #726),
-template composition semantics (fragment-based composer PR-A #688 → PR-G #699),
-PR-enqueue timing (PR #724 + the #725 atomic 3-write seam + orphaned-PR startup
-sweep), and issue-triage routing. The v79 fix (PR #734) enables triage →
-new-spec insertion on real out-of-scope findings — the closest we've been to the
-issue-loop half of the apex proof firing autonomously. Trial-driven fixes
-landed 2026-06-30 → 2026-07-04 also include: PR #715 (autostash gate artifacts
-on clean-PR rebase; classify `WorkspaceCommandError`), PR #719 (F2 fragment
-authoring observability), PRs #720/#721 (re-drive halt observability + wandering
-halt convergence detector), PR #723 (org-scoped eventStore), PR #728 (squash
-writer commits before clean-PR rebase), PR #729 (compose smoke for
-Go/Python/Rust), PR #730 (reconcile duplicate `addEnvVar` across fragments),
-PR #732 (`ActivityWatchdog` neighbor-floor widened to 5 for agent-class execs),
-PR #733 (pnpm bootstrap `CI=true`), plus PRs #722/#727 on infra. The audit
+obviated by PR-F #693). The v79-era product-build-loop frontier (writer subtask
+sizing PR #731, plan stall recovery PR #726, fragment-based composer PR-A #688 →
+PR-G #699, PR-enqueue timing PR #724 + the #725 atomic 3-write seam +
+orphaned-PR startup sweep, triage → new-spec insertion PR #734 on real
+out-of-scope findings) has since been HARDENED across three subsequent audit
+passes plus a cleanup wave — **34 PRs (#738–#768) landed 2026-07-05 →
+2026-07-07** closed every Codex-critic (#1–#18) / Codex-round-3 (#1–#4) / RA1 /
+RA2 finding. **Wave D1 (BLOCKING pre-apex-v80)** landed the design-oracle
+finalize guard, `gateRework` required in `BaseShiftCoordinatorDeps`, the
+`MalformedAncestorStackError` typed classification, and the v79 loop-closure
+end-to-end fix (auditor prompt no-omit + `routeOne` scope-first +
+`ensureFindingCoverage` empty-workItems P0 synthesis + newSpecs materialization
+via `acceptProposals`). **Wave D2** landed the observability +
+silent-fallback closures — `demo.failed` schema + `demo.completed { failed>0 }`
+severity promotion + `deploy.skipped` self-loop close, Zod-at-boundary for
+`jobClaim` + `sidecarHttpAllocator`, dashboard HALTED-set unification via
+`@tanren/db`, the design-oracle silent-fallback trio (typed
+`DesignContractCorruptError` union + `DesignOracleActorConfigError` on
+null-orgId + `MalformedDesignOracleResultError` on missing hasContract
+fields), a unified `subscribeWithReconnect` helper across 4 subscribers
+(race-hardened), and read-failure-as-progress sentinel typed unions on the
+orphan reader stack. **Wave D3** landed the convergence-escalation
+always-halts rule, `retryUntilConverged` `onAttempt` hook wired into 2
+priority callers, the Vercel pager over cursor + the timeout-eradication
+lint extended to catch bare
+`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` give-up stems +
+SCREAMING_CASE loop-cap patterns (PR #750), writer progress-append
+structured logging, walker `orderKey` on stable `(created_at, spec_id)` + a
+composite `specs_project_created` index, the budget fails-closed on null-org
+path, and the `usage.accounting_failed` event + `subtaskLoop.finalize`
+demoting `passed → halted` on accounting throw. **Wave D4 (re-audit)**
+landed `DEFAULT_ROUTE_EVENTS` seeding for `demo.failed` +
+`usage.accounting_failed`, 4 typed error arms in `stageFailureKind.ts`,
+`specs` provenance columns (`parent_spec_id`, `source_finding_ids`,
+`origin_triage_task_id`, `origin_run_id`) via migration 0025, the
+`design_contracts.mode` column via migration 0026 with `(project_id, mode,
+version)` unique index threaded through all readers, triage
+`ensureFindingCoverage` synthesizing P0 for PARTIAL coverage (not just empty
+workItems), and notify-subscribe try/catch handler removal + `stop()` async
+drain. **Wave E-fix (Codex round-3)** landed demo `alreadyDemoed` →
+`alreadyTerminalDemo` including `demo.failed` in the terminal check, 4
+worker-level typed classifier arms (context-hydration + pre-row paths), the
+`notifySubscriber` reconnect wake latch, and triage newSpecs dedupe via
+provenance + partial unique index `specs_triage_provenance_unique`
+(migration 0027). **Wave F cleanups** landed the `.realjj` test flake fix,
+missing-doc pointer pages (`spec-loop-redesign.md` / `tanren-direction.md`),
+the mutation-weekly workflow unbreakage (task #17), `PgDagEventEmitter`
+fails LOUD on unresolvable project org (task #38), and the PR-F #693
+doctrine debris sweep (24 files updated + 2 files deleted). The audit
 rounds 2 and 3 (PRs #708–#718) landed the writer-seam doctrine sweep,
 designOracle mode-aware re-drive, runFinalize prober filter, priorEvents
-discipline (terminal-leak guard + idempotency keys), and the writer-seam tail
-cleanup in the same window. The drive playbook is
-`docs/operator-guide/apex-run-playbook.md`; the operator role and run rhythm
-live in `docs/operator-guide/apex.md`; the templating doctrine is
+discipline (terminal-leak guard + idempotency keys), and the writer-seam
+tail cleanup in the same window. The autonomous-loop machinery — auditor →
+triage → routing → newSpecs materialization → durable provenance-deduped
+`acceptProposals` — is complete and hardened by regression pins. The
+honest open frontier for v80 is the **fragment authoring path** (the F2
+writer→validate loop the composer spawns when a curated stack references a
+fragment the library doesn't have): every fix wave left it alone, so it is
+the live-validation vehicle for the next trial. Two smaller documented
+gaps: scaffold specs (`specialize_seed` mode) now see NO design context
+after Wave D4's migration 0026 (intentional — scaffolds specialize
+toolchain, not product identity — but the design-oracle silent-skip surface
+is widened vs pre-#756 behavior); and `loadSpecWithProject` doesn't SELECT
+the new provenance columns, so a future feature that needs them at
+read-time will require the schema+join update. The drive playbook is
+`docs/operator-guide/apex-run-playbook.md`; the operator role and run
+rhythm live in `docs/operator-guide/apex.md`; the templating doctrine is
 `docs/roadmap/templating-system.md`.
 
 ### v21 native delivery (the current doctrine)
@@ -319,17 +365,27 @@ cite); the merge-engine cutover rationale is
   ran on the previous WSL host through 2026-06-19; v47–v79 have run on the new
   NixOS host from 2026-06-23 through 2026-07-04 — each flushed real engine bugs now
   fixed on `main`; **no run has yet closed the product loop** (issue → triage → fix
-  → merge → deploy → a working product, no human in the inner loop). The v79 fix
-  (PR #734) enables triage → new-spec insertion on real out-of-scope findings — the
-  closest we've come to the issue-loop half of the apex proof firing autonomously,
-  without yet closing the loop end-to-end. That close is the open proof. To drive
-  the next run: the operator role + run rhythm + proof portfolio is
-  `docs/operator-guide/apex.md`; the **concrete drive-from-zero playbook** is
+  → merge → deploy → a working product, no human in the inner loop). The
+  v79-era product-build-loop frontier (triage → new-spec insertion PR #734,
+  writer subtask sizing PR #731, plan stall recovery PR #726, PR-enqueue timing
+  #724/#725, fragment-composer PR-A #688 → PR-G #699) has since been HARDENED
+  across three subsequent audit passes plus a cleanup wave — 34 PRs
+  (#738–#768) landed 2026-07-05 → 2026-07-07 closed every Codex-critic /
+  round-3 / RA1 / RA2 finding (Wave D1..D4 + E-fix + F). The autonomous-loop
+  machinery — auditor → triage → routing → newSpecs materialization → durable
+  provenance-deduped `acceptProposals` — is complete and hardened by
+  regression pins. The honest open frontier for v80 is the **fragment
+  authoring path** (the F2 writer→validate loop the composer spawns when a
+  curated stack references a fragment the library doesn't have): every fix
+  wave left it alone, so it is the live-validation vehicle for the next
+  trial. That close is the open proof. To drive the next run: the operator
+  role + run rhythm + proof portfolio is `docs/operator-guide/apex.md`; the
+  **concrete drive-from-zero playbook** is
   `docs/operator-guide/apex-run-playbook.md`; the **templating doctrine** (no
-  from-scratch-into-a-project; do NOT pre-create a template — the fragment-based
-  composer, PR-A #688 → PR-G #699, is the single seed path) is
-  `docs/roadmap/templating-system.md`. It spends real credits under the $50 ceiling
-  on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
+  from-scratch-into-a-project; do NOT pre-create a template — the
+  fragment-based composer, PR-A #688 → PR-G #699, is the single seed path)
+  is `docs/roadmap/templating-system.md`. It spends real credits under the
+  $50 ceiling on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
 - **v49-era infra halts (task #21) — RESOLVED, historical.** The apex-v49
   runner-INSERT retry loop
   (`duplicate key value violates unique constraint "runners_pkey"`) between the

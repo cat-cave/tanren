@@ -25,9 +25,18 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 > helper across the three writer-failed exit branches, every planner-terminal
 > site in `runSubtaskLoop` routed through the atomic writer seam, and the
 > `STABLE_CADENCE_FLOOR` prose re-framed as a streak saturation gate (parity with
-> `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2`). The doctrine stands: progress /
-> sign-of-life based; `ActivityWatchdog` is the sole running-command hang
-> detector; every terminal exit is an atomic row + event pair.
+> `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2`). **PR #750 (Wave D3, 2026-07-06)
+> extended the lint again** — the `giveUpIdentifier` regex now catches bare
+> `_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` stems and
+> SCREAMING_CASE loop-cap patterns (`MAX_PAGES`, `MAX_ROUNDS`, `TURN_LIMIT`,
+> `CYCLE_CAP`, etc.) that the prior word-boundary family scanned past when
+> the identifier omitted an `S_ATTEMPTS`-family suffix. The same PR also
+> replaced the Vercel pager `while` loop's fixed cursor-turn budget with
+> `retryUntilConverged` over the cursor — the first non-transient-retry
+> caller of the primitive. The doctrine stands: progress / sign-of-life
+> based; `ActivityWatchdog` is the sole running-command hang detector; every
+> terminal exit is an atomic row + event pair; the lint keeps ratcheting up
+> as new evasion shapes surface.
 >
 > **Disguised survivors the lint missed, found by successive apex trials +
 > critic-arc audits and since fixed:**

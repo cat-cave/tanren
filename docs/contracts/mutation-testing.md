@@ -79,7 +79,11 @@ Measured on branch `ci/scheduled-mutation-and-backend-baseline`, DB-free
 > Whole-repo (`just mutation-full`) baseline: **pending the first scheduled
 > weekly run** — the full orchestrator-wide run is too slow to complete on the
 > authoring branch. Record the first number here once `mutation-weekly` lands its
-> initial artifact.
+> initial artifact. **PR #762 (Wave F, 2026-07-06, task #17) restored the
+> `mutation-weekly.yml` workflow** by excluding `env-read-whitelist.test.ts`
+> from the Stryker sandbox (the whitelist scans the whole repo, which the
+> Stryker sandbox can't stand up) and bumping `dryRunTimeoutMinutes: 15` so
+> the whole-repo dry-run has room to complete.
 
 ## How to run
 

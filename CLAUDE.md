@@ -103,15 +103,35 @@ new NixOS host from 2026-06-23 through 2026-07-04, roughly a trial a day since
 2026-06-28 — each flushed real engine bugs now fixed on `main`. **No run has yet
 closed the full autonomous loop** (issue → triage → fix → merge → deploy → a
 working product, no human in the inner loop). The v49-era infra halts (task #21
-runner-INSERT PK race + derive synchronous-wait breaker) are gone; the frontier
-as of v79 sits inside the product-build loop itself — writer subtask sizing (PR
-#731), plan stall recovery (PR #726), template composition semantics (the
-fragment-based composer, PR-A #688 → PR-G #699), PR-enqueue timing (PR #724 +
-#725 atomic 3-write seam + orphaned-PR startup sweep), and issue-triage routing.
-The **v79 fix (PR #734) enables triage → new-spec insertion on real out-of-scope
-findings** — the closest we've come to the issue-loop half of the apex proof
-firing autonomously, without yet closing the loop end-to-end. That close is
-exactly what apex still has to prove.
+runner-INSERT PK race + derive synchronous-wait breaker) are gone. The v79
+product-build-loop frontier (writer subtask sizing #731, plan stall recovery
+#726, template composition semantics — the fragment-based composer PR-A #688 →
+PR-G #699, PR-enqueue timing #724 + the #725 atomic 3-write seam + orphaned-PR
+startup sweep, triage → new-spec insertion #734) has since been HARDENED across
+three subsequent audit passes plus a cleanup wave — 34 PRs (#738–#768) landed
+2026-07-05 → 2026-07-07 closed every Codex-critic / Codex-round-3 / RA1 / RA2
+finding: auditor prompt no-omit + `routeOne` scope-first + `ensureFindingCoverage`
+empty-workItems P0 synthesis + `acceptProposals` newSpecs materialization +
+`specs` provenance columns (`parent_spec_id`, `source_finding_ids`,
+`origin_triage_task_id`, `origin_run_id` — migration 0025) + partial unique
+index dedupe (migration 0027); design-oracle finalize guard + typed
+`DesignContractCorruptError` / `DesignOracleActorConfigError` /
+`MalformedDesignOracleResultError` returns + `design_contracts.mode` column
+(migration 0026) + org-scope requirement; `demo.failed` + `usage.accounting_failed`
+event schemas + `DEFAULT_ROUTE_EVENTS` seed + severity promotions; a unified
+`subscribeWithReconnect` helper across 4 subscribers (race-hardened); per-stage
+`task.failed` emit-on-throw with typed classifier arms
+(`MalformedAncestorStackError` + 4 worker-level typed error arms); the
+timeout-eradication lint extended to catch bare
+`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` give-up stems +
+SCREAMING_CASE loop-cap patterns (PR #750). The autonomous-loop machinery —
+auditor → triage → routing → newSpecs materialization → durable
+provenance-deduped `acceptProposals` — is complete and hardened by regression
+pins. The honest open frontier for v80: the **fragment authoring path** (the F2
+writer→validate loop the composer spawns when a curated stack references a
+fragment the library doesn't have) is the largest untouched surface — every
+fix wave left it alone, so it is the live-validation vehicle for the next apex
+trial. Closing the full loop end-to-end is what apex still has to prove.
 
 **To drive the next apex run, a fresh agent reads, in order:**
 

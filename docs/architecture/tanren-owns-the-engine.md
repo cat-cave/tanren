@@ -52,10 +52,19 @@
 > carried the frontier through v65–v79 — each halt producing a fix-on-`main` merge,
 > the v79 frontier landing triage → new-spec routing on real out-of-scope findings
 > (PR #734). The task-#21 runner-INSERT + derive synchronous-wait circuit-breaker
-> class is merged (PR #705); the current frontier lives in the product-build loop,
-> not v49-era infra hangs. The full loop has not yet closed), so a real merge
-> through the jj/`MergeAuthority` path is the open live-validation item (the engine
-> is the single path on `main` regardless).
+> class is merged (PR #705). **The v79-era product-build-loop frontier has since
+> been HARDENED across three subsequent audit passes plus a cleanup wave** — 34
+> PRs (#738–#768) landed 2026-07-05 → 2026-07-07 closed every Codex-critic /
+> round-3 / RA1 / RA2 finding, including new migrations 0025 (`specs` provenance
+> columns — `parent_spec_id`, `source_finding_ids`, `origin_triage_task_id`,
+> `origin_run_id`), 0026 (`design_contracts.mode` with `(project_id, mode,
+version)` unique index), and 0027 (partial unique index
+> `specs_triage_provenance_unique` on `(project_id, parent_spec_id,
+source_finding_ids)` for triage newSpecs dedupe). The autonomous-loop
+> machinery is complete and hardened by regression pins; the v80 frontier is
+> the fragment authoring path. The full loop has not yet closed), so a real
+> merge through the jj/`MergeAuthority` path is the open live-validation item
+> (the engine is the single path on `main` regardless).
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -346,8 +355,20 @@ recognizes Go/Python/Rust tests #729; reconcile duplicate `addEnvVar` across
 fragments #730; planner one-concern-per-subtask sizing #731; `ActivityWatchdog`
 neighbor-floor widened to 5 for agent-class execs #732; **v79** — triage routes
 out-of-scope findings to new specs #734, the issue-triage → new-spec insertion
-mechanic firing on real out-of-scope findings). The current frontier is inside
-the product-build loop, not v49-era infra hangs. The full loop has not yet
-closed. So a real merge through the live jj/`MergeAuthority` path is still the
-open validation item. The cutover itself is complete — the engine is the single
-path whether or not a given apex run reaches a merge.
+mechanic firing on real out-of-scope findings). **The v79-era frontier was then
+HARDENED (2026-07-05 → 2026-07-07)** by 34 PRs (#738–#768) that closed every
+Codex-critic / round-3 / RA1 / RA2 finding across Waves D1..D4 + E-fix + F —
+notably the v79 loop-closure end-to-end fix (auditor prompt no-omit +
+`routeOne` scope-first + `ensureFindingCoverage` + `acceptProposals` newSpecs
+materialization + `specs` provenance columns via migration 0025 + partial
+unique index dedupe via migration 0027), the design-oracle typed error union
+
+- `design_contracts.mode` column (migration 0026), the `demo.failed` +
+  `usage.accounting_failed` event schemas + severity promotions + default-route
+  seeding, a unified `subscribeWithReconnect` helper across 4 subscribers, and
+  the timeout-eradication lint extended (PR #750) to catch bare give-up stems +
+  SCREAMING_CASE loop-cap patterns. The current frontier is inside the
+  product-build loop; the v80 target is the fragment authoring path. The full
+  loop has not yet closed. So a real merge through the live jj/`MergeAuthority`
+  path is still the open validation item. The cutover itself is complete — the
+  engine is the single path whether or not a given apex run reaches a merge.
