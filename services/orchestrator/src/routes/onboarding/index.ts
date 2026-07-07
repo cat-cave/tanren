@@ -50,7 +50,13 @@ import type { DesignAgent } from "../../engine/design/designAgent.js";
 import type { MaterializeTemplate } from "../../engine/templates/fragments/materialize.js";
 import type { FragmentAuthoring, FragmentLibrary } from "../../engine/templates/index.js";
 export { buildLiveMaterializeTemplate } from "./materializeTemplate.js";
-export { buildLiveRunFragmentAuthoring, buildLiveLoadFragmentLibrary } from "./fragmentAuthoring.js";
+export {
+  buildLiveFragmentAuthoringDeps,
+  buildLiveLoadFragmentLibrary,
+  buildLiveRunFragmentAuthoring,
+  buildLiveRuntimeValiditySmokeDeps,
+  type FragmentAuthoringFlowDeps,
+} from "./fragmentAuthoring.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
