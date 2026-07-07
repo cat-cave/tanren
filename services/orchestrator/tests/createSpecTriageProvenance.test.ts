@@ -152,4 +152,25 @@ describe("createSpec — triage provenance ROUND-TRIP through INSERT INTO specs 
     );
     expect(pool.specInserts[0]!.params[11]).toEqual([]);
   });
+
+  // Codex round-3 #4 — CANONICALIZATION. The persisted `source_finding_ids`
+  // column is sorted at write time so the DB `text[]` equality (used by the
+  // re-drive dedupe SELECT + the partial unique index `specs_triage_provenance_unique`)
+  // is stable regardless of the emit-order the triage stage produced the finding
+  // ids in. A regression that drops the sort would break dedupe across re-drives.
+  it("canonicalizes sourceFindingIds by sorting before INSERT (Codex round-3 #4)", async () => {
+    const pool = newPool();
+    await createSpec(
+      pool.asPgPool(),
+      baseInput({
+        parentSpecId: "spec_parent",
+        // Unsorted — persisted sorted.
+        sourceFindingIds: ["z-finding", "a-finding", "m-finding"],
+        originTriageTaskId: "task_triage_a",
+        originRunId: "run_source_a",
+      }),
+      ACTOR,
+    );
+    expect(pool.specInserts[0]!.params[11]).toEqual(["a-finding", "m-finding", "z-finding"]);
+  });
 });
