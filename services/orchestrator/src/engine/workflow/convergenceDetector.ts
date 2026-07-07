@@ -7,8 +7,8 @@
 // failure repeating with no real change)."
 //
 // So EVERY convergence loop (the run-finalize re-drive, the base-shift / conflict
-// re-plan, the batch-gate rework, the template-build recovery, the spec-implementation
-// loop) continues UNBOUNDED while it is making PROGRESS, and escalates to a genuine
+// re-plan, the batch-gate rework, the fragment-authoring writer→validate loop, the
+// spec-implementation loop) continues UNBOUNDED while it is making PROGRESS, and escalates to a genuine
 // human-decision ONLY when it is intelligently detected to be genuinely STUCK. There is
 // NO `K`, NO `MAX_*`, NO fixed budget — anywhere. This module is the single decision the
 // scattered counters collapse into.
@@ -50,8 +50,8 @@
  *     identity; `workSignature` = the re-planned branch head;
  *   - the batch-gate rework: `failureSignature` = the failing integrated-gate tier/step;
  *     `workSignature` = the reworked head;
- *   - the template-build recovery: `failureSignature` = the stranded-spec set;
- *     `magnitude` = the count of NOT-yet-merged specs (shrinks as the build converges);
+ *   - the fragment-authoring writer→validate loop (F2): `failureSignature` = the
+ *     validator's rejection code; `workSignature` = the writer's produced fragment body hash;
  *   - the spec loop: `failureSignature` = the blocking root-cause id; `magnitude` = the
  *     total P-score (shrinks as findings are retired).
  */

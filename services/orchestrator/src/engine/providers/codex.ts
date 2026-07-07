@@ -121,7 +121,7 @@ export function createCodexWriter(dependencies: CodexWriterDependencies): Writer
           nativeApiKeyEnvFile: auth.nativeApiKeyEnvFile,
         }),
         stdin: opts.prompt,
-        // AGENT exec: codex `--json` streams telemetry continuously (every line is a sign of life → the watchdog resets), with a workspace liveness probe as the backstop for a long silent tool call. NEVER killed for elapsed time. `onWatchdogProgress` bridges every advancing tick into the #21B child-run breaker (task #24, apex v52/v53).
+        // AGENT exec: codex `--json` streams telemetry continuously (every line is a sign of life → the watchdog resets), with a workspace liveness probe as the backstop for a long silent tool call. NEVER killed for elapsed time. `onWatchdogProgress` (task #24, apex v52/v53) is the cross-layer sign-of-life bridge — every advancing tick emits `writer.subtask.progress`; composes with the substrate's `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (ssh/watchdogProgress.ts — the agent class widens to the 5-neighbor floor for Codex's think-then-stream burst pattern), which is signature identity, never elapsed time.
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,

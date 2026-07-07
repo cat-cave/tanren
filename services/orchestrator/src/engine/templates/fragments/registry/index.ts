@@ -1,13 +1,13 @@
-// THE CURATED-TEMPLATE REGISTRY (matrix-hit routing — docs/roadmap/templating-system.md
-// §FRAGMENTS / PR-C). Maps a free-form stack label (the operator's `lifecycle.stack`,
-// e.g. "ts/pnpm + React Router + Prisma + PostgreSQL on Fly.io") to a CURATED
-// `TemplateConfig` the composer (compose.ts) assembles deterministically.
+// THE CURATED-TEMPLATE REGISTRY (docs/roadmap/templating-system.md §FRAGMENTS).
+// Maps a free-form stack label (the operator's `lifecycle.stack`, e.g. "ts/pnpm +
+// React Router + Prisma + PostgreSQL on Fly.io") to a CURATED `TemplateConfig` the
+// composer (compose.ts) assembles deterministically.
 //
-// WHY: PR-A built the deterministic 9-phase composer; PR-B hardened the fragments with
-// real behavior tie-ins. PR-C is the LIVE DECISION-POINT WIRING — `selectSeedTemplate`
-// (forge/interview/interviewTemplateGate.ts) checks this registry FIRST. A hit yields a
-// `compose-from-fragments` decision (the new variant); the agent template-build path
-// (the slow research → author → build → validate loop) runs ONLY on a true miss.
+// USED BY: `selectFragmentConfig` (../selectFragmentConfig.ts) — the sole selection
+// entry point. A curated-hit short-circuits to the registered `TemplateConfig`; a
+// miss synthesizes a config from the lifecycle's stack + deploy tokens (open-world
+// — no closed enum gates it). Either way the composer runs; there is no
+// agent-fallback branch.
 //
 // CANONICALIZATION. The lookup key is the operator's free-form stack label, so two
 // cosmetically-different requests for the SAME stack must hit the same entry. We
@@ -25,7 +25,7 @@ import type { TemplateConfig } from "../types.js";
 import { CURATED_TEMPLATES } from "./curated.js";
 
 /**
- * A curated matrix-hit entry. `id` is the stable, opaque key (used in audit + tests);
+ * A curated catalog entry. `id` is the stable, opaque key (used in audit + tests);
  * `stack` is the human-readable stack label the lookup matches against (canonicalized
  * at compare time); `config` is the complete `TemplateConfig` the composer will run
  * through `composeTemplate`.
@@ -79,7 +79,7 @@ function buildIndex(): ReadonlyMap<string, CuratedTemplate> {
       const prior = out.get(key);
       throw new Error(
         `CuratedTemplate duplicate canonical stack "${key}" — "${entry.id}" collides with ` +
-          `"${prior?.id ?? "<unknown>"}". A canonical stack uniquely identifies a matrix entry.`,
+          `"${prior?.id ?? "<unknown>"}". A canonical stack uniquely identifies a curated entry.`,
       );
     }
     out.set(key, entry);
@@ -105,8 +105,8 @@ function getIndex(): ReadonlyMap<string, CuratedTemplate> {
 /**
  * Find a curated template for a free-form stack label. Canonicalizes the input + the
  * registry entries so cosmetic differences (case, whitespace, punctuation) do not
- * cause a miss. Returns `undefined` on a true miss (the caller falls through to the
- * org-registry / agent template-build path).
+ * cause a miss. Returns `undefined` on a true miss (the caller — `selectFragmentConfig` —
+ * then synthesizes a config from lifecycle tokens).
  */
 export function lookupCurated(stack: string): CuratedTemplate | undefined {
   const key = canonicalizeStack(stack);
@@ -116,8 +116,8 @@ export function lookupCurated(stack: string): CuratedTemplate | undefined {
 
 /**
  * Every curated template, in stable id order. Used by tests + observability surfaces
- * that enumerate the matrix-hit catalog (e.g. "which stacks short-circuit the agent
- * template-build?"). Stable across calls so the snapshot test is deterministic.
+ * that enumerate the curated catalog (e.g. "which stacks short-circuit lifecycle-token
+ * synthesis?"). Stable across calls so the snapshot test is deterministic.
  */
 export function listCurated(): readonly CuratedTemplate[] {
   return [...getIndex().values()].sort((a, b) => a.id.localeCompare(b.id));

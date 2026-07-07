@@ -37,7 +37,7 @@
 //                      targets; throws on an UNKNOWN target name (a writer typo).
 //   processCiYml     — fills tier-2 / tier-3 evidence declarations from the runtime's
 //                      declared test runner; throws if no runtime declared one.
-//   processReadme    — writes a minimal README naming the matrix point.
+//   processReadme    — writes a minimal README naming the composed config.
 //
 // ENFORCEMENT (the user's load-bearing constraint — fragments fill hooks, never replace
 // base scaffolding):
@@ -166,8 +166,9 @@ export async function composeTemplate(config: TemplateConfig, library: FragmentL
   // is a cross-runtime mismatch — throw BEFORE the first phase runs so the error
   // fires deterministically and never inside a partially-composed VFS. (`compose`
   // already calls `library.require` per slot, so a missing-fragment slot still
-  // throws here with its FragmentLibrary.require message — matrix-miss routing
-  // is unchanged.)
+  // throws here with its FragmentLibrary.require message — a missing fragment
+  // upstream of composition is handled by `selectFragmentConfig`, which spawns
+  // the per-fragment authoring DAG (F2) before compose is ever called.)
   const plannedFragments = compose(config).map((ref) => library.require(ref.id));
   assertDependsOnRuntimeMatchesConfig(plannedFragments, library, runtimeFragmentId(config.runtime));
 
@@ -381,7 +382,7 @@ function mergeContracts(applied: readonly Fragment[]): FragmentContract {
   return merged;
 }
 
-/** Minimal README naming the matrix point. */
+/** Minimal README naming the composed config. */
 function processReadme(vfs: VirtualFileSystem, config: TemplateConfig): void {
   const lines: string[] = [
     `# ${config.slug}`,

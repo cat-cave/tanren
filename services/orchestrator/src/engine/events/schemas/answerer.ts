@@ -176,7 +176,7 @@ export const WriterSubtaskFailedPayload = z
   })
   .strict();
 
-// writer.subtask.progress — task #24 (apex v52/v53) cross-layer sign-of-life bridge. SSH ActivityWatchdog emits on every tick the WORK SIGNATURE advances; the #21B child-run breaker counts this as worker progress (allowlist `writer.%`). Composes with `MIN_NON_ADVANCING_NEIGHBOR_REPEATS=2` (substrate-internal streak floor) — fix at two layers.
+// writer.subtask.progress — task #24 (apex v52/v53) cross-layer sign-of-life bridge. SSH ActivityWatchdog emits on every tick the WORK SIGNATURE advances so any parent progress reader observes a durable per-tick advancement signal. Composes with the substrate-internal `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (ssh/watchdogProgress.ts) — the watchdog tolerates a brief mid-IO-burst signature plateau (`pnpm install`) via the streak floor, and the bridged event lets any parent reader see the writer as still advancing across ticks.
 export const WriterSubtaskProgressPayload = z
   .object({
     runId: z.string(),

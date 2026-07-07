@@ -93,7 +93,7 @@ export function createClaudeWriter(dependencies: ClaudeWriterDependencies): Writ
           anthropicBaseUrl: auth.anthropicBaseUrl,
         }),
         stdin: opts.prompt,
-        // AGENT exec (claude `stream-json`): output-driven + workspace liveness probe; never a time kill. `onWatchdogProgress` bridges advancing ticks into the #21B child-run breaker (task #24).
+        // AGENT exec (claude `stream-json`): output-driven + workspace liveness probe; never a time kill. `onWatchdogProgress` (task #24) is the cross-layer sign-of-life bridge — every advancing tick emits `writer.subtask.progress`; composes with the substrate's `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (ssh/watchdogProgress.ts), which is signature identity, never elapsed time.
         watchdog: buildActivityWatchdog({
           substrate: dependencies.ssh,
           target: dependencies.target,

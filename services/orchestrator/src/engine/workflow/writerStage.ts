@@ -22,9 +22,9 @@ import type { StageAppendEvent } from "./subtaskStages.js";
 // Structured log seam for the watchdog-progress bridge (Codex critic #1). The
 // `onWatchdogProgress` callback fires-and-forgets `writer.subtask.progress`; a
 // silent swallow of an appendEvent rejection makes the cross-layer sign-of-life
-// bridge invisibly broken (the #21B breaker reads the writer as no-longer-
-// signaling while the actual work signature is still advancing). Route the
-// catch through this logger so an operator investigating "why did the watchdog
+// bridge invisibly broken (any parent progress reader reads the writer as
+// no-longer-signaling while the actual work signature is still advancing). Route
+// the catch through this logger so an operator investigating "why did the watchdog
 // fire on a spec that was making progress" finds durable evidence of the
 // transport failure, keyed by run/task/subtask.
 const watchdogProgressLog = createLogger("writer-watchdog-progress");
@@ -133,24 +133,26 @@ async function runWriterStageBody(args: WriterStageInput): Promise<WriterStageOu
     baseSha: args.baseSha,
     // CROSS-LAYER sign-of-life bridge (task #24, apex v52/v53). On every probe
     // tick the SSH ActivityWatchdog reads the work signature as advancing, emit a
-    // `writer.subtask.progress` row — the #21B child-run progress breaker's
-    // allowlist includes `writer.%` so this keeps the breaker streak alive on a
-    // legitimately slow writer turn whose work signature briefly plateaus mid-
-    // IO-burst (a `pnpm install` window). Fire-and-forget `void` because
-    // `onProgress` is synchronous (the substrate already catches any throw, but
-    // we double-defend here — a rejected appendEvent must not bubble back into
-    // the watchdog tick).
+    // `writer.subtask.progress` row — a durable per-tick advancement signal any
+    // parent progress reader can observe. Composes with the substrate-internal
+    // `MIN_NON_ADVANCING_NEIGHBOR_REPEATS_*` streak floor (ssh/watchdogProgress.ts)
+    // so a legitimately slow writer whose work signature briefly plateaus mid-
+    // IO-burst (a `pnpm install` window) does not trip a spurious wedge. Fire-
+    // and-forget `void` because `onProgress` is synchronous (the substrate
+    // already catches any throw, but we double-defend here — a rejected
+    // appendEvent must not bubble back into the watchdog tick).
     //
     // Codex critic #1: the append is fire-and-forget, but its rejection is NOT
     // silent. The prior empty `.catch(() => {})` made a broken control-plane
-    // writer invisible — the #21B breaker then reads the writer as no-longer-
-    // signaling while the actual work signature is still advancing, so the
-    // watchdog fires on a run that WAS making progress with zero durable
-    // evidence for the operator. Route through `watchdogProgressLog.warn` so
-    // one structured JSON line (level=warn → console.error) carries the
-    // run/task/subtask lineage + the underlying error, on an entirely different
-    // path from `appendEvent` (the log stream, not the event transport). Still
-    // never re-throws — the watchdog callback contract stands.
+    // writer invisible — any parent progress reader would then observe the
+    // writer as no-longer-signaling while the actual work signature is still
+    // advancing, so the watchdog fires on a run that WAS making progress with
+    // zero durable evidence for the operator. Route through
+    // `watchdogProgressLog.warn` so one structured JSON line (level=warn →
+    // console.error) carries the run/task/subtask lineage + the underlying
+    // error, on an entirely different path from `appendEvent` (the log stream,
+    // not the event transport). Still never re-throws — the watchdog callback
+    // contract stands.
     onWatchdogProgress: (signal) => {
       void args
         .appendEvent(

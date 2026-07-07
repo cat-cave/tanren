@@ -1,10 +1,8 @@
 import { z } from "zod";
 
-// Templating events (docs/roadmap/templating-system.md). The wave-1 template
-// REGISTRY lifecycle + the wave-4 just-in-time creation + the wave-5 maintenance
-// vocabularies are GONE with the doctrine collapse — there is no template
-// registry, no agent template-build DAG, no template-maintenance scheduler. What
-// remains here is the per-fragment authoring run (F2) lifecycle:
+// Templating events (docs/roadmap/templating-system.md). The fragment-authoring
+// lifecycle is what remains: a missing fragment spawns the per-fragment authoring
+// DAG (F2), which emits these events.
 //
 //   • fragment.authoring.started   — an authoring run for ONE missing fragment began
 //   • fragment.authoring.succeeded — the writer's body validated + persisted
