@@ -19,12 +19,24 @@
 import { loadFragmentLibrary as loadBundledLibrary } from "./library/index.js";
 import { FragmentContractSchema, type FragmentContractShape } from "../../repositories/fragments.js";
 import {
+  assertOnlyVfsStatements,
+  extractApplyBody,
+  findMatchingClose,
+  FragmentBodyParseError,
+} from "./fragmentBodyWalker.js";
+import {
   type Fragment,
   FragmentKind,
   type FragmentLibrary,
   type TemplateConfig,
   type VirtualFileSystem,
 } from "./types.js";
+
+// Re-export the parser-error class so existing consumers (index.ts +
+// downstream tests / adapters) keep importing it from unifiedLibrary. The
+// balanced-brace walker owns the class internally so it can throw it without
+// a circular import.
+export { FragmentBodyParseError };
 
 /** A serialized org-scoped fragment as it lives in the `fragments` table — pure
  * data, no executable. The unified library loader turns this into a real
@@ -130,13 +142,6 @@ export type FragmentOp =
   | { kind: "env"; key: string; example: string }
   | { kind: "just"; target: string; lines: string[] };
 
-export class FragmentBodyParseError extends Error {
-  constructor(message: string) {
-    super(`FragmentBody parse error: ${message}`);
-    this.name = "FragmentBodyParseError";
-  }
-}
-
 const STRING_LITERAL_PATTERN = /^"((?:[^"\\]|\\.)*)"$|^`((?:[^`\\]|\\.)*)`$/u;
 
 function parseStringLiteral(token: string): string {
@@ -223,42 +228,32 @@ function splitArgs(rawArgs: string): string[] {
 
 const CALL_PATTERN = /^vfs\.([a-zA-Z]+)\s*\(([\s\S]*)\)\s*;?$/u;
 
+// NOTE: `extractApplyBody`, `findMatchingClose`, and `assertOnlyVfsStatements`
+// used to live here. They are now in `fragmentBodyWalker.ts` so this module
+// stays under the 500-line file cap. See that file's header for the balanced-
+// brace / non-vfs-statement rejection rationale.
+
 /** Parse a fragment body's `apply()` block into the constrained-subset `FragmentOp`
  * list. Exported so the fragment-authoring smoke validator can derive implicit
  * runtime dependencies from the ops (audit finding #11). Throws
  * `FragmentBodyParseError` on any unsupported call shape. */
 export function parseFragmentBody(bodyTs: string): FragmentOp[] {
-  // The body MUST declare a recognizable `apply(...)` block — a body without one
-  // is not a fragment module (rejects free-form strings the writer produced
-  // outside the constrained subset). The signature may carry a return-type
-  // annotation (e.g. `: Promise<void>`); the regex tolerates anything between
-  // `)` and the opening `{`.
-  const applyMatch = /apply\s*\([^)]*\)[^{]*\{([\s\S]*?)\}\s*,?\s*\}?\s*;?\s*(?:export\s+default)?[\s\S]*$/u.exec(
-    bodyTs,
-  );
-  if (applyMatch === null) {
-    throw new FragmentBodyParseError(
-      "body does not declare an `apply(vfs, config)` block. The body MUST default-export a Fragment " +
-        "whose apply signature is `async apply(vfs: VirtualFileSystem, _config: TemplateConfig): Promise<void> { … }`. " +
-        "Example:\n" +
-        "```\n" +
-        "export const fragment: Fragment = {\n" +
-        '  id: "addon-example", version: "1.0.0", kind: "addon", contract: {},\n' +
-        "  async apply(vfs, _config) {\n" +
-        '    vfs.write("docs/example.md", "hello\\n");\n' +
-        "  },\n" +
-        "};\n" +
-        "export default fragment;\n" +
-        "```",
-    );
-  }
-  const body = applyMatch[1] ?? "";
-  // Strip block + line comments before splitting on statements.
+  // 1) Extract the body between the `apply()` block's outermost braces via a
+  //    balanced-brace walker — nested `{}` inside string / template / comment
+  //    literals do NOT truncate the body (fix for Claude HIGH #1).
+  const body = extractApplyBody(bodyTs);
+  // 2) Reject non-vfs statements up-front so the persisted TS source and the
+  //    interpreted ops list can never disagree (fix for Codex #6). Comments and
+  //    blank lines are allowed; anything else halts with a writer-facing
+  //    rejection that names the offending prefix.
+  assertOnlyVfsStatements(body);
+  // 3) Walk the body a second time, collecting each `vfs.<method>(…)` call.
+  //    `assertOnlyVfsStatements` has already proven every top-level unit is
+  //    either a comment, whitespace, or a vfs call — so this loop's only job
+  //    is to slice each call and hand it to `toOp`. Comment-stripping keeps
+  //    the CALL_PATTERN regex simple.
   const stripped = body.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
-  // Split on `vfs.` boundary so multi-line template literals stay intact.
   const ops: FragmentOp[] = [];
-  // A simple state machine: accumulate from the start of each `vfs.…(` until the
-  // matching `)`, respecting nested parens + string literals.
   let i = 0;
   while (i < stripped.length) {
     const next = stripped.indexOf("vfs.", i);
@@ -267,28 +262,15 @@ export function parseFragmentBody(bodyTs: string): FragmentOp[] {
     while (end < stripped.length && stripped[end] !== "(") end += 1;
     if (end >= stripped.length) break;
     const openParen = end;
-    let depth = 1;
-    let cursor = openParen + 1;
-    let inStr: '"' | "`" | undefined;
-    while (cursor < stripped.length && depth > 0) {
-      const ch = stripped[cursor];
-      if (inStr === undefined) {
-        if (ch === '"' || ch === "`") inStr = ch;
-        else if (ch === "(") depth += 1;
-        else if (ch === ")") depth -= 1;
-      } else if (ch === inStr) {
-        inStr = undefined;
-      }
-      cursor += 1;
-    }
-    const stmt = stripped.slice(next, cursor);
-    const m = CALL_PATTERN.exec(stmt);
-    if (m !== null) {
-      const method = m[1]!;
-      const args = splitArgs(m[2]!);
+    const closeParen = findMatchingClose(stripped, openParen, "apply() body has unbalanced parens in a vfs.* call");
+    const stmt = stripped.slice(next, closeParen + 1);
+    const cm = CALL_PATTERN.exec(stmt);
+    if (cm !== null) {
+      const method = cm[1]!;
+      const args = splitArgs(cm[2]!);
       ops.push(toOp(method, args));
     }
-    i = cursor;
+    i = closeParen + 1;
   }
   return ops;
 }
