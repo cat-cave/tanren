@@ -164,6 +164,7 @@ describe("createEnvironment — build→validate→publish + the fail-closed gat
     const { pool } = fakePool();
     const released: string[] = [];
     const allocator: Allocator = {
+      taxonomy: "fixed_pool" as const,
       async allocate(req): Promise<RunnerAllocation> {
         return new FakeAllocator().allocate(req);
       },

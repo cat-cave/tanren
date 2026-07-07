@@ -27,6 +27,7 @@ import { githubCredentialRef, WorkerPool } from "./helpers/workerPool.js";
 class EmptyClaimPool extends WorkerPool {}
 
 const noopAllocator: Allocator = {
+  taxonomy: "fixed_pool" as const,
   async allocate() {
     throw new Error("not used — the queue is always empty");
   },

@@ -182,6 +182,7 @@ describe("HetznerAllocator — readiness convergence inner contract", () => {
 // on a wrapper class. Acceptable here: the conformance suite owns the seam.
 function unwrapHetzner(allocator: Allocator): Allocator {
   return {
+    taxonomy: allocator.taxonomy,
     async allocate(request) {
       try {
         return await allocator.allocate(request);

@@ -1,11 +1,26 @@
 import { z } from "zod";
+import type { AllocatorTaxonomy } from "../contracts/allocator.js";
+
+// Re-exported so existing `import { AllocatorTaxonomy } from "./poolPolicy"` /
+// barrel imports keep working — the canonical definition lives in
+// `contracts/allocator.ts` (the taxonomy is a contract concept, not tied to a
+// specific implementation registry).
+export type { AllocatorTaxonomy } from "../contracts/allocator.js";
 
 /**
- * Allocator kinds the selector understands. `static` / `sidecar` are the
- * existing dev/prod allocators; `manual_ssh` / `hetzner` / `digitalocean` /
- * `gcp` / `aws_ec2` / `kubernetes` are all real cloud implementations. Stored in
- * project config (JSONB) and/or supplied via env — no schema migration is
- * required because we reuse the existing `projects.config` column.
+ * Allocator kinds the selector understands. The catalog conflated three distinct
+ * concerns; {@link AllocatorTaxonomy} names them explicitly:
+ *
+ *   - `static`, `manual_ssh`         → FIXED-POOL   (lease a long-lived host; no
+ *                                       provision, no destroy — the operator owns
+ *                                       lifecycle out of band).
+ *   - `sidecar`                      → DELEGATED    (orchestrator itself does not
+ *                                       provision; the sidecar service does).
+ *   - `hetzner`, `digitalocean`,     → PROVISIONING (create + destroy real cloud
+ *     `gcp`, `aws_ec2`, `kubernetes`   resources on every allocate / release).
+ *
+ * Stored in project config (JSONB) and/or supplied via env — no schema migration
+ * is required because we reuse the existing `projects.config` column.
  */
 export const AllocatorKind = z.enum([
   "static",
@@ -18,6 +33,38 @@ export const AllocatorKind = z.enum([
   "kubernetes",
 ]);
 export type AllocatorKind = z.infer<typeof AllocatorKind>;
+
+/**
+ * The taxonomy class of a given allocator kind. This is the KIND-level lookup
+ * (used by boot wiring that reads {@link resolveBootedAllocatorKind} rather
+ * than holding an `Allocator` instance). Instance-level consumers should read
+ * the `taxonomy` field on the `Allocator` interface — the two must agree, and
+ * a conformance test asserts they do.
+ *
+ * The switch is EXHAUSTIVE over {@link AllocatorKind}: a new kind forces a
+ * classification decision here, never a silent default that treats a new cloud
+ * allocator as a fixed-pool host (which would defeat both the orphan sweeper
+ * gate and the run-workspace reaper gate).
+ */
+export function allocatorTaxonomyFor(kind: AllocatorKind): AllocatorTaxonomy {
+  switch (kind) {
+    case "static":
+    case "manual_ssh":
+      return "fixed_pool";
+    case "sidecar":
+      return "delegated";
+    case "hetzner":
+    case "digitalocean":
+    case "gcp":
+    case "aws_ec2":
+    case "kubernetes":
+      return "provisioning";
+    default: {
+      const exhaustive: never = kind;
+      throw new Error(`allocatorTaxonomyFor: unhandled allocator kind ${String(exhaustive)}`);
+    }
+  }
+}
 
 /**
  * Pool policy for a given allocator kind. Caps how many runners may be in

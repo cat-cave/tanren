@@ -167,6 +167,7 @@ describeLive(
 
 /** A single pre-provisioned SSH host as an `Allocator` — TEST FIXTURE for the gated test. */
 class SingleHostAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   constructor(private readonly target: RunnerHandle) {}
 
   async allocate(request: AllocationRequest): Promise<RunnerAllocation> {

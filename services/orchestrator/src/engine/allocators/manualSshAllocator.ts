@@ -4,6 +4,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -89,6 +90,10 @@ export interface ManualSshAllocatorOptions {
  * double-booking a machine.
  */
 export class ManualSshAllocator implements Allocator {
+  // FIXED-POOL: pre-provisioned, operator-managed hosts. `allocate()` leases one;
+  // `release()` frees the lease + clears the mirror row. The hosts are never
+  // created or destroyed by the allocator.
+  readonly taxonomy: AllocatorTaxonomy = "fixed_pool";
   private readonly hosts: ReadonlyArray<ManualSshHost>;
   /** runnerId -> hostId, so release frees the right host. */
   private readonly leases = new Map<string, string>();

@@ -7,7 +7,7 @@
 // fake, the static/manual allocators, and every cloud allocator driven by its
 // injected mock client. Track C §2 of docs/architecture/portability-and-longevity.md.
 import { describe, expect, it } from "vitest";
-import type { AllocationRequest, Allocator } from "../../src/engine/contracts/allocator.js";
+import type { AllocationRequest, Allocator, AllocatorTaxonomy } from "../../src/engine/contracts/allocator.js";
 import { asSshRunnerHandle } from "../../src/engine/contracts/allocator.js";
 
 /**
@@ -21,6 +21,13 @@ export interface AllocatorConformanceHarness {
   make(): Allocator;
   /** A well-formed allocation request for `runId`. */
   request(runId: string): AllocationRequest;
+  /**
+   * The taxonomy every fresh allocator from `make()` must declare. Documented
+   * per impl in the conformance driver so a new allocator cannot land without
+   * classifying itself (Codex H3 #14/#15/#16). The check is contract-level —
+   * it asserts the field the interface promises consumers can read.
+   */
+  expectedTaxonomy: AllocatorTaxonomy;
 }
 
 /**
@@ -83,6 +90,16 @@ function expectWellFormedAllocation(
  */
 export function describeAllocatorConformance(label: string, harness: AllocatorConformanceHarness): void {
   describe(`Allocator conformance: ${label}`, () => {
+    it("declares the expected taxonomy (provisioning / fixed_pool / delegated / routed)", () => {
+      const allocator = harness.make();
+      // The taxonomy is a contract-level capability field, not a runtime probe:
+      // consumers that reason about lifecycle (does release destroy?) read it
+      // directly. A mismatch here means the impl misclassifies itself — the
+      // orphan sweeper + run-workspace reaper would then wire against a wrong
+      // long-lived vs ephemeral assumption.
+      expect(allocator.taxonomy).toBe(harness.expectedTaxonomy);
+    });
+
     it("allocate() returns a well-formed RunnerAllocation", async () => {
       const allocator = harness.make();
       const request = harness.request("conf_alloc_1");

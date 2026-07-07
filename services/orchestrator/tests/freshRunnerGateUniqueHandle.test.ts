@@ -43,6 +43,7 @@ const TARGET: RunnerHandle = {
  * exactly like the live `runners_pkey` constraint.
  */
 class PkeyEnforcingAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   readonly allocatedIds: string[] = [];
   readonly releases: string[] = [];
   /** The persisted runner rows (pre-seeded with the ORIGINAL run's retained row). */

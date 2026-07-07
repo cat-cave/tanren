@@ -4,6 +4,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
   type SshRunnerHandle,
@@ -61,6 +62,9 @@ export interface StaticRunnerAllocatorOptions {
  * the orchestrator cannot rely on a baked-in fingerprint.
  */
 export class StaticRunnerAllocator implements Allocator {
+  // FIXED-POOL: the dev-compose static runner is a single long-lived container;
+  // `release()` only clears the mirror row (the container survives across runs).
+  readonly taxonomy: AllocatorTaxonomy = "fixed_pool";
   private readonly clientFactory: () => Pick<Client, "connect" | "destroy" | "end" | "once" | "on">;
 
   constructor(private readonly options: StaticRunnerAllocatorOptions) {

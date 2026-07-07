@@ -57,6 +57,7 @@ const TARGET = sshRunnerHandle({
 
 /** Allocate succeeds; release behavior is injected (resolve = clean, reject = a real leak). */
 class ScriptedAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   readonly releasedRunnerIds: string[] = [];
   constructor(private readonly releaseImpl: (runnerId: string) => Promise<void>) {}
 
@@ -175,6 +176,7 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
     // scope with NO ambient org id.
     let capturedOrgId: string | undefined;
     const orgCapturingAllocator: Allocator = {
+      taxonomy: "fixed_pool" as const,
       async allocate(request: AllocationRequest): Promise<RunnerAllocation> {
         return {
           runnerId: `runner_${request.runId}`,

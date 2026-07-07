@@ -21,6 +21,7 @@ export function unwrapCauseAllocator<E extends abstract new (...args: never[]) =
   errorClass: E,
 ): Allocator {
   return {
+    taxonomy: allocator.taxonomy,
     async allocate(request) {
       try {
         return await allocator.allocate(request);

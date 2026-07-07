@@ -312,6 +312,7 @@ export async function enqueuePlanJob(
 }
 
 export class RecordingAllocator implements Allocator {
+  readonly taxonomy = "fixed_pool" as const;
   async allocate(_request: AllocationRequest): Promise<RunnerAllocation> {
     return { runnerId: "runner_hard", imageSha: "sha256:hard", target };
   }

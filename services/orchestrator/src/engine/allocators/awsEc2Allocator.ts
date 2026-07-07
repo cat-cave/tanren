@@ -3,6 +3,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -98,6 +99,9 @@ export interface AwsEc2AllocatorOptions {
  * known host key into the AMI / user-data.
  */
 export class AwsEc2Allocator implements Allocator {
+  // PROVISIONING: allocate() launches a fresh EC2 instance; release()
+  // terminates it.
+  readonly taxonomy: AllocatorTaxonomy = "provisioning";
   private readonly client: AwsEc2Client;
   private readonly sleep: (ms: number) => Promise<void>;
   /** runnerId -> EC2 instance id, so release can terminate the right instance. */

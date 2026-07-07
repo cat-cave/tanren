@@ -3,6 +3,7 @@ import {
   sshRunnerHandle,
   type AllocationRequest,
   type Allocator,
+  type AllocatorTaxonomy,
   type ReleaseReason,
   type RunnerAllocation,
 } from "../contracts/allocator.js";
@@ -112,6 +113,9 @@ export interface GcpAllocatorOptions {
  * bake a known host key into the image / startup script.
  */
 export class GcpAllocator implements Allocator {
+  // PROVISIONING: allocate() creates a fresh Compute Engine instance;
+  // release() deletes it.
+  readonly taxonomy: AllocatorTaxonomy = "provisioning";
   private readonly client: GcpComputeClient;
   private readonly sleep: (ms: number) => Promise<void>;
   /** runnerId -> GCE instance name, so release can delete the right instance. */
