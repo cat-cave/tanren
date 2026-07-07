@@ -18,8 +18,14 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { LiveJjWorkspace } from "../src/engine/providers/liveJjWorkspace.js";
+
+// This suite spawns real `jj` + real `git` subprocesses per case. Under the 48-thread
+// vitest pool the subprocess contention races the default 5s per-test timeout even
+// though each op completes fine in isolation — silent flake in `just fast-check` /
+// pre-push. Raise the ceiling for this file so the suite stays a reliable gate. Task #25.
+vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 import type { SecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { JjWorkspaceVcsCore } from "../src/engine/providers/jjWorkspaceVcsCore.js";
