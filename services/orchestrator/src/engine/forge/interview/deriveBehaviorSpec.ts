@@ -34,6 +34,12 @@ export {
 // already imports from this module and is at its max-imports cap).
 export { assertJitAvailableForToolchain } from "../../environments/creation/index.js";
 
+// fix/f2-prompt-hardening: the F2 writer-prompt product-context builder
+// (deriveProductContext.ts). Re-exported through this same behavior-derive module
+// so `derive.ts` reaches it without a separate module dependency (derive.ts is
+// already at its max-imports cap).
+export { buildProductContextFromCapture } from "./deriveProductContext.js";
+
 // FINDING #1 + task #79: the autonomous greenfield config. When the operator opts
 // into `auto`/`simulated`, the project is created ATOMICALLY with EVERY knob
 // autonomous operation requires — no second governance PUT, no operator race-window.

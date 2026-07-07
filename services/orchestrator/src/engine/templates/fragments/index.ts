@@ -66,9 +66,9 @@ export {
   type SelectFragmentConfigResult,
   UnresolvableLifecycleError,
 } from "./selectFragmentConfig.js";
+export { deriveImplicitDependsOn } from "./implicitDependsOn.js";
 export {
   buildFragmentAuthoring,
-  deriveImplicitDependsOn,
   FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX,
   type FragmentAuthoring,
   type FragmentAuthoringAttemptDecision,
@@ -82,6 +82,14 @@ export {
   type FragmentPersistence,
   truncateBodyPreview,
 } from "./fragmentAuthoringRun.js";
+export { type PriorFragment, type ProductContext } from "./fragmentAuthoringContextTypes.js";
+export {
+  EXEMPLAR_MAX_CHARS,
+  exemplarFor,
+  FRAGMENT_EXEMPLARS,
+  type FragmentExemplar,
+  truncateExemplar,
+} from "./fragmentAuthorerExemplars.js";
 export {
   deriveRuntimeLanguage,
   SUPPORTED_RUNTIME_LANGUAGES,
@@ -104,7 +112,11 @@ export {
   isCandidateTestPath,
   SCENARIO_HEADER,
 } from "./functionalTestRecognizer.js";
-export { buildFragmentAuthorerPrompt, wrapProviderFragmentAuthorer } from "./providerFragmentAuthorer.js";
+export {
+  buildFragmentAuthorerPrompt,
+  FRAGMENT_AUTHORER_PROMPT_MAX_CHARS,
+  wrapProviderFragmentAuthorer,
+} from "./providerFragmentAuthorer.js";
 export {
   assertComposedCiYmlParsesAsCiConfigV1,
   assertPnpmInstallIsNonInteractive,
