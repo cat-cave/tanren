@@ -49,15 +49,18 @@ function recordingEvents(): { events: FragmentAuthoringEvents; calls: unknown[] 
 }
 
 function inMemoryPersistence(): { persistence: FragmentPersistence; created: unknown[]; validated: string[] } {
+  // The in-memory persistence mirrors `FragmentsStore.createValidated`: a single
+  // atomic call inserts the fragment as VALIDATED. Both `created` + `validated`
+  // are populated by the one call — kept as separate lists so existing tests
+  // asserting on either surface still work post-atomic refactor (task #150).
   const created: unknown[] = [];
   const validated: string[] = [];
   const persistence: FragmentPersistence = {
-    async create(input) {
+    async createValidated(input) {
       created.push(input);
-      return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
-    },
-    async markValidated(fragmentId) {
+      const fragmentId = `${input.orgId}:${input.spec.id}:1.0.0`;
       validated.push(fragmentId);
+      return { fragmentId };
     },
   };
   return { persistence, created, validated };

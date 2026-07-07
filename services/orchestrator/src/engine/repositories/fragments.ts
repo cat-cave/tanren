@@ -178,4 +178,34 @@ export const FragmentsStore = {
     }
     return mapRow(row);
   },
+
+  /** ATOMIC insert-as-validated (audit finding H2 — task #150). Inserts the
+   * row with `status='validated'` + `validated_at=now()` in ONE query. Under
+   * `runWithOrgScope` (which opens a transaction) the row is either fully
+   * validated + visible to the unified loader OR nothing at all — no orphaned
+   * draft the loader would silently ignore. Preferred over the two-step
+   * `create` + `markValidated` pattern for the F2 authoring pipeline. */
+  async createValidated(client: QueryClient, input: RegisterFragmentInput, _actor: ActorRef): Promise<FragmentRow> {
+    const id = fragmentId(input.orgId, input.kind, input.label, input.version);
+    const result = await client.query<RawFragmentRow>(
+      `INSERT INTO fragments (fragment_id, org_id, kind, label, version, body_ts, contract, depends_on, status, validated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, 'validated', now())
+         RETURNING ${COLUMNS}`,
+      [
+        id,
+        input.orgId,
+        input.kind,
+        input.label,
+        input.version,
+        input.bodyTs,
+        JSON.stringify(input.contract),
+        JSON.stringify(input.dependsOn ?? []),
+      ],
+    );
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new Error(`FragmentsStore.createValidated: insert returned no row for ${id}`);
+    }
+    return mapRow(row);
+  },
 };

@@ -9,25 +9,22 @@
 // `FragmentAuthorer` seam iterates on a body; each VALIDATE rejection feeds back
 // as `previousAttempt`; UNBOUNDED while making progress, halts at a FIXED POINT
 // — no iteration cap, per the timeout-eradication doctrine) → VALIDATE (parse
-// body via `interpretOrgFragment`, run a smoke composition; pass ⇒ persist).
-// On fixed-point failure `failedIds` lets `resolveFragmentConfig` halt loud
-// with `FragmentAuthoringFailedError` — NEVER silent-skip.
+// body via `interpretOrgFragment`, run BOTH the isolated + full-library smoke
+// compositions; pass ⇒ persist as validated ATOMICALLY). On fixed-point failure
+// `failedIds` lets `resolveFragmentConfig` halt loud with
+// `FragmentAuthoringFailedError` — NEVER silent-skip.
 
 import type { ActorContext } from "../../../auth/schemas.js";
-import { composeTemplate } from "./compose.js";
-import {
-  BASE_FRAGMENT_ID,
-  loadFragmentLibrary,
-  RUNTIME_NODE_PNPM_ID,
-  RUNTIME_RUBY_BUNDLER_ID,
-} from "./library/index.js";
+import { canonicalizeBodySignature } from "./canonicalizeBody.js";
+import { loadFragmentLibrary, RUNTIME_NODE_PNPM_ID, RUNTIME_RUBY_BUNDLER_ID } from "./library/index.js";
 import { deriveRuntimeLanguage, unsupportedRuntimeLanguageReason } from "./runtimeLanguage.js";
 import {
-  assertComposedCiYmlParsesAsCiConfigV1,
-  assertPnpmInstallIsNonInteractive,
-  assertScaffoldBootstrapsFromFreshCheckout,
-} from "./runtimeValidation.js";
-import { type Fragment, type FragmentLibrary, type TemplateConfig, type VirtualFileSystem } from "./types.js";
+  runFullLibrarySmokeComposition,
+  runSmokeComposition,
+  type SmokeFailed,
+  type SmokeOk,
+} from "./smokeComposition.js";
+import { type Fragment, type FragmentLibrary } from "./types.js";
 import type { FragmentSpec } from "./selectFragmentConfig.js";
 import {
   type FragmentOp,
@@ -94,20 +91,22 @@ export interface FragmentAuthorerOutput {
  * test seam. */
 export type FragmentAuthorer = (input: FragmentAuthorerInput) => Promise<FragmentAuthorerOutput>;
 
-/** The persistence seam — production wires this to `FragmentsStore.create` under
- * an org-scoped `QueryClient`. Tests inject an in-memory map.
+/** The persistence seam — production wires this to `FragmentsStore.createValidated`
+ * under an org-scoped `QueryClient`. Tests inject an in-memory map.
  *
- * `markValidated` is called AFTER the smoke composition passes; the `create`
- * inserts as `status: "draft"`, then `markValidated` flips it. */
+ * ATOMIC by contract (audit finding H2 — task #150): the single `createValidated`
+ * call inserts the row with `status='validated'` + `validated_at=now()` in ONE
+ * transaction. A throw between the previous two-step insert-as-draft +
+ * markValidated pattern could leave an orphaned draft row that the loader
+ * silently ignored; this seam eliminates that race by construction. */
 export interface FragmentPersistence {
-  create(input: {
+  createValidated(input: {
     orgId: string;
     spec: FragmentSpec;
     bodyTs: string;
     contract: FragmentSpec["requiredContract"];
     dependsOn: readonly string[];
   }): Promise<{ fragmentId: string }>;
-  markValidated(fragmentId: string): Promise<void>;
 }
 
 /** The event-stream seam — wire to the durable event store so authoring runs are
@@ -197,8 +196,13 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
 
   // UNBOUNDED writer-rework loop while the writer is making PROGRESS (the body or
   // the rejection signature keeps changing). The loop stops ONLY at a FIXED POINT
-  // (identical body + identical rejection — no new information). NO iteration cap
+  // (canonical body + identical rejection — no new information). NO iteration cap
   // (the timeout-eradication doctrine: a structural fixed-point is the bound).
+  //
+  // FIXED-POINT SIGNATURE (audit finding H1): the body is canonicalized before
+  // hashing so whitespace/comment-only changes do NOT count as progress. See
+  // `canonicalizeBody.ts` — structural (parsed ops) when parseable, lexical
+  // fallback otherwise.
   let attempt = 0;
   let previousAttempt: { bodyTs: string; rejection: string } | undefined;
   let lastSignature: string | undefined;
@@ -234,23 +238,25 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
         contract: spec.requiredContract,
         dependsOn,
       };
-      const persisted = await deps.persistence.create({
+      // ATOMIC persist (audit finding H2 — task #150). Single call, single
+      // transaction — the row lands as `status='validated'` or nothing at all.
+      // A throw here rolls back; the next attempt sees no orphaned draft.
+      await deps.persistence.createValidated({
         orgId,
         spec,
         bodyTs,
         contract: spec.requiredContract,
         dependsOn,
       });
-      await deps.persistence.markValidated(persisted.fragmentId);
       await deps.events.emit({ kind: "fragment.authoring.succeeded", orgId, fragmentId: spec.id, attempts: attempt });
       return { kind: "ok", source };
     }
 
     lastRejection = validation.reason;
-    const signature = `${hashish(bodyTs)}:${lastRejection}`;
+    const signature = `${canonicalizeBodySignature(bodyTs)}:${lastRejection}`;
     if (signature === lastSignature) {
-      // FIXED POINT — identical body + identical rejection. Stop, the writer is
-      // not making progress. Doctrine: a fixed point is NOT a transient.
+      // FIXED POINT — canonical body + identical rejection ⇒ no new information.
+      // Doctrine: a fixed point is NOT a transient.
       break;
     }
     lastSignature = signature;
@@ -269,26 +275,14 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
 
 // ── Validation pipeline ─────────────────────────────────────────────────────
 
-interface ValidationOk {
-  kind: "ok";
-  /** The fragment-id dependsOn list the smoke composition required. */
-  dependsOn: readonly string[];
-}
-interface ValidationFailed {
-  kind: "failed";
-  reason: string;
-}
-
 /** Parse + smoke-compose the authored body. A pass proves: the body's structure
- * is the constrained subset; `interpretOrgFragment` builds a real Fragment; that
- * Fragment composes with the bundled library at its declared phase slot. The
- * persisted `dependsOn` is DERIVED from the parsed ops (audit finding #11) so a
- * fragment that uses node-pnpm-only ops without declaring the runtime dep is
- * caught here rather than silently dropping deps in a later compose. */
-async function validateFragmentBody(args: {
-  spec: FragmentSpec;
-  bodyTs: string;
-}): Promise<ValidationOk | ValidationFailed> {
+ * is the constrained subset; `interpretOrgFragment` builds a real Fragment;
+ * that Fragment composes with the bundled library BOTH in isolation AND in the
+ * full-library kitchen-sink (audit finding H5). The persisted `dependsOn` is
+ * DERIVED from the parsed ops (audit finding #11) so a fragment that uses
+ * node-pnpm-only ops without declaring the runtime dep is caught here rather
+ * than silently dropping deps in a later compose. */
+async function validateFragmentBody(args: { spec: FragmentSpec; bodyTs: string }): Promise<SmokeOk | SmokeFailed> {
   // 1) Parse — rejects bodies that step outside the constrained subset. We pull
   // ops separately to derive the implicit dependsOn (audit finding #11) and to
   // build the smoke Fragment with the correct dependsOn so the cross-runtime
@@ -335,8 +329,22 @@ async function validateFragmentBody(args: {
     return { kind: "failed", reason };
   }
 
-  // 4) Smoke-compose — assemble the minimal config that exercises this fragment.
-  return runSmokeComposition(args.spec, fragment, derivedDependsOn);
+  // 4) Smoke-compose in isolation — the minimal config that exercises THIS
+  // fragment. Post-compose runtime validators (ci.yml schema, fresh-checkout
+  // bootstrap, pnpm non-interactive) run here.
+  const isolated = await runSmokeComposition(args.spec, fragment, derivedDependsOn);
+  if (isolated.kind !== "ok") return isolated;
+
+  // 5) Full-library smoke — the kitchen-sink config that composes the authored
+  // fragment alongside every bundled fragment compatible with the runtime.
+  // Catches the "isolated-fine but composes-with-conflict" class (audit
+  // finding H5 — task #150) that the minimal smoke can't see because it only
+  // wires the authored slot: file collisions, dep-version conflicts, justfile
+  // clashes when the operator's real project uses the full bundled set.
+  const full = await runFullLibrarySmokeComposition(args.spec, fragment, derivedDependsOn);
+  if (full.kind !== "ok") return full;
+
+  return { kind: "ok", dependsOn: derivedDependsOn };
 }
 
 /** Derive the implicit `dependsOn` list from the parsed ops (audit findings #11
@@ -401,94 +409,6 @@ function lineHasNodeToolingToken(line: string): boolean {
 function lineHasRubyToolingToken(line: string): boolean {
   const code = stripJustfileComment(line);
   return /(?:^|[\s|;&"'`(])(?:bundle|gem|ruby)(?=$|[\s|;&"'`)])/u.test(code);
-}
-
-async function runSmokeComposition(
-  spec: FragmentSpec,
-  fragment: Fragment,
-  derivedDependsOn: readonly string[],
-): Promise<ValidationOk | ValidationFailed> {
-  const library = loadFragmentLibrary();
-  if (library.has(fragment.id)) {
-    library.replaceForTests(fragment);
-  } else {
-    library.register(fragment);
-  }
-  const config: TemplateConfig = configForSmoke(spec, fragment);
-  let vfs: VirtualFileSystem;
-  try {
-    vfs = await composeTemplate(config, library);
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `smoke compose failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-
-  // POST-COMPOSE RUNTIME VALIDATORS (audit finding #12). The same checks the
-  // static matrix + isolation harnesses run — lifted to the runtime module so
-  // the live smoke pipeline catches the same v62 (malformed `.tanren/ci.yml`),
-  // v63 (frozen-install on fresh checkout — justfile OR Dockerfile), and v71/
-  // v78 (pnpm install without a non-interactive signal — task #141) halt
-  // classes. A failing validator rejects the fragment with the specific reason
-  // so the writer's next rework iteration sees it.
-  const validators: readonly {
-    readonly label: string;
-    readonly assert: (label: string, vfs: VirtualFileSystem) => void;
-  }[] = [
-    { label: "ci.yml schema", assert: assertComposedCiYmlParsesAsCiConfigV1 },
-    { label: "fresh-checkout bootstrap", assert: assertScaffoldBootstrapsFromFreshCheckout },
-    { label: "pnpm non-interactive", assert: assertPnpmInstallIsNonInteractive },
-  ];
-  for (const { label, assert } of validators) {
-    try {
-      assert(spec.id, vfs);
-    } catch (err) {
-      return {
-        kind: "failed",
-        reason: `runtime validator (${label}) rejected: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
-  }
-
-  return { kind: "ok", dependsOn: derivedDependsOn };
-}
-
-function configForSmoke(spec: FragmentSpec, fragment: Fragment): TemplateConfig {
-  // Default to node-pnpm runtime + none deploy. Adjust if the candidate is a
-  // runtime fragment (use its own label) or a ruby-dependent fragment.
-  const isRubyDependent =
-    fragment.id.startsWith("runtime-ruby") || (fragment.dependsOn ?? []).some((id) => id.startsWith("runtime-ruby"));
-  const runtime = spec.kind === "runtime" ? spec.label : isRubyDependent ? "ruby-bundler" : "node-pnpm";
-  const deploy = spec.kind === "deploy" ? spec.label : "none";
-
-  const config: TemplateConfig = {
-    slug: `smoke-${spec.id}`,
-    runtime,
-    deploy,
-    addons: [],
-    examples: [],
-  };
-  if (spec.kind === "frontend") config.frontend = spec.label;
-  if (spec.kind === "backend") config.backend = spec.label;
-  if (spec.kind === "db") config.db = spec.label;
-  if (spec.kind === "auth") config.auth = spec.label;
-  if (spec.kind === "addon") config.addons = [spec.label];
-  if (spec.kind === "example") config.examples = [spec.label];
-  // The base + runtime + deploy slots reference the library; nothing else to wire.
-  // BASE_FRAGMENT_ID is always required — assert presence.
-  void BASE_FRAGMENT_ID;
-  return config;
-}
-
-// Tiny stable hash for convergence-signature comparison. Not cryptographic —
-// just enough to detect "the writer produced an identical body".
-function hashish(s: string): string {
-  let h = 0;
-  for (let i = 0; i < s.length; i += 1) {
-    h = Math.trunc(h * 31 + (s.codePointAt(i) ?? 0));
-  }
-  return h.toString(16);
 }
 
 // NOTE: the in-memory deterministic fragment authorer is a TEST-FIXTURES path.
