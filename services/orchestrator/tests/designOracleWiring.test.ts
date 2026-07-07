@@ -75,7 +75,9 @@ class DesignOraclePool extends FakePool {
     if (trimmed.includes("FROM design_contracts")) {
       if (!this.hasContract) return { rows: [], rowCount: 0 };
       const contract = webContract();
-      const requestedMode = typeof params[1] === "string" ? String(params[1]) : "from_scratch";
+      // H2 BLOCKING (unify): the store keys the head on `project_id = $1`
+      // alone — one head per project (migration 0028 dropped mode).
+      void params;
       return {
         rows: [
           {
@@ -83,7 +85,6 @@ class DesignOraclePool extends FakePool {
             org_id: ORG,
             project_id: "project_test",
             version: 2,
-            mode: requestedMode,
             domain: contract.domain,
             contract,
           },

@@ -111,20 +111,20 @@ class FakeGraphClient {
       const pid = String(params[0]);
       return rows(this.seed.behaviors.filter((b) => b.personaId === pid).map((b) => this.behaviorRow(b)));
     }
-    // DesignContractStore.create INSERT — the store now passes `mode` as $4
-    // and shifts domain/contract to $5/$6 (Codex RA1: mode dimension added).
+    // DesignContractStore.create INSERT — post-H2-unify (migration 0028):
+    // the store keys the head on `(project_id, version)` alone. Params are
+    // id ($1), org_id ($2), project_id ($3), domain ($4), contract ($5).
     if (text.includes("INSERT INTO design_contracts")) {
       const version = this.inserted.length + 1;
-      this.inserted.push({ domain: String(params[4]), contract: JSON.parse(String(params[5])), version });
+      this.inserted.push({ domain: String(params[3]), contract: JSON.parse(String(params[4])), version });
       return rows([
         {
           id: `design_${version}`,
           org_id: params[1],
           project_id: params[2],
           version,
-          mode: params[3],
-          domain: params[4],
-          contract: JSON.parse(String(params[5])),
+          domain: params[3],
+          contract: JSON.parse(String(params[4])),
         },
       ]);
     }

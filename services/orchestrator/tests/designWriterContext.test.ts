@@ -13,7 +13,11 @@
 //       default); an `unscopedPlatform` scope likewise yields no block;
 //   (e) MALFORMED ⇒ LOUD: a malformed persisted contract throws (the store re-parse);
 //   (f) DANGLING REF ⇒ LOUD: an unresolved persona/behavior ref throws (parity with the
-//       design oracle's `resolvePersonas`/`resolveBehaviors` — never a silent drop).
+//       design oracle's `resolvePersonas`/`resolveBehaviors` — never a silent drop);
+//   (g) H2 BLOCKING (unify): the writer-context reads the SINGLE per-project head —
+//       a scaffold/build/deploy spec (which under the old broken code silently got
+//       `{ kind: absent }` from a per-mode lookup that never had a matching row)
+//       now loads the project's shared product contract.
 
 import { describe, expect, it } from "vitest";
 import { parseDesignContract, type DesignContractV1 } from "../src/engine/design/designContract.js";
@@ -65,16 +69,15 @@ class FakeDesignClient {
     const id = typeof params[0] === "string" ? params[0] : "";
     if (text.includes("FROM design_contracts")) {
       if (this.seed.contract === undefined) return rows([]);
-      // Post-Codex-RA1: the store SELECT filters on `mode = $2`. The requested
-      // mode is echoed back on the row so a mode-aware caller sees its own head.
-      const requestedMode = typeof params[1] === "string" ? params[1] : "from_scratch";
+      // H2 BLOCKING (unify): the store SELECT keys on `project_id = $1` only —
+      // one contract per project, shared across every spec type (migration
+      // 0028 dropped the broken per-mode key).
       return rows([
         {
           id: "design_1",
           org_id: ORG,
           project_id: PROJECT,
           version: 1,
-          mode: requestedMode,
           domain: this.seed.contract.domain,
           contract: this.seed.contract,
         },
@@ -251,47 +254,99 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
     expect(block).toBeUndefined();
   });
 
-  // Codex RA1 — the writer-context threads the spec's mode into the store's
-  // head lookup. Prove both:
-  //   (i) the requested mode is passed to the store (the fake echoes $2 back
-  //       onto the row's `mode` column);
-  //   (ii) two loads with different modes each read a mode-specific head.
-  it("Codex RA1: threads the spec mode into the head lookup (per-mode head)", async () => {
-    // The fake echoes the requested mode back onto the returned row. If the
-    // caller passes no mode, the writer-context falls back to DEFAULT_SPEC_MODE
-    // (`from_scratch`) — the same default the DB column carries.
-    const modeSeenByStore: string[] = [];
+  // H2 BLOCKING (unify) — pins the fix's core promise: the SAME contract, written
+  // ONCE at derive under `from_scratch` mode, is now visible to a scaffold /
+  // build / deploy spec's writer (which runs under `specialize_seed`). Under the
+  // pre-fix code the store SELECT filtered `mode = 'specialize_seed'` and found
+  // no row → `{ kind: 'absent' }` → the writer got NO design block, exactly the
+  // silent no-op the H2 audit flagged. Post-fix: one head per project, every
+  // spec type reads it.
+  it("H2: a scaffold spec (specialize_seed) reads the SAME project head the derive wrote (was silent no-op)", async () => {
+    const contract = parseDesignContract({
+      version: 1,
+      domain: "saas-web",
+      identity: "the neatlink workspace",
+      intent: "link shortening with zero ceremony",
+      personaRefs: ["persona_operator"],
+      behaviorRefs: [],
+      dimensions: [],
+    });
+    // A store where the ONLY persisted row was written at derive (as the code
+    // path used to do at DEFAULT_SPEC_MODE = "from_scratch"). Post-fix the store
+    // doesn't care about mode: it returns the project's single head to whichever
+    // caller asks. The fake refuses to serve a row if the SQL WHERE clause
+    // includes any mode filter — proving the H2 collapse in the store SQL.
+    const scaffoldClient = {
+      async query(text: string, params: unknown[] = []): Promise<FakeResult> {
+        if (text.includes("FROM design_contracts")) {
+          // The pre-fix SQL was `WHERE project_id = $1 AND mode = $2`. Post-H2
+          // it is `WHERE project_id = $1`. Guard the collapse in the SQL text
+          // AND the bound-param shape (one param, the project id).
+          expect(text).not.toContain("mode");
+          expect(params).toEqual([PROJECT]);
+          return rows([
+            {
+              id: "design_derive",
+              org_id: ORG,
+              project_id: PROJECT,
+              version: 1,
+              domain: contract.domain,
+              contract,
+            },
+          ]);
+        }
+        return new FakeDesignClient({ contract, personas, behaviors: [] }).query(text, params);
+      },
+    };
+    const block = await loadDesignContextBlock({
+      client: scaffoldClient,
+      orgScope: { kind: "org", orgId: ORG },
+      projectId: PROJECT,
+    });
+    // The block IS defined — the scaffold spec now gets its product identity.
+    // (Pre-fix this was `undefined` and the writer got NO design context —
+    // exactly the H2 finding.)
+    expect(block).toBeDefined();
+    expect(block).toContain("Design identity: the neatlink workspace");
+    expect(block).toContain("Operator");
+  });
+
+  // H2 BLOCKING (unify) — the writer-context load surface itself. Prove the
+  // store SELECT does NOT include a mode filter and only binds the project id.
+  it("H2: loads the project head for ANY spec type (scaffold/build/deploy included)", async () => {
+    const capturedParams: unknown[][] = [];
     const spyFakeClient = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async query(text: string, params: unknown[] = []): Promise<any> {
         if (text.includes("FROM design_contracts")) {
-          modeSeenByStore.push(String(params[1]));
+          capturedParams.push([...params]);
+          // The SELECT must NOT include a mode filter — one head per project.
+          expect(text).not.toContain("mode");
           return rows([
             {
               id: "design_1",
               org_id: ORG,
               project_id: PROJECT,
               version: 1,
-              mode: String(params[1]),
               domain: saasContract.domain,
               contract: saasContract,
             },
           ]);
         }
-        // Persona/behavior reads route through the pre-existing fake shape.
         return new FakeDesignClient({ contract: saasContract, personas, behaviors }).query(text, params);
       },
     };
-    // Default (no specMode) ⇒ from_scratch reaches the store.
-    await loadDesignContextBlock({ client: spyFakeClient, orgScope: { kind: "org", orgId: ORG }, projectId: PROJECT });
-    // Explicit specialize_seed reaches the store.
-    await loadDesignContextBlock({
+    // The load produces the same block regardless of the downstream spec's mode
+    // — the contract is PRODUCT-scoped, shared across every spec type.
+    const block = await loadDesignContextBlock({
       client: spyFakeClient,
       orgScope: { kind: "org", orgId: ORG },
       projectId: PROJECT,
-      specMode: "specialize_seed",
     });
-    expect(modeSeenByStore).toEqual(["from_scratch", "specialize_seed"]);
+    expect(block).toBeDefined();
+    expect(block).toContain("Design domain: saas-web");
+    // Only one bound param — the project id.
+    expect(capturedParams).toEqual([[PROJECT]]);
   });
 
   it("THROWS LOUD on a dangling persona ref (parity with the design oracle — no silent drop)", async () => {
@@ -340,7 +395,6 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
               org_id: ORG,
               project_id: PROJECT,
               version: 1,
-              mode: "from_scratch",
               domain: "saas-web",
               contract: { version: 1, domain: "saas-web", identity: "x" },
             },
@@ -375,7 +429,6 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
         orgId: ORG,
         projectId: PROJECT,
         version: 1,
-        mode: "from_scratch",
         domain: saasContract.domain,
         contract: saasContract,
       },
