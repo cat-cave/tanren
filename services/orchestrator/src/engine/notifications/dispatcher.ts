@@ -57,15 +57,10 @@ export interface DispatcherDeps {
   // Receives the event and returns a URL or undefined.
   urlFor?: (event: TypedEvent, context: EventContext) => string | undefined;
   // Code-level DEFAULT ROUTE (the "never silently drop a fail-severity event"
-  // guarantee). When an event's effective severity meets `minSeverity`
-  // (default `warn`) and NO per-org `notification_routes` row matched it, the
-  // dispatcher delivers to this fallback channel/destination so a genuine
-  // escalation — most importantly `dag.spec.needs_attention` — still reaches a
-  // human even on an org that never configured a route. Per-org routes that DO
-  // match always take precedence (and augment, not replace) the default — the
-  // default fires ONLY when the matrix found nothing. When this is absent and a
-  // fail-severity event matched no route, the dispatcher emits a LOUD log
-  // (never a silent drop) so the gap is visible.
+  // guarantee). Delivers to a fallback channel when NO per-org route matched;
+  // per-org routes always take precedence. When absent, a fail-severity event
+  // with no route emits a LOUD log AND a durable `undelivered_no_route` ledger
+  // row (Codex H3 #19) — never a silent drop.
   defaultRoute?: DefaultRoute;
 }
 
@@ -222,22 +217,21 @@ export class NotificationDispatcher {
   }
 
   /**
-   * No configured route matched this event. The "never silently drop a genuine
-   * escalation" guarantee: if the event's effective severity meets the default
-   * route's floor (default `warn`) we deliver to the code-level default channel
-   * when one is configured; otherwise — a fail-severity event with no route at
-   * all — we emit a LOUD log (never a silent drop). A routine sub-floor event
-   * (info/ok lifecycle) returns quietly: that is the no-spam contract, not a
-   * dropped escalation.
+   * No configured route matched this event. Never silently drop a genuine
+   * escalation: if the event's effective severity meets the default route's
+   * floor (default `warn`) we deliver to the code-level default channel when
+   * one is configured; otherwise we emit a LOUD log AND persist a durable
+   * `undelivered_no_route` row in the notifications ledger (Codex H3 Surface 6
+   * #19) so the operator sees the missing-route escalation on the deliveries
+   * API. A routine sub-floor event returns quietly (no-spam contract).
    */
   private async handleNoMatch(event: TypedEvent, context: EventContext, severity: Severity): Promise<void> {
     const floor = this.defaultRoute?.minSeverity ?? "warn";
     if (!severityMeetsFloor(severity, floor)) return;
 
     if (this.defaultRoute === undefined) {
-      // A genuine escalation that reaches NO human because the org configured no
-      // route AND no code-level default is wired. This is the loud failure the
-      // no-silent-fallback rule demands — surfaced, never swallowed.
+      // Two surfaces so the operator cannot miss it: LOUD log for stderr /
+      // observability + a durable `undelivered_no_route` row (Codex H3 #19).
       this.log("error", "no notification route configured for a fail-severity event", {
         eventName: event.eventType,
         severity,
@@ -245,6 +239,25 @@ export class NotificationDispatcher {
         specId: context.specId ?? null,
         runId: context.runId ?? null,
       });
+      if (context.orgId !== null) {
+        await this.recordDispatch({
+          orgId: context.orgId,
+          channel: "no_route",
+          payload: {
+            eventName: event.eventType,
+            severity,
+            reason: "no_route",
+            layering: "no_route",
+            specId: context.specId ?? null,
+            runId: context.runId ?? null,
+            projectId: context.projectId ?? null,
+            title: `[${severity.toUpperCase()}] ${event.eventType}`,
+          },
+          status: "undelivered_no_route",
+          attempts: 0,
+          sentAt: null,
+        });
+      }
       return;
     }
 
@@ -396,14 +409,9 @@ export class NotificationDispatcher {
 }
 
 // effectiveSeverityFor: the registry's default-severity map is the base
-// rate; a few payload shapes carry per-instance severity hints we honor:
-//   - run.completed with outcome containing "fail" promotes to warn.
-//   - release.finalized with `cleanedUp=false` promotes (leaked runner).
-//   - demo.completed with `failed > 0` promotes (info → warn) so a demo whose
-//     behaviors failed on a verified deploy clears the default-route floor.
-// This keeps the matrix actionable without proliferating event names.
-// (checker.verdict / auditor.verdict are FINDINGS-ONLY now — no `passed`
-// flag — so they carry no per-instance promotion; they take the base rate.)
+// rate; a few payload shapes carry per-instance severity hints (run.completed
+// outcome "fail", release.finalized cleanedUp=false, demo.completed failed>0)
+// so the matrix is actionable without proliferating event names.
 export function effectiveSeverityFor(event: TypedEvent): Severity {
   const base = defaultSeverityFor(event.eventType);
   if (event.eventType === "run.completed") {
@@ -412,21 +420,16 @@ export function effectiveSeverityFor(event: TypedEvent): Severity {
       return promote(base);
     }
   }
-  // Security-baseline cleanup-proof: a clean release is info; a FAILED teardown
-  // (`cleanedUp=false`, residual resources to reconcile) promotes one tier so a
-  // leaked runner reaches the operator.
+  // A FAILED teardown (residual resources to reconcile) promotes one tier so
+  // a leaked runner reaches the operator.
   if (event.eventType === "release.finalized") {
     const payload = event.payload as { cleanedUp?: boolean };
     if (payload.cleanedUp === false) {
       return promote(base);
     }
   }
-  // demos-as-evidence signal: an all-passing demo (`failed === 0`) stays `info`
-  // (routine ok summary — no matrix spam). A demo where ANY behavior failed
-  // (`failed > 0`) is the apex "deploy verified but the planted issue makes
-  // behaviors fail" signal — the one an operator most needs to see — so it
-  // promotes one tier (info → warn), clearing the default-route floor without a
-  // per-event route configured.
+  // demos-as-evidence: a demo where any behavior failed promotes (info → warn)
+  // so the "deploy verified but planted issue" signal clears the default floor.
   if (event.eventType === "demo.completed") {
     const payload = event.payload as { failed?: number };
     if (typeof payload.failed === "number" && payload.failed > 0) {

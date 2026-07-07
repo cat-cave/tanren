@@ -122,9 +122,12 @@ export class NotificationMemoryClient {
         filterValues.includes("sent") ||
         filterValues.includes("failed") ||
         filterValues.includes("stubbed") ||
-        filterValues.includes("skipped");
+        filterValues.includes("skipped") ||
+        filterValues.includes("undelivered_no_route");
       if (hasStatusFilter && !filterValues.includes(String(dispatch.status))) continue;
-      const eventFilter = filterValues.find((value) => !["sent", "failed", "stubbed", "skipped"].includes(value));
+      const eventFilter = filterValues.find(
+        (value) => !["sent", "failed", "stubbed", "skipped", "undelivered_no_route"].includes(value),
+      );
       if (eventFilter !== undefined && payload.eventName !== eventFilter) continue;
       rows.push({
         id: dispatch.id,

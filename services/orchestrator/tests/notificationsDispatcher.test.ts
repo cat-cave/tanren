@@ -336,7 +336,12 @@ describe("NotificationDispatcher", () => {
     expect(body).toContain("happy intent");
   });
 
-  it("skips entirely when the org has no targets configured", async () => {
+  it("persists a durable no_route record when a fail-severity event finds no target AND no default route (Codex H3 #19)", async () => {
+    // With NO configured target/route AND NO code-level default route, a
+    // fail-severity event (`run.failed`) is now written to the notifications
+    // ledger as `undelivered_no_route` so the operator can observe the missing
+    // route on the deliveries API. Previously this silently no-op'd — the
+    // Codex H3 Surface 6 #19 fix upgraded it to a durable escalation record.
     const client = new NotificationMemoryClient();
     const ntfy = new CapturingChannel("ntfy");
     const dispatcher = new NotificationDispatcher({
@@ -347,6 +352,27 @@ describe("NotificationDispatcher", () => {
     await dispatcher.onEvent(
       { eventType: "run.failed", payload: { status: "failed", message: "x" } },
       { orgId: "org_1", actorUserId: null },
+    );
+    expect(ntfy.calls).toHaveLength(0);
+    expect(client.dispatches).toHaveLength(1);
+    expect(client.dispatches[0]?.status).toBe("undelivered_no_route");
+    expect(client.dispatches[0]?.channel).toBe("no_route");
+  });
+
+  it("does not persist a no_route record for sub-floor lifecycle events (no-spam contract)", async () => {
+    // A routine `task.started` (info) with no matrix match returns quietly — no
+    // durable record, no log line. That is the no-spam contract, not a
+    // dropped escalation.
+    const client = new NotificationMemoryClient();
+    const ntfy = new CapturingChannel("ntfy");
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry({ ntfy }),
+      now: () => new Date("2026-01-05T12:00:00Z"),
+    });
+    await dispatcher.onEvent(
+      { eventType: "task.started", payload: { taskKind: "plan" } },
+      { orgId: "org_1", actorUserId: null, runId: "run_1" },
     );
     expect(ntfy.calls).toHaveLength(0);
     expect(client.dispatches).toHaveLength(0);

@@ -205,7 +205,7 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // reaches a human only because notifications key off the every-event channel.
   // Its own LISTEN connection so it never contends with the other notify pumps.
   const notificationNotifyListener = new PgNotifyListener(deps.pool);
-  const dispatcher = buildNotificationDispatcher({
+  const { dispatcher } = buildNotificationDispatcher({
     pool: deps.pool,
     secrets: deps.secrets,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),

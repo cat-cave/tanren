@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import type { ChannelKind } from "../src/engine/notifications/index.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createNotificationRoutes } from "../src/routes/notifications/index.js";
 import { NotificationMemoryClient } from "./helpers/notificationMemoryClient.js";
@@ -19,7 +20,7 @@ const actor: ActorContext = {
   source: "session",
 };
 
-function harness(who: ActorContext | undefined = actor) {
+function harness(who: ActorContext | undefined = actor, wiredChannelKinds?: ReadonlySet<ChannelKind>) {
   const pool = new NotificationMemoryClient();
   const app = new Hono<ActorContextEnv>();
   app.use(
@@ -35,7 +36,13 @@ function harness(who: ActorContext | undefined = actor) {
       localDevActor: who,
     }),
   );
-  app.route("/orgs", createNotificationRoutes({ pool: pool as never }));
+  app.route(
+    "/orgs",
+    createNotificationRoutes({
+      pool: pool as never,
+      ...(wiredChannelKinds !== undefined && { wiredChannelKinds }),
+    }),
+  );
   return { app, pool };
 }
 
@@ -298,5 +305,55 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     const { app } = harness();
     const res = await app.request("/orgs/org_intruder/notifications/matrix");
     expect(res.status).toBe(403);
+  });
+
+  // Codex H3 Surface 6 #18: ban stub-in-prod routing. When the boot supplies
+  // the wired-channel set to the route-write endpoint, a POST that names a
+  // target whose channelKind is NOT wired must be rejected — otherwise the
+  // route would silently drop fail-severity escalations via a StubChannel
+  // no-op publish.
+  it("rejects a route to an unwired channel when wiredChannelKinds is provided", async () => {
+    // ntfy is the only wired kind in this harness. Create a target on `teams`
+    // (unwired) and attempt to route to it.
+    const { app, pool } = harness(actor, new Set(["ntfy"] as const));
+    pool.targets.set("notif_target_teams", {
+      id: "notif_target_teams",
+      org_id: "org_acme",
+      scope: "org",
+      user_id: null,
+      channel_kind: "teams",
+      destination: "teams-dest",
+      label: "teams",
+      enabled: 1,
+      weekend_mute: 0,
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+    const res = await app.request("/orgs/org_acme/notifications/routes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ targetId: "notif_target_teams", eventName: "run.failed" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; channelKind: string };
+    expect(body.error).toBe("channel_not_wired");
+    expect(body.channelKind).toBe("teams");
+  });
+
+  it("accepts a route to a wired channel when wiredChannelKinds is provided", async () => {
+    const { app } = harness(actor, new Set(["ntfy"] as const));
+    const target = (await (
+      await app.request("/orgs/org_acme/notifications/targets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channelKind: "ntfy", destination: "https://ntfy.sh/x", label: "x" }),
+      })
+    ).json()) as { id: string };
+    const res = await app.request("/orgs/org_acme/notifications/routes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ targetId: target.id, eventName: "run.failed", minSeverity: "fail" }),
+    });
+    expect(res.status).toBe(201);
   });
 });

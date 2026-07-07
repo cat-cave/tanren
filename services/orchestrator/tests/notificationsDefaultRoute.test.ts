@@ -112,7 +112,7 @@ describe("NotificationDispatcher default route", () => {
     }
   });
 
-  it("LOUD-logs (never silently drops) a fail-severity event when no route AND no default route", async () => {
+  it("LOUD-logs AND persists a durable no_route record when no route AND no default route (Codex H3 #19)", async () => {
     const client = new NotificationMemoryClient();
     const ntfy = new CapturingChannel("ntfy");
     const logs: Array<{ level: string; message: string }> = [];
@@ -140,11 +140,44 @@ describe("NotificationDispatcher default route", () => {
     );
 
     // Nothing delivered (no route, no default) — but it was NOT silent.
+    // Two surfaces: the LOUD log AND a durable `undelivered_no_route` row so a
+    // later operator sees the missing-route escalation on the deliveries API.
     expect(ntfy.calls).toHaveLength(0);
-    expect(client.dispatches).toHaveLength(0);
     const loud = logs.find((l) => l.message.includes("no notification route configured for a fail-severity event"));
     expect(loud).toBeDefined();
     expect(loud?.level).toBe("error");
+    // Codex H3 #19: durable record persisted to the notifications ledger.
+    expect(client.dispatches).toHaveLength(1);
+    expect(client.dispatches[0]?.status).toBe("undelivered_no_route");
+    expect(client.dispatches[0]?.channel).toBe("no_route");
+    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
+    const noRoutePayload = client.dispatches[0]?.payload as {
+      eventName: string;
+      severity: string;
+      reason: string;
+      specId: string | null;
+    };
+    expect(noRoutePayload.eventName).toBe("dag.spec.needs_attention");
+    expect(noRoutePayload.severity).toBe("fail");
+    expect(noRoutePayload.reason).toBe("no_route");
+    expect(noRoutePayload.specId).toBe("spec_1");
+  });
+
+  it("does NOT persist a no_route record for sub-floor events (no-spam contract)", async () => {
+    const client = new NotificationMemoryClient();
+    const ntfy = new CapturingChannel("ntfy");
+    const dispatcher = new NotificationDispatcher({
+      query: client as unknown as pg.Pool,
+      channels: baseRegistry(ntfy),
+      now: () => new Date("2026-01-05T12:00:00Z"),
+    });
+    // `task.started` is `info` — below the default warn floor.
+    await dispatcher.onEvent(
+      { eventType: "task.started", payload: { taskKind: "plan" } },
+      { orgId: "org_1", actorUserId: null, runId: "run_1" },
+    );
+    expect(ntfy.calls).toHaveLength(0);
+    expect(client.dispatches).toHaveLength(0);
   });
 
   it("routes deploy.verified (live-URL-up milestone) via the default channel BY DEFAULT", async () => {
@@ -212,10 +245,11 @@ describe("NotificationDispatcher default route", () => {
     expect(client.dispatches[0]?.status).toBe("sent");
   });
 
-  it("LOUD-logs a budget milestone when no route AND no default channel (never a silent drop)", async () => {
-    // The doctrine: a REQUIRED-but-missing channel must fail loud. A budget milestone
-    // on an org with NO configured route AND no code-level default emits a LOUD log
-    // rather than silently swallowing the heads-up.
+  it("LOUD-logs + persists a durable no_route record for a budget milestone with no route AND no default", async () => {
+    // The doctrine (Codex H3 #19): a REQUIRED-but-missing channel must fail
+    // loud on TWO surfaces — the LOUD log (immediate signal) AND a durable
+    // `undelivered_no_route` row in the notifications ledger (so a later
+    // operator sees the missing-route escalation on the deliveries API).
     const client = new NotificationMemoryClient();
     const ntfy = new CapturingChannel("ntfy");
     const logs: Array<{ level: string; message: string }> = [];
@@ -236,10 +270,14 @@ describe("NotificationDispatcher default route", () => {
     );
 
     expect(ntfy.calls).toHaveLength(0);
-    expect(client.dispatches).toHaveLength(0);
     const loud = logs.find((l) => l.message.includes("no notification route configured for a fail-severity event"));
     expect(loud).toBeDefined();
     expect(loud?.level).toBe("error");
+    // Durable record (Codex H3 #19).
+    expect(client.dispatches).toHaveLength(1);
+    expect(client.dispatches[0]?.status).toBe("undelivered_no_route");
+    expect(client.dispatches[0]?.channel).toBe("no_route");
+    expect(client.dispatches[0]?.tenant_id).toBe("org_1");
   });
 
   it("does NOT route a routine low-severity event via the default (no spam)", async () => {

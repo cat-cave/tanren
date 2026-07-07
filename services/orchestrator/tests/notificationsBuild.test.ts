@@ -7,6 +7,7 @@
 import type pg from "pg";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildNotificationDispatcher } from "../src/engine/notifications/build.js";
+import { ChannelKind } from "../src/engine/notifications/schemas.js";
 import type { SecretStore } from "../src/engine/contracts/index.js";
 
 const fakeSecrets = {} as unknown as SecretStore;
@@ -27,8 +28,8 @@ describe("buildNotificationDispatcher", () => {
 
   it("builds a dispatcher with no default route when the env is unset", () => {
     clearDefaultEnv();
-    const dispatcher = buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets });
-    expect(dispatcher).toBeDefined();
+    const built = buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets });
+    expect(built.dispatcher).toBeDefined();
   });
 
   it("LOUD-throws when the secret store dep is missing (channels could only stub)", () => {
@@ -50,5 +51,16 @@ describe("buildNotificationDispatcher", () => {
     expect(() => buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets })).toThrow(
       /not a known channel kind/u,
     );
+  });
+
+  it("returns every ChannelKind as wired (Codex H3 #17: boot-time missing-dep guard is satisfied)", () => {
+    // With `secrets` present, every credential-resolving channel wires; ntfy
+    // is always wired via its env-default base URL. The wired set therefore
+    // equals ChannelKind.options — the route-write endpoint uses it to reject
+    // creating a route to an unwired kind (Codex H3 #18).
+    const built = buildNotificationDispatcher({ pool: fakePool, secrets: fakeSecrets });
+    for (const kind of ChannelKind.options) {
+      expect(built.wiredChannelKinds.has(kind)).toBe(true);
+    }
   });
 });

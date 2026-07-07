@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelRegistry, type ChannelRegistryDeps } from "../src/engine/notifications/registry.js";
+import {
+  buildChannelRegistry,
+  ChannelNotConfiguredError,
+  wiredChannelKinds,
+  type ChannelRegistryDeps,
+} from "../src/engine/notifications/registry.js";
 import { ChannelKind } from "../src/engine/notifications/index.js";
 import type { SecretStore } from "../src/engine/contracts/secretStore.js";
 
@@ -85,5 +90,57 @@ describe("buildChannelRegistry", () => {
       expect(registry[kind].kind).toBe(kind);
       expect(registry[kind].wired).toBe(false);
     }
+  });
+
+  // Codex H3 Surface 6 #17: the boot-time missing-dep guard. When any REQUIRED
+  // channel is missing its dep, `buildChannelRegistry` throws a typed
+  // `ChannelNotConfiguredError` at boot rather than silently substituting a
+  // StubChannel whose no-op publish would drop the fail-severity escalation.
+  it("throws ChannelNotConfiguredError when a required channel is missing its dep", () => {
+    expect(() => buildChannelRegistry({}, { requiredChannels: new Set<ChannelKind>(["slack"]) })).toThrow(
+      ChannelNotConfiguredError,
+    );
+  });
+
+  it("names the unwired kind on the ChannelNotConfiguredError instance", () => {
+    let caught: unknown;
+    try {
+      buildChannelRegistry({}, { requiredChannels: new Set<ChannelKind>(["teams"]) });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ChannelNotConfiguredError);
+    expect((caught as ChannelNotConfiguredError).kind).toBe("teams");
+  });
+
+  it("does NOT throw for a NOT-required unwired channel (unrouted absence is fine)", () => {
+    // slack is unwired but not in the required set — the legacy stub audit
+    // path applies (tests only).
+    expect(() => buildChannelRegistry({}, { requiredChannels: new Set<ChannelKind>(["ntfy"]) })).not.toThrow();
+  });
+
+  it("succeeds when every required channel is wired", () => {
+    const deps: ChannelRegistryDeps = {
+      slack: { secrets: fakeSecrets },
+      teams: { secrets: fakeSecrets },
+    };
+    const registry = buildChannelRegistry(deps, {
+      requiredChannels: new Set<ChannelKind>(["ntfy", "slack", "teams"]),
+    });
+    expect(registry.ntfy.wired).toBe(true);
+    expect(registry.slack.wired).toBe(true);
+    expect(registry.teams.wired).toBe(true);
+  });
+
+  // Codex H3 Surface 6 #18: `wiredChannelKinds` reports the current registry's
+  // wired set. The route-write endpoint uses it to reject creating a route to
+  // a channel whose adapter isn't wired.
+  it("wiredChannelKinds returns exactly the kinds whose adapter is wired", () => {
+    const registry = buildChannelRegistry({ slack: { secrets: fakeSecrets } });
+    const wired = wiredChannelKinds(registry);
+    expect(wired.has("ntfy")).toBe(true);
+    expect(wired.has("slack")).toBe(true);
+    expect(wired.has("teams")).toBe(false);
+    expect(wired.has("discord")).toBe(false);
   });
 });

@@ -24,9 +24,10 @@ import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import type { NotificationChannel } from "./channels/types.js";
 import { NotificationDispatcher, type DefaultRoute } from "./dispatcher.js";
 import type { NtfyChannelDeps } from "./channels/ntfy.js";
-import { buildChannelRegistry } from "./registry.js";
+import { buildChannelRegistry, wiredChannelKinds } from "./registry.js";
 import { ChannelKind } from "./schemas.js";
 
 export interface BuildNotificationDispatcherDeps {
@@ -47,42 +48,92 @@ export interface BuildNotificationDispatcherDeps {
 }
 
 /**
+ * The production dispatcher build result: the dispatcher itself PLUS the set
+ * of channel kinds actually wired in this boot's registry. Route-write
+ * endpoints (`POST /orgs/:orgId/notifications/routes`) consult
+ * `wiredChannelKinds` to reject creating a route to an unwired kind — the
+ * runtime companion to the boot-time `requiredChannels` guard so a stub can
+ * never back a routed channel (Codex H3 Surface 6 #18).
+ */
+export interface BuiltNotificationDispatcher {
+  dispatcher: NotificationDispatcher;
+  wiredChannelKinds: ReadonlySet<ChannelKind>;
+  channels: Record<ChannelKind, NotificationChannel>;
+}
+
+/**
+ * Build the production channel registry. Shared by `buildNotificationDispatcher`
+ * (worker boot) and the route-write endpoint's route-guard (Codex H3 #18), so
+ * both surfaces agree on the SAME wired set the boot check enforced.
+ *
+ * LOUD failure on missing `secrets` — a stub-only registry would silently
+ * swallow escalations. Every `ChannelKind.options` entry is passed as
+ * `requiredChannels` so `buildChannelRegistry` throws
+ * `ChannelNotConfiguredError` at boot if any dep is missing.
+ */
+export function buildProductionChannelRegistry(deps: BuildNotificationDispatcherDeps): {
+  channels: Record<ChannelKind, NotificationChannel>;
+  wiredChannelKinds: ReadonlySet<ChannelKind>;
+} {
+  if (deps.secrets === undefined) {
+    throw new Error(
+      "buildProductionChannelRegistry requires a secret store (channels resolve write-only credential refs)",
+    );
+  }
+  const channels = buildChannelRegistry(
+    {
+      ntfy: resolveNtfyDeployDefault(),
+      slack: { secrets: deps.secrets },
+      webhook: { secrets: deps.secrets },
+      teams: { secrets: deps.secrets },
+      discord: { secrets: deps.secrets },
+      twilio: { secrets: deps.secrets },
+      pagerduty: { secrets: deps.secrets },
+      email: { secrets: deps.secrets },
+      github: {
+        secrets: deps.secrets,
+        // The pool: github_checks resolves the PUBLISHING org's OWN github credential
+        // from the ambient per-event org scope at publish time (loadOrg* query by the
+        // explicit getJobOrgId), never a shared/deploy token — no cross-tenant leak.
+        pool: deps.pool,
+        ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
+      },
+    },
+    {
+      // Boot-time doctrine (Codex H3 #17): require EVERY registered channel
+      // kind to be wired so a future misconfig cannot silently drop routes.
+      // If the operator wants some channels to remain unwired they should not
+      // register them in the ChannelKind schema — the schema itself is the
+      // authoritative "possibly routable" set.
+      requiredChannels: new Set<ChannelKind>(ChannelKind.options),
+    },
+  );
+  return { channels, wiredChannelKinds: wiredChannelKinds(channels) };
+}
+
+/**
  * Build the production dispatcher. LOUD failure (not a silent skip) if the
  * required `secrets` dep is missing — a credential-resolving channel with no
  * store could only ever stub, which would silently swallow real escalations.
+ *
+ * Notification-integrity doctrine (Codex H3 Surface 6 #17): every ChannelKind
+ * is passed as `requiredChannels` so `buildChannelRegistry` throws
+ * `ChannelNotConfiguredError` at boot for any dep-misconfigured kind, rather
+ * than silently substituting a StubChannel whose no-op publish would drop a
+ * fail-severity escalation. The env-configured default route's channel MUST
+ * also be wired (belt-and-suspenders — that dep would have thrown already).
  */
-export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDeps): NotificationDispatcher {
-  if (deps.secrets === undefined) {
-    throw new Error(
-      "buildNotificationDispatcher requires a secret store (channels resolve write-only credential refs)",
-    );
-  }
-  const channels = buildChannelRegistry({
-    ntfy: resolveNtfyDeployDefault(),
-    slack: { secrets: deps.secrets },
-    webhook: { secrets: deps.secrets },
-    teams: { secrets: deps.secrets },
-    discord: { secrets: deps.secrets },
-    twilio: { secrets: deps.secrets },
-    pagerduty: { secrets: deps.secrets },
-    email: { secrets: deps.secrets },
-    github: {
-      secrets: deps.secrets,
-      // The pool: github_checks resolves the PUBLISHING org's OWN github credential
-      // from the ambient per-event org scope at publish time (loadOrg* query by the
-      // explicit getJobOrgId), never a shared/deploy token — no cross-tenant leak.
-      pool: deps.pool,
-      ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),
-    },
-  });
+export function buildNotificationDispatcher(deps: BuildNotificationDispatcherDeps): BuiltNotificationDispatcher {
+  const { channels, wiredChannelKinds: wired } = buildProductionChannelRegistry(deps);
   const defaultRoute = resolveDefaultRouteFromEnv();
-  return new NotificationDispatcher({
+  const dispatcher = new NotificationDispatcher({
     // org-scoping wrapper: each tenant-table read/write self-routes under the
     // per-event org scope the subscriber establishes via `runWithJobOrgId`.
     query: orgScopingPool(deps.pool),
     channels,
     ...(defaultRoute !== undefined && { defaultRoute }),
   });
+  return { dispatcher, wiredChannelKinds: wired, channels };
 }
 
 /**
