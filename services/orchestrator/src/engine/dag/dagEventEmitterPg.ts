@@ -11,7 +11,10 @@ import type { BudgetPeriod, SpeculationThreshold } from "../config/index.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { DagTickPlan } from "../contracts/dagWalker.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
+import { createLogger } from "../observability/logger.js";
 import type { ConfigCorruptInput, DagEventEmitter } from "./walkerPg.js";
+
+const log = createLogger("dag-event-emitter");
 
 /**
  * The pg-backed dag.* event emitter. Resolves the project's org, then writes each event through
@@ -30,6 +33,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
 
   private async withScopedStore(
     projectId: string,
+    eventKind: string,
     work: (store: EventStore, orgId: string) => Promise<void>,
   ): Promise<void> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
@@ -39,7 +43,27 @@ export class PgDagEventEmitter implements DagEventEmitter {
       );
       return result.rows[0]?.org_id ?? null;
     });
-    if (orgId === null) return;
+    if (orgId === null) {
+      // OBSERVABILITY GAP FIX (task #38, follow-up to PR #753 budget fails-closed):
+      // this branch used to silently return when the project row was missing or its
+      // org_id was NULL — the fail-closed `dag.budget.paused` (or any other dag.*)
+      // event was dropped so the operator could not see WHY the walker halted
+      // without grepping engine logs. The safety invariant still held (walker
+      // returned `budget_paused`, subscriber short-circuited), but the reason
+      // was invisible from the events timeline. Fail LOUD instead: log at ERROR
+      // with the projectId + event kind + reason so an operator has a grep-able
+      // signal in the log stream. We do NOT durably append the event under a
+      // synthesized org (events.org_id is NOT NULL + FK-tied to organizations —
+      // see jobReaper.ts's v68-fix rationale: never fake tenancy to satisfy a
+      // NOT NULL). The deeper option-1 fix (nullable events.org_id + system-scoped
+      // emergency append) is out of scope for an observability-only follow-up.
+      log.error("dag event DROPPED — project org unresolvable", {
+        projectId,
+        eventKind,
+        reason: "unresolvable_project_org",
+      });
+      return;
+    }
     // Plane-split: when a writer is wired, route the append through the control plane — the
     // writer's `append` resolves the run's org from the ambient per-job org-id, so set it for
     // the duration of the append. Absent, append in-process under a short org scope.
@@ -59,7 +83,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
     inFlightBefore: number;
     concurrencyCeiling: number;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "dag.spec.enqueued", (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
@@ -84,7 +108,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
     unmergedAncestors: string[];
     threshold: SpeculationThreshold;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "dag.spec.speculative", (store, orgId) =>
       store.append({
         runId: input.runId,
         specId: input.specId,
@@ -108,7 +132,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
     depth: number;
     depthCap: number;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "dag.spec.speculation_held", (store, orgId) =>
       store.append({
         specId: input.specId,
         projectId: input.projectId,
@@ -130,7 +154,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
     ancestorSpecId: string;
     ancestorPhase: "pending" | "in_flight";
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "dag.spec.ancestor_not_ready", (store, orgId) =>
       store.append({
         specId: input.specId,
         projectId: input.projectId,
@@ -149,7 +173,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
 
   async emitDrained(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     const { doneCount, inFlightCount, blockedCount } = input.plan;
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "dag.drained", (store, orgId) =>
       store.append({
         projectId: input.projectId,
         orgId,
@@ -168,7 +192,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
     reason?: "unpriced_spend" | "unparseable_config" | "unresolvable_project_org";
   }): Promise<void> {
     const { projectId, ceilingUsd, spentUsd, period, readyHeldBack, reason } = input;
-    await this.withScopedStore(projectId, (store, orgId) =>
+    await this.withScopedStore(projectId, "dag.budget.paused", (store, orgId) =>
       store.append({
         projectId,
         orgId,
@@ -198,7 +222,19 @@ export class PgDagEventEmitter implements DagEventEmitter {
       );
       return result.rows[0]?.org_id ?? null;
     });
-    if (orgId === null) return false;
+    if (orgId === null) {
+      // Same observability-gap fail-loud posture as {@link withScopedStore} above
+      // (task #38 follow-up to PR #753). A null-org project row here silently
+      // suppressed the 50% / 80% milestone ping; log at ERROR with the projectId
+      // + event kind + reason so an operator has a grep-able signal (the milestone
+      // event still cannot land — events.org_id is NOT NULL).
+      log.error("dag event DROPPED — project org unresolvable", {
+        projectId: input.projectId,
+        eventKind: "dag.budget.milestone",
+        reason: "unresolvable_project_org",
+      });
+      return false;
+    }
     const windowClause = budgetMilestoneWindowClause(input.period);
     return runWithOrgScope(this.pool, orgId, async (client) => {
       const existing = await client.query<{ id: string }>(
@@ -235,7 +271,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
 
   async emitConcurrencySaturated(input: { projectId: string; plan: DagTickPlan }): Promise<void> {
     const { readyHeldBack, inFlightCount, concurrencyCeiling } = input.plan;
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "dag.concurrency.saturated", (store, orgId) =>
       store.append({
         projectId: input.projectId,
         orgId,
@@ -246,7 +282,7 @@ export class PgDagEventEmitter implements DagEventEmitter {
   }
 
   async emitConfigCorrupt({ projectId, ...payload }: ConfigCorruptInput): Promise<void> {
-    await this.withScopedStore(projectId, (store, orgId) =>
+    await this.withScopedStore(projectId, "dag.config.corrupt", (store, orgId) =>
       store.append({ projectId, orgId, eventType: "dag.config.corrupt", payload }),
     );
   }
