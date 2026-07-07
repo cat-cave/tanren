@@ -26,6 +26,7 @@ import {
   type OrgFragmentSource,
   loadUnifiedFragmentLibrary,
   type FragmentLibrary,
+  type PriorFragment,
 } from "../../engine/templates/index.js";
 import { FragmentsStore } from "../../engine/repositories/fragments.js";
 import type { EventStore } from "../../engine/eventStore.js";
@@ -127,7 +128,20 @@ export function buildLiveRunFragmentAuthoring(
     },
   };
 
-  return buildFragmentAuthoring({ authorer, persistence, events });
+  // fix/f2-prompt-hardening: prior-fragments seam. The F2 writer prompt renders a
+  // "these have worked before in this org, follow the shape" section when the
+  // caller passes a non-empty prior list. Backed by `FragmentsStore.listValidatedByOrg`
+  // under the org-scoped `QueryClient` (RLS bounds visibility). A DB blip here
+  // does not fail the authoring run — `buildFragmentAuthoring` catches + logs
+  // and proceeds with an empty prior context.
+  const priorFragmentsLookup = async (lookupOrgId: string): Promise<readonly PriorFragment[]> => {
+    return runWithOrgScope(pool, lookupOrgId, async (client) => {
+      const rows = await FragmentsStore.listValidatedByOrg(client, { kind: "operator" });
+      return rows.map((r) => ({ fragmentId: r.fragmentId, kind: r.kind, label: r.label }));
+    });
+  };
+
+  return buildFragmentAuthoring({ authorer, persistence, events, priorFragmentsLookup });
 }
 
 /** Build the live unified fragment library loader for ONE (orgId) context. */

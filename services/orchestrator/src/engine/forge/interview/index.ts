@@ -55,6 +55,9 @@ export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesi
 export { JitBuildRequiredError } from "../../environments/creation/index.js";
 
 export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOptions } from "./providerAnswerer.js";
+// fix/f2-prompt-hardening: the semi-structured product-context builder the derive
+// threads into the F2 writer prompt (acceptance criteria + personas + behaviors).
+export { buildProductContextFromCapture } from "./derive.js";
 export { buildInterviewPrompt } from "./prompt.js";
 export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";
 export {

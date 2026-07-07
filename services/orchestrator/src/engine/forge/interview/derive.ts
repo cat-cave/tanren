@@ -57,6 +57,7 @@ import { createProject } from "../../workflow/projectSpec.js";
 import {
   assertJitAvailableForToolchain,
   autonomousConfig,
+  buildProductContextFromCapture,
   MissingDesignContractError,
   productVisionConfig,
   resumeDerivedProject,
@@ -85,6 +86,7 @@ import {
   type FragmentLibrary,
   type FragmentSpec,
   type MaterializeTemplate,
+  type ProductContext,
   type SeededTemplate,
   selectFragmentConfig,
   type TemplateConfig,
@@ -258,6 +260,7 @@ async function resolveFragmentConfig(
   orgId: string,
   input: DeriveInput,
   lifecycle: CaptureLifecycle,
+  capture: InterviewCapture,
 ): Promise<{ config: TemplateConfig; library: FragmentLibrary }> {
   let library = input.fragmentLibrary ?? loadFragmentLibrary();
   let decision = selectFragmentConfig(lifecycle, library);
@@ -271,11 +274,21 @@ async function resolveFragmentConfig(
       },
     );
   }
+  // fix/f2-prompt-hardening: thread SEMI-STRUCTURED PRODUCT CONTEXT into the F2
+  // writer prompt. The writer uses acceptance criteria + personas + behaviors to
+  // make DOMAIN-INFORMED defaults (a db fragment for a "link shortener" models
+  // `links(id, url, clicks)` roughly, not a generic Item table). A capture with
+  // no personas/behaviors/design-intent still authors, just without the context
+  // section. `capture.designContract` may be null on a partial derive — we key
+  // acceptance criteria off the design contract's principles + constraints
+  // (the durable design "rulesets" that describe what the product must satisfy).
+  const productContext = buildProductContextFromCapture(capture);
   const authoringResult = await input.runFragmentAuthoring({
     orgId,
     actor: input.actor,
     missing: decision.missing,
     lifecycle,
+    ...(productContext === undefined ? {} : { productContext }),
   });
   if (authoringResult.failedIds.length > 0) {
     throw new FragmentAuthoringFailedError(authoringResult.failedIds, {
@@ -327,6 +340,8 @@ export type {
   FragmentAuthoringInput,
   FragmentAuthoringResult,
 } from "../../templates/fragments/fragmentAuthoringRun.js";
+export type { ProductContext };
+export { buildProductContextFromCapture } from "./deriveBehaviorSpec.js";
 
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
   const capture = InterviewCapture.parse(input.capture);
@@ -369,7 +384,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // `resumeDerivedProject` returns it idempotently.
   const compensation = newDeriveCompensation();
   try {
-    const { config, library } = await resolveFragmentConfig(input.orgId, input, capture.lifecycle);
+    const { config, library } = await resolveFragmentConfig(input.orgId, input, capture.lifecycle, capture);
 
     const autonomousOptIn = input.autonomy === "auto" || input.autonomy === "simulated";
     const baseConfig = autonomousOptIn

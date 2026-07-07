@@ -165,6 +165,26 @@ export const FragmentsStore = {
     return result.rows.map(mapRow);
   },
 
+  /** LIGHTWEIGHT prior-fragments projection for the F2 writer prompt (fix/f2-prompt-hardening).
+   * Returns just `{fragmentId, kind, label}` per validated fragment visible to the
+   * caller's org — the writer's "these worked before, follow the shape" hint needs no
+   * body_ts, no contract, no dependsOn. RLS bounds visibility to the caller's org.
+   *
+   * Returns EMPTY when the org has no prior validated fragments — the writer prompt
+   * then omits the prior-fragments section cleanly. */
+  async listValidatedByOrg(
+    client: QueryClient,
+    _actor: ActorRef,
+  ): Promise<Array<{ fragmentId: string; kind: string; label: string }>> {
+    const result = await client.query<{ fragment_id: string; kind: string; label: string }>(
+      `SELECT DISTINCT ON (kind, label) fragment_id, kind, label
+         FROM fragments
+         WHERE status = 'validated'
+         ORDER BY kind, label, validated_at DESC NULLS LAST, version DESC`,
+    );
+    return result.rows.map((row) => ({ fragmentId: row.fragment_id, kind: row.kind, label: row.label }));
+  },
+
   async markValidated(client: QueryClient, id: string, _actor: ActorRef): Promise<FragmentRow> {
     const result = await client.query<RawFragmentRow>(
       `UPDATE fragments SET status = 'validated', validated_at = now()
