@@ -163,9 +163,22 @@ describe("apex v79/v80 loop closure — triage → materializeTriageNewSpecs sea
         setMetadataCalls.push(input);
       },
     } as unknown as RunStateWriter;
-    // Minimal pool stub — the provenance path reads `spec_metadata` before UPDATEing it.
+    // Minimal pool stub — Codex round-3 #4 the dedupe read runs under org scope
+    // (a `runWithOrgScope` client) BEFORE `acceptProposals`, and returns zero rows
+    // (no prior routed spec on this trail) so materialization proceeds. The
+    // provenance path then reads `spec_metadata` off the raw pool before UPDATEing.
     const stubPool = {
       query: async () => ({ rows: [{ metadata: {} }], rowCount: 1 }),
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql.startsWith("BEGIN") || sql.startsWith("COMMIT") || sql.startsWith("SET")) {
+            return { rows: [], rowCount: 0 };
+          }
+          // The dedupe SELECT — no rows means "no prior routed spec, proceed".
+          return { rows: [], rowCount: 0 };
+        },
+        release: () => {},
+      }),
     } as unknown as pg.Pool;
 
     const materializer = buildTriageNewSpecsMaterializer({
@@ -206,5 +219,196 @@ describe("apex v79/v80 loop closure — triage → materializeTriageNewSpecs sea
       discovery?: { placementLabel?: string };
     };
     expect(metadata.discovery?.placementLabel).toBe("auto-routed from triage in spec_parent");
+  });
+});
+
+/** Build a pool stub whose SELECT returns `existingRows` for the dedupe read, and answers
+ * other queries (`spec_metadata` read + `SET/BEGIN/COMMIT`) with neutral defaults. Tracks
+ * the SELECT-query arg list so a test can assert the canonicalization applied (sorted
+ * `source_finding_ids`). */
+function buildDedupePool(existingRows: Array<{ spec_id: string }>) {
+  const selectArgs: Array<ReadonlyArray<unknown>> = [];
+  const pool = {
+    query: async () => ({ rows: [{ metadata: {} }], rowCount: 1 }),
+    connect: async () => ({
+      query: async (sql: string, args?: ReadonlyArray<unknown>) => {
+        if (sql.startsWith("BEGIN") || sql.startsWith("COMMIT") || sql.startsWith("SET")) {
+          return { rows: [], rowCount: 0 };
+        }
+        selectArgs.push(args ?? []);
+        return { rows: existingRows, rowCount: existingRows.length };
+      },
+      release: () => {},
+    }),
+  } as unknown as pg.Pool;
+  return { pool, selectArgs };
+}
+
+function stubWriterForCreate(createSpecCalls: Array<{ input: unknown; actorOrgId: string | null }>): RunStateWriter {
+  return {
+    createSpec: async ({ input, actor }: { input: unknown; actor: { orgId: string | null } }) => {
+      createSpecCalls.push({ input, actorOrgId: actor.orgId });
+      return {
+        specId: `spec_new_${createSpecCalls.length}`,
+        projectId: "project_x",
+        title: (input as { title: string }).title,
+        description: (input as { description: string }).description,
+        acceptanceCriteria: [] as string[],
+        priority: "tbd" as const,
+        dependsOn: [] as string[],
+        status: "open" as const,
+      };
+    },
+    setSpecMetadata: async (_input: { orgId: string; specId: string; metadataJson: string }) => {},
+  } as unknown as RunStateWriter;
+}
+
+// Codex round-3 #4 — the re-drive dedupe TEETH. `materializedNewSpecIds` in
+// `plannerRun.ts` is per-run in-memory; a re-drive after a halt/fix/rebuild starts
+// with an empty tracker. Without this dedupe, the SAME triage-routed finding on
+// the SAME parent spec would materialize a fresh duplicate spec on every run. The
+// dedupe queries by the persisted provenance trail before calling `acceptProposals`.
+describe("Codex round-3 #4 — cross-run dedupe via persisted provenance trail", () => {
+  it("skips acceptProposals when a spec with the same (project, parent, sourceFindingIds) already exists", async () => {
+    // Simulate a re-drive: the prior run already materialized this routed spec, so
+    // the dedupe SELECT finds a row. The materializer MUST NOT call `createSpec` again.
+    const createSpecCalls: Array<{ input: unknown; actorOrgId: string | null }> = [];
+    const { pool } = buildDedupePool([{ spec_id: "spec_prior_routed" }]);
+    const materializer = buildTriageNewSpecsMaterializer({
+      pool,
+      runStateWriter: stubWriterForCreate(createSpecCalls),
+      resolveActor: triageMaterializerSystemActor,
+    });
+
+    await materializer({
+      runId: "run_redrive",
+      parentSpecId: "spec_parent",
+      projectId: "project_x",
+      orgId: "org_test",
+      newSpecs: [
+        {
+          id: "wi-deploy",
+          title: "Configure the deploy target",
+          body: "Deploy details.",
+          severity: "P1",
+          findingIds: ["deploy-not-configured"],
+        },
+      ],
+    });
+
+    expect(createSpecCalls).toHaveLength(0);
+  });
+
+  it("proceeds cleanly on the first-time materialize when no matching prior spec exists", async () => {
+    // Fresh trail — the dedupe SELECT returns no rows, so acceptProposals runs
+    // normally. This pins that the dedupe is not a silent no-op on the clean path.
+    const createSpecCalls: Array<{ input: unknown; actorOrgId: string | null }> = [];
+    const { pool } = buildDedupePool([]);
+    const materializer = buildTriageNewSpecsMaterializer({
+      pool,
+      runStateWriter: stubWriterForCreate(createSpecCalls),
+      resolveActor: triageMaterializerSystemActor,
+    });
+
+    await materializer({
+      runId: "run_first",
+      parentSpecId: "spec_parent",
+      projectId: "project_x",
+      orgId: "org_test",
+      newSpecs: [
+        {
+          id: "wi-deploy",
+          title: "Configure the deploy target",
+          body: "Deploy details.",
+          severity: "P1",
+          findingIds: ["deploy-not-configured"],
+        },
+      ],
+    });
+
+    expect(createSpecCalls).toHaveLength(1);
+    expect(createSpecCalls[0]!.input).toMatchObject({ title: "Configure the deploy target" });
+  });
+
+  it("canonicalizes sourceFindingIds by sorting before querying + writing", async () => {
+    // The routed spec's findingIds arrive UNSORTED. The dedupe SELECT + the
+    // downstream createSpec MUST both key off the CANONICAL (sorted) form so the
+    // `text[]` comparison + the partial unique index are stable across re-drives.
+    const createSpecCalls: Array<{ input: unknown; actorOrgId: string | null }> = [];
+    const { pool, selectArgs } = buildDedupePool([]);
+    const materializer = buildTriageNewSpecsMaterializer({
+      pool,
+      runStateWriter: stubWriterForCreate(createSpecCalls),
+      resolveActor: triageMaterializerSystemActor,
+    });
+
+    await materializer({
+      runId: "run_first",
+      parentSpecId: "spec_parent",
+      projectId: "project_x",
+      orgId: "org_test",
+      newSpecs: [
+        {
+          id: "wi-multi",
+          title: "Multi-finding routed spec",
+          body: "Body.",
+          severity: "P1",
+          // Unsorted on purpose — the materializer canonicalizes before write/read.
+          findingIds: ["z-finding", "a-finding", "m-finding"],
+        },
+      ],
+    });
+
+    // Assert the dedupe SELECT queried with sorted findingIds.
+    expect(selectArgs).toHaveLength(1);
+    expect(selectArgs[0]![2]).toEqual(["a-finding", "m-finding", "z-finding"]);
+    // Assert the createSpec input carries the sorted findingIds through provenance.
+    expect(createSpecCalls).toHaveLength(1);
+    expect(createSpecCalls[0]!.input).toMatchObject({
+      triageProvenance: {
+        sourceFindingIds: ["a-finding", "m-finding", "z-finding"],
+      },
+    });
+  });
+
+  it("different sourceFindingIds on the same parent DO create separate specs (dedupe is provenance-keyed, not parent-keyed)", async () => {
+    // Two routed specs off the SAME parent but distinct finding-id sets must both
+    // materialize. The dedupe key is `(project, parent, source_finding_ids)`, so a
+    // second finding set does not collide.
+    const createSpecCalls: Array<{ input: unknown; actorOrgId: string | null }> = [];
+    // No prior match for either finding set.
+    const { pool } = buildDedupePool([]);
+    const materializer = buildTriageNewSpecsMaterializer({
+      pool,
+      runStateWriter: stubWriterForCreate(createSpecCalls),
+      resolveActor: triageMaterializerSystemActor,
+    });
+
+    await materializer({
+      runId: "run_first",
+      parentSpecId: "spec_parent",
+      projectId: "project_x",
+      orgId: "org_test",
+      newSpecs: [
+        {
+          id: "wi-a",
+          title: "Routed A",
+          body: "A body",
+          severity: "P1",
+          findingIds: ["finding-a"],
+        },
+        {
+          id: "wi-b",
+          title: "Routed B",
+          body: "B body",
+          severity: "P2",
+          findingIds: ["finding-b"],
+        },
+      ],
+    });
+
+    expect(createSpecCalls).toHaveLength(2);
+    expect(createSpecCalls[0]!.input).toMatchObject({ title: "Routed A" });
+    expect(createSpecCalls[1]!.input).toMatchObject({ title: "Routed B" });
   });
 });

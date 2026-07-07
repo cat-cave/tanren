@@ -212,6 +212,9 @@ async function createSpecOnClient(
   await ensureProjectAccess(client, input.projectId, actor);
   await ensureSpecDependenciesExist(client, input.projectId, input.dependsOn ?? []);
   const projectOrgId = await loadProjectOrgId(client, input.projectId);
+  // Codex round-3 #4 — sort `sourceFindingIds` for stable `text[]` dedupe equality.
+  const rp = input.triageProvenance;
+  const canonical = rp && { ...rp, sourceFindingIds: [...rp.sourceFindingIds].sort() };
   const spec: SpecContract = {
     specId: `spec_${randomUUID()}`,
     projectId: input.projectId,
@@ -223,12 +226,10 @@ async function createSpecOnClient(
     status: "open",
     priority: input.priority ?? DEFAULT_SPEC_PRIORITY,
     mode: input.mode ?? DEFAULT_SPEC_MODE,
-    ...(input.triageProvenance !== undefined && { triageProvenance: input.triageProvenance }),
+    ...(canonical !== undefined && { triageProvenance: canonical }),
   };
 
-  // Triage-routing PROVENANCE (Claude RA2): four nullable columns on the same
-  // INSERT — a non-routed spec passes null across the board.
-  const provenance = input.triageProvenance;
+  // Triage-routing PROVENANCE (Claude RA2): four nullable columns; a non-routed spec passes null.
   await client.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on,
                          status, priority, mode,
@@ -245,10 +246,10 @@ async function createSpecOnClient(
       spec.status,
       spec.priority,
       spec.mode,
-      provenance?.parentSpecId ?? null,
-      provenance === undefined ? null : [...provenance.sourceFindingIds],
-      provenance?.originTriageTaskId ?? null,
-      provenance?.originRunId ?? null,
+      canonical?.parentSpecId ?? null,
+      canonical === undefined ? null : [...canonical.sourceFindingIds],
+      canonical?.originTriageTaskId ?? null,
+      canonical?.originRunId ?? null,
     ],
   );
   // Wake the DagWalker (notifyDagChanged): a fresh DAG's run channel never fires on its own.

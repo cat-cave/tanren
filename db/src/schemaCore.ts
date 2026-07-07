@@ -88,12 +88,11 @@ export const specs = pgTable(
     // place + proven green and only product-identity surfaces should change. NOT a
     // state-machine value — literals mirror `SpecMode` in engine/state/spec.ts.
     mode: text("mode").notNull().default("from_scratch"),
+    // P3-0014: discovery provenance under `discovery` key
     metadata: jsonb("metadata")
       .notNull()
-      // P3-0014: discovery provenance under `discovery` key
       .default(sql`'{}'::jsonb`),
-    // Triage-routing PROVENANCE (Claude RA2 — apex GAP 1): nullable trail for a routed spec
-    // (`plannerRunTriageNewSpecs.ts`); operator/discovery/seed pass null. Enables re-drive DEDUPE.
+    // Triage-routing PROVENANCE (Claude RA2 — apex GAP 1): nullable trail; enables re-drive DEDUPE.
     parentSpecId: text("parent_spec_id"),
     sourceFindingIds: text("source_finding_ids").array(),
     originTriageTaskId: text("origin_triage_task_id"),
@@ -106,6 +105,9 @@ export const specs = pgTable(
     enumCheck("specs_mode_check", table.mode, ["specialize_seed", "from_scratch"]),
     index("specs_org_id").on(table.orgId),
     index("specs_project_created").on(table.projectId, table.createdAt, table.specId),
+    uniqueIndex("specs_triage_provenance_unique")
+      .on(table.projectId, table.parentSpecId, table.sourceFindingIds)
+      .where(sql`parent_spec_id IS NOT NULL`),
   ],
 );
 

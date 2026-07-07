@@ -11,6 +11,17 @@
 // `newSpecs` remains observable on the return value but nothing is persisted (the
 // pre-v80 behavior). Cross-loop dedup lives in `plannerRun.ts`, which tracks the
 // ids already materialized so a rework/re-plan iteration is idempotent.
+//
+// Codex round-3 #4 — CROSS-RUN dedupe. The `materializedNewSpecIds` set in
+// `plannerRun.ts` is per-run in-memory: a re-drive that fires materialize AGAIN on
+// the same triage-routed finding (same parent spec + same finding ids) would
+// insert a duplicate spec. The persisted provenance columns (PR #755) make the
+// invariant queryable; this module runs the read + skips `acceptProposals` when a
+// matching spec already exists. Canonicalization (sort of `sourceFindingIds`) is
+// enforced on the WRITE side in `projectSpec.ts` so the DB comparison is stable;
+// the partial unique index `specs_triage_provenance_unique` (migration 0027) is
+// the belt-and-suspenders that catches any read-then-insert race.
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
@@ -50,6 +61,22 @@ export function buildTriageNewSpecsMaterializer(deps: {
 }): TriageNewSpecsMaterializer {
   return async ({ runId, parentSpecId, projectId, orgId, newSpecs }) => {
     for (const req of newSpecs) {
+      // Codex round-3 #4 — CROSS-RUN dedupe. Sort the `findingIds` (canonical
+      // form; the write side sorts too) and query for an already-materialized
+      // spec with the same `(project_id, parent_spec_id, source_finding_ids)`
+      // trail. If found, skip `acceptProposals` — the trail is already on the
+      // DAG. Race against a concurrent materialization is caught by the partial
+      // unique index `specs_triage_provenance_unique` (migration 0027); the
+      // insert would fail LOUD (not silently duplicate).
+      const canonicalFindingIds = [...req.findingIds].sort();
+      const existing = await findRoutedSpecByProvenance(deps.pool, {
+        orgId,
+        projectId,
+        parentSpecId,
+        canonicalFindingIds,
+      });
+      if (existing !== undefined) continue;
+
       const insight: DiscoveryInsight = {
         variant: "feature",
         source: `triage:${parentSpecId}`,
@@ -92,7 +119,8 @@ export function buildTriageNewSpecsMaterializer(deps: {
           // spec.
           triageProvenance: {
             parentSpecId,
-            sourceFindingIds: req.findingIds,
+            // Canonical (sorted) — the write side re-canonicalizes for defence in depth.
+            sourceFindingIds: canonicalFindingIds,
             originTriageTaskId: req.originTriageTaskId ?? "",
             originRunId: runId,
           },
@@ -100,6 +128,36 @@ export function buildTriageNewSpecsMaterializer(deps: {
       );
     }
   };
+}
+
+/**
+ * Codex round-3 #4 — the re-drive dedupe READ. Look up an already-materialized
+ * routed spec by its persisted provenance trail: `(project_id, parent_spec_id,
+ * source_finding_ids)` under the run's org scope (RLS-scoped read). Callers pass
+ * `canonicalFindingIds` already-sorted; the DB column is sorted at write time
+ * (`projectSpec.ts::canonicalizeTriageProvenance`) so `text[]` equality holds.
+ * Returns the existing `spec_id` on a match, `undefined` otherwise.
+ */
+export async function findRoutedSpecByProvenance(
+  pool: pg.Pool,
+  input: {
+    orgId: string;
+    projectId: string;
+    parentSpecId: string;
+    canonicalFindingIds: ReadonlyArray<string>;
+  },
+): Promise<string | undefined> {
+  return runWithOrgScope(pool, input.orgId, async (client) => {
+    const result = await client.query<{ spec_id: string }>(
+      `SELECT spec_id FROM specs
+        WHERE project_id = $1
+          AND parent_spec_id = $2
+          AND source_finding_ids = $3::text[]
+        LIMIT 1`,
+      [input.projectId, input.parentSpecId, [...input.canonicalFindingIds]],
+    );
+    return result.rows[0]?.spec_id;
+  });
 }
 
 /** The default system actor for the auto-routed materialize path (platform:admin, org-scoped). */
