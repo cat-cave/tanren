@@ -62,6 +62,33 @@ export const integrationProvisioningSensitivityRules: SensitivityRule[] = [
   { eventName: "deploy.skipped", path: "reason", tag: "public" },
   { eventName: "deploy.skipped", path: "detail", tag: "public" },
 
+  // deploy.pending_manual ("a manual_external deploy is awaiting operator confirmation"):
+  // the operator-facing wake for an out-of-band deploy. Every field is non-secret (a
+  // URL + repo/git-ref + ids + a confirmation route path) — the confirmation itself
+  // carries no credential material.
+  { eventName: "deploy.pending_manual", path: "provider", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "appId", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "repo", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "ref", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "url", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "surfaceKind", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "orgId", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "projectId", tag: "public" },
+  { eventName: "deploy.pending_manual", path: "confirmationPath", tag: "public" },
+  ...auditEnvelopeRulesFor("deploy.pending_manual"),
+
+  // deploy.manual_confirmed ("an operator confirmed the manual_external deploy"): the
+  // operator's user id is the audit trail. Every field is non-secret (an internal user
+  // id + ids).
+  { eventName: "deploy.manual_confirmed", path: "provider", tag: "public" },
+  { eventName: "deploy.manual_confirmed", path: "appId", tag: "public" },
+  { eventName: "deploy.manual_confirmed", path: "deploymentId", tag: "public" },
+  { eventName: "deploy.manual_confirmed", path: "orgId", tag: "public" },
+  { eventName: "deploy.manual_confirmed", path: "projectId", tag: "public" },
+  { eventName: "deploy.manual_confirmed", path: "confirmedBy", tag: "public" },
+  ...auditEnvelopeRulesFor("deploy.manual_confirmed"),
+
   // demos-as-evidence: the per-behavior demo verdict + the summary. Every field is
   // non-secret — a behavior id/title, a surface kind, an outcome, and the OBSERVABLE
   // SHAPE of the reach ("GET /links → HTTP 200"); never a token or a response body.

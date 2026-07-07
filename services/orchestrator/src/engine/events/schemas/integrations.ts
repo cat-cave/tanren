@@ -402,7 +402,14 @@ export const NotificationFailedPayload = z
 // `integration.provisioned` (schemas/onboarding.ts) + `deploy.triggered`
 // (schemas/deploy.ts) live in their own modules (500-line cap), re-exported here.
 export { IntegrationProvisionedPayload } from "./onboarding.js";
-export { DeployTriggeredPayload, DeployVerifiedPayload, DeployFailedPayload, DeploySkippedPayload } from "./deploy.js";
+export {
+  DeployTriggeredPayload,
+  DeployVerifiedPayload,
+  DeployFailedPayload,
+  DeploySkippedPayload,
+  DeployPendingManualPayload,
+  DeployManualConfirmedPayload,
+} from "./deploy.js";
 
 const RunnerProofPayload = z
   .object({

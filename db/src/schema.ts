@@ -485,7 +485,6 @@ export const specDependencies = pgTable(
     index("spec_dependencies_to_spec_id").on(table.toSpecId),
   ],
 );
-
 // Sub-schema files split for file-line-max-500; re-exported as `schema.*`.
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
@@ -498,3 +497,4 @@ export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";
 export { designContracts } from "./schemaDesign.js";
+export { manualDeployAttestations } from "./schemaDeploy.js";

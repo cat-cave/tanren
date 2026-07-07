@@ -134,6 +134,66 @@ export const DeployFailedPayload = z
   .strict();
 export type DeployFailedPayload = z.infer<typeof DeployFailedPayload>;
 
+// Deploy PENDING MANUAL ("a `manual_external` deploy is awaiting operator confirmation"):
+// the `manual_external` DeployAdapter's `deploy()` recorded a pending-confirmation
+// attestation for the merged commit — the deploy is EXPECTED to happen OUT-OF-BAND
+// (a hand-run deploy, a vendor portal, a physical delivery) and the run is waiting on
+// the operator to CONFIRM it via the confirmation route. The event is the operator-
+// facing wake ("please confirm the deploy") — a downstream notification route surfaces
+// it on the operator's channel with a link/CLI hint to the confirmation endpoint.
+// SECURITY: every field is non-secret (a URL + repo/git-ref + ids); the confirmation
+// itself carries no credential material.
+export const DeployPendingManualPayload = z
+  .object({
+    /** The deploy provider kind (`deploy.manual_external`). */
+    provider: z.string(),
+    /** The deployed app/project id the release targets. */
+    appId: z.string(),
+    /** The merged repo, `owner/name`, the operator is expected to deploy. */
+    repo: z.string(),
+    /** The git ref (branch/sha) the operator is expected to deploy. */
+    ref: z.string(),
+    /** The adapter's deployment handle (the confirmation route re-keys off this id). */
+    deploymentId: z.string(),
+    /** The operator-declared live target URL the deploy is expected to serve at. */
+    url: z.string(),
+    /** Whether the target is a live URL (`web_url`) or a downloadable artifact. */
+    surfaceKind: z.enum(["web_url", "download"]),
+    /** The tenant scope the confirmation route is org-admin over. */
+    orgId: z.string().min(1),
+    projectId: z.string().min(1),
+    /**
+     * The confirmation route path (a suggestion the notification renders as a
+     * link/CLI hint). Non-secret — it is a route on the tenant's own dashboard.
+     */
+    confirmationPath: z.string().min(1),
+  })
+  .extend(AuditEnvelope.shape)
+  .strict();
+export type DeployPendingManualPayload = z.infer<typeof DeployPendingManualPayload>;
+
+// Deploy MANUAL CONFIRMED ("an operator confirmed the `manual_external` deploy"): the
+// confirmation route flipped the attestation to `confirmed`; `verify()` may now run
+// the URL smoke probe + emit `deploy.verified`. The confirming operator's user id is
+// the audit trail — NON-SECRET (an internal id, not a credential).
+export const DeployManualConfirmedPayload = z
+  .object({
+    /** The deploy provider kind (`deploy.manual_external`). */
+    provider: z.string(),
+    /** The deployed app/project id the confirmation is keyed to. */
+    appId: z.string(),
+    /** The adapter's deployment handle the confirmation flipped. */
+    deploymentId: z.string(),
+    /** The tenant scope (mirrored on the row). */
+    orgId: z.string().min(1),
+    projectId: z.string().min(1),
+    /** The user id of the confirming operator (non-secret; internal id). */
+    confirmedBy: z.string().min(1),
+  })
+  .extend(AuditEnvelope.shape)
+  .strict();
+export type DeployManualConfirmedPayload = z.infer<typeof DeployManualConfirmedPayload>;
+
 // Deploy SKIPPED ("an expected deploy could not even be RESOLVED"): a PRE-resolution
 // failure on merge that occurs BEFORE a deploy target is known — so it cannot be a
 // `deploy.failed` (which requires a resolved provider + appId). Both reasons reach here

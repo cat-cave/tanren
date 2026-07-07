@@ -189,6 +189,15 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // (deploy.triggered stays `info`: routine lifecycle, not the proven-live milestone.)
   "deploy.verified": "warn",
 
+  // deploy.pending_manual ("please confirm the deploy"): the OPERATOR is the required
+  // next actor — a manual_external deploy is stuck without them. Operator-actionable →
+  // `warn` so the wake reaches the operator's default route rather than a silent info
+  // lifecycle entry.
+  "deploy.pending_manual": "warn",
+  // deploy.manual_confirmed: audit-trail lifecycle entry (the operator acted); the
+  // downstream verify emits `deploy.verified` (`warn`) as the proven-live milestone.
+  "deploy.manual_confirmed": "info",
+
   // demo.evidence.recorded ("a behavior was exercised on the live surface"): routine
   // per-behavior verdict lifecycle — the summary (demo.completed) carries the pass/fail
   // tally the operator acts on, so keep the per-behavior grain at `info` (no matrix spam).

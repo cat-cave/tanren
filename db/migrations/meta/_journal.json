@@ -204,6 +204,13 @@
       "when": 1783446176153,
       "tag": "0030_awaiting_review_outcome",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1783444509207,
+      "tag": "0031_manual_deploy_attestations",
+      "breakpoints": true
     }
   ]
 }

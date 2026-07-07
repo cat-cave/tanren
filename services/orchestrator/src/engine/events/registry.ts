@@ -69,6 +69,8 @@ import {
   DeployVerifiedPayload,
   DeployFailedPayload,
   DeploySkippedPayload,
+  DeployPendingManualPayload,
+  DeployManualConfirmedPayload,
   GithubBranchPushedPayload,
   GithubFailedPayload,
   GithubPrCreatedPayload,
@@ -180,7 +182,6 @@ import {
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
-
 // Single source of truth mapping event names → typed Zod payload schemas. To add: (1)
 // Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
 // sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
@@ -368,14 +369,15 @@ export const EventRegistry = {
   // or bound from the org grant (refs only, never secret values).
   "integration.provisioned": IntegrationProvisionedPayload,
 
-  // Deploy lifecycle (deploy-on-merge): triggered (a deploy happened) → verified (DeployAdapter
-  // polled a READY terminal + smoke-checked the URL) / failed (bounded-retry exhausted; LOUD
-  // terminal vs a silent triggered-but-unverified stall) / skipped (pre-resolution failure on
-  // merge — incomplete deploy config / missing mergeSha — recorded DURABLY for the operator).
+  // Deploy lifecycle (deploy-on-merge): triggered → verified (poll-to-READY + URL smoke) / failed
+  // (bounded-retry exhausted; LOUD terminal) / skipped (pre-resolution failure — recorded durably);
+  // pending_manual/manual_confirmed = the manual_external attestation lifecycle (operator wake + route flip).
   "deploy.triggered": DeployTriggeredPayload,
   "deploy.verified": DeployVerifiedPayload,
   "deploy.failed": DeployFailedPayload,
   "deploy.skipped": DeploySkippedPayload,
+  "deploy.pending_manual": DeployPendingManualPayload,
+  "deploy.manual_confirmed": DeployManualConfirmedPayload,
 
   // Demos-as-evidence (design doc § "Native Deployment And Demos"): a verified
   // deploy exercises each spec BEHAVIOR + records evidence per behavior
@@ -479,12 +481,10 @@ export class UnknownEventTypeError extends Error {
     super(`unknown event type: ${eventType}`);
   }
 }
-
 export interface TypedEvent<N extends EventName = EventName> {
   eventType: N;
   payload: EventPayload<N>;
 }
-
 export interface RawEventRow {
   event_type: string;
   payload: unknown;
