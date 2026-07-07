@@ -13,8 +13,14 @@ type ReadClient = Pick<pg.Pool | pg.PoolClient, "query">;
 /**
  * A run's VERIFIED deploy + the coordinates a demo records under. Resolved from the
  * run's `deploy.verified` event (the proof the deploy is live) joined to its run row
- * (spec + project + org). `alreadyDemoed` reflects a prior `demo.completed` on the run
- * (the per-run idempotency marker).
+ * (spec + project + org). `alreadyTerminalDemo` reflects a prior TERMINAL demo outcome
+ * on the run — either `demo.completed` (success) OR `demo.failed` (durable failure).
+ * BOTH must gate: `demo.failed`'s append wakes the run-activity bus (per
+ * `eventStore.ts`), so gating only on `demo.completed` self-loops on any real demo
+ * failure — the next wake re-enters `check()`, re-throws, re-appends `demo.failed`, and
+ * storms `warn`s at the operator per merge. Mirrors `deployOnMerge.ts`'s
+ * `alreadyTerminal` discipline (which unifies `deploy.verified` + `deploy.failed` +
+ * `deploy.skipped` under one terminal gate).
  */
 export interface VerifiedDeploy {
   runId: string;
@@ -27,8 +33,8 @@ export interface VerifiedDeploy {
   appId: string;
   /** The provider's deployment handle the demo surface status read targets. */
   deploymentId: string;
-  /** Whether this run already ran a demo (a prior `demo.completed` exists). */
-  alreadyDemoed: boolean;
+  /** Whether this run already reached a terminal demo outcome (`demo.completed` OR `demo.failed`). */
+  alreadyTerminalDemo: boolean;
 }
 
 interface DeployVerifiedRow {
@@ -43,7 +49,9 @@ interface DeployVerifiedRow {
  * Read a run's verified-deploy coordinates, or `undefined` when the run has no
  * `deploy.verified` (no deploy target, or not yet verified) — the clean no-op gate.
  * Joins the latest `deploy.verified` event to the run + project (spec/org) and flags
- * a prior `demo.completed` for the per-run idempotency short-circuit.
+ * a prior TERMINAL demo outcome (`demo.completed` OR `demo.failed`) for the per-run
+ * idempotency short-circuit — the unified terminal check that prevents `demo.failed`
+ * from self-looping through the run-activity NOTIFY wake.
  */
 export async function loadVerifiedDeploy(client: ReadClient, runId: string): Promise<VerifiedDeploy | undefined> {
   const result = await client.query<DeployVerifiedRow>(
@@ -52,7 +60,9 @@ export async function loadVerifiedDeploy(client: ReadClient, runId: string): Pro
             r.project_id,
             p.org_id,
             EXISTS (
-              SELECT 1 FROM events d WHERE d.run_id = $1 AND d.event_type = 'demo.completed'
+              SELECT 1 FROM events d
+              WHERE d.run_id = $1
+                AND d.event_type IN ('demo.completed', 'demo.failed')
             ) AS demoed
        FROM events v
        JOIN runs r ON r.run_id = v.run_id
@@ -77,7 +87,7 @@ export async function loadVerifiedDeploy(client: ReadClient, runId: string): Pro
     provider,
     appId,
     deploymentId,
-    alreadyDemoed: row.demoed,
+    alreadyTerminalDemo: row.demoed,
   };
 }
 

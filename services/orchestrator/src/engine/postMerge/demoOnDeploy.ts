@@ -11,8 +11,11 @@
 //
 // GATED on a verified deploy: a run with no `deploy.verified` (no deploy target, or a
 // deploy not yet verified) is a CLEAN NO-OP — demos are tied to a real live surface,
-// never narrated for an app that was never deployed. IDEMPOTENT per run: a prior
-// `demo.completed` short-circuits, so a notification storm collapses to one demo.
+// never narrated for an app that was never deployed. IDEMPOTENT per run on ANY
+// terminal demo outcome (`demo.completed` OR `demo.failed`) — both are run-scoped
+// appends that wake the run-activity bus, so gating only on `demo.completed`
+// self-loops on any real demo failure. One terminal demo per run suffices; a
+// notification storm collapses to a single demo.
 //
 // SECRET DISCIPLINE: the deploy token never reaches this file (it is resolved inside
 // the wrapped provisioner). The evidence events carry only behavior ids/titles +
@@ -98,7 +101,8 @@ export class DemoOnDeployWatcher {
   /**
    * Exercise the spec's behaviors against the run's verified deploy surface + record
    * per-behavior evidence. Returns without effect when the run's deploy is not
-   * verified or this run already ran a demo.
+   * verified or this run already reached a terminal demo outcome
+   * (`demo.completed` OR `demo.failed`).
    *
    * DURABLE FAILURE (mirrors {@link DeployOnMergeWatcher.check}): once a demo is EXPECTED
    * (a verified deploy exists and this run has not yet demoed), ANY throw records a
@@ -113,8 +117,14 @@ export class DemoOnDeployWatcher {
     const verified = await runWithSystemScope(this.deps.pool, (client) => loadVerifiedDeploy(client, runId));
     // No verified deploy ⇒ no live surface to exercise ⇒ clean no-op (not an error).
     if (verified === undefined) return;
-    // Idempotent: this run already ran its demo.
-    if (verified.alreadyDemoed) return;
+    // Idempotent on ANY terminal demo outcome — `demo.completed` OR `demo.failed`.
+    // BOTH wake the run-activity bus (`eventStore.ts` NOTIFYs `tanren_run` on any
+    // event append), so gating only on `demo.completed` self-loops on any real
+    // demo failure: the subscriber wakes on the `demo.failed` append, re-enters
+    // `check()`, re-throws, re-appends `demo.failed`, and storms `warn`s at the
+    // operator per merge. Mirrors `deployOnMerge.ts`'s `alreadyTerminal`
+    // discipline (which unifies verified/failed/skipped under one terminal gate).
+    if (verified.alreadyTerminalDemo) return;
 
     let phase: DemoFailPhase = "resolve_surface_failed";
     let surfaceKind: string | undefined;
