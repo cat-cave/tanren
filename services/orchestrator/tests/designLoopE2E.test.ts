@@ -209,16 +209,20 @@ describe("design loop e2e — the loop CLOSES (canned model responses, stateful 
     expect(block).toBeUndefined();
   });
 
-  it("no-org path: an unscopedPlatform run yields no writer block (never reads off the wrong scope)", async () => {
+  it("no-org path is UNREPRESENTABLE: `loadDesignContextBlock` requires a TenantScope", async () => {
+    // The vestigial "silent skip on `unscopedPlatform`" branch is gone. A run is
+    // ALWAYS tenant-scoped — the hydration boundary throws `UnscopedOrgError` on
+    // a missing/empty org id, so a downstream design read is never called
+    // off-scope. The invariant is enforced at the TYPE (loadDesignContextBlock
+    // takes `TenantScope`, not `OrgScope`), documented here as a compile-time
+    // check.
     const graph = newGraph();
     await author(graph);
-    // Even WITH a persisted contract, an unscoped run resolves no entity graph → no block.
-    const block = await loadDesignContextBlock({
-      client: graph as never,
-      orgScope: { kind: "unscopedPlatform" },
-      projectId: PROJECT,
-    });
-    expect(block).toBeUndefined();
+    // @ts-expect-error `unscopedPlatform` is not a `TenantScope`.
+    void loadDesignContextBlock({ client: graph as never, orgScope: { kind: "unscopedPlatform" }, projectId: PROJECT });
+    // The compile-time proof IS the assertion (the `@ts-expect-error` above);
+    // this expect anchors it as a runtime-observable test too.
+    expect(typeof loadDesignContextBlock).toBe("function");
   });
 
   it("authoring is loud, not silent: a dropped behavior throws (the exhaustive-coverage moat)", async () => {

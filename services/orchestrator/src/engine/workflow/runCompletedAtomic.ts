@@ -1,7 +1,9 @@
 // Success-path run finalize: row → completed/ok + `run.completed` event in ONE
-// org-scoped transaction. Three-arm dispatch (R5 #1 + #2 fixes / tasks #49+#50):
-// (1) writer+orgId → remote atomic; (2) orgId, no writer → in-process direct
-// atomic via runWithOrgScope; (3) no orgId → unit-test legacy split.
+// org-scoped transaction. Two-arm dispatch (R5 #1 + #2 fixes / tasks #49+#50):
+// (1) writer wired → remote atomic; (2) else → in-process direct atomic via
+// runWithOrgScope on a real pool; else → unit-test legacy split (fake pool).
+// The prior third arm (no orgId → legacy split) is gone: `PlannerRunContext.orgId`
+// is REQUIRED by the hydration invariant (a run is always tenant-scoped).
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { EventName, EventPayload } from "../events/index.js";
@@ -15,20 +17,20 @@ export async function finalizeRunCompletedAtomic(
   context: PlannerRunContext,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
 ): Promise<void> {
-  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
-  // events.org_id is NOT NULL + AppendEventInput requires explicit `orgId` (v68
-  // fix): both atomic-applier paths below carry it on the event so the row lands
-  // tenant-scoped. The unit-test fallback at the bottom (no-org / no-pool) emits
+  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
+  // the tenant-scope invariant); both atomic-applier paths carry it on the event
+  // so the row lands tenant-scoped. The fake-pool fallback at the bottom emits
   // via the appendEvent closure, which adds orgId itself.
-  const evt = (eventOrgId: string) => ({
+  const orgId = context.orgId;
+  const evt = () => ({
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
-    orgId: eventOrgId,
+    orgId,
     eventType: "run.completed" as const,
     payload: { status: "completed", outcome: "ok" },
   });
-  if (input.runStateWriter !== undefined && orgId !== undefined) {
+  if (input.runStateWriter !== undefined) {
     await input.runStateWriter.finalizeRunWithEvent({
       finalize: {
         runId: context.runId,
@@ -37,11 +39,11 @@ export async function finalizeRunCompletedAtomic(
         outcome: "ok",
         fromStatuses: ["running", "queued"],
       },
-      event: evt(orgId),
+      event: evt(),
     });
     return;
   }
-  if (orgId !== undefined && typeof (input.pool as { connect?: unknown }).connect === "function") {
+  if (typeof (input.pool as { connect?: unknown }).connect === "function") {
     const finalizeInput = {
       runId: context.runId,
       orgId,
@@ -50,7 +52,7 @@ export async function finalizeRunCompletedAtomic(
       fromStatuses: ["running", "queued"],
     };
     await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
-      await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: evt(orgId) });
+      await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: evt() });
     });
     return;
   }

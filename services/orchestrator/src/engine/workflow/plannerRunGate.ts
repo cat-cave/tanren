@@ -150,11 +150,10 @@ export function buildDefaultGate(
   // posture: `lenient` ⇒ {lint, typecheck} are advisory; every other posture ⇒
   // empty set (strict default — every step blocks, behavior unchanged).
   const advisoryStepNames = advisoryStepNamesForPosture(context.governancePosture);
-  // v68 fix: events.org_id is NOT NULL; the run's org propagates from runs.org_id
-  // (NOT NULL) onto PlannerRunContext.orgId. Tests that drive the gate without an
-  // explicit org carry an empty sentinel — the FakeEventStore stores them
-  // unchanged; PgEventStore would fail the INSERT loud.
-  const orgId = typeof context.orgId === "string" ? context.orgId : "";
+  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
+  // the tenant-scope invariant), so every appended gate event stamps a real
+  // org id — no empty-sentinel fallback.
+  const orgId = context.orgId;
   const appendEvent = async <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => {
     await eventStore.append({
       runId: context.runId,

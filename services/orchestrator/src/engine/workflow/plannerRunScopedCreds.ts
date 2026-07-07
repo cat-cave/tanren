@@ -262,7 +262,9 @@ export async function resolveScopedRunCredentials(
     ...(scoping.fetchImpl === undefined ? {} : { fetchImpl: scoping.fetchImpl }),
     input: {
       runId: input.context.runId,
-      orgId: input.context.orgId ?? null,
+      // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration
+      // enforces the tenant-scope invariant); no `?? null` fallback.
+      orgId: input.context.orgId,
       credentialRefPaths: refPaths,
       writableCredentialRefPaths: writableRefPaths,
       // r6 §2: the TTL pinned at boot from the INJECTED env (on `scoping`), NOT

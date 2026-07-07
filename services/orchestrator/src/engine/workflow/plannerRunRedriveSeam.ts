@@ -44,7 +44,9 @@ export interface FinalizeRedriveSeamCtx {
   finalizeRunState: FinalizeRunState;
   context: PlannerRunContext;
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
-  orgId: string | undefined;
+  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
+  // the tenant-scope invariant); this seam receives the SAME string, no null.
+  orgId: string;
 }
 
 /** The seam payload — the run outcome to persist + the paired `run.failed` event +
@@ -59,15 +61,18 @@ export interface FinalizeRedriveSeamInput {
 const JOB_QUEUE_FAILURE_MESSAGE_SQL =
   "UPDATE job_queue SET failure_message = $2 WHERE run_id = $1 AND status = 'running'";
 
-/** Three-arm dispatch: writer+orgId → remote atomic + best-effort failure_message;
- * orgId-only → in-process ONE-TX atomic (run+event+failure_message); no orgId →
- * unit-test legacy split (direct SQL + append, no failure_message). */
+/** Two-arm dispatch: writer wired → remote atomic + best-effort failure_message;
+ * else → in-process ONE-TX atomic (run+event+failure_message). The prior third
+ * arm (no orgId → unit-test legacy split without failure_message) is gone:
+ * `orgId` is required by the hydration invariant. A fake-pool unit test still
+ * lands here on the second branch and falls through to the plain
+ * `finalizeRunState` + `appendEvent` split when `isRealPool` returns false. */
 export async function finalizeRedriveAtomicSeam(
   ctx: FinalizeRedriveSeamCtx,
   { runOutcome, runFailedEvent, rawErrorMessage }: FinalizeRedriveSeamInput,
 ): Promise<void> {
   const { input, finalizeRunState, context, appendEvent, orgId } = ctx;
-  if (input.runStateWriter !== undefined && orgId !== undefined) {
+  if (input.runStateWriter !== undefined) {
     // Remote atomic finalize + run.failed event (server-side org-scoped tx). The
     // failure_message capture is a separate best-effort write against the
     // worker's pool — job_queue is OUTSIDE RLS so no GUC scope is required,
@@ -86,7 +91,7 @@ export async function finalizeRedriveAtomicSeam(
     await persistFailureMessageBestEffort(input.pool, context.runId, rawErrorMessage);
     return;
   }
-  if (orgId !== undefined && isRealPool(input.pool)) {
+  if (isRealPool(input.pool)) {
     // In-process atomic: runs UPDATE + run.failed event + job_queue
     // failure_message UPDATE in ONE org-scoped transaction.
     const finalizeInput = {

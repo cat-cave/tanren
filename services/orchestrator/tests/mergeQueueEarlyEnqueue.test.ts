@@ -99,7 +99,7 @@ async function publishWithSeam(input: {
     context,
   } as unknown as RunPlannerLoopInput;
 
-  const seam = mergeQueueEarlyEnqueueSeam(loopInput, context, events, context.orgId ?? "");
+  const seam = mergeQueueEarlyEnqueueSeam(loopInput, context, events, context.orgId);
 
   await publishDraftPullRequest({
     pool: pool.asPgPool(),
@@ -111,7 +111,7 @@ async function publishWithSeam(input: {
     runId: context.runId,
     specId: context.specId,
     projectId: context.projectId,
-    appendEventOrgId: context.orgId ?? "",
+    appendEventOrgId: context.orgId,
     workspacePath: "/workspace/runs/run_42/repo",
     repoUrl: context.repoUrl,
     targetBranch: context.targetBranch,

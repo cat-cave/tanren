@@ -30,6 +30,7 @@ function context(opts?: { governancePosture?: GovernancePosture; greenfield?: bo
     runId: "run_greenfield",
     specId: "spec_greenfield",
     projectId: "project_greenfield",
+    orgId: "org_greenfield",
     repoUrl: "https://github.com/cat-cave/greenfield",
     targetBranch: "main",
     runBranch: "tanren/greenfield",

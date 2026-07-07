@@ -128,7 +128,17 @@ export interface ResolveCredentialsInput {
  * The credential resolver's org scope — the EXPLICIT replacement for a bare `orgId`
  * string that callers used to coerce with `?? ""`. See {@link ResolveCredentialsInput}.
  */
-export type OrgScope = { kind: "org"; orgId: string } | { kind: "unscopedPlatform" };
+export type OrgScope = TenantScope | { kind: "unscopedPlatform" };
+
+/**
+ * The NARROWED variant of {@link OrgScope} carried by every tenant-scoped path (run
+ * / forge project surface / design writer + oracle). It is the ONLY legitimate scope
+ * for a run — the `unscopedPlatform` variant is reserved for the greenfield forge
+ * interview and is NOT reachable from a run. Callers on a run path receive this
+ * narrower type from {@link orgScopeFromRunOrgId} and can read `orgId` directly
+ * without a `kind === "org"` branch (the branch is unreachable by the type).
+ */
+export type TenantScope = { kind: "org"; orgId: string };
 
 /**
  * Build an `{ kind: "org" }` scope from a real org id, failing LOUD on an empty/blank
@@ -136,9 +146,11 @@ export type OrgScope = { kind: "org"; orgId: string } | { kind: "unscopedPlatfor
  * `?? ""`: `projects.org_id` / `runs.org_id` are NOT-NULL, so an empty org id at a
  * run path is a scoping/RLS-denial bug — it must be a loud error, not a quiet BYOK
  * degrade. The `unscopedPlatform` mode is reached only by NAMING it directly, never
- * by an empty string flowing through here.
+ * by an empty string flowing through here. Returns the NARROWED {@link TenantScope}
+ * (not the broader {@link OrgScope}) so downstream tenant-only consumers can read
+ * `orgId` with no `kind === "org"` branch.
  */
-export function orgScopeFromRunOrgId(orgId: string | null | undefined): OrgScope {
+export function orgScopeFromRunOrgId(orgId: string | null | undefined): TenantScope {
   if (typeof orgId !== "string" || orgId.trim() === "") {
     throw new UnscopedOrgError();
   }

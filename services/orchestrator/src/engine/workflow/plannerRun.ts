@@ -98,8 +98,15 @@ export interface PlannerRunContext {
   runId: string;
   specId: string;
   projectId: string;
-  // The run's org (null = unscoped); threaded to allocator for `runners` RLS scope.
-  orgId?: string | null;
+  // The run's tenant scope, threaded to allocator for `runners` RLS scope + every
+  // downstream event append (`events.org_id` is NOT NULL). A run is ALWAYS
+  // tenant-scoped; the invariant is enforced at the hydration boundary
+  // ({@link loadRunExecutionContext} routes `runs.org_id` through
+  // {@link orgScopeFromRunOrgId}, which throws `UnscopedOrgError` on a
+  // missing/empty value), so this field is a REQUIRED non-empty string — never
+  // null/undefined — and downstream consumers can read it directly without a
+  // defensive `?? ""` / `typeof …` narrow.
+  orgId: string;
   repoUrl: string;
   targetBranch: string;
   runBranch: string;
@@ -273,8 +280,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     projectId: context.projectId,
     runnerImage: context.runnerImage,
     identitySecretRef: context.identitySecretRef,
-    // Threaded so `runners` row is RLS-scoped; undefined for null-org jobs.
-    orgId: context.orgId ?? undefined,
+    // Threaded so `runners` row is RLS-scoped. `PlannerRunContext.orgId` is a
+    // REQUIRED non-empty string (hydration enforces the tenant-scope invariant),
+    // so there is no null/undefined branch here.
+    orgId: context.orgId,
   });
   await appendEvent("runner.allocated", runnerPayload(allocation));
 
