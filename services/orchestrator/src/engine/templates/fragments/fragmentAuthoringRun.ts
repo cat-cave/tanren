@@ -20,6 +20,7 @@ import { deriveImplicitDependsOn } from "./implicitDependsOn.js";
 export { deriveImplicitDependsOn } from "./implicitDependsOn.js";
 import { loadFragmentLibrary } from "./library/index.js";
 import { deriveRuntimeLanguage, unsupportedRuntimeLanguageReason } from "./runtimeLanguage.js";
+import { runRuntimeValiditySmoke, type RuntimeValiditySmokeDeps } from "./runtimeValiditySmoke.js";
 import {
   runFullLibrarySmokeComposition,
   runSmokeComposition,
@@ -170,6 +171,13 @@ export interface FragmentAuthoringDeps {
    * undefined ⇒ the writer prompt omits the section cleanly. Returning `[]` is
    * equivalent to omitting the seam. */
   priorFragmentsLookup?: (orgId: string) => Promise<readonly PriorFragment[]>;
+  /** Optional runtime-validity smoke deps. When absent, the runtime-validity
+   * step is SKIPPED with an explicit log — the composition-validity smokes
+   * still run. Production wires the real pnpm/bundle subprocess seams here so
+   * the writer's declared deps are proved resolvable BEFORE the fragment
+   * persists; tests either omit this (skip the runtime step entirely) or wire
+   * a fake invoker to assert the pipeline behavior. */
+  runtimeValiditySmoke?: RuntimeValiditySmokeDeps;
 }
 
 /** Build the authoring runner. The returned function processes the missing list
@@ -328,7 +336,11 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
     const bodyTs = output.bodyTs;
 
     // VALIDATE.
-    const validation = await validateFragmentBody({ spec, bodyTs });
+    const validation = await validateFragmentBody({
+      spec,
+      bodyTs,
+      ...(deps.runtimeValiditySmoke && { runtimeValiditySmoke: deps.runtimeValiditySmoke }),
+    });
     const canonicalSignature = canonicalizeBodySignature(bodyTs);
     if (validation.kind === "ok") {
       // Emit the per-iteration observability event for the WINNING attempt
@@ -410,11 +422,17 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
 /** Parse + smoke-compose the authored body. A pass proves: the body's structure
  * is the constrained subset; `interpretOrgFragment` builds a real Fragment;
  * that Fragment composes with the bundled library BOTH in isolation AND in the
- * full-library kitchen-sink (audit finding H5). The persisted `dependsOn` is
- * DERIVED from the parsed ops (audit finding #11) so a fragment that uses
- * node-pnpm-only ops without declaring the runtime dep is caught here rather
- * than silently dropping deps in a later compose. */
-async function validateFragmentBody(args: { spec: FragmentSpec; bodyTs: string }): Promise<SmokeOk | SmokeFailed> {
+ * full-library kitchen-sink (audit finding H5); AND — when the runtime-validity
+ * seam is wired — the runtime's dependency resolver accepts the composed
+ * scaffold (runtime-validity smoke — task added this PR). The persisted
+ * `dependsOn` is DERIVED from the parsed ops (audit finding #11) so a fragment
+ * that uses node-pnpm-only ops without declaring the runtime dep is caught here
+ * rather than silently dropping deps in a later compose. */
+async function validateFragmentBody(args: {
+  spec: FragmentSpec;
+  bodyTs: string;
+  runtimeValiditySmoke?: RuntimeValiditySmokeDeps;
+}): Promise<SmokeOk | SmokeFailed> {
   // 1) Parse — rejects bodies that step outside the constrained subset. We pull
   // ops separately to derive the implicit dependsOn (audit finding #11) and to
   // build the smoke Fragment with the correct dependsOn so the cross-runtime
@@ -430,18 +448,10 @@ async function validateFragmentBody(args: { spec: FragmentSpec; bodyTs: string }
     return { kind: "failed", reason };
   }
 
-  // 2) Derive the implicit `dependsOn` from the ops (audit finding #11). Any
-  // `addPackageJsonDep` / `addPackageJsonDevDep` call ⇒ implicit
-  // `runtime-node-pnpm` dependency — pkg.json deps only land in the composed
-  // VFS when the active runtime is node-pnpm (the ruby-bundler runtime ships
-  // no package.json + `processDeps` early-returns on its absence), so this
-  // dep is structurally required.
+  // 2) Derive implicit `dependsOn` (audit #11) — see `implicitDependsOn.ts`.
   const derivedDependsOn = deriveImplicitDependsOn(ops, args.spec);
 
-  // 3) Build the validated Fragment via `interpretOrgFragment`, carrying the
-  // derived dependsOn so the smoke compose's cross-runtime pre-flight sees the
-  // correct shape (and so a future compose that pairs this fragment with the
-  // wrong runtime fails loud via the existing `dependency_runtime_mismatch`).
+  // 3) Build the Fragment carrying derivedDependsOn so cross-runtime pre-flight sees it.
   let fragment: Fragment;
   try {
     fragment = interpretOrgFragment({
@@ -467,14 +477,23 @@ async function validateFragmentBody(args: { spec: FragmentSpec; bodyTs: string }
   const isolated = await runSmokeComposition(args.spec, fragment, derivedDependsOn);
   if (isolated.kind !== "ok") return isolated;
 
-  // 5) Full-library smoke — the kitchen-sink config that composes the authored
-  // fragment alongside every bundled fragment compatible with the runtime.
-  // Catches the "isolated-fine but composes-with-conflict" class (audit
-  // finding H5 — task #150) that the minimal smoke can't see because it only
-  // wires the authored slot: file collisions, dep-version conflicts, justfile
-  // clashes when the operator's real project uses the full bundled set.
+  // 5) Full-library smoke — kitchen-sink compose (audit H5 — catches isolated-fine-but-composes-with-conflict).
   const full = await runFullLibrarySmokeComposition(args.spec, fragment, derivedDependsOn);
   if (full.kind !== "ok") return full;
 
+  // 6) Runtime-validity smoke — the final gate; composition-validity ≠ runtime-validity.
+  // Materializes the composed VFS + runs the runtime's dep resolver (e.g. pnpm install).
+  // Skipped with a log when deps aren't wired (composition-validity tests).
+  if (args.runtimeValiditySmoke === undefined) {
+    log.info("runtime-validity smoke deps not wired — skipping", { specId: args.spec.id });
+    return { kind: "ok", dependsOn: derivedDependsOn };
+  }
+  const runtime = await runRuntimeValiditySmoke({
+    spec: args.spec,
+    fragment,
+    derivedDependsOn,
+    deps: args.runtimeValiditySmoke,
+  });
+  if (runtime.kind !== "ok") return runtime;
   return { kind: "ok", dependsOn: derivedDependsOn };
 }
