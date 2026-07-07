@@ -106,7 +106,12 @@ function stringArray(value: unknown): string[] {
 export interface RunExecutionContext {
   context: PlannerRunContext;
   projectConfig: ProjectConfigV1;
-  orgId: string | null;
+  // A run is ALWAYS tenant-scoped ({@link loadRunExecutionContext} routes
+  // `runs.org_id` through {@link orgScopeFromRunOrgId}, which throws
+  // `UnscopedOrgError` on a missing/empty value). The vestigial `string | null`
+  // branch is gone — every returned execution context carries a real, non-empty
+  // org id, matching the narrowed {@link PlannerRunContext.orgId}.
+  orgId: string;
 }
 
 /**
@@ -229,7 +234,11 @@ export async function loadRunExecutionContext(
     runId: decoded.run_id,
     specId: decoded.spec_id,
     projectId: decoded.project_id,
-    orgId: decoded.org_id,
+    // A run is ALWAYS tenant-scoped: `orgScopeFromRunOrgId` above threw
+    // `UnscopedOrgError` on an empty/absent value, so `orgScope.orgId` is a real
+    // non-empty string. This is the SINGLE production hydration site — the
+    // invariant is enforced HERE, not at every downstream consumer.
+    orgId: orgScope.orgId,
     repoUrl: decoded.repo_url,
     // §2c jj-local: the run's history root is `default_branch`. A DEPENDENT speculative run
     // jj-ASSEMBLES `main + ordered ancestors` LOCALLY at bootstrap from `ancestorStack`
@@ -330,7 +339,10 @@ export async function loadRunExecutionContext(
           },
         };
 
-  return { context, projectConfig: resolvedConfig, orgId: decoded.org_id };
+  // A run's tenant scope is enforced at hydration ({@link orgScopeFromRunOrgId}
+  // threw above on empty), so the returned `orgId` is a real non-empty string —
+  // matching the narrowed `RunExecutionContext.orgId` invariant.
+  return { context, projectConfig: resolvedConfig, orgId: orgScope.orgId };
 }
 
 /**

@@ -140,7 +140,7 @@ class RecordingPool {
 }
 
 function reviewCtx(): PlannerRunContext {
-  return { runId: "run_1", specId: "spec_1", projectId: "project_1" } as unknown as PlannerRunContext;
+  return { runId: "run_1", specId: "spec_1", projectId: "project_1", orgId: "org_1" } as unknown as PlannerRunContext;
 }
 
 function reviewRejection(reason: string): PlannerRejectionFeedback {

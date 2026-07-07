@@ -34,6 +34,7 @@ function context(): PlannerRunContext {
     runId: "run_cfg",
     specId: "spec_cfg",
     projectId: "project_cfg",
+    orgId: "org_cfg",
     repoUrl: "https://github.com/cat-cave/greenfield",
     targetBranch: "main",
     runBranch: "tanren/cfg",

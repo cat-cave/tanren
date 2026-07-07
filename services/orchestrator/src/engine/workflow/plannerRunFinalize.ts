@@ -81,9 +81,15 @@ export function buildFinalizeRunState(input: RunPlannerLoopInput, runId: string)
  * (the seam is only wired when it is known).
  */
 export async function markRunRunning(input: RunPlannerLoopInput, context: PlannerRunContext): Promise<void> {
-  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
-  if (input.runStateWriter !== undefined && orgId !== undefined) {
-    await input.runStateWriter.setRunStatus({ runId: context.runId, orgId, status: "running", setStartedAt: true });
+  // context.orgId is a REQUIRED string (hydration invariant); writer path
+  // chosen on WIRING alone (a no-DB unit run omits it → in-process UPDATE).
+  if (input.runStateWriter !== undefined) {
+    await input.runStateWriter.setRunStatus({
+      runId: context.runId,
+      orgId: context.orgId,
+      status: "running",
+      setStartedAt: true,
+    });
     return;
   }
   await input.pool.query("UPDATE runs SET status = 'running', started_at = now() WHERE run_id = $1", [context.runId]);
@@ -99,9 +105,9 @@ export async function setSpecStatus(
   context: PlannerRunContext,
   status: string,
 ): Promise<void> {
-  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
-  if (input.runStateWriter !== undefined && orgId !== undefined) {
-    await input.runStateWriter.setSpecStatus({ specId: context.specId, orgId, status });
+  // See `markRunRunning`: writer path chosen on WIRING alone (orgId is REQUIRED).
+  if (input.runStateWriter !== undefined) {
+    await input.runStateWriter.setSpecStatus({ specId: context.specId, orgId: context.orgId, status });
     return;
   }
   await input.pool.query("UPDATE specs SET status = $2 WHERE spec_id = $1", [context.specId, status]);
@@ -131,16 +137,15 @@ function dispositionSeams(
   context: PlannerRunContext,
   appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>,
 ): DispositionSeams {
-  const orgId = typeof context.orgId === "string" ? context.orgId : undefined;
+  // context.orgId is REQUIRED (hydration invariant); two-arm dispatch (R5 #2 /
+  // task #50): writer wired → remote atomic; else → in-process direct atomic.
+  const orgId = context.orgId;
   return {
     finalizeRunState,
     finalizeNonPass: (outcome) => finalizeNonPass(finalizeRunState, context.runId, outcome),
     setSpecStatus: (status) => setSpecStatus(input, context, status),
-    // Three-arm dispatch (R5 #2 / task #50): writer+orgId → remote atomic;
-    // orgId-only → in-process direct atomic via runWithOrgScope's BEGIN/COMMIT
-    // around applyXxxWithEvent; no orgId → unit-test legacy split.
     updateSpecAtomic: async (spec, event) => {
-      if (input.runStateWriter !== undefined && orgId !== undefined) {
+      if (input.runStateWriter !== undefined) {
         await input.runStateWriter.updateSpecWithEvent({
           spec: {
             specId: context.specId,
@@ -152,7 +157,7 @@ function dispositionSeams(
         });
         return;
       }
-      if (orgId !== undefined && isRealPool(input.pool)) {
+      if (isRealPool(input.pool)) {
         const specInput = {
           specId: context.specId,
           orgId,
@@ -168,7 +173,7 @@ function dispositionSeams(
       await appendEvent(event.eventType, event.payload, event.taskId);
     },
     finalizeGenuineHaltAtomic: async (event) => {
-      if (input.runStateWriter !== undefined && orgId !== undefined) {
+      if (input.runStateWriter !== undefined) {
         await input.runStateWriter.finalizeRunWithEvent({
           finalize: {
             runId: context.runId,
@@ -181,7 +186,7 @@ function dispositionSeams(
         });
         return;
       }
-      if (orgId !== undefined && isRealPool(input.pool)) {
+      if (isRealPool(input.pool)) {
         const finalizeInput = {
           runId: context.runId,
           orgId,

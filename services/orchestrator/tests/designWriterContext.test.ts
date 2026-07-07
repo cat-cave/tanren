@@ -248,10 +248,18 @@ describe("WS-D2 design writer context — resolve + render (persona-scoped, beha
     expect(block).toBeUndefined();
   });
 
-  it("returns undefined for an unscopedPlatform scope (no tenant to resolve against)", async () => {
+  it("enforces the tenant-scope invariant at the TYPE level (unscopedPlatform is unreachable)", () => {
+    // The vestigial "silent skip on `kind !== "org"`" branch is gone — the
+    // hydration boundary (`orgScopeFromRunOrgId`) throws `UnscopedOrgError` on a
+    // missing/empty org id, so a run never reaches `loadDesignContextBlock` with
+    // an `unscopedPlatform` scope. The invariant is enforced HERE at the TYPE
+    // (loadDesignContextBlock now requires `TenantScope`, not `OrgScope`).
     const client = fakeClient({ contract: saasContract, personas, behaviors });
-    const block = await loadDesignContextBlock({ client, orgScope: { kind: "unscopedPlatform" }, projectId: PROJECT });
-    expect(block).toBeUndefined();
+    // @ts-expect-error `unscopedPlatform` is not a `TenantScope`.
+    void loadDesignContextBlock({ client, orgScope: { kind: "unscopedPlatform" }, projectId: PROJECT });
+    // The compile-time proof IS the assertion (the `@ts-expect-error` above);
+    // this expect anchors it as a runtime-observable test too.
+    expect(typeof loadDesignContextBlock).toBe("function");
   });
 
   // H2 BLOCKING (unify) — pins the fix's core promise: the SAME contract, written

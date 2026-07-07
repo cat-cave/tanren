@@ -62,6 +62,7 @@ function context(): PlannerRunContext {
     runId: "run_boot",
     specId: "spec_boot",
     projectId: "project_boot",
+    orgId: "org_boot",
     repoUrl: "https://github.com/cat-cave/greenfield",
     targetBranch: "main",
     runBranch: "tanren/boot",

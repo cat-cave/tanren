@@ -130,7 +130,10 @@ export interface DispositionSeams {
 export interface DispositionContext {
   appendEvent: AppendEvent;
   input: { redriveHistoryReader?: RedriveHistoryReader };
-  context: { runId: string; specId: string; orgId?: unknown };
+  // `orgId` mirrors the narrowed `PlannerRunContext.orgId` — REQUIRED non-empty
+  // string. The hydration boundary enforces the invariant, so this seam receives
+  // the same real org id every consumer already gets.
+  context: { runId: string; specId: string; orgId: string };
 }
 
 /** The bucket a terminal outcome was disposed into (the workflow `catch` keys off this). */
@@ -180,16 +183,14 @@ function resolveProjectId(ctx: DispositionContext): string {
 }
 
 /**
- * Resolve the run's `orgId` from `ctx.context` for the spec/run-disposition events
- * (v68 fix: AppendEventInput requires explicit `orgId` rather than the prior
- * derive-from-project subquery; runs.org_id is NOT NULL on the table, propagated
- * through the workflow's `PlannerRunContext.orgId`). Fail loud on absence — the
- * applier is reached only on a real workflow throw where the run row exists, so a
- * missing org is a wiring bug that must NEVER silently drop org_id (the apex v68
- * RLS-deny mode the fix exists to close).
+ * Return the run's `orgId` for the spec/run-disposition events (AppendEventInput
+ * requires explicit `orgId`). `PlannerRunContext.orgId` is a REQUIRED non-empty
+ * string (hydration enforces the tenant-scope invariant), so this is a direct
+ * field read — the prior `typeof … : ""` sentinel fallback is gone; a missing
+ * org would have thrown loud at hydration.
  */
 function resolveOrgId(ctx: DispositionContext): string {
-  return typeof ctx.context.orgId === "string" ? ctx.context.orgId : "";
+  return ctx.context.orgId;
 }
 
 /** Apply a RE-DRIVE: halt the run recoverable, return the spec to `open`, emit `dag.spec.redriven`.
@@ -446,8 +447,12 @@ async function readConvergenceFacts(ctx: DispositionContext, outcome: TerminalOu
   const code = probe.bucket === "re_drive" || probe.bucket === "genuine_halt" ? probe.failure?.code : undefined;
   const stage = probe.bucket === "re_drive" || probe.bucket === "genuine_halt" ? probe.failure?.stage : undefined;
   const reader = ctx.input.redriveHistoryReader;
-  const orgId = typeof ctx.context.orgId === "string" ? ctx.context.orgId : undefined;
-  if (reader === undefined || orgId === undefined || code === undefined || stage === undefined) {
+  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
+  // the tenant-scope invariant); the read is skipped only when the reader isn't
+  // wired or the disposition has no counted failure code (a merge / pause /
+  // ancestor-wait outcome), never on a missing org.
+  const orgId = ctx.context.orgId;
+  if (reader === undefined || code === undefined || stage === undefined) {
     return { priorSameFixedPoint: 0 };
   }
   const result = await reader({ orgId, specId: ctx.context.specId, code, stage });

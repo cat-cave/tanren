@@ -10,6 +10,7 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
+import { PlannerRunPool } from "./helpers/plannerRunPool.js";
 import type { GitHubHttpClient, GitHubHttpRequest, GitHubHttpResponse } from "../src/engine/providers/github.js";
 import type { CcusageAccounting, UsageProbe, WindowObservation } from "../src/engine/usage/index.js";
 import { runWithJobOrgId, runWithSystemJobScope } from "@tanren/db";
@@ -35,8 +36,9 @@ export function runPlannerLoopScoped(
     ...input,
     runStateWriter: input.runStateWriter ?? new DirectRunStateWriter(input.pool),
   };
-  const orgId = typeof input.context.orgId === "string" ? input.context.orgId : "org_planner_test";
-  return runWithSystemJobScope(() => runWithJobOrgId(orgId, () => runPlannerLoopWorkflow(resolved)));
+  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration
+  // enforces the tenant-scope invariant), so the fixture always provides it.
+  return runWithSystemJobScope(() => runWithJobOrgId(input.context.orgId, () => runPlannerLoopWorkflow(resolved)));
 }
 
 export {
@@ -74,6 +76,7 @@ export function context(): PlannerRunContext {
     runId: "run_planner_test",
     specId: "spec_planner_test",
     projectId: "project_planner_test",
+    orgId: "org_planner_test",
     repoUrl: "https://github.com/cat-cave/tanren-fixture-medium",
     targetBranch: "main",
     runBranch: "tanren/planner-test",
@@ -161,6 +164,9 @@ export async function setup(projectConfig?: Record<string, unknown>) {
   const ctx = context();
   const pool = new PlannerRunPool(ctx, projectConfig);
   const events = new FakeEventStore();
+  // Share the FakeEventStore with the pool so an atomic-path INSERT INTO events
+  // routed through `PgEventStore(fakePool)` still lands in `events.events`.
+  pool.eventSink = events;
   const secrets = new FakeSecretStore();
   await storeGithubToken(secrets, { ref: ctx.githubCredentialRef, token: "ghp_secretToken" });
   const allocator = new RecordingAllocator();
@@ -367,132 +373,6 @@ export class ScriptedGitHubHttp implements GitHubHttpClient {
   }
 }
 
-// Fake pool covering: run-state updates, the loop's task/cost rows, the
-// planner-task supersede, and the CI poll queries.
-export class PlannerRunPool {
-  runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
-  prUrl: string | null = null;
-  readonly taskKinds: string[] = [];
-  /** Every `UPDATE specs SET status = ...` in spec-write order. */
-  readonly specStatuses: string[] = [];
-  private readonly costRows: Array<{ id: string; total_tokens: number; billing_mode: string }> = [];
-  private nextCostId = 1;
-  private ciTask: { taskId: string; attempt: number } | undefined;
-
-  // The project config the review/merge tail loads. Defaults to the not_configured
-  // hand-off; tests override to exercise direct_merge / other branches.
-  private readonly projectConfig: Record<string, unknown>;
-
-  constructor(
-    private readonly runContext: PlannerRunContext,
-    projectConfig?: Record<string, unknown>,
-  ) {
-    // A valid version:1 project config (migrateProjectConfig fails hard on `{}`);
-    // the static GitHub credential ref lives under strict-V1 `credentials`.
-    this.projectConfig = projectConfig ?? {
-      version: 1,
-      ...(runContext.githubCredentialRef === undefined
-        ? {}
-        : { credentials: { githubCredentialRef: runContext.githubCredentialRef } }),
-    };
-  }
-
-  async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
-    const trimmed = sql.trim();
-    if (trimmed.startsWith("SELECT id, total_tokens, billing_mode FROM cost_records")) {
-      return { rows: [...this.costRows], rowCount: this.costRows.length };
-    }
-    if (trimmed.startsWith("UPDATE cost_records SET")) {
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO cost_records")) {
-      // total_tokens = $12 (idx 11); billing_mode = $15 (idx 14, after notional_cost_usd $14).
-      this.costRows.push({
-        id: String(this.nextCostId++),
-        total_tokens: Number(params[11] ?? 0),
-        billing_mode: String(params[14] ?? "self_hosted"),
-      });
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("INSERT INTO tasks")) {
-      this.taskKinds.push(String(trimmed.includes("'ci'") ? "ci" : (params[2] ?? "plan")));
-      if (trimmed.includes("'ci'")) {
-        this.ciTask = { taskId: String(params[0]), attempt: 1 };
-      }
-      return { rows: [], rowCount: 1 };
-    }
-    // PgBudgetGate (Codex critic #11): synthesize owner+zero-spend so the fail-closed gate does not pause workflows.
-    if (trimmed.startsWith("SELECT org_id, config FROM projects WHERE project_id = $1"))
-      return { rows: [{ org_id: "org_planner_test", config: this.projectConfig }], rowCount: 1 };
-    if (trimmed.startsWith("SELECT config FROM organizations WHERE id = $1"))
-      return { rows: [{ config: { version: 1 } }], rowCount: 1 };
-    if (trimmed.startsWith("SELECT COALESCE(SUM(cost_usd"))
-      return { rows: [{ total: "0", notional: "0", unpriced: "0" }], rowCount: 1 };
-    if (trimmed.startsWith("SELECT r.run_id, r.spec_id, r.project_id, r.")) {
-      // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
-      const row = {
-        run_id: this.runContext.runId,
-        spec_id: this.runContext.specId,
-        project_id: this.runContext.projectId,
-        org_id: "org_planner_test",
-        pr_url: this.prUrl,
-        branch: this.runContext.runBranch,
-        config: this.projectConfig,
-        default_branch: "main",
-        org_config: null,
-      };
-      return { rows: [row], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE specs SET status = 'in_flight'")) {
-      // review-rework re-entry sets the spec back in_flight ($1 = spec_id).
-      this.specStatuses.push("in_flight");
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE specs SET status = $2")) {
-      // merged / handed-off tail sets the final spec status ($2).
-      this.specStatuses.push(String(params[1]));
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("SELECT task_id, attempt")) {
-      return {
-        rows: this.ciTask === undefined ? [] : [{ task_id: this.ciTask.taskId, attempt: this.ciTask.attempt }],
-        rowCount: this.ciTask === undefined ? 0 : 1,
-      };
-    }
-    if (trimmed.startsWith("UPDATE runs SET pr_url")) {
-      this.prUrl = String(params[1]);
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'running'")) {
-      this.runStatus = { status: "running", outcome: null };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'completed'")) {
-      this.runStatus = { status: "completed", outcome: "ok" };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'halted'")) {
-      this.runStatus = { status: "halted", outcome: String(params[1]) };
-      return { rows: [], rowCount: 1 };
-    }
-    // task #82.
-    if (trimmed.startsWith("UPDATE runs SET status = 'paused'")) {
-      this.runStatus = { status: "paused", outcome: "window_paused" };
-      return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE runs SET status = 'failed'")) {
-      this.runStatus = { status: "failed", outcome: "failed" };
-      return { rows: [], rowCount: 1 };
-    }
-    return { rows: [], rowCount: 1 };
-  }
-
-  // Minimal `connect()` so `runWithOrgScope`/`runWithSystemScope` transactions work.
-  async connect(): Promise<{ query: PlannerRunPool["query"]; release: () => void }> {
-    return { query: this.query.bind(this), release: () => {} };
-  }
-
-  asPgPool() {
-    return this as never;
-  }
-}
+// `PlannerRunPool` lives in `helpers/plannerRunPool.ts` — re-exported here so
+// existing test imports (`import { PlannerRunPool } from "./plannerRun.fixtures"`) work.
+export { PlannerRunPool };

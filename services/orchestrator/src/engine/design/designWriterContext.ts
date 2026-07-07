@@ -33,7 +33,7 @@
 
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import type { OrgScope } from "../credentials/resolveCredentials.js";
+import type { TenantScope } from "../credentials/resolveCredentials.js";
 import { BehaviorStore } from "../entities/behaviors.js";
 import { PersonaStore } from "../entities/personas.js";
 import { DesignContractStore, type DesignContractRecord } from "../repositories/designContracts.js";
@@ -281,11 +281,13 @@ export async function resolveDesignContext(
  * Read under the run's org scope (the passed client is already RLS-scoped); a
  * malformed persisted contract fails LOUDLY in the store before it reaches here.
  *
- * `orgScope` is the run's resolved scope (the same `{ kind: "org", orgId }` the
- * credential resolve uses). A run is ALWAYS tenant-scoped — an `unscopedPlatform`
- * scope has no tenant to resolve personas/behaviors against, so it yields no block
- * (rather than reading off the wrong scope), mirroring the conflict resolver's
- * no-org guard.
+ * `orgScope` is the run's resolved tenant scope (a `{ kind: "org", orgId }`
+ * emitted by {@link orgScopeFromRunOrgId}). A run is ALWAYS tenant-scoped, so the
+ * caller passes the NARROWED {@link TenantScope} — the type makes an
+ * `unscopedPlatform` scope unreachable at compile time. There is no defensive
+ * `kind !== "org"` skip: the invariant is enforced at the hydration boundary
+ * (a missing tenant scope throws `UnscopedOrgError` there), never silently
+ * degraded to a `return undefined` here.
  *
  * H2 BLOCKING (unify): the design contract is PROJECT-scoped, shared across all
  * spec types (scaffold/build/deploy specs need product identity for naming +
@@ -295,10 +297,9 @@ export async function resolveDesignContext(
  */
 export async function loadDesignContextBlock(input: {
   client: QueryClient;
-  orgScope: OrgScope;
+  orgScope: TenantScope;
   projectId: string;
 }): Promise<string | undefined> {
-  if (input.orgScope.kind !== "org") return undefined;
   const actor = designResolverActor(input.orgScope.orgId, input.projectId);
   // Use the TYPED-STATE lookup so a CORRUPT persisted row throws loud (Codex
   // critic #7) rather than the prior `undefined` return that made it

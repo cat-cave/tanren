@@ -154,6 +154,34 @@ describe("loadRunExecutionContext", () => {
     await expect(
       loadRunExecutionContext(rowPool(fullRow({ org_id: "" })), { runId: "run_1", identitySecretRef: "id" }),
     ).rejects.toMatchObject({ name: "UnscopedOrgError" });
+    await expect(
+      loadRunExecutionContext(rowPool(fullRow({ org_id: "   " })), { runId: "run_1", identitySecretRef: "id" }),
+    ).rejects.toMatchObject({ name: "UnscopedOrgError" });
+  });
+
+  it("H2 org-scope invariant: the hydrated PlannerRunContext.orgId is the SAME real non-empty string as the row's org_id", async () => {
+    // The H2 findings (#2 designWriterContext / #3 providerFactory / #4-#5
+    // plannerRunSeams) each defended against a `context.orgId` state that
+    // "cannot happen" but silently degraded (undefined skip / `""` coercion) if
+    // it did. The fix enforces the invariant HERE at the hydration boundary:
+    // `runs.org_id` is threaded through `orgScopeFromRunOrgId`, which throws
+    // `UnscopedOrgError` on a missing value AND returns the narrowed
+    // `TenantScope`. The context's `orgId` is populated from THAT scope, so a
+    // downstream consumer can read it as a REQUIRED non-empty string with no
+    // `?? ""` / `typeof …` narrow (the whole vestigial safety-net cluster).
+    const { context, orgId } = await loadRunExecutionContext(rowPool(fullRow({ org_id: "org_h2" })), {
+      runId: "run_1",
+      identitySecretRef: "id",
+    });
+    expect(context.orgId).toBe("org_h2");
+    expect(orgId).toBe("org_h2");
+    // TypeScript narrowing: at this point `context.orgId` and `orgId` are both
+    // typed `string` (not `string | null | undefined`). A vestigial `?? ""`
+    // downstream would now be a type error, not a silent runtime empty-string.
+    const narrow: string = context.orgId;
+    expect(narrow).toBe("org_h2");
+    const returnedOrgId: string = orgId;
+    expect(returnedOrgId).toBe("org_h2");
   });
 
   it("distinguishes the run branch from the project default branch", async () => {

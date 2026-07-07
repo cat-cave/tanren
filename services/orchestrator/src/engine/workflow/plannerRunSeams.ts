@@ -169,7 +169,7 @@ export function reGateGateReworkSeam(
     return { reGateGateRework: input.reGateGateRework };
   }
   const context = input.context;
-  const orgId = typeof context.orgId === "string" ? context.orgId : "";
+  const orgId = context.orgId;
   return {
     reGateGateRework: new SpecStatusGateReworkRouter({
       pool: input.pool,
@@ -239,23 +239,32 @@ export function baseShiftRebaseSeam(
   );
 }
 
-/** v68 fix: the planner-loop's context-orgId resolver. */
+/**
+ * Return the run's tenant org id. `PlannerRunContext.orgId` is now a REQUIRED
+ * non-empty string (the hydration boundary enforces the tenant-scope invariant),
+ * so this reduces to a direct field read. Kept as a named seam because a few
+ * call sites still spell the intent ("the run's org") more clearly through the
+ * helper than through a bare field read.
+ */
 export function requireContextOrgId(context: PlannerRunContext): string {
-  return typeof context.orgId === "string" ? context.orgId : "";
+  return context.orgId;
 }
 
-// WS-D4 native design subsystem — the actor identity the in-loop design ORACLE reads the
-// contract + entity graph under (the SAME org-scoped seam `loadDesignContextBlock` uses for
-// the writer side). A run with no org cannot resolve the entity graph, so the seam is empty
-// (the stage is then skipped) rather than reading off the wrong scope. Never a kill-switch:
-// when present, the stage runs and self-skips cleanly when the project has no contract.
+// WS-D4 native design subsystem — the actor identity the in-loop design ORACLE
+// reads the contract + entity graph under (the SAME org-scoped seam
+// `loadDesignContextBlock` uses for the writer side). A run is ALWAYS tenant-scoped
+// (the invariant is enforced at the {@link loadRunExecutionContext} hydration
+// boundary), so the actor is UNCONDITIONALLY populated here — the old
+// "undefined ⇒ silently skip the oracle" fallback is gone; skipping is now a
+// legitimate stage decision (project has no contract), never a quiet degrade.
 export function designOracleSeam(context: PlannerRunContext): {
-  designOracleActor?: { actor: ActorContext; actorRef: ActorRef };
+  designOracleActor: { actor: ActorContext; actorRef: ActorRef };
 } {
-  const orgId = context.orgId ?? undefined;
-  if (orgId === undefined) return {};
   return {
-    designOracleActor: { actor: designResolverActor(orgId, context.projectId), actorRef: { kind: "operator" } },
+    designOracleActor: {
+      actor: designResolverActor(context.orgId, context.projectId),
+      actorRef: { kind: "operator" },
+    },
   };
 }
 

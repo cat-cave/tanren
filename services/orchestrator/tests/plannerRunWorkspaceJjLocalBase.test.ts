@@ -86,6 +86,7 @@ function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunCont
     runId: "run_dep",
     specId: "spec_dep",
     projectId: "project_dep",
+    orgId: "org_dep",
     repoUrl: "https://github.com/cat-cave/dep-fixture",
     targetBranch: "main",
     runBranch: "tanren/run_dep",

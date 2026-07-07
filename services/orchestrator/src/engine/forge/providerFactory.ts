@@ -28,7 +28,7 @@ import type { ProjectConfigV1 } from "../config/index.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import { type OrgScope, orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import { type TenantScope, orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { ForgeToolsStore } from "../repositories/forgeTools.js";
 import { systemActor } from "../state/actor.js";
 import { buildAnswererAdapter } from "../providers/adapterSelector.js";
@@ -131,7 +131,7 @@ const FORGE_UNUSED_GITHUB_REF = "forge/unused-github-credential";
 async function resolveForgeRunnerContext(
   pool: QueryClient,
   projectConfig: ProjectConfigV1,
-  orgScope: OrgScope,
+  orgScope: TenantScope,
   runnerImage: string,
 ): Promise<ForgeRunnerContext> {
   const resolved = await resolveCredentialsForRun(pool, {
@@ -148,10 +148,12 @@ async function resolveForgeRunnerContext(
     routingForge,
     defaultLlm: resolved.defaultLlm,
     ...(resolved.endpointOverride ? { endpointBaseUrl: resolved.endpointOverride.baseUrl } : {}),
-    // Both forge paths reach here only through `orgScopeFromRunOrgId` ⇒ a real
-    // `{ kind: "org", orgId }`, so the carried org id is always non-empty (the
-    // allocation org-scoping below no longer needs an empty-org guard).
-    orgId: orgScope.kind === "org" ? orgScope.orgId : "",
+    // Both forge paths reach here only through `orgScopeFromRunOrgId`, whose return
+    // type is now the NARROWED `TenantScope` — the previous `kind === "org" ? … : ""`
+    // ternary was defensive against an `unscopedPlatform` variant that is unreachable
+    // at this call site by the type (drop the empty-string fallback; a real non-empty
+    // orgId is guaranteed).
+    orgId: orgScope.orgId,
   };
 }
 
@@ -204,7 +206,7 @@ export function forgeAllocatingAnswererAdapter<TOutput>(
         projectId: target.projectId ?? `org:${target.orgId}`,
         runnerImage: ctx.runnerImage,
         identitySecretRef: infra.identitySecretRef,
-        ...(ctx.orgId === "" ? {} : { orgId: ctx.orgId }),
+        orgId: ctx.orgId,
         // A Forge ideation call has NO run — mark the allocation runless so the
         // persisted runners row writes run_id = NULL (no `runs` row) and
         // project_id = the REAL project (project surfaces) or NULL (greenfield

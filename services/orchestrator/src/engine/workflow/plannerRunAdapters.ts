@@ -244,10 +244,11 @@ async function resolveOverLiveJj(
   conflictContext: Parameters<ConflictResolverHook>[0],
 ): Promise<{ resolved: boolean }> {
   const context = input.context;
-  const orgId = typeof context.orgId === "string" ? context.orgId : "";
   const live = await buildLiveJjWorkspace({
     facts: {
-      orgId,
+      // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration
+      // enforces the tenant-scope invariant).
+      orgId: context.orgId,
       projectId: context.projectId,
       repoUrl: context.repoUrl,
       runnerImage: context.runnerImage,
@@ -359,9 +360,10 @@ function buildResolver(
 ): ConflictResolverHook {
   const context = input.context;
   const routing = requireRouting(context.routing);
-  // v68 fix: the conflict resolver's writes carry an explicit org_id; tests using
-  // FakeEventStore pass with an empty sentinel, production always sets it.
-  const orgId = typeof context.orgId === "string" ? context.orgId : "";
+  // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
+  // the tenant-scope invariant), so the conflict resolver's writes always carry
+  // a real org id — no empty-sentinel fallback.
+  const orgId = context.orgId;
   return buildDefaultConflictResolver({
     applier,
     pool: input.pool,
