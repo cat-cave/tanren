@@ -26,6 +26,15 @@ export const DagSpecRedrivenPayload = z
       "empty_writer_output",
       // apex v56 #61: a fail-closed throw on the dependent-run speculative base-assembly path.
       "speculative_assembly",
+      // Codex round-3 #3 (PR #740 + #745): typed errors from worker context-hydration
+      // + design-oracle pre-row paths that would otherwise alias into the opaque
+      // `internal` code. Enumerating them here (mirroring `RunFailureCode`) keeps the
+      // `dag.spec.redriven` payload closed-vocabulary + lets the convergence detector
+      // key a real fix-point on each specific class rather than the generic bucket.
+      "malformed_ancestor_stack",
+      "design_contract_corrupt",
+      "design_oracle_actor_config",
+      "malformed_design_oracle_result",
       "internal",
     ]),
     // The run STAGE the failure is attributed to (closed vocabulary), for the timeline.

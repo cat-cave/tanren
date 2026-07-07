@@ -21,6 +21,10 @@
         "deploy",
         "empty_writer_output",
         "speculative_assembly",
+        "malformed_ancestor_stack",
+        "design_contract_corrupt",
+        "design_oracle_actor_config",
+        "malformed_design_oracle_result",
         "internal"
       ],
       "type": "string"

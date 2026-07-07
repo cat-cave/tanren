@@ -31,6 +31,31 @@ export type RunFailureCode =
   // error (apex v56 stranded with no actionable class), and so the convergence detector keys
   // a real fix-point on this class — not every unknown throw aliased together.
   | "speculative_assembly"
+  // Codex round-3 #3: worker-context-hydration + design-stage pre-row throws (PRs #740,
+  // #745) that fall to `classifyRunFailure` BEFORE the stage-level finalize guard can
+  // see them. Without a worker-level arm they aliased into the opaque `internal` code
+  // on `run.failed`, hiding the typed diagnosis the stage-level classifier already
+  // captures (`stageFailureKind.ts`). Each error class here has a MIRROR arm in the
+  // stage-level classifier — the two paths agree on WHAT failed regardless of whether
+  // the throw landed inside or outside the stage-body guard.
+  //
+  // - `malformed_ancestor_stack` — `runs.ancestor_stack` jsonb failed the schema parse
+  //   during `loadRunContextScoped` context hydration; the resolver fails closed rather
+  //   than silently downgrading a speculative run to non-speculative.
+  // - `design_contract_corrupt` — a `design_contracts` HEAD row failed
+  //   `parseDesignContract`; distinct from ABSENT so a caller can tell "no design phase
+  //   yet" apart from "the persisted contract is malformed and must not be used".
+  // - `design_oracle_actor_config` — the design oracle stage was invoked with a
+  //   null-org actor (thrown BEFORE any store read / task row insert, so the
+  //   stage-level guard never sees it).
+  // - `malformed_design_oracle_result` — the oracle answerer returned `hasContract:true`
+  //   but a required timeline-observable field was missing/empty (this ALSO has a
+  //   stage-level arm because it can throw INSIDE the finalize guard, but the worker-level
+  //   arm keeps the vocabulary complete for defense in depth).
+  | "malformed_ancestor_stack"
+  | "design_contract_corrupt"
+  | "design_oracle_actor_config"
+  | "malformed_design_oracle_result"
   | "internal";
 
 /** Closed vocabulary of the run STAGE a failure is attributed to. */
@@ -99,6 +124,33 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "workspace",
     stage: "workspace",
     summary: "a workspace command failed during the run",
+  },
+  // Codex round-3 #3: PR #740 + #745 typed errors that can throw from context-hydration
+  // + design-oracle pre-row paths BEFORE the stage-level finalize guard is entered.
+  // The stage-level classifier already carries a mirror arm for each (see
+  // `stageFailureKind.ts` — `malformed_ancestor_stack`, `design_contract_corrupt`,
+  // `design_oracle_actor_config`, `malformed_design_oracle_result`); these
+  // worker-level arms preserve the typed diagnosis on `run.failed.failureCode` when
+  // the throw escapes the stage boundary (or precedes any task row).
+  MalformedAncestorStackError: {
+    code: "malformed_ancestor_stack",
+    stage: "bootstrap",
+    summary: "the run's ancestor stack failed schema parse",
+  },
+  DesignContractCorruptError: {
+    code: "design_contract_corrupt",
+    stage: "bootstrap",
+    summary: "the persisted design contract failed schema parse",
+  },
+  DesignOracleActorConfigError: {
+    code: "design_oracle_actor_config",
+    stage: "agent",
+    summary: "the design oracle actor is misconfigured",
+  },
+  MalformedDesignOracleResultError: {
+    code: "malformed_design_oracle_result",
+    stage: "agent",
+    summary: "the design oracle result was malformed",
   },
 };
 

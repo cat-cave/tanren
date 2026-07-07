@@ -293,6 +293,13 @@ const ORPHAN_PROXY_NAME_BY_CODE: Readonly<Record<ClassifiedRunFailure["code"], s
   deploy: "__OrphanDeployFault",
   empty_writer_output: "EmptyWriterCommitError",
   speculative_assembly: "SpeculativeAssemblyError",
+  // Codex round-3 #3: the four PR #740 + #745 typed errors carried through the
+  // orphan proxy so the reader-side classification recovers the same code (the
+  // proxy round-trips through `classifyRunFailure` keyed off `error.name`).
+  malformed_ancestor_stack: "MalformedAncestorStackError",
+  design_contract_corrupt: "DesignContractCorruptError",
+  design_oracle_actor_config: "DesignOracleActorConfigError",
+  malformed_design_oracle_result: "MalformedDesignOracleResultError",
   internal: "__OrphanInternalFault",
 };
 
