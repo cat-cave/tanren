@@ -11,7 +11,10 @@ import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { BatchFormation } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
+import { createLogger } from "../observability/logger.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
+
+const log = createLogger("batch-merge-event-emitter");
 
 function membersOf(batch: ReadonlyArray<MergeQueueEntry>): Array<{ specId: string; prNumber: number }> {
   return batch.map((e) => ({ specId: e.specId, prNumber: e.prNumber }));
@@ -30,6 +33,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
 
   private async withScopedStore(
     projectId: string,
+    eventKind: string,
     work: (store: EventStore, orgId: string) => Promise<void>,
   ): Promise<void> {
     const orgId = await runWithSystemScope(this.pool, async (client) => {
@@ -39,7 +43,24 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
       );
       return result.rows[0]?.org_id ?? null;
     });
-    if (orgId === null) return;
+    if (orgId === null) {
+      // Observability fix (task #51 follow-up to PR #763 / PR #770): this branch
+      // used to silently return when the project row was missing or its
+      // `org_id` was NULL — the merge.batch.* event was DROPPED so the operator
+      // could not see WHY without grepping engine logs. Mirrors the exact fail-
+      // loud posture PR #763 introduced on `PgDagEventEmitter` and PR #770
+      // extended to `PgPercolationEventEmitter`: log at ERROR with the projectId
+      // + eventKind + a machine-parseable `unresolvable_project_org` reason so
+      // an operator has a grep-able signal. We do NOT synthesize an org
+      // (events.org_id NOT NULL + FK-tied — v68 jobReaper.ts rationale: never
+      // fake tenancy to satisfy a NOT NULL).
+      log.error("merge.batch event DROPPED — project org unresolvable", {
+        projectId,
+        eventKind,
+        reason: "unresolvable_project_org",
+      });
+      return;
+    }
     // v68 fix: thread the resolved orgId into the work callback so the event
     // append stamps the explicit tenant key (no derive-from-project subquery).
     const writer = this.runStateWriter;
@@ -53,7 +74,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     maxBatchSize: number;
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "merge.batch.checking", (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
@@ -76,7 +97,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     integrationBranch: string;
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "merge.batch.passed", (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
@@ -97,7 +118,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     message: string;
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "merge.batch.bisecting", (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
@@ -122,7 +143,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     kind?: "missing_required_credential" | "ambiguous_merge_state";
   }): Promise<void> {
     const head = input.batch[0];
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "merge.batch.infra_blocked", (store, orgId) =>
       store.append({
         ...(head !== undefined && { runId: head.runId, specId: head.specId }),
         projectId: input.projectId,
@@ -149,7 +170,7 @@ export class PgBatchMergeEventEmitter implements BatchMergeEventEmitter {
     checks: number;
     message: string;
   }): Promise<void> {
-    await this.withScopedStore(input.projectId, (store, orgId) =>
+    await this.withScopedStore(input.projectId, "merge.batch.culprit", (store, orgId) =>
       store.append({
         runId: input.culprit.runId,
         specId: input.culprit.specId,
