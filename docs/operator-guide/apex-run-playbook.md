@@ -16,9 +16,17 @@ is the mechanical "how to drive a single run" half.
 > `/scratch/worktrees/tanren/v<N>`. Successive apex trials — v37–v46 ran on the
 > previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host on
 > 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
-> 2026-07-04 — see `apex.md` for the honest proof state; the full autonomy loop
-> has not yet closed end-to-end. Runs are **disposable** — `main` only moves
-> forward; you never patch a run or its generated repo (see `apex.md`).
+> 2026-07-04. **The v79-era product-build-loop frontier has since been
+> HARDENED across three subsequent audit passes plus a cleanup wave** — 34
+> PRs (#738–#768) landed 2026-07-05 → 2026-07-07 closed every Codex-critic
+> (#1–#18) / Codex-round-3 (#1–#4) / RA1 / RA2 finding across Waves
+> D1..D4 + E-fix + F. The next trial (v80) is the live-validation vehicle
+> for the **fragment authoring path** (the F2 writer→validate loop the
+> composer spawns when a curated stack references a fragment the library
+> doesn't have — the largest untouched surface in the greenfield path). See
+> `apex.md` for the honest proof state; the full autonomy loop has not yet
+> closed end-to-end. Runs are **disposable** — `main` only moves forward;
+> you never patch a run or its generated repo (see `apex.md`).
 >
 > **Picking `<N>`:** look at `ls /scratch/worktrees/tanren/` and pick the next integer after the highest existing trial. The compose project name follows the worktree directory name automatically (e.g. `v47`), so no `-p` override is needed.
 
@@ -504,13 +512,36 @@ issue-triage → new-spec insertion mechanic firing on real out-of-scope finding
 That is the closest observed firing of the issue-loop half of the apex proof
 to date.
 
-**What is NOT yet proven:** the full autonomy loop end-to-end. No single run
-has yet produced merged spec → product build → planted-issue auto-triaged →
-merged fix → live deploy → a working product URL. The loops past a CI-green
-merged PR — deploy → the full issue-loop firing on real symptoms → audits →
-CI-intelligence → notifications — **remain to demonstrate live**. The native
-**design subsystem** is wired into derive (a `DesignContract` is captured and
-verified against the build); see `apex.md` for the full honest proof state.
+**The v79-era frontier was then HARDENED (2026-07-05 → 2026-07-07)** by 34
+PRs (#738–#768) that closed every Codex-critic / round-3 / RA1 / RA2
+finding: Wave D1..D4 landed the design-oracle finalize guard +
+`MalformedAncestorStackError` + the v79 loop-closure end-to-end fix
+(auditor prompt no-omit + `routeOne` scope-first + `ensureFindingCoverage` +
+`acceptProposals` newSpecs materialization + `specs` provenance columns
+via migration 0025), `demo.failed` / `usage.accounting_failed` event
+schemas + severity promotions, the design-oracle silent-fallback trio
+(typed errors + `design_contracts.mode` column via migration 0026), a
+unified `subscribeWithReconnect` helper across 4 subscribers, per-stage
+`task.failed` emit-on-throw with 4 typed classifier arms, and the
+timeout-eradication lint extended (PR #750) to catch bare
+`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` stems +
+SCREAMING_CASE loop-cap patterns; Wave E-fix + F landed round-3 newSpecs
+provenance dedupe via migration 0027 + notify wake-latch +
+mutation-weekly workflow restored + PR-F #693 doctrine debris sweep.
+
+**What is NOT yet proven for v80:** the **fragment authoring path** — the
+F2 writer→validate loop the composer spawns when a curated stack
+references a fragment the library doesn't have — is the largest untouched
+surface in the greenfield path. Every fix wave left it alone; v80 is its
+live-validation vehicle. The loops past a CI-green merged PR — deploy →
+the full issue-loop firing on real symptoms → audits → CI-intelligence →
+notifications — also **remain to demonstrate live**; no single run has
+yet produced merged spec → product build → planted-issue auto-triaged →
+merged fix → live deploy → a working product URL. The native **design
+subsystem** is wired into derive (a `DesignContract` is captured and
+verified against the build) and now fails LOUD on every corrupt /
+inaccessible / malformed state; see `apex.md` for the full honest proof
+state.
 
 ## Where this fits
 

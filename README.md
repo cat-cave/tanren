@@ -240,18 +240,42 @@ engine bugs now fixed on `main`. **No live run has yet closed the full autonomou
 loop** (issue → triage → fix → merge → deploy → a working product) — that is
 precisely what apex still has to prove. The v49-era infra halts (task #21
 runner-INSERT PK race + derive synchronous-wait breaker) are resolved (#21A
-shipped as PR #705; #21B obviated by PR-F #693). The current frontier as of v79
-sits inside the product-build loop itself: writer subtask sizing (PR #731), plan
-stall recovery (PR #726), template composition semantics (fragment-based
-composer PR-A #688 → PR-G #699), PR-enqueue timing (PR #724 + the #725 atomic
-3-write seam + orphaned-PR startup sweep), and issue-triage routing. The v79 fix
-(PR #734) enables triage → new-spec insertion on real out-of-scope findings —
-the closest we've been to the issue-loop half of the apex proof firing
-autonomously, without yet closing the loop end-to-end. Trial-driven fixes
-landed 2026-06-30 → 2026-07-04 also include PRs #715/#719/#720/#721/#723/#728/
-#729/#730/#732/#733 across writer/planner/composer/watchdog/observability, plus
-the audit rounds #708–#718 (writer-seam doctrine sweep, designOracle mode-aware
-re-drive, priorEvents discipline, writer-seam tail cleanup).
+shipped as PR #705; #21B obviated by PR-F #693). The v79-era product-build-loop
+frontier (writer subtask sizing PR #731, plan stall recovery PR #726,
+fragment-based composer PR-A #688 → PR-G #699, PR-enqueue timing PR #724 +
+the #725 atomic 3-write seam + orphaned-PR startup sweep, triage → new-spec
+insertion PR #734 on real out-of-scope findings) has since been HARDENED across
+three subsequent audit passes plus a cleanup wave — **34 PRs (#738–#768) landed
+2026-07-05 → 2026-07-07** closed every Codex-critic (#1–#18) / Codex-round-3
+(#1–#4) / RA1 / RA2 finding. Wave D1..D4 landed the design-oracle finalize
+guard + `MalformedAncestorStackError` classification + the v79 loop-closure
+end-to-end fix (auditor prompt no-omit + `routeOne` scope-first +
+`ensureFindingCoverage` empty-workItems P0 synthesis + `acceptProposals`
+newSpecs materialization + `specs` provenance columns via migration 0025),
+`demo.failed` / `usage.accounting_failed` event schemas + `DEFAULT_ROUTE_EVENTS`
+seeding + severity promotions, the design-oracle silent-fallback trio
+(`DesignContractCorruptError` / `DesignOracleActorConfigError` /
+`MalformedDesignOracleResultError` typed returns + `design_contracts.mode`
+column via migration 0026), a unified `subscribeWithReconnect` helper across
+4 subscribers (race-hardened), per-stage `task.failed` emit-on-throw with 4
+typed classifier arms, the timeout-eradication lint extended (PR #750) to
+catch bare `_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` stems +
+SCREAMING_CASE loop-cap patterns, wandering-halt convergence + writer
+progress-append observability, walker stable `orderKey`, budget fail-closed
+on null-org, and Wave E-fix + F cleanups (round-3 dedupe via migration 0027
+partial unique index + notify wake-latch + PR-F #693 doctrine debris sweep +
+mutation-weekly workflow restored). The autonomous-loop machinery —
+auditor → triage → routing → newSpecs materialization → durable
+provenance-deduped `acceptProposals` — is complete and hardened by
+regression pins. **The honest open frontier for v80 is the fragment
+authoring path** (the F2 writer→validate loop the composer spawns when a
+curated stack references a fragment the library doesn't have): every fix
+wave left it alone, so it is the live-validation vehicle for the next apex
+trial. Trial-driven fixes landed 2026-06-30 → 2026-07-04 also include PRs
+#715/#719/#720/#721/#723/#728/#729/#730/#732/#733 across
+writer/planner/composer/watchdog/observability, plus the audit rounds
+#708–#718 (writer-seam doctrine sweep, designOracle mode-aware re-drive,
+priorEvents discipline, writer-seam tail cleanup).
 
 Smaller near-term items: the **benchmark seed corpus**, `typify→serde` codegen, and
 the first whole-repo mutation baseline; long-horizon: a second `CodeHost` backend

@@ -11,8 +11,9 @@ contract for the human/orchestrator driving the run.**
 > **[apex-run-playbook.md](./apex-run-playbook.md)**. Read THIS doc first (the role
 > and the rhythm below), then drive from the playbook.
 
-> **Where the trials stand (through v79).** Successive apex trials — v37–v46 ran
-> on the previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host
+> **Where the trials stand (through v79, plus 34 fix PRs hardening the frontier).**
+> Successive apex trials — v37–v46 ran on the previous WSL host through
+> 2026-06-19; v47–v49 ran on the new NixOS host
 > on 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
 > 2026-07-04. The chain has surfaced a long list of real bugs — all fixed on
 > `main`: the never-discard re-drive paths (#585–#594), the intelligent
@@ -49,20 +50,48 @@ contract for the human/orchestrator driving the run.**
 >   Go/Python/Rust tests (v72, #729), duplicate `addEnvVar` reconcile across
 >   fragments (v75, #730), planner one-concern-per-subtask sizing (v76, #731),
 >   `ActivityWatchdog` neighbor-floor widened to 5 for agent-class execs (v76/v77,
->   #732), pnpm bootstrap non-interactive with `CI=true` (v71/v78, #733), and —
->   the freshest — triage routing out-of-scope findings to new specs (v79, #734:
->   the issue-triage → new-spec insertion mechanic firing on real out-of-scope
->   findings; the closest the issue-loop half of the apex proof has come to firing
->   autonomously). The full autonomy loop has **STILL NOT closed end-to-end** — no
->   single run has produced merged spec → product build → issue→triage→fix →
->   deploy → a working URL; those remain to demonstrate live.
+>   #732), pnpm bootstrap non-interactive with `CI=true` (v71/v78, #733), and
+>   triage routing out-of-scope findings to new specs (v79, #734: the
+>   issue-triage → new-spec insertion mechanic firing on real out-of-scope
+>   findings). **The v79-era frontier has since been HARDENED across three
+>   subsequent audit passes plus a cleanup wave — 34 PRs (#738–#768) landed
+>   2026-07-05 → 2026-07-07** closed every Codex-critic (#1–#18) /
+>   Codex-round-3 (#1–#4) / RA1 / RA2 finding. Wave D1..D4 landed the
+>   design-oracle finalize guard + `MalformedAncestorStackError`
+>   classification + the v79 loop-closure end-to-end fix (auditor prompt
+>   no-omit + `routeOne` scope-first + `ensureFindingCoverage` empty-workItems
+>   - PARTIAL-coverage P0 synthesis + newSpecs materialization via
+>     `acceptProposals` + `specs` provenance columns via migration 0025);
+>     `demo.failed` + `usage.accounting_failed` event schemas +
+>     `DEFAULT_ROUTE_EVENTS` seeding + severity promotions; the design-oracle
+>     silent-fallback trio (typed `DesignContractCorruptError` /
+>     `DesignOracleActorConfigError` / `MalformedDesignOracleResultError`
+>     returns + `design_contracts.mode` column via migration 0026 threaded
+>     through all readers); a unified `subscribeWithReconnect` helper across
+>     4 subscribers (race-hardened); per-stage `task.failed` emit-on-throw with
+>     4 typed classifier arms; the timeout-eradication lint extended (PR #750)
+>     to catch bare `_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks`
+>     stems + SCREAMING_CASE loop-cap patterns; wandering-halt escalation
+>     always halts; walker stable `orderKey`; budget fails-closed on null-org.
+>     Wave E-fix + F cleanups landed the round-3 triage newSpecs dedupe via
+>     migration 0027 partial unique index + notify wake-latch +
+>     mutation-weekly workflow restored (task #17) + PR-F #693 doctrine
+>     debris sweep. The autonomous-loop machinery is complete and hardened by
+>     regression pins. The full autonomy loop has **STILL NOT closed
+>     end-to-end** — no single run has produced merged spec → product build →
+>     issue→triage→fix → deploy → a working URL; those remain to demonstrate
+>     live.
 >
 > The **native design subsystem** is part of the build: WS-D1..D4 are merged
 > and the design loop (author → inject → verify → re-drive) closes end-to-end
 > in a CI-gated eval harness (no live LLM). A real run now captures a
 > `DesignContract` at derive and exercises design fidelity at the
 > contract-coverage + static-readability bar (rendered-pixel fidelity / WS-D4a
-> live-render is scoped out).
+> live-render is scoped out). Post-Wave-D2/D4 the subsystem also fails LOUD
+> on every corrupt / inaccessible / malformed state via the typed error
+> union above, and the `design_contracts.mode` column (migration 0026) plus
+> the org-scope requirement gate the writer-injection + oracle paths so
+> scaffold specs no longer double-flag against the seed surface.
 
 ## What is under test — and what is NOT
 
@@ -209,12 +238,23 @@ autonomous software org**. The proofs:
   only (the playbook is written to make it reproducible).
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
-The runs **through v79** advanced the autonomy-loop (DAG-build, walker
+The runs **through v79** — plus the 34-PR hardening wave that landed
+2026-07-05 → 2026-07-07 — advanced the autonomy-loop (DAG-build, walker
 auto-execution, just-in-time template materialization — pre-PR-F #693, via the
 now-collapsed creation meta-flow; post-PR-F, via fragment composition + F2
 per-fragment authoring — and the never-discard re-drive + recovery paths),
-run-discipline, and code-integrity proofs, and — with v79 — the closest the
-**issue-triage → new-spec insertion** mechanic has come to firing autonomously
-(on real out-of-scope findings surfaced during the run). The loops **past a
-CI-green merged PR** (deploy → the full issue-loop firing end-to-end → audits →
-CI-intelligence → notifications) remain to demonstrate live in the next run.
+run-discipline, and code-integrity proofs. The autonomous-loop machinery —
+auditor → triage → routing → newSpecs materialization → durable
+provenance-deduped `acceptProposals` — is now complete AND hardened with
+regression pins. **What is NOT yet proven for v80: the fragment authoring path.**
+The F2 writer→validate loop the composer spawns when a curated stack
+references a fragment the library doesn't have is the largest untouched
+surface in the greenfield path; every fix wave left it alone. Live-run risks
+identified by the Claude E sweep (not yet reproduced on `main`): the
+fixed-point signature counts whitespace/comment as progress; the
+`markValidated` split can leave an orphaned draft; the runtime-language
+recognizer + body-parse rejection vocabulary are under-tested against LLM
+output. Fragment authoring is the honest v80 live-validation vehicle. The
+loops **past a CI-green merged PR** (deploy → the full issue-loop firing
+end-to-end → audits → CI-intelligence → notifications) also remain to
+demonstrate live.
