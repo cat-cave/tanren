@@ -22,6 +22,7 @@ export const stateEnumLists = {
     "convergence_stalled",
     "window_exhausted",
     "window_paused",
+    "awaiting_review",
     "cancelled",
     "failed"
   ],

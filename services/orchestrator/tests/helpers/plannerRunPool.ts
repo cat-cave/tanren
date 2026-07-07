@@ -118,17 +118,20 @@ export class PlannerRunPool {
       return { rows: [], rowCount: 1 };
     }
     // Legacy split's literal-status runs UPDATE: 'running'/'completed'/'halted'
-    // ($2 outcome)/'paused' (window_paused)/'failed'.
+    // ($2 outcome)/'paused' (window_paused OR awaiting_review — Codex H3 #11
+    // human-review park uses reviewPauseSeam which emits paused-with-outcome
+    // via a direct UPDATE inline of the target outcome literal)/'failed'.
     const runStatusLiteralMatch = /^UPDATE runs SET status = '(\w+)'/u.exec(trimmed);
     if (runStatusLiteralMatch !== null) {
       const status = runStatusLiteralMatch[1] ?? "";
+      const pausedOutcome = trimmed.includes("'awaiting_review'") ? "awaiting_review" : "window_paused";
       const outcome =
         status === "running"
           ? null
           : status === "completed"
             ? "ok"
             : status === "paused"
-              ? "window_paused"
+              ? pausedOutcome
               : status === "halted"
                 ? String(params[1])
                 : status;

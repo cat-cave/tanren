@@ -71,7 +71,7 @@ import {
   runnerPayload,
   supersedeQueuedPlannerTask,
 } from "./plannerRunFinalize.js";
-import { applyReviewVerdict, type MergeGateBudget } from "./plannerRunSelfHeal.js";
+import { dispatchReviewVerdict, type MergeGateBudget } from "./plannerRunSelfHeal.js";
 import type { RedriveHistoryReader } from "./plannerRunRedrive.js";
 import type { PublishedDraftPullRequest } from "./githubDraftPr.js";
 import type { PlannerRejectionFeedback } from "./planner/planner.js";
@@ -79,7 +79,6 @@ import {
   type GateAttempt,
   mergeForRun,
   pollReviewForRun,
-  reviewerRejection,
   type ConflictResolverHook,
   type MergeAuthorityBundle,
   type MergeForRunInput,
@@ -94,6 +93,12 @@ import { runSubtaskLoop, type SubtaskLoopAdapters, type SubtaskLoopOutcome } fro
 import { materializeFreshTriageNewSpecs, type TriageNewSpecsMaterializer } from "./plannerRunTriageNewSpecs.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+// Codex H3 #11: `parked` → `abandoned` (prober resumes); `halt` → `failed`.
+const REVIEW_EXIT_RELEASE_REASON: Record<"parked" | "halt", ReleaseReason> = {
+  parked: "abandoned",
+  halt: "failed",
+};
 export interface PlannerRunContext {
   runId: string;
   specId: string;
@@ -432,19 +437,21 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         ...simulatedReviewSeam(input, adapterCtx),
       });
 
-      // Map the review verdict (plannerRunFinalize): merge → proceed; rework → re-author; halt → parked LOUD.
-      const reviewMove = await applyReviewVerdict(
+      // Codex H3 #11: `dispatchReviewVerdict` short-circuits `parked`; the
+      // awaiting-review prober owns the resume. Release lookup keeps complexity ratcheted.
+      const reviewMove = await dispatchReviewVerdict(
         input,
         finalizeRunState,
         context,
         appendEvent,
-        { verdict: review.verdict, rejection: reviewerRejection(review, pullRequest.branch) },
+        pullRequest,
+        review,
         seedRejections,
         reviewReworkAttempts,
       );
       if (reviewMove === "merge") break;
       if (reviewMove === "rework") continue;
-      releaseReason = "failed";
+      releaseReason = REVIEW_EXIT_RELEASE_REASON[reviewMove];
       return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review };
     }
 
@@ -482,15 +489,10 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     releaseReason = "completed";
     return { runId: context.runId, workspacePath, outcome, pullRequest, mergeGate, review, merge };
   } catch (error) {
-    // SINGLE-FINALIZE INVARIANT (apex v35): finalize the run+spec ONCE (spec-aware) — RETURN a
-    // re-driven recoverable-halt result (never re-throw into the worker's strand path, the #580
-    // double-finalize) or re-throw WRAPPED. The orchestration lives in `finalizeWorkflowThrow`.
     releaseReason = "failed";
-    // eslint-disable-next-line no-console
-    console.error("DEBUG halt", error);
     return await finalizeWorkflowThrow(error, { finalizeRunState, appendEvent, workspacePath, input, context });
   } finally {
-    // SECURITY-BASELINE CLEANUP-PROOF: remove the run's `/workspace/runs/<runId>` sandbox (layer 1 of the ≈204 GB disk-leak fix), then release through the RELEASE FINALIZER seam + emit `release.finalized`. The helper never throws (a throw here would mask the run's error); `releaseReason` reflects the run's outcome.
+    // SECURITY-BASELINE CLEANUP-PROOF: sandbox teardown + release via finalizer + release.finalized event (~204 GB leak fix).
     const runWorkspace = { ssh: input.ssh, target: allocation.target, runId: context.runId };
     await releaseRunnerWithCleanupProof(input.allocator, allocation.runnerId, appendEvent, runWorkspace, releaseReason);
   }

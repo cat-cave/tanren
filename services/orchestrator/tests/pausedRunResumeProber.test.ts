@@ -71,7 +71,12 @@ function buildPool(rows: RunRow[]): {
         return { rows: [], rowCount: 0 };
       }
       if (trimmed.startsWith("SELECT r.run_id")) {
-        const paused = state.rows.filter((row) => row.status === "paused");
+        // Codex H3 #11: the prober's SELECT now filters to BOTH pause outcomes
+        // (`window_paused` + `awaiting_review`), so the fake mirrors the filter
+        // and returns the outcome column for the resume-preserves-outcome fix.
+        const paused = state.rows.filter(
+          (row) => row.status === "paused" && (row.outcome === "window_paused" || row.outcome === "awaiting_review"),
+        );
         return {
           rows: paused.map((row) => ({
             run_id: row.runId,
@@ -79,6 +84,7 @@ function buildPool(rows: RunRow[]): {
             project_id: row.projectId,
             org_id: row.orgId,
             ended_at: row.endedAt,
+            outcome: row.outcome,
           })),
           rowCount: paused.length,
         };
@@ -240,6 +246,93 @@ describe("pausedRunResumeProber (task #82 — window-pause auto-resume)", () => 
     prober.stop();
     expect(result.resumedRunIds).toEqual([]);
     expect(resumes).toEqual([]);
+  });
+
+  it("Codex H3 #11 — RESUMES an `awaiting_review` paused run and PRESERVES the outcome through the resume", async () => {
+    // The human-review durable-park path (Codex H3 #11) parks a run with
+    // `outcome: "awaiting_review"`. The prober admits it (same seam that task
+    // #82 window_paused rides), and the resume PRESERVES `awaiting_review` on
+    // the halted row so the recovery surface still distinguishes "waiting on
+    // capacity" (window pressure) from "waiting on a human verdict".
+    const rows: RunRow[] = [
+      {
+        runId: "run_review_paused",
+        specId: "spec_review",
+        projectId: "proj_review",
+        orgId: "org_review",
+        status: "paused",
+        outcome: "awaiting_review",
+        endedAt: new Date(Date.now() - 30_000),
+      },
+    ];
+    const { pool } = buildPool(rows);
+    const { writer, resumes } = buildRecordingWriter(rows);
+    const prober = startPausedRunResumeProber({
+      pool,
+      runStateWriter: writer,
+      probeIntervalMs: 60_000,
+      setIntervalFn: () => 0,
+      clearIntervalFn: () => {},
+    });
+    const result = await prober.probeOnce();
+    prober.stop();
+
+    expect(result.resumedRunIds).toContain("run_review_paused");
+    expect(resumes).toHaveLength(1);
+    // The distinguishing WHY on the recovery surface — the outcome is
+    // preserved through the resume (halted + awaiting_review), NOT collapsed
+    // to `window_paused` (which would misclassify a human-review park as a
+    // capacity pause on the dashboard / operator triage).
+    expect(resumes[0]).toMatchObject({
+      runId: "run_review_paused",
+      specId: "spec_review",
+      status: "halted",
+      outcome: "awaiting_review",
+      specStatus: "open",
+      resumedEvent: { eventType: "run.resumed" },
+      redrivenEvent: { eventType: "dag.spec.redriven" },
+    });
+  });
+
+  it("Codex H3 #11 — RESTART preserves the parked state: a fresh prober picks up a still-paused run and resumes it", async () => {
+    // The core durability invariant of the fix: the prior in-process polling
+    // loop lost its state on a restart, forcing the worker to poll from scratch.
+    // The new durable-park path lives in `runs.status` + `runs.outcome`, so a
+    // fresh prober (post-restart) sees the paused row on its FIRST tick and
+    // resumes it — the state survives the restart boundary.
+    const rows: RunRow[] = [
+      {
+        runId: "run_survives_restart",
+        specId: "spec_survives",
+        projectId: "proj_survives",
+        orgId: "org_survives",
+        status: "paused",
+        outcome: "awaiting_review",
+        // 1h ago — long before this "restart".
+        endedAt: new Date(Date.now() - 3_600_000),
+      },
+    ];
+    const { pool } = buildPool(rows);
+    const { writer, resumes } = buildRecordingWriter(rows);
+    // A "fresh" prober — a brand-new instance with no in-memory state about
+    // this run. It reads the paused row via the SELECT and resumes it.
+    const prober = startPausedRunResumeProber({
+      pool,
+      runStateWriter: writer,
+      probeIntervalMs: 60_000,
+      setIntervalFn: () => 0,
+      clearIntervalFn: () => {},
+    });
+    const result = await prober.probeOnce();
+    prober.stop();
+
+    expect(result.resumedRunIds).toContain("run_survives_restart");
+    expect(resumes).toHaveLength(1);
+    expect(resumes[0]!.outcome).toBe("awaiting_review");
+    // The resume-event payload's paused duration reflects the row's ended_at
+    // — proof the state was DURABLE across the restart (the 1h pause survives).
+    const payload = resumes[0]!.resumedEvent.payload as { pausedDurationSeconds: number };
+    expect(payload.pausedDurationSeconds).toBeGreaterThanOrEqual(3600);
   });
 
   it("CYCLES paused→resumed→paused: a probe ALWAYS resumes a paused run, even if it pauses AGAIN (UNBOUNDED, sign-of-life)", async () => {

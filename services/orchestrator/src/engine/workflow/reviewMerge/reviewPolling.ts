@@ -31,6 +31,7 @@ import {
   type ReviewMergeRunContext,
   type RunStateClient,
 } from "./context.js";
+import { finalizePauseForReviewAtomic } from "./reviewPauseSeam.js";
 import { markReviewTaskDoneWithEvent } from "./reviewTaskTerminal.js";
 import {
   reviewBodyFor,
@@ -101,10 +102,20 @@ export interface ReviewProbe {
   submitReview?(event: SubmitReviewEvent, body: string): Promise<void>;
 }
 
+/**
+ * The result verdict of a poll: the three GitHub-derived ReviewVerdict values
+ * PLUS the Codex H3 #11 `parked` sentinel — emitted when a `human`-policy run
+ * has NO terminal verdict yet and has been parked (run → `paused`, outcome
+ * `awaiting_review`, `run.paused` on the timeline). The caller
+ * (`plannerRun.ts`) treats `parked` as a NON-fault exit: return the worker to
+ * the pool, no merge, no finalize; the awaiting-review prober owns the resume.
+ */
+export type PollReviewForRunVerdict = ReviewVerdict | "parked";
+
 export interface PollReviewForRunResult {
   runId: string;
   taskId: string;
-  verdict: ReviewVerdict;
+  verdict: PollReviewForRunVerdict;
   prUrl: string;
   prNumber: number;
   /** Reviewer login that produced the verdict, when known. */
@@ -195,40 +206,98 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     return result;
   }
 
-  // Human/external review tier: await the review verdict INDEFINITELY
-  // (feedback_no_timeouts_progress_based, BINDING). A review legitimately takes a
-  // long time — a human reviewer may sit on a PR for hours or days — so there is
-  // NO poll cap and NO wall-clock deadline. The ONLY terminal is a REAL verdict
-  // signal: `approved` → proceed to merge, `changes_requested` → rework. A
-  // `pending` verdict (no review yet, or a transient host hiccup the probe folds
-  // into `pending`) is NOT a give-up — the loop keeps polling on its cadence. The
-  // poll `delayMs` is the SPACING between probes (a paced interval), never a budget.
-  const delayMs = input.pollDelayMs ?? 10_000;
-  const sleep =
-    input.sleep ??
-    ((ms) =>
-      new Promise<void>((resolve) => {
-        // arch-allow: timeout-class — poll SPACING between review-verdict probes (cadence, not a deadline).
-        setTimeout(resolve, ms);
-      }));
-
-  let last: ReviewVerdictResult = { verdict: "pending" };
-  for (;;) {
-    last = await probe.fetchVerdict();
-    if (last.verdict !== "pending") {
-      break;
-    }
-    await sleep(delayMs);
+  // Human/external review tier: DURABLE PARK (Codex H3 Surface 4 finding #11).
+  // The prior in-process polling loop pinned the worker thread indefinitely — a
+  // restart discarded the state and pinned a fresh worker on the same run. The
+  // fix flips the human tier to the SAME shape task #82 uses for window-pause:
+  //
+  //   1. FETCH the verdict ONCE. A resumed run (the awaiting-review prober
+  //      already flipped the paused run to `halted`, the walker's successor is
+  //      re-driving) will observe the now-terminal verdict here and proceed.
+  //   2. On a `pending` verdict, PARK: flip run to `paused` (outcome
+  //      `awaiting_review`, distinct WHY on the recovery surface), emit
+  //      `run.paused` with `reason: "awaiting_human_review"` (the notification
+  //      dispatcher's operator wake), and return the `parked` sentinel.
+  //   3. The caller (`plannerRun.ts`) treats `parked` as a NON-fault exit:
+  //      return the worker to the pool, no merge, no finalize.
+  //   4. The awaiting-review prober re-checks GitHub on cadence; a terminal
+  //      verdict resumes the run atomically (paused → halted + spec `open`),
+  //      and the walker enqueues a successor that reads the terminal verdict.
+  //
+  // The awaited event stays `review.requested` (already emitted above); the
+  // notification path is unchanged. The `parked` outcome is what makes this
+  // DURABLE — a restart between park and approval preserves the state (the
+  // prober picks it up on the fresh boot).
+  const initialVerdict = await probe.fetchVerdict();
+  if (initialVerdict.verdict === "pending") {
+    // Park the run — durable, worker released.
+    const pauseEvent = {
+      runId: context.runId,
+      specId: context.specId,
+      projectId: context.projectId,
+      orgId: context.orgId,
+      taskId,
+      eventType: "run.paused" as const,
+      payload: {
+        provider: "human_reviewer",
+        slot: "primary",
+        usedPercent: 0,
+        // The recovery surface reads WHY (window pressure vs operator approval);
+        // the field is a string on the schema so a new kind rides through
+        // without a schema change.
+        reason: "awaiting_human_review",
+        // No prober `resetsAt` — the review verdict is externally driven
+        // (operator action / dashboard), not a time-bound refresh. The prober
+        // probes on cadence; the ISO is nominal.
+        resetsAt: new Date().toISOString(),
+      },
+    };
+    await finalizePauseForReviewAtomic(
+      {
+        pool: input.pool,
+        runId: context.runId,
+        orgId: context.orgId,
+        // Test-inject seam: route the event append through the run's
+        // eventStore so a `FakeEventStore` (unit tests) sees the emitted
+        // `run.paused`; production paths pass a real `PgEventStore` which
+        // shares the row UPDATE's transaction via the client wrapper.
+        eventStore,
+        // Legacy-arm fallback event append via the run's event store — the
+        // real-pool arm never uses it, but the seam signature requires it for
+        // the unit-test no-orgId code path.
+        appendEvent: async (eventType, payload, appendTaskId) =>
+          eventStore.append({
+            runId: context.runId,
+            specId: context.specId,
+            projectId: context.projectId,
+            orgId: context.orgId,
+            ...(appendTaskId !== undefined && { taskId: appendTaskId }),
+            eventType,
+            payload,
+          }),
+      },
+      pauseEvent,
+    );
+    // The run is now durable-parked. Return a `parked` sentinel so the caller
+    // exits without finalizing the review task (the successor run's poll owns
+    // the terminal finalize) and without publishing a `run.completed` / halt.
+    return {
+      runId: context.runId,
+      taskId,
+      verdict: "parked",
+      prUrl: context.prUrl,
+      prNumber: pr.pullNumber,
+    };
   }
 
   const result: PollReviewForRunResult = {
     runId: context.runId,
     taskId,
-    verdict: last.verdict,
+    verdict: initialVerdict.verdict,
     prUrl: context.prUrl,
     prNumber: pr.pullNumber,
-    reviewer: last.latest?.reviewer,
-    feedback: last.latest?.body,
+    reviewer: initialVerdict.latest?.reviewer,
+    feedback: initialVerdict.latest?.body,
   };
   await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
   return result;
