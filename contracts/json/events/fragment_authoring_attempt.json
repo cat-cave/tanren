@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attempt": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+    },
+    "bodyPreview": {
+      "type": "string"
+    },
+    "canonicalSignature": {
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "continue",
+        "converged",
+        "halted_fixed_point"
+      ],
+      "type": "string"
+    },
+    "fragmentId": {
+      "type": "string"
+    },
+    "orgId": {
+      "type": "string"
+    },
+    "rejection": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "orgId",
+    "fragmentId",
+    "attempt",
+    "bodyPreview",
+    "canonicalSignature",
+    "rejection",
+    "decision"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.fragment.authoring.attempt"
+}

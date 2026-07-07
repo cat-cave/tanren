@@ -109,12 +109,30 @@ export interface FragmentPersistence {
   }): Promise<{ fragmentId: string }>;
 }
 
+/** Length ceiling for the per-attempt `bodyPreview` field. The Zod schema mirrors
+ * this constant (`FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX`); centralized here
+ * so the emit site + the tests import ONE symbol. */
+export const FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX = 500;
+
+/** What the writer-rework loop decided after one iteration. */
+export type FragmentAuthoringAttemptDecision = "continue" | "converged" | "halted_fixed_point";
+
 /** The event-stream seam — wire to the durable event store so authoring runs are
  * observable. Tests use a noop. */
 export interface FragmentAuthoringEvents {
   emit(
     event:
       | { kind: "fragment.authoring.started"; orgId: string; fragmentId: string; spec: FragmentSpec }
+      | {
+          kind: "fragment.authoring.attempt";
+          orgId: string;
+          fragmentId: string;
+          attempt: number;
+          bodyPreview: string;
+          canonicalSignature: string;
+          rejection: string;
+          decision: FragmentAuthoringAttemptDecision;
+        }
       | { kind: "fragment.authoring.succeeded"; orgId: string; fragmentId: string; attempts: number }
       | { kind: "fragment.authoring.failed"; orgId: string; fragmentId: string; reason: string; attempts: number },
   ): Promise<void>;
@@ -171,6 +189,15 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
   };
 }
 
+/** Truncate a fragment body to the `bodyPreview` ceiling for the per-attempt
+ * event. Under the limit is passed through verbatim; over the limit is sliced
+ * to the ceiling with a trailing ellipsis (visible-in-payload marker that the
+ * body was cut). Exported for tests + shared by the emit path. */
+export function truncateBodyPreview(body: string): string {
+  if (body.length <= FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX) return body;
+  return `${body.slice(0, FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX)}…`;
+}
+
 interface AuthorOneArgs {
   spec: FragmentSpec;
   lifecycle: CaptureLifecycle;
@@ -218,7 +245,22 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
       log.warn("fragment authorer threw", { fragmentId: spec.id, attempt, error: lastRejection });
       const signature = `authorer-threw:${lastRejection}`;
       // Fixed point — not making progress; stop the inner loop.
-      if (signature === lastSignature) break;
+      const isFixedPoint = signature === lastSignature;
+      // Emit the per-iteration observability event even on the authorer-throw
+      // branch: an operator debugging a stuck LLM sees WHICH iteration threw +
+      // whether the loop is about to halt. bodyPreview is empty here (no body
+      // was produced); canonicalSignature carries the `authorer-threw:*` marker.
+      await deps.events.emit({
+        kind: "fragment.authoring.attempt",
+        orgId,
+        fragmentId: spec.id,
+        attempt,
+        bodyPreview: "",
+        canonicalSignature: signature,
+        rejection: lastRejection,
+        decision: isFixedPoint ? "halted_fixed_point" : "continue",
+      });
+      if (isFixedPoint) break;
       lastSignature = signature;
       previousAttempt = { bodyTs: previousAttempt?.bodyTs ?? "", rejection: lastRejection };
       continue;
@@ -227,7 +269,22 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
 
     // VALIDATE.
     const validation = await validateFragmentBody({ spec, bodyTs });
+    const canonicalSignature = canonicalizeBodySignature(bodyTs);
     if (validation.kind === "ok") {
+      // Emit the per-iteration observability event for the WINNING attempt
+      // BEFORE persist — the timeline reads attempt→succeeded in order, so a
+      // subscriber replaying can rebuild the trajectory even if persistence
+      // throws after this point (the emit is idempotent-safe by construction).
+      await deps.events.emit({
+        kind: "fragment.authoring.attempt",
+        orgId,
+        fragmentId: spec.id,
+        attempt,
+        bodyPreview: truncateBodyPreview(bodyTs),
+        canonicalSignature,
+        rejection: "",
+        decision: "converged",
+      });
       const dependsOn = validation.dependsOn;
       const source: OrgFragmentSource = {
         fragmentId: `${orgId}:${spec.id}:1.0.0`,
@@ -253,8 +310,23 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
     }
 
     lastRejection = validation.reason;
-    const signature = `${canonicalizeBodySignature(bodyTs)}:${lastRejection}`;
-    if (signature === lastSignature) {
+    const signature = `${canonicalSignature}:${lastRejection}`;
+    const isFixedPoint = signature === lastSignature;
+    // Emit the per-iteration observability event for the REJECTED attempt with
+    // the loop's decision. `continue` ⇒ new information, another iteration
+    // runs. `halted_fixed_point` ⇒ same canonical body + rejection, no
+    // progress; the outer terminal `fragment.authoring.failed` follows.
+    await deps.events.emit({
+      kind: "fragment.authoring.attempt",
+      orgId,
+      fragmentId: spec.id,
+      attempt,
+      bodyPreview: truncateBodyPreview(bodyTs),
+      canonicalSignature,
+      rejection: lastRejection,
+      decision: isFixedPoint ? "halted_fixed_point" : "continue",
+    });
+    if (isFixedPoint) {
       // FIXED POINT — canonical body + identical rejection ⇒ no new information.
       // Doctrine: a fixed point is NOT a transient.
       break;

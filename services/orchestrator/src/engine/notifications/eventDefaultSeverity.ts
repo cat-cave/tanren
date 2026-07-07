@@ -252,8 +252,11 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // Per-fragment authoring (F2 — docs/roadmap/templating-system.md). started +
   // succeeded are routine `ok`; a failed authoring run is a LOUD terminal signal
   // (the derive halts) → `fail`, so it clears the matrix warn floor and the
-  // code-level default route, reaching the operator.
+  // code-level default route, reaching the operator. attempt is per-iteration
+  // trajectory noise (writer body + rejection + decision) — `info` so the matrix
+  // row defaults off, but an operator debugging a stuck writer can opt in.
   "fragment.authoring.started": "ok",
+  "fragment.authoring.attempt": "info",
   "fragment.authoring.succeeded": "ok",
   "fragment.authoring.failed": "fail",
 };

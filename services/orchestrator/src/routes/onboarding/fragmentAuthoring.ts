@@ -99,9 +99,19 @@ export function buildLiveRunFragmentAuthoring(
       const payload =
         event.kind === "fragment.authoring.started"
           ? { orgId: event.orgId, fragmentId: event.fragmentId, kind: event.spec.kind, label: event.spec.label }
-          : event.kind === "fragment.authoring.succeeded"
-            ? { orgId: event.orgId, fragmentId: event.fragmentId, attempts: event.attempts }
-            : { orgId: event.orgId, fragmentId: event.fragmentId, reason: event.reason, attempts: event.attempts };
+          : event.kind === "fragment.authoring.attempt"
+            ? {
+                orgId: event.orgId,
+                fragmentId: event.fragmentId,
+                attempt: event.attempt,
+                bodyPreview: event.bodyPreview,
+                canonicalSignature: event.canonicalSignature,
+                rejection: event.rejection,
+                decision: event.decision,
+              }
+            : event.kind === "fragment.authoring.succeeded"
+              ? { orgId: event.orgId, fragmentId: event.fragmentId, attempts: event.attempts }
+              : { orgId: event.orgId, fragmentId: event.fragmentId, reason: event.reason, attempts: event.attempts };
       // ORG-SCOPED append (no project): the F2 per-fragment authoring DAG fires
       // BEFORE `createProject` in derive (services/orchestrator/src/engine/forge/
       // interview/derive.ts), so there is no project row to derive `org_id` from.
