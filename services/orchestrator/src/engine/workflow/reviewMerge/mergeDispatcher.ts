@@ -111,7 +111,7 @@ export class MergeDispatcher implements LandOps {
     return this.result("blocked", { message: decision.reason });
   }
 
-  /** external_reviewer / not_configured: stop at ready, emit the hand-off. */
+  /** external_reviewer: stop at ready, emit the hand-off. */
   async handOff(): Promise<MergeForRunResult> {
     const { eventStore, integration } = this.deps;
     await eventStore.append({
@@ -121,6 +121,19 @@ export class MergeDispatcher implements LandOps {
     });
     await this.finalize("handed_off", { taskOutcome: "ok", taskStatus: "done" });
     return this.result("handed_off");
+  }
+
+  /** `not_configured`: emit DISTINCT `merge.blocked` (mode `not_configured`, no posture — a CONFIG-gap block) so the operator surface distinguishes it from external_reviewer. Task left running for recovery (same pattern as `blockByPosture`). */
+  async blockNotConfigured(): Promise<MergeForRunResult> {
+    const { eventStore, integration } = this.deps;
+    const reason = "no MergeIntegration configured — merge blocked (operator must opt into a merge integration)";
+    await eventStore.append({
+      ...this.base(),
+      eventType: "merge.blocked",
+      payload: { ...this.prFields(), integration, mode: "not_configured", externalLogins: [], reason },
+    });
+    await this.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
+    return this.result("blocked", { message: reason });
   }
 
   /**

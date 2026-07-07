@@ -6,7 +6,9 @@
  * their own api modules so they never diverge a shared client).
  */
 
-export type GovernancePosture = "strict" | "open" | "audit_only";
+// Mirrors the orchestrator's `GovernancePosture` z.enum in
+// `services/orchestrator/src/engine/config/shared.ts` — extend both together.
+export type GovernancePosture = "strict" | "open" | "audit_only" | "lenient";
 
 export interface ReconPersona {
   name: string;

@@ -69,6 +69,7 @@ export const specs = pgTable(
       .references(() => organizations.id),
     title: text("title").notNull(),
     description: text("description").notNull(),
+    // jsonb-ARRAY + tolerant reader (`StringArrayOrEmpty`) → not the versioned-object latent-500 case; `text[]` default below is Postgres empty-array syntax, not jsonb.
     acceptanceCriteria: jsonb("acceptance_criteria")
       .notNull()
       .default(sql`'[]'::jsonb`),
@@ -84,11 +85,10 @@ export const specs = pgTable(
     priority: text("priority").notNull().default("tbd"),
     // WRITER-PROMPT MODE (task #86 — v64 root cause): selects `writerPromptFor()` standing
     // instructions. `from_scratch` (default) → brownfield/legacy authoring; the greenfield
-    // SCAFFOLD spec sets `specialize_seed` so the writer is told the composed seed is in
-    // place + proven green and only product-identity surfaces should change. NOT a
-    // state-machine value — literals mirror `SpecMode` in engine/state/spec.ts.
+    // SCAFFOLD spec sets `specialize_seed` (writer told the composed seed is in place +
+    // proven green; only product-identity surfaces should change). Literals mirror `SpecMode`.
     mode: text("mode").notNull().default("from_scratch"),
-    // P3-0014: discovery provenance under `discovery` key
+    // P3-0014: discovery provenance under `discovery` key. Open bag, tolerant reader — `{}` honest empty.
     metadata: jsonb("metadata")
       .notNull()
       .default(sql`'{}'::jsonb`),

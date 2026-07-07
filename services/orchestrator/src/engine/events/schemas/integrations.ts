@@ -357,16 +357,21 @@ export const MergeConflictReplanRoutedPayload = z
 // the configured posture holds an auto-merge:
 //   strict / lenient + external → mode "operator_approval" (lenient mirrors strict)
 //   audit_only + external change → mode "audit_only" (observed, never merged)
-// `externalLogins` are the non-Tanren contributor logins that drove the block.
+//   not_configured (no MergeIntegration opted in) → mode "not_configured" (never
+//     auto-merged; the operator hasn't wired an integration yet). `posture` is
+//     absent here — it's a CONFIG-gap block, not a posture block.
+// `externalLogins` are the non-Tanren contributor logins that drove a posture block
+// (empty for the config-gap `not_configured` mode).
 export const GovernancePostureMode = z.enum(["strict", "open", "audit_only", "lenient"]);
-export const MergeBlockMode = z.enum(["operator_approval", "audit_only"]);
+export const MergeBlockMode = z.enum(["operator_approval", "audit_only", "not_configured"]);
 
 export const MergeBlockedPayload = z
   .object({
     prUrl: z.string(),
     prNumber: z.number().int(),
     integration: MergeIntegrationMode,
-    posture: GovernancePostureMode,
+    // Optional for the `not_configured` mode (a config-gap block, not a posture block).
+    posture: GovernancePostureMode.optional(),
     mode: MergeBlockMode,
     externalLogins: z.array(z.string()),
     reason: z.string(),

@@ -19,10 +19,12 @@
 //                     not spawn fix-work while the run is still live); otherwise they
 //                     carry forward untouched.
 //
-// This slice is ADDITIVE: `evaluatePostureGate` is PURE (decision + the routable
-// spec shapes + the fix-in-place set) and is NOT yet wired into the live merge
-// path — S1 reads it. Keeping the disposition logic pure lets the DORA-knob
-// behavior be conformance-tested with no DB, exactly like `decideFromFindings`.
+// `evaluatePostureGate` is PURE (decision + the routable spec shapes + the
+// fix-in-place set) and IS NOW WIRED INTO THE LIVE MERGE PATH: `mergeLandPaths.ts`
+// (`emitFindingsDisposition`) invokes it inside `landViaAuthority` so a per-run
+// merge lands under the DORA-knob dispositions the pure policy dictates. Keeping
+// the disposition logic pure lets the knob behavior be conformance-tested with no
+// DB, exactly like `decideFromFindings`.
 
 import { type AuditPosture, type AuditPostureDecision, decideFromFindings } from "../../contracts/auditPosture.js";
 import type { Finding } from "../../contracts/findings.js";

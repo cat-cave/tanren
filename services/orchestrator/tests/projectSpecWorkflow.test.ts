@@ -368,6 +368,9 @@ class ContractPool {
       depends_on: spec.dependsOn,
       status: spec.status,
       priority: spec.priority,
+      // Task #86: `specs.mode` (NOT NULL, default `from_scratch`) is now non-optional in
+      // the row schema. This fake doesn't track mode per spec, so echo the DB default.
+      mode: "from_scratch",
     };
     return { rows: [row], rowCount: 1 };
   }

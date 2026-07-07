@@ -7,8 +7,10 @@
 //                       later DRIVES the merge through the same per-run path
 //   external_reviewer → stop at ready-for-review; emit a hand-off and let a
 //                       human merge (no merge call is made here)
-//   not_configured    → treated as an external_reviewer hand-off (safe default;
-//                       never auto-merge a repo that has not opted in)
+//   not_configured    → emit a DISTINCT `merge.blocked` (mode `not_configured`)
+//                       so the operator surface distinguishes a repo that never
+//                       opted in from one on the external_reviewer path. Still a
+//                       safe default: never auto-merges.
 //
 // A direct merge that GitHub reports as non-mergeable (405/409) is surfaced as
 // `merge.conflict` + a typed recoverable outcome — the hook the future
@@ -75,12 +77,19 @@ export {
   type ReGateCiHook,
 };
 
-/** Map the configured integration to the mode the stage dispatches to. */
+/**
+ * Map the configured integration to the mode the stage dispatches to. `not_configured`
+ * still surfaces as `external_reviewer` on the DispatchedIntegration axis (a never-
+ * auto-merge hand-off), but `mergeForRun` short-circuits `not_configured` BEFORE this
+ * mapping with a distinct `merge.blocked` (mode `not_configured`) so the operator
+ * surface distinguishes it from a real external_reviewer opt-in.
+ */
 export function dispatchedIntegrationFor(mode: MergeIntegration): DispatchedIntegration {
   if (mode === "direct_merge" || mode === "native_queue" || mode === "external_reviewer") {
     return mode;
   }
-  // not_configured → never auto-merge; hand off to a human.
+  // not_configured — a repo that hasn't opted into any merge integration. Never
+  // auto-merge. See the `mergeForRun` short-circuit above for the distinct emit.
   return "external_reviewer";
 }
 
@@ -209,6 +218,14 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     pr,
     probe,
   });
+
+  // A project that has not opted into any MergeIntegration surfaces a DISTINCT
+  // `merge.blocked` (mode `not_configured`) BEFORE the coerced hand-off runs, so the
+  // operator surface distinguishes "no integration opted in" from a real
+  // external_reviewer opt-in (both still stop-at-ready; neither auto-merges).
+  if (context.mergeIntegration === "not_configured") {
+    return dispatcher.blockNotConfigured();
+  }
 
   // governance posture gate. Only Tanren-initiated auto-merges
   // (direct_merge / native_queue) are governed: a strict-posture external

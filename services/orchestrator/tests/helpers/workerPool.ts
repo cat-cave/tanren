@@ -161,6 +161,9 @@ export class WorkerPool {
         depends_on: spec.depends_on,
         status: spec.status,
         priority: spec.priority,
+        // Task #86: `specs.mode` (NOT NULL, default `from_scratch`) is now non-optional in
+        // the row schema. The fixture insert doesn't parameterize mode, so echo the DB default.
+        mode: "from_scratch",
       });
     }
     // worker loadRunExecutionContext: run⋈spec⋈project join
@@ -184,6 +187,9 @@ export class WorkerPool {
         title: spec.title,
         description: spec.description,
         acceptance_criteria: spec.acceptance_criteria,
+        // Task #86: `specs.mode` (NOT NULL, default `from_scratch`) is now non-optional in
+        // the row schema. The fixture insert doesn't parameterize mode, so echo the DB default.
+        mode: "from_scratch",
       });
     }
     if (trimmed.startsWith("SELECT config FROM organizations")) {
