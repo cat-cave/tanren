@@ -31,8 +31,14 @@ interface BehaviorSeed {
 interface PoolState {
   /** Whether a `deploy.verified` event exists for the run. */
   verified: boolean;
-  /** Whether a prior `demo.completed` exists for the run (idempotency). */
-  alreadyDemoed?: boolean;
+  /**
+   * Whether a prior TERMINAL demo outcome exists for the run — `demo.completed`
+   * OR `demo.failed`. BOTH gate `check()` to a no-op via `alreadyTerminalDemo`
+   * (mirrors deployOnMerge's `alreadyTerminal`). Without the failed gate the
+   * `demo.failed` NOTIFY re-wakes the subscriber, re-appends `demo.failed`, and
+   * storms `warn`s per merge.
+   */
+  alreadyTerminalDemo?: boolean;
   /** The org grant row (org_integrations) for the deploy provider. */
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
   /** The spec's behaviors (returned by BehaviorStore.listForSpec). */
@@ -50,7 +56,10 @@ function fakePool(state: PoolState): pg.Pool {
   const query = async (sql: string, _params?: readonly unknown[]) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
-    // loadVerifiedDeploy: the deploy.verified event + run/project + a prior-demo flag.
+    // loadVerifiedDeploy: the deploy.verified event + run/project + a prior TERMINAL
+    // demo flag. The `demoed` EXISTS subquery targets `demo.completed` OR
+    // `demo.failed` — both wake the run-activity bus, so gating on the failed
+    // outcome too breaks the demo.failed self-loop storm (Codex round-3 #2).
     if (/event_type = 'deploy\.verified'/u.test(sql)) {
       if (!state.verified) return { rows: [], rowCount: 0 };
       return {
@@ -60,7 +69,7 @@ function fakePool(state: PoolState): pg.Pool {
             spec_id: SPEC_ID,
             project_id: PROJECT_ID,
             org_id: ORG_ID,
-            demoed: state.alreadyDemoed === true,
+            demoed: state.alreadyTerminalDemo === true,
           },
         ],
         rowCount: 1,
@@ -179,19 +188,47 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
     expect(events.appends).toEqual([]);
   });
 
-  it("is idempotent: a re-check after a prior demo records nothing new", async () => {
+  it("is idempotent on demo.completed: a re-check after a prior successful demo records nothing new", async () => {
     const probe = scriptedProbe({ "/x": 200 });
     const events = new RecordingEventStore();
     await run(
       {
         verified: true,
-        alreadyDemoed: true,
+        alreadyTerminalDemo: true,
         grant: VERCEL_GRANT,
         behaviors: [{ id: "beh_x", title: "X", surfacePath: "/x" }],
       },
       probe,
       events,
     );
+    expect(events.appends).toEqual([]);
+    expect(probe.probed).toEqual([]);
+  });
+
+  // A demo.failed append fires a `tanren_run` NOTIFY that wakes the post-merge
+  // subscriber (per eventStore.ts) → without gating on demo.failed as TERMINAL,
+  // the next pass re-enters check(), re-throws in resolveSurface (grant still
+  // lost / provider read still failing), re-appends demo.failed, and storms
+  // `warn`s per merge. Regression pin for Codex round-3 audit finding #2:
+  // demoOnDeployReads must include demo.failed in the terminal IN clause
+  // (mirrors deployOnMerge's alreadyTerminal unification of verified/failed/
+  // skipped).
+  it("is TERMINAL on demo.failed: a re-check after a prior failure is a no-op (no self-loop storm)", async () => {
+    const probe = scriptedProbe({ "/x": 200 });
+    const events = new RecordingEventStore();
+    await run(
+      {
+        verified: true,
+        // A prior demo.failed exists on the run — same TERMINAL gate as
+        // demo.completed. No grant seeded either: without the terminal gate the
+        // watcher would throw "no matching grant" again + re-append demo.failed.
+        alreadyTerminalDemo: true,
+        behaviors: [{ id: "beh_x", title: "X", surfacePath: "/x" }],
+      },
+      probe,
+      events,
+    );
+    // The terminal gate held — no new demo.failed (and no demo.completed either).
     expect(events.appends).toEqual([]);
     expect(probe.probed).toEqual([]);
   });
