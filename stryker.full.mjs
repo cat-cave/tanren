@@ -44,6 +44,11 @@ const config = {
   // Whole-repo mutants include some heavier loop paths; give each a generous
   // ceiling so a slow mutant is not miscounted as a kill-by-timeout.
   timeoutMS: 120000,
+  // Stryker's default `dryRunTimeoutMinutes` is 5. The full vitest suite plus
+  // Stryker's whole-repo instrumentation is close to that ceiling on GitHub's
+  // ubuntu-latest runner (June 8 run: 3m43s; June 15+ runs: >5m timeouts as
+  // the codebase grew). Bumped to 15 for headroom.
+  dryRunTimeoutMinutes: 15,
 };
 
 export default config;
