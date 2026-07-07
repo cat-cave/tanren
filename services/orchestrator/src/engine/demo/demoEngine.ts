@@ -6,10 +6,18 @@
 // prose then summarizes.
 //
 // The engine is provider-AGNOSTIC: it takes a `DemoSurface` (resolved by whichever
-// DeployAdapter owns the deploy) and dispatches on the surface KIND. Today only the
-// `web_url` arm exists (HTTP reachability of each behavior's described route); richer
-// exercises (a scripted user flow, a JSON-shape assertion) and other surface kinds
-// (package / app_channel / download) slot in as new arms — never a refactor.
+// DeployAdapter owns the deploy) and dispatches on the surface KIND. ALL FOUR surface
+// kinds have real per-behavior exercise arms:
+//   • `web_url`      — HTTP reachability of each behavior's described route.
+//   • `package`      — registry metadata resolve for the coordinate (installability).
+//   • `download`     — HTTP GET + streamed SHA-256 hash, verified against a behavior's
+//                       declared `expectedSha256` when present.
+//   • `app_channel`  — presence attested on the distribution channel for the buildRef
+//                       (the adapter's verify step already confirmed availability;
+//                       richer launch-and-drive on a device farm is a legitimate later
+//                       extension the probe seam accommodates).
+// Richer exercises (a scripted user flow, a JSON-shape assertion, a substrate-driven
+// package invocation) slot in as probe extensions — never a refactor of this dispatch.
 //
 // EVIDENCE → EVENTS: each behavior's verdict is emitted as a `demo.evidence.recorded`
 // event (behavior id · surface kind · outcome · the captured detail) and the whole
@@ -25,6 +33,9 @@ import { runWithJobOrgId } from "@tanren/db";
 import type { DemoSurface } from "../contracts/deployAdapter.js";
 import type { EventStore } from "../eventStore.js";
 import { type BehaviorEvidence, type DemoWebProbe, exerciseWebBehavior } from "./demoEvidence.js";
+import { type DemoPackageProbe, exercisePackageBehavior } from "./demoPackageArm.js";
+import { type DemoDownloadProbe, exerciseDownloadBehavior } from "./demoDownloadArm.js";
+import { type DemoAppChannelProbe, exerciseAppChannelBehavior } from "./demoAppChannelArm.js";
 
 /** A spec behavior the demo exercises — the row's id/title + its free-form metadata (carries `surfacePath`). */
 export interface DemoBehavior {
@@ -48,6 +59,38 @@ export interface DemoEngineDeps {
   events: EventStore;
   /** The HTTP reach probe a `web_url` surface is exercised over (scripted in tests). */
   webProbe: DemoWebProbe;
+  /**
+   * The registry-metadata probe a `package` surface is exercised over. Optional at the
+   * type level for tests that never encounter a package surface; missing at runtime
+   * when the engine actually encounters one is a LOUD typed throw (via
+   * {@link DemoProbeMissingError}) — never a silent skip.
+   */
+  packageProbe?: DemoPackageProbe;
+  /**
+   * The streamed-fetch + SHA-256 probe a `download` surface is exercised over.
+   * Optional-with-loud-throw, same discipline as `packageProbe`.
+   */
+  downloadProbe?: DemoDownloadProbe;
+  /**
+   * The presence-reread probe an `app_channel` surface is exercised over.
+   * Optional-with-loud-throw, same discipline as `packageProbe`.
+   */
+  appChannelProbe?: DemoAppChannelProbe;
+}
+
+/**
+ * A LOUD, TYPED throw when the engine encounters a surface kind whose probe is not wired
+ * — the honest failure that lets a caller (or a test) diagnose "the surface HAS an arm,
+ * but its probe is not present in the DI graph" apart from the older "the surface kind
+ * has no arm" family. Fixed non-secret message stem so the demo-on-deploy watcher can
+ * refine the `demo.failed.reason` to `probe_unwired` when it lands (today it maps to
+ * the more generic `exercise_failed`, which is already durable).
+ */
+export class DemoProbeMissingError extends Error {
+  constructor(readonly surfaceKind: DemoSurface["kind"]) {
+    super(`demoEngine: probe for surface kind '${surfaceKind}' is not wired into DemoEngineDeps`);
+    this.name = "DemoProbeMissingError";
+  }
 }
 
 /** The in-memory result of a demo run — the per-behavior evidence + the pass/fail tally. */
@@ -119,21 +162,18 @@ export class DemoEngine {
     switch (surface.kind) {
       case "web_url":
         return exerciseWebBehavior(this.deps.webProbe, surface.url, behavior);
-      // The non-web surface kinds (package / app_channel / download) are RESOLVED by
-      // their owning DeployAdapter classes (package_release / mobile_release /
-      // manual_external), but a per-behavior EXERCISE for them (install-and-run a
-      // package, drive an app-channel build, fetch-and-verify a download) is a separate
-      // piece of demo-engine work. Until it lands, exercising one of these surfaces is a
-      // LOUD throw — never a silent skip that would let a demo report "no evidence"
-      // against a surface it cannot yet exercise. Each slots in here as a real exercise
-      // arm — not a refactor.
-      case "package":
-      case "app_channel":
-      case "download":
-        throw new Error(
-          `demoEngine: surface kind '${surface.kind}' is resolved by its deploy adapter but has no behavior exercise yet — ` +
-            `the per-behavior exercise for non-web surfaces is not implemented`,
-        );
+      case "package": {
+        if (this.deps.packageProbe === undefined) throw new DemoProbeMissingError("package");
+        return exercisePackageBehavior(this.deps.packageProbe, surface, behavior);
+      }
+      case "download": {
+        if (this.deps.downloadProbe === undefined) throw new DemoProbeMissingError("download");
+        return exerciseDownloadBehavior(this.deps.downloadProbe, surface, behavior);
+      }
+      case "app_channel": {
+        if (this.deps.appChannelProbe === undefined) throw new DemoProbeMissingError("app_channel");
+        return exerciseAppChannelBehavior(this.deps.appChannelProbe, surface, behavior);
+      }
       default: {
         const exhaustive: never = surface;
         throw new Error(`demoEngine: no exercise for surface kind '${(exhaustive as { kind: string }).kind}'`);
