@@ -44,4 +44,5 @@ export {
   type EnvCreationDeps,
   NixTierNotBuiltError,
 } from "./resolveProjectEnvWithCreation.js";
-export { buildEnvCreationFromEnv, type BuildEnvCreationInput } from "./envCreationConfig.js";
+export { buildEnvCreationFromEnv, jitEnvRegistryConfigured, type BuildEnvCreationInput } from "./envCreationConfig.js";
+export { assertJitAvailableForToolchain, JitBuildRequiredError } from "./jitBuildRequired.js";

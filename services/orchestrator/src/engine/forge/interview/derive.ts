@@ -55,6 +55,7 @@ import { ProjectStore } from "../../repositories/projects.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../workflow/projectSpec.js";
 import {
+  assertJitAvailableForToolchain,
   autonomousConfig,
   MissingDesignContractError,
   productVisionConfig,
@@ -334,6 +335,17 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   if (capture.designContract === null) throw new MissingDesignContractError();
 
   const slug = safeProjectSlug(capture);
+
+  // H1 #4 — EARLY-FEEDBACK JIT env-image guard (env-management.md §2.2 halt-loud).
+  // A greenfield project whose captured toolchain is OFF the golden baseline AND
+  // whose deployment has no `TANREN_ENV_REGISTRY` configured has no way to run:
+  // the executor's env-refinement seam will fail-loud on every run. Hoisted BEFORE any
+  // expensive derive work (no template resolution, no repo create, no deploy
+  // provision) so the operator learns the config gap AT project-create time rather
+  // than at the first run's mysterious runtime failure. A no-toolchain / baseline-
+  // subset capture (apex-style node+pnpm) passes cleanly — the golden base already
+  // serves it. The run-time check in `refineRunnerImageForEnv` remains the safety.
+  assertJitAvailableForToolchain(capture.lifecycle.toolchain);
 
   // DEPLOY-REQUIRED guard hoisted BEFORE template resolution. A project missing its
   // deploy config fails FAST — we never spend authoring cost on a project that

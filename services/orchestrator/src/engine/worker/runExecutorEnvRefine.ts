@@ -9,15 +9,24 @@
 // baseline-subset toolchain to the golden base (NO build), and SYNCHRONOUSLY
 // builds→validates→publishes a real env image for an off-baseline no-match, then
 // overrides `context.runnerImage` to seed from it. A creation FAILURE propagates LOUD
-// (the run fails-closed; never seeds from an unvalidated env). A no-op when the seams
-// are absent (P3 behavior preserved) or the toolchain is empty.
+// (the run fails-closed; never seeds from an unvalidated env). A no-op when the
+// toolchain is empty OR baseline-subset (the golden base already serves it).
+//
+// H1 finding #4 — an OFF-baseline toolchain with NO JIT seams wired
+// (`TANREN_ENV_REGISTRY` unset) FAILS LOUD (`JitBuildRequiredError`) rather than
+// silently degrading to the golden base. Doctrine §2.2: halt loud, never seed from
+// an unvalidated env for a toolchain that demanded a real one.
 
 import type pg from "pg";
 import { orgScopingPool } from "../data/orgScopedDb.js";
 import { systemActor } from "../state/actor.js";
 import type { ProjectConfigV1 } from "../config/index.js";
 import type { PlannerRunContext } from "../workflow/plannerRun.js";
-import { resolveProjectEnvWithCreation, type EnvCreationDeps } from "../environments/creation/index.js";
+import {
+  assertJitAvailableForToolchain,
+  resolveProjectEnvWithCreation,
+  type EnvCreationDeps,
+} from "../environments/creation/index.js";
 
 // Re-exported so runExecutor.ts types its `RunExecutorDeps.envCreation` seam without a
 // direct import of the env-creation module (keeping that file under its dependency cap).
@@ -32,20 +41,36 @@ export interface RefineRunnerImageForEnvInput {
 }
 
 /**
- * Refine the run's resolved runner image via JIT env-image creation when the seams are
- * wired. Mutates `context.runnerImage` in place to the (possibly JIT-built + validated)
- * env image. A no-op when `creation` is undefined (P4 seams not wired → P3 behavior) or
- * the project declared no toolchain. A creation failure throws LOUD (fail-closed).
+ * Refine the run's resolved runner image via JIT env-image creation. A no-op when the
+ * project declared no toolchain OR the toolchain is a baseline-subset (the golden
+ * base already serves it — apex-style node+pnpm lands here). An OFF-baseline
+ * toolchain routes through the P4 resolver to build→validate→publish a real env
+ * image, then overrides `context.runnerImage` to seed from it.
+ *
+ * An OFF-baseline toolchain with NO `creation` seams wired throws
+ * `JitBuildRequiredError` (H1 #4 — no silent golden-base fallback). A creation
+ * failure throws LOUD (fail-closed; never seed from an unvalidated env).
  */
 export async function refineRunnerImageForEnv(input: RefineRunnerImageForEnvInput): Promise<void> {
   const { creation, context, projectConfig, orgId } = input;
+  const toolchain = projectConfig.lifecycle?.toolchain;
+  // Symmetric with `assertJitAvailableForToolchain`: an empty / baseline-subset
+  // toolchain needs neither JIT nor a build. The assertion no-ops in both cases
+  // and throws only when off-baseline + no registry. We call it FIRST so a run on
+  // a worker booted without JIT capability fails LOUD immediately, before we
+  // touch the DB.
+  assertJitAvailableForToolchain(toolchain, {
+    projectId: context.projectId,
+    registryConfigured: creation !== undefined,
+  });
   if (creation === undefined) {
-    // P4 seams not wired → P3 behavior (the golden-base no-match fallback).
+    // The assertion above passed ⇒ the toolchain is empty / baseline-subset ⇒
+    // the golden base binding is correct. Nothing to refine.
     return;
   }
-  const toolchain = projectConfig.lifecycle?.toolchain;
   if (toolchain === undefined || toolchain.length === 0) {
-    // No declared toolchain → nothing to build (the golden base stands).
+    // Guard already returned above for the empty case when creation was undefined;
+    // preserved here so the type narrowing works for the resolver call below.
     return;
   }
   // Route through the P4 resolver: a match / baseline-subset toolchain returns the

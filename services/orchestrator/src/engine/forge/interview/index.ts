@@ -49,6 +49,11 @@ export {
 // dangling moat refs (mirroring `MissingLifecycleError`).
 export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesignContract.js";
 
+// Environment management (env-management.md §2.2 halt-loud, H1 #4) — re-exported so
+// the greenfield onboarding route dispatches the typed error to a 400 body without
+// reaching into `engine/environments/creation`.
+export { JitBuildRequiredError } from "../../environments/creation/index.js";
+
 export { wrapProviderInterviewAnswerer, type WrapProviderInterviewAnswererOptions } from "./providerAnswerer.js";
 export { buildInterviewPrompt } from "./prompt.js";
 export { mergeCapture, resolveLifecycle, type LifecycleResolution } from "./capture.js";
