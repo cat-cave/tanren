@@ -158,6 +158,20 @@ export interface CostRecord {
 // ProjectFeedItem are generated from contracts/json/http/** and re-exported at
 // the top of this file (no longer hand-mirrored here).
 
+/**
+ * Codex H3 #8 — the triage-routing PROVENANCE trail (Claude RA2, migration
+ * 0025) surfaced on a spec response. Present iff the spec was auto-routed by
+ * triage from a parent spec's finding; operator / discovery / seed specs omit.
+ * The dashboard renders the routing chain from this block so an operator can
+ * trace a routed spec back to its origin without a second fetch.
+ */
+export interface SpecTriageProvenance {
+  parentSpecId: string;
+  sourceFindingIds: string[];
+  originTriageTaskId: string;
+  originRunId: string;
+}
+
 /** A spec row (`GET .../specs`). */
 export interface SpecSummary {
   specId: string;
@@ -167,6 +181,11 @@ export interface SpecSummary {
   acceptanceCriteria: string[];
   dependsOn: string[];
   status: string;
+  /**
+   * Codex H3 #8 — the triage-routing PROVENANCE trail; undefined for a
+   * non-routed spec. See {@link SpecTriageProvenance}.
+   */
+  triageProvenance?: SpecTriageProvenance;
 }
 
 /** A milestone row (`GET .../milestones`). */

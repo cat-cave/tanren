@@ -240,6 +240,14 @@ export class RecoveryMemoryPool {
             // Task #86: `specs.mode` (NOT NULL, default `from_scratch`) is now non-optional
             // in the row schema. This fake doesn't track mode per spec, so echo the default.
             mode: "from_scratch",
+            // Codex H3 #7 — the four triage-routing PROVENANCE columns are now
+            // SELECT-ed by `loadSpecWithProject`. This fake seeds them all null
+            // (non-routed) since the recovery flows here don't exercise triage
+            // routing; a routed-spec test seeds a real fake pool with values.
+            parent_spec_id: null,
+            source_finding_ids: null,
+            origin_triage_task_id: null,
+            origin_run_id: null,
           },
         ],
         rowCount: 1,

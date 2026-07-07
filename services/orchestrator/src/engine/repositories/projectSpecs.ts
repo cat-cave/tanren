@@ -28,12 +28,24 @@ export interface ProjectSpecRow {
   depends_on: unknown;
   status: string;
   priority: string;
+  // Codex H3 #8 — the four triage-routing PROVENANCE columns (Claude RA2,
+  // migration 0025) surfaced on the route-shaped row so the dashboard spec-list
+  // and spec-detail responses can render the routing chain for a routed spec.
+  // All NULLABLE: a non-routed spec has null across the four; a routed spec has
+  // parent_spec_id set (the sentinel the route layer uses to promote the trail
+  // to the response's `triageProvenance` block).
+  parent_spec_id: string | null;
+  source_finding_ids: unknown;
+  origin_triage_task_id: string | null;
+  origin_run_id: string | null;
 }
 
-// The exact column list the spec list/detail routes used (now 8 columns with the
-// P1b `priority` ordering key; no org_id — the org-scoped client carries tenancy).
+// The exact column list the spec list/detail routes use (now 12 columns with the
+// four Claude RA2 provenance columns; no org_id — the org-scoped client carries
+// tenancy).
 const SELECT_SPEC_COLUMNS =
-  "spec_id, project_id, title, description, acceptance_criteria, depends_on, status, priority";
+  "spec_id, project_id, title, description, acceptance_criteria, depends_on, status, priority, " +
+  "parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id";
 
 /**
  * The pre-rendered dynamic PATCH payload. The route inspects the parsed body,

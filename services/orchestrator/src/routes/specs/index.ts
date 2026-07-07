@@ -262,6 +262,24 @@ export function createSpecRoutes(options: SpecRoutesOptions) {
 }
 
 function toSpecContract(row: ProjectSpecRow) {
+  // Codex H3 #8 — surface the four triage-routing PROVENANCE columns (Claude
+  // RA2, migration 0025) as a `triageProvenance` block on the response, present
+  // iff `parent_spec_id` is non-null (the sentinel that identifies a routed
+  // spec). A non-routed spec (operator create / discovery accept / seed) omits
+  // the block, matching the shape the workflow `SpecContract` uses. The check
+  // treats null / undefined / "" as "no routing" so a legacy in-memory fixture
+  // that hasn't been updated to seed the new columns still renders as
+  // non-routed rather than emitting a broken block.
+  const parentSpecId = row.parent_spec_id;
+  const triageProvenance =
+    parentSpecId === null || parentSpecId === undefined || parentSpecId === ""
+      ? undefined
+      : {
+          parentSpecId,
+          sourceFindingIds: parseStringArray(row.source_finding_ids),
+          originTriageTaskId: row.origin_triage_task_id ?? "",
+          originRunId: row.origin_run_id ?? "",
+        };
   return {
     specId: row.spec_id,
     projectId: row.project_id,
@@ -271,6 +289,7 @@ function toSpecContract(row: ProjectSpecRow) {
     dependsOn: parseStringArray(row.depends_on),
     status: row.status,
     priority: row.priority,
+    ...(triageProvenance !== undefined && { triageProvenance }),
   };
 }
 

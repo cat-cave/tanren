@@ -8,6 +8,20 @@
 /** The five locked node statuses (colour + glyph keyed off these). */
 export type DagStatus = "done" | "live" | "review" | "blocked" | "queued";
 
+/**
+ * Codex H3 #9 — the triage-routing PROVENANCE trail (Claude RA2, migration
+ * 0025) surfaced on a DAG node. Present iff the spec was auto-routed by triage
+ * from a parent spec's finding; operator / discovery / seed specs omit. The
+ * DAG view renders the routing chain from this block so an operator can trace
+ * a routed node back to its origin without a spec-detail fetch.
+ */
+export interface DagNodeTriageProvenance {
+  parentSpecId: string;
+  sourceFindingIds: string[];
+  originTriageTaskId: string;
+  originRunId: string;
+}
+
 /** A spec node in the assembled graph. */
 export interface DagNode {
   id: string;
@@ -20,6 +34,11 @@ export interface DagNode {
   latestRunId: string | null;
   onCriticalPath: boolean;
   attention: number | null;
+  /**
+   * Codex H3 #9 — the triage-routing PROVENANCE trail; undefined for a
+   * non-routed spec. See {@link DagNodeTriageProvenance}.
+   */
+  triageProvenance?: DagNodeTriageProvenance;
 }
 
 /** A dependency edge: `from` (upstream dep) → `to` (the dependent spec). */

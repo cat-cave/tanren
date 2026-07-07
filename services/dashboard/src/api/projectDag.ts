@@ -14,7 +14,7 @@
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag } from "./dagTypes.js";
 import type { OrchestratorClient } from "./orchestrator.js";
-import type { RunListItem } from "./types.js";
+import type { RunListItem, SpecTriageProvenance } from "./types.js";
 
 export type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag };
 
@@ -59,7 +59,18 @@ function latestRunsBySpec(runs: RunListItem[]): Map<string, RunListItem> {
 }
 
 export interface BuildDagInput {
-  specs: { specId: string; title: string; dependsOn: string[]; status: string }[];
+  specs: {
+    specId: string;
+    title: string;
+    dependsOn: string[];
+    status: string;
+    /**
+     * Codex H3 #9 — the triage-routing PROVENANCE trail on a routed spec.
+     * Threaded from the orchestrator `SpecSummary` so the DAG-view node exposes
+     * the routing origin. Absent on operator/discovery/seed specs.
+     */
+    triageProvenance?: SpecTriageProvenance;
+  }[];
   milestones: { id: string; label: string; name: string; status: string }[];
   runs: RunListItem[];
   /** spec-id → behaviour titles (best-effort; empty when unlinked). */
@@ -102,6 +113,10 @@ export function buildProjectDag(input: BuildDagInput): ProjectDag {
       latestRunId: run?.runId ?? null,
       onCriticalPath: dependedOn.has(spec.specId),
       attention: null,
+      // Codex H3 #9 — thread the triage-routing PROVENANCE trail (Claude RA2)
+      // onto the DAG node so the DAG view can render the routing chain for a
+      // routed spec. Undefined on operator/discovery/seed specs.
+      ...(spec.triageProvenance !== undefined && { triageProvenance: spec.triageProvenance }),
     };
   });
 
@@ -199,6 +214,9 @@ export async function getProjectDag(client: OrchestratorClient, orgId: string, p
       title: s.title,
       dependsOn: s.dependsOn,
       status: s.status,
+      // Codex H3 #9 — forward the SpecSummary's triage-routing PROVENANCE onto
+      // the DAG-build input so the routing origin surfaces on the DAG node.
+      ...(s.triageProvenance !== undefined && { triageProvenance: s.triageProvenance }),
     })),
     milestones: milestones.map((m) => ({
       id: m.id,

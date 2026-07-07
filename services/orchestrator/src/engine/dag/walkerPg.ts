@@ -78,10 +78,37 @@ interface SpecDagRow {
   depends_on: unknown;
   priority: unknown;
   rn: string | number;
+  // Codex H3 #9 — the four triage-routing PROVENANCE columns (Claude RA2,
+  // migration 0025). All NULLABLE: a non-routed spec has null across the four; a
+  // routed spec has parent_spec_id set (the sentinel that promotes the trail
+  // onto `DagSpecNode.triageProvenance`).
+  parent_spec_id: string | null;
+  source_finding_ids: unknown;
+  origin_triage_task_id: string | null;
+  origin_run_id: string | null;
 }
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+/**
+ * Codex H3 #9 — hydrate the walker-snapshot triage-routing provenance from a raw
+ * spec row. Returns undefined when parent_spec_id is null (the "not routed"
+ * sentinel), else the {@link DagSpecTriageProvenance} trail with defensive
+ * fallbacks for legacy rows: a null `source_finding_ids` degrades to `[]` and a
+ * null origin_* field degrades to "" (the parent trail still identifies the
+ * routed spec). See {@link SpecTriageProvenance} in workflow/projectSpec.ts.
+ */
+function hydrateTriageProvenance(row: SpecDagRow): DagSpecNode["triageProvenance"] {
+  const parentSpecId = row.parent_spec_id;
+  if (parentSpecId === null || parentSpecId === undefined || parentSpecId === "") return undefined;
+  return {
+    parentSpecId,
+    sourceFindingIds: asStringArray(row.source_finding_ids),
+    originTriageTaskId: row.origin_triage_task_id ?? "",
+    originRunId: row.origin_run_id ?? "",
+  };
 }
 
 /**
@@ -120,23 +147,30 @@ export class PgDagReadModel implements DagReadModel {
     }
     const orgId = project.orgId;
     const nodes = await runWithOrgScope(this.pool, orgId, async (client) => {
+      // Codex H3 #9 — SELECT the four triage-routing PROVENANCE columns so the
+      // DAG snapshot carries the routing origin for every routed spec node.
+      // Absent from the previous SELECT, the DAG view was blind to the routing
+      // trail even though the columns had persisted since PR #755.
       const result = await client.query<SpecDagRow>(
         `SELECT spec_id, status, depends_on, priority,
+                parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id,
                 row_number() OVER (ORDER BY created_at ASC, spec_id ASC) AS rn
            FROM specs
           WHERE project_id = $1`,
         [projectId],
       );
-      return result.rows.map(
-        (row): DagSpecNode => ({
+      return result.rows.map((row): DagSpecNode => {
+        const triageProvenance = hydrateTriageProvenance(row);
+        return {
           specId: row.spec_id,
           phase: classifySpecStatus(row.status),
           dependsOn: asStringArray(row.depends_on),
           // The DB CHECK guarantees a valid value; parse defends the read seam.
           priority: SpecPriority.parse(row.priority),
           orderKey: Number(row.rn),
-        }),
-      );
+          ...(triageProvenance !== undefined && { triageProvenance }),
+        };
+      });
     });
     return { projectId, nodes, archived: false };
   }
