@@ -12,6 +12,9 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { eventDefaultSeverity } from "../../engine/notifications/eventDefaultSeverity.js";
 import {
+  buildProductionChannelRegistry,
+  type BuildNotificationDispatcherDeps,
+  type ChannelKind,
   NotificationDispatchLog,
   NotificationRouteCreateInput,
   NotificationRouteStore,
@@ -24,6 +27,23 @@ import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface NotificationRoutesOptions {
   pool: pg.Pool;
+  /**
+   * The set of channel kinds actually wired in this boot's registry. When
+   * provided, `POST /orgs/:orgId/notifications/routes` REJECTS creating a
+   * route to a target whose `channelKind` is NOT in the set — the runtime
+   * companion to the boot-time `requiredChannels` guard so a stub can never
+   * back a routed production channel (Codex H3 Surface 6 #18: ban stub-in-
+   * prod routing). Omitted (and `productionChannelDeps` also omitted) → the
+   * endpoint accepts any known kind (tests / dev harness).
+   */
+  wiredChannelKinds?: ReadonlySet<ChannelKind>;
+  /**
+   * Production channel deps (secret store, etc.). When provided, the endpoint
+   * builds the SAME registry the worker boot uses and derives the wired set
+   * from it. Prefer this to `wiredChannelKinds` when both the API and worker
+   * share the same secret store — a single source of truth for the wired set.
+   */
+  productionChannelDeps?: BuildNotificationDispatcherDeps;
 }
 
 /** Every event-registry row + its default severity, for the matrix rows. */
@@ -33,10 +53,26 @@ function eventCatalog(): Array<{ eventName: string; defaultSeverity: string }> {
     .sort((a, b) => a.eventName.localeCompare(b.eventName));
 }
 
-const DELIVERY_STATUSES = new Set<DispatchStatus>(["sent", "failed", "stubbed", "skipped"]);
+const DELIVERY_STATUSES = new Set<DispatchStatus>([
+  "sent",
+  "failed",
+  "stubbed",
+  "skipped",
+  // Codex H3 Surface 6 #19: durable no-route escalation records — filterable so
+  // operators can enumerate the fail-severity events that reached no human.
+  "undelivered_no_route",
+]);
 
 export function createNotificationRoutes(options: NotificationRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
+  // Codex H3 Surface 6 #18: resolve the wired-channel set once per boot.
+  // Prefer an explicitly-provided set; else, derive it from the shared
+  // production channel deps so the API's guard matches the worker's registry.
+  const wiredChannelKinds: ReadonlySet<ChannelKind> | undefined =
+    options.wiredChannelKinds ??
+    (options.productionChannelDeps === undefined
+      ? undefined
+      : buildProductionChannelRegistry(options.productionChannelDeps).wiredChannelKinds);
 
   // The full matrix payload: every configured target, every route opt-in
   // across those targets, and the event catalog with default severities.
@@ -134,6 +170,23 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     const target = await NotificationTargetStore.get(options.pool, parsed.data.targetId);
     if (target === undefined || target.orgId !== orgId) {
       return c.json({ error: "target_not_found" }, 404);
+    }
+    // Codex H3 Surface 6 #18: BAN stub-in-prod routing. If the boot supplied
+    // the set of wired channels, reject creating a route to a target whose
+    // channelKind is not wired — a StubChannel publish is a no-op, so a route
+    // to a stub silently drops fail-severity escalations. This is the
+    // runtime companion to the boot-time `requiredChannels` guard in
+    // `buildChannelRegistry`.
+    if (wiredChannelKinds !== undefined && !wiredChannelKinds.has(target.channelKind)) {
+      return c.json(
+        {
+          error: "channel_not_wired",
+          channelKind: target.channelKind,
+          detail:
+            "cannot route to a channel whose adapter is not wired in this deploy (would silently stub fail-severity escalations)",
+        },
+        400,
+      );
     }
     const created = await NotificationRouteStore.create(options.pool, parsed.data);
     return c.json(toRouteContract(created), 201);

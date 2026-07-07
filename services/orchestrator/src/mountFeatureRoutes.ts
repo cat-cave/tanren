@@ -287,7 +287,19 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // The benchmark scheduler runs on the scoped pool; its live accept/await seams
   // carry their own infra (allocator/ssh/identity/notify) when the boot wired it.
   mountReportRoutes(app, { pool: scopedPool, ...(benchmarkInfra === undefined ? {} : { benchmark: benchmarkInfra }) });
-  app.route("/orgs", createNotificationRoutes({ pool: scopedPool }));
+  // Codex H3 Surface 6 #17/#18: hand the API-plane secrets store to the route
+  // factory so it can build the SAME production channel registry the worker
+  // boot did and reject POSTs that route to an unwired channel. Both surfaces
+  // agree on the same wired set — the boot-time `requiredChannels` guard threw
+  // already if any kind was unwired; the route-write check is belt to that
+  // boot suspenders.
+  app.route(
+    "/orgs",
+    createNotificationRoutes({
+      pool: scopedPool,
+      productionChannelDeps: { pool, secrets, ...(githubAppMinter !== undefined && { githubAppMinter }) },
+    }),
+  );
   // capability-driven onboarding — "enable error tracking / notify /
   // deploy" resolves the org grant, builds the provisioner with PRODUCTION deps,
   // applies confirm-with-smart-default, persists the artifact (inbox source /

@@ -61,9 +61,20 @@ export {
   type EventContext,
 } from "./dispatcher.js";
 
-export { buildChannelRegistry, type ChannelRegistryDeps } from "./registry.js";
+export {
+  buildChannelRegistry,
+  wiredChannelKinds,
+  ChannelNotConfiguredError,
+  type BuildChannelRegistryOptions,
+  type ChannelRegistryDeps,
+} from "./registry.js";
 
-export { buildNotificationDispatcher, type BuildNotificationDispatcherDeps } from "./build.js";
+export {
+  buildNotificationDispatcher,
+  buildProductionChannelRegistry,
+  type BuildNotificationDispatcherDeps,
+  type BuiltNotificationDispatcher,
+} from "./build.js";
 
 export {
   ensureDefaultNotificationRoute,

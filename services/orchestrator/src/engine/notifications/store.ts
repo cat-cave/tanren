@@ -223,7 +223,13 @@ function qualifiedRouteColumns(): string {
 // each call to publish() — successful, failed, or
 // stubbed — appends one row here. The dispatcher writes through this
 // helper so the audit trail is consistent regardless of channel.
-export type DispatchStatus = "sent" | "failed" | "stubbed" | "skipped";
+// `undelivered_no_route` (Codex H3 Surface 6 #19): a fail-severity event
+// cleared the default-route floor but matched NO per-org route AND had no
+// code-level default route configured. Persisted DURABLY so the operator sees
+// the missing-route escalation on the deliveries API rather than the LOUD log
+// alone. The dispatcher records it under a synthetic `no_route` channel with a
+// `null` targetId so the payload is self-descriptive.
+export type DispatchStatus = "sent" | "failed" | "stubbed" | "skipped" | "undelivered_no_route";
 
 export interface DispatchLogInput {
   orgId: string;

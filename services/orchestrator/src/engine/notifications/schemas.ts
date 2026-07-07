@@ -150,11 +150,18 @@ export const NotificationPayload = z.object({
 });
 export type NotificationPayload = z.infer<typeof NotificationPayload>;
 
+// `undelivered_no_route` (Codex H3 Surface 6 #19): a fail-severity event that
+// cleared the default-route floor but matched NO per-org route AND had no
+// code-level default route configured. The dispatcher records a durable row
+// with this status so the operator can observe the missing route on the
+// deliveries API, rather than only a LOUD log line that scrolls off.
 export const NotificationDeliveryRow = z.object({
   id: z.number().int().nonnegative(),
   orgId: z.string().min(1).nullable(),
-  channel: ChannelKind,
-  status: z.enum(["sent", "failed", "stubbed", "skipped"]),
+  // `channel` may be a synthetic "no_route" marker when the delivery is an
+  // undelivered-no-route escalation record — otherwise it is a real ChannelKind.
+  channel: z.union([ChannelKind, z.literal("no_route")]),
+  status: z.enum(["sent", "failed", "stubbed", "skipped", "undelivered_no_route"]),
   attempts: z.number().int().nonnegative(),
   enqueuedAt: z.date(),
   sentAt: z.date().nullable(),
