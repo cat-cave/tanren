@@ -69,7 +69,9 @@ export {
 export {
   buildFragmentAuthoring,
   deriveImplicitDependsOn,
+  FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX,
   type FragmentAuthoring,
+  type FragmentAuthoringAttemptDecision,
   type FragmentAuthoringDeps,
   type FragmentAuthoringEvents,
   type FragmentAuthoringInput,
@@ -78,6 +80,7 @@ export {
   type FragmentAuthorerInput,
   type FragmentAuthorerOutput,
   type FragmentPersistence,
+  truncateBodyPreview,
 } from "./fragmentAuthoringRun.js";
 export {
   deriveRuntimeLanguage,

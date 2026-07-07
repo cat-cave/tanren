@@ -77,6 +77,7 @@ export const eventTypeNames = [
   "forge.claim.anchored",
   "forge.claim.self_resolved",
   "forge.claim.validated",
+  "fragment.authoring.attempt",
   "fragment.authoring.failed",
   "fragment.authoring.started",
   "fragment.authoring.succeeded",
