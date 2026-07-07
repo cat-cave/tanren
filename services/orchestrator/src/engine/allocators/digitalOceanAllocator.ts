@@ -222,6 +222,13 @@ export class DigitalOceanAllocator implements Allocator {
         hostKeyFingerprint: this.options.hostKeyFingerprint,
         imageSha: allocation.imageSha,
         containerId: String(droplet.id),
+        // Codex H3 #13: persist the droplet id in a DEDICATED discriminated
+        // blob so a fresh allocator instance (post-restart) can reconstruct
+        // the DELETE without the in-memory `droplets` map. `container_id` was
+        // the old convention but it's a stringly-typed catch-all shared with
+        // sidecar/manual-ssh — the discriminated blob makes the cloud-teardown
+        // shape explicit at the DB seam.
+        providerMetadata: { kind: "digitalocean", dropletId: droplet.id },
       });
     } catch (error) {
       await this.client.deleteDroplet(droplet.id).catch(() => {});
@@ -233,14 +240,36 @@ export class DigitalOceanAllocator implements Allocator {
   }
 
   async release(runnerId: string, _reason: ReleaseReason = "completed"): Promise<void> {
-    const dropletId = this.droplets.get(runnerId);
+    const dropletId = await this.resolveDropletId(runnerId);
     if (dropletId === undefined) {
-      // Already released or unknown to this instance: no-op.
+      // Already released, unknown to this instance AND unpersisted, or the
+      // persisted row belongs to a different provider (kind mismatch). No-op.
       return;
     }
     this.droplets.delete(runnerId);
     await this.client.deleteDroplet(dropletId);
     await this.options.runners.release(runnerId);
+  }
+
+  /**
+   * Codex H3 #13: resolve the droplet id for a release, tolerating the
+   * process-restart shape. Prefers the in-memory `droplets` map (fast, and the
+   * common case within one process lifetime); on a miss, falls back to the
+   * persisted `runners.provider_metadata` — the DB is the source of truth for
+   * a fresh allocator instance whose in-memory state was lost to a restart.
+   * Returns `undefined` when nothing tracks this runner (already released, or
+   * the row belongs to a different provider — the discriminant guards it).
+   */
+  private async resolveDropletId(runnerId: string): Promise<number | undefined> {
+    const cached = this.droplets.get(runnerId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const persisted = await this.options.runners.readTeardownDescriptor(runnerId);
+    if (persisted?.kind === "digitalocean") {
+      return persisted.dropletId;
+    }
+    return undefined;
   }
 
   /**

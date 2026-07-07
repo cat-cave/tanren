@@ -9,24 +9,14 @@ import {
   type HetznerSshKey,
 } from "../src/engine/allocators/hetznerAllocator.js";
 import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
-import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import type { RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { FakeRunnerStore } from "./fakeRunnerStore.helper.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import {
   generateEd25519KeyPair,
   hostKeyFingerprintFromPublicKey,
   type EphemeralKeyPair,
 } from "../src/engine/ssh/keygen.js";
-
-class FakeRunnerStore implements RunnerStore {
-  readonly claims: ClaimRunnerInput[] = [];
-  readonly releases: string[] = [];
-  async claim(input: ClaimRunnerInput): Promise<void> {
-    this.claims.push(input);
-  }
-  async release(runnerId: string): Promise<void> {
-    this.releases.push(runnerId);
-  }
-}
 
 /**
  * Mocked Hetzner API: created server is "initializing" then "running". Records
@@ -198,6 +188,27 @@ describe("HetznerAllocator", () => {
     expect(client.deletedKeys).toEqual([555]);
     expect(await secrets.get(allocation.target.identitySecretRef)).toBeUndefined();
     expect(runners.releases).toEqual([allocation.runnerId]);
+  });
+
+  // Codex H3 #13: restart-then-release still tears down (persisted triple).
+  // All three fields — server + ssh_key + identitySecretRef — or the per-run
+  // SSH private key leaks (see `cleanup`).
+  it("release tears down server + ssh_key + secret after a process restart (Codex H3 #13)", async () => {
+    const client = new FakeHetznerClient();
+    const runners = new FakeRunnerStore();
+    const secrets = new InMemorySecretStore();
+    const alloc = await allocator(client, runners, secrets).allocate(req("run_restart"));
+    expect(runners.claims[0]?.providerMetadata).toEqual({
+      kind: "hetzner",
+      serverId: 42,
+      sshKeyId: 555,
+      identitySecretRef: alloc.target.identitySecretRef,
+    });
+    await allocator(client, runners, secrets).release(alloc.runnerId, "completed");
+    expect(client.deleted).toEqual([42]);
+    expect(client.deletedKeys).toEqual([555]);
+    expect(await secrets.get(alloc.target.identitySecretRef)).toBeUndefined();
+    expect(runners.releases).toEqual([alloc.runnerId]);
   });
 
   it("cleans up the ssh_key + stored private key when server-create fails", async () => {

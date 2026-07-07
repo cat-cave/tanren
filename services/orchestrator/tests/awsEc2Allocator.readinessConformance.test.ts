@@ -31,6 +31,11 @@ class FakeRunnerStore implements RunnerStore {
   async release(runnerId: string): Promise<void> {
     this.releases.push(runnerId);
   }
+  // Codex H3 #13 fallback: metadata captured at claim time, sans released.
+  async readTeardownDescriptor(runnerId: string) {
+    if (this.releases.includes(runnerId)) return;
+    return this.claims.find((c) => c.runnerId === runnerId)?.providerMetadata ?? undefined;
+  }
 }
 
 class ScenarioFakeAwsEc2Client implements AwsEc2Client {

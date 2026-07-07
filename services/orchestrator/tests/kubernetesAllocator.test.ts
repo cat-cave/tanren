@@ -9,18 +9,8 @@ import {
   type KubernetesSecretInput,
 } from "../src/engine/allocators/kubernetesAllocator.js";
 import { PersistentProvisioningOutageError } from "../src/engine/allocators/readinessConvergence.js";
-import type { ClaimRunnerInput, RunnerStore } from "../src/engine/allocators/runnerStore.js";
-
-class FakeRunnerStore implements RunnerStore {
-  readonly claims: ClaimRunnerInput[] = [];
-  readonly releases: string[] = [];
-  async claim(input: ClaimRunnerInput): Promise<void> {
-    this.claims.push(input);
-  }
-  async release(runnerId: string): Promise<void> {
-    this.releases.push(runnerId);
-  }
-}
+import type { RunnerStore } from "../src/engine/allocators/runnerStore.js";
+import { FakeRunnerStore } from "./fakeRunnerStore.helper.js";
 
 /**
  * Mocked Kubernetes API: createPod returns a `Pending` Pod; getPod is `Pending`
@@ -166,6 +156,19 @@ describe("KubernetesAllocator", () => {
     expect(client.deletedPods).toEqual([client.pods[0]?.name]);
     expect(client.deletedSecrets).toEqual([client.secrets[0]?.name]);
     expect(runners.releases).toEqual([allocation.runnerId]);
+  });
+
+  // Codex H3 #13: restart-then-release tears down BOTH pod + per-run secret.
+  it("release deletes pod + secret after a process restart (Codex H3 #13)", async () => {
+    const client = new FakeKubernetesClient();
+    const runners = new FakeRunnerStore();
+    const alloc = await new KubernetesAllocator(baseOpts(client, runners)).allocate(req("run_restart"));
+    const [pod, secret] = [client.pods[0]?.name, client.secrets[0]?.name];
+    expect(runners.claims[0]?.providerMetadata).toEqual({ kind: "kubernetes", podName: pod, secretName: secret });
+    await new KubernetesAllocator(baseOpts(client, runners)).release(alloc.runnerId, "completed");
+    expect(client.deletedPods).toEqual([pod]);
+    expect(client.deletedSecrets).toEqual([secret]);
+    expect(runners.releases).toEqual([alloc.runnerId]);
   });
 
   it("release is idempotent: releasing twice deletes only once", async () => {

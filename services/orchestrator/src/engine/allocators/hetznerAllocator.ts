@@ -246,6 +246,9 @@ export class HetznerAllocator implements Allocator {
         hostKeyFingerprint,
         imageSha: allocation.imageSha,
         containerId: String(server.id),
+        // Codex H3 #13: persist the full { server, ssh_key, secretRef } triple
+        // or the fresh-instance release leaks the SSH private key.
+        providerMetadata: { kind: "hetzner", serverId: server.id, sshKeyId: sshKey.id, identitySecretRef },
       });
 
       // Only record the runner for release AFTER the claim succeeds, so a failed
@@ -261,14 +264,25 @@ export class HetznerAllocator implements Allocator {
   }
 
   async release(runnerId: string, _reason: ReleaseReason = "completed"): Promise<void> {
-    const resources = this.resources.get(runnerId);
-    if (resources === undefined) {
-      // Already released or unknown to this instance: no-op.
-      return;
-    }
+    // Already-released / unknown / kind-mismatch → resolveResources yields
+    // undefined and release is a no-op.
+    const resources = await this.resolveResources(runnerId);
+    if (resources === undefined) return;
     this.resources.delete(runnerId);
     await this.cleanup(resources);
     await this.options.runners.release(runnerId);
+  }
+
+  /**
+   * Codex H3 #13: resolve the teardown triple. In-memory (fast); DB fallback
+   * via `runners.provider_metadata` when the map was lost to a restart.
+   */
+  private async resolveResources(runnerId: string): Promise<HetznerAllocationResources | undefined> {
+    const cached = this.resources.get(runnerId);
+    if (cached !== undefined) return cached;
+    const p = await this.options.runners.readTeardownDescriptor(runnerId);
+    if (p?.kind !== "hetzner") return undefined;
+    return { serverId: p.serverId, sshKeyId: p.sshKeyId, identitySecretRef: p.identitySecretRef };
   }
 
   /**

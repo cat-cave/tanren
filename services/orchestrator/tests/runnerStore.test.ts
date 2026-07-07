@@ -118,6 +118,11 @@ describe("PgRunnerStore.claim", () => {
       "SHA256:abc",
       "img@sha256:deadbeef",
       "host-1",
+      // provider_metadata ($11) — null for the manual-ssh claim above (no
+      // external cloud teardown descriptor to persist); the cloud allocators
+      // (DO/GCP/AWS/K8s/Hetzner) pass a discriminated JSON string. See the
+      // Codex H3 #13 fix.
+      null,
     ]);
   });
 
@@ -264,5 +269,104 @@ describe("PgRunnerStore.release", () => {
     expect(text).toMatch(/released_at = now\(\)/u);
     expect(text).toMatch(/WHERE runner_id = \$1/u);
     expect(params).toEqual(["runner_run_1"]);
+  });
+});
+
+// Codex H3 Surface 5 #13: the cloud allocator teardown descriptor is written
+// alongside the row so a fresh allocator instance (post-restart) can
+// reconstruct the DELETE from the DB — the in-memory `Map` a cold-boot loses.
+// Pin the shape: (a) provider_metadata IS in the INSERT column list; (b) it
+// binds as $11 with a JSON string (jsonb-castable) OR null; (c) the ON CONFLICT
+// re-adopt branch also updates provider_metadata so a re-claim of a released
+// row picks up the new descriptor. Absence of any of these silently
+// re-introduces the leak.
+describe("PgRunnerStore.claim — provider_metadata persistence (Codex H3 #13)", () => {
+  it("binds a discriminated blob as a JSON string in the documented $11 slot", async () => {
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() =>
+      new PgRunnerStore(poolAs(pool)).claim({
+        ...claimInput,
+        providerMetadata: { kind: "digitalocean", dropletId: 99 },
+      }),
+    );
+
+    // pg binds objects poorly for jsonb columns (it stringifies to `[object
+    // Object]`). The store serializes to JSON explicitly + casts `$11::jsonb`
+    // in the SQL so the bind is a first-class jsonb literal.
+    expect(pool.queries[0]!.params[10]).toBe(JSON.stringify({ kind: "digitalocean", dropletId: 99 }));
+    expect(pool.queries[0]!.text).toMatch(/provider_metadata/u);
+    expect(pool.queries[0]!.text).toMatch(/\$11::jsonb/u);
+  });
+
+  it("the ON CONFLICT re-adopt branch also updates provider_metadata", async () => {
+    // Without this, a re-claim of a RELEASED runner id would keep the OLD
+    // provider_metadata pointing at the prior droplet/instance/pod — the fresh
+    // release would then reconstruct the WRONG teardown (deleting a resource
+    // that already went away, or worse, missing the new one).
+    const pool = new RecordingPool();
+    await runWithSystemJobScope(() =>
+      new PgRunnerStore(poolAs(pool)).claim({
+        ...claimInput,
+        providerMetadata: { kind: "digitalocean", dropletId: 42 },
+      }),
+    );
+
+    const { text } = pool.queries[0]!;
+    expect(text).toMatch(/provider_metadata\s*=\s*EXCLUDED\.provider_metadata/u);
+  });
+
+  it("null when the caller passes no descriptor (the long-lived / non-cloud allocator kinds)", async () => {
+    const pool = new RecordingPool();
+    // manual-ssh / static-runner never populate providerMetadata — a bind
+    // of `null` (not the string "null") lets the SQL cast to a genuine jsonb
+    // NULL rather than a JSON-encoded null literal that could confuse a
+    // `IS NULL` predicate.
+    await runWithSystemJobScope(() => new PgRunnerStore(poolAs(pool)).claim(claimInput));
+    expect(pool.queries[0]!.params[10]).toBeNull();
+  });
+});
+
+describe("PgRunnerStore.readTeardownDescriptor (Codex H3 #13)", () => {
+  // The cold-start release fallback: a fresh allocator instance reads the
+  // persisted descriptor from `runners.provider_metadata` (LIVE row only)
+  // when its in-memory map has been lost. Pin the SQL: (a) select
+  // provider_metadata, (b) restrict to `released_at IS NULL`, (c) `undefined`
+  // for a missing OR already-released row (both are correct no-op signals
+  // for the release path).
+  it("SELECTs provider_metadata for a LIVE runner (`released_at IS NULL`)", async () => {
+    class LiveRowPool extends RecordingPool {
+      async connect(): Promise<pg.PoolClient> {
+        const record = (text: string, params: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> => {
+          const trimmed = text.trim();
+          const isTx = ["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed) || trimmed.startsWith("SET LOCAL");
+          if (isTx) return Promise.resolve({ rows: [], rowCount: 0 });
+          this.queries.push({ text, params });
+          return Promise.resolve({
+            rows: [{ provider_metadata: { kind: "digitalocean", dropletId: 99 } }],
+            rowCount: 1,
+          });
+        };
+        return { query: (t: string, p: unknown[] = []) => record(t, p), release: () => {} } as unknown as pg.PoolClient;
+      }
+    }
+    const pool = new LiveRowPool();
+
+    const result = await runWithSystemJobScope(() =>
+      new PgRunnerStore(poolAs(pool)).readTeardownDescriptor("runner_run_1"),
+    );
+    expect(result).toEqual({ kind: "digitalocean", dropletId: 99 });
+    const { text, params } = pool.queries[0]!;
+    expect(text).toMatch(/SELECT provider_metadata/u);
+    expect(text).toMatch(/released_at IS NULL/u);
+    expect(params).toEqual(["runner_run_1"]);
+  });
+
+  it("undefined for a missing OR already-released row (both are release no-op signals)", async () => {
+    // RecordingPool returns 0 rows by default → the release path treats it as no-op.
+    const pool = new RecordingPool();
+    const result = await runWithSystemJobScope(() =>
+      new PgRunnerStore(poolAs(pool)).readTeardownDescriptor("runner_missing"),
+    );
+    expect(result).toBeUndefined();
   });
 });

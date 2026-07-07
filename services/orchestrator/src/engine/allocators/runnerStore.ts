@@ -35,7 +35,34 @@ export interface ClaimRunnerInput {
   hostKeyFingerprint: string;
   imageSha: string;
   containerId: string;
+  /**
+   * Cloud-provider teardown descriptor persisted alongside the row so a
+   * restarted allocator can reconstruct the DELETE call without the in-memory
+   * `runnerId -> resourceId` map that lives only for the process's lifetime
+   * (Codex H3 Surface 5 #13). Each cloud allocator writes a discriminated
+   * `{ kind, ...perProviderFields }` blob (see `providerTeardown.ts`); the
+   * long-lived / no-external-resource kinds (`static-runner`, `manual-ssh`,
+   * `sidecar-docker`) leave it `null` because their release semantics live in
+   * the orphan sweepers, not here.
+   */
+  providerMetadata?: ProviderTeardownMetadata | null;
 }
+
+/**
+ * The union of every cloud allocator's teardown descriptor, discriminated on
+ * `kind`. Persisted verbatim as jsonb in `runners.provider_metadata` at claim
+ * time, and consulted on release when the allocator's in-memory map misses
+ * (the process-restart shape the H3 #13 finding names). Adding a new cloud
+ * kind requires (a) extending this union, (b) updating the per-allocator
+ * claim, and (c) wiring the release-path reconstruction — no silent shape
+ * drift is possible because both writers and readers reference this union.
+ */
+export type ProviderTeardownMetadata =
+  | { kind: "digitalocean"; dropletId: number }
+  | { kind: "gcp"; instanceName: string }
+  | { kind: "aws_ec2"; instanceId: string }
+  | { kind: "kubernetes"; podName: string; secretName: string }
+  | { kind: "hetzner"; serverId: number; sshKeyId: number; identitySecretRef: string };
 
 /**
  * Thrown by {@link PgRunnerStore.claim} when the INSERT…ON CONFLICT matches a
@@ -74,6 +101,17 @@ export class RunnerClaimLiveRowError extends Error {
 export interface RunnerStore {
   claim(input: ClaimRunnerInput): Promise<void>;
   release(runnerId: string): Promise<void>;
+  /**
+   * Read the persisted provider teardown descriptor for a LIVE runner row —
+   * the DB is the source of truth so a fresh allocator instance (post-restart)
+   * can reconstruct the DELETE without its in-memory map (Codex H3 #13). Only
+   * returns metadata for rows whose `released_at IS NULL`; a missing row OR an
+   * already-released row returns `undefined` (the correct no-op signal for a
+   * cold-start release). The `providerMetadata` field itself is `null` for the
+   * long-lived allocator kinds that don't populate it — the release path
+   * treats `null` identically to `undefined` (no-op).
+   */
+  readTeardownDescriptor(runnerId: string): Promise<ProviderTeardownMetadata | undefined>;
 }
 
 export class PgRunnerStore implements RunnerStore {
@@ -137,11 +175,18 @@ export class PgRunnerStore implements RunnerStore {
         // oldest-first sweeper ordering + DORA timing; resetting it to `now()` on
         // re-adopt (the `EXCLUDED.created_at` alternative, the bug shape #8 names)
         // would silently warp every downstream signal that keys off allocation age.
+        // provider_metadata ($11) carries the cloud teardown descriptor (Codex
+        // H3 #13). Serialized to JSON on the app side so the pg driver binds
+        // it as a jsonb literal (a bare object bind is rejected as
+        // `invalid input syntax for type json`). `null` for the long-lived /
+        // no-external-resource kinds — indistinguishable from a legacy row
+        // predating this column, which is correct: neither has anything to
+        // reconstruct on release.
         `INSERT INTO runners (
            runner_id, run_id, project_id, org_id, allocator, status, ssh_host, ssh_port,
-           host_key_fingerprint, image_sha, container_id
+           host_key_fingerprint, image_sha, container_id, provider_metadata
          )
-         VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, $9, $10)
+         VALUES ($1, $2, $3, $4, $5, 'claimed', $6, $7, $8, $9, $10, $11::jsonb)
          ON CONFLICT (runner_id) DO UPDATE SET
            status = EXCLUDED.status,
            run_id = EXCLUDED.run_id,
@@ -153,6 +198,7 @@ export class PgRunnerStore implements RunnerStore {
            host_key_fingerprint = EXCLUDED.host_key_fingerprint,
            image_sha = EXCLUDED.image_sha,
            container_id = EXCLUDED.container_id,
+           provider_metadata = EXCLUDED.provider_metadata,
            created_at = runners.created_at,
            released_at = NULL
          WHERE runners.released_at IS NOT NULL`,
@@ -167,6 +213,9 @@ export class PgRunnerStore implements RunnerStore {
           input.hostKeyFingerprint,
           input.imageSha,
           input.containerId,
+          input.providerMetadata === undefined || input.providerMetadata === null
+            ? null
+            : JSON.stringify(input.providerMetadata),
         ],
       );
       if (result.rowCount === 0) {
@@ -182,5 +231,30 @@ export class PgRunnerStore implements RunnerStore {
     await withJobOrgScope(this.pool, (client) =>
       client.query("UPDATE runners SET status = 'released', released_at = now() WHERE runner_id = $1", [runnerId]),
     );
+  }
+
+  /**
+   * Codex H3 #13: cloud teardown reconstruction for a restarted allocator.
+   * Returns the persisted `provider_metadata` blob for a LIVE row
+   * (`released_at IS NULL`). A missing row OR an already-released row returns
+   * `undefined` — the calling allocator treats that as a no-op (nothing to
+   * tear down, or a concurrent release already won). Runs through the same
+   * per-job-org-id seam as `claim` / `release` so the SELECT is RLS-scoped to
+   * the caller's tenant (the allocator layer is always inside a per-job scope
+   * by this point; a bare-pool read would trip RLS deny-by-default).
+   */
+  async readTeardownDescriptor(runnerId: string): Promise<ProviderTeardownMetadata | undefined> {
+    return withJobOrgScope(this.pool, async (client) => {
+      const result = await client.query<{ provider_metadata: ProviderTeardownMetadata | null }>(
+        `SELECT provider_metadata
+         FROM runners
+         WHERE runner_id = $1 AND released_at IS NULL`,
+        [runnerId],
+      );
+      // Missing row (already released or never existed) → no-op.
+      // A `null` blob is a legacy row (predates 0028) or a long-lived kind that
+      // never populated it — either way there is nothing to reconstruct.
+      return result.rows[0]?.provider_metadata ?? undefined;
+    });
   }
 }
