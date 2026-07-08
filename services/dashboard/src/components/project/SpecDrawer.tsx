@@ -2,9 +2,13 @@
  * Spec drawer + full-page spec view. Clicking any DAG node opens the
  * `SpecDrawerBody` (a slide-in over the canvas), which shows status, the
  * blocked reason, the latest run, acceptance criteria (BDD), dependency chips
- * (depends-on / blocks), and economics — with routing to run-detail/review and
- * an "open full page ⤢" escalation to `SpecPageBody`. Both read the same
- * `SpecDetail` model. Colours/typography from tokens only.
+ * (depends-on / blocks), and a light economics strip — with routing to
+ * run-detail/review and an "open full page ⤢" escalation to `SpecPageBody`.
+ * Both read the same `SpecDetail` model. Colours/typography from tokens only.
+ *
+ * The full page is the depth surface: run history (with when + cost) and an
+ * economics panel (spend / attempts / avg cost / status). Uncomputable figures
+ * render as "—"; a failed run-list read shows "unavailable", never fake zeros.
  *
  * The drawer body is delivered as an HTML fragment by a dashboard route and
  * injected by the `dag-canvas` island, so node click → drawer needs no extra
@@ -12,6 +16,7 @@
  * dependency-chip walking + escalation.
  */
 
+import { timestamp } from "../costs/format.js";
 import { PageHead } from "./shared.js";
 import type { SpecDepChip, SpecDetail, SpecRunRow } from "./specDetail.js";
 
@@ -115,7 +120,7 @@ export function SpecDrawerBody(props: { spec: SpecDetail }) {
             </div>
             <div>
               <span class="k">attempts</span>
-              <b>{spec.runs.length > 0 ? String(spec.runs.length) : "—"}</b>
+              <b>{spec.economics.attempts}</b>
             </div>
             <div>
               <span class="k">status</span>
@@ -138,7 +143,14 @@ export function SpecDrawerBody(props: { spec: SpecDetail }) {
   );
 }
 
-function RunHistory(props: { runs: SpecRunRow[] }) {
+function RunHistory(props: { runs: SpecRunRow[]; available: boolean }) {
+  if (!props.available) {
+    return (
+      <div class="empty-note" data-runs-unavailable>
+        Run history unavailable — the orchestrator read failed.
+      </div>
+    );
+  }
   if (props.runs.length === 0) {
     return <div class="empty-note">No runs yet — Forge hasn't started this spec.</div>;
   }
@@ -150,9 +162,10 @@ function RunHistory(props: { runs: SpecRunRow[] }) {
             <div class="top">
               <span class="rid">{run.runId}</span>
               <span class={`oc oc-${run.outcome}`}>{run.outcome.replaceAll("_", " ")}</span>
+              <span class="when">{timestamp(run.when)}</span>
             </div>
             <div class="cost">
-              {run.costUsd === "0" ? "—" : `$${run.costUsd}`}
+              {run.costLabel}
               {run.href !== null && <span class="go"> · open ↗</span>}
             </div>
           </>
@@ -165,6 +178,37 @@ function RunHistory(props: { runs: SpecRunRow[] }) {
         );
       })}
     </>
+  );
+}
+
+function EconomicsPanel(props: { spec: SpecDetail }) {
+  const { spec } = props;
+  if (!spec.runsAvailable) {
+    return (
+      <div class="empty-note" data-economics-unavailable>
+        Economics unavailable — the orchestrator run-list read failed.
+      </div>
+    );
+  }
+  return (
+    <div class="spec-meta-grid wide" data-economics-panel>
+      <div>
+        <span class="k">spend to date</span>
+        <b>{spec.economics.spendUsd}</b>
+      </div>
+      <div>
+        <span class="k">avg / attempt</span>
+        <b>{spec.economics.avgCostUsd}</b>
+      </div>
+      <div>
+        <span class="k">attempts</span>
+        <b>{spec.economics.attempts}</b>
+      </div>
+      <div>
+        <span class="k">status</span>
+        <b>{spec.statusLabel}</b>
+      </div>
+    </div>
   );
 }
 
@@ -241,33 +285,20 @@ export function SpecPageBody(props: { spec: SpecDetail; projectName: string }) {
             </div>
           </div>
           <div class="col">
-            <div class="panel">
+            <div class="panel" data-run-history-panel>
               <div class="panel-head">
                 <h3>run history</h3>
               </div>
               <div class="panel-body spec-runs">
-                <RunHistory runs={spec.runs} />
+                <RunHistory runs={spec.runs} available={spec.runsAvailable} />
               </div>
             </div>
-            <div class="panel">
+            <div class="panel" data-economics-section>
               <div class="panel-head">
                 <h3>economics</h3>
               </div>
               <div class="panel-body">
-                <div class="spec-meta-grid wide">
-                  <div>
-                    <span class="k">spend to date</span>
-                    <b>{spec.spendUsd}</b>
-                  </div>
-                  <div>
-                    <span class="k">attempts</span>
-                    <b>{spec.runs.length > 0 ? String(spec.runs.length) : "—"}</b>
-                  </div>
-                  <div>
-                    <span class="k">status</span>
-                    <b>{spec.statusLabel}</b>
-                  </div>
-                </div>
+                <EconomicsPanel spec={spec} />
               </div>
             </div>
           </div>

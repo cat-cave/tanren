@@ -2,6 +2,10 @@
  * Spec-detail model — shapes the spec drawer + full page from the
  * orchestrator primitives (spec + its dependency edges + run history). Pure +
  * I/O-free so the route handler stays thin and the derivation is testable.
+ *
+ * Economics doctrine: uncomputable figures render as "—", never a fake $0.00.
+ * `costTotalUsd` arrives as a string (often "0" when no priced records exist);
+ * only strictly-positive finite amounts count as real spend.
  */
 
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
@@ -12,8 +16,13 @@ export interface SpecRunRow {
   runId: string;
   outcome: string;
   status: string;
+  /** ISO stamp for the run's most recent activity (started / last event). */
   when: string;
-  costUsd: string;
+  /**
+   * Display cost for this run: `"$12.50"` when a positive priced total exists,
+   * otherwise `"—"` (unpriced / uncomputable — never a fabricated `$0.00`).
+   */
+  costLabel: string;
   href: string | null;
   live: boolean;
 }
@@ -22,6 +31,18 @@ export interface SpecDepChip {
   specId: string;
   title: string;
   status: DagStatus;
+}
+
+/** Economics figures for the full-page panel (and the lighter drawer strip). */
+export interface SpecEconomics {
+  /** Spend to date (`"$12.50"`) or `"—"` when no priced dollars. */
+  spendUsd: string;
+  /** Attempt count, or `"—"` when runs are unavailable / empty. */
+  attempts: string;
+  /** Average cost per priced attempt, or `"—"`. */
+  avgCostUsd: string;
+  /** How many runs contributed a positive priced total. */
+  pricedAttempts: number;
 }
 
 export interface SpecDetail {
@@ -38,10 +59,17 @@ export interface SpecDetail {
   dependsOn: SpecDepChip[];
   blocks: SpecDepChip[];
   runs: SpecRunRow[];
+  /**
+   * False when the run-list orchestrator read failed. Panels must show
+   * "unavailable" rather than empty/zero figures.
+   */
+  runsAvailable: boolean;
   latestRun: SpecRunRow | null;
   /** A short "why blocked" line when the spec is blocked, else null. */
   blockedReason: string | null;
+  /** Spend to date — mirrors `economics.spendUsd` for the drawer strip. */
   spendUsd: string;
+  economics: SpecEconomics;
   /** Primary action route per status, or null (queued/blocked handled inline). */
   primaryAction: { label: string; href: string } | null;
 }
@@ -78,6 +106,24 @@ function runHref(projectId: string, runId: string): string {
   return `/projects/${projectId}/runs/${runId}`;
 }
 
+/**
+ * Parse a run's `costTotalUsd` into a positive finite amount, or null when the
+ * figure is uncomputable. The run-list API COALESCE-defaults missing sums to
+ * `"0"`, which is NOT trustworthy real spend — treat ≤0 / NaN as unpriced.
+ */
+export function parsePricedUsd(costTotalUsd: string | null | undefined): number | null {
+  if (costTotalUsd === null || costTotalUsd === undefined || costTotalUsd === "") return null;
+  const n = Number(costTotalUsd);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+/** Format a positive amount as `$12.50`; null → `"—"`. */
+export function formatPricedUsd(amount: number | null): string {
+  if (amount === null) return "—";
+  return `$${amount.toFixed(2)}`;
+}
+
 function toRunRow(projectId: string, run: RunListItem): SpecRunRow {
   const live = run.status === "running" || run.needsReview;
   return {
@@ -85,20 +131,45 @@ function toRunRow(projectId: string, run: RunListItem): SpecRunRow {
     outcome: run.outcome ?? run.status,
     status: run.status,
     when: run.lastEventAt ?? run.startedAt,
-    costUsd: run.costTotalUsd,
+    costLabel: formatPricedUsd(parsePricedUsd(run.costTotalUsd)),
     href: runHref(projectId, run.runId),
     live,
   };
+}
+
+/** Roll priced run costs into the economics figures (honest "—" when empty). */
+export function buildEconomics(runs: readonly RunListItem[], runsAvailable: boolean): SpecEconomics {
+  if (!runsAvailable) {
+    return { spendUsd: "—", attempts: "—", avgCostUsd: "—", pricedAttempts: 0 };
+  }
+  let total = 0;
+  let pricedAttempts = 0;
+  for (const run of runs) {
+    const priced = parsePricedUsd(run.costTotalUsd);
+    if (priced !== null) {
+      total += priced;
+      pricedAttempts += 1;
+    }
+  }
+  const attempts = runs.length > 0 ? String(runs.length) : "—";
+  const spendUsd = formatPricedUsd(pricedAttempts > 0 ? total : null);
+  const avgCostUsd = formatPricedUsd(pricedAttempts > 0 ? total / pricedAttempts : null);
+  return { spendUsd, attempts, avgCostUsd, pricedAttempts };
 }
 
 export interface BuildSpecDetailInput {
   spec: SpecSummary;
   /** All specs in the project (for dep-chip titles + "blocks" reverse edges). */
   allSpecs: SpecSummary[];
-  /** Runs for THIS spec, newest first. */
+  /** Runs for THIS spec, newest first. Empty when unavailable or none yet. */
   runs: RunListItem[];
   /** Latest run per dep spec id → status (for dep-chip colours). */
   statusBySpecId: Map<string, DagStatus>;
+  /**
+   * False when the run-list read failed. Defaults to true (caller has runs or
+   * confirmed an empty successful list).
+   */
+  runsAvailable?: boolean;
 }
 
 function depChip(specId: string, allSpecs: SpecSummary[], statusBySpecId: Map<string, DagStatus>): SpecDepChip {
@@ -112,7 +183,8 @@ function depChip(specId: string, allSpecs: SpecSummary[], statusBySpecId: Map<st
 
 export function buildSpecDetail(input: BuildSpecDetailInput): SpecDetail {
   const { spec, allSpecs, runs } = input;
-  const latest = runs[0];
+  const runsAvailable = input.runsAvailable !== false;
+  const latest = runsAvailable ? runs[0] : undefined;
   const status = statusForSpec(spec.status, latest);
   const meta = STATUS_META[status];
   const projectId = spec.projectId;
@@ -122,9 +194,9 @@ export function buildSpecDetail(input: BuildSpecDetailInput): SpecDetail {
     .filter((s) => s.dependsOn.includes(spec.specId))
     .map((s) => depChip(s.specId, allSpecs, input.statusBySpecId));
 
-  const runRows = runs.map((run) => toRunRow(projectId, run));
+  const runRows = runsAvailable ? runs.map((run) => toRunRow(projectId, run)) : [];
   const latestRun = runRows[0] ?? null;
-  const spend = runs.reduce((acc, run) => acc + (Number(run.costTotalUsd) || 0), 0);
+  const economics = buildEconomics(runsAvailable ? runs : [], runsAvailable);
 
   const blockedDeps = dependsOn.filter((d) => d.status !== "done");
   const blockedReason =
@@ -158,9 +230,11 @@ export function buildSpecDetail(input: BuildSpecDetailInput): SpecDetail {
     dependsOn,
     blocks,
     runs: runRows,
+    runsAvailable,
     latestRun,
     blockedReason,
-    spendUsd: `$${spend.toFixed(2)}`,
+    spendUsd: economics.spendUsd,
+    economics,
     primaryAction,
   };
 }
