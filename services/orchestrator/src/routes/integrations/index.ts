@@ -1,5 +1,10 @@
 // the capability-driven onboarding HTTP surface (orchestrator side).
 //
+//   GET /:orgId/integrations
+//     List the org's linked provider grants (Plane A). Credential REF names +
+//     metadata KEYS only — never secret values or metadata values. Empty list
+//     when nothing is linked (200). Org-scoped via actorCanAccessOrg.
+//
 //   POST /:orgId/projects/:projectId/integrations/provision
 //     Body: { capability, providerKind?, mode, chosenResourceId?, stack?, name? }.
 //     Requests a CAPABILITY ("enable error tracking", "notify on Slack",
@@ -20,8 +25,8 @@
 //     this kind so the dashboard can render the smart-default picker before any
 //     provider write. Returns `not_linked` (link-first) when no grant exists.
 //
-// The route shape is intentionally clean for the dashboard capability-toggle UI
-// (a follow-up) to call: a single POST per enabled capability. Production wires
+// The route shape is intentionally clean for the dashboard two-plane UI:
+// link-provider-once (org) → enable-capability-per-project. Production wires
 // the configured SecretStore + the real provisioner registry; tests drive the
 // engine directly with a fake provisioner.
 
@@ -78,6 +83,32 @@ const ProvisionBody = z
 export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
   const events = new PgEventStore(options.pool);
+
+  // GET /:orgId/integrations — list Plane-A grants for the org. Refs + status +
+  // capability tags only; metadata VALUES and secret VALUES never leave the
+  // store. Empty array when nothing is linked (a successful "no grants yet").
+  app.get("/:orgId/integrations", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const rows = await OrgIntegrationsStore.list(options.pool, orgId, {
+      kind: "operator",
+      id: actor.userId,
+    });
+    // Strip metadata values; surface only the keys (same discipline as link).
+    const integrations = rows.map((row) => ({
+      id: row.id,
+      orgId: row.orgId,
+      providerKind: row.providerKind,
+      credentialRef: row.credentialRef,
+      metadataKeys: Object.keys(row.metadata),
+      capabilities: row.capabilities,
+      status: row.status,
+    }));
+    return c.json({ integrations }, 200);
+  });
 
   app.post("/:orgId/projects/:projectId/integrations/provision", async (c) => {
     const actor = requireActor(c);
