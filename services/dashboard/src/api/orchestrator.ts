@@ -151,9 +151,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return response.json();
   }
 
-  // Product reads/writes below use the shared `getJson`/`sendJson` helpers from
-  // `OrchestratorHttpClient`; each forwards the session cookie and degrades to
-  // an empty/undefined result so a page never 500s when a data source is down.
+  // Product reads/writes below use shared getJson/sendJson; degrade empty on failure.
 
   /** Runs for attention queue + KPIs; empty array on failure. */
   async listRuns(
@@ -177,7 +175,8 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     const json = await this.getJson<{ items?: RunListItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
-    if (json === undefined || !Array.isArray(json.items)) return undefined; // broken contract ≠ empty
+    // Missing/non-array items is a broken contract, not empty success.
+    if (json === undefined || !Array.isArray(json.items)) return undefined;
     return json.items;
   }
 
