@@ -100,12 +100,14 @@ export const DAG_SCREEN_CSS = `
 .p2b .dep-chip.self { cursor:default; font-weight:700; }
 .p2b .dep-none { font-family:var(--font-mono); font-size:10.5px; color:var(--fg-3); }
 .p2b .spec-meta-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
-.p2b .spec-meta-grid.wide { grid-template-columns:repeat(3,1fr); }
+.p2b .spec-meta-grid.wide { grid-template-columns:repeat(2,1fr); }
 .p2b .spec-meta-grid > div { display:flex; flex-direction:column; gap:3px; padding:8px 10px; border:1px solid var(--line-1); border-radius:var(--r-1); background:var(--bg-canvas); }
 .p2b .spec-meta-grid .k { font-family:var(--font-mono); font-size:8.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-3); }
 .p2b .spec-meta-grid b { font-family:var(--font-display); font-size:14px; color:var(--fg-1); }
+.p2b .spec-meta-grid > div.spec-econ-note { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--fg-3); padding:4px 2px 0; border:none; background:transparent; }
 .p2b .spec-drawer-foot { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:12px 16px; border-top:1px solid var(--line-1); background:var(--bg-sunken); }
 .p2b .spec-expand { margin-left:auto; }
+.p2b .empty-note { font-family:var(--font-mono); font-size:11px; color:var(--fg-3); padding:8px 0; line-height:1.5; }
 
 /* ---- spec full page ---- */
 .p2b .spec-page-grid { display:grid; grid-template-columns:1.4fr 1fr; gap:14px; align-items:start; }
@@ -120,7 +122,8 @@ export const DAG_SCREEN_CSS = `
 .p2b .run-hist:hover { border-color:var(--ember-08); }
 .p2b .run-hist .top { display:flex; gap:9px; align-items:center; }
 .p2b .run-hist .rid { font-family:var(--font-mono); font-size:11px; color:var(--fg-1); }
-.p2b .run-hist .oc { font-family:var(--font-mono); font-size:9px; color:var(--fg-3); }
+.p2b .run-hist .oc { font-family:var(--font-mono); font-size:9px; color:var(--fg-3); letter-spacing:0.06em; text-transform:uppercase; }
+.p2b .run-hist .when { margin-left:auto; font-family:var(--font-mono); font-size:9.5px; color:var(--fg-3); }
 .p2b .run-hist .cost { font-family:var(--font-mono); font-size:10px; color:var(--fg-3); }
 .p2b .run-hist .go { color:var(--ember-08); }
 `;
