@@ -5,7 +5,7 @@
 // rendered shell HTML. No live orchestrator and no DB are required.
 //
 // Coverage (the acceptance-criteria checklist for shell-and-palette.md):
-//   - all four sidenav groups render;
+//   - the standing sidenav groups render;
 //   - non-Phase-2 rows carry their `phase 3+` placeholder label;
 //   - TopBar elements present (brand, org pill, ink/ash toggle, ⌘K, bell, avatar);
 //   - palette markup present + sourced from the Forge tool surface groups;
@@ -85,14 +85,32 @@ async function build() {
 }
 
 describe("dashboard shell rendering", () => {
-  it("renders the four sidenav groups", async () => {
+  it("renders the standing sidenav groups without onboarding", async () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/projects")).text();
     expect(html).toContain("▮ org");
     expect(html).toContain("▮ projects");
-    expect(html).toContain("▮ set up");
-    expect(html).toContain("▮ onboarding");
+    expect(html).toContain("▮ system");
+    expect(html).not.toContain("▮ onboarding");
+    expect(html).not.toContain('data-nav-id="onb-org"');
+    expect(html).not.toContain('data-nav-id="onb-new"');
+    expect(html).not.toContain('data-nav-id="onb-exist"');
+  });
+
+  it("keeps onboarding flows mounted outside the standing nav", async () => {
+    mockOrchestrator();
+    const app = await build();
+    const orgHtml = await (await app.request("/onboarding/org?step=1")).text();
+    const newHtml = await (await app.request("/onboarding/new")).text();
+    const existingHtml = await (await app.request("/onboarding/existing")).text();
+
+    expect(orgHtml).toContain("org setup");
+    expect(newHtml).toContain('data-screen="onboarding-new"');
+    expect(existingHtml).toContain('data-screen="onboarding-existing-full"');
+    expect(orgHtml).not.toContain("▮ onboarding");
+    expect(newHtml).not.toContain('data-nav-id="onb-new"');
+    expect(existingHtml).not.toContain('data-nav-id="onb-exist"');
   });
 
   it("labels non-Phase-2 rows as phase 3+ placeholders", async () => {

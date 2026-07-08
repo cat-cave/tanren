@@ -57,7 +57,7 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
   // GET /settings/config — the config-as-code surface.
   // -------------------------------------------------------------------------
   app.get("/settings/config", async (c: Context) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "settings" });
+    const ctx = await loadShellContext(c, deps, { activeNavId: "config" });
     let config: OrgConfig | undefined;
     if (ctx.org !== undefined) {
       config = (await clientFor(c, deps).getOrg(ctx.org.id))?.config;
@@ -104,7 +104,7 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
   // POST /settings/config/toggle — flip the gate on/off (org config PATCH).
   // -------------------------------------------------------------------------
   app.post("/settings/config/toggle", async (c: Context) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "settings" });
+    const ctx = await loadShellContext(c, deps, { activeNavId: "config" });
     const form = await c.req.parseBody();
     const enable = formField(form, "enable") === "1";
     const repo = formField(form, "repo").trim();
