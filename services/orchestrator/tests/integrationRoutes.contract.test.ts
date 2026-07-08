@@ -125,6 +125,14 @@ function statefulPool(): pg.Pool {
       const found = rows.filter((r) => r["org_id"] === orgId && r["provider_kind"] === providerKind);
       return { rows: found, rowCount: found.length };
     }
+    // list(orgId) — ORDER BY provider_kind, no provider filter.
+    if (/FROM org_integrations WHERE org_id = \$1 ORDER BY provider_kind/u.test(text)) {
+      const [orgId] = params as string[];
+      const found = rows
+        .filter((r) => r["org_id"] === orgId)
+        .sort((a, b) => String(a["provider_kind"]).localeCompare(String(b["provider_kind"])));
+      return { rows: found, rowCount: found.length };
+    }
     return { rows: [], rowCount: 0 };
   };
   return { query } as unknown as pg.Pool;
@@ -203,5 +211,62 @@ describe("integration LINK route (POST /:orgId/integrations/:providerKind)", () 
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("unknown_provider_kind");
+  });
+});
+
+describe("integration LIST route (GET /:orgId/integrations)", () => {
+  it("returns an empty integrations array when nothing is linked", async () => {
+    const res = await harness().request("/orgs/org_acme/integrations", { method: "GET" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { integrations: unknown[] };
+    expect(body.integrations).toEqual([]);
+  });
+
+  it("lists linked grants with credential REF + metadata KEYS only (no secret values)", async () => {
+    const pool = statefulPool();
+    const secrets = new InMemorySecretStore();
+    const app = linkHarness(adminActor, pool, secrets);
+
+    const link = await app.request("/orgs/org_acme/integrations/sentry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        token: "sentry_super_secret",
+        metadata: { orgSlug: "unique-sentry-org-slug-xyz" },
+      }),
+    });
+    expect(link.status).toBe(201);
+
+    // A member (not just admin) can LIST.
+    const memberApp = linkHarness(actor, pool, secrets);
+    const res = await memberApp.request("/orgs/org_acme/integrations", { method: "GET" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      integrations: Array<{
+        providerKind: string;
+        credentialRef: string;
+        metadataKeys: string[];
+        capabilities: string[];
+        status: string;
+      }>;
+    };
+    expect(body.integrations).toHaveLength(1);
+    const row = body.integrations[0]!;
+    expect(row.providerKind).toBe("sentry");
+    expect(row.capabilities).toEqual(["errors"]);
+    expect(row.status).toBe("linked");
+    expect(row.credentialRef).toBe("secret://org/org_acme/integration/sentry/token");
+    expect(row.metadataKeys).toEqual(["orgSlug"]);
+    // Never leak the token value or metadata VALUES.
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("sentry_super_secret");
+    expect(serialized).not.toContain("unique-sentry-org-slug-xyz");
+    expect(serialized).not.toMatch(/"metadata"\s*:/u);
+  });
+
+  it("guards cross-org list access with 403", async () => {
+    const res = await harness().request("/orgs/org_intruder/integrations", { method: "GET" });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("org_access_denied");
   });
 });
