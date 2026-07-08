@@ -99,11 +99,12 @@ describe("dashboard shell rendering", () => {
     mockOrchestrator();
     const app = await build();
     const html = await (await app.request("/projects")).text();
-    // overview/roadmap/personas are phase 3+ (DORA shipped in,
-    // discovery in).
+    // roadmap + personas remain phase 3+; overview shipped as the org
+    // command deck (phase 2b). DORA / discovery / costs already shipped.
     expect(html).toContain("roadmap");
     expect(html).toMatch(/roadmap[\s\S]*?phase 3\+/u);
-    expect((html.match(/phase 3\+/gu) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(html).toMatch(/personas[\s\S]*?phase 3\+/u);
+    expect((html.match(/phase 3\+/gu) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 
   it("renders the TopBar chrome elements", async () => {

@@ -46,7 +46,7 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "org",
     rows: [
-      { id: "overview", glyph: "▤", label: "overview", path: "/overview", phase: "3+" },
+      { id: "overview", glyph: "▤", label: "overview", path: "/overview", phase: "2b" },
       { id: "roadmap", glyph: "⌥", label: "roadmap", path: "/roadmap", phase: "3+" },
       { id: "personas", glyph: "◍", label: "personas", path: "/personas", phase: "3+" },
       {
