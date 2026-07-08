@@ -170,7 +170,7 @@ export function buildLiveFragmentAuthoringDeps(
   // and proceeds with an empty prior context.
   const priorFragmentsLookup = async (lookupOrgId: string): Promise<readonly PriorFragment[]> => {
     return runWithOrgScope(pool, lookupOrgId, async (client) => {
-      const rows = await FragmentsStore.listValidatedByOrg(client, { kind: "operator" });
+      const rows = await FragmentsStore.listValidatedByOrg(client, lookupOrgId, { kind: "operator" });
       return rows.map((r) => ({ fragmentId: r.fragmentId, kind: r.kind, label: r.label }));
     });
   };

@@ -168,19 +168,30 @@ export const FragmentsStore = {
   /** LIGHTWEIGHT prior-fragments projection for the F2 writer prompt (fix/f2-prompt-hardening).
    * Returns just `{fragmentId, kind, label}` per validated fragment visible to the
    * caller's org — the writer's "these worked before, follow the shape" hint needs no
-   * body_ts, no contract, no dependsOn. RLS bounds visibility to the caller's org.
+   * body_ts, no contract, no dependsOn.
    *
    * Returns EMPTY when the org has no prior validated fragments — the writer prompt
-   * then omits the prior-fragments section cleanly. */
+   * then omits the prior-fragments section cleanly.
+   *
+   * Round III M7 (Claude): the DISTINCT ON key (kind, label) does NOT include
+   * `org_id`. Under an ORG-SCOPED `QueryClient` (RLS-restricted rows) this is
+   * safe — RLS filters cross-org rows before the DISTINCT ON collapses. But if
+   * a future caller passes a RAW pool (bypassing RLS), the DISTINCT ON would
+   * silently pick one row per (kind, label) GLOBALLY across every org — a
+   * cross-tenant leak. Defense-in-depth: take `orgId` explicitly + add an
+   * explicit `WHERE org_id = $1` clause. RLS remains the primary defense; this
+   * is a belt-and-suspenders backup so the query is safe even off a raw pool. */
   async listValidatedByOrg(
     client: QueryClient,
+    orgId: string,
     _actor: ActorRef,
   ): Promise<Array<{ fragmentId: string; kind: string; label: string }>> {
     const result = await client.query<{ fragment_id: string; kind: string; label: string }>(
       `SELECT DISTINCT ON (kind, label) fragment_id, kind, label
          FROM fragments
-         WHERE status = 'validated'
+         WHERE status = 'validated' AND org_id = $1
          ORDER BY kind, label, validated_at DESC NULLS LAST, version DESC`,
+      [orgId],
     );
     return result.rows.map((row) => ({ fragmentId: row.fragment_id, kind: row.kind, label: row.label }));
   },
