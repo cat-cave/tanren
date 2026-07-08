@@ -109,6 +109,11 @@ SCREEN_MOUNTS.push(mountMergeQueueScreen);
 import { mountBudgetScreen } from "../routes/budget/index.js";
 SCREEN_MOUNTS.push(mountBudgetScreen);
 
+// org integrations two-plane (link provider once → enable capability per
+// project). Overrides the /integrations nav row.
+import { mountIntegrationsScreen } from "../routes/integrations/index.js";
+SCREEN_MOUNTS.push(mountIntegrationsScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

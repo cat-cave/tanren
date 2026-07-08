@@ -134,6 +134,13 @@ export const NAV_GROUPS: NavGroup[] = [
         phase: "2b",
         spec: "P2B-0002",
       },
+      {
+        id: "integrations",
+        glyph: "⬡",
+        label: "integrations",
+        path: "/integrations",
+        phase: "2b",
+      },
     ],
   },
   {
