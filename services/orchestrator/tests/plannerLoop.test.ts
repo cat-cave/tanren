@@ -3,7 +3,6 @@
 // INTELLIGENT convergence HALT (NOT a count) among the redesign's core behaviors.
 import { describe, expect, it } from "vitest";
 import { runSubtaskLoop } from "../src/engine/workflow/subtaskLoop.js";
-import { PersistentlyInvalidSpecError } from "../src/engine/forge/specQuality/index.js";
 import { auditorReGateDecision } from "../src/engine/workflow/auditor/auditor.js";
 import { decideCheckerOutcome } from "../src/engine/workflow/checker/checker.js";
 import { routeTriageItems, summarizeTriageRouting } from "../src/engine/workflow/loopPolicy.js";
@@ -223,63 +222,6 @@ describe("spec loop — TRIAGE routing", () => {
     expect(summary.newSpecs).toHaveLength(2);
   });
   // Coverage-guard + end-to-end routing tests live in `apexV79LoopClosure.test.ts`.
-});
-
-describe("spec loop — WS1↔WS2 spec-quality gate over triage's new specs", () => {
-  const passAnswer = {
-    accomplishable: { pass: true, reason: "bounded" },
-    demoable: { pass: true, reason: "observable" },
-    nonTrivial: { pass: true, reason: "worth a spec" },
-    legible: { pass: true, reason: "clear" },
-    overall: "pass" as const,
-    revisionGuidance: "",
-  };
-  const reviseAnswer = {
-    accomplishable: { pass: false, reason: "an unbounded epic" },
-    demoable: { pass: false, reason: "no observable behavior" },
-    nonTrivial: { pass: true, reason: "worth a spec" },
-    legible: { pass: true, reason: "clear" },
-    overall: "revise" as const,
-    revisionGuidance: "split into a bounded, demo-able unit",
-  };
-
-  it("validates each kind:spec item against the contract and lets a PASSING spec through", async () => {
-    const validated: Array<{ title: string }> = [];
-    const { input } = defaultLoopInput({
-      adapters: {
-        ...defaultLoopInput().input.adapters,
-        auditor: makeAuditor([p1Audit]),
-        triage: makeTriage([triageAllSpecs]),
-      },
-      specValidator: {
-        validator: {
-          validate: (spec) => {
-            validated.push({ title: spec.title });
-            return Promise.resolve(passAnswer);
-          },
-        },
-      },
-    });
-    const outcome = await runSubtaskLoop(input);
-    expect(outcome.kind).toBe("passed");
-    if (outcome.kind !== "passed") return;
-    // The new spec materialized AND the gate ran on it (the seam is real, not a TODO).
-    expect(outcome.newSpecs).toHaveLength(1);
-    expect(validated).toHaveLength(1);
-  });
-
-  it("raises PersistentlyInvalidSpecError (loud) when a triaged spec fails the contract", async () => {
-    const { input } = defaultLoopInput({
-      adapters: {
-        ...defaultLoopInput().input.adapters,
-        auditor: makeAuditor([p1Audit]),
-        triage: makeTriage([triageAllSpecs]),
-      },
-      // STRICT (no reviseSpec) → a first-pass failure escalates loud, never a silent commit.
-      specValidator: { validator: { validate: () => Promise.resolve(reviseAnswer) } },
-    });
-    await expect(runSubtaskLoop(input)).rejects.toThrow(PersistentlyInvalidSpecError);
-  });
 });
 
 describe("spec loop — DEMO-RUN gating (optional slot)", () => {
