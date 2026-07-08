@@ -46,7 +46,12 @@ export const FragmentAuthoringAttemptPayload = z
     /** What the loop decided after this iteration:
      *   - `continue`            — the writer made progress; another iteration runs
      *   - `converged`           — the body validated; the run terminalizes ok
-     *   - `halted_fixed_point`  — identical signature + rejection ⇒ no progress; halt */
+     *   - `halted_fixed_point`  — the signature appears in the trailing progress
+     *                             window ⇒ the loop is cycling; halt
+     *
+     * The `iteration_ceiling_exceeded` safety net does NOT emit an attempt event
+     * on the ceiling breach (the authorer is never called for that attempt); the
+     * terminal `fragment.authoring.failed` event carries the reason instead. */
     decision: z.enum(["continue", "converged", "halted_fixed_point"]),
   })
   .strict();

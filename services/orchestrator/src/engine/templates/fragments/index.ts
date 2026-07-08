@@ -75,6 +75,8 @@ export {
 export {
   buildFragmentAuthoring,
   FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX,
+  FRAGMENT_AUTHORING_ITERATION_CEILING,
+  FRAGMENT_AUTHORING_SIGNATURE_WINDOW,
   type FragmentAuthoring,
   type FragmentAuthoringAttemptDecision,
   type FragmentAuthoringDeps,
@@ -87,6 +89,9 @@ export {
   type FragmentPersistence,
   truncateBodyPreview,
 } from "./fragmentAuthoringRun.js";
+export { sanitizeAuthorerErrorSignature } from "./sanitizeAuthorerErrorSignature.js";
+export { type BatchComposeResult, runPostAuthoringBatchCompose } from "./batchComposeAfterAuthoring.js";
+export { validateFragmentBody } from "./validateFragmentBody.js";
 export { type PriorFragment, type ProductContext } from "./fragmentAuthoringContextTypes.js";
 export {
   EXEMPLAR_MAX_CHARS,
