@@ -8,9 +8,9 @@
  * the orchestrator. Org default is shown for context only (not edited here).
  * Uncomputable/missing → "—"; read failure → "unavailable" (never fake zeros).
  *
- * Fail-closed safety: the budget GET does not expose `failClosed`, but a pause
- * with no resolved ceiling means spend was NOT measured (backend placeholders
- * zeros). Those figures render "—", not `$0.00`.
+ * Fail-closed safety: when `failClosed` is set, or no ceiling is resolved (gate
+ * skips the cost sum), spend/notional/remaining render "—", never placeholder
+ * `$0.00`.
  */
 
 import type { BudgetPeriod, OrgBudgetView, ProjectBudgetView } from "../../api/budget.js";
