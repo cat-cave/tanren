@@ -116,13 +116,22 @@ Three operator-local files hold the bootstrap + per-org tier-1 inventory:
 | `connections.manifest.local.yaml` | Apex credential manifest (refs only)                                   |
 
 All three are gitignored. They live canonically in
-`${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}/` (0700 dir, 0600 files); every
-worktree symlinks them in via `just secrets-link`, which `just up-dev` calls
-automatically. **One-time setup** (if your secrets currently sit inline in your
-main checkout): `just secrets-migrate` moves them to the canonical location and
-symlinks them back, keeping the main checkout working while letting fresh
-worktrees see the same set. `just doctor` verifies the layout is intact and
-`.env` has the required keys; run it before `just up-dev` from a fresh worktree.
+`${TANREN_SECRETS_DIR:-~/.config/tanren/secrets}/` (0700 dir, **0600 files —
+PLAINTEXT LOCAL storage**); every worktree symlinks them in via
+`just secrets-link`, which `just up-dev` calls automatically.
+
+> **`.env.validation.local` is a plaintext-local FALLBACK, not the only source.**
+> For the managed-router key specifically (`TANREN_E2E_MANAGED_ROUTER_KEY`),
+> operators who keep secrets in a real secret manager do **not** need this
+> plaintext file. See [Managed-router key: portable seeding](#managed-router-key-portable-seeding)
+> below — you may instead export the key or point `TANREN_SECRET_ENV_FILE` at a
+> secure env-file rendered by ANY secret manager (sops / 1Password /
+> Vault-agent / …). Tanren is agnostic to the producer and depends on no
+> secret-manager toolchain. **One-time setup** (if your secrets currently sit inline in your
+> main checkout): `just secrets-migrate` moves them to the canonical location and
+> symlinks them back, keeping the main checkout working while letting fresh
+> worktrees see the same set. `just doctor` verifies the layout is intact and
+> `.env` has the required keys; run it before `just up-dev` from a fresh worktree.
 
 **Secrets mode is explicit, never implicit.** `secrets-link` reads
 `TANREN_SECRETS_MODE` (default: `canonical`):
@@ -176,12 +185,49 @@ Seed the platform refs with the sanctioned hosting seeder:
 just seed-platform-creds
 ```
 
-It reads `TANREN_E2E_MANAGED_ROUTER_KEY` (sourced from `.env.validation.local`
-when present), writes the platform ref into the configured secret store
-(`scripts/dev/seed-platform-creds.ts`), is **idempotent**, and **fails loud** if
-the key env var is absent (never a silent skip). It is also folded into
-`just up-dev`, so a normal dev bring-up seeds it automatically when the key is
-present. This is the deploy-layer's job — kept strictly separate from the
-tenant credential routes; if a future platform-scoped ref is needed on a fresh
-stack, add it to `PLATFORM_REFS` in that seeder (tenant creds stay on the
-operator API).
+It resolves `TANREN_E2E_MANAGED_ROUTER_KEY`, writes the platform ref into the
+configured secret store (`scripts/dev/seed-platform-creds.ts`), is
+**idempotent**, and **fails loud** (a typed `MissingSeedSecretError` naming every
+source tried) if no source yields the key — never a silent skip. It is also
+folded into `just up-dev`, so a normal dev bring-up seeds it automatically when
+the key is obtainable (and skips with a notice for a BYOK-only stack). This is
+the deploy-layer's job — kept strictly separate from the tenant credential
+routes; if a future platform-scoped ref is needed on a fresh stack, add it to
+`PLATFORM_REFS` in that seeder (tenant creds stay on the operator API) and to the
+`SEED_SECRET_ALLOWLIST` beside it.
+
+#### Managed-router key: portable seeding
+
+The seeder resolves `TANREN_E2E_MANAGED_ROUTER_KEY` through a **portable
+precedence** so Tanren stays machine-independent — it depends on **no** Nix,
+sops, or other secret-manager toolchain:
+
+1. **Exported env (highest).** If `TANREN_E2E_MANAGED_ROUTER_KEY` is already a
+   non-empty environment variable, it is used directly. A CI runner or a
+   secret-manager shim (`op run --`, `vault agent`, a systemd `EnvironmentFile`,
+   etc.) that exports it needs nothing else.
+2. **A secure env-file** at `TANREN_SECRET_ENV_FILE=<path>`. Point this at an
+   env-file rendered by **any** secret manager — sops, 1Password, Vault-agent,
+   a CI artifact, whatever. The seeder reads **only a fixed allowlist** of known
+   secret keys from that file (today: `TANREN_E2E_MANAGED_ROUTER_KEY`); every
+   other key in the file is **ignored** — it never blindly exports arbitrary
+   vars into the process. Parsing is defensive (`KEY=value`, `export KEY=…`,
+   quoted values, comments, blank lines). Pass the path as the recipe argument:
+
+   ```sh
+   just seed-platform-creds /path/to/rendered-secrets.env
+   # or export it:
+   export TANREN_SECRET_ENV_FILE=/path/to/rendered-secrets.env
+   just up-dev
+   ```
+
+3. **Plaintext-local fallback** — `.env.validation.local` (the 0600 canonical
+   file above). Backwards-compatible: existing setups keep working unchanged.
+
+**Never require the plaintext file when a secure source provides the key.**
+A machine that renders `TANREN_E2E_MANAGED_ROUTER_KEY` into an env-file from its
+own secret store (e.g. via sops) seeds cleanly by exporting
+`TANREN_SECRET_ENV_FILE` — no `.env.validation.local` needed. Machines without a
+secret manager keep the plaintext-local fallback (or export the key directly).
+The raw key value is **never logged** — the seeder prints only the ref name and
+a "seeded platform ref …" confirmation.

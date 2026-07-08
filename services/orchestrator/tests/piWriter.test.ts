@@ -48,7 +48,11 @@ describe("pi writer adapter", () => {
     const piCommand = ssh.commands[1]?.command;
     expect(piCommand?.command).toContain("pi");
     expect(piCommand?.command).toContain("-p 'make a tiny edit'");
-    expect(piCommand?.command).toContain("ANTHROPIC_API_KEY=");
+    // SECURITY: the key VALUE never appears in the command string; the command
+    // sources a chmod-600 env file whose `export …` line arrives on stdin.
+    expect(piCommand?.command).toContain("chmod 600");
+    expect(piCommand?.command).not.toContain(apiKey);
+    expect(piCommand?.stdin).toContain(`export ANTHROPIC_API_KEY='${apiKey}'`);
     expect(piCommand?.cwd).toBe("/workspace/repo");
     expect(writer.cli).toBe("pi");
     expect(writer.authRef).toBe("credential/pi/dev");
@@ -67,7 +71,7 @@ describe("pi writer adapter", () => {
     });
   });
 
-  it("resolves the underlying-LLM API key from the credential store via authRef", async () => {
+  it("resolves the underlying-LLM API key from the credential store and passes it via stdin (never argv)", async () => {
     const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/pi/dev", value: apiKey });
@@ -79,7 +83,9 @@ describe("pi writer adapter", () => {
       runId: "run_pi_2",
     });
     await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
-    expect(ssh.commands[1]?.command.command).toContain(`ANTHROPIC_API_KEY='${apiKey}'`);
+    // The key rides stdin into a chmod-600 env file, NOT the command string.
+    expect(ssh.commands[1]?.command.stdin).toContain(`export ANTHROPIC_API_KEY='${apiKey}'`);
+    expect(ssh.commands[1]?.command.command).not.toContain(apiKey);
   });
 
   it("throws when the credential ref is missing", async () => {
@@ -114,13 +120,13 @@ describe("pi writer adapter", () => {
     expect(JSON.stringify(result)).not.toContain(apiKey);
   });
 
-  it("builds a non-interactive -p command and derives the env var from the model", () => {
-    expect(buildPiWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", apiKey: "k", prompt: "do it" })).toContain(
-      "pi -p 'do it'",
-    );
-    expect(buildPiWriterCommand({ apiKeyEnvVar: "OPENAI_API_KEY", apiKey: "k", prompt: "do it" })).toContain(
-      "OPENAI_API_KEY=",
-    );
+  it("builds a non-interactive -p command that sources a chmod-600 key file rather than argv-injecting the key", () => {
+    const command = buildPiWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", prompt: "do it", runId: "run_build_1" });
+    expect(command).toContain("pi -p 'do it'");
+    expect(command).toContain("chmod 600");
+    expect(command).toContain(". '/tmp/tanren-pi-run_build_1.env'");
+    // The key env-var ASSIGNMENT never appears in argv (only the file source).
+    expect(command).not.toContain("ANTHROPIC_API_KEY=");
   });
 
   // SaaS Tier-B #5: managed mode points pi at the OpenRouter endpoint with the
@@ -139,14 +145,18 @@ describe("pi writer adapter", () => {
       endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
     await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
-    const piCommand = ssh.commands[1]?.command.command ?? "";
+    const piCmd = ssh.commands[1]?.command;
+    const piCommand = piCmd?.command ?? "";
+    // OPENAI_BASE_URL is NON-secret → fine as a command-scoped env prefix (argv).
     expect(piCommand).toContain("OPENAI_BASE_URL='https://openrouter.ai/api/v1'");
-    expect(piCommand).toContain("OPENAI_API_KEY='or-platform-key'");
-    expect(piCommand).not.toContain("ANTHROPIC_API_KEY=");
+    // The managed key rides stdin as OPENAI_API_KEY, never argv.
+    expect(piCmd?.stdin).toContain("export OPENAI_API_KEY='or-platform-key'");
+    expect(piCommand).not.toContain("or-platform-key");
+    expect(piCommand).not.toContain("ANTHROPIC_API_KEY");
   });
 
   it("omits OPENAI_BASE_URL for a BYOK run (no override)", () => {
-    const command = buildPiWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", apiKey: "k", prompt: "do it" });
+    const command = buildPiWriterCommand({ apiKeyEnvVar: "ANTHROPIC_API_KEY", prompt: "do it", runId: "run_byok_1" });
     expect(command).not.toContain("OPENAI_BASE_URL");
   });
 

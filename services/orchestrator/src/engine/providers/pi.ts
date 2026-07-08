@@ -73,16 +73,21 @@ export function createPiWriter(dependencies: PiWriterDependencies): WriterAdapte
       const model = dependencies.model ?? DEFAULT_PI_MODEL;
       const apiKey = await resolvePiApiKey(dependencies.secrets, dependencies.credentialRef);
       const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
+      // Managed (endpoint override present) → the platform key is an OpenRouter
+      // (OpenAI-compatible) key, read from OPENAI_API_KEY. BYOK → the
+      // provider-specific var derived from the pinned model.
+      const apiKeyEnvVar = dependencies.endpointBaseUrl === undefined ? apiKeyEnvVarForModel(model) : "OPENAI_API_KEY";
       const pi = await dependencies.ssh.run(dependencies.target, {
         command: buildPiWriterCommand({
-          // Managed (endpoint override present) → the platform key is an
-          // OpenRouter (OpenAI-compatible) key, read from OPENAI_API_KEY. BYOK →
-          // the provider-specific var derived from the pinned model.
-          apiKeyEnvVar: dependencies.endpointBaseUrl === undefined ? apiKeyEnvVarForModel(model) : "OPENAI_API_KEY",
-          apiKey,
+          apiKeyEnvVar,
           prompt: opts.prompt,
+          runId: dependencies.runId,
           endpointBaseUrl: dependencies.endpointBaseUrl,
         }),
+        // The API key rides stdin into a chmod-600 per-run env file (see
+        // buildPiWriterCommand) — it is NEVER interpolated into the command
+        // string, so it can't leak into `ps`/process listings or logs.
+        stdin: `export ${apiKeyEnvVar}=${shellSingleQuotePi(apiKey)}\n`,
         cwd: opts.workspace,
         // AGENT exec: pi streams its output continuously (every line is a sign of life
         // → the watchdog resets), with the workspace as the silent-stretch liveness
@@ -136,26 +141,54 @@ export async function resolvePiApiKey(secrets: SecretStore, ref: string): Promis
   return secret.value;
 }
 
-// Builds the non-interactive pi invocation. The API key is injected as a
-// command-scoped env var (provider-specific) so it never lands in a file and is
-// redacted from the adapter's own result. The workspace is the cwd (the
-// RunnerCommand.cwd cd's into it), so pi operates on the run's git repo.
+// The per-run env file the pi command sources for the provider API key. The
+// key VALUE lives ONLY in this chmod-600 file (written from stdin), never in the
+// command string.
+export function piKeyEnvPath(runId: string): string {
+  return `/tmp/tanren-pi-${runId}.env`;
+}
+
+// Builds the non-interactive pi invocation. SECURITY: the API key is NOT
+// interpolated into the command string (that would leak it into `ps`/process
+// listings and any log capturing the command). Instead the command reads the
+// `export <VAR>=<key>` line from stdin into a chmod-600 per-run env file, then
+// sources it before invoking pi — the same env-file pattern codex/aider use.
+// The non-secret `OPENAI_BASE_URL` (managed mode) stays a plain command-scoped
+// env prefix (safe to appear in argv). The workspace is the cwd
+// (RunnerCommand.cwd cd's into it), so pi operates on the run's git repo.
 export function buildPiWriterCommand(input: {
   apiKeyEnvVar: string;
-  apiKey: string;
   prompt: string;
+  runId: string;
   // SaaS Tier-B #5: when set (managed mode), pi is pointed at this
   // OpenAI-compatible base URL via OPENAI_BASE_URL (OpenRouter endpoint). Absent
   // ⇒ BYOK: no override, pi hits the provider's native endpoint.
   endpointBaseUrl?: string;
 }): string {
-  return [
-    `${input.apiKeyEnvVar}=${quoteSshShellArg(input.apiKey)}`,
+  const envPath = piKeyEnvPath(input.runId);
+  const pi = [
     ...(input.endpointBaseUrl === undefined ? [] : [`OPENAI_BASE_URL=${quoteSshShellArg(input.endpointBaseUrl)}`]),
     "pi",
     "-p",
     quoteSshShellArg(input.prompt),
   ].join(" ");
+  // umask 077 + explicit chmod 600 so the key file is never world/group-readable.
+  // The `export …=…` line arrives on stdin (never the argv). Sourcing exports the
+  // key var for the pi child; a `rm -f` trap wipes the key file on any exit path.
+  return [
+    "umask 077",
+    `cat > ${quoteSshShellArg(envPath)}`,
+    `chmod 600 ${quoteSshShellArg(envPath)}`,
+    `trap ${quoteSshShellArg(`rm -f ${envPath}`)} EXIT`,
+    `. ${quoteSshShellArg(envPath)}`,
+    pi,
+  ].join(" && ");
+}
+
+// POSIX single-quote escaping for the stdin `export` line. Wrap in single
+// quotes, replacing any embedded single quote with the '\'' sequence.
+function shellSingleQuotePi(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 // pi does not emit a documented structured event stream in v1 of this adapter.

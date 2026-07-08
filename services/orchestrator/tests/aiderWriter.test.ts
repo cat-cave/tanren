@@ -55,7 +55,11 @@ describe("aider writer adapter", () => {
     expect(aiderCommand?.command).toContain("--yes-always");
     expect(aiderCommand?.command).toContain("--message 'make a tiny edit'");
     expect(aiderCommand?.command).toContain("--model 'anthropic/claude-opus-4-8'");
-    expect(aiderCommand?.command).toContain("ANTHROPIC_API_KEY=");
+    // SECURITY: the key VALUE never appears in the command string; the command
+    // sources a chmod-600 env file whose `export …` line arrives on stdin.
+    expect(aiderCommand?.command).toContain("chmod 600");
+    expect(aiderCommand?.command).not.toContain(apiKey);
+    expect(aiderCommand?.stdin).toContain(`export ANTHROPIC_API_KEY='${apiKey}'`);
     expect(aiderCommand?.cwd).toBe("/workspace/repo");
     expect(writer.cli).toBe("aider");
     expect(writer.authRef).toBe("credential/aider/dev");
@@ -74,7 +78,7 @@ describe("aider writer adapter", () => {
     });
   });
 
-  it("resolves the underlying-LLM API key from the credential store via authRef", async () => {
+  it("resolves the underlying-LLM API key from the credential store and passes it via stdin (never argv)", async () => {
     const ssh = new ScriptedSsh([ok(`${baselineSha}\n`), ok(""), ok(""), ok(""), ok("")]);
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/aider/dev", value: apiKey });
@@ -86,7 +90,9 @@ describe("aider writer adapter", () => {
       runId: "run_aider_2",
     });
     await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
-    expect(ssh.commands[1]?.command.command).toContain(`ANTHROPIC_API_KEY='${apiKey}'`);
+    // The key rides stdin into a chmod-600 env file, NOT the command string.
+    expect(ssh.commands[1]?.command.stdin).toContain(`export ANTHROPIC_API_KEY='${apiKey}'`);
+    expect(ssh.commands[1]?.command.command).not.toContain(apiKey);
   });
 
   it("throws when the credential ref is missing", async () => {
@@ -130,16 +136,21 @@ describe("aider writer adapter", () => {
     expect(apiKeyEnvVarForModel("gemini/gemini-2.5-pro")).toBe("GEMINI_API_KEY");
   });
 
-  it("builds a non-interactive batch command with the documented flags", () => {
+  it("builds a non-interactive batch command with the documented flags, key-file sourced not argv-injected", () => {
     const command = buildAiderWriterCommand({
       apiKeyEnvVar: "ANTHROPIC_API_KEY",
-      apiKey: "k",
       model: "anthropic/x",
       prompt: "do it",
+      runId: "run_build_1",
     });
     expect(command).toContain("--yes-always");
     expect(command).toContain("--no-stream");
     expect(command).toContain("--message 'do it'");
+    // The command sources a chmod-600 key file rather than interpolating the key.
+    expect(command).toContain("chmod 600");
+    expect(command).toContain(". '/tmp/tanren-aider-run_build_1.env'");
+    // The env-var ASSIGNMENT never appears in argv (only the source of the file).
+    expect(command).not.toContain("ANTHROPIC_API_KEY=");
   });
 
   // SaaS Tier-B #5: managed mode points aider at the OpenRouter endpoint with
@@ -157,18 +168,21 @@ describe("aider writer adapter", () => {
       endpointBaseUrl: "https://openrouter.ai/api/v1",
     });
     await writer.runWriter({ prompt: "edit", workspace: "/workspace/repo" });
-    const aiderCommand = ssh.commands[1]?.command.command ?? "";
+    const aiderCmd = ssh.commands[1]?.command;
+    const aiderCommand = aiderCmd?.command ?? "";
     expect(aiderCommand).toContain("--openai-api-base 'https://openrouter.ai/api/v1'");
-    expect(aiderCommand).toContain("OPENAI_API_KEY='or-platform-key'");
-    expect(aiderCommand).not.toContain("ANTHROPIC_API_KEY=");
+    // Managed key rides stdin as OPENAI_API_KEY, never argv.
+    expect(aiderCmd?.stdin).toContain("export OPENAI_API_KEY='or-platform-key'");
+    expect(aiderCommand).not.toContain("or-platform-key");
+    expect(aiderCommand).not.toContain("ANTHROPIC_API_KEY");
   });
 
   it("omits --openai-api-base for a BYOK run (no override)", () => {
     const command = buildAiderWriterCommand({
       apiKeyEnvVar: "ANTHROPIC_API_KEY",
-      apiKey: "k",
       model: "anthropic/x",
       prompt: "do it",
+      runId: "run_byok_1",
     });
     expect(command).not.toContain("--openai-api-base");
   });
@@ -176,9 +190,9 @@ describe("aider writer adapter", () => {
   it("adds --openai-api-base when an endpoint is passed to the command builder", () => {
     const command = buildAiderWriterCommand({
       apiKeyEnvVar: "OPENAI_API_KEY",
-      apiKey: "k",
       model: "anthropic/x",
       prompt: "do it",
+      runId: "run_override_1",
       openaiApiBase: "https://openrouter.ai/api/v1",
     });
     expect(command).toContain("--openai-api-base 'https://openrouter.ai/api/v1'");
