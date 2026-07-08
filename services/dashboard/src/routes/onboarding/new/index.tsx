@@ -78,7 +78,7 @@ function noOrgBody(error?: string) {
 export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
   // Step 1 entry (GET): the opening interview round.
   app.get("/onboarding/new", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
+    const ctx = await loadShellContext(c, deps, {});
     if (ctx.org === undefined) {
       return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody());
     }
@@ -115,7 +115,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
 
   // POST: drives the active phase (round / advance-to-derive / advance-to-arrival).
   app.post("/onboarding/new", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
+    const ctx = await loadShellContext(c, deps, {});
     if (ctx.org === undefined) {
       return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody());
     }

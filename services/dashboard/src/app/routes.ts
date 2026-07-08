@@ -1,7 +1,8 @@
 /**
- * The shell's navigation model: the four sidenav groups (org / projects /
- * setup / onboarding) and, for each row, the route it points at plus the phase
- * it ships in.
+ * The shell's standing navigation model: the three sidenav groups (org /
+ * projects / system) and, for each row, the route it points at plus the phase
+ * it ships in. One-time onboarding routes mount separately; they are not
+ * permanent product nav rows.
  *
  * This is the single source of truth that both `SideNav` (chrome) and
  * `mountShell` (route registration) read from. Child screens
@@ -37,7 +38,7 @@ export interface NavGroup {
 }
 
 /**
- * The four groups, exactly per the acceptance criteria. Project-scoped rows use
+ * The three groups, exactly per the acceptance criteria. Project-scoped rows use
  * a `:projectId` placeholder; `SideNav` substitutes the active project. Rows
  * without an implementation yet are marked `phase: "3+"` and render as
  * placeholders carrying that label.
@@ -100,7 +101,7 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "set up",
+    label: "system",
     rows: [
       {
         id: "audits",
@@ -140,36 +141,6 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "integrations",
         path: "/integrations",
         phase: "2b",
-      },
-    ],
-  },
-  {
-    label: "onboarding",
-    rows: [
-      {
-        id: "onb-org",
-        glyph: "鍛",
-        kanji: true,
-        label: "org setup",
-        path: "/onboarding/org",
-        phase: "2b",
-        spec: "P2B-0002",
-      },
-      {
-        id: "onb-new",
-        glyph: "+",
-        label: "new project",
-        path: "/onboarding/new",
-        phase: "2b",
-        spec: "P2B-0009",
-      },
-      {
-        id: "onb-exist",
-        glyph: "↗",
-        label: "existing project",
-        path: "/onboarding/existing",
-        phase: "2b",
-        spec: "P2B-0002",
       },
     ],
   },

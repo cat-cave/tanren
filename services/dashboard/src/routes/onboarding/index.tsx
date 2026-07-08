@@ -75,7 +75,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
 
   // ── org-setup wizard ─────────────────────────────────────────────────────
   app.get("/onboarding/org", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-org" });
+    const ctx = await loadShellContext(c, deps, {});
     const client = clientFor(c, deps);
     const orgId = ctx.org?.id;
     const step = Number.parseInt(c.req.query("step") ?? "1", 10) || 1;
@@ -119,7 +119,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
 
   // ── standalone credentials surface ───────────────────────────────────────
   app.get("/onboarding/credentials", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-org" });
+    const ctx = await loadShellContext(c, deps, {});
     const client = clientFor(c, deps);
     const orgId = ctx.org?.id;
     const [orgCredentials, myCredentials] = await Promise.all([

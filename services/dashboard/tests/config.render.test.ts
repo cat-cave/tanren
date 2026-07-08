@@ -108,6 +108,8 @@ describe("tanren-config audit-gate surface (/settings/config)", () => {
     const app = await build();
     const html = await (await app.request("/settings/config")).text();
     expect(html).toContain("config as code");
+    expect(html).toContain('<a class="active" href="/settings/config" data-nav-id="config">');
+    expect(html).not.toContain('<a class="active" href="/settings/routing" data-nav-id="settings">');
     expect(html).not.toContain("documented placeholder");
   });
 
