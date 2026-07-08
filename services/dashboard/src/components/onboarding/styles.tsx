@@ -124,6 +124,26 @@ export const ONBOARDING_CSS = `
 .onb .matrix-sev.warn { color: var(--status-warn); }
 .onb .matrix-sev.fail { color: var(--status-fail); }
 
+.onb .delivery-head, .onb .delivery-row {
+  display: grid; grid-template-columns: 92px 1.7fr 1fr 148px 58px;
+  align-items: center; gap: 10px; padding: 8px 16px;
+}
+.onb .delivery-head {
+  border-bottom: 1px solid var(--line-1);
+  font-family: var(--font-mono); font-size: 9px; color: var(--fg-3);
+  letter-spacing: 0.16em; text-transform: uppercase;
+}
+.onb .delivery-row {
+  border-bottom: 1px solid var(--line-1);
+  font-family: var(--font-mono); font-size: 11px; color: var(--fg-1);
+}
+.onb .delivery-row .name { display: block; color: var(--fg-1); }
+.onb .delivery-row .desc { display: block; color: var(--fg-3); font-size: 9.5px; margin-top: 2px; }
+.onb .empty-state {
+  padding: 18px 16px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--fg-3); background: var(--bg-sunken);
+}
+
 .onb .arrival-card { position: relative; overflow: hidden; padding: 18px; border: 1px solid var(--ember-08); border-radius: 3px; background: var(--accent-tint); display: flex; flex-direction: column; gap: 8px; }
 .onb .arrival-card .kanji-bg { position: absolute; right: 8px; top: -14px; font-family: var(--font-jp); font-size: 90px; color: var(--ember-08); opacity: 0.12; pointer-events: none; }
 .onb .arrival-card .eyebrow { font-family: var(--font-mono); font-size: 10px; color: var(--ember-08); letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; }

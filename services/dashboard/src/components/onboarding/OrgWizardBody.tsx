@@ -360,7 +360,7 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
             em="we tell you"
             sub="multi-channel routing per event. set the org defaults; devs layer personal overrides. all channels deliver once configured."
           />
-          <NotificationsBody matrix={props.matrix} />
+          <NotificationsBody matrix={props.matrix} deliveries={[]} />
         </>
       ) : (
         <Step4Infra orgLogin={props.orgLogin} />

@@ -25,6 +25,8 @@ import type {
   InsightSummary,
   MilestoneSummary,
   NotificationMatrix,
+  NotificationDeliveriesResponse,
+  NotificationDelivery,
   NotificationRoute,
   NotificationTarget,
   OrgSummary,
@@ -404,6 +406,15 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   async notificationMatrix(orgId: string): Promise<NotificationMatrix> {
     const json = await this.getJson<NotificationMatrix>(`/orgs/${encodeURIComponent(orgId)}/notifications/matrix`);
     return json ?? { targets: [], routes: [], events: [] };
+  }
+
+  /** Recent notification dispatch attempts for the org. Empty on failure. */
+  async notificationDeliveries(orgId: string, limit = 24): Promise<NotificationDelivery[]> {
+    const query = new URLSearchParams({ limit: String(limit) });
+    const json = await this.getJson<NotificationDeliveriesResponse>(
+      `/orgs/${encodeURIComponent(orgId)}/notifications/deliveries?${query.toString()}`,
+    );
+    return json?.deliveries ?? [];
   }
 
   /** Create a notification target. */
