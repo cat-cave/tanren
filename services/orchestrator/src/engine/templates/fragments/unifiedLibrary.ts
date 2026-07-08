@@ -146,6 +146,16 @@ const STRING_LITERAL_PATTERN = /^"((?:[^"\\]|\\.)*)"$|^`((?:[^`\\]|\\.)*)`$/u;
 
 function parseStringLiteral(token: string): string {
   const t = token.trim();
+  // Single-quoted `'…'` is not accepted — call it out specifically so the writer
+  // gets ONE actionable rejection ("use double quotes or backticks"), not the
+  // generic "expected a string literal" message. Claude M5 (Round III).
+  if (t.length >= 2 && t.startsWith("'") && t.endsWith("'")) {
+    throw new FragmentBodyParseError(
+      `single-quoted strings are not accepted — use double quotes or backticks. Got ${truncateForError(t)}. ` +
+        `Example: vfs.write("docs/hello.md", "content"). Multi-line content: use a backtick template ` +
+        `literal (do not interpolate).`,
+    );
+  }
   const m = STRING_LITERAL_PATTERN.exec(t);
   if (m === null) {
     throw new FragmentBodyParseError(
@@ -155,9 +165,63 @@ function parseStringLiteral(token: string): string {
         `bake it into the literal at authoring time.`,
     );
   }
-  // Group 1 = double-quoted; group 2 = backtick. Unescape the obvious common escapes.
+  // Group 1 = double-quoted; group 2 = backtick.
   const raw = m[1] ?? m[2] ?? "";
-  return raw.replaceAll('\\"', '"').replaceAll("\\`", "`").replaceAll("\\n", "\n").replaceAll("\\\\", "\\");
+  return unescapeStringContent(raw);
+}
+
+/**
+ * Single-pass unescape for the constrained-subset string content. The historical
+ * multi-pass `.replaceAll` chain was ORDER-DEPENDENT and mangled interleaved
+ * escapes:
+ *
+ *   Input:  `\\n`  (3 bytes: 5c 5c 6e — an escaped backslash followed by `n`)
+ *   Should decode to `\n` (2 bytes: 5c 6e — literal backslash + letter n).
+ *   The old chain ran `\\n → newline` BEFORE `\\\\ → \\`, so it saw the middle
+ *   two bytes (5c 6e) as the `\n` escape and produced `\<newline>` (5c 0a) — a
+ *   silent corruption of any fragment content that carried `\\n` (a JSON-in-a-
+ *   TS-string, a Windows path, a regex, a docstring).
+ *
+ * Walking left-to-right consuming ONE escape at a time is order-independent:
+ * once we consume `\\` as `\`, the following `n` is a plain character, not the
+ * start of a new escape. Claude H5 (Round III).
+ */
+function unescapeStringContent(raw: string): string {
+  let result = "";
+  let i = 0;
+  while (i < raw.length) {
+    const ch = raw[i]!;
+    if (ch !== "\\") {
+      result += ch;
+      i += 1;
+      continue;
+    }
+    // Backslash — consume the next char as part of the escape.
+    const next = raw[i + 1];
+    if (next === undefined) {
+      // Trailing backslash: the STRING_LITERAL_PATTERN regex should have
+      // rejected this at match time (it requires `\\.` — a backslash followed
+      // by ANY char — inside strings), so this is a defensive fall-through.
+      result += ch;
+      i += 1;
+      continue;
+    }
+    if (next === "\\") result += "\\";
+    else if (next === '"') result += '"';
+    else if (next === "`") result += "`";
+    else if (next === "n") result += "\n";
+    else if (next === "t") result += "\t";
+    else if (next === "r") result += "\r";
+    else {
+      // Unknown escape — preserve BOTH characters so a `\0` / `\u….` / `\x…`
+      // sequence the parser doesn't decode round-trips unchanged instead of
+      // being silently corrupted. Matches the old chain's behavior on any
+      // escape outside the 4 it handled.
+      result += "\\" + next;
+    }
+    i += 2;
+  }
+  return result;
 }
 
 /** Truncate a token for inclusion in an error message so a huge template
@@ -177,53 +241,81 @@ function parseArrayOfStrings(token: string): string[] {
   }
   const inner = t.slice(1, -1).trim();
   if (inner === "") return [];
-  // Split on top-level commas (no nested arrays in this subset).
-  const parts: string[] = [];
-  let depth = 0;
-  let buf = "";
-  let inStr: '"' | "`" | undefined;
-  for (const ch of inner) {
-    if (inStr === undefined) {
-      if (ch === '"' || ch === "`") inStr = ch;
-      else if (ch === "[" || ch === "(") depth += 1;
-      else if (ch === "]" || ch === ")") depth -= 1;
-      if (ch === "," && depth === 0) {
-        parts.push(buf);
-        buf = "";
-        continue;
-      }
-    } else if (ch === inStr) {
-      inStr = undefined;
-    }
-    buf += ch;
-  }
-  if (buf.trim() !== "") parts.push(buf);
+  // Split on top-level commas (no nested arrays in this subset). Shares the
+  // string-tracking + escape handling used by `splitArgs` — `'` is tracked so
+  // an accidental single-quoted `'a,b'` is opaque and rejected as a single
+  // literal (Claude M5) rather than fanning out into a confusing arg-count
+  // error.
+  const parts = splitOnTopLevelCommas(inner, { allowBraces: false });
   return parts.map((part) => parseStringLiteral(part));
 }
 
 /** Split a function-call arg list on top-level commas, respecting strings + brackets. */
 function splitArgs(rawArgs: string): string[] {
-  const args: string[] = [];
+  return splitOnTopLevelCommas(rawArgs, { allowBraces: true }).map((a) => a.trim());
+}
+
+/**
+ * Shared top-level-comma splitter. Tracks single-quoted `'…'`, double-quoted
+ * `"…"`, and backtick `` `…` `` strings as opaque (a comma inside any of them
+ * is NOT a split point). Backslash-escapes inside a string are honored so
+ * `"a\",b"` does not prematurely close the string. Depth is tracked across
+ * `[]` / `()` (and `{}` when `allowBraces` is true — arg lists may carry
+ * object-literal patterns, array-of-array is out of subset).
+ *
+ * Claude M5 (Round III): the historical implementation did NOT track single
+ * quotes, so `vfs.write('a,b', 'c')` fanned out into 3 args and the writer
+ * saw three "expected a string literal" errors instead of ONE actionable
+ * "use double quotes or backticks" rejection.
+ */
+function splitOnTopLevelCommas(src: string, opts: { allowBraces: boolean }): string[] {
+  const parts: string[] = [];
   let depth = 0;
   let buf = "";
-  let inStr: '"' | "`" | undefined;
-  for (const ch of rawArgs) {
-    if (inStr === undefined) {
-      if (ch === '"' || ch === "`") inStr = ch;
-      else if (ch === "(" || ch === "[" || ch === "{") depth += 1;
-      else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
-      if (ch === "," && depth === 0) {
-        args.push(buf);
-        buf = "";
+  let inStr: '"' | "`" | "'" | undefined;
+  let escaped = false;
+  for (const ch of src) {
+    if (escaped) {
+      // Consume the char after a `\` inside a string as-is — it does NOT close
+      // the string even if it matches the opener.
+      escaped = false;
+      buf += ch;
+      continue;
+    }
+    if (inStr !== undefined) {
+      if (ch === "\\") {
+        escaped = true;
+        buf += ch;
         continue;
       }
-    } else if (ch === inStr) {
-      inStr = undefined;
+      if (ch === inStr) inStr = undefined;
+      buf += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "`" || ch === "'") {
+      inStr = ch;
+      buf += ch;
+      continue;
+    }
+    if (ch === "[" || ch === "(" || (opts.allowBraces && ch === "{")) {
+      depth += 1;
+      buf += ch;
+      continue;
+    }
+    if (ch === "]" || ch === ")" || (opts.allowBraces && ch === "}")) {
+      depth -= 1;
+      buf += ch;
+      continue;
+    }
+    if (ch === "," && depth === 0) {
+      parts.push(buf);
+      buf = "";
+      continue;
     }
     buf += ch;
   }
-  if (buf.trim() !== "") args.push(buf);
-  return args.map((a) => a.trim());
+  if (buf.trim() !== "") parts.push(buf);
+  return parts;
 }
 
 const CALL_PATTERN = /^vfs\.([a-zA-Z]+)\s*\(([\s\S]*)\)\s*;?$/u;

@@ -278,3 +278,200 @@ describe("parseFragmentBody — reject non-vfs statements (Bug 2: Codex #6)", ()
     expect(ops.map((o) => o.kind)).toEqual(["write", "overwrite", "dep", "devDep", "env", "just"]);
   });
 });
+
+// ── Bug 3 (Claude H5): parseStringLiteral single-pass unescape order ────────
+
+function firstWriteOp(applyBody: string): { path: string; content: string } {
+  const body = bodyWith(applyBody);
+  const ops = parseFragmentBody(body);
+  const first = ops[0];
+  if (first === undefined || first.kind !== "write") {
+    throw new Error(`expected first op to be a write, got ${JSON.stringify(first)}`);
+  }
+  return { path: first.path, content: first.content };
+}
+
+function bytesOf(s: string): string {
+  return Array.from(s)
+    .map((c) => (c.codePointAt(0) ?? 0).toString(16).padStart(2, "0"))
+    .join(" ");
+}
+
+describe("parseFragmentBody — string-literal escape decoding (Bug 3: Claude H5)", () => {
+  // The historical multi-pass `.replaceAll` chain ran `\\n → newline` BEFORE
+  // `\\\\ → \\`. Any string source that carried `\\n` (an escaped backslash
+  // followed by `n` — 3 bytes: 5c 5c 6e) was silently corrupted to `\<newline>`
+  // (2 bytes: 5c 0a). These pins prove the single-pass decoder consumes ONE
+  // escape at a time so the order-dependence is gone.
+
+  it("decodes `\\n` as a newline (1 char, 0x0a)", () => {
+    const { content } = firstWriteOp('    vfs.write("a", "hello\\nworld");');
+    expect(content).toBe("hello\nworld");
+    expect(content).toHaveLength(11);
+  });
+
+  it("decodes `\\\\n` as backslash + letter n (2 chars, 5c 6e — NOT a newline)", () => {
+    // This is the H5 regression case. Under the buggy multi-pass chain the
+    // output was `\<newline>` (2 chars, 5c 0a). Under single-pass the `\\`
+    // consumes both backslashes into ONE literal `\`, leaving the trailing `n`
+    // as a plain character.
+    const { content } = firstWriteOp('    vfs.write("a", "\\\\n");');
+    expect(content).toBe("\\n");
+    expect(content).toHaveLength(2);
+    expect(bytesOf(content)).toBe("5c 6e");
+  });
+
+  it("decodes `\\\\` as a single backslash (1 char, 5c)", () => {
+    const { content } = firstWriteOp('    vfs.write("a", "\\\\");');
+    expect(content).toBe("\\");
+    expect(content).toHaveLength(1);
+    expect(bytesOf(content)).toBe("5c");
+  });
+
+  it("decodes `a\\\\nb` as `a`, `\\`, `n`, `b` — 4 chars, escape NOT consuming the letter n", () => {
+    const { content } = firstWriteOp('    vfs.write("a", "a\\\\nb");');
+    expect(content).toBe("a\\nb");
+    expect(content).toHaveLength(4);
+    expect(bytesOf(content)).toBe("61 5c 6e 62");
+  });
+
+  it("decodes `a\\nb` as a, newline, b — 3 chars (positive control)", () => {
+    const { content } = firstWriteOp('    vfs.write("a", "a\\nb");');
+    expect(content).toBe("a\nb");
+    expect(content).toHaveLength(3);
+    expect(bytesOf(content)).toBe("61 0a 62");
+  });
+
+  it("decodes `\\\\\\n` (3 backslashes + n) as backslash + newline — 2 chars, 5c 0a (nested escapes)", () => {
+    // Left-to-right consumption of the 4-byte captured group `\\\n` (5c 5c 5c 6e):
+    //   pos 0: `\\` → write `\` (5c), advance 2
+    //   pos 2: `\n` → write newline (0a), advance 2
+    // Result: backslash + newline (2 bytes, 5c 0a). This proves left-to-right
+    // consumption is order-INDEPENDENT — the second escape's `\n` is only seen
+    // AFTER the first `\\` collapsed the leading pair.
+    const { content } = firstWriteOp('    vfs.write("a", "\\\\\\n");');
+    expect(content).toBe("\\\n");
+    expect(content).toHaveLength(2);
+    expect(bytesOf(content)).toBe("5c 0a");
+  });
+
+  it("decodes `\\t` as a tab and `\\r` as a carriage return (extended vocabulary)", () => {
+    const { content } = firstWriteOp('    vfs.write("a", "col1\\tcol2\\r\\n");');
+    expect(content).toBe("col1\tcol2\r\n");
+  });
+
+  it('decodes `\\"` as a double-quote inside a double-quoted string', () => {
+    const { content } = firstWriteOp('    vfs.write("a", "she said \\"hi\\"");');
+    expect(content).toBe('she said "hi"');
+  });
+
+  it("decodes `\\`` as a backtick inside a backtick string", () => {
+    const { content } = firstWriteOp("    vfs.write(`a`, `code: \\`x\\``);");
+    expect(content).toBe("code: `x`");
+  });
+
+  it("preserves an unknown escape `\\0` as backslash + `0` (backward-compat with the old chain)", () => {
+    // The old multi-pass chain did NOT decode \0 / \x / \u, so anything a
+    // fragment carried past those code points round-tripped. The new decoder
+    // preserves them the same way rather than silently dropping the backslash.
+    const { content } = firstWriteOp('    vfs.write("a", "null:\\0end");');
+    expect(content).toBe("null:\\0end");
+  });
+
+  it("REGRESSION PIN: the existing escaped-JSON exemplar still decodes correctly", () => {
+    // The Bug-1 test above pushes a JSON-in-double-quotes string with `\"`
+    // through the parser. Prove the H5 fix does not alter that decode path.
+    const body = bodyWith('    vfs.write("data.json", "{\\"nested\\":\\"value\\"}");');
+    const ops = parseFragmentBody(body);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({
+      kind: "write",
+      path: "data.json",
+      content: '{"nested":"value"}',
+    });
+  });
+});
+
+// ── Bug 4 (Claude M5): splitArgs single-quote tracking ─────────────────────
+
+describe("parseFragmentBody — single-quoted args (Bug 4: Claude M5)", () => {
+  it("rejects a single-quoted arg with an actionable 'use double quotes' message (NOT an arg-count error)", () => {
+    // Historical: splitArgs did not track `'…'`. A call like
+    //   vfs.write('a,b', 'c')
+    // fanned out into 3 args because the comma inside `'a,b'` was treated as a
+    // top-level split point. The writer then saw THREE cryptic "expected a
+    // string literal" errors — one per arg — instead of ONE clear "use double
+    // quotes or backticks" message. With single-quote tracking the arg list
+    // splits into 2, each rejected individually with the single-quote-specific
+    // message.
+    const body = bodyWith(`    vfs.write('a,b', 'c');`);
+    let err: unknown;
+    try {
+      parseFragmentBody(body);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FragmentBodyParseError);
+    const msg = (err as FragmentBodyParseError).message;
+    expect(msg).toMatch(/single-quoted strings are not accepted/u);
+    expect(msg).toMatch(/double quotes|backticks/u);
+    // Must NOT surface as an arg-count error (which would happen if the comma
+    // inside `'a,b'` fanned the call out into 3 args).
+    expect(msg).not.toMatch(/expects 2 args, got 3/u);
+  });
+
+  it("keeps a single-quoted arg with an embedded comma OPAQUE — no split on the inner comma", () => {
+    // Even though the args are single-quoted (and thus rejected), the arg
+    // count should be 2, not 3. The rejection wins on string-type, not on
+    // arg-count.
+    const body = bodyWith(`    vfs.addPackageJsonDep('name,with,commas', 'version');`);
+    let err: unknown;
+    try {
+      parseFragmentBody(body);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FragmentBodyParseError);
+    const msg = (err as FragmentBodyParseError).message;
+    expect(msg).toMatch(/single-quoted strings are not accepted/u);
+    expect(msg).not.toMatch(/expects 2 args, got \d/u);
+  });
+
+  it("rejects a mixed double-quoted + single-quoted call with the single-quote message on the offending arg", () => {
+    const body = bodyWith(`    vfs.write("docs/x.md", 'content');`);
+    let err: unknown;
+    try {
+      parseFragmentBody(body);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FragmentBodyParseError);
+    expect((err as FragmentBodyParseError).message).toMatch(/single-quoted strings are not accepted/u);
+  });
+
+  it("keeps a single-quoted element inside an array-arg opaque (array split does not fan on inner commas)", () => {
+    // Prove the fix also flows through parseArrayOfStrings — the shared splitter
+    // treats `'a,b'` as opaque so the array is 1 element, not 2.
+    const body = bodyWith(`    vfs.appendToJustfileTarget("bootstrap", ['a,b']);`);
+    let err: unknown;
+    try {
+      parseFragmentBody(body);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(FragmentBodyParseError);
+    expect((err as FragmentBodyParseError).message).toMatch(/single-quoted strings are not accepted/u);
+  });
+
+  it("still accepts a body that mixes double quotes + backticks (positive control)", () => {
+    const body = bodyWith(
+      ['    vfs.write("docs/x.md", `multi', "line", "content`);", '    vfs.write("docs/y.md", "single-line");'].join(
+        "\n",
+      ),
+    );
+    const ops = parseFragmentBody(body);
+    expect(ops).toHaveLength(2);
+    expect(ops[0]).toMatchObject({ kind: "write", path: "docs/x.md" });
+    expect(ops[0]!.kind === "write" && ops[0].content).toBe("multi\nline\ncontent");
+  });
+});
