@@ -77,17 +77,22 @@ export function createAiderWriter(dependencies: AiderWriterDependencies): Writer
       const model = dependencies.model ?? DEFAULT_AIDER_MODEL;
       const apiKey = await resolveAiderApiKey(dependencies.secrets, dependencies.credentialRef);
       const baselineSha = await captureBaselineSha(dependencies.ssh, dependencies.target, opts.workspace);
+      // Managed (endpoint override present) → the platform key is an OpenRouter
+      // (OpenAI-compatible) key, read from OPENAI_API_KEY. BYOK → the
+      // provider-specific var derived from the pinned model.
+      const apiKeyEnvVar = dependencies.endpointBaseUrl === undefined ? apiKeyEnvVarForModel(model) : "OPENAI_API_KEY";
       const aider = await dependencies.ssh.run(dependencies.target, {
         command: buildAiderWriterCommand({
-          // Managed (endpoint override present) → the platform key is an
-          // OpenRouter (OpenAI-compatible) key, read from OPENAI_API_KEY. BYOK →
-          // the provider-specific var derived from the pinned model.
-          apiKeyEnvVar: dependencies.endpointBaseUrl === undefined ? apiKeyEnvVarForModel(model) : "OPENAI_API_KEY",
-          apiKey,
+          apiKeyEnvVar,
           model,
           prompt: opts.prompt,
+          runId: dependencies.runId,
           openaiApiBase: dependencies.endpointBaseUrl,
         }),
+        // The API key rides stdin into a chmod-600 per-run env file (see
+        // buildAiderWriterCommand) — it is NEVER interpolated into the command
+        // string, so it can't leak into `ps`/process listings or logs.
+        stdin: `export ${apiKeyEnvVar}=${shellSingleQuoteAider(apiKey)}\n`,
         cwd: opts.workspace,
         // AGENT exec: aider streams its edit/telemetry output continuously (every line
         // is a sign of life → the watchdog resets), with the workspace as the
@@ -160,22 +165,32 @@ export function apiKeyEnvVarForModel(model: string): string {
   return "ANTHROPIC_API_KEY";
 }
 
-// Builds the non-interactive aider invocation. The API key is injected as a
-// command-scoped env var (provider-specific) so it never lands in a file and
-// is redacted from the adapter's own result. The workspace is the cwd (the
-// RunnerCommand.cwd cd's into it), so aider operates on the run's git repo.
+// The per-run env file the aider command sources for the provider API key.
+// The key VALUE lives ONLY in this chmod-600 file (written from stdin), never
+// in the command string.
+export function aiderKeyEnvPath(runId: string): string {
+  return `/tmp/tanren-aider-${runId}.env`;
+}
+
+// Builds the non-interactive aider invocation. SECURITY: the API key is NOT
+// interpolated into the command string (that would leak it into `ps`/process
+// listings and any log capturing the command). Instead the command reads the
+// `export <VAR>=<key>` line from stdin into a chmod-600 per-run env file, then
+// sources it before invoking aider — the exact env-file pattern the codex
+// adapter uses. The workspace is the cwd (RunnerCommand.cwd cd's into it), so
+// aider operates on the run's git repo.
 export function buildAiderWriterCommand(input: {
   apiKeyEnvVar: string;
-  apiKey: string;
   model: string;
   prompt: string;
+  runId: string;
   // SaaS Tier-B #5: when set (managed mode), aider is pointed at this
   // OpenAI-compatible base URL via `--openai-api-base` (OpenRouter endpoint).
   // Absent ⇒ BYOK: no flag, aider hits the provider's native endpoint.
   openaiApiBase?: string;
 }): string {
-  return [
-    `${input.apiKeyEnvVar}=${quoteSshShellArg(input.apiKey)}`,
+  const envPath = aiderKeyEnvPath(input.runId);
+  const aider = [
     "aider",
     "--yes-always",
     "--no-stream",
@@ -187,6 +202,24 @@ export function buildAiderWriterCommand(input: {
     "--message",
     quoteSshShellArg(input.prompt),
   ].join(" ");
+  // umask 077 + explicit chmod 600 so the key file is never world/group-readable.
+  // The `export …=…` line arrives on stdin (never the argv). `set -a` while
+  // sourcing marks the exported var for the aider child; a `rm -f` trap wipes the
+  // key file on any exit path.
+  return [
+    "umask 077",
+    `cat > ${quoteSshShellArg(envPath)}`,
+    `chmod 600 ${quoteSshShellArg(envPath)}`,
+    `trap ${quoteSshShellArg(`rm -f ${envPath}`)} EXIT`,
+    `. ${quoteSshShellArg(envPath)}`,
+    aider,
+  ].join(" && ");
+}
+
+// POSIX single-quote escaping for the stdin `export` line. Wrap in single
+// quotes, replacing any embedded single quote with the '\'' sequence.
+function shellSingleQuoteAider(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 // aider does not emit a structured event stream in v1 of this adapter. We
