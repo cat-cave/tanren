@@ -13,8 +13,10 @@ live proof — the whole-product loop, driven end-to-end over the API by a
 non-technical operator — is now carried forward by the **`apex`** trial series
 (through **v79** as of 2026-07-04; the v79-era product-build-loop frontier
 was subsequently HARDENED by 34 PRs #738–#768 landed 2026-07-05 → 2026-07-07
-closing every Codex-critic / round-3 / RA1 / RA2 finding, and v80 targets
-the fragment authoring path — see [`apex.md`](./apex.md) and
+closing every Codex-critic / round-3 / RA1 / RA2 finding, then a Wave H +
+F2 hardening push landed 2026-07-07 — 26 more PRs #774–#799 — preemptively
+closed the F2 fragment authoring path. v80 targets closing the full
+autonomous loop end-to-end — see [`apex.md`](./apex.md) and
 [`apex-run-playbook.md`](./apex-run-playbook.md) for the honest proof state
 and the drive-from-zero runbook).
 

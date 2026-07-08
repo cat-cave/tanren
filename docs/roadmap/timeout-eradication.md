@@ -33,10 +33,17 @@ emphatic that this class keeps recurring); the existing models it generalizes ar
 > the identifier omitted an `S_ATTEMPTS`-family suffix. The same PR also
 > replaced the Vercel pager `while` loop's fixed cursor-turn budget with
 > `retryUntilConverged` over the cursor — the first non-transient-retry
-> caller of the primitive. The doctrine stands: progress / sign-of-life
-> based; `ActivityWatchdog` is the sole running-command hang detector; every
-> terminal exit is an atomic row + event pair; the lint keeps ratcheting up
-> as new evasion shapes surface.
+> caller of the primitive. **PR #794 (F2 Round II, 2026-07-07)** added the
+> per-fragment authoring iteration ceiling
+> `FRAGMENT_AUTHORING_ITERATION_CEILING = 24` as an integer-count safety
+> net (blessed with an arch-allow annotation) over the 8-entry
+> signature-window fixed-point — NOT wall-clock, sitting alongside the
+> primary progress-based bound to catch the pathological case of a writer
+> that produces a fresh rejection class on every attempt (drift the window
+> can't detect). The doctrine stands: progress / sign-of-life based;
+> `ActivityWatchdog` is the sole running-command hang detector; every
+> terminal exit is an atomic row + event pair; the lint keeps ratcheting
+> up as new evasion shapes surface.
 >
 > **Disguised survivors the lint missed, found by successive apex trials +
 > critic-arc audits and since fixed:**

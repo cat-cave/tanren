@@ -39,70 +39,97 @@ obviated by PR-F #693). The v79-era product-build-loop frontier (writer subtask
 sizing PR #731, plan stall recovery PR #726, fragment-based composer PR-A #688 →
 PR-G #699, PR-enqueue timing PR #724 + the #725 atomic 3-write seam +
 orphaned-PR startup sweep, triage → new-spec insertion PR #734 on real
-out-of-scope findings) has since been HARDENED across three subsequent audit
-passes plus a cleanup wave — **34 PRs (#738–#768) landed 2026-07-05 →
-2026-07-07** closed every Codex-critic (#1–#18) / Codex-round-3 (#1–#4) / RA1 /
-RA2 finding. **Wave D1 (BLOCKING pre-apex-v80)** landed the design-oracle
-finalize guard, `gateRework` required in `BaseShiftCoordinatorDeps`, the
-`MalformedAncestorStackError` typed classification, and the v79 loop-closure
-end-to-end fix (auditor prompt no-omit + `routeOne` scope-first +
-`ensureFindingCoverage` empty-workItems P0 synthesis + newSpecs materialization
-via `acceptProposals`). **Wave D2** landed the observability +
-silent-fallback closures — `demo.failed` schema + `demo.completed { failed>0 }`
-severity promotion + `deploy.skipped` self-loop close, Zod-at-boundary for
-`jobClaim` + `sidecarHttpAllocator`, dashboard HALTED-set unification via
-`@tanren/db`, the design-oracle silent-fallback trio (typed
-`DesignContractCorruptError` union + `DesignOracleActorConfigError` on
-null-orgId + `MalformedDesignOracleResultError` on missing hasContract
-fields), a unified `subscribeWithReconnect` helper across 4 subscribers
-(race-hardened), and read-failure-as-progress sentinel typed unions on the
-orphan reader stack. **Wave D3** landed the convergence-escalation
-always-halts rule, `retryUntilConverged` `onAttempt` hook wired into 2
-priority callers, the Vercel pager over cursor + the timeout-eradication
-lint extended to catch bare
-`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` give-up stems +
-SCREAMING_CASE loop-cap patterns (PR #750), writer progress-append
-structured logging, walker `orderKey` on stable `(created_at, spec_id)` + a
-composite `specs_project_created` index, the budget fails-closed on null-org
-path, and the `usage.accounting_failed` event + `subtaskLoop.finalize`
-demoting `passed → halted` on accounting throw. **Wave D4 (re-audit)**
-landed `DEFAULT_ROUTE_EVENTS` seeding for `demo.failed` +
-`usage.accounting_failed`, 4 typed error arms in `stageFailureKind.ts`,
-`specs` provenance columns (`parent_spec_id`, `source_finding_ids`,
-`origin_triage_task_id`, `origin_run_id`) via migration 0025, the
-`design_contracts.mode` column via migration 0026 with `(project_id, mode,
-version)` unique index threaded through all readers, triage
-`ensureFindingCoverage` synthesizing P0 for PARTIAL coverage (not just empty
-workItems), and notify-subscribe try/catch handler removal + `stop()` async
-drain. **Wave E-fix (Codex round-3)** landed demo `alreadyDemoed` →
-`alreadyTerminalDemo` including `demo.failed` in the terminal check, 4
-worker-level typed classifier arms (context-hydration + pre-row paths), the
-`notifySubscriber` reconnect wake latch, and triage newSpecs dedupe via
-provenance + partial unique index `specs_triage_provenance_unique`
-(migration 0027). **Wave F cleanups** landed the `.realjj` test flake fix,
-missing-doc pointer pages (`spec-loop-redesign.md` / `tanren-direction.md`),
-the mutation-weekly workflow unbreakage (task #17), `PgDagEventEmitter`
-fails LOUD on unresolvable project org (task #38), and the PR-F #693
-doctrine debris sweep (24 files updated + 2 files deleted). The audit
-rounds 2 and 3 (PRs #708–#718) landed the writer-seam doctrine sweep,
+out-of-scope findings) was HARDENED across three audit passes + cleanup wave —
+**34 PRs (#738–#768) landed 2026-07-05 → 2026-07-07** closed every Codex-critic
+(#1–#18) / Codex-round-3 (#1–#4) / RA1 / RA2 finding across Waves D1..D4 +
+E-fix + F: the design-oracle finalize guard, `gateRework` required in
+`BaseShiftCoordinatorDeps`, `MalformedAncestorStackError` typed classification,
+the v79 loop-closure end-to-end fix (auditor prompt no-omit + `routeOne`
+scope-first + `ensureFindingCoverage` empty-workItems + PARTIAL-coverage P0
+synthesis + `acceptProposals` newSpecs materialization + `specs` provenance
+columns via migration 0025), `demo.failed` + `usage.accounting_failed` event
+schemas + `DEFAULT_ROUTE_EVENTS` seeding + severity promotions, the
+design-oracle silent-fallback trio (typed errors + `design_contracts.mode`
+column via migration 0026 threaded through all readers), a unified
+`subscribeWithReconnect` helper across 4 subscribers, the walker `orderKey`
+on stable `(created_at, spec_id)`, budget fails-closed on null-org, the
+`notifySubscriber` reconnect wake latch, triage newSpecs dedupe via
+migration 0027, the timeout-eradication lint extended (PR #750) to catch
+bare `_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` stems +
+SCREAMING_CASE loop-cap patterns, and the PR-F #693 doctrine debris sweep.
+Audit rounds 2/3 (PRs #708–#718) landed the writer-seam doctrine sweep,
 designOracle mode-aware re-drive, runFinalize prober filter, priorEvents
-discipline (terminal-leak guard + idempotency keys), and the writer-seam
-tail cleanup in the same window. The autonomous-loop machinery — auditor →
-triage → routing → newSpecs materialization → durable provenance-deduped
-`acceptProposals` — is complete and hardened by regression pins. The
-honest open frontier for v80 is the **fragment authoring path** (the F2
-writer→validate loop the composer spawns when a curated stack references a
-fragment the library doesn't have): every fix wave left it alone, so it is
-the live-validation vehicle for the next trial. Two smaller documented
-gaps: scaffold specs (`specialize_seed` mode) now see NO design context
-after Wave D4's migration 0026 (intentional — scaffolds specialize
-toolchain, not product identity — but the design-oracle silent-skip surface
-is widened vs pre-#756 behavior); and `loadSpecWithProject` doesn't SELECT
-the new provenance columns, so a future feature that needs them at
-read-time will require the schema+join update. The drive playbook is
-`docs/operator-guide/apex-run-playbook.md`; the operator role and run
-rhythm live in `docs/operator-guide/apex.md`; the templating doctrine is
-`docs/roadmap/templating-system.md`.
+discipline. **A subsequent Wave H + F2 hardening push landed 2026-07-07 —
+26 more PRs (#774–#799)** preemptively closed the F2 authoring path (what
+was the honest v80 frontier at the start of that window):
+
+- **Wave H #774–#787 (14 PRs)** — canonical fixed-point signature + ATOMIC
+  `createValidated` persistence seam (audit finding H2 — task #150; one
+  INSERT with `status='validated'`, no draft→flip window that the unified
+  loader would silently ignore); guaranteed JIT env build reaches
+  off-baseline toolchains (#776); design contract unified on project-scope
+  — mode-keying dropped (#775); orgId invariant enforced at hydration
+  (silent-degrade branches dropped, #778); allocators reclassified
+  provisioning vs fixed-pool vs delegated + provider resource id persisted
+  (#782/#786/#787); demo non-web arms + adapter-aware surface dispatch
+  (#780); triage select + expose provenance columns downstream (#785);
+  durable manual_external deploy attestation + real operator confirmation
+  (#783); human-review mode uses durable parked state (#784);
+  notifications no silent stubs + durable no-route record (#781); reject
+  unknown deploy tokens + derive `testRunner` per runtime (#779).
+- **F2 Round I #788–#791** — per-attempt `fragment.authoring.attempt`
+  events (writer trajectory visibility, #788); prompt hardening with
+  inline exemplars + slot-kind guidance + prior-org fragments + product
+  context (#790); runtime-validity smoke (pnpm/bundle live invokers
+  materialize the composed VFS into a temp dir + run the runtime's dep
+  resolver, #789) — WIRED IN PROD by #791 (Codex HIGH found #789 was
+  dead code without it, a `next@^99.0.0` fragment would persist as
+  validated).
+- **F2 Round II #792–#795** — parser hardened to a balanced-brace
+  `apply()` body walker + non-vfs statement rejection
+  (`fragmentBodyWalker.ts`; the prior lazy regex truncated at the
+  first `}` inside a template literal); exemplars use inline literals
+  so the parser doesn't reject identifier args (#793); PER-FRAGMENT
+  ITERATION CEILING `FRAGMENT_AUTHORING_ITERATION_CEILING = 24`
+  (arch-allow: timeout-class — integer count, NOT wall-clock, doctrine-
+  compliant safety net over the 8-entry signature window for the
+  pathological writer that produces a fresh rejection class every
+  attempt) + sanitized signature (strips clock/id noise before hashing
+  so a stuck LLM provider's cosmetically-different error every attempt
+  no longer counts as progress) + batch compose post-authoring gate +
+  persist-throw event (#794); real dep resolvers for python/go/rust
+  (`uv pip compile` / `go mod download` / `cargo fetch`) + extended
+  implicit-dependsOn tokens with justfile comment-strip (task #103,
+  #795).
+- **F2 Round III #796–#799** — parseStringLiteral single-pass unescape +
+  splitArgs single-quote tracking (#796); sanitizer regex anchors +
+  explicit `org_id` filter defense (#797); RETRACT-WITH-DELETE — the
+  post-authoring batch compose rejection now DELETES the persisted row
+  via `FragmentsStore.deleteById` so the org's `fragments` table stays
+  free of cross-run contamination (Round-III H1),
+  `fragment.authoring.succeeded` DEFERRED until the batch gate passes
+  (H4 — no more succeeded-then-failed for the same id), failed emit
+  carries the REAL per-fragment attempts count (H7 — not hardcoded 1),
+  `skipped` batch arm EXPLICITLY handled as failure (M6 — no silent
+  commit), empty `apply()` body rejected (M4 — the no-op stealth-
+  downgrade class where a fragment persisted as validated but
+  contributed nothing) (#798); pip/go/cargo live invokers wired in prod
+  (#799 — same class as #791).
+
+Two smaller documented gaps: scaffold specs (`specialize_seed` mode) see
+no design context after migration 0026 (intentional — scaffolds
+specialize toolchain, not product identity — but the design-oracle
+silent-skip surface is widened vs pre-#756 behavior); and
+`loadSpecWithProject` doesn't SELECT the new provenance columns, so a
+future feature that needs them at read-time will require the schema+join
+update. The autonomous-loop machinery AND the F2 authoring pipeline are
+complete and hardened by regression pins. **The honest open frontier for
+v80 is closing the full autonomous loop end-to-end** — the F2 pre-
+hardening means the run should reach further into the greenfield
+product-build loop than any prior trial before surfacing the next real
+bug. The drive playbook is `docs/operator-guide/apex-run-playbook.md`;
+the operator role and run rhythm live in `docs/operator-guide/apex.md`;
+the templating doctrine is `docs/roadmap/templating-system.md`.
 
 ### v21 native delivery (the current doctrine)
 
@@ -366,25 +393,22 @@ cite); the merge-engine cutover rationale is
   NixOS host from 2026-06-23 through 2026-07-04 — each flushed real engine bugs now
   fixed on `main`; **no run has yet closed the product loop** (issue → triage → fix
   → merge → deploy → a working product, no human in the inner loop). The
-  v79-era product-build-loop frontier (triage → new-spec insertion PR #734,
-  writer subtask sizing PR #731, plan stall recovery PR #726, PR-enqueue timing
-  #724/#725, fragment-composer PR-A #688 → PR-G #699) has since been HARDENED
-  across three subsequent audit passes plus a cleanup wave — 34 PRs
-  (#738–#768) landed 2026-07-05 → 2026-07-07 closed every Codex-critic /
-  round-3 / RA1 / RA2 finding (Wave D1..D4 + E-fix + F). The autonomous-loop
-  machinery — auditor → triage → routing → newSpecs materialization → durable
-  provenance-deduped `acceptProposals` — is complete and hardened by
-  regression pins. The honest open frontier for v80 is the **fragment
-  authoring path** (the F2 writer→validate loop the composer spawns when a
-  curated stack references a fragment the library doesn't have): every fix
-  wave left it alone, so it is the live-validation vehicle for the next
-  trial. That close is the open proof. To drive the next run: the operator
-  role + run rhythm + proof portfolio is `docs/operator-guide/apex.md`; the
-  **concrete drive-from-zero playbook** is
-  `docs/operator-guide/apex-run-playbook.md`; the **templating doctrine** (no
-  from-scratch-into-a-project; do NOT pre-create a template — the
-  fragment-based composer, PR-A #688 → PR-G #699, is the single seed path)
-  is `docs/roadmap/templating-system.md`. It spends real credits under the
+  v79-era product-build-loop frontier was HARDENED across three audit passes +
+  cleanup wave (34 PRs #738–#768) — then a Wave H + F2 hardening push
+  (26 PRs #774–#799 landed 2026-07-07) preemptively closed the F2
+  authoring path (the honest v80 frontier at the start of that window),
+  detailed in §1. The autonomous-loop machinery AND the F2 authoring
+  pipeline are complete and hardened by regression pins. The honest open
+  frontier for v80 is **closing the full autonomous loop end-to-end** —
+  the F2 pre-hardening means the run should reach further into the
+  greenfield product-build loop than any prior trial before surfacing the
+  next real bug. To drive the next run: the operator role + run rhythm +
+  proof portfolio is `docs/operator-guide/apex.md`; the **concrete
+  drive-from-zero playbook** is `docs/operator-guide/apex-run-playbook.md`;
+  the **templating doctrine** (no from-scratch-into-a-project; do NOT
+  pre-create a template — the fragment-based composer, PR-A #688 →
+  PR-G #699, is the single seed path) is
+  `docs/roadmap/templating-system.md`. It spends real credits under the
   $50 ceiling on already-provisioned Tier-1 creds (BYOK Codex runs at $0).
 - **v49-era infra halts (task #21) — RESOLVED, historical.** The apex-v49
   runner-INSERT retry loop
