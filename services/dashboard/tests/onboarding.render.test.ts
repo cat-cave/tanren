@@ -49,7 +49,7 @@ const DOCTOR_FAIL = {
   ],
 };
 
-function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): MockState {
+function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown; deliveries?: unknown } = {}): MockState {
   const state: MockState = {
     credentialImports: [],
     targetCreates: [],
@@ -72,6 +72,28 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown } = {}): Mo
           events: [{ eventName: "run.failed", defaultSeverity: "fail" }],
         },
       );
+    }
+    if (url.includes("/notifications/deliveries")) {
+      return json({
+        deliveries: opts.deliveries ?? [
+          {
+            id: 1,
+            orgId: "org_acme",
+            channel: "ntfy",
+            status: "sent",
+            attempts: 1,
+            enqueuedAt: "2026-05-28T14:00:00.000Z",
+            sentAt: "2026-05-28T14:00:01.000Z",
+            eventName: "run.failed",
+            targetId: "target_1",
+            severity: "fail",
+            title: "Run failed",
+            reason: "native gate failed",
+            layering: "org",
+            target: { id: "target_1", channelKind: "ntfy", label: "ops-alerts" },
+          },
+        ],
+      });
     }
     if (url.includes("/notifications/targets") && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
@@ -233,6 +255,17 @@ describe("notifications matrix", () => {
     // All channels now dispatch once their credentials are configured.
     expect(html).toContain("all channel kinds dispatch");
     expect(html).not.toContain("configured but not yet wired");
+  });
+
+  it("renders recent notification delivery history from the org ledger", async () => {
+    mockOrchestrator();
+    const app = await build();
+    const html = await (await app.request("/notifications")).text();
+    expect(html).toContain("delivery <em>history</em>");
+    expect(html).toContain("Run failed");
+    expect(html).toContain("ops-alerts");
+    expect(html).toContain("native gate failed");
+    expect(html).toContain("sent");
   });
 
   it("add-target form POST proxies to the orchestrator", async () => {

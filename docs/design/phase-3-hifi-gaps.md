@@ -321,17 +321,23 @@ Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build
 - **Size/priority: small / low.**
 - **Confidence: medium** (route exists; panel completeness not fully verified).
 
-### 2.7 Notifications — delivery history + quiet hours (verify)
+### 2.7 Notifications — delivery history mounted; quiet hours still partial
 
 - **Hi-fi**: `view-org.jsx` `NotificationsView` shows the channel list + per-event
   matrix **plus delivery history and pause/quiet-hours**.
 - **Code state — PARTIAL**: `/notifications` is mounted
   (`routes/onboarding/index.tsx`) and renders the channels + per-event × severity
-  matrix (`components/onboarding/NotificationsBody`), but **delivery history** and
-  **quiet-hours/pause** are not evidently present.
-- **Gap**: add the delivery-history list and quiet-hours/pause controls.
+  matrix (`components/onboarding/NotificationsBody`). It now also reads the
+  orchestrator's org-scoped notification dispatch ledger
+  (`GET /orgs/:orgId/notifications/deliveries`) and renders a real delivery
+  history panel. Quiet posture is visible from persisted per-target weekend mute,
+  but the hi-fi's personal pause/deep-work controls still have no dashboard
+  persistence surface.
+- **Gap**: add a real quiet-hours/pause model + endpoint, then wire controls in
+  the notifications UI.
 - **Size/priority: small / low.**
-- **Confidence: medium.**
+- **Confidence: high for delivery history; medium for the remaining quiet-hours
+  product shape.**
 
 ---
 

@@ -11,7 +11,7 @@
 
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import type { CredentialRecord, DoctorReport, NotificationMatrix } from "../../api/types.js";
+import type { CredentialRecord, DoctorReport, NotificationDelivery, NotificationMatrix } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { CredentialsBody } from "../../components/onboarding/CredentialsBody.js";
 import { NotificationsBody } from "../../components/onboarding/NotificationsBody.js";
@@ -159,8 +159,14 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
   app.get("/notifications", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "notifications" });
     const client = clientFor(c, deps);
-    const matrix =
-      ctx.org?.id === undefined ? { targets: [], routes: [], events: [] } : await client.notificationMatrix(ctx.org.id);
+    let matrix: NotificationMatrix = { targets: [], routes: [], events: [] };
+    let deliveries: NotificationDelivery[] = [];
+    if (ctx.org?.id !== undefined) {
+      [matrix, deliveries] = await Promise.all([
+        client.notificationMatrix(ctx.org.id),
+        client.notificationDeliveries(ctx.org.id),
+      ]);
+    }
     return renderShell(
       c,
       ctx,
@@ -180,7 +186,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
               </div>
             </div>
           </div>
-          <NotificationsBody matrix={matrix} notice={noticeOf(c)} />
+          <NotificationsBody matrix={matrix} deliveries={deliveries} notice={noticeOf(c)} />
         </div>
       </>,
     );

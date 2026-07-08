@@ -411,6 +411,34 @@ export interface NotificationMatrix {
   events: NotificationEvent[];
 }
 
+export type NotificationDeliveryStatus = "sent" | "failed" | "stubbed" | "skipped" | "undelivered_no_route";
+
+/** A recorded notification dispatch attempt from the orchestrator ledger. */
+export interface NotificationDelivery {
+  id: number;
+  orgId: string | null;
+  channel: ChannelKind | "no_route";
+  status: NotificationDeliveryStatus;
+  attempts: number;
+  enqueuedAt: string;
+  sentAt: string | null;
+  eventName: string | null;
+  targetId: string | null;
+  severity: Severity | null;
+  title: string | null;
+  reason: string | null;
+  layering: string | null;
+  target: {
+    id: string;
+    channelKind: ChannelKind;
+    label: string;
+  } | null;
+}
+
+export interface NotificationDeliveriesResponse {
+  deliveries: NotificationDelivery[];
+}
+
 /** A cursor-paginated page wrapper, matching the orchestrator `CursorPage<T>`. */
 export interface CursorPage<T> {
   items: T[];

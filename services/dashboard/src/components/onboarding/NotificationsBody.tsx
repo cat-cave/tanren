@@ -11,7 +11,14 @@
  * render its "configured but not yet wired" hint.
  */
 
-import type { ChannelKind, NotificationMatrix, NotificationRoute, NotificationTarget } from "../../api/types.js";
+import type {
+  ChannelKind,
+  NotificationDelivery,
+  NotificationDeliveryStatus,
+  NotificationMatrix,
+  NotificationRoute,
+  NotificationTarget,
+} from "../../api/types.js";
 import { PhaseBadge, SevBadge, Toggle } from "./primitives.js";
 
 /** Channel catalog: glyph + phase badge + whether dispatch is wired in v0. */
@@ -193,8 +200,128 @@ function MatrixGrid(props: { matrix: NotificationMatrix }) {
   );
 }
 
+function deliveryStatusClass(status: NotificationDeliveryStatus): "ok" | "warn" | "fail" | "cold" {
+  if (status === "sent") return "ok";
+  if (status === "failed" || status === "undelivered_no_route") return "fail";
+  if (status === "stubbed") return "warn";
+  return "cold";
+}
+
+function deliveryTitle(delivery: NotificationDelivery): string {
+  return delivery.title ?? delivery.eventName ?? "notification event";
+}
+
+function deliveryTargetLabel(delivery: NotificationDelivery): string {
+  if (delivery.status === "undelivered_no_route") return "no route";
+  return delivery.target?.label ?? delivery.target?.channelKind ?? delivery.channel;
+}
+
+function deliveryTime(value: string | null): string {
+  if (value === null) return "queued";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "short",
+    day: "numeric",
+  })
+    .format(date)
+    .toLowerCase();
+}
+
+function QuietHoursPanel(props: { targets: NotificationTarget[] }) {
+  const mutedTargets = props.targets.filter((target) => target.weekendMute);
+  return (
+    <div class="col-card" style="gap:8px">
+      <div class="h">
+        <span>
+          quiet <em>posture</em>
+        </span>
+        <span class="mono-dim" style="margin-left:auto">
+          persisted per target
+        </span>
+      </div>
+      <div class="sunken">
+        <div class="section-label">weekend mute</div>
+        <div class="mono" style="margin-top:4px">
+          {mutedTargets.length > 0
+            ? `${mutedTargets.length} target${mutedTargets.length === 1 ? "" : "s"} mute non-critical delivery on weekends`
+            : "no targets have weekend mute enabled"}
+        </div>
+        <div class="mono-dim" style="margin-top:4px">
+          hard-fail and budget-cap events still route according to their severity floor.
+        </div>
+      </div>
+      {mutedTargets.length > 0 ? (
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          {mutedTargets.map((target) => (
+            <span class="pill hot">
+              <span class="d"></span>
+              {target.label}
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DeliveryHistory(props: { deliveries: NotificationDelivery[] }) {
+  return (
+    <div class="col-card" style="padding:0;overflow:hidden">
+      <div class="h" style="padding:12px 16px;border-bottom:1px solid var(--line-1)">
+        <span>
+          delivery <em>history</em>
+        </span>
+        <span class="mono-dim" style="margin-left:auto">
+          latest dispatch ledger
+        </span>
+      </div>
+      <div class="delivery-head">
+        <span>queued</span>
+        <span>event</span>
+        <span>target</span>
+        <span>status</span>
+        <span>sev</span>
+      </div>
+      <div style="max-height:280px;overflow:auto">
+        {props.deliveries.length > 0 ? (
+          props.deliveries.map((delivery) => (
+            <div class="delivery-row">
+              <span class="mono-dim">{deliveryTime(delivery.enqueuedAt)}</span>
+              <span>
+                <span class="name">{deliveryTitle(delivery)}</span>
+                <span class="desc">
+                  {delivery.eventName ?? "unknown event"}
+                  {delivery.reason === null ? "" : ` · ${delivery.reason}`}
+                </span>
+              </span>
+              <span class="mono-dim">{deliveryTargetLabel(delivery)}</span>
+              <span class={`pill ${deliveryStatusClass(delivery.status)}`}>
+                <span class="d"></span>
+                {delivery.status}
+              </span>
+              <span class="matrix-cell">
+                {delivery.severity === null ? (
+                  <span class="mono-dim">n/a</span>
+                ) : (
+                  <SevBadge severity={delivery.severity} />
+                )}
+              </span>
+            </div>
+          ))
+        ) : (
+          <div class="empty-state">no notification deliveries recorded yet</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export interface NotificationsBodyProps {
   matrix: NotificationMatrix;
+  deliveries: NotificationDelivery[];
   notice?: string;
 }
 
@@ -206,6 +333,10 @@ export function NotificationsBody(props: NotificationsBodyProps) {
       <div class="cols-narrow">
         <ChannelsColumn targets={props.matrix.targets} />
         <MatrixGrid matrix={props.matrix} />
+      </div>
+      <div class="cols-narrow">
+        <QuietHoursPanel targets={props.matrix.targets} />
+        <DeliveryHistory deliveries={props.deliveries} />
       </div>
     </>
   );
