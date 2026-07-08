@@ -1,22 +1,18 @@
 // Tests for the F2 runtime-validity smoke — the final step in
 // `validateFragmentBody` that materializes the composed VFS into a temp dir and
-// asks the runtime's dependency resolver whether the composed scaffold
-// bootstraps. Composition-validity is NOT runtime-validity: a fragment can
-// declare `"vitest": "^99.0.0"` in package.json, pass BOTH prior smokes, and
-// still explode when the writer runs `pnpm install`. This module catches that.
+// asks the runtime's dep resolver whether the scaffold bootstraps. Composition-
+// validity is NOT runtime-validity: a fragment can declare `"vitest": "^99.0.0"`,
+// pass both prior smokes, then explode at `pnpm install`. This module catches it.
 //
-// COVERAGE:
-//   - Node fragment with a resolvable manifest → passes (fake invoker OK).
-//   - Node fragment with a bad version → fails with actionable message (fake
-//     invoker returns pnpm's ERR_PNPM_NO_MATCHING_VERSION shape).
-//   - Ruby fragment via `bundle check` seam → passes / fails.
-//   - Ruby fragment with no bundle seam → falls back to Gemfile syntax check.
-//   - Non-recognized runtime → skip cleanly with log (returns ok).
-//   - Wired via `buildFragmentAuthoring` — the runtime-validity failure propagates
-//     into `failureReasons` and the fragment does NOT persist.
-//   - `parsePnpmError` — the parser exposed for reuse (deterministic tests without
-//     spawning pnpm).
-//   - Real integration test (opt-in via TANREN_REAL_PNPM=1) — skipped by default.
+// COVERAGE: node-pnpm resolvable/bad-version arms; ruby bundle-check + Gemfile
+// syntax fallback; unrecognized-runtime skip; `buildFragmentAuthoring` wiring
+// (failure → failureReasons, no persist); `parsePnpmError` reuse; the apex-v81
+// ERR_PNPM_IGNORED_BUILDS tolerance (parser + live invoker); opt-in real-pnpm
+// integration (TANREN_REAL_PNPM=1, skipped by default).
+
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import {
@@ -29,6 +25,7 @@ import {
   loadFragmentLibrary,
   parsePnpmError,
   type PnpmInvoker,
+  type PnpmInvokerResult,
   type BundleInvoker,
   runRuntimeValiditySmoke,
   type SmokeResult,
@@ -104,10 +101,8 @@ function interpretedFragment(id: string, kind: FragmentSpec["kind"], bodyTs: str
   });
 }
 
-/** Narrow-or-throw helper so `expect` calls stay unconditional (satisfies the
- * `vitest/no-conditional-expect` lint). Throws a descriptive error when the
- * result kind doesn't match the expected one, so the vitest failure names the
- * actual kind + reason instead of the type checker's structural mismatch. */
+/** Narrow-or-throw helpers so `expect` calls stay unconditional (satisfies
+ * `vitest/no-conditional-expect`) and the failure names the actual kind. */
 function assertFailed(result: SmokeResult): asserts result is Extract<SmokeResult, { kind: "failed" }> {
   if (result.kind !== "failed") {
     throw new Error(`expected result.kind === "failed", got ${JSON.stringify(result)}`);
@@ -311,6 +306,61 @@ describe("parsePnpmError — actionable rejection message extraction", () => {
     const output = "unmet peer react@^18.0.0";
     expect(parsePnpmError(output)).toContain("unmet peer dependency react@^18.0.0");
   });
+
+  it("treats ERR_PNPM_IGNORED_BUILDS as tolerated, NOT a resolvability rejection (apex v81)", () => {
+    // pnpm 10/11 exits non-zero when it declines to run dep build scripts, but
+    // the deps RESOLVED fine — warning-class, not a resolvability reject.
+    const output = [
+      " WARN  Issues with peer dependencies found",
+      " ERR_PNPM_IGNORED_BUILDS  Ignored build scripts: esbuild@0.21.5, @swc/core@1.5.0.",
+    ].join("\n");
+    const parsed = parsePnpmError(output);
+    expect(parsed).toContain("ERR_PNPM_IGNORED_BUILDS");
+    expect(parsed).toContain("tolerated");
+    expect(parsed).not.toContain("no matching version");
+  });
+
+  it("still surfaces a real ERR_PNPM_NO_MATCHING_VERSION even when ignored-builds is ALSO logged", () => {
+    const output = [
+      " ERR_PNPM_IGNORED_BUILDS  Ignored build scripts: esbuild@0.21.5.",
+      " ERR_PNPM_NO_MATCHING_VERSION  No matching version found for vitest@^99.0.0",
+    ].join("\n");
+    const parsed = parsePnpmError(output);
+    expect(parsed).toContain("no matching version for vitest@^99.0.0");
+    expect(parsed).not.toContain("tolerated");
+  });
+});
+
+/** Spawn `buildLivePnpmInvoker` against a fake `pnpm` (a shell wrapper over a
+ * node script) that writes `stderrOut` then exits NON-ZERO — the shape a
+ * default-config pnpm 10/11 takes when it declines dep build scripts. */
+async function runFakePnpm(stderrOut: string): Promise<PnpmInvokerResult> {
+  const liveMod = await import("../src/engine/templates/fragments/runtimeValiditySmokeLive.js");
+  const dir = await mkdtemp(join(tmpdir(), "tanren-fake-pnpm-"));
+  try {
+    const script = join(dir, "fake-pnpm.mjs");
+    await writeFile(script, `process.stderr.write(${JSON.stringify(stderrOut + "\n")});\nprocess.exit(1);\n`);
+    const wrapper = join(dir, "pnpm");
+    await writeFile(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+    return await liveMod.buildLivePnpmInvoker({ pnpmBinary: wrapper })({ cwd: dir });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+describe("buildLivePnpmInvoker — ERR_PNPM_IGNORED_BUILDS tolerance (apex v81)", () => {
+  it("returns ok when a default-config pnpm exits non-zero on ignored-builds-ONLY", async () => {
+    const result = await runFakePnpm(" ERR_PNPM_IGNORED_BUILDS  Ignored build scripts: esbuild@0.21.5.");
+    expect(result.kind).toBe("ok");
+  });
+
+  it("still FAILS on a real ERR_PNPM_NO_MATCHING_VERSION non-zero exit", async () => {
+    const result = await runFakePnpm(" ERR_PNPM_NO_MATCHING_VERSION  No matching version found for vitest@^99.0.0");
+    expect(result).toEqual({
+      kind: "failed",
+      message: expect.stringContaining("no matching version for vitest@^99.0.0"),
+    });
+  });
 });
 
 describe("buildFragmentAuthoring — runtime-validity failure short-circuits persist", () => {
@@ -408,18 +458,11 @@ describe("buildFragmentAuthoring — runtime-validity failure short-circuits per
   });
 });
 
-// ── Real integration test (opt-in) ──────────────────────────────────────────
-//
-// This test actually spawns pnpm — it is DISABLED by default so `just fast-check`
-// stays deterministic + fast. Set `TANREN_REAL_PNPM=1` to opt in (e.g. a local
-// verification pass or a nightly job). The test asserts the LIVE invoker built
-// by `buildLivePnpmInvoker` runs pnpm against the composed VFS + surfaces an
-// actionable error when the writer declares an unresolvable version.
-//
+// Real integration test (opt-in): actually spawns pnpm — DISABLED by default so
+// `just fast-check` stays deterministic + fast. Set TANREN_REAL_PNPM=1 to opt in.
 describe.skipIf(process.env.TANREN_REAL_PNPM !== "1")("runRuntimeValiditySmoke — real pnpm integration", () => {
   it("spawns real pnpm + rejects a bad version with an actionable message", async () => {
-    // Lazy-import so a missing pnpm binary in a non-opt-in env doesn't break
-    // module load.
+    // Lazy-import so a missing pnpm binary in a non-opt-in env doesn't break load.
     const smokeMod = await import("../src/engine/templates/fragments/runtimeValiditySmoke.js");
     const liveMod = await import("../src/engine/templates/fragments/runtimeValiditySmokeLive.js");
     const s = spec("addon", "real-pnpm-bad");
@@ -437,11 +480,10 @@ describe.skipIf(process.env.TANREN_REAL_PNPM !== "1")("runRuntimeValiditySmoke �
 });
 
 describe("live invoker factories — smoke-only wiring assertion", () => {
-  // These builders are the production wirings the orchestrator's route wiring
-  // hands into `FragmentAuthoringDeps.runtimeValiditySmoke`. Neither is
-  // exercised at the unit-test tier (all five spawn real subprocesses); this
-  // test asserts the factory shape so knip sees the exports as used AND so a
-  // refactor that accidentally breaks the factory signature fails here loudly.
+  // Production wirings handed into `FragmentAuthoringDeps.runtimeValiditySmoke`.
+  // Asserts factory shape so knip sees the exports as used AND a signature-
+  // breaking refactor fails here loudly. (buildLivePnpmInvoker also has a
+  // fake-binary behavioral test above.)
   it("all live invoker factories return typed callables", async () => {
     const liveMod = await import("../src/engine/templates/fragments/runtimeValiditySmokeLive.js");
     expect(typeof liveMod.buildLivePnpmInvoker).toBe("function");
