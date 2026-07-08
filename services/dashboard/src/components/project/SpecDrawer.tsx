@@ -190,24 +190,33 @@ function EconomicsPanel(props: { spec: SpecDetail }) {
       </div>
     );
   }
+  const { economics } = spec;
+  const spendLabel =
+    economics.unpricedAttempts > 0 && economics.pricedAttempts > 0 ? "spend · priced only" : "spend to date";
+  const avgLabel = economics.unpricedAttempts > 0 && economics.pricedAttempts > 0 ? "avg / priced" : "avg / attempt";
   return (
     <div class="spec-meta-grid wide" data-economics-panel>
       <div>
-        <span class="k">spend to date</span>
-        <b>{spec.economics.spendUsd}</b>
+        <span class="k">{spendLabel}</span>
+        <b>{economics.spendUsd}</b>
       </div>
       <div>
-        <span class="k">avg / attempt</span>
-        <b>{spec.economics.avgCostUsd}</b>
+        <span class="k">{avgLabel}</span>
+        <b>{economics.avgCostUsd}</b>
       </div>
       <div>
         <span class="k">attempts</span>
-        <b>{spec.economics.attempts}</b>
+        <b>{economics.attempts}</b>
       </div>
       <div>
         <span class="k">status</span>
         <b>{spec.statusLabel}</b>
       </div>
+      {economics.unpricedAttempts > 0 && (
+        <div class="spec-econ-note" data-unpriced-note>
+          {economics.unpricedAttempts} attempt{economics.unpricedAttempts === 1 ? "" : "s"} unpriced · not counted as $0
+        </div>
+      )}
     </div>
   );
 }

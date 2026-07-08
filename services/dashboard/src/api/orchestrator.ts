@@ -155,7 +155,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
   // `OrchestratorHttpClient`; each forwards the session cookie and degrades to
   // an empty/undefined result so a page never 500s when a data source is down.
 
-  /** Runs for attention queue + KPIs. Empty array on read failure. */
+  /** Runs for attention queue + KPIs; empty array on failure. */
   async listRuns(
     orgId: string,
     projectId: string,
@@ -164,7 +164,7 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return (await this.listRunsMaybe(orgId, projectId, query)) ?? [];
   }
 
-  /** Like listRuns, but `undefined` on failure (panels show unavailable, not zeros). */
+  /** listRuns, but undefined on failure (unavailable, not fake empty/zeros). */
   async listRunsMaybe(
     orgId: string,
     projectId: string,
@@ -177,8 +177,8 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     const json = await this.getJson<{ items?: RunListItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
-    if (json === undefined) return undefined;
-    return json.items ?? [];
+    if (json === undefined || !Array.isArray(json.items)) return undefined; // broken contract ≠ empty
+    return json.items;
   }
 
   /** Project activity feed. */

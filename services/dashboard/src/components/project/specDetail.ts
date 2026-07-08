@@ -35,14 +35,24 @@ export interface SpecDepChip {
 
 /** Economics figures for the full-page panel (and the lighter drawer strip). */
 export interface SpecEconomics {
-  /** Spend to date (`"$12.50"`) or `"—"` when no priced dollars. */
+  /**
+   * Known real spend (`"$12.50"`) summed over priced attempts only, or `"—"`
+   * when no attempt has a positive priced total. Never invents $0 for unpriced
+   * runs. When `unpricedAttempts > 0` this is a known-lower-bound, not a
+   * complete total — the panel surfaces that.
+   */
   spendUsd: string;
   /** Attempt count, or `"—"` when runs are unavailable / empty. */
   attempts: string;
-  /** Average cost per priced attempt, or `"—"`. */
+  /**
+   * Average over **priced** attempts only, or `"—"`. Unpriced attempts are
+   * excluded from both numerator and denominator (not treated as $0).
+   */
   avgCostUsd: string;
   /** How many runs contributed a positive priced total. */
   pricedAttempts: number;
+  /** How many runs had no priced total (unpriced / `"0"` / unparseable). */
+  unpricedAttempts: number;
 }
 
 export interface SpecDetail {
@@ -137,10 +147,18 @@ function toRunRow(projectId: string, run: RunListItem): SpecRunRow {
   };
 }
 
-/** Roll priced run costs into the economics figures (honest "—" when empty). */
+/**
+ * Roll run costs into economics figures.
+ *
+ * Real spend is the sum of **positive priced** totals only — unpriced /
+ * COALESCE-`"0"` runs never contribute a fake zero to the sum. When some
+ * attempts are unpriced the spend figure is still the known real dollars
+ * (matching the org costs dashboard), but `unpricedAttempts` is set so the
+ * panel can label the figure as incomplete rather than a silent full total.
+ */
 export function buildEconomics(runs: readonly RunListItem[], runsAvailable: boolean): SpecEconomics {
   if (!runsAvailable) {
-    return { spendUsd: "—", attempts: "—", avgCostUsd: "—", pricedAttempts: 0 };
+    return { spendUsd: "—", attempts: "—", avgCostUsd: "—", pricedAttempts: 0, unpricedAttempts: 0 };
   }
   let total = 0;
   let pricedAttempts = 0;
@@ -151,10 +169,13 @@ export function buildEconomics(runs: readonly RunListItem[], runsAvailable: bool
       pricedAttempts += 1;
     }
   }
+  const unpricedAttempts = runs.length - pricedAttempts;
   const attempts = runs.length > 0 ? String(runs.length) : "—";
+  // Known real spend only. Incomplete coverage is signalled via unpricedAttempts
+  // (never by inventing $0 rows or zeroing the whole aggregate).
   const spendUsd = formatPricedUsd(pricedAttempts > 0 ? total : null);
   const avgCostUsd = formatPricedUsd(pricedAttempts > 0 ? total / pricedAttempts : null);
-  return { spendUsd, attempts, avgCostUsd, pricedAttempts };
+  return { spendUsd, attempts, avgCostUsd, pricedAttempts, unpricedAttempts };
 }
 
 export interface BuildSpecDetailInput {

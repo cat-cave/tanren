@@ -343,7 +343,7 @@ describe("spec full page", () => {
     expect(html).toContain("r_review_prior");
     expect(html).toContain("$12.00");
     expect(html).toContain("$4.00");
-    // Economics: $12 + $4 = $16 spend, 2 attempts, $8 avg.
+    // Economics: $12 + $4 = $16 spend, 2 attempts, $8 avg (both priced).
     expect(html).toContain("spend to date");
     expect(html).toContain("$16.00");
     expect(html).toContain("avg / attempt");
@@ -351,8 +351,9 @@ describe("spec full page", () => {
     expect(html).toContain("attempts");
     // When stamps from the run list are rendered (not raw ISO-only).
     expect(html).toContain("may 28");
-    // No fabricated zero spend.
+    // No fabricated zero spend; no partial-coverage note when all priced.
     expect(html).not.toContain("$0.00");
+    expect(html).not.toContain("data-unpriced-note");
   });
 
   it("renders em-dash for unpriced economics, never fake zeros", async () => {
@@ -366,6 +367,9 @@ describe("spec full page", () => {
     expect(html).toContain("—");
     expect(html).not.toContain("$0.00");
     expect(html).not.toContain("$0.0");
+    // One unpriced attempt is labelled, not hidden as a silent $0.
+    expect(html).toContain("data-unpriced-note");
+    expect(html).toContain("unpriced");
   });
 
   it("shows unavailable (not zeros) when the run-list read fails", async () => {

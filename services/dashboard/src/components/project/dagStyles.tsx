@@ -104,6 +104,7 @@ export const DAG_SCREEN_CSS = `
 .p2b .spec-meta-grid > div { display:flex; flex-direction:column; gap:3px; padding:8px 10px; border:1px solid var(--line-1); border-radius:var(--r-1); background:var(--bg-canvas); }
 .p2b .spec-meta-grid .k { font-family:var(--font-mono); font-size:8.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--fg-3); }
 .p2b .spec-meta-grid b { font-family:var(--font-display); font-size:14px; color:var(--fg-1); }
+.p2b .spec-meta-grid > div.spec-econ-note { grid-column:1 / -1; font-family:var(--font-mono); font-size:10px; color:var(--fg-3); padding:4px 2px 0; border:none; background:transparent; }
 .p2b .spec-drawer-foot { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:12px 16px; border-top:1px solid var(--line-1); background:var(--bg-sunken); }
 .p2b .spec-expand { margin-left:auto; }
 .p2b .empty-note { font-family:var(--font-mono); font-size:11px; color:var(--fg-3); padding:8px 0; line-height:1.5; }

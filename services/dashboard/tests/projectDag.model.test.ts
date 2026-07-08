@@ -206,7 +206,7 @@ describe("buildSpecDetail", () => {
     expect(detail.runs.every((r) => r.costLabel === "—")).toBe(true);
   });
 
-  it("sums only priced attempts and averages over those", () => {
+  it("sums only priced attempts and surfaces unpriced coverage (never as $0)", () => {
     const live = allSpecs.find((s) => s.specId === "s_live")!;
     const detail = buildSpecDetail({
       spec: live,
@@ -218,10 +218,14 @@ describe("buildSpecDetail", () => {
       ],
       statusBySpecId,
     });
+    // Known real spend only — unpriced run excluded from sum AND avg denominator.
     expect(detail.economics.spendUsd).toBe("$15.00");
     expect(detail.economics.avgCostUsd).toBe("$7.50");
     expect(detail.economics.attempts).toBe("3");
     expect(detail.economics.pricedAttempts).toBe(2);
+    expect(detail.economics.unpricedAttempts).toBe(1);
+    // Per-run label for the unpriced attempt is "—", not "$0.00".
+    expect(detail.runs.find((r) => r.runId === "r_b")?.costLabel).toBe("—");
   });
 
   it("marks runs unavailable when the run-list read failed", () => {
