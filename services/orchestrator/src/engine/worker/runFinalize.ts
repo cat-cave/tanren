@@ -300,6 +300,7 @@ const ORPHAN_PROXY_NAME_BY_CODE: Readonly<Record<ClassifiedRunFailure["code"], s
   design_contract_corrupt: "DesignContractCorruptError",
   design_oracle_actor_config: "DesignOracleActorConfigError",
   malformed_design_oracle_result: "MalformedDesignOracleResultError",
+  spec_persistently_invalid: "PersistentlyInvalidSpecError",
   internal: "__OrphanInternalFault",
 };
 

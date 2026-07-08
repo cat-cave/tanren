@@ -35,6 +35,8 @@ export const DagSpecRedrivenPayload = z
       "design_contract_corrupt",
       "design_oracle_actor_config",
       "malformed_design_oracle_result",
+      // apex v82: a spec the spec-quality gate could not make valid at a fixed point.
+      "spec_persistently_invalid",
       "internal",
     ]),
     // The run STAGE the failure is attributed to (closed vocabulary), for the timeline.

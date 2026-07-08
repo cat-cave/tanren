@@ -25,6 +25,7 @@
         "design_contract_corrupt",
         "design_oracle_actor_config",
         "malformed_design_oracle_result",
+        "spec_persistently_invalid",
         "internal"
       ],
       "type": "string"

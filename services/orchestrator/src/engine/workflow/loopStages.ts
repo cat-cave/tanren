@@ -40,7 +40,12 @@ import { runAnswererStageWithRecovery } from "./loopStageRecovery.js";
 import { runStageBodyWithFinalizeGuard, wrapEventAppend } from "./stageFailureKind.js";
 import { insertChildTask, markTaskDoneWithEvent } from "./subtaskTasks.js";
 import type { StageAppendEvent } from "./subtaskStages.js";
-import { ensureFindingCoverage, gateTriagedSpecs, type TriageSpecValidator } from "./loopFindings.js";
+import {
+  buildTriageCompletedPayloadPieces,
+  ensureFindingCoverage,
+  gateTriagedSpecs,
+  type TriageSpecValidator,
+} from "./loopFindings.js";
 
 export type LoopQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -269,9 +274,10 @@ export async function runTriageStage(args: TriageStageInput): Promise<TriageStag
   );
   await args.appendEvent("task.started", { taskKind: "triage" }, triageTaskId);
   await args.appendEvent("triage.started", { taskKind: "triage" }, triageTaskId);
-  // WIDER FINALIZE GUARD (task #35): same shape as demoRun. `gateTriagedSpecs`'s
-  // `PersistentlyInvalidSpecError` is INTENTIONAL — the guard classifies it as
-  // `crashed`, emits `task.failed{crashed}`, re-throws to the run-level catch.
+  // WIDER FINALIZE GUARD (task #35): same shape as demoRun. `gateTriagedSpecs` now
+  // DEGRADES gracefully — a triage-proposed spec's `PersistentlyInvalidSpecError` is
+  // caught per-spec + dropped/parked, so the run is NOT sunk by a bad proposal. The
+  // guard still fail-closes on any OTHER stage throw (per `stageFailureKind.ts`).
   return await runStageBodyWithFinalizeGuard({
     writer: args.writer,
     taskId: triageTaskId,
@@ -302,26 +308,18 @@ async function runTriageStageBody(args: TriageStageInput, triageTaskId: string):
   const routed: RoutedWorkItem[] = routeTriageItems(effectiveWorkItems, args.posture);
   const routing = summarizeTriageRouting(routed);
   // WORKSTREAM 1 ↔ 2 SEAM — gate every NEW-spec routed item against the spec-quality
-  // contract before it materializes. A persistently-invalid spec throws loud
-  // (PersistentlyInvalidSpecError → the outer guard classifies + the run halts →
-  // needs_attention), never a silent commit. Inert when no validator is wired (unit paths).
-  await gateTriagedSpecs(routing.newSpecs, args.specValidator);
+  // contract before it materializes. Under autonomy a triage-PROPOSED spec is an
+  // INDEPENDENT audit-derived DAG node (not the BUILD spec's critical path), so a
+  // persistently-invalid proposal is DROPPED + PARKED (mirroring `autoRouteOrDeadLetter`)
+  // rather than re-thrown to sink the run. `gateTriagedSpecs` returns the SURVIVORS
+  // (gate-passing); only those leave this stage. Inert when no validator is wired.
+  const gated = await gateTriagedSpecs(routing.newSpecs, args.specValidator);
+  const survivingRouting: TriageRoutingResult = { ...routing, newSpecs: [...gated.survivors] };
+  const completedPieces = buildTriageCompletedPayloadPieces(routed, gated);
   await wrapEventAppend(() =>
     args.appendEvent(
       "triage.completed",
-      {
-        runId: args.runId,
-        taskId: triageTaskId,
-        outcome: routing.outcome,
-        items: routed.map((r) => ({
-          id: r.item.id,
-          kind: r.item.kind,
-          route: r.route,
-          severity: r.item.severity,
-          title: r.item.title,
-          findingIds: [...r.item.findingIds],
-        })),
-      },
+      { runId: args.runId, taskId: triageTaskId, outcome: survivingRouting.outcome, ...completedPieces },
       triageTaskId,
     ),
   );
@@ -336,7 +334,7 @@ async function runTriageStageBody(args: TriageStageInput, triageTaskId: string):
   });
   // ATOMIC terminal-row + terminal-event pair (task #39).
   await loopStageTaskDone(args, triageTaskId, "triage");
-  return { routing, triageTaskId };
+  return { routing: survivingRouting, triageTaskId };
 }
 
 // ---- CONVERGENCE ----------------------------------------------------------

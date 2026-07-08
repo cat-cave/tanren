@@ -24,6 +24,7 @@ import { ClaudeUsageLimitError } from "../providers/claude.js";
 import { DesignContractCorruptError } from "../repositories/designContracts.js";
 import { DesignOracleActorConfigError, MalformedDesignOracleResultError } from "./designOracle/designOracle.js";
 import { StageStallEscalationError } from "./loopStageRecovery.js";
+import { PersistentlyInvalidSpecError } from "../forge/specQuality/index.js";
 import { markTaskFailedIfRunningWithEvent, type TerminalTaskEventEnvelope } from "./subtaskTasks.js";
 
 /** The closed vocabulary the per-stage `task.failed.failureKind` carries. */
@@ -47,6 +48,14 @@ export type StageFailureKind =
   // typed arms preserve the diagnosis on `task.failed.failureKind`.
   | "design_oracle_actor_config"
   | "malformed_design_oracle_result"
+  // A spec (typically a triage-proposed new spec) the spec-quality gate could not
+  // make valid within its convergence budget. Under autonomy:auto the triage stage
+  // now DROPS + PARKS such a proposal rather than throwing (loopFindings
+  // `gateTriagedSpecs`), so this arm should NOT fire on that path — it is the
+  // defense-in-depth surface for a genuinely-unfixable spec that reaches a stage
+  // guard by another route (a BUILD-spec re-author dead-end), so the operator sees a
+  // SPECIFIC needs_attention class instead of opaque `crashed`.
+  | "spec_persistently_invalid"
   | "crashed";
 
 /**
@@ -119,6 +128,12 @@ export class EventAppendError extends Error {
  *   (PR #745 — the oracle answerer returned `hasContract:true` but a required
  *   field was missing/empty; distinct from the silent-fallback shape that
  *   coerced these to `0`/`""` and hid the regression on the timeline.)
+ * - `PersistentlyInvalidSpecError` → `spec_persistently_invalid`
+ *   (defense-in-depth: a spec the spec-quality gate could not make valid at a genuine
+ *   fixed point. The triage stage now degrades gracefully for a triage-PROPOSED spec
+ *   — dropped + parked, never thrown — so this should not fire there; the arm keeps a
+ *   genuinely-unfixable spec reaching a stage guard by another route SPECIFIC instead
+ *   of opaque `crashed`.)
  * - default → `crashed` (the writer-stage's existing default for an unclassified throw)
  */
 export function classifyStageFailureKind(error: unknown): StageFailureKind {
@@ -148,6 +163,9 @@ export function classifyStageFailureKind(error: unknown): StageFailureKind {
   }
   if (error instanceof MalformedDesignOracleResultError) {
     return "malformed_design_oracle_result";
+  }
+  if (error instanceof PersistentlyInvalidSpecError) {
+    return "spec_persistently_invalid";
   }
   return "crashed";
 }
