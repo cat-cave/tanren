@@ -93,15 +93,27 @@ export function buildLiveBundleInvoker(overrides: { readonly bundleBinary?: stri
  * host Python resolver.
  *
  * PREFERENCE ORDER:
- *   1. `uv pip compile pyproject.toml -o /dev/stdout` — the modern, fast
+ *   1. `uv pip compile pyproject.toml -o /dev/null` — the modern, fast
  *      option that resolves without needing a build backend. Preferred when
  *      `uv` is on PATH.
  *   2. `pip install --dry-run -r requirements.txt` — when the scaffold ships
  *      a requirements.txt.
- *   3. `pip install --dry-run --ignore-installed --no-build-isolation .` —
- *      the fallback for a pyproject-only scaffold on a host with pip but no
- *      uv. This requires a build backend so it's the slower + more brittle
- *      arm; the `uv pip compile` path is dramatically preferred.
+ *   3. `pip install --dry-run --ignore-installed .` — the fallback for a
+ *      pyproject-only scaffold on a host with pip but no uv. Runs with pip's
+ *      default build-isolation so the declared build backend (hatchling /
+ *      poetry-core / setuptools>=64 / etc.) is installed into an isolated env
+ *      before the resolver runs. The `uv pip compile` path is dramatically
+ *      preferred (no backend install needed at all) but this arm now Just
+ *      Works against a modern pyproject.toml.
+ *
+ * `--no-build-isolation` was DROPPED (Codex round-III H6): with it, the
+ * fallback ran pip against the operator's ambient env which almost never has
+ * `hatchling` pre-installed — every valid pyproject.toml on a
+ * uv-less host got rejected with "Cannot import 'hatchling.build'" and no
+ * user-facing dep in the message. Letting pip build-isolate normally is
+ * slower on first run (it downloads the backend into a temp env) but is
+ * correct for every modern pyproject and preserves the "name the failing
+ * dep" contract the parser relies on.
  *
  * Returns `unavailable` when neither `uv` nor `pip` is on PATH so the caller
  * falls back to the shallow pyproject.toml sniff. No wall-clock kill timer
@@ -154,9 +166,16 @@ async function tryPipDryRun(
   hasRequirements: boolean,
   requirementsPath: string,
 ): Promise<Awaited<ReturnType<PipInvoker>> | null> {
+  // NB: `--no-build-isolation` was DROPPED from the pyproject arm (Codex
+  // round-III H6). With it, pip needed the build backend (hatchling /
+  // poetry-core / setuptools>=64) pre-installed in the ambient env — a
+  // fresh temp dir with no venv setup does not, so every valid pyproject on
+  // a uv-less host rejected with "Cannot import 'hatchling.build'" and named
+  // no user-facing dep. Letting pip build-isolate normally installs the
+  // declared backend into a temp env (slower first run, correct behavior).
   const args = hasRequirements
     ? ["install", "--dry-run", "--ignore-installed", "-r", requirementsPath]
-    : ["install", "--dry-run", "--ignore-installed", "--no-build-isolation", "."];
+    : ["install", "--dry-run", "--ignore-installed", "."];
   try {
     await execFileAsync(pipBinary, args, {
       cwd,
