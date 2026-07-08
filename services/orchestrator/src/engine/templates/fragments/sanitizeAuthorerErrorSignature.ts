@@ -37,9 +37,29 @@ export function sanitizeAuthorerErrorSignature(errMsg: string): string {
       .replaceAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu, "<UUID>")
       // Retry-After / retry after N (any unit — plain N, N ms, N s, N seconds).
       // Matches `Retry-After: 12`, `retry after 12 seconds`, `retry-after 12s`.
-      .replaceAll(/retry[- ]after[:\s]*\d+(?:\.\d+)?\s*(?:milliseconds?|ms|seconds?|sec|s)?/giu, "retry-after:<N>")
+      //
+      // Round III H3 (Codex, verified via `node -e`): the trailing single-`s`
+      // unit MUST be followed by punctuation / whitespace / end-of-input.
+      // Without that constraint, `retry after 12 sockets are open` greedy-matched
+      // through the `s` of `sockets`, collapsing every distinct error class of
+      // shape `retry after N s <word>` into the same signature. The
+      // `(?=[.,;\s\)!]|$)` lookahead pins the unit boundary — regex backtracks
+      // to the no-unit match ("retry after 12") when the next char after the
+      // unit isn't a boundary.
+      .replaceAll(
+        /retry[- ]after[:\s]*\d+(?:\.\d+)?\s*(?:milliseconds?|ms|seconds?|sec|s)?(?=[.,;\s)!]|$)/giu,
+        "retry-after:<N>",
+      )
       // Bare millisecond counters (`took 4200ms`, `elapsed 12.3 ms`).
-      .replaceAll(/\b\d+(?:\.\d+)?\s*ms\b/gu, "<MS>")
+      //
+      // Round III H3 (Codex): `\b` matched `foo-1ms-cache-bar` because `\b`
+      // fires at the `-`/digit transition (hyphen is not a word char). That
+      // collapsed `foo-1ms-x` and `foo-2ms-x` — legitimately distinct npm
+      // package/version pairs — to the same signature. The lookbehind
+      // `(?<=^|[\s(\[])` requires the leading digit to be at start-of-string
+      // or after whitespace / `(` / `[`, so hyphen-prefixed digits are NOT
+      // matched. Zero-width so the leading whitespace is preserved in output.
+      .replaceAll(/(?<=^|[\s([])\d+(?:\.\d+)?\s*ms\b/gu, "<MS>")
       // Unix timestamps (10-13 digit numbers — seconds since epoch or ms since epoch).
       // MUST run AFTER the ms counter + timestamp patterns so those are not
       // shredded first. The `\b` bounds keep us from eating substrings of longer
