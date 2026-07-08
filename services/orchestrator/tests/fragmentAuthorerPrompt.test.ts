@@ -84,15 +84,33 @@ describe("buildFragmentAuthorerPrompt — shipped exemplars (improvement #1)", (
     expect(prompt).toContain("Dockerfile");
   });
 
-  it("falls back to a valid exemplar for backend / auth / example (no dedicated shipped analog)", () => {
-    // Neither backend/auth/example ships a fragment yet — the writer still needs a
-    // real fragment shape to reference. Each falls back to the runtime exemplar.
-    for (const kind of ["backend", "auth", "example"] as const) {
-      const prompt = buildFragmentAuthorerPrompt(baseInput(kind, "foo"));
-      // A `Fragment` value declaration is present regardless of which exemplar is used.
-      expect(prompt).toContain("export const fragment: Fragment = {");
-      expect(prompt).toContain("export default");
-    }
+  it("embeds a backend-shaped exemplar for a backend slot (NOT the runtime fallback — Codex #7)", () => {
+    const prompt = buildFragmentAuthorerPrompt(baseInput("backend", "hono"));
+    expect(prompt).toContain("backend-fastify");
+    expect(prompt).toContain("src/server.ts");
+    // The backend exemplar does not teach the writer to INSTALL the test runner
+    // (that's the runtime fragment's job). The exemplar's tests may IMPORT from
+    // vitest — but must not addPackageJsonDevDep("vitest"). Asserted on the
+    // exemplar SOURCE, not the full prompt (which mentions vitest in the
+    // recognizer guidance).
+    expect(exemplarFor("backend").source).not.toContain(`addPackageJsonDevDep("vitest"`);
+  });
+
+  it("embeds an auth-shaped exemplar for an auth slot (NOT the runtime fallback — Codex #7)", () => {
+    const prompt = buildFragmentAuthorerPrompt(baseInput("auth", "clerk"));
+    expect(prompt).toContain("auth-authjs");
+    expect(prompt).toContain("AUTH_SECRET");
+    // The auth exemplar body does not declare DATABASE_URL — asserted on the
+    // exemplar SOURCE, not the full prompt (which mentions DATABASE_URL in the
+    // owned-env-vars guidance).
+    expect(exemplarFor("auth").source).not.toContain("DATABASE_URL");
+    expect(exemplarFor("auth").source).not.toContain("prisma");
+  });
+
+  it("embeds an example-shaped exemplar for an example slot (NOT the runtime fallback — Codex #7)", () => {
+    const prompt = buildFragmentAuthorerPrompt(baseInput("example", "linkshort"));
+    expect(prompt).toContain("example-todo");
+    expect(prompt).toContain("src/example/todo.ts");
   });
 
   it("exposes an exemplar for every FragmentKind (no missing coverage)", () => {
