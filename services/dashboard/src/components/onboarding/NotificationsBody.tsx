@@ -62,8 +62,9 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
       {CHANNELS.map((channel) => {
         const target = byKind.get(channel.kind);
         const configured = target !== undefined;
+        const enabled = configured ? (target?.enabled ?? false) : false;
         return (
-          <div class={`row-card ${configured && target?.enabled ? "on" : ""}`}>
+          <div class={`row-card ${configured && enabled ? "on" : ""}`}>
             <span class="glyph">{channel.glyph}</span>
             <div>
               <div class="name">{channel.label}</div>
@@ -72,14 +73,32 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             </div>
             <PhaseBadge phase={channel.phase} />
             <span class="mono-dim">{configured && target?.weekendMute ? "wknd-mute" : ""}</span>
-            <Toggle
-              on={configured ? (target?.enabled ?? false) : false}
-              dataAttrs={{
-                "data-notif-channel": channel.kind,
-                "data-notif-target": target?.id ?? "",
-                "data-notif-wired": channel.wired ? "1" : "0",
-              }}
-            />
+            {configured && target !== undefined ? (
+              <form method="post" action="/notifications/targets/update" style="margin:0">
+                <input type="hidden" name="targetId" value={target.id} />
+                <input type="hidden" name="enabled" value={enabled ? "false" : "true"} />
+                <button
+                  type="submit"
+                  class={`toggle ${enabled ? "on" : "off"}`}
+                  title={enabled ? "pause channel" : "resume channel"}
+                  data-notif-channel={channel.kind}
+                  data-notif-target={target.id}
+                  data-notif-enabled={enabled ? "1" : "0"}
+                  data-notif-pause-toggle={target.id}
+                >
+                  <span class="knob"></span>
+                </button>
+              </form>
+            ) : (
+              <Toggle
+                on={false}
+                dataAttrs={{
+                  "data-notif-channel": channel.kind,
+                  "data-notif-target": "",
+                  "data-notif-wired": channel.wired ? "1" : "0",
+                }}
+              />
+            )}
           </div>
         );
       })}

@@ -205,6 +205,82 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     expect(crossOrg.status).toBe(403);
   });
 
+  it("patches enabled (pause) on an existing target", async () => {
+    const { app } = harness();
+    const created = (await (
+      await app.request("/orgs/org_acme/notifications/targets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channelKind: "ntfy", destination: "https://ntfy.sh/pause", label: "pause-me" }),
+      })
+    ).json()) as { id: string; enabled: boolean };
+    expect(created.enabled).toBe(true);
+
+    const patch = await app.request(`/orgs/org_acme/notifications/targets/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(patch.status).toBe(200);
+    expect(((await patch.json()) as { enabled: boolean }).enabled).toBe(false);
+  });
+
+  it("refuses patching another actor's user-scoped target", async () => {
+    const { app, pool } = harness();
+    pool.targets.set("notif_target_bob", {
+      id: "notif_target_bob",
+      org_id: "org_acme",
+      scope: "user",
+      user_id: "user_bob",
+      channel_kind: "ntfy",
+      destination: "https://ntfy.sh/bob",
+      label: "bob override",
+      enabled: 1,
+      weekend_mute: 0,
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+
+    const patch = await app.request("/orgs/org_acme/notifications/targets/notif_target_bob", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ weekendMute: true }),
+    });
+    // 404 (not 403) so we do not leak existence of another user's override.
+    expect(patch.status).toBe(404);
+    expect(((await patch.json()) as { error: string }).error).toBe("target_not_found");
+  });
+
+  it("refuses creating a route on another actor's user-scoped target", async () => {
+    const { app, pool } = harness();
+    pool.targets.set("notif_target_bob", {
+      id: "notif_target_bob",
+      org_id: "org_acme",
+      scope: "user",
+      user_id: "user_bob",
+      channel_kind: "ntfy",
+      destination: "https://ntfy.sh/bob",
+      label: "bob override",
+      enabled: 1,
+      weekend_mute: 0,
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+
+    const route = await app.request("/orgs/org_acme/notifications/routes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        targetId: "notif_target_bob",
+        eventName: "run.failed",
+        minSeverity: "fail",
+        enabled: true,
+      }),
+    });
+    expect(route.status).toBe(404);
+    expect(((await route.json()) as { error: string }).error).toBe("target_not_found");
+  });
+
   it("returns recent delivery evidence scoped to the org without raw payload values", async () => {
     const { app, pool } = harness();
     pool.targets.set("notif_target_acme", {

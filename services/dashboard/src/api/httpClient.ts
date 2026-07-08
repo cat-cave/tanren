@@ -18,17 +18,25 @@ export interface OrchestratorClientDeps {
   orchestratorUrl: string;
   /** Inbound dashboard request cookie header, forwarded for session auth. */
   cookieHeader?: string;
+  /**
+   * Session CSRF token from `/auth/me`. Required for state-changing session
+   * requests (POST/PATCH/PUT/DELETE) against the orchestrator; omitted only for
+   * local-dev actor mode where the orchestrator skips the CSRF gate.
+   */
+  csrfToken?: string;
   fetchImpl?: typeof fetch;
 }
 
 export abstract class OrchestratorHttpClient {
   protected readonly orchestratorUrl: string;
   protected readonly cookieHeader: string | undefined;
+  protected readonly csrfToken: string | undefined;
   protected readonly fetchImpl: typeof fetch;
 
   constructor(deps: OrchestratorClientDeps) {
     this.orchestratorUrl = deps.orchestratorUrl;
     this.cookieHeader = deps.cookieHeader;
+    this.csrfToken = deps.csrfToken;
     this.fetchImpl = deps.fetchImpl ?? fetch;
   }
 
@@ -55,9 +63,16 @@ export abstract class OrchestratorHttpClient {
     path: string,
     body?: unknown,
   ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
+    const writeHeaders: Record<string, string> = body === undefined ? {} : { "content-type": "application/json" };
+    // Session-auth state-changing routes require x-csrf-token (orchestrator auth
+    // middleware). Forward when the BFF resolved a session; local-dev actor mode
+    // has no session and skips the gate.
+    if (this.csrfToken !== undefined && this.csrfToken !== "") {
+      writeHeaders["x-csrf-token"] = this.csrfToken;
+    }
     const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
       method,
-      headers: this.headers(body === undefined ? {} : { "content-type": "application/json" }),
+      headers: this.headers(writeHeaders),
       body: body === undefined ? undefined : JSON.stringify(body),
     }).catch(() => {});
     if (response === undefined) {

@@ -157,7 +157,8 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
   });
 
   // Quiet-posture mutation: weekend mute and/or enabled. Org-scoped; never
-  // echoes secrets (targets only hold destination + flags).
+  // echoes secrets (targets only hold destination + flags). User-scoped
+  // targets may only be mutated by their owner (dev override layer).
   app.patch("/:orgId/notifications/targets/:targetId", async (c) => {
     const actor = requireActor(c);
     const orgId = c.req.param("orgId");
@@ -169,6 +170,13 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     const parsed = NotificationTargetUpdateInput.safeParse(raw);
     if (!parsed.success) {
       return c.json({ error: "invalid_target_update", issues: parsed.error.issues }, 400);
+    }
+    const existing = await NotificationTargetStore.get(options.pool, targetId);
+    if (existing === undefined || existing.orgId !== orgId) {
+      return c.json({ error: "target_not_found" }, 404);
+    }
+    if (existing.scope === "user" && existing.userId !== actor.userId) {
+      return c.json({ error: "target_not_found" }, 404);
     }
     const updated = await NotificationTargetStore.update(options.pool, {
       id: targetId,
@@ -193,8 +201,13 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
       return c.json({ error: "invalid_route", issues: parsed.error.issues }, 400);
     }
     // The target must belong to this org (defense against cross-org writes).
+    // User-scoped overrides may only be routed by their owner — same boundary
+    // as quiet-posture PATCH (prevents mutating another actor's dev layer).
     const target = await NotificationTargetStore.get(options.pool, parsed.data.targetId);
     if (target === undefined || target.orgId !== orgId) {
+      return c.json({ error: "target_not_found" }, 404);
+    }
+    if (target.scope === "user" && target.userId !== actor.userId) {
       return c.json({ error: "target_not_found" }, 404);
     }
     // Codex H3 Surface 6 #18: BAN stub-in-prod routing. If the boot supplied

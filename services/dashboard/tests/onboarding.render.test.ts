@@ -18,7 +18,7 @@ const ORG = {
 interface MockState {
   credentialImports: Array<{ url: string; body: unknown }>;
   targetCreates: unknown[];
-  targetUpdates: Array<{ url: string; body: unknown }>;
+  targetUpdates: Array<{ url: string; body: unknown; headers: Record<string, string> }>;
   projectCreates: unknown[];
   brownfieldLinks: unknown[];
   brownfieldOk: boolean;
@@ -99,7 +99,14 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown; deliveries
     }
     if (url.includes("/notifications/targets") && method === "PATCH") {
       const body = JSON.parse(String(init?.body ?? "{}"));
-      state.targetUpdates.push({ url, body });
+      const headers: Record<string, string> = {};
+      const rawHeaders = init?.headers;
+      if (rawHeaders !== undefined && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)) {
+        for (const [key, value] of Object.entries(rawHeaders as Record<string, string>)) {
+          headers[key.toLowerCase()] = value;
+        }
+      }
+      state.targetUpdates.push({ url, body, headers });
       return json({ id: "notif_target_1", weekendMute: true, enabled: true, ...body });
     }
     if (url.includes("/notifications/targets") && method === "POST") {
@@ -349,9 +356,12 @@ describe("notifications matrix", () => {
     expect(html).toContain('action="/notifications/targets/update"');
     expect(html).toContain("unmute weekends");
     expect(html).toContain("mute weekends");
+    // Pause (enabled) control on configured channel rows.
+    expect(html).toContain('data-notif-pause-toggle="target_muted"');
+    expect(html).toContain('title="pause channel"');
   });
 
-  it("quiet-hours toggle POST proxies PATCH weekendMute to the orchestrator", async () => {
+  it("quiet-hours toggle POST proxies PATCH weekendMute with session CSRF", async () => {
     const state = mockOrchestrator();
     const app = await build();
     const res = await app.request("/notifications/targets/update", {
@@ -363,6 +373,22 @@ describe("notifications matrix", () => {
     expect(state.targetUpdates).toHaveLength(1);
     expect(state.targetUpdates[0]?.url).toContain("/notifications/targets/target_open");
     expect(state.targetUpdates[0]?.body).toEqual({ weekendMute: true });
+    // Session CSRF from /auth/me must ride along for state-changing writes.
+    expect(state.targetUpdates[0]?.headers["x-csrf-token"]).toBe("c");
+  });
+
+  it("channel pause toggle POST proxies PATCH enabled to the orchestrator", async () => {
+    const state = mockOrchestrator();
+    const app = await build();
+    const res = await app.request("/notifications/targets/update", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "targetId=target_muted&enabled=false",
+    });
+    expect(res.status).toBe(303);
+    expect(state.targetUpdates).toHaveLength(1);
+    expect(state.targetUpdates[0]?.body).toEqual({ enabled: false });
+    expect(state.targetUpdates[0]?.headers["x-csrf-token"]).toBe("c");
   });
 });
 
