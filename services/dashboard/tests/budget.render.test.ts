@@ -189,12 +189,34 @@ describe("budget-halt panel (/budget)", () => {
     expect(html).not.toContain("halted on budget");
   });
 
-  it("renders the config form with save and clear controls", async () => {
+  it("renders fail-closed pause with — for unmeasured spend, not $0.00", async () => {
+    // Backend fail-closed placeholders: paused + no ceiling + spent/notional 0.
+    projectBudgetPayload = {
+      ceilingUsd: null,
+      period: "monthly",
+      spentUsd: 0,
+      notionalUsd: 0,
+      remainingUsd: null,
+      paused: true,
+    };
+    const app = await build();
+    const html = await (await app.request("/budget")).text();
+    expect(html).toContain("halted on budget");
+    expect(html).toContain("Fail-closed safety pause");
+    expect(html).toContain("unmeasured · fail-closed safety pause");
+    // Real-spend / notional cards must not claim $0.00 for fail-closed placeholders.
+    expect(html).not.toContain("gated figure · cost_usd billed");
+    expect(html).not.toContain("$0.00");
+  });
+
+  it("renders the config form with save and clear controls and scoped projectId", async () => {
     const app = await build();
     const html = await (await app.request("/budget")).text();
     expect(html).toContain('action="/budget"');
     expect(html).toContain('name="ceilingUsd"');
     expect(html).toContain('name="period"');
+    expect(html).toContain('name="projectId"');
+    expect(html).toContain('value="project_easy"');
     expect(html).toContain('value="save"');
     expect(html).toContain('value="clear"');
     expect(html).toContain("configure project ceiling");
@@ -208,11 +230,12 @@ describe("budget-halt panel (/budget)", () => {
     const res = await app.request("/budget", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "action=save&ceilingUsd=75&period=quarterly",
+      body: "action=save&ceilingUsd=75&period=quarterly&projectId=project_easy",
       redirect: "manual",
     });
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/budget?ok=saved");
+    expect(res.headers.get("location")).toContain("ok=saved");
+    expect(res.headers.get("location")).toContain("projectId=project_easy");
     expect(lastPutBody).toEqual({ ceilingUsd: 75, period: "quarterly" });
   });
 
@@ -221,12 +244,25 @@ describe("budget-halt panel (/budget)", () => {
     const res = await app.request("/budget", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "action=clear",
+      body: "action=clear&projectId=project_easy",
       redirect: "manual",
     });
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/budget?ok=cleared");
+    expect(res.headers.get("location")).toContain("ok=cleared");
     expect(lastPutBody).toEqual({ ceilingUsd: null });
+  });
+
+  it("POST rejects an unknown projectId without writing", async () => {
+    const app = await build();
+    const res = await app.request("/budget", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "action=save&ceilingUsd=10&period=monthly&projectId=project_other",
+      redirect: "manual",
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("err=no_project");
+    expect(lastPutBody).toBeUndefined();
   });
 
   it("shows org-default unavailable when the org budget read fails", async () => {

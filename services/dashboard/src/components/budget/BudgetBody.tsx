@@ -7,6 +7,10 @@
  * Config control: server-rendered form POSTs to `/budget` which proxies PUT to
  * the orchestrator. Org default is shown for context only (not edited here).
  * Uncomputable/missing → "—"; read failure → "unavailable" (never fake zeros).
+ *
+ * Fail-closed safety: the budget GET does not expose `failClosed`, but a pause
+ * with no resolved ceiling means spend was NOT measured (backend placeholders
+ * zeros). Those figures render "—", not `$0.00`.
  */
 
 import type { BudgetPeriod, OrgBudgetView, ProjectBudgetView } from "../../api/budget.js";
@@ -20,6 +24,8 @@ export interface BudgetBodyProps {
   projectBudget: ProjectBudgetView | undefined;
   /** Org default budget (context only), or `undefined` when the read failed. */
   orgBudget: OrgBudgetView | undefined;
+  /** Explicit project id for the mutation form (scoped write). */
+  projectId: string;
   projectName: string;
   noProject: boolean;
   /** Flash after a form POST proxy (saved / cleared / error). */
@@ -38,8 +44,18 @@ function isEmpty(value: string): boolean {
   return value === "—";
 }
 
+/**
+ * True when pause is active with no resolved ceiling — the API maps fail-closed
+ * unresolvable/unparseable states to spentUsd=0 placeholders. Do not paint those
+ * as real zero spend.
+ */
+function isFailClosedPlaceholder(b: ProjectBudgetView): boolean {
+  return b.paused && b.ceilingUsd === null;
+}
+
 /** Cards from a successful project-budget read. */
 function spendCards(b: ProjectBudgetView): StatCard[] {
+  const failClosed = isFailClosedPlaceholder(b);
   return [
     {
       label: "ceiling",
@@ -48,13 +64,13 @@ function spendCards(b: ProjectBudgetView): StatCard[] {
     },
     {
       label: "real spend",
-      value: budgetUsd(b.spentUsd),
-      sub: "gated figure · cost_usd billed",
+      value: failClosed ? "—" : budgetUsd(b.spentUsd),
+      sub: failClosed ? "unmeasured · fail-closed safety pause" : "gated figure · cost_usd billed",
     },
     {
       label: "notional",
-      value: budgetUsd(b.notionalUsd),
-      sub: "API-equivalent · not gated",
+      value: failClosed ? "—" : budgetUsd(b.notionalUsd),
+      sub: failClosed ? "unmeasured · fail-closed safety pause" : "API-equivalent · not gated",
     },
     {
       label: "remaining",
@@ -79,12 +95,13 @@ function OrgDefaultLine(props: { orgBudget: OrgBudgetView | undefined }) {
   );
 }
 
-function ConfigForm(props: { projectBudget: ProjectBudgetView | undefined }) {
+function ConfigForm(props: { projectBudget: ProjectBudgetView | undefined; projectId: string }) {
   const b = props.projectBudget;
   const defaultCeiling = b?.ceilingUsd === null || b?.ceilingUsd === undefined ? "" : String(b.ceilingUsd);
   const defaultPeriod: BudgetPeriod = b?.period ?? "monthly";
   return (
     <form class="budget-form" method="post" action="/budget">
+      <input type="hidden" name="projectId" value={props.projectId} />
       <div class="form-row">
         <div class="field">
           <label for="ceilingUsd">project ceiling (USD)</label>
@@ -126,8 +143,22 @@ function ConfigForm(props: { projectBudget: ProjectBudgetView | undefined }) {
   );
 }
 
+function HaltBanner(props: { budget: ProjectBudgetView }) {
+  const failClosed = isFailClosedPlaceholder(props.budget);
+  return (
+    <section class="halt-banner" role="alert">
+      <span class="halt-title">halted on budget</span>
+      <span class="halt-sub">
+        {failClosed
+          ? "Fail-closed safety pause: the budget gate could not resolve a ceiling or measure spend (unresolvable project org or unparseable config). Spend figures are unmeasured — not zero. Fix ownership/config, then re-check."
+          : "The DagWalker is paused on this project's budget (ceiling reached or fail-closed safety — e.g. unpriced spend). Raise or clear the ceiling when headroom should free; a successful write re-wakes the walk when the gate loosens."}
+      </span>
+    </section>
+  );
+}
+
 export function BudgetBody(props: BudgetBodyProps) {
-  const { projectBudget, orgBudget, projectName, noProject, flash } = props;
+  const { projectBudget, orgBudget, projectId, projectName, noProject, flash } = props;
   return (
     <>
       <style data-screen="budget" dangerouslySetInnerHTML={{ __html: BUDGET_SCREEN_CSS }} />
@@ -150,15 +181,7 @@ export function BudgetBody(props: BudgetBodyProps) {
             <>
               {flash === undefined ? null : <div class={`flash ${flash.kind}`}>{flash.message}</div>}
 
-              {projectBudget?.paused === true ? (
-                <section class="halt-banner" role="alert">
-                  <span class="halt-title">halted on budget</span>
-                  <span class="halt-sub">
-                    The DagWalker is paused on this project's budget. Raise or clear the ceiling to free headroom; a
-                    successful write re-wakes the walk when the gate loosens.
-                  </span>
-                </section>
-              ) : null}
+              {projectBudget?.paused === true ? <HaltBanner budget={projectBudget} /> : null}
 
               <section class="panel">
                 <div class="panel-pad">
@@ -190,7 +213,7 @@ export function BudgetBody(props: BudgetBodyProps) {
                 <div class="panel-pad">
                   <div class="mini-eyebrow">configure project ceiling</div>
                   <OrgDefaultLine orgBudget={orgBudget} />
-                  <ConfigForm projectBudget={projectBudget} />
+                  <ConfigForm projectBudget={projectBudget} projectId={projectId} />
                 </div>
               </section>
             </>
