@@ -16,17 +16,26 @@ is the mechanical "how to drive a single run" half.
 > `/scratch/worktrees/tanren/v<N>`. Successive apex trials — v37–v46 ran on the
 > previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host on
 > 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
-> 2026-07-04. **The v79-era product-build-loop frontier has since been
-> HARDENED across three subsequent audit passes plus a cleanup wave** — 34
-> PRs (#738–#768) landed 2026-07-05 → 2026-07-07 closed every Codex-critic
-> (#1–#18) / Codex-round-3 (#1–#4) / RA1 / RA2 finding across Waves
-> D1..D4 + E-fix + F. The next trial (v80) is the live-validation vehicle
-> for the **fragment authoring path** (the F2 writer→validate loop the
-> composer spawns when a curated stack references a fragment the library
-> doesn't have — the largest untouched surface in the greenfield path). See
-> `apex.md` for the honest proof state; the full autonomy loop has not yet
-> closed end-to-end. Runs are **disposable** — `main` only moves forward;
-> you never patch a run or its generated repo (see `apex.md`).
+> 2026-07-04. The v79-era product-build-loop frontier was HARDENED across
+> three audit passes and a cleanup wave (34 PRs #738–#768 landed 2026-07-05 →
+> 2026-07-07, Waves D1..D4 + E-fix + F). **A subsequent Wave H + F2
+> hardening push landed 2026-07-07 — 26 more PRs (#774–#799)**
+> preemptively closed the F2 fragment authoring path: Wave H landed the
+> canonical signature and ATOMIC `createValidated` seam via task #150
+> alongside design / orgId / allocator / demo / notify hardening; F2
+> Round I added prompt hardening, per-attempt `fragment.authoring.attempt`
+> events, and the runtime-validity smoke wired in prod; Round II added a
+> balanced-brace `apply()` body parser, iteration ceiling, sanitized
+> signature, batch compose gate, and python/go/rust dep resolvers; Round
+> III added RETRACT-WITH-DELETE, event ordering hardening, empty
+> `apply()` body rejection, and pip/go/cargo live invokers. **v80 is the
+> live-validation vehicle for closing the full autonomous loop
+> end-to-end** — the F2 pre-hardening means the run should reach further
+> into the greenfield product-build loop than any prior trial before
+> surfacing the next real bug. See `apex.md` for the honest proof state;
+> the full autonomy loop has not yet closed end-to-end. Runs are
+> **disposable** — `main` only moves forward; you never patch a run or
+> its generated repo (see `apex.md`).
 >
 > **Picking `<N>`:** look at `ls /scratch/worktrees/tanren/` and pick the next integer after the highest existing trial. The compose project name follows the worktree directory name automatically (e.g. `v47`), so no `-p` override is needed.
 
@@ -514,34 +523,71 @@ to date.
 
 **The v79-era frontier was then HARDENED (2026-07-05 → 2026-07-07)** by 34
 PRs (#738–#768) that closed every Codex-critic / round-3 / RA1 / RA2
-finding: Wave D1..D4 landed the design-oracle finalize guard +
-`MalformedAncestorStackError` + the v79 loop-closure end-to-end fix
-(auditor prompt no-omit + `routeOne` scope-first + `ensureFindingCoverage` +
-`acceptProposals` newSpecs materialization + `specs` provenance columns
-via migration 0025), `demo.failed` / `usage.accounting_failed` event
-schemas + severity promotions, the design-oracle silent-fallback trio
-(typed errors + `design_contracts.mode` column via migration 0026), a
-unified `subscribeWithReconnect` helper across 4 subscribers, per-stage
-`task.failed` emit-on-throw with 4 typed classifier arms, and the
-timeout-eradication lint extended (PR #750) to catch bare
-`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` stems +
-SCREAMING_CASE loop-cap patterns; Wave E-fix + F landed round-3 newSpecs
-provenance dedupe via migration 0027 + notify wake-latch +
-mutation-weekly workflow restored + PR-F #693 doctrine debris sweep.
+finding across Waves D1..D4 + E-fix + F: the design-oracle finalize guard
+with `MalformedAncestorStackError` typed classification, the v79
+loop-closure end-to-end fix (auditor prompt no-omit, `routeOne`
+scope-first, `ensureFindingCoverage`, `acceptProposals` newSpecs
+materialization, `specs` provenance columns via migration 0025),
+`demo.failed` / `usage.accounting_failed` event schemas with severity
+promotions, the design-oracle silent-fallback trio and
+`design_contracts.mode` column via migration 0026, a unified
+`subscribeWithReconnect` helper across 4 subscribers, per-stage
+`task.failed` emit-on-throw with 4 typed classifier arms, the
+timeout-eradication lint extended (PR #750), round-3 newSpecs provenance
+dedupe via migration 0027, the notify wake-latch, mutation-weekly workflow
+restored, and the PR-F #693 doctrine debris sweep.
 
-**What is NOT yet proven for v80:** the **fragment authoring path** — the
-F2 writer→validate loop the composer spawns when a curated stack
-references a fragment the library doesn't have — is the largest untouched
-surface in the greenfield path. Every fix wave left it alone; v80 is its
-live-validation vehicle. The loops past a CI-green merged PR — deploy →
-the full issue-loop firing on real symptoms → audits → CI-intelligence →
-notifications — also **remain to demonstrate live**; no single run has
-yet produced merged spec → product build → planted-issue auto-triaged →
-merged fix → live deploy → a working product URL. The native **design
-subsystem** is wired into derive (a `DesignContract` is captured and
-verified against the build) and now fails LOUD on every corrupt /
-inaccessible / malformed state; see `apex.md` for the full honest proof
-state.
+**A subsequent Wave H + F2 hardening push landed 2026-07-07 — 26 more
+PRs (#774–#799)** preemptively closed the F2 fragment authoring path
+(what was the honest v80 frontier at the start of that window):
+
+- **Wave H #774–#787** landed canonical fixed-point signature + ATOMIC
+  `createValidated` persistence seam (audit finding H2 / task #150),
+  guaranteed JIT env build, design contract unified on project-scope,
+  orgId invariant at hydration, allocators reclassified provisioning
+  vs fixed-pool vs delegated + provider resource id persisted, demo
+  non-web arms + adapter-aware dispatch, triage provenance columns
+  SELECTed + exposed downstream, durable manual_external deploy
+  attestation + human-review parked state, notifications no silent
+  stubs + durable no-route record, reject unknown deploy tokens +
+  derive `testRunner` per runtime.
+- **F2 Round I #788–#791** — per-attempt
+  `fragment.authoring.attempt` events (writer trajectory visibility);
+  prompt hardening with exemplars + slot-kind guidance + prior-org
+  fragments + product context; runtime-validity smoke wired in prod
+  (#791 — #789 was dead code without it, a `next@^99.0.0` fragment
+  would persist as validated).
+- **Round II #792–#795** — parser hardened to a balanced-brace body
+  walker + non-vfs statement rejection; iteration ceiling
+  `FRAGMENT_AUTHORING_ITERATION_CEILING = 24` (arch-allow:
+  timeout-class — integer count, NOT wall-clock); sanitized
+  signature; batch compose post-authoring gate; real dep resolvers
+  for python/go/rust.
+- **Round III #796–#799** — RETRACT-WITH-DELETE (batch compose
+  rejection deletes the persisted row so the org's `fragments` table
+  stays free of cross-run contamination), `succeeded` DEFERRED until
+  the batch gate passes, empty `apply()` body rejected (the no-op
+  stealth-downgrade class), pip/go/cargo live invokers wired in prod.
+
+**What is NOT yet proven for v80: closing the full autonomous loop
+end-to-end.** No single run has yet produced merged spec → product
+build → planted-issue auto-triaged → merged fix → live deploy → a
+working product URL. The F2 pre-hardening means the run should reach
+further into the greenfield product-build loop than any prior trial
+before surfacing the next real bug. The loops past a CI-green merged PR
+— deploy → the full issue-loop firing on real symptoms → audits →
+CI-intelligence → notifications — also **remain to demonstrate live**.
+The native **design subsystem** is wired into derive (a
+`DesignContract` is captured and verified against the build) and now
+fails LOUD on every corrupt / inaccessible / malformed state; see
+`apex.md` for the full honest proof state.
+
+**On a halt, watch `fragment.authoring.{started,attempt,succeeded,failed}`**
+in the event stream when the F2 path fires (a curated stack references a
+fragment the bundled library doesn't have). The per-attempt event carries
+`bodyPreview` + `canonicalSignature` + `rejection` + `decision`
+(`continue` | `converged` | `halted_fixed_point`) so the writer's
+trajectory is inspectable end-to-end without dashboard access.
 
 ## Where this fits
 

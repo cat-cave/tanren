@@ -11,76 +11,87 @@ contract for the human/orchestrator driving the run.**
 > **[apex-run-playbook.md](./apex-run-playbook.md)**. Read THIS doc first (the role
 > and the rhythm below), then drive from the playbook.
 
-> **Where the trials stand (through v79, plus 34 fix PRs hardening the frontier).**
-> Successive apex trials — v37–v46 ran on the previous WSL host through
-> 2026-06-19; v47–v49 ran on the new NixOS host
-> on 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
-> 2026-07-04. The chain has surfaced a long list of real bugs — all fixed on
-> `main`: the never-discard re-drive paths (#585–#594), the intelligent
-> non-convergence detection that replaced hardcoded attempt caps (#593), merge
-> re-gating that routes a gate failure to writer rework instead of bricking the
-> DAG (#601), the timeout/retry-cap eradication (#608/#609 — a run is never killed
-> by elapsed time; recovery is progress/sign-of-life based), the v37–v46 cluster:
-> runner-release org-scope leak (#636), writer must regenerate+commit derived
-> companions (lockfile) before the frozen gate (#637), ssh2 connect-config
-> socket idle-timeout killing long codex runs (#638), descendant
-> `ancestor_not_ready` hot-loop (#639), and the job-stall watchdog gap where a
-> lock-heartbeat fooled a mtime-only probe (#640 — structural file-count+bytes
-> probe + progress-based backstop); the v47–v49 cluster: the apex-mode env-var
-> eradicated so apex now configures its autonomous posture via the same
-> governance API any operator uses (#646), `.env.validation.local` bash-source
-> breaking on unquoted commas (#656), Fly link route required-`orgSlug` (#658),
-> the template-build child project born without the autonomous audit posture
-> (#659 — synthetic child now gets `AUTONOMOUS_AUDIT_POSTURE` +
-> `insightThresholds.ciInsightFlakyMinShas: 1`), the runner-INSERT PK race +
-> derive synchronous-wait circuit breaker (task #21, #705); and the v65–v79
-> cluster which moved past infra hangs into the product-build loop: autostash
-> gate artifacts on clean-PR rebase + `WorkspaceCommandError` classification
-> (v65, #715), F2 fragment-authoring observability wiring `eventStore` +
-> propagating 409 reasons (v66, #719), re-drive halt observability (`run.failed`
+> **Where the trials stand (through v79, plus 60 hardening PRs closing every
+> pre-v80 audit finding).** Successive apex trials — v37–v46 ran on the
+> previous WSL host through 2026-06-19; v47–v49 ran on the new NixOS host on
+> 2026-06-23; v65–v79 ran roughly daily on the same host across 2026-06-28 →
+> 2026-07-04. Trial-driven fixes landed on `main` include the never-discard
+> re-drive paths (#585–#594), intelligent non-convergence detection (#593),
+> merge re-gating (#601), the timeout/retry-cap eradication (#608/#609), and
+> the v37–v79 clusters (runner org-scope + writer lockfile-regeneration + ssh2
+> connect-timeout + watchdog structural probe + apex-mode env eradication +
+> Fly `orgSlug` + child audit posture + task #21 runner-INSERT + derive
+> synchronous-wait + F2 fragment-authoring observability + wandering-halt
+> convergence + atomic 3-write PR enqueue + plan-stage stall recovery +
+> writer squash-before-rebase + Go/Python/Rust compose smoke + planner
+> one-concern-per-subtask sizing + watchdog neighbor-floor widened to 5 +
+> pnpm bootstrap non-interactive + triage routing out-of-scope findings to
+> new specs at v79 #734 — the issue-triage → new-spec mechanic firing on
+> real findings).
 >
-> - persisted `job_queue.failure_message`, v67, #720) **plus** the wandering-halt
->   convergence detector that caps re-drives making no deliverable progress (v67,
->   #721 — a `dag.spec.needs_attention` with `source: "wandering_halt"`, distinct
->   from the same-failure `"strand"` case), the `eventStore` accepting org-scoped
->   events (v68, #723), enqueue pushed PR into `merge_queue` at `github.pr.created`
-> - atomic 3-write seam + orphaned-PR startup sweep (v67/v69, #724, #725),
->   plan-stage answerer wrapped in stall-recovery (v70, #726), writer commits
->   squashed before clean-PR rebase (v71, #728), compose smoke recognizing
->   Go/Python/Rust tests (v72, #729), duplicate `addEnvVar` reconcile across
->   fragments (v75, #730), planner one-concern-per-subtask sizing (v76, #731),
->   `ActivityWatchdog` neighbor-floor widened to 5 for agent-class execs (v76/v77,
->   #732), pnpm bootstrap non-interactive with `CI=true` (v71/v78, #733), and
->   triage routing out-of-scope findings to new specs (v79, #734: the
->   issue-triage → new-spec insertion mechanic firing on real out-of-scope
->   findings). **The v79-era frontier has since been HARDENED across three
->   subsequent audit passes plus a cleanup wave — 34 PRs (#738–#768) landed
->   2026-07-05 → 2026-07-07** closed every Codex-critic (#1–#18) /
->   Codex-round-3 (#1–#4) / RA1 / RA2 finding. Wave D1..D4 landed the
->   design-oracle finalize guard + `MalformedAncestorStackError`
->   classification + the v79 loop-closure end-to-end fix (auditor prompt
->   no-omit + `routeOne` scope-first + `ensureFindingCoverage` empty-workItems
->   - PARTIAL-coverage P0 synthesis + newSpecs materialization via
->     `acceptProposals` + `specs` provenance columns via migration 0025);
->     `demo.failed` + `usage.accounting_failed` event schemas +
->     `DEFAULT_ROUTE_EVENTS` seeding + severity promotions; the design-oracle
->     silent-fallback trio (typed `DesignContractCorruptError` /
->     `DesignOracleActorConfigError` / `MalformedDesignOracleResultError`
->     returns + `design_contracts.mode` column via migration 0026 threaded
->     through all readers); a unified `subscribeWithReconnect` helper across
->     4 subscribers (race-hardened); per-stage `task.failed` emit-on-throw with
->     4 typed classifier arms; the timeout-eradication lint extended (PR #750)
->     to catch bare `_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks`
->     stems + SCREAMING_CASE loop-cap patterns; wandering-halt escalation
->     always halts; walker stable `orderKey`; budget fails-closed on null-org.
->     Wave E-fix + F cleanups landed the round-3 triage newSpecs dedupe via
->     migration 0027 partial unique index + notify wake-latch +
->     mutation-weekly workflow restored (task #17) + PR-F #693 doctrine
->     debris sweep. The autonomous-loop machinery is complete and hardened by
->     regression pins. The full autonomy loop has **STILL NOT closed
->     end-to-end** — no single run has produced merged spec → product build →
->     issue→triage→fix → deploy → a working URL; those remain to demonstrate
->     live.
+> **The v79-era frontier was then HARDENED (2026-07-05 → 2026-07-07)** by
+> 34 PRs (#738–#768) that closed every Codex-critic (#1–#18) /
+> Codex-round-3 (#1–#4) / RA1 / RA2 finding across Waves D1..D4 + E-fix +
+> F: the design-oracle finalize guard + `MalformedAncestorStackError`
+> classification, the v79 loop-closure end-to-end fix (auditor prompt
+> no-omit + `routeOne` scope-first + `ensureFindingCoverage` +
+> PARTIAL-coverage P0 synthesis + newSpecs materialization via
+> `acceptProposals` + `specs` provenance columns via migration 0025);
+> `demo.failed` + `usage.accounting_failed` event schemas + severity
+> promotions; the design-oracle silent-fallback trio + `design_contracts.mode`
+> column via migration 0026; a unified `subscribeWithReconnect` helper
+> across 4 subscribers; per-stage `task.failed` emit-on-throw with 4 typed
+> classifier arms; the timeout-eradication lint extended (PR #750);
+> wandering-halt always-halts; walker stable `orderKey`; budget
+> fails-closed on null-org; triage newSpecs dedupe via migration 0027;
+> the notify wake-latch; mutation-weekly workflow restored (task #17);
+> and the PR-F #693 doctrine debris sweep.
+>
+> **A subsequent Wave H + F2 hardening push landed 2026-07-07 — 26 more
+> PRs (#774–#799)** preemptively closed the F2 authoring path (what was
+> the honest v80 frontier at the start of that window). **Wave H #774–#787
+> (14 PRs)** landed the canonical fixed-point signature + ATOMIC
+> `createValidated` persistence seam (audit finding H2 / task #150 — one
+> INSERT with `status='validated'`, no draft→flip window that the unified
+> loader would silently ignore); guaranteed JIT env build reaching
+> off-baseline toolchains; design contract unified on project-scope; the
+> orgId invariant enforced at hydration; allocators reclassified
+> provisioning vs fixed-pool vs delegated with the provider resource id
+> persisted; demo non-web arms with adapter-aware surface dispatch;
+> triage provenance columns SELECTed and exposed downstream; durable
+> manual_external deploy attestation with human-review parked state;
+> notifications with no silent stubs and a durable no-route record;
+> rejecting unknown deploy tokens with `testRunner` derived per runtime.
+> **F2 Round I #788–#791** added per-attempt `fragment.authoring.attempt`
+> events (writer trajectory visibility) and prompt hardening (exemplars,
+> slot-kind guidance, prior-org fragments, product context), plus the
+> runtime-validity smoke wired in prod (#791 — #789 shipped it as dead
+> code without the prod wiring, a `next@^99.0.0` fragment would persist
+> as validated). **Round II #792–#795** hardened the parser to a
+> balanced-brace `apply()` body walker with non-vfs statement rejection
+> (`fragmentBodyWalker.ts` — the prior lazy regex truncated at the first
+> `}` inside a template literal); added the iteration ceiling
+> `FRAGMENT_AUTHORING_ITERATION_CEILING = 24` (arch-allow: timeout-class
+> — integer count, NOT wall-clock, doctrine-compliant safety net over
+> the 8-entry signature window); sanitized the signature (strips
+> clock/id noise); added the batch compose post-authoring gate; and
+> shipped real dep resolvers for python/go/rust. **Round III #796–#799**
+> landed parseStringLiteral single-pass unescape with splitArgs
+> single-quote tracking; sanitizer regex anchors with an explicit
+> `org_id` filter defense; RETRACT-WITH-DELETE — the post-authoring
+> batch compose rejection now DELETES the persisted row so the org's
+> `fragments` table stays free of cross-run contamination (Round-III
+> H1); `succeeded` DEFERRED until the batch gate passes (H4); failed
+> emit carrying the REAL attempts count (H7); `skipped` batch arm
+> EXPLICITLY handled as failure (M6 — no silent commit); empty
+> `apply()` body rejected (M4 — the no-op stealth-downgrade class);
+> pip/go/cargo live invokers wired in prod (#799 — same class as #791).
+>
+> The autonomous-loop machinery AND the F2 authoring pipeline are
+> complete and hardened by regression pins. The full autonomy loop has
+> **STILL NOT closed end-to-end** — no single run has produced merged
+> spec → product build → issue→triage→fix → deploy → a working URL;
+> those remain to demonstrate live.
 >
 > The **native design subsystem** is part of the build: WS-D1..D4 are merged
 > and the design loop (author → inject → verify → re-drive) closes end-to-end
@@ -238,23 +249,26 @@ autonomous software org**. The proofs:
   only (the playbook is written to make it reproducible).
 - **standing code-integrity** — the adversarial Codex audit over the platform code.
 
-The runs **through v79** — plus the 34-PR hardening wave that landed
-2026-07-05 → 2026-07-07 — advanced the autonomy-loop (DAG-build, walker
-auto-execution, just-in-time template materialization — pre-PR-F #693, via the
-now-collapsed creation meta-flow; post-PR-F, via fragment composition + F2
-per-fragment authoring — and the never-discard re-drive + recovery paths),
-run-discipline, and code-integrity proofs. The autonomous-loop machinery —
-auditor → triage → routing → newSpecs materialization → durable
-provenance-deduped `acceptProposals` — is now complete AND hardened with
-regression pins. **What is NOT yet proven for v80: the fragment authoring path.**
-The F2 writer→validate loop the composer spawns when a curated stack
-references a fragment the library doesn't have is the largest untouched
-surface in the greenfield path; every fix wave left it alone. Live-run risks
-identified by the Claude E sweep (not yet reproduced on `main`): the
-fixed-point signature counts whitespace/comment as progress; the
-`markValidated` split can leave an orphaned draft; the runtime-language
-recognizer + body-parse rejection vocabulary are under-tested against LLM
-output. Fragment authoring is the honest v80 live-validation vehicle. The
-loops **past a CI-green merged PR** (deploy → the full issue-loop firing
-end-to-end → audits → CI-intelligence → notifications) also remain to
-demonstrate live.
+The runs **through v79** — plus the 34-PR hardening wave (#738–#768) landed
+2026-07-05 → 2026-07-07 and the 26-PR Wave H + F2 hardening push (#774–#799)
+landed 2026-07-07 — advanced the autonomy-loop (DAG-build, walker
+auto-execution, fragment composition + F2 per-fragment authoring, and the
+never-discard re-drive + recovery paths), run-discipline, and code-integrity
+proofs. The autonomous-loop machinery AND the F2 authoring pipeline are now
+complete AND hardened with regression pins. Live-run risks previously
+identified by the Claude E sweep have since been fixed on `main`: the
+fixed-point signature no longer counts whitespace/comment as progress
+(canonicalized via `canonicalizeBodySignature` — parses to ops when possible,
+lexically normalized as fallback); the `markValidated` split window is
+closed by the atomic `createValidated` seam (task #150 — no orphaned draft);
+and the runtime-language recognizer + body-parse rejection vocabulary were
+significantly hardened by the state-aware `fragmentBodyWalker.ts` +
+non-vfs-statement rejection (Round II #792). **What is NOT yet proven for
+v80: closing the full autonomous loop end-to-end.** No single run has yet
+produced merged spec → product build → issue → triage → merged fix →
+deploy → a working URL. That end-to-end close is exactly what apex still
+has to prove. The F2 pre-hardening means the run should reach further into
+the greenfield product-build loop than any prior trial before surfacing
+the next real bug; the loops **past a CI-green merged PR** (deploy → the
+full issue-loop firing end-to-end → audits → CI-intelligence →
+notifications) remain to demonstrate live.

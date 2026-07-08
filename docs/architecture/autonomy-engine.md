@@ -507,8 +507,14 @@ of the apex proof firing autonomously. The current frontier has moved past the
 v49-era infra-hang class (runner-INSERT PK race + derive synchronous-wait circuit
 breaker, task #21 merged as PR #705) into the product-build loop — writer subtask
 sizing, plan stall recovery, template composition semantics, PR-enqueue timing,
-triage → new-spec routing. Every capability is **built and on `main`**; the bar is
-clear; it has not yet been cleared (no single run has produced: rough notes →
+triage → new-spec routing. **The v79-era product-build-loop frontier was HARDENED
+across 34 PRs (#738–#768) landed 2026-07-05 → 2026-07-07** closing every
+Codex-critic / round-3 / RA1 / RA2 finding (Waves D1..D4 + E-fix + F); **a
+subsequent Wave H + F2 hardening push landed 2026-07-07 — 26 more PRs
+(#774–#799)** preemptively closed the F2 fragment authoring path. The
+autonomous-loop machinery and the F2 authoring pipeline are complete and
+hardened by regression pins. Every capability is **built and on `main`**; the bar
+is clear; it has not yet been cleared (no single run has produced: rough notes →
 merged spec → product build → planted issue auto-triaged → merged fix → live deploy
 → a working product URL). This section describes the workload apex _forces_ and the
 bar it _must_ clear, not a cleared bar.

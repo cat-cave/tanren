@@ -103,35 +103,60 @@ new NixOS host from 2026-06-23 through 2026-07-04, roughly a trial a day since
 2026-06-28 — each flushed real engine bugs now fixed on `main`. **No run has yet
 closed the full autonomous loop** (issue → triage → fix → merge → deploy → a
 working product, no human in the inner loop). The v49-era infra halts (task #21
-runner-INSERT PK race + derive synchronous-wait breaker) are gone. The v79
+runner-INSERT PK race + derive synchronous-wait breaker) are gone. The v79-era
 product-build-loop frontier (writer subtask sizing #731, plan stall recovery
-#726, template composition semantics — the fragment-based composer PR-A #688 →
-PR-G #699, PR-enqueue timing #724 + the #725 atomic 3-write seam + orphaned-PR
-startup sweep, triage → new-spec insertion #734) has since been HARDENED across
-three subsequent audit passes plus a cleanup wave — 34 PRs (#738–#768) landed
-2026-07-05 → 2026-07-07 closed every Codex-critic / Codex-round-3 / RA1 / RA2
-finding: auditor prompt no-omit + `routeOne` scope-first + `ensureFindingCoverage`
-empty-workItems P0 synthesis + `acceptProposals` newSpecs materialization +
-`specs` provenance columns (`parent_spec_id`, `source_finding_ids`,
-`origin_triage_task_id`, `origin_run_id` — migration 0025) + partial unique
-index dedupe (migration 0027); design-oracle finalize guard + typed
-`DesignContractCorruptError` / `DesignOracleActorConfigError` /
-`MalformedDesignOracleResultError` returns + `design_contracts.mode` column
-(migration 0026) + org-scope requirement; `demo.failed` + `usage.accounting_failed`
-event schemas + `DEFAULT_ROUTE_EVENTS` seed + severity promotions; a unified
-`subscribeWithReconnect` helper across 4 subscribers (race-hardened); per-stage
-`task.failed` emit-on-throw with typed classifier arms
-(`MalformedAncestorStackError` + 4 worker-level typed error arms); the
-timeout-eradication lint extended to catch bare
-`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` give-up stems +
-SCREAMING_CASE loop-cap patterns (PR #750). The autonomous-loop machinery —
-auditor → triage → routing → newSpecs materialization → durable
-provenance-deduped `acceptProposals` — is complete and hardened by regression
-pins. The honest open frontier for v80: the **fragment authoring path** (the F2
-writer→validate loop the composer spawns when a curated stack references a
-fragment the library doesn't have) is the largest untouched surface — every
-fix wave left it alone, so it is the live-validation vehicle for the next apex
-trial. Closing the full loop end-to-end is what apex still has to prove.
+#726, fragment-based composer PR-A #688 → PR-G #699, PR-enqueue timing #724
+with the #725 atomic 3-write seam and orphaned-PR startup sweep, triage →
+new-spec insertion #734) was HARDENED across three audit passes and a
+cleanup wave. **34 PRs (#738–#768) landed 2026-07-05 → 2026-07-07** closed
+every Codex-critic / round-3 / RA1 / RA2 finding: auditor prompt no-omit,
+`routeOne` scope-first, `ensureFindingCoverage` empty-workItems P0
+synthesis, `acceptProposals` newSpecs materialization, `specs` provenance
+columns via migration 0025, partial unique index dedupe via 0027,
+design-oracle finalize guard and typed `DesignContractCorruptError` /
+`DesignOracleActorConfigError` / `MalformedDesignOracleResultError`
+returns, `design_contracts.mode` column via 0026, `demo.failed` /
+`usage.accounting_failed` event schemas with `DEFAULT_ROUTE_EVENTS` seed
+and severity promotions, a unified `subscribeWithReconnect` helper across
+4 subscribers, per-stage `task.failed` emit-on-throw with typed classifier
+arms, and the timeout-eradication lint extended (PR #750) to catch bare
+`_pages`/`_rounds`/`_turns`/`_cycles`/`_passes`/`_reworks` stems and
+SCREAMING_CASE loop-cap patterns. **A subsequent Wave H + F2 hardening push
+landed 26 more PRs (#774–#799) 2026-07-07** to close the pre-apex-v80
+frontier. Wave H #774–#787 (14 PRs) landed the canonical fixed-point
+signature and ATOMIC `createValidated` persistence seam via task #150,
+guaranteed JIT env build reaching off-baseline toolchains, the design
+contract unified on project-scope, the orgId invariant enforced at
+hydration, allocators reclassified provisioning vs fixed-pool vs delegated
+with provider resource id persisted, demo non-web arms with adapter-aware
+surface dispatch, triage provenance columns SELECTed and exposed
+downstream, durable manual_external deploy attestation with real operator
+confirmation, notifications with no silent stubs and a durable no-route
+record, and rejecting unknown deploy tokens with `testRunner` derived per
+runtime. F2 Round I #788–#791 shipped per-attempt
+`fragment.authoring.attempt` events plus writer prompt hardening
+(exemplars, slot-kind guidance, prior-org fragments, product context) and
+the runtime-validity smoke wired in prod construction (#789 was dead code
+until #791). Round II #792–#795 hardened the parser to a balanced-brace
+body walker with non-vfs statement rejection (replacing the lazy-regex
+parser that truncated at the first `}` in a template literal); added the
+iteration ceiling `FRAGMENT_AUTHORING_ITERATION_CEILING = 24` (integer
+count, doctrine-compliant safety net over the 8-entry signature window);
+and shipped real dep resolvers for python/go/rust. Round III #796–#799
+landed parseStringLiteral single-pass unescape, sanitizer regex anchors
+with an explicit `org_id` filter defense, RETRACT-WITH-DELETE (the
+post-authoring batch-compose rejection deletes persisted rows so the org's
+fragments table stays free of cross-run contamination), `succeeded`
+deferred until the batch gate passes, the no-op apply()-body
+stealth-downgrade class closed, and pip/go/cargo live invokers wired in
+prod. The autonomous-loop machinery AND the F2 authoring pipeline are
+complete and hardened by regression pins. **The honest open frontier for
+v80: closing the full autonomous loop end-to-end** — no single run has yet
+produced merged product spec → build → planted-issue auto-triaged →
+merged fix → live deploy → a working product URL. That close is what apex
+v80 must prove. The pre-hardening of F2 means the run should reach further
+into the greenfield product-build loop than any prior trial before
+surfacing the next real bug.
 
 **To drive the next apex run, a fresh agent reads, in order:**
 

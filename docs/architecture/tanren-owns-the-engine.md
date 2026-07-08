@@ -52,19 +52,27 @@
 > carried the frontier through v65–v79 — each halt producing a fix-on-`main` merge,
 > the v79 frontier landing triage → new-spec routing on real out-of-scope findings
 > (PR #734). The task-#21 runner-INSERT + derive synchronous-wait circuit-breaker
-> class is merged (PR #705). **The v79-era product-build-loop frontier has since
-> been HARDENED across three subsequent audit passes plus a cleanup wave** — 34
-> PRs (#738–#768) landed 2026-07-05 → 2026-07-07 closed every Codex-critic /
-> round-3 / RA1 / RA2 finding, including new migrations 0025 (`specs` provenance
-> columns — `parent_spec_id`, `source_finding_ids`, `origin_triage_task_id`,
+> class is merged (PR #705). **The v79-era product-build-loop frontier was
+> HARDENED across three audit passes + cleanup wave** — 34 PRs (#738–#768)
+> landed 2026-07-05 → 2026-07-07 closed every Codex-critic / round-3 / RA1 /
+> RA2 finding, including new migrations 0025 (`specs` provenance columns —
+> `parent_spec_id`, `source_finding_ids`, `origin_triage_task_id`,
 > `origin_run_id`), 0026 (`design_contracts.mode` with `(project_id, mode,
 version)` unique index), and 0027 (partial unique index
 > `specs_triage_provenance_unique` on `(project_id, parent_spec_id,
-source_finding_ids)` for triage newSpecs dedupe). The autonomous-loop
-> machinery is complete and hardened by regression pins; the v80 frontier is
-> the fragment authoring path. The full loop has not yet closed), so a real
-> merge through the jj/`MergeAuthority` path is the open live-validation item
-> (the engine is the single path on `main` regardless).
+source_finding_ids)` for triage newSpecs dedupe). **A subsequent Wave H +
+> F2 hardening push landed 2026-07-07 — 26 more PRs (#774–#799)**
+> preemptively closed the F2 fragment authoring path (Wave H atomic
+> `createValidated` persistence seam via task #150 + design/orgId/allocator/
+> demo/notify hardening; F2 Rounds I/II/III — per-attempt observability,
+> balanced-brace parser, iteration ceiling, RETRACT-WITH-DELETE, event
+> ordering, empty-`apply()`-body rejection, real dep resolvers for
+> python/go/rust wired in prod). The autonomous-loop machinery AND the F2
+> authoring pipeline are complete and hardened by regression pins; the
+> honest open frontier for v80 is closing the full autonomous loop
+> end-to-end. The full loop has not yet closed), so a real merge through
+> the jj/`MergeAuthority` path is the open live-validation item (the engine
+> is the single path on `main` regardless).
 
 ## 0. The governing principle — guaranteed-internal vs best-effort-external
 
@@ -358,17 +366,26 @@ out-of-scope findings to new specs #734, the issue-triage → new-spec insertion
 mechanic firing on real out-of-scope findings). **The v79-era frontier was then
 HARDENED (2026-07-05 → 2026-07-07)** by 34 PRs (#738–#768) that closed every
 Codex-critic / round-3 / RA1 / RA2 finding across Waves D1..D4 + E-fix + F —
-notably the v79 loop-closure end-to-end fix (auditor prompt no-omit +
-`routeOne` scope-first + `ensureFindingCoverage` + `acceptProposals` newSpecs
-materialization + `specs` provenance columns via migration 0025 + partial
+notably the v79 loop-closure end-to-end fix (auditor prompt no-omit,
+`routeOne` scope-first, `ensureFindingCoverage`, `acceptProposals` newSpecs
+materialization, `specs` provenance columns via migration 0025, and partial
 unique index dedupe via migration 0027), the design-oracle typed error union
-
-- `design_contracts.mode` column (migration 0026), the `demo.failed` +
-  `usage.accounting_failed` event schemas + severity promotions + default-route
-  seeding, a unified `subscribeWithReconnect` helper across 4 subscribers, and
-  the timeout-eradication lint extended (PR #750) to catch bare give-up stems +
-  SCREAMING_CASE loop-cap patterns. The current frontier is inside the
-  product-build loop; the v80 target is the fragment authoring path. The full
-  loop has not yet closed. So a real merge through the live jj/`MergeAuthority`
-  path is still the open validation item. The cutover itself is complete — the
-  engine is the single path whether or not a given apex run reaches a merge.
+with `design_contracts.mode` column (migration 0026), the `demo.failed` and
+`usage.accounting_failed` event schemas with severity promotions and
+default-route seeding, a unified `subscribeWithReconnect` helper across 4
+subscribers, and the timeout-eradication lint extended (PR #750) to catch
+bare give-up stems and SCREAMING_CASE loop-cap patterns. **A subsequent
+Wave H plus F2 hardening push landed 2026-07-07 — 26 more PRs (#774–#799)**
+preemptively closed the F2 fragment authoring path (Wave H atomic
+`createValidated` persistence seam via task #150 plus design / orgId /
+allocator / demo / notify hardening; F2 Rounds I/II/III with per-attempt
+observability, balanced-brace parser, iteration ceiling `= 24` integer
+count, sanitized signature, batch compose post-authoring gate, RETRACT-
+WITH-DELETE, event ordering, empty-`apply()`-body rejection, and
+python/go/rust dep resolvers wired in prod). The autonomous-loop machinery
+AND the F2 authoring pipeline are complete and hardened by regression
+pins; the honest open frontier for v80 is closing the full autonomous
+loop end-to-end. The full loop has not yet closed. So a real merge
+through the live jj/`MergeAuthority` path is still the open validation
+item. The cutover itself is complete — the engine is the single path
+whether or not a given apex run reaches a merge.
