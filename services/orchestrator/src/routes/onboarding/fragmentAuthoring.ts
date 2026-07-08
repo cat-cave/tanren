@@ -31,6 +31,9 @@ import { runWithOrgScope } from "@tanren/db";
 import {
   buildFragmentAuthoring,
   buildLiveBundleInvoker,
+  buildLiveCargoInvoker,
+  buildLiveGoInvoker,
+  buildLivePipInvoker,
   buildLivePnpmInvoker,
   type FragmentAuthoring,
   type FragmentAuthorer,
@@ -61,17 +64,29 @@ export interface FragmentAuthoringFlowDeps {
   authorer: FragmentAuthorer;
 }
 
-/** Build the LIVE `RuntimeValiditySmokeDeps` — real pnpm + real bundle subprocess
- * invokers. Extracted (and exported) so a regression test can pin the shape is
- * non-undefined + populated. PR #789 shipped the runtime-validity smoke
- * WITHOUT wiring it into prod, so the module was dead code and a fragment
- * declaring `next@^99.0.0` persisted as `validated` (Codex HIGH). The
- * `mountFeatureRoutes` path routes through `buildLiveFragmentAuthoringDeps`
- * below which calls this helper unconditionally. */
+/** Build the LIVE `RuntimeValiditySmokeDeps` — real subprocess invokers for
+ * every supported runtime (pnpm / bundle / pip+uv / go / cargo). Extracted
+ * (and exported) so a regression test can pin the shape is non-undefined +
+ * every invoker slot is populated. PR #789 shipped the runtime-validity smoke
+ * WITHOUT wiring it into prod at all (pnpm/bundle were dead code); PR #795
+ * shipped the pip/go/cargo LIVE invoker factories without wiring them either
+ * — a Python/Go/Rust fragment declaring `fastapi==999.999.999` passed the
+ * shallow manifest sniff and persisted as `validated` (Codex round-III H2:
+ * same class of bug as #789). `mountFeatureRoutes` routes through
+ * `buildLiveFragmentAuthoringDeps` below which calls this helper
+ * unconditionally.
+ *
+ * The bundle/pip/go/cargo invokers each return `unavailable` when their
+ * binary is off PATH; the smoke then falls back to the shallow manifest
+ * sniff for that runtime, so wiring them unconditionally costs nothing on
+ * hosts without ruby/python/go/rust. */
 export function buildLiveRuntimeValiditySmokeDeps(): RuntimeValiditySmokeDeps {
   return {
     pnpmInvoker: buildLivePnpmInvoker(),
     bundleInvoker: buildLiveBundleInvoker(),
+    pipInvoker: buildLivePipInvoker(),
+    goInvoker: buildLiveGoInvoker(),
+    cargoInvoker: buildLiveCargoInvoker(),
   };
 }
 

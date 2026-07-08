@@ -12,6 +12,15 @@
 //     three-arm union `{ ok | failed | unavailable }`).
 //   - `buildLive*Invoker` factories — smoke-only wiring assertion so knip
 //     sees the exports as used AND a signature refactor breaks here.
+//   - `buildLivePipInvoker` pyproject-only fallback — a shell-script fake pip
+//     that logs its args, so a regression test can pin that
+//     `--no-build-isolation` is NOT passed (Codex round-III H6). With that
+//     flag, pip needed the build backend (hatchling / poetry-core /
+//     setuptools>=64) pre-installed in the ambient env — a fresh temp dir
+//     doesn't, so every valid modern-build-backend pyproject on a uv-less
+//     host got rejected with "Cannot import 'hatchling.build'" and named no
+//     user-facing dep. Both the ok arm (fake pip exits 0) and the failed arm
+//     (fake pip emits pip's "No matching distribution" shape) are asserted.
 //   - Real integration tests (opt-in via TANREN_REAL_{PIP,GO,CARGO}=1) —
 //     skipped in `just fast-check` so it stays fast + deterministic.
 
@@ -165,6 +174,127 @@ describe("non-Node invoker seams — shape assertion via canned fakes", () => {
 // failed / unavailable) because the operator's environment determines which
 // resolver binaries are on PATH. When we DO get a `failed`, the message must
 // name the specific broken dep — that's the whole point of the parser.
+
+// ── H6 regression: pyproject-only fallback drops --no-build-isolation ───────
+//
+// The `buildLivePipInvoker` pyproject arm previously ran with
+// `--no-build-isolation`, which requires the declared build backend
+// (hatchling / poetry-core / setuptools>=64 / etc.) pre-installed in the pip
+// process's ambient env. A fresh temp dir has no venv setup, so on any host
+// where `uv` isn't on PATH, every valid modern pyproject rejected with
+// "Cannot import 'hatchling.build'" — the message named no user-facing dep,
+// so the writer's next rework iteration couldn't act on it.
+//
+// The fix (H6): drop `--no-build-isolation`. Pip build-isolates by default,
+// installing the declared backend into an isolated env before the resolver
+// runs. Slower on first run (backend download) but correct against every
+// modern pyproject.
+//
+// This test pins the fix via a shell-script fake `pipBinary` that logs its
+// args + returns pip's "No matching distribution" shape on stderr, so the
+// parser has an actionable error to work with. Skipped on Windows because
+// the fake uses `#!/bin/sh` + `chmod +x`.
+describe.skipIf(process.platform === "win32")(
+  "buildLivePipInvoker — pyproject-only fallback drops --no-build-isolation (H6)",
+  () => {
+    it("does NOT pass --no-build-isolation on a modern-build-backend pyproject", async () => {
+      const { mkdtemp, writeFile, rm, chmod, readFile } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const liveMod = await import("../src/engine/templates/fragments/runtimeValiditySmokeLive.js");
+      const dir = await mkdtemp(join(tmpdir(), "tanren-pip-h6-args-"));
+      try {
+        // A modern-build-backend pyproject — hatchling requires build isolation
+        // to install its backend into a temp env before pip can resolve deps.
+        const pyproject = [
+          "[project]",
+          'name = "tanren-h6-test"',
+          'version = "0.0.0"',
+          'dependencies = ["fastapi==999.999.999"]',
+          "",
+          "[build-system]",
+          'requires = ["hatchling"]',
+          'build-backend = "hatchling.build"',
+        ].join("\n");
+        await writeFile(join(dir, "pyproject.toml"), pyproject);
+        // Fake pip: log args, then emit pip's "No matching distribution" error
+        // shape so `parsePipError` names fastapi in the returned message.
+        const argsLogPath = join(dir, "pip-args.log");
+        const fakePipPath = join(dir, "fake-pip");
+        const fakePipScript = [
+          "#!/bin/sh",
+          `printf '%s\\n' "$@" > "${argsLogPath}"`,
+          "printf 'ERROR: Could not find a version that satisfies the requirement fastapi==999.999.999\\n' >&2",
+          "printf 'ERROR: No matching distribution found for fastapi==999.999.999\\n' >&2",
+          "exit 1",
+          "",
+        ].join("\n");
+        await writeFile(fakePipPath, fakePipScript);
+        await chmod(fakePipPath, 0o755);
+        // Force the pip fallback path by pointing uvBinary at a nonexistent
+        // path — `tryUvPipCompile` returns null on ENOENT so we fall through
+        // to `tryPipDryRun` (the H6-fixed arm).
+        const invoker = liveMod.buildLivePipInvoker({
+          pipBinary: fakePipPath,
+          uvBinary: join(dir, "nonexistent-uv"),
+        });
+        const result = await invoker({ cwd: dir, pyprojectPath: join(dir, "pyproject.toml") });
+        // Error path: fake pip returned nonzero → invoker returns failed +
+        // parser names fastapi (the user-facing dep, not a "cannot import
+        // hatchling.build" backend error).
+        expect(result.kind).toBe("failed");
+        const message = result.kind === "failed" ? result.message : "";
+        expect(message).toContain("fastapi");
+        // The H6 pin: verify --no-build-isolation is NOT in the args passed
+        // to pip. A future refactor that re-adds the flag reproduces the
+        // "cannot import hatchling.build" bug against every valid pyproject.
+        const loggedArgs = (await readFile(argsLogPath, "utf8")).split("\n").filter((l) => l.length > 0);
+        expect(loggedArgs).not.toContain("--no-build-isolation");
+        // Belt: assert the expected args ARE there so a future accidental
+        // swap (e.g. dropping --dry-run) fails loud here too.
+        expect(loggedArgs).toContain("install");
+        expect(loggedArgs).toContain("--dry-run");
+        expect(loggedArgs).toContain("--ignore-installed");
+        expect(loggedArgs).toContain(".");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("returns ok when the fake pip exits 0 against a modern-build-backend pyproject", async () => {
+      const { mkdtemp, writeFile, rm, chmod } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const liveMod = await import("../src/engine/templates/fragments/runtimeValiditySmokeLive.js");
+      const dir = await mkdtemp(join(tmpdir(), "tanren-pip-h6-ok-"));
+      try {
+        const pyproject = [
+          "[project]",
+          'name = "tanren-h6-ok"',
+          'version = "0.0.0"',
+          'dependencies = ["httpx"]',
+          "",
+          "[build-system]",
+          'requires = ["setuptools>=64"]',
+          'build-backend = "setuptools.build_meta"',
+        ].join("\n");
+        await writeFile(join(dir, "pyproject.toml"), pyproject);
+        // Fake pip that exits 0 — the "resolvable" case.
+        const fakePipPath = join(dir, "fake-pip");
+        await writeFile(fakePipPath, "#!/bin/sh\nexit 0\n");
+        await chmod(fakePipPath, 0o755);
+        const invoker = liveMod.buildLivePipInvoker({
+          pipBinary: fakePipPath,
+          uvBinary: join(dir, "nonexistent-uv"),
+        });
+        const result = await invoker({ cwd: dir, pyprojectPath: join(dir, "pyproject.toml") });
+        expect(result.kind).toBe("ok");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  },
+);
 
 describe.skipIf(process.env.TANREN_REAL_PIP !== "1")("buildLivePipInvoker — real pip/uv integration", () => {
   it("resolves ok / fails / unavailable against a real pyproject.toml", async () => {
