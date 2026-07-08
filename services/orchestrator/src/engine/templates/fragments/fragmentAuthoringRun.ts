@@ -20,10 +20,10 @@
 // class the per-fragment smokes cannot see (`batchComposeAfterAuthoring.ts`).
 
 import type { ActorContext } from "../../../auth/schemas.js";
-import { runPostAuthoringBatchCompose } from "./batchComposeAfterAuthoring.js";
 import { canonicalizeBodySignature } from "./canonicalizeBody.js";
 export { deriveImplicitDependsOn } from "./implicitDependsOn.js";
 import { loadFragmentLibrary } from "./library/index.js";
+import { drivePostAuthoringOutcome, wrapEventsWithLogging, type AuthoredForBatch } from "./postAuthoringOutcome.js";
 import { deriveRuntimeLanguage, unsupportedRuntimeLanguageReason } from "./runtimeLanguage.js";
 import type { RuntimeValiditySmokeDeps } from "./runtimeValiditySmoke.js";
 import { sanitizeAuthorerErrorSignature } from "./sanitizeAuthorerErrorSignature.js";
@@ -113,13 +113,21 @@ export interface FragmentAuthorerOutput {
 /** The seam the wiring layer fills — production calls an LLM-backed authorer. */
 export type FragmentAuthorer = (input: FragmentAuthorerInput) => Promise<FragmentAuthorerOutput>;
 
-/** The persistence seam — production wires this to `FragmentsStore.createValidated`.
+/** The persistence seam — production wires this to `FragmentsStore.createValidated`
+ * + `FragmentsStore.deleteById`.
  *
  * ATOMIC by contract (audit finding H2 — task #150): the single `createValidated`
  * call inserts the row with `status='validated'` + `validated_at=now()` in ONE
  * transaction. A throw here rolls back; the F2 loop's Fix-4 try/catch surfaces
  * the throw as a terminal `fragment.authoring.failed` event so the event stream
- * never shows "converged" with no follow-up on a unique-index collision. */
+ * never shows "converged" with no follow-up on a unique-index collision.
+ *
+ * RETRACT-WITH-DELETE (Round-III H1 — the post-authoring batch compose gate).
+ * When the batch compose rejects the augmented library, `deleteById` retracts
+ * the persisted row so the org's `fragments` table stays free of cross-run
+ * contamination. Prior behavior emitted `failed` without deleting; the org
+ * carried the "validated" but broken fragment forward. The delete is
+ * best-effort — a throw is log-warn'd in the caller, not propagated. */
 export interface FragmentPersistence {
   createValidated(input: {
     orgId: string;
@@ -128,6 +136,11 @@ export interface FragmentPersistence {
     contract: FragmentSpec["requiredContract"];
     dependsOn: readonly string[];
   }): Promise<{ fragmentId: string }>;
+  /** Hard-delete a persisted fragment row (Round-III H1 retract). Called by
+   * the post-authoring batch-compose retract when the augmented library fails
+   * to compose. Non-idempotent-error: deleting an already-absent id succeeds
+   * silently (the caller's retract loop is resilient to a row already missing). */
+  deleteById(fragmentId: string): Promise<void>;
 }
 
 /** Length ceiling for the per-attempt `bodyPreview` field. */
@@ -168,20 +181,44 @@ export interface FragmentAuthoringDeps {
 /** Build the authoring runner. The returned function processes the missing list
  * sequentially: an authoring failure on one fragment doesn't stop the others
  * (they may be independent), so the caller sees the full failedIds list at the
- * end rather than the first-failure short-circuit. */
+ * end rather than the first-failure short-circuit.
+ *
+ * ROUND-III RESTRUCTURE (H1/H4/H7/M2/M6). The event ordering is coordinated with
+ * the post-authoring batch compose:
+ *   - `authorOneFragment` NO LONGER emits `fragment.authoring.succeeded` — that
+ *     emit is DEFERRED until the batch gate passes. (H4 fix: no succeeded-then-
+ *     failed for the same id when batch retract fires.)
+ *   - On batch failure/skip, each authored row is DELETED from persistence
+ *     BEFORE emitting `failed` — the org's fragments table stays free of
+ *     retracted rows. (H1 fix.)
+ *   - The retract-emit carries the REAL per-fragment attempts count — no more
+ *     hardcoded `attempts: 1`. (H7 fix.)
+ *   - Every event emit is try/catch'd so a DB-down `events.emit` cannot
+ *     propagate upward and defeat the "continue authoring remaining specs"
+ *     contract. (M2 fix.)
+ *   - The `skipped` arm is EXPLICITLY treated as a failure — no silent commit.
+ *     (M6 fix.) */
 export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAuthoring {
+  // Wrap `deps.events` so every emit call is throw-safe (M2). The per-spec
+  // authorOneFragment loop passes this wrapped seam through; the batch-outcome
+  // module (postAuthoringOutcome.ts) does its own wrapping since it may be
+  // called with a bare seam. Both belt+braces so a future refactor cannot
+  // accidentally drop a wrap.
+  const safeEvents = wrapEventsWithLogging(deps.events);
+  const safeDeps: FragmentAuthoringDeps = { ...deps, events: safeEvents };
+
   return async (input: FragmentAuthoringInput): Promise<FragmentAuthoringResult> => {
     const failedIds: string[] = [];
     const failureReasons: Record<string, string> = {};
-    const authored: OrgFragmentSource[] = [];
-    // Track the specs whose authoring succeeded — used by the batch compose
-    // attribution when it rejects the augmented library (Fix 3).
-    const authoredSpecs: FragmentSpec[] = [];
+    // Each successfully-authored fragment carries its `attempts` + persisted id
+    // (used by the batch-outcome retract for the REAL attempts count + the
+    // deleteById call). See `postAuthoringOutcome.ts:AuthoredForBatch`.
+    const authored: AuthoredForBatch[] = [];
 
     let priorFragments: readonly PriorFragment[] = [];
-    if (deps.priorFragmentsLookup !== undefined) {
+    if (safeDeps.priorFragmentsLookup !== undefined) {
       try {
-        priorFragments = await deps.priorFragmentsLookup(input.orgId);
+        priorFragments = await safeDeps.priorFragmentsLookup(input.orgId);
       } catch (err) {
         log.warn("prior fragments lookup threw — proceeding with empty prior context", {
           orgId: input.orgId,
@@ -195,13 +232,17 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
         spec,
         lifecycle: input.lifecycle,
         orgId: input.orgId,
-        deps,
+        deps: safeDeps,
         priorFragments,
         ...(input.productContext === undefined ? {} : { productContext: input.productContext }),
       });
       if (outcome.kind === "ok") {
-        authored.push(outcome.source);
-        authoredSpecs.push(spec);
+        authored.push({
+          spec,
+          source: outcome.source,
+          attempts: outcome.attempts,
+          persistedFragmentId: outcome.persistedFragmentId,
+        });
       } else {
         failedIds.push(spec.id);
         failureReasons[spec.id] = outcome.reason;
@@ -210,8 +251,8 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
 
     // Assemble the augmented library: bundled core + freshly-authored fragments.
     const library = loadFragmentLibrary();
-    for (const source of authored) {
-      const fragment = interpretOrgFragment(source);
+    for (const item of authored) {
+      const fragment = interpretOrgFragment(item.source);
       if (library.has(fragment.id)) {
         library.replaceForTests(fragment);
       } else {
@@ -219,33 +260,21 @@ export function buildFragmentAuthoring(deps: FragmentAuthoringDeps): FragmentAut
       }
     }
 
-    // Fix 3: POST-AUTHORING BATCH COMPOSE — the final gate. Re-composes the
-    // captured lifecycle's config against the AUGMENTED library so the
-    // cross-fragment `dependency_runtime_mismatch` class (that the per-fragment
-    // smokes cannot see) fails LOUD here — not later inside the derive.
-    if (authoredSpecs.length > 0) {
-      const batch = await runPostAuthoringBatchCompose({
-        lifecycle: input.lifecycle,
-        library,
-        authoredSpecIds: authoredSpecs.map((s) => s.id),
-      });
-      if (batch.kind === "failed") {
-        // Attribute to every freshly-authored spec (see attribution logic in
-        // `batchComposeAfterAuthoring.ts`). Move each to failedIds + emit a
-        // terminal `fragment.authoring.failed` event so an observer sees the
-        // batch-compose halt was per-fragment, not global.
-        for (const spec of authoredSpecs) {
-          failedIds.push(spec.id);
-          failureReasons[spec.id] = batch.reason;
-          await deps.events.emit({
-            kind: "fragment.authoring.failed",
-            orgId: input.orgId,
-            fragmentId: spec.id,
-            reason: batch.reason,
-            attempts: 1,
-          });
-        }
-      }
+    // Fix 3 / Round-III H1+H4+H7+M6: POST-AUTHORING BATCH COMPOSE — the final gate.
+    // The batch-outcome handler emits `succeeded` (batch ok) OR retracts
+    // persistence + emits `failed` (batch failed | skipped). See
+    // `postAuthoringOutcome.ts` for the invariants.
+    const outcome = await drivePostAuthoringOutcome({
+      orgId: input.orgId,
+      lifecycle: input.lifecycle,
+      library,
+      authored,
+      persistence: safeDeps.persistence,
+      events: safeDeps.events,
+    });
+    for (const id of outcome.retractedIds) {
+      failedIds.push(id);
+      failureReasons[id] = outcome.retractedReasons[id] ?? "batch_compose_failed";
     }
 
     return { library, failedIds, failureReasons };
@@ -267,7 +296,16 @@ interface AuthorOneArgs {
   productContext?: ProductContext;
 }
 
-type AuthorOneOutcome = { kind: "ok"; source: OrgFragmentSource } | { kind: "failed"; reason: string };
+/** The result the per-spec authoring loop returns to `buildFragmentAuthoring`.
+ *
+ * ROUND-III H7 fix — the `ok` variant now carries `attempts` (the real per-
+ * fragment attempt count at convergence) + `persistedFragmentId` (returned by
+ * `FragmentPersistence.createValidated` — the id needed for a batch-retract
+ * `deleteById`). Prior shape carried only `source`, so the batch-retract had
+ * to hardcode `attempts: 1` on the failed emit and had no id to delete. */
+type AuthorOneOutcome =
+  | { kind: "ok"; source: OrgFragmentSource; attempts: number; persistedFragmentId: string }
+  | { kind: "failed"; reason: string };
 
 async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome> {
   const { spec, lifecycle, orgId, deps, priorFragments, productContext } = args;
@@ -381,14 +419,16 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
       // emit `fragment.authoring.failed` on any persistence throw + surface
       // the throw's message as the failure reason. Do NOT throw upward —
       // the outer loop continues authoring the remaining specs.
+      let persistedFragmentId: string;
       try {
-        await deps.persistence.createValidated({
+        const persisted = await deps.persistence.createValidated({
           orgId,
           spec,
           bodyTs,
           contract: spec.requiredContract,
           dependsOn,
         });
+        persistedFragmentId = persisted.fragmentId;
       } catch (err) {
         const reason = `persistence_failed: ${err instanceof Error ? err.message : String(err)}`;
         await deps.events.emit({
@@ -400,8 +440,12 @@ async function authorOneFragment(args: AuthorOneArgs): Promise<AuthorOneOutcome>
         });
         return { kind: "failed", reason };
       }
-      await deps.events.emit({ kind: "fragment.authoring.succeeded", orgId, fragmentId: spec.id, attempts: attempt });
-      return { kind: "ok", source };
+      // Round-III H4: `fragment.authoring.succeeded` is NO LONGER emitted here.
+      // The emit is DEFERRED to `drivePostAuthoringOutcome` once the batch
+      // compose gate passes — if the batch gate rejects, we retract + emit
+      // `failed` instead. Prior behavior emitted both events for the same id
+      // when the batch retract fired; the corruption is closed here.
+      return { kind: "ok", source, attempts: attempt, persistedFragmentId };
     }
 
     lastRejection = validation.reason;

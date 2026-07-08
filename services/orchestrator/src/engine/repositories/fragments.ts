@@ -210,6 +210,19 @@ export const FragmentsStore = {
     return mapRow(row);
   },
 
+  /** HARD DELETE a fragment row by id. The row was persisted-as-validated by
+   * `createValidated`, but a subsequent gate (Round-III H1 — the post-authoring
+   * batch compose) rejected the augmented library, so the row must be retracted
+   * in the same authoring run to keep the org's library free of cross-run
+   * contamination. Under RLS the caller's org-scoped client only sees + deletes
+   * that org's rows; a wrong-scope client's DELETE is a no-op (0 rows affected)
+   * — the caller's `runWithOrgScope` binds scope. NOT idempotent-error on
+   * missing rows — a caller retract loop must be resilient to a row already
+   * absent (delete of a non-existent id succeeds with 0 rows). */
+  async deleteById(client: QueryClient, id: string, _actor: ActorRef): Promise<void> {
+    await client.query(`DELETE FROM fragments WHERE fragment_id = $1`, [id]);
+  },
+
   /** ATOMIC insert-as-validated (audit finding H2 — task #150). Inserts the
    * row with `status='validated'` + `validated_at=now()` in ONE query. Under
    * `runWithOrgScope` (which opens a transaction) the row is either fully

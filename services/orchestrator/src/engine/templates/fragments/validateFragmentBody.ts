@@ -14,6 +14,7 @@
 // here rather than silently dropping deps in a later compose.
 
 import { deriveImplicitDependsOn } from "./implicitDependsOn.js";
+import { loadFragmentLibrary } from "./library/index.js";
 import { runRuntimeValiditySmoke, type RuntimeValiditySmokeDeps } from "./runtimeValiditySmoke.js";
 import {
   runFullLibrarySmokeComposition,
@@ -51,8 +52,48 @@ export async function validateFragmentBody(args: {
     return { kind: "failed", reason };
   }
 
+  // 1a) Round-III M4: reject an EMPTY apply() body. A body that parses cleanly
+  // but declares zero vfs operations is a no-op fragment — it validates through
+  // both smokes because base+runtime+deploy produce the meaningful files, but
+  // the org's persisted fragment then contributes NOTHING. A no-op fragment
+  // is never useful; more importantly, it silently passes as "validated" and
+  // shadows the bundled fragment for that (kind, label) — a stealth downgrade.
+  if (ops.length === 0) {
+    return {
+      kind: "failed",
+      reason:
+        `empty apply() body: the fragment declares no vfs operations (no file writes, no dep declarations, no env vars, no justfile hooks). ` +
+        `A fragment must produce at least one meaningful mutation — the writer must fill the apply() block with at least one ` +
+        `vfs.write / vfs.overwrite / vfs.addPackageJsonDep / vfs.addPackageJsonDevDep / vfs.addEnvVar / vfs.appendToJustfileTarget call.`,
+    };
+  }
+
   // 2) Derive implicit `dependsOn` (audit #11) — see `implicitDependsOn.ts`.
   const derivedDependsOn = deriveImplicitDependsOn(ops, args.spec);
+
+  // 2a) Round-III M1: pre-check derived runtime-dependency ids against the
+  // BUNDLED library. If any derived `runtime-<lang>` id is not shipped, halt
+  // LOUD with an unsupported_runtime_language reason BEFORE the smoke steps
+  // (which would defer the failure to a cryptic `library.require: no fragment
+  // registered for id "runtime-python-uv"` deep in the composer). The writer's
+  // rework loop then sees the direct halt class + can pivot to a shipped
+  // runtime instead of iterating on runtime tooling the library cannot compose.
+  const bundled = loadFragmentLibrary();
+  const missingRuntimeDeps = derivedDependsOn.filter((id) => id.startsWith("runtime-") && !bundled.has(id));
+  if (missingRuntimeDeps.length > 0) {
+    const shippedRuntimes = bundled
+      .all()
+      .filter((f) => f.kind === "runtime")
+      .map((f) => f.id);
+    return {
+      kind: "failed",
+      reason:
+        `unsupported_runtime_language: the fragment implicitly requires runtime "${missingRuntimeDeps[0]}" ` +
+        `(derived from the ops it declared — pyproject/go.mod/Cargo.toml/pip/poetry/uv/cargo/rustc/go/python tokens) ` +
+        `but no such runtime fragment ships in the Tanren library. Available runtimes: ${shippedRuntimes.join(", ")}. ` +
+        `Author your fragment for one of the shipped runtimes — do not fill the body with tooling for a runtime the library cannot compose.`,
+    };
+  }
 
   // 3) Build the Fragment carrying derivedDependsOn so cross-runtime pre-flight sees it.
   let fragment: Fragment;
