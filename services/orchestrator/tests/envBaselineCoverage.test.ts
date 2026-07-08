@@ -3,6 +3,8 @@ import {
   GOLDEN_BASELINE_TOOLCHAIN,
   toolchainCoveredByGoldenBaseline,
 } from "../src/engine/environments/baselineCoverage.js";
+import { buildInterviewPrompt } from "../src/engine/forge/interview/prompt.js";
+import { emptyCapture } from "../src/engine/forge/interview/types.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -83,5 +85,43 @@ describe("toolchainCoveredByGoldenBaseline — the golden-base short-circuit", (
       if (m) parsed[m[1] as string] = m[2] as string;
     }
     expect(parsed).toEqual({ ...GOLDEN_BASELINE_TOOLCHAIN });
+  });
+});
+
+describe("interview prompt toolchain example — derived from GOLDEN_BASELINE_TOOLCHAIN (drift guard)", () => {
+  // The vision-interview prompt shows illustrative toolchain versions to the LLM
+  // answerer. A hardcoded example (the prior `pnpm '10'` / `python '3.13'`) was a
+  // THIRD copy of the baseline that silently rotted: an LLM copying the stale example
+  // declares an off-baseline spec, which DEFEATS the golden-base coverage short-circuit
+  // and forces a needless JIT env build on a standard fresh node+pnpm project (apex v80
+  // greenfield derive `jit_build_required` halt). The example versions are now DERIVED
+  // from GOLDEN_BASELINE_TOOLCHAIN so they can never drift again — this test pins that.
+  it("the rendered example node/pnpm/python versions equal the golden baseline specs", () => {
+    const prompt = buildInterviewPrompt({
+      round: 1,
+      totalRounds: 14,
+      answer: "",
+      capture: emptyCapture(),
+    });
+    // The example line spells out node/pnpm/python at their baseline specs, so a future
+    // golden-image bump that changes the baseline can never leave the prompt stale.
+    expect(prompt).toContain(`{ name: 'node', version: '${GOLDEN_BASELINE_TOOLCHAIN["node"] ?? ""}' }`);
+    expect(prompt).toContain(`{ name: 'pnpm',`);
+    expect(prompt).toContain(`version: '${GOLDEN_BASELINE_TOOLCHAIN["pnpm"] ?? ""}' }`);
+    expect(prompt).toContain(`{ name: 'python', version: '${GOLDEN_BASELINE_TOOLCHAIN["python"] ?? ""}' }`);
+    // And it must NOT carry the old stale numbers that mismatched the baseline.
+    expect(prompt).not.toContain("version: '10' }");
+    expect(prompt).not.toContain("{ name: 'python', version: '3.13' }");
+  });
+
+  it("the derived example toolchain is itself baseline-COVERED (no JIT build for a standard fresh project)", () => {
+    // The whole point: a fresh node+pnpm project that follows the example stays on the
+    // warm baseline. Assert the example versions the prompt advertises are covered.
+    expect(
+      toolchainCoveredByGoldenBaseline([
+        { name: "node", version: GOLDEN_BASELINE_TOOLCHAIN["node"] ?? "" },
+        { name: "pnpm", version: GOLDEN_BASELINE_TOOLCHAIN["pnpm"] ?? "" },
+      ]),
+    ).toBe(true);
   });
 });
