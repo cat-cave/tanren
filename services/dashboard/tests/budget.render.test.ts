@@ -39,6 +39,7 @@ const PROJECT_BUDGET_FULL = {
   notionalUsd: 40.5,
   remainingUsd: 37.66,
   paused: false,
+  failClosed: null,
 };
 
 const PROJECT_BUDGET_SPARSE = {
@@ -48,6 +49,7 @@ const PROJECT_BUDGET_SPARSE = {
   notionalUsd: 0,
   remainingUsd: null,
   paused: false,
+  failClosed: null,
 };
 
 const PROJECT_BUDGET_PAUSED = {
@@ -55,6 +57,7 @@ const PROJECT_BUDGET_PAUSED = {
   spentUsd: 50,
   remainingUsd: 0,
   paused: true,
+  failClosed: null,
 };
 
 const ORG_BUDGET = {
@@ -190,7 +193,7 @@ describe("budget-halt panel (/budget)", () => {
   });
 
   it("renders fail-closed pause with — for unmeasured spend, not $0.00", async () => {
-    // Backend fail-closed placeholders: paused + no ceiling + spent/notional 0.
+    // Backend fail-closed placeholders: unresolvable + spent/notional 0.
     projectBudgetPayload = {
       ceilingUsd: null,
       period: "monthly",
@@ -198,6 +201,7 @@ describe("budget-halt panel (/budget)", () => {
       notionalUsd: 0,
       remainingUsd: null,
       paused: true,
+      failClosed: "unresolvable_project_org",
     };
     const app = await build();
     const html = await (await app.request("/budget")).text();
@@ -209,26 +213,39 @@ describe("budget-halt panel (/budget)", () => {
     expect(html).not.toContain("$0.00");
   });
 
-  it("renders unpriced_spend fail-closed (paused with headroom) as unmeasured, not partial $0", async () => {
-    // Ceiling set, spent still under ceiling, paused → unpriced_spend shape.
+  it("renders unpriced_spend fail-closed even when partial spent ≥ ceiling as unmeasured", async () => {
+    // Explicit failClosed: partial sum may already meet the ceiling but true spend is unknown.
     projectBudgetPayload = {
       ceilingUsd: 50,
       period: "monthly",
-      spentUsd: 0,
-      notionalUsd: 0,
-      remainingUsd: 50,
+      spentUsd: 50,
+      notionalUsd: 60,
+      remainingUsd: 0,
       paused: true,
+      failClosed: "unpriced_spend",
     };
     const app = await build();
     const html = await (await app.request("/budget")).text();
     expect(html).toContain("halted on budget");
     expect(html).toContain("Fail-closed safety pause");
     expect(html).toContain("unmeasured · fail-closed safety pause");
-    // Ceiling is still shown; only spend/notional/remaining go to "—".
+    // Ceiling is still shown; spend/notional/remaining go to "—".
     expect(html).toContain("$50.00");
     expect(html).not.toContain("gated figure · cost_usd billed");
-    // Do not paint partial zeros as the gated total.
-    expect(html).not.toMatch(/real spend[\s\S]*?\$0\.00/u);
+    expect(html).not.toContain("$60.00");
+  });
+
+  it("POST without projectId rejects without writing", async () => {
+    const app = await build();
+    const res = await app.request("/budget", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "action=save&ceilingUsd=10&period=monthly",
+      redirect: "manual",
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("err=no_project");
+    expect(lastPutBody).toBeUndefined();
   });
 
   it("renders the config form with save and clear controls and scoped projectId", async () => {

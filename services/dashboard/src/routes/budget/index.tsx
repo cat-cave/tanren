@@ -104,20 +104,20 @@ export function mountBudgetScreen(app: Hono, deps: ShellDeps): void {
   });
 
   // Form POST proxy → orchestrator PUT. Clear sends ceilingUsd: null.
-  // Project id must be present on the form and resolve against the org list.
+  // Project id MUST be present on the form and resolve against the org list —
+  // never fall back to projects[0] on a write (unscoped mutation).
   app.post("/budget", async (c: Context) => {
     const form = await c.req.parseBody();
     const formProjectId = formField(form, "projectId").trim();
-    const ctx = await loadShellContext(c, deps, {
-      activeNavId: "budget",
-      projectId: formProjectId === "" ? undefined : formProjectId,
-    });
-    const project = resolveProject(ctx.projects, formProjectId === "" ? undefined : formProjectId);
-    if (ctx.org === undefined || project === undefined) {
+    if (formProjectId === "") {
       return c.redirect("/budget?err=no_project");
     }
-    // Reject a form that named a project not visible to this org/session.
-    if (formProjectId !== "" && formProjectId !== project.projectId) {
+    const ctx = await loadShellContext(c, deps, {
+      activeNavId: "budget",
+      projectId: formProjectId,
+    });
+    const project = resolveProject(ctx.projects, formProjectId);
+    if (ctx.org === undefined || project === undefined || project.projectId !== formProjectId) {
       return c.redirect("/budget?err=no_project");
     }
 

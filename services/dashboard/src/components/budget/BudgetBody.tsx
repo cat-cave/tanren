@@ -45,15 +45,14 @@ function isEmpty(value: string): boolean {
 }
 
 /**
- * Spend is uncomputable when the walker is fail-closed. The budget GET does not
- * expose `failClosed`, so recover it from the observation shape:
- *   - paused + null ceiling → unresolvable/unparseable (backend zero placeholders)
- *   - paused + ceiling set + spent < ceiling → unpriced_spend (true spend unknown;
- *     partial sum must not be painted as the gated total, especially $0.00)
- * A genuine ceiling-reached halt has spent ≥ ceiling and is NOT uncomputable.
+ * Spend is uncomputable when the gate is fail-closed. Prefer the explicit
+ * `failClosed` field from the budget GET; fall back to shape heuristics for
+ * older payloads that only expose `paused`.
  */
 function isSpendUncomputable(b: ProjectBudgetView): boolean {
+  if (b.failClosed !== undefined && b.failClosed !== null) return true;
   if (!b.paused) return false;
+  // Heuristic for pre-failClosed payloads: null ceiling or spent still under ceiling.
   if (b.ceilingUsd === null) return true;
   return b.spentUsd < b.ceilingUsd;
 }

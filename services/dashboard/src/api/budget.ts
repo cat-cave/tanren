@@ -24,6 +24,9 @@ export interface BudgetPutBody {
  * The resolved ceiling (project-over-org), real spend, notional, headroom, and
  * whether the walker is paused on budget.
  */
+/** Fail-closed safety reason from the budget gate (null when open / ceiling-reached). */
+export type BudgetFailClosedReason = "unpriced_spend" | "unparseable_config" | "unresolvable_project_org";
+
 export interface ProjectBudgetView {
   ceilingUsd: number | null;
   period: BudgetPeriod;
@@ -35,6 +38,12 @@ export interface ProjectBudgetView {
   remainingUsd: number | null;
   /** True when the walker is halted on budget (or fail-closed safety pause). */
   paused: boolean;
+  /**
+   * When set, true spend is untrusted — do not paint spent/notional as measured
+   * figures (especially not $0.00 placeholders). Null on genuine ceiling-reached
+   * or when the gate is open. Optional for older payloads.
+   */
+  failClosed?: BudgetFailClosedReason | null;
 }
 
 /** Org-level default budget (`GET/PUT .../orgs/:id/budget`). No spend sum. */
