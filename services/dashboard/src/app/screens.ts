@@ -104,6 +104,11 @@ SCREEN_MOUNTS.push(mountAuditScreens);
 import { mountMergeQueueScreen } from "../routes/mergeQueue/index.js";
 SCREEN_MOUNTS.push(mountMergeQueueScreen);
 
+// budget-halt — enforced project ceiling + real spend (gated) + notional
+// (not gated) + pause banner + form POST proxy to PUT project budget.
+import { mountBudgetScreen } from "../routes/budget/index.js";
+SCREEN_MOUNTS.push(mountBudgetScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

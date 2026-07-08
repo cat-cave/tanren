@@ -62,6 +62,13 @@ export interface BudgetView {
   notionalUsd: number;
   remainingUsd: number | null;
   paused: boolean;
+  /**
+   * Fail-closed safety reason when the gate pauses because true spend cannot be
+   * trusted (`unpriced_spend` / `unparseable_config` / `unresolvable_project_org`).
+   * Null when the pause (if any) is a genuine ceiling-reached halt or the gate is open.
+   * Surfaced so the operator UI can avoid painting placeholder/partial zeros as real spend.
+   */
+  failClosed: "unpriced_spend" | "unparseable_config" | "unresolvable_project_org" | null;
 }
 
 function toView(state: ProjectBudgetState): BudgetView {
@@ -76,6 +83,7 @@ function toView(state: ProjectBudgetState): BudgetView {
     // BUDGET-SAFETY (C1b/M5): a fail-closed safety pause shows as paused too, not
     // just the genuine ceiling-reached case.
     paused: shouldPauseOnBudget(state),
+    failClosed: state.failClosed ?? null,
   };
 }
 

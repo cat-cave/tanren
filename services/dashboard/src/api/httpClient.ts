@@ -5,8 +5,8 @@
  * `OrchestratorClient` shares: the orchestrator base URL, the inbound cookie
  * header (forwarded for session auth), and the two defensive JSON helpers.
  * `getJson` swallows network + parse failures (→ `undefined`); `sendJson`
- * serves every write caller (POST/PATCH/DELETE, optional body — content-type is
- * only set when a body is present). Both degrade to an empty/undefined result
+ * serves every write caller (POST/PATCH/PUT/DELETE, optional body — content-type
+ * is only set when a body is present). Both degrade to an empty/undefined result
  * so a page never 500s when one panel's data source is unavailable.
  *
  * Split out of `orchestrator.ts` so the product surface stays under the
@@ -51,7 +51,7 @@ export abstract class OrchestratorHttpClient {
   }
 
   protected async sendJson<T = unknown>(
-    method: "POST" | "PATCH" | "DELETE",
+    method: "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
     body?: unknown,
   ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
