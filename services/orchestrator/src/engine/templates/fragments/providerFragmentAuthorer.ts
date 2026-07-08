@@ -42,6 +42,7 @@ import { z } from "zod";
 import { renderAnswererJsonSchema } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { exemplarFor, truncateExemplar } from "./fragmentAuthorerExemplars.js";
+import { RUNTIME_NODE_PNPM_OWNED_DEVDEPS, RUNTIME_NODE_PNPM_OWNED_FILES } from "./library/runtime-node-pnpm.js";
 import type {
   FragmentAuthorer,
   FragmentAuthorerInput,
@@ -116,11 +117,11 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "  - AT LEAST ONE test asserting the root component / router mounts.",
     "MUST NOT: touch backend/server code (that's the backend fragment). Do not",
     "define API routes here — the frontend calls them, it does not own them. Do NOT",
-    "overwrite runtime-owned files (`tsconfig.json`, `vitest.config.ts`) — to extend",
-    'TS config write `tsconfig.<label>.json` with `"extends": "./tsconfig.json"`',
-    "(the shipped frontend-remix exemplar writes `tsconfig.remix.json` + `vite.config.ts`",
-    "this way, and folds nothing new into the justfile). Do NOT re-declare",
-    "runtime-owned devDeps (typescript, vitest, eslint) — reuse the runtime's.",
+    "overwrite runtime-owned files or re-declare runtime-owned devDeps (the exact",
+    "set is listed in the RUNTIME-OWNED section below). To extend TS config write",
+    '`tsconfig.<label>.json` with `"extends": "./tsconfig.json"` (the shipped',
+    "frontend-remix exemplar writes `tsconfig.remix.json` + `vite.config.ts` this way,",
+    "and folds nothing new into the justfile).",
     "MUST DECLARE: `dependsOn: [runtime-<lang>-<pm>]` (the frontend cannot exist",
     "without the runtime that mounts its deps).",
   ],
@@ -135,8 +136,8 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "  - AT LEAST ONE test hitting a route (structural).",
     "MUST NOT: touch client-side code (the frontend fragment owns that). Do not",
     "declare product env vars owned by the db/deploy/auth slots. Do NOT overwrite",
-    "runtime-owned files (`tsconfig.json`) or re-declare runtime-owned devDeps",
-    "(typescript, vitest, eslint) — reuse the runtime's.",
+    "runtime-owned files or re-declare runtime-owned devDeps (the exact set is in",
+    "the RUNTIME-OWNED section below) — reuse the runtime's.",
     "MUST DECLARE: `dependsOn: [runtime-<lang>-<pm>]`.",
   ],
   db: [
@@ -144,17 +145,19 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "  - ORM/query-builder config + schema file (prisma/schema.prisma, drizzle",
     "    schema, models.py, Elixir schemas, …).",
     "  - Migrations directory (empty gitkeep on first compose; the writer adds).",
-    "  - Migration + seed logic as FILES (or package.json scripts) — NEVER a justfile",
-    "    target. There is no `just migrate` / `just db-reset`; if a migrate step must",
-    "    run in CI, fold it into the base `bootstrap` or `build` hook via",
-    "    vfs.appendToJustfileTarget(...).",
+    "  - Migration + seed logic as FILES — NEVER a justfile target. There is no",
+    "    `just migrate` / `just db-reset`; if a migrate step must run in CI, fold it",
+    "    into the base `bootstrap` or `build` hook via vfs.appendToJustfileTarget(...).",
+    "    A fragment CANNOT add a package.json script: there is no addPackageJsonScript",
+    "    op, and overwriting `package.json` clobbers the runtime's (VfsCollisionError).",
     "  - The DATABASE URL env var (`DATABASE_URL`, `POSTGRES_URL`, `MONGO_URL`, …)",
     "    — the DB slot is the AUTHORITATIVE owner; no other slot declares it.",
     "  - AT LEAST ONE test proving the client instantiates.",
     "MUST DECLARE: `contract.dbMigrationsDir` (the composer's evidence block reads",
     "this to detect pending migrations).",
     "MUST NOT: set up the language test runner (that's the runtime fragment), or",
-    "overwrite runtime-owned files / re-declare runtime-owned devDeps.",
+    "overwrite runtime-owned files / re-declare runtime-owned devDeps (the exact set",
+    "is in the RUNTIME-OWNED section below).",
   ],
   auth: [
     "An AUTH fragment owns the SESSION / IDENTITY LAYER:",
@@ -234,10 +237,19 @@ export function buildFragmentAuthorerPrompt(input: FragmentAuthorerInput): strin
     lines.push(``, ...productSection);
   }
 
+  lines.push(``, `## Slot-kind guidance (for ${spec.kind} fragments)`, ...SLOT_KIND_GUIDANCE[spec.kind]);
+
+  // RUNTIME-OWNED files + devDeps — derived from the runtime fragment's exported
+  // single-source-of-truth sets so this can NEVER drift from what the runtime
+  // actually writes/declares. Emitted for every NON-runtime kind (the runtime slot
+  // IS the owner, so it does not warn itself off its own files). A collision here is
+  // a guaranteed compose-time reject (VfsCollisionError on a re-write; a dep conflict
+  // on a different-version re-declare) — the class that stalled apex v81 F2 authoring.
+  if (spec.kind !== "runtime" && spec.kind !== "base") {
+    lines.push(``, ...runtimeOwnedGuidanceLines());
+  }
+
   lines.push(
-    ``,
-    `## Slot-kind guidance (for ${spec.kind} fragments)`,
-    ...SLOT_KIND_GUIDANCE[spec.kind],
     ``,
     `## What you must produce`,
     `Return JSON \`{ "bodyTs": "<string>" }\` where bodyTs is the TypeScript source`,
@@ -381,6 +393,34 @@ export function buildFragmentAuthorerPrompt(input: FragmentAuthorerInput): strin
     return rendered.slice(0, FRAGMENT_AUTHORER_PROMPT_MAX_CHARS) + "\n// … (prompt truncated at cap)\n";
   }
   return rendered;
+}
+
+// RUNTIME-OWNED collision guard — the exact files + devDeps the runtime fragment
+// owns, DERIVED from its exported single-source-of-truth sets. A fragment that
+// re-writes an owned file collides (VfsCollisionError); one that re-declares an
+// owned devDep at a DIFFERENT version throws the conflict check. Building this list
+// from the exported consts (rather than hand-maintaining a subset in the guidance)
+// means a future runtime change that adds an owned file/dep can't leave the writer
+// prompt stale — the drift-guard test asserts this list names every exported entry.
+function runtimeOwnedGuidanceLines(): readonly string[] {
+  const files = [...RUNTIME_NODE_PNPM_OWNED_FILES].sort();
+  const deps = Object.keys(RUNTIME_NODE_PNPM_OWNED_DEVDEPS).sort();
+  return [
+    `## RUNTIME-OWNED files + devDeps — DO NOT collide (compose-time reject)`,
+    `The runtime fragment (runtime-node-pnpm) already WRITES these files. Re-writing`,
+    `any of them is a VfsCollisionError at compose time — do NOT write them:`,
+    `  ${files.join(", ")}`,
+    `To extend TypeScript config, write \`tsconfig.<label>.json\` with`,
+    `\`"extends": "./tsconfig.json"\` (the shipped frontend-remix pattern) — never`,
+    `overwrite \`tsconfig.json\` itself. There is NO addPackageJsonScript op, so you`,
+    `cannot add a package.json script; overwriting \`package.json\` clobbers the`,
+    `runtime's and is rejected.`,
+    `The runtime fragment also DECLARES these devDeps. Re-declaring one at a DIFFERENT`,
+    `version throws the conflict check — reuse the runtime's; only add NEW deps your`,
+    `slot needs. If you must reference one below, use the SAME version (same-version`,
+    `re-declare is idempotent):`,
+    `  ${deps.map((d) => `${d}@${RUNTIME_NODE_PNPM_OWNED_DEVDEPS[d]}`).join(", ")}`,
+  ];
 }
 
 function renderProductContext(context: ProductContext | undefined): readonly string[] {

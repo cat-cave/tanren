@@ -105,6 +105,74 @@ describe("tanren demo", () => {
 });
 `;
 
+const MISE_TOML = `# Tanren base/ — toolchain pin. Runtime fragments fill the [tools] block; do not
+# add deps via env vars (mise pins the version we ran the gate on).
+[tools]
+node = "24"
+pnpm = "11"
+`;
+
+function packageJsonFor(config: TemplateConfig): string {
+  return `${JSON.stringify(
+    {
+      name: config.slug,
+      version: "0.0.0",
+      private: true,
+      type: "module",
+      scripts: {
+        lint: "eslint src tests",
+        typecheck: "tsc -p tsconfig.json --noEmit",
+        test: "vitest run",
+        build: "tsc -p tsconfig.json",
+      },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+// SINGLE SOURCE OF TRUTH — the files this runtime fragment WRITES. Any other
+// fragment that re-writes one of these paths collides at compose time
+// (VfsCollisionError). The `apply()` body writes FROM this set (and mise.toml +
+// package.json, which are config-dependent — see OWNED_FILES below), so the set
+// can never drift from what is actually written. `providerFragmentAuthorer.ts`
+// imports OWNED_FILES to build the writer-guidance "do NOT overwrite these" list,
+// and a drift-guard test asserts the guidance names every entry.
+//
+// `content` is `undefined` for the two config-dependent files (mise.toml is
+// overwritten, package.json is derived from `config.slug`); those are still OWNED
+// (a re-write collides) but are written on their own lines in `apply()`.
+const STATIC_OWNED_FILES: Readonly<Record<string, string>> = {
+  "tsconfig.json": TSCONFIG,
+  "vitest.config.ts": VITEST_CONFIG,
+  "cucumber.cjs": CUCUMBER_CONFIG,
+  "stryker.conf.mjs": STRYKER_CONFIG,
+  "src/demo.ts": DEMO_ENTRY,
+  "tests/demo.test.ts": DEMO_TEST,
+  "features/step_definitions/.gitkeep": "",
+} as const;
+
+/** Every file path this runtime fragment owns (writes on compose). A fragment that
+ * re-writes any of these collides (VfsCollisionError). The authorer guidance is
+ * derived from this set so it can never go stale. */
+export const RUNTIME_NODE_PNPM_OWNED_FILES: readonly string[] = [
+  "mise.toml",
+  "package.json",
+  ...Object.keys(STATIC_OWNED_FILES),
+];
+
+/** Every devDep this runtime fragment declares. A fragment that re-declares one of
+ * these at a DIFFERENT version throws the conflict check; same-version is idempotent.
+ * The authorer guidance is derived from this set so it can never go stale. */
+export const RUNTIME_NODE_PNPM_OWNED_DEVDEPS: Readonly<Record<string, string>> = {
+  vitest: "^4.0.0",
+  typescript: "^5.6.0",
+  eslint: "^9.0.0",
+  "@cucumber/cucumber": "^11.0.0",
+  "@stryker-mutator/core": "^9.0.0",
+  "@stryker-mutator/vitest-runner": "^9.0.0",
+} as const;
+
 export const runtimeNodePnpmFragment: Fragment = {
   id: RUNTIME_NODE_PNPM_ID,
   version: "1.0.0",
@@ -115,54 +183,26 @@ export const runtimeNodePnpmFragment: Fragment = {
     ciTier2: "pnpm test -- --reporter=junit --outputFile=reports/junit.xml",
   },
   async apply(vfs: VirtualFileSystem, config: TemplateConfig): Promise<void> {
-    // Fill mise.toml's [tools] table.
-    vfs.overwrite(
-      "mise.toml",
-      `# Tanren base/ — toolchain pin. Runtime fragments fill the [tools] block; do not
-# add deps via env vars (mise pins the version we ran the gate on).
-[tools]
-node = "24"
-pnpm = "11"
-`,
-    );
+    // Fill mise.toml's [tools] table (config-dependent OWNED file — overwritten).
+    vfs.overwrite("mise.toml", MISE_TOML);
 
-    vfs.write(
-      "package.json",
-      `${JSON.stringify(
-        {
-          name: config.slug,
-          version: "0.0.0",
-          private: true,
-          type: "module",
-          scripts: {
-            lint: "eslint src tests",
-            typecheck: "tsc -p tsconfig.json --noEmit",
-            test: "vitest run",
-            build: "tsc -p tsconfig.json",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    // package.json — config-dependent OWNED file (derived from config.slug).
+    vfs.write("package.json", packageJsonFor(config));
 
-    vfs.write("tsconfig.json", TSCONFIG);
-    vfs.write("vitest.config.ts", VITEST_CONFIG);
-    vfs.write("cucumber.cjs", CUCUMBER_CONFIG);
-    vfs.write("stryker.conf.mjs", STRYKER_CONFIG);
-    vfs.write("src/demo.ts", DEMO_ENTRY);
-    vfs.write("tests/demo.test.ts", DEMO_TEST);
-    vfs.write("features/step_definitions/.gitkeep", "");
+    // The static OWNED files — written FROM the single-source-of-truth map so the
+    // exported RUNTIME_NODE_PNPM_OWNED_FILES set cannot drift from what is written.
+    for (const [path, content] of Object.entries(STATIC_OWNED_FILES)) {
+      vfs.write(path, content);
+    }
 
-    // Runtime deps — vitest + tooling. Versions are pinned strings; an addon that
-    // bumps these declares the bump via addPackageJsonDevDep so the conflict-check
-    // surfaces a coordinated bump (or rejects an accidental skew).
-    vfs.addPackageJsonDevDep("vitest", "^4.0.0");
-    vfs.addPackageJsonDevDep("typescript", "^5.6.0");
-    vfs.addPackageJsonDevDep("eslint", "^9.0.0");
-    vfs.addPackageJsonDevDep("@cucumber/cucumber", "^11.0.0");
-    vfs.addPackageJsonDevDep("@stryker-mutator/core", "^9.0.0");
-    vfs.addPackageJsonDevDep("@stryker-mutator/vitest-runner", "^9.0.0");
+    // Runtime devDeps — vitest + tooling. Declared FROM the single-source-of-truth
+    // map (RUNTIME_NODE_PNPM_OWNED_DEVDEPS) so the exported set cannot drift. Versions
+    // are pinned strings; an addon that bumps these declares the bump via
+    // addPackageJsonDevDep so the conflict-check surfaces a coordinated bump (or
+    // rejects an accidental skew).
+    for (const [name, version] of Object.entries(RUNTIME_NODE_PNPM_OWNED_DEVDEPS)) {
+      vfs.addPackageJsonDevDep(name, version);
+    }
 
     // Justfile hook fills — the base owns the recipe shell; the runtime fills the
     // recipe BODY via this surface.
