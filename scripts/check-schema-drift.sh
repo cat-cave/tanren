@@ -7,7 +7,13 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 mkdir -p "$TMP_DIR"
 cp -R "$ROOT_DIR/db/migrations" "$TMP_DIR/migrations"
-OUT_DIR="$(realpath --relative-to="$ROOT_DIR" "$TMP_DIR/migrations")"
+# Compute the migrations dir relative to ROOT_DIR. GNU realpath (Linux/CI) has
+# --relative-to; BSD/macOS realpath does not, so fall back to python3 there.
+if realpath --relative-to=/ / >/dev/null 2>&1; then
+  OUT_DIR="$(realpath --relative-to="$ROOT_DIR" "$TMP_DIR/migrations")"
+else
+  OUT_DIR="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$TMP_DIR/migrations" "$ROOT_DIR")"
+fi
 
 cat > "$TMP_DIR/drizzle.config.ts" <<EOF
 import { defineConfig } from "drizzle-kit";
