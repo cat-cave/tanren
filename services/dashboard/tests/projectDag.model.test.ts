@@ -166,6 +166,11 @@ describe("buildSpecDetail", () => {
     expect(detail.blockedReason).not.toBeNull();
     expect(detail.latestRun?.runId).toBe("r_b");
     expect(detail.spendUsd).toBe("$3.50");
+    expect(detail.economics.spendUsd).toBe("$3.50");
+    expect(detail.economics.attempts).toBe("1");
+    expect(detail.economics.avgCostUsd).toBe("$3.50");
+    expect(detail.latestRun?.costLabel).toBe("$3.50");
+    expect(detail.runsAvailable).toBe(true);
   });
 
   it("routes review specs to the review handoff", () => {
@@ -180,5 +185,77 @@ describe("buildSpecDetail", () => {
     expect(detail.primaryAction?.href).toBe("/runs/r_r/review");
     // s_review blocks s_blocked (reverse edge).
     expect(detail.blocks.map((b) => b.specId)).toEqual(["s_blocked"]);
+  });
+
+  it("renders unpriced / zero cost totals as em-dash, never fake $0.00", () => {
+    const queued = allSpecs.find((s) => s.specId === "s_queued")!;
+    const detail = buildSpecDetail({
+      spec: queued,
+      allSpecs,
+      runs: [
+        run({ runId: "r1", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: "0" }),
+        run({ runId: "r2", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: "0.00" }),
+      ],
+      statusBySpecId,
+    });
+    expect(detail.spendUsd).toBe("—");
+    expect(detail.economics.spendUsd).toBe("—");
+    expect(detail.economics.avgCostUsd).toBe("—");
+    expect(detail.economics.attempts).toBe("2");
+    expect(detail.economics.pricedAttempts).toBe(0);
+    expect(detail.runs.every((r) => r.costLabel === "—")).toBe(true);
+  });
+
+  it("sums only priced attempts and surfaces unpriced coverage (never as $0)", () => {
+    const live = allSpecs.find((s) => s.specId === "s_live")!;
+    const detail = buildSpecDetail({
+      spec: live,
+      allSpecs,
+      runs: [
+        run({ runId: "r_a", specId: "s_live", costTotalUsd: "10.00" }),
+        run({ runId: "r_b", specId: "s_live", costTotalUsd: "0" }),
+        run({ runId: "r_c", specId: "s_live", costTotalUsd: "5.00" }),
+      ],
+      statusBySpecId,
+    });
+    // Known real spend only — unpriced run excluded from sum AND avg denominator.
+    expect(detail.economics.spendUsd).toBe("$15.00");
+    expect(detail.economics.avgCostUsd).toBe("$7.50");
+    expect(detail.economics.attempts).toBe("3");
+    expect(detail.economics.pricedAttempts).toBe(2);
+    expect(detail.economics.unpricedAttempts).toBe(1);
+    // Per-run label for the unpriced attempt is "—", not "$0.00".
+    expect(detail.runs.find((r) => r.runId === "r_b")?.costLabel).toBe("—");
+  });
+
+  it("marks runs unavailable when the run-list read failed", () => {
+    const review = allSpecs.find((s) => s.specId === "s_review")!;
+    const detail = buildSpecDetail({
+      spec: review,
+      allSpecs,
+      runs: [],
+      statusBySpecId,
+      runsAvailable: false,
+    });
+    expect(detail.runsAvailable).toBe(false);
+    expect(detail.runs).toEqual([]);
+    expect(detail.latestRun).toBeNull();
+    expect(detail.spendUsd).toBe("—");
+    expect(detail.economics.attempts).toBe("—");
+    expect(detail.economics.avgCostUsd).toBe("—");
+  });
+
+  it("shows em-dash attempts when there are genuinely no runs yet", () => {
+    const queued = allSpecs.find((s) => s.specId === "s_queued")!;
+    const detail = buildSpecDetail({
+      spec: queued,
+      allSpecs,
+      runs: [],
+      statusBySpecId,
+      runsAvailable: true,
+    });
+    expect(detail.runsAvailable).toBe(true);
+    expect(detail.economics.attempts).toBe("—");
+    expect(detail.economics.spendUsd).toBe("—");
   });
 });

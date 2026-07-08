@@ -105,6 +105,8 @@ export function resolveProjectMode(c: Context): "chat" | "dag" {
  * Load + shape a single spec's detail (drawer + full page). Composes the spec,
  * the project's spec list (for dep-chip titles + reverse "blocks" edges + dep
  * statuses), and the spec's run history. `undefined` when the spec is missing.
+ * A failed run-list read is surfaced as `runsAvailable: false` so the full-page
+ * run-history / economics panels show "unavailable" rather than fake zeros.
  */
 async function loadSpecDetail(
   c: Context,
@@ -114,13 +116,19 @@ async function loadSpecDetail(
   specId: string,
 ): Promise<SpecDetail | undefined> {
   const client = clientFor(c, deps);
-  const [allSpecs, specRuns, allRuns] = await Promise.all([
+  const [allSpecs, specRunsMaybe, allRunsMaybe] = await Promise.all([
     client.listSpecs(orgId, projectId),
-    client.listRuns(orgId, projectId, { specId }),
-    client.listRuns(orgId, projectId),
+    client.listRunsMaybe(orgId, projectId, { specId }),
+    client.listRunsMaybe(orgId, projectId),
   ]);
   const spec = allSpecs.find((s) => s.specId === specId);
   if (spec === undefined) return undefined;
+
+  // Spec-scoped runs drive the history + economics panels; project-wide runs
+  // only colour dependency chips. Either failure degrades its own surface.
+  const runsAvailable = specRunsMaybe !== undefined;
+  const specRuns = specRunsMaybe ?? [];
+  const allRuns = allRunsMaybe ?? [];
 
   const latestBySpec = new Map<string, RunListItem>();
   for (const run of allRuns) {
@@ -131,7 +139,7 @@ async function loadSpecDetail(
     statusBySpecId.set(other.specId, depStatus(other, latestBySpec.get(other.specId)));
   }
 
-  return buildSpecDetail({ spec, allSpecs, runs: specRuns, statusBySpecId });
+  return buildSpecDetail({ spec, allSpecs, runs: specRuns, statusBySpecId, runsAvailable });
 }
 
 // HALTED-outcome policy set imported from @tanren/db — the prior private copy

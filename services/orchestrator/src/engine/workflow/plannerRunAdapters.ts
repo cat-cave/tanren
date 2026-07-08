@@ -124,27 +124,46 @@ export function defaultSpecQualityValidator(
   ctx: PlannerRunAdapterContext,
 ): SpecQualityAnswerer {
   let resolved: SpecQualityAnswerer | undefined;
-  return {
-    validate(spec) {
-      if (resolved === undefined) {
-        const routing = input.context.routing;
-        if (routing === undefined) {
-          throw new Error(
-            "context.routing is required to build the spec-quality validator from the project routing table",
-          );
-        }
-        resolved = buildSpecQualityValidator(
-          {
-            secrets: input.secrets,
-            ssh: input.ssh,
-            target: ctx.target,
-            runId: ctx.runId,
-            endpointBaseUrl: input.context.endpointBaseUrl,
-          },
-          routing,
+  // Resolve-once, then DELEGATE every method. The prior wrapper exposed ONLY
+  // `validate` and silently dropped `reAuthor` — so `resolveReviseSpec`
+  // (specQuality/stage.ts) found no re-author callback and escalated at round 0
+  // (never applying the guidance it produced). Delegating BOTH methods forwards
+  // the underlying validator's built-in re-author; adding a method to the
+  // `SpecQualityAnswerer` contract now surfaces here at the type level rather than
+  // being silently lost. `reAuthor` stays optional-safe per the contract (a fake
+  // validator may omit it), but production `buildSpecQualityValidator` always
+  // provides it (via `wrapProviderSpecQualityAnswerer`).
+  const ensure = (): SpecQualityAnswerer => {
+    if (resolved === undefined) {
+      const routing = input.context.routing;
+      if (routing === undefined) {
+        throw new Error(
+          "context.routing is required to build the spec-quality validator from the project routing table",
         );
       }
-      return resolved.validate(spec);
+      resolved = buildSpecQualityValidator(
+        {
+          secrets: input.secrets,
+          ssh: input.ssh,
+          target: ctx.target,
+          runId: ctx.runId,
+          endpointBaseUrl: input.context.endpointBaseUrl,
+        },
+        routing,
+      );
+    }
+    return resolved;
+  };
+  return {
+    validate: (spec) => ensure().validate(spec),
+    reAuthor: (spec, guidance) => {
+      const v = ensure();
+      // Contract-optional, but production always provides it. Fail LOUD (not a
+      // silent drop) if a validator without `reAuthor` ever reaches this lazy seam.
+      if (v.reAuthor === undefined) {
+        throw new Error("the resolved spec-quality validator does not provide a re-author capability");
+      }
+      return v.reAuthor(spec, guidance);
     },
   };
 }

@@ -56,6 +56,14 @@ export type RunFailureCode =
   | "design_contract_corrupt"
   | "design_oracle_actor_config"
   | "malformed_design_oracle_result"
+  // apex v82: a spec the spec-quality gate could not make valid at a genuine fixed
+  // point (`PersistentlyInvalidSpecError`). Under autonomy:auto the triage stage now
+  // DROPS + PARKS a triage-PROPOSED invalid spec (loopFindings `gateTriagedSpecs`) so
+  // this should NOT reach the run-level catch on that path; this arm is
+  // DEFENSE-IN-DEPTH for a genuinely-unfixable spec that escapes by another route — it
+  // surfaces a SPECIFIC needs_attention class instead of the opaque `internal` code
+  // (which sank the whole apex v82 run behind a muddled `run.failed{internal}`).
+  | "spec_persistently_invalid"
   | "internal";
 
 /** Closed vocabulary of the run STAGE a failure is attributed to. */
@@ -151,6 +159,16 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     code: "malformed_design_oracle_result",
     stage: "agent",
     summary: "the design oracle result was malformed",
+  },
+  // apex v82 defense-in-depth: mirror arm to `stageFailureKind.ts`'s
+  // `spec_persistently_invalid`. A spec the spec-quality gate could not make valid at a
+  // fixed point — a genuine "a human must clarify/split it" signal, NOT an internal
+  // fault. Pulling it out of the opaque `internal` default gives the operator a
+  // SPECIFIC needs_attention class on `run.failed`/`dag.spec.needs_attention`.
+  PersistentlyInvalidSpecError: {
+    code: "spec_persistently_invalid",
+    stage: "agent",
+    summary: "a spec could not be made valid and requires human attention",
   },
 };
 

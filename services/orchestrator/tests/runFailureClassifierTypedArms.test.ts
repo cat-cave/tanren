@@ -26,6 +26,7 @@ import {
   MalformedDesignOracleResultError,
 } from "../src/engine/workflow/designOracle/designOracle.js";
 import { classifyRunFailure } from "../src/engine/worker/runFailureClassifier.js";
+import { PersistentlyInvalidSpecError } from "../src/engine/forge/specQuality/index.js";
 
 describe("classifyRunFailure — typed-error arms for context-hydration + pre-row paths (Codex round-3 #3)", () => {
   it("maps MalformedAncestorStackError → malformed_ancestor_stack @ bootstrap", () => {
@@ -75,6 +76,27 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       code: "malformed_design_oracle_result",
       stage: "agent",
       summary: "the design oracle result was malformed",
+    });
+  });
+
+  it("BUG2 defense-in-depth: maps PersistentlyInvalidSpecError → spec_persistently_invalid @ agent (NOT internal)", () => {
+    // apex v82: a triage-proposed spec's fixed-point rejection used to fall to the
+    // opaque `internal` default and sink the whole run. With the triage-stage catch in
+    // place this should not reach the run-level catch under autonomy:auto — but if it
+    // escapes by another route (a genuinely-unfixable BUILD spec), the operator must
+    // see a SPECIFIC needs_attention class, never opaque `internal`.
+    const error = new PersistentlyInvalidSpecError(
+      { title: "an unbounded epic", description: "d", acceptanceCriteria: [] },
+      undefined,
+      0,
+    );
+    const classified = classifyRunFailure(error);
+    expect(classified.code).toBe("spec_persistently_invalid");
+    expect(classified.code).not.toBe("internal");
+    expect(classified).toEqual({
+      code: "spec_persistently_invalid",
+      stage: "agent",
+      summary: "a spec could not be made valid and requires human attention",
     });
   });
 

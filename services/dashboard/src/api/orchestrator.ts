@@ -151,16 +151,23 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     return response.json();
   }
 
-  // Product reads/writes below use the shared `getJson`/`sendJson` helpers from
-  // `OrchestratorHttpClient`; each forwards the session cookie and degrades to
-  // an empty/undefined result so a page never 500s when a data source is down.
+  // Product reads/writes below use shared getJson/sendJson; degrade empty on failure.
 
-  /** Runs for the project's attention queue + KPIs. */
+  /** Runs for attention queue + KPIs; empty array on failure. */
   async listRuns(
     orgId: string,
     projectId: string,
     query: { status?: string; specId?: string } = {},
   ): Promise<RunListItem[]> {
+    return (await this.listRunsMaybe(orgId, projectId, query)) ?? [];
+  }
+
+  /** listRuns, but undefined on failure (unavailable, not fake empty/zeros). */
+  async listRunsMaybe(
+    orgId: string,
+    projectId: string,
+    query: { status?: string; specId?: string } = {},
+  ): Promise<RunListItem[] | undefined> {
     const params = new URLSearchParams();
     if (query.status !== undefined && query.status !== "") params.set("status", query.status);
     if (query.specId !== undefined && query.specId !== "") params.set("specId", query.specId);
@@ -168,7 +175,9 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
     const json = await this.getJson<{ items?: RunListItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
-    return json?.items ?? [];
+    // Missing/non-array items is a broken contract, not empty success.
+    if (json === undefined || !Array.isArray(json.items)) return undefined;
+    return json.items;
   }
 
   /** Project activity feed. */

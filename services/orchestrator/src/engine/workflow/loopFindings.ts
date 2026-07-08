@@ -5,6 +5,7 @@
 import type { Finding } from "../contracts/findings.js";
 import {
   type CandidateSpec,
+  PersistentlyInvalidSpecError,
   type SpecAudience,
   validateEmittedSpecs,
   type ValidateEmittedSpecsInput,
@@ -124,22 +125,98 @@ function triagedSpecToCandidate(routed: RoutedWorkItem, audience: SpecAudience |
   };
 }
 
+// A triage-proposed new spec DROPPED because the spec-quality gate could not make it
+// valid within its convergence budget. Parked (surfaced on `triage.completed`) so the
+// drop is visible, never silent — mirroring the audit scheduler's dead-letter to
+// needs_attention (`audits/scheduler.ts` `autoRouteOrDeadLetter`).
+export interface DroppedTriagedSpec {
+  id: string;
+  title: string;
+  severity: RoutedWorkItem["item"]["severity"];
+  reason: string;
+}
+
+/** The survivor subset (gate-passing) + the dropped-and-parked persistently-invalid specs. */
+export interface GateTriagedSpecsResult {
+  survivors: ReadonlyArray<RoutedWorkItem>;
+  dropped: ReadonlyArray<DroppedTriagedSpec>;
+}
+
 /**
  * Gate the triage's NEW-spec routed items through the spec-quality contract before
- * they leave triage. Propagates `PersistentlyInvalidSpecError` loud on a persistently
- * non-compliant spec. A no-op (returns immediately) when no validator is wired or no
- * item routed to a spec.
+ * they leave triage, per-item. A spec the gate could not make valid within its
+ * convergence budget throws `PersistentlyInvalidSpecError`; under autonomy that spec
+ * is an INDEPENDENT audit-derived DAG node (materialized separately), NOT the scaffold
+ * BUILD spec and NOT on its critical path — so a single bad proposal must NOT sink the
+ * whole run. We CATCH per-spec, DROP just that proposal, and PARK it (returned in
+ * `dropped`, surfaced on `triage.completed` for visibility) — mirroring the audit
+ * scheduler's `autoRouteOrDeadLetter` (park to needs_attention, never re-throw). The
+ * surviving (gate-passing) specs are returned for the caller to materialize; triage
+ * completes and the run continues. A no-op (returns all specs, none dropped) when no
+ * validator is wired or no item routed to a spec.
  */
 export async function gateTriagedSpecs(
   newSpecs: ReadonlyArray<RoutedWorkItem>,
   gate: TriageSpecValidator | undefined,
-): Promise<void> {
-  if (gate === undefined || newSpecs.length === 0) return;
-  await validateEmittedSpecs({
-    specs: newSpecs.map((routed) => triagedSpecToCandidate(routed, gate.audience)),
-    validator: gate.validator,
-    ...(gate.reviseSpec !== undefined && { reviseSpec: gate.reviseSpec }),
-  });
+): Promise<GateTriagedSpecsResult> {
+  if (gate === undefined || newSpecs.length === 0) return { survivors: newSpecs, dropped: [] };
+  const survivors: RoutedWorkItem[] = [];
+  const dropped: DroppedTriagedSpec[] = [];
+  for (const routed of newSpecs) {
+    try {
+      await validateEmittedSpecs({
+        specs: [triagedSpecToCandidate(routed, gate.audience)],
+        validator: gate.validator,
+        ...(gate.reviseSpec !== undefined && { reviseSpec: gate.reviseSpec }),
+      });
+      survivors.push(routed);
+    } catch (error) {
+      // Only a PERSISTENTLY-invalid spec degrades gracefully; any OTHER error
+      // (transient provider/DB fault) propagates so the run's normal fail-closed
+      // classification/retry applies — we never swallow an unknown throw here.
+      if (!(error instanceof PersistentlyInvalidSpecError)) throw error;
+      dropped.push({
+        id: routed.item.id,
+        title: routed.item.title,
+        severity: routed.item.severity,
+        reason: error.lastAnswer?.revisionGuidance ?? error.message,
+      });
+    }
+  }
+  return { survivors, dropped };
+}
+
+/** The `triage.completed` item + droppedSpecs payload pieces, derived from the gate
+ * result: the gate-dropped proposals leave `items` (surfaced in `droppedSpecs` instead)
+ * so the timeline shows exactly what materialized vs. what was parked. */
+export function buildTriageCompletedPayloadPieces(
+  routed: ReadonlyArray<RoutedWorkItem>,
+  gated: GateTriagedSpecsResult,
+): {
+  items: Array<{
+    id: string;
+    kind: RoutedWorkItem["item"]["kind"];
+    route: RoutedWorkItem["route"];
+    severity: RoutedWorkItem["item"]["severity"];
+    title: string;
+    findingIds: string[];
+  }>;
+  droppedSpecs: DroppedTriagedSpec[];
+} {
+  const droppedIds = new Set(gated.dropped.map((d) => d.id));
+  return {
+    items: routed
+      .filter((r) => !droppedIds.has(r.item.id))
+      .map((r) => ({
+        id: r.item.id,
+        kind: r.item.kind,
+        route: r.route,
+        severity: r.item.severity,
+        title: r.item.title,
+        findingIds: [...r.item.findingIds],
+      })),
+    droppedSpecs: [...gated.dropped],
+  };
 }
 
 /**

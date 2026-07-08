@@ -95,6 +95,23 @@ const RUNS = [
     lastEventAt: "2026-05-28T09:30:00.000Z",
     needsReview: true,
   },
+  // Prior attempt for the same review-ready spec (run history depth).
+  {
+    runId: "r_review_prior",
+    specId: "s_review",
+    projectId: "project_easy",
+    branch: "main",
+    trigger: "dashboard",
+    status: "completed",
+    outcome: "halted",
+    startedAt: "2026-05-27T08:00:00.000Z",
+    endedAt: "2026-05-27T08:20:00.000Z",
+    prUrl: null,
+    specTitle: "supplier scorecard",
+    costTotalUsd: "4.0",
+    lastEventAt: "2026-05-27T08:20:00.000Z",
+    needsReview: false,
+  },
   {
     runId: "r_blocked",
     specId: "s_blocked",
@@ -109,6 +126,23 @@ const RUNS = [
     specTitle: "edi mapping ui",
     costTotalUsd: "3.0",
     lastEventAt: "2026-05-28T08:30:00.000Z",
+    needsReview: false,
+  },
+  // Unpriced / zero-cost run for sparse economics assertions.
+  {
+    runId: "r_done_unpriced",
+    specId: "s_done",
+    projectId: "project_easy",
+    branch: "main",
+    trigger: "dashboard",
+    status: "completed",
+    outcome: "ok",
+    startedAt: "2026-05-26T07:00:00.000Z",
+    endedAt: "2026-05-26T07:15:00.000Z",
+    prUrl: null,
+    specTitle: "auth schema",
+    costTotalUsd: "0",
+    lastEventAt: "2026-05-26T07:15:00.000Z",
     needsReview: false,
   },
 ];
@@ -295,6 +329,87 @@ describe("spec full page", () => {
     expect(html).toContain("r_review");
     // back-to-dag link.
     expect(html).toContain("/projects/project_easy?mode=dag");
+  });
+
+  it("pins full-data run-history + economics panels (spend, attempts, avg)", async () => {
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy/specs/s_review")).text();
+    // Panels present (data-* hooks for the full-page depth surface).
+    expect(html).toContain("data-run-history-panel");
+    expect(html).toContain("data-economics-section");
+    expect(html).toContain("data-economics-panel");
+    // Both attempts for this spec show in run history with priced cost labels.
+    expect(html).toContain("r_review");
+    expect(html).toContain("r_review_prior");
+    expect(html).toContain("$12.00");
+    expect(html).toContain("$4.00");
+    // Economics: $12 + $4 = $16 spend, 2 attempts, $8 avg (both priced).
+    expect(html).toContain("spend to date");
+    expect(html).toContain("$16.00");
+    expect(html).toContain("avg / attempt");
+    expect(html).toContain("$8.00");
+    expect(html).toContain("attempts");
+    // When stamps from the run list are rendered (not raw ISO-only).
+    expect(html).toContain("may 28");
+    // No fabricated zero spend; no partial-coverage note when all priced.
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toContain("data-unpriced-note");
+  });
+
+  it("renders em-dash for unpriced economics, never fake zeros", async () => {
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy/specs/s_done")).text();
+    expect(html).toContain("run history");
+    expect(html).toContain("r_done_unpriced");
+    expect(html).toContain("economics");
+    expect(html).toContain("spend to date");
+    // Unpriced costTotalUsd "0" → "—", not "$0.00".
+    expect(html).toContain("—");
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toContain("$0.0");
+    // One unpriced attempt is labelled, not hidden as a silent $0.
+    expect(html).toContain("data-unpriced-note");
+    expect(html).toContain("unpriced");
+  });
+
+  it("shows unavailable (not zeros) when the run-list read fails", async () => {
+    // Override fetch so the runs endpoint 502s while specs still succeed.
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url))
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (url.endsWith("/projects/project_easy") && method === "GET")
+        return new Response(JSON.stringify(PROJECT), { status: 200 });
+      // Spec-scoped and project-wide run lists both fail.
+      if (url.includes("/runs")) return new Response("upstream down", { status: 502 });
+      if (url.endsWith("/specs") && method === "GET")
+        return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
+      if (url.includes("/milestones")) return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+      if (url.includes("/feed")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url.includes("/insights")) return new Response(JSON.stringify({ insights: [] }), { status: 200 });
+      if (url.includes("/personas")) return new Response(JSON.stringify({ personas: PERSONAS }), { status: 200 });
+      if (url.includes("/behaviors")) return new Response(JSON.stringify({ behaviors: BEHAVIORS }), { status: 200 });
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+
+    const app = await build();
+    const res = await app.request("/projects/project_easy/specs/s_review");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("supplier scorecard");
+    expect(html).toContain("data-runs-unavailable");
+    expect(html).toContain("data-economics-unavailable");
+    expect(html).toContain("Run history unavailable");
+    expect(html).toContain("Economics unavailable");
+    // Must not fabricate empty-history or zero-dollar figures.
+    expect(html).not.toContain("No runs yet");
+    expect(html).not.toContain("$0.00");
+    expect(html).not.toContain("data-economics-panel");
   });
 
   it("does not shadow /specs/new", async () => {
