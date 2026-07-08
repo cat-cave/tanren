@@ -16,9 +16,18 @@
 // wrappers; nothing in this module reads elapsed time.
 
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { parsePnpmError, type BundleInvoker, type PnpmInvoker } from "./runtimeValiditySmoke.js";
+import {
+  type BundleInvoker,
+  type CargoInvoker,
+  type GoInvoker,
+  type PipInvoker,
+  type PnpmInvoker,
+} from "./runtimeValiditySmoke.js";
+import { parseCargoError, parseGoError, parsePipError, parsePnpmError } from "./runtimeValiditySmokeParsers.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,6 +84,134 @@ export function buildLiveBundleInvoker(overrides: { readonly bundleBinary?: stri
       if (code === "ENOENT") return { kind: "unavailable" };
       const combined = collectExecOutput(err);
       return { kind: "failed", message: firstNonEmptyLine(combined) };
+    }
+  };
+}
+
+/** Build the production `PipInvoker` — resolves a pyproject.toml (or a
+ * requirements.txt when the scaffold produced one) against the operator's
+ * host Python resolver.
+ *
+ * PREFERENCE ORDER:
+ *   1. `uv pip compile pyproject.toml -o /dev/stdout` — the modern, fast
+ *      option that resolves without needing a build backend. Preferred when
+ *      `uv` is on PATH.
+ *   2. `pip install --dry-run -r requirements.txt` — when the scaffold ships
+ *      a requirements.txt.
+ *   3. `pip install --dry-run --ignore-installed --no-build-isolation .` —
+ *      the fallback for a pyproject-only scaffold on a host with pip but no
+ *      uv. This requires a build backend so it's the slower + more brittle
+ *      arm; the `uv pip compile` path is dramatically preferred.
+ *
+ * Returns `unavailable` when neither `uv` nor `pip` is on PATH so the caller
+ * falls back to the shallow pyproject.toml sniff. No wall-clock kill timer
+ * (feedback_no_timeouts_progress_based). */
+export function buildLivePipInvoker(
+  overrides: { readonly pipBinary?: string; readonly uvBinary?: string } = {},
+): PipInvoker {
+  const pipBinary = overrides.pipBinary ?? "pip";
+  const uvBinary = overrides.uvBinary ?? "uv";
+  return async ({ cwd, pyprojectPath }) => {
+    const requirementsPath = join(cwd, "requirements.txt");
+    const hasRequirements = existsSync(requirementsPath);
+    const hasPyproject = existsSync(pyprojectPath);
+    // Try uv first when available — no build backend needed.
+    const uvResult = await tryUvPipCompile(uvBinary, cwd, hasPyproject, hasRequirements, requirementsPath);
+    if (uvResult !== null) return uvResult;
+    // Fall back to plain pip.
+    const pipResult = await tryPipDryRun(pipBinary, cwd, hasRequirements, requirementsPath);
+    if (pipResult !== null) return pipResult;
+    return { kind: "unavailable" };
+  };
+}
+
+async function tryUvPipCompile(
+  uvBinary: string,
+  cwd: string,
+  hasPyproject: boolean,
+  hasRequirements: boolean,
+  requirementsPath: string,
+): Promise<Awaited<ReturnType<PipInvoker>> | null> {
+  const target = hasPyproject ? "pyproject.toml" : hasRequirements ? requirementsPath : null;
+  if (target === null) return null;
+  try {
+    await execFileAsync(uvBinary, ["pip", "compile", "--quiet", "-o", "/dev/null", target], {
+      cwd,
+      maxBuffer: 32 * 1024 * 1024,
+      env: { ...process.env, CI: "true" },
+    });
+    return { kind: "ok" };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return null;
+    return { kind: "failed", message: parsePipError(collectExecOutput(err)) };
+  }
+}
+
+async function tryPipDryRun(
+  pipBinary: string,
+  cwd: string,
+  hasRequirements: boolean,
+  requirementsPath: string,
+): Promise<Awaited<ReturnType<PipInvoker>> | null> {
+  const args = hasRequirements
+    ? ["install", "--dry-run", "--ignore-installed", "-r", requirementsPath]
+    : ["install", "--dry-run", "--ignore-installed", "--no-build-isolation", "."];
+  try {
+    await execFileAsync(pipBinary, args, {
+      cwd,
+      maxBuffer: 32 * 1024 * 1024,
+      env: { ...process.env, CI: "true" },
+    });
+    return { kind: "ok" };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return null;
+    return { kind: "failed", message: parsePipError(collectExecOutput(err)) };
+  }
+}
+
+/** Build the production `GoInvoker` — runs `go mod download` in the manifest
+ * directory. Returns `unavailable` when `go` is not on PATH. No wall-clock
+ * kill timer (feedback_no_timeouts_progress_based). */
+export function buildLiveGoInvoker(overrides: { readonly goBinary?: string } = {}): GoInvoker {
+  const goBinary = overrides.goBinary ?? "go";
+  return async ({ cwd }) => {
+    try {
+      await execFileAsync(goBinary, ["mod", "download"], {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, CI: "true" },
+      });
+      return { kind: "ok" };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") return { kind: "unavailable" };
+      return { kind: "failed", message: parseGoError(collectExecOutput(err)) };
+    }
+  };
+}
+
+/** Build the production `CargoInvoker` — runs `cargo fetch` against the
+ * manifest. Preferred over `cargo check` because it resolves + downloads deps
+ * without compiling anything — faster + more targeted at the "does this
+ * dependency exist" question this smoke asks. Returns `unavailable` when
+ * `cargo` is not on PATH. No wall-clock kill timer
+ * (feedback_no_timeouts_progress_based). */
+export function buildLiveCargoInvoker(overrides: { readonly cargoBinary?: string } = {}): CargoInvoker {
+  const cargoBinary = overrides.cargoBinary ?? "cargo";
+  return async ({ cwd, cargoTomlPath }) => {
+    try {
+      await execFileAsync(cargoBinary, ["fetch", "--manifest-path", cargoTomlPath], {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        env: { ...process.env, CI: "true" },
+      });
+      return { kind: "ok" };
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") return { kind: "unavailable" };
+      return { kind: "failed", message: parseCargoError(collectExecOutput(err)) };
     }
   };
 }

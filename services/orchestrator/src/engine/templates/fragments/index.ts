@@ -66,7 +66,12 @@ export {
   type SelectFragmentConfigResult,
   UnresolvableLifecycleError,
 } from "./selectFragmentConfig.js";
-export { deriveImplicitDependsOn } from "./implicitDependsOn.js";
+export {
+  deriveImplicitDependsOn,
+  RUNTIME_GO_ID,
+  RUNTIME_PYTHON_UV_ID,
+  RUNTIME_RUST_CARGO_ID,
+} from "./implicitDependsOn.js";
 export {
   buildFragmentAuthoring,
   FRAGMENT_AUTHORING_ATTEMPT_BODY_PREVIEW_MAX,
@@ -110,14 +115,32 @@ export {
   type BundleInvoker,
   type BundleInvokerInput,
   type BundleInvokerResult,
+  type CargoInvoker,
+  type CargoInvokerInput,
+  type CargoInvokerResult,
+  type GoInvoker,
+  type GoInvokerInput,
+  type GoInvokerResult,
+  parseCargoError,
+  parseGoError,
+  parsePipError,
   parsePnpmError,
+  type PipInvoker,
+  type PipInvokerInput,
+  type PipInvokerResult,
   type PnpmInvoker,
   type PnpmInvokerInput,
   type PnpmInvokerResult,
   runRuntimeValiditySmoke,
   type RuntimeValiditySmokeDeps,
 } from "./runtimeValiditySmoke.js";
-export { buildLiveBundleInvoker, buildLivePnpmInvoker } from "./runtimeValiditySmokeLive.js";
+export {
+  buildLiveBundleInvoker,
+  buildLiveCargoInvoker,
+  buildLiveGoInvoker,
+  buildLivePipInvoker,
+  buildLivePnpmInvoker,
+} from "./runtimeValiditySmokeLive.js";
 export {
   BASE_SKELETON_TEST_PATHS,
   hasMeaningfulAssertion,

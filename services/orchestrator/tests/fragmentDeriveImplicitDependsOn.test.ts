@@ -211,3 +211,135 @@ describe("deriveImplicitDependsOn — runtime fragments never imply a self-depen
     expect(deriveImplicitDependsOn(ops, runtimeSpec)).toEqual([]);
   });
 });
+
+// ── Non-Node runtime derivation (Codex MEDIUM + Claude MEDIUM finding) ──────
+//
+// A Python/Go/Rust addon that writes a manifest OR invokes toolchain commands in
+// a justfile MUST surface the implicit runtime so the composer's
+// `dependency_runtime_mismatch` pre-flight can catch a cross-runtime authoring
+// error (a python `pip install` line in a scaffold whose active runtime is
+// node-pnpm). Before this fix these ops derived EMPTY implicit dependsOn and
+// the mismatch went silent.
+
+describe("deriveImplicitDependsOn — python-tooled writes derive runtime-python-uv", () => {
+  it("derives runtime-python-uv when the body writes pyproject.toml", () => {
+    const ops: FragmentOp[] = [
+      { kind: "write", path: "pyproject.toml", content: '[project]\nname="x"\nversion="0.0.0"\n' },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-python-uv"]);
+  });
+
+  it("derives runtime-python-uv when the body writes requirements.txt", () => {
+    const ops: FragmentOp[] = [{ kind: "write", path: "requirements.txt", content: "fastapi\n" }];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-python-uv"]);
+  });
+
+  it("derives runtime-python-uv when the body OVERWRITES pyproject.toml", () => {
+    const ops: FragmentOp[] = [
+      { kind: "overwrite", path: "pyproject.toml", content: '[project]\nname="x"\nversion="0.0.0"\n' },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-python-uv"]);
+  });
+});
+
+describe("deriveImplicitDependsOn — go-tooled writes derive runtime-go", () => {
+  it("derives runtime-go when the body writes go.mod", () => {
+    const ops: FragmentOp[] = [{ kind: "write", path: "go.mod", content: "module tanren.test\n\ngo 1.22\n" }];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-go"]);
+  });
+
+  it("derives runtime-go when the body OVERWRITES go.mod", () => {
+    const ops: FragmentOp[] = [{ kind: "overwrite", path: "go.mod", content: "module tanren.test\n\ngo 1.22\n" }];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-go"]);
+  });
+});
+
+describe("deriveImplicitDependsOn — rust-tooled writes derive runtime-rust-cargo", () => {
+  it("derives runtime-rust-cargo when the body writes Cargo.toml", () => {
+    const ops: FragmentOp[] = [
+      { kind: "write", path: "Cargo.toml", content: '[package]\nname="x"\nversion="0.0.0"\n' },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-rust-cargo"]);
+  });
+
+  it("derives runtime-rust-cargo when the body OVERWRITES Cargo.toml", () => {
+    const ops: FragmentOp[] = [
+      { kind: "overwrite", path: "Cargo.toml", content: '[package]\nname="x"\nversion="0.0.0"\n' },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-rust-cargo"]);
+  });
+});
+
+describe("deriveImplicitDependsOn — non-Node justfile tooling tokens", () => {
+  it("derives runtime-python-uv for pip / python / python3 / poetry / uv / pipx tokens", () => {
+    const pipOps: FragmentOp[] = [{ kind: "just", target: "bootstrap", lines: ["pip install -r requirements.txt"] }];
+    expect(deriveImplicitDependsOn(pipOps, addonSpec)).toEqual(["runtime-python-uv"]);
+    const pythonOps: FragmentOp[] = [{ kind: "just", target: "start", lines: ["python -m app"] }];
+    expect(deriveImplicitDependsOn(pythonOps, addonSpec)).toEqual(["runtime-python-uv"]);
+    const python3Ops: FragmentOp[] = [{ kind: "just", target: "start", lines: ["python3 app.py"] }];
+    expect(deriveImplicitDependsOn(python3Ops, addonSpec)).toEqual(["runtime-python-uv"]);
+    const poetryOps: FragmentOp[] = [{ kind: "just", target: "install", lines: ["poetry install"] }];
+    expect(deriveImplicitDependsOn(poetryOps, addonSpec)).toEqual(["runtime-python-uv"]);
+    const uvOps: FragmentOp[] = [{ kind: "just", target: "install", lines: ["uv pip install ."] }];
+    expect(deriveImplicitDependsOn(uvOps, addonSpec)).toEqual(["runtime-python-uv"]);
+    const pipxOps: FragmentOp[] = [{ kind: "just", target: "tool", lines: ["pipx install black"] }];
+    expect(deriveImplicitDependsOn(pipxOps, addonSpec)).toEqual(["runtime-python-uv"]);
+  });
+
+  it("derives runtime-go for the go binary token", () => {
+    const ops: FragmentOp[] = [{ kind: "just", target: "test", lines: ["go test ./..."] }];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual(["runtime-go"]);
+  });
+
+  it("derives runtime-rust-cargo for cargo / rustc tokens", () => {
+    const cargoOps: FragmentOp[] = [{ kind: "just", target: "build", lines: ["cargo build --release"] }];
+    expect(deriveImplicitDependsOn(cargoOps, addonSpec)).toEqual(["runtime-rust-cargo"]);
+    const rustcOps: FragmentOp[] = [{ kind: "just", target: "compile", lines: ["rustc src/main.rs"] }];
+    expect(deriveImplicitDependsOn(rustcOps, addonSpec)).toEqual(["runtime-rust-cargo"]);
+  });
+
+  it("whole-word matching — a token embedded in another word does NOT match (e.g. `mongoose` does not match `go`)", () => {
+    const ops: FragmentOp[] = [
+      // `pipe`, `pygopher`, `mongoose`, `cargol`, `python-something` are all
+      // substrings not whole-word tokens — none should trigger.
+      { kind: "just", target: "pipeline", lines: ["mkdir /var/pipeline"] },
+      { kind: "just", target: "deploy", lines: ["ssh pygopher-host echo ok"] },
+      { kind: "just", target: "start", lines: ["mongoose serve"] },
+      { kind: "just", target: "build", lines: ["cargolm build"] },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
+  });
+
+  it("comment stripping applies uniformly — a python/go/rust token in a comment does NOT derive its runtime", () => {
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "docs", lines: ["# pip install was here"] },
+      { kind: "just", target: "docs", lines: ["true # go test cached"] },
+      { kind: "just", target: "docs", lines: ["    # cargo build removed"] },
+    ];
+    expect(deriveImplicitDependsOn(ops, addonSpec)).toEqual([]);
+  });
+
+  it("aggregates multiple runtimes when a body mixes tokens (the composer then fails loud on the mismatch)", () => {
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "py", lines: ["pip install ."] },
+      { kind: "just", target: "go", lines: ["go build ./..."] },
+      { kind: "just", target: "rs", lines: ["cargo build"] },
+    ];
+    const result = deriveImplicitDependsOn(ops, addonSpec);
+    expect(new Set(result)).toEqual(new Set(["runtime-python-uv", "runtime-go", "runtime-rust-cargo"]));
+    expect(result).toHaveLength(3);
+  });
+
+  it("recognizes the cross-runtime finding's exact shape: a db-* fragment that pip-installs in a justfile derives runtime-python-uv", () => {
+    // The finding's motivating case: an authored `db-*` fragment writes a
+    // `pip install ...` line into a justfile. Before this fix the derivation
+    // was EMPTY and the composer's `dependency_runtime_mismatch` couldn't
+    // catch the cross-runtime pair. Now it surfaces runtime-python-uv.
+    const dbSpec: FragmentSpec = { kind: "db", label: "postgres-py", id: "db-postgres-py", requiredContract: {} };
+    const ops: FragmentOp[] = [
+      { kind: "just", target: "bootstrap", lines: ["pip install psycopg2-binary"] },
+      { kind: "write", path: "docs/db.md", content: "postgres via python\n" },
+    ];
+    expect(deriveImplicitDependsOn(ops, dbSpec)).toEqual(["runtime-python-uv"]);
+  });
+});

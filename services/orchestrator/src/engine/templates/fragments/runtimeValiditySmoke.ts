@@ -13,17 +13,23 @@
 // next rework iteration sees the specific broken dep instead of a generic
 // "install failed".
 //
-// SCOPE per runtime (v0):
+// SCOPE per runtime (v1 — the non-Node runtimes now have real resolver seams too;
+// v0 shipped only the shallow manifest sniffs, which passed pyproject.toml with
+// `fastapi==999.999.999`):
 //   - node-pnpm: `pnpm install --frozen-lockfile=false --prefer-offline
 //     --no-strict-peer-dependencies` in the temp dir. Errors are parsed for the
 //     specific unresolved dep so the rejection names WHICH dep is broken.
 //   - ruby-bundler: `bundle check --gemfile=<Gemfile>` when a `BundleInvoker` is
 //     wired; else a lighter Gemfile syntax sanity check that flags obvious
 //     regressions (missing `source`, malformed `gem` line).
-//   - go / python / rust: parse the manifest (go.mod / pyproject.toml /
-//     Cargo.toml) for structural syntax + obviously-wrong version specifiers.
-//     A full `go mod download` / `pip install` / `cargo build` is out of scope
-//     for v0 — the goal is to catch DECLARED nonsense, not exercise the resolver.
+//   - python: `uv pip compile pyproject.toml` (preferred — no build backend
+//     needed) or `pip install --dry-run -r requirements.txt` when a `PipInvoker`
+//     is wired. When unwired OR unavailable, falls back to the shallow
+//     pyproject.toml sniff (structural sections + no leading-operator deps).
+//   - go: `go mod download` in the manifest dir when a `GoInvoker` is wired.
+//     When unwired OR unavailable, falls back to the shallow go.mod sniff.
+//   - rust: `cargo fetch --manifest-path <path>` when a `CargoInvoker` is wired.
+//     When unwired OR unavailable, falls back to the shallow Cargo.toml sniff.
 //   - unrecognized runtime: skipped with an explicit log so a maintainer can see
 //     which fragments never hit the runtime-validity gate.
 //
@@ -39,7 +45,6 @@
 // out to real pnpm / bundle. Tests inject a fake that returns canned results
 // so `just fast-check` never spawns an actual package manager.
 
-import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -51,7 +56,18 @@ import { deriveRuntimeLanguage, type SupportedRuntimeLanguage } from "./runtimeL
 import type { FragmentSpec } from "./selectFragmentConfig.js";
 import { configForFullLibrarySmoke } from "./smokeComposition.js";
 import type { SmokeResult } from "./smokeComposition.js";
+import {
+  checkCargoManifest,
+  checkGemfileSyntax,
+  checkGoModManifest,
+  checkPythonManifest,
+} from "./runtimeValiditySmokeSniffs.js";
 import { type Fragment, type FragmentLibrary, type VirtualFileSystem } from "./types.js";
+
+// Re-export the parsers so callers of this module get them at the historical
+// import path. The parser bodies live in `runtimeValiditySmokeParsers.ts` to
+// keep this file under the 500-line architecture cap.
+export { parseCargoError, parseGoError, parsePipError, parsePnpmError } from "./runtimeValiditySmokeParsers.js";
 
 const log = createLogger("fragment-runtime-validity-smoke");
 
@@ -91,13 +107,73 @@ export type BundleInvokerResult =
  * fallback runs. */
 export type BundleInvoker = (input: BundleInvokerInput) => Promise<BundleInvokerResult>;
 
-/** Deps the runtime-validity smoke is built with — both invoker seams so the
- * production wiring can hand in real subprocess spawners while tests hand in
- * canned fakes. `bundleInvoker` is optional (the Gemfile syntax fallback
- * covers a host without bundle). */
+/** Input to the pip invoker. The pyproject.toml (and any requirements.txt the
+ * scaffold produced) has been materialized into `cwd`. */
+export interface PipInvokerInput {
+  readonly cwd: string;
+  readonly pyprojectPath: string;
+}
+
+/** Outcome of a `pip install --dry-run` / `uv pip compile` invocation. Same
+ * three-arm union as the bundle invoker: `unavailable` (no `pip`/`uv` on PATH)
+ * triggers the fallback shallow manifest check. */
+export type PipInvokerResult =
+  | { readonly kind: "ok" }
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "unavailable" };
+
+/** The pip subprocess seam. Production wires this to `buildLivePipInvoker`;
+ * tests inject a canned fake. Optional — when omitted, the pyproject.toml
+ * shallow sniff runs. */
+export type PipInvoker = (input: PipInvokerInput) => Promise<PipInvokerResult>;
+
+/** Input to the go invoker. The go.mod is at `cwd`. */
+export interface GoInvokerInput {
+  readonly cwd: string;
+  readonly gomodPath: string;
+}
+
+/** Outcome of a `go mod download` invocation. Same three-arm union as bundle
+ * / pip. */
+export type GoInvokerResult =
+  | { readonly kind: "ok" }
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "unavailable" };
+
+/** The go subprocess seam. Production wires this to `buildLiveGoInvoker`;
+ * tests inject a canned fake. Optional — when omitted, the go.mod shallow
+ * sniff runs. */
+export type GoInvoker = (input: GoInvokerInput) => Promise<GoInvokerResult>;
+
+/** Input to the cargo invoker. The Cargo.toml is at `cwd`. */
+export interface CargoInvokerInput {
+  readonly cwd: string;
+  readonly cargoTomlPath: string;
+}
+
+/** Outcome of a `cargo fetch` invocation. Same three-arm union as bundle /
+ * pip / go. */
+export type CargoInvokerResult =
+  | { readonly kind: "ok" }
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "unavailable" };
+
+/** The cargo subprocess seam. Production wires this to `buildLiveCargoInvoker`;
+ * tests inject a canned fake. Optional — when omitted, the Cargo.toml shallow
+ * sniff runs. */
+export type CargoInvoker = (input: CargoInvokerInput) => Promise<CargoInvokerResult>;
+
+/** Deps the runtime-validity smoke is built with — one invoker seam per runtime
+ * so the production wiring can hand in real subprocess spawners while tests
+ * hand in canned fakes. Only `pnpmInvoker` is required (the historical Node-only
+ * v0 gate); the four others are optional — when omitted OR `unavailable`, the
+ * shallow manifest-sniff fallback runs for that runtime. */
 export interface RuntimeValiditySmokeDeps {
   readonly pnpmInvoker: PnpmInvoker;
   readonly bundleInvoker?: BundleInvoker;
+  readonly pipInvoker?: PipInvoker;
+  readonly goInvoker?: GoInvoker;
+  readonly cargoInvoker?: CargoInvoker;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────
@@ -153,11 +229,11 @@ export async function runRuntimeValiditySmoke(args: {
       case "ruby":
         return await checkRubyBundler(deps, dir, derivedDependsOn);
       case "go":
-        return checkGoModManifest(dir, derivedDependsOn);
+        return await checkGo(deps, dir, derivedDependsOn);
       case "python":
-        return checkPythonManifest(dir, derivedDependsOn);
+        return await checkPython(deps, dir, derivedDependsOn);
       case "rust":
-        return checkCargoManifest(dir, derivedDependsOn);
+        return await checkRust(deps, dir, derivedDependsOn);
       /* c8 ignore next 2 -- exhaustive check on the union */
       default:
         return { kind: "ok", dependsOn: derivedDependsOn };
@@ -205,169 +281,67 @@ async function checkRubyBundler(
   return checkGemfileSyntax(cwd, derivedDependsOn);
 }
 
-/** Lighter Gemfile sanity check when `bundle check` is unavailable. Flags:
- *   - missing `source` directive (a Gemfile without a rubygems source can't
- *     resolve any gem),
- *   - malformed `gem "name", "version"` lines whose version constraint is
- *     structurally broken (e.g. contains an unquoted operator or is
- *     obviously not a semver constraint).
- * Full Gemfile evaluation requires a Ruby interpreter; this heuristic catches
- * the shape-level regressions v0 aims at. */
-function checkGemfileSyntax(cwd: string, derivedDependsOn: readonly string[]): SmokeResult {
-  // A composed scaffold with a ruby-bundler runtime always writes a Gemfile;
-  // its absence here is a composer regression, not a fragment bug.
-  // NOTE: uses the Node fs API sync-style is out of scope — we already
-  // materialized into cwd via async writes.
-  let gemfile: string;
-  try {
-    // Read via node:fs/promises would require another await; use a sync form
-    // via the materialized flat map is cleaner, but we're already inside cwd.
-    // Use readFileSync via require-shape? — cleaner: use fs/promises inline.
-    gemfile = readFileSyncSafe(join(cwd, "Gemfile"));
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: Gemfile absent — ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  const lines = gemfile.split("\n");
-  const hasSource = lines.some((l) => /^\s*source\s+["'][^"']+["']/u.test(l));
-  if (!hasSource) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: Gemfile is missing a \`source "…"\` directive — no gem is resolvable without a rubygems source`,
-    };
-  }
-  for (const raw of lines) {
-    const line = raw.replace(/#.*$/u, "").trim();
-    if (line.length === 0) continue;
-    if (!/^gem\s+/u.test(line)) continue;
-    // Very forgiving parse: gem "name" [, "version_constraint"[, options…]]
-    // Reject a gem line whose FIRST arg is not a quoted string.
-    if (!/^gem\s+["'][^"']+["']/u.test(line)) {
+async function checkGo(
+  deps: RuntimeValiditySmokeDeps,
+  cwd: string,
+  derivedDependsOn: readonly string[],
+): Promise<SmokeResult> {
+  const gomodPath = join(cwd, "go.mod");
+  if (deps.goInvoker !== undefined) {
+    const result = await deps.goInvoker({ cwd, gomodPath });
+    if (result.kind === "ok") return { kind: "ok", dependsOn: derivedDependsOn };
+    if (result.kind === "failed") {
       return {
         kind: "failed",
-        reason: `runtime-validity smoke rejected: Gemfile has a malformed gem line: ${JSON.stringify(line)}`,
+        reason: `runtime-validity smoke rejected: go mod download rejected: ${result.message}`,
       };
     }
+    // unavailable → fall through to the shallow manifest sniff.
+    log.info("go unavailable on host — falling back to go.mod shallow sniff", { cwd });
   }
-  return { kind: "ok", dependsOn: derivedDependsOn };
+  return checkGoModManifest(cwd, derivedDependsOn);
 }
 
-function checkGoModManifest(cwd: string, derivedDependsOn: readonly string[]): SmokeResult {
-  let manifest: string;
-  try {
-    manifest = readFileSyncSafe(join(cwd, "go.mod"));
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: go.mod absent — ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  const lines = manifest.split("\n");
-  // The first non-comment, non-blank line must be `module <path>`.
-  const first = lines.find((l) => {
-    const stripped = l.replace(/\/\/.*$/u, "").trim();
-    return stripped.length > 0;
-  });
-  if (first === undefined || !/^module\s+\S+/u.test(first.trim())) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: go.mod must open with a \`module <path>\` directive; got ${JSON.stringify(first ?? "")}`,
-    };
-  }
-  // Each `require <path> <version>` line must have a version that looks like a
-  // semver or pseudo-version (v0.0.0-…). We don't verify resolution here.
-  for (const raw of lines) {
-    const line = raw.replace(/\/\/.*$/u, "").trim();
-    const m = line.match(/^require\s+\S+\s+(\S+)/u);
-    if (m === null) continue;
-    const version = m[1] ?? "";
-    if (!/^v\d/u.test(version)) {
+async function checkPython(
+  deps: RuntimeValiditySmokeDeps,
+  cwd: string,
+  derivedDependsOn: readonly string[],
+): Promise<SmokeResult> {
+  const pyprojectPath = join(cwd, "pyproject.toml");
+  if (deps.pipInvoker !== undefined) {
+    const result = await deps.pipInvoker({ cwd, pyprojectPath });
+    if (result.kind === "ok") return { kind: "ok", dependsOn: derivedDependsOn };
+    if (result.kind === "failed") {
       return {
         kind: "failed",
-        reason: `runtime-validity smoke rejected: go.mod require line has a suspicious version specifier: ${JSON.stringify(line)} (Go module versions start with \`v\`)`,
+        reason: `runtime-validity smoke rejected: pip install rejected: ${result.message}`,
       };
     }
+    // unavailable → fall through to the shallow manifest sniff.
+    log.info("pip/uv unavailable on host — falling back to pyproject.toml shallow sniff", { cwd });
   }
-  return { kind: "ok", dependsOn: derivedDependsOn };
+  return checkPythonManifest(cwd, derivedDependsOn);
 }
 
-function checkPythonManifest(cwd: string, derivedDependsOn: readonly string[]): SmokeResult {
-  let manifest: string;
-  try {
-    manifest = readFileSyncSafe(join(cwd, "pyproject.toml"));
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: pyproject.toml absent — ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  // Very light TOML sanity: at least one [section] header and no obviously-broken
-  // key = value line inside it. A missing [project] section is the classic
-  // regression a writer produces when it forgets the pyproject structure.
-  if (!/^\s*\[(project|tool\.[^\]]+|build-system)\]/mu.test(manifest)) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: pyproject.toml has no recognized top-level section (\`[project]\`, \`[tool.…]\`, or \`[build-system]\`)`,
-    };
-  }
-  // Check dependencies list entries for shape: "pkg" or "pkg==ver" or "pkg>=ver".
-  const depsMatch = manifest.match(/dependencies\s*=\s*\[([^\]]*)\]/u);
-  if (depsMatch !== null) {
-    const inner = depsMatch[1] ?? "";
-    const entries = inner.match(/"[^"]+"|'[^']+'/gu) ?? [];
-    for (const entry of entries) {
-      const dep = entry.slice(1, -1).trim();
-      if (dep === "") continue;
-      // Reject an entry containing a semver-like constraint the writer wrote
-      // WITHOUT a package name (a common LLM misfire).
-      if (/^[<>=!~^]/u.test(dep)) {
-        return {
-          kind: "failed",
-          reason: `runtime-validity smoke rejected: pyproject.toml dependency entry ${JSON.stringify(dep)} starts with a version operator — the package name is missing`,
-        };
-      }
-    }
-  }
-  return { kind: "ok", dependsOn: derivedDependsOn };
-}
-
-function checkCargoManifest(cwd: string, derivedDependsOn: readonly string[]): SmokeResult {
-  let manifest: string;
-  try {
-    manifest = readFileSyncSafe(join(cwd, "Cargo.toml"));
-  } catch (err) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: Cargo.toml absent — ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  // Cargo requires either a [package] or [workspace] table.
-  if (!/^\s*\[(package|workspace)\]/mu.test(manifest)) {
-    return {
-      kind: "failed",
-      reason: `runtime-validity smoke rejected: Cargo.toml has no \`[package]\` or \`[workspace]\` table`,
-    };
-  }
-  // If [package] is present, name + version are required at minimum.
-  const pkgMatch = manifest.match(/\[package\]([\s\S]*?)(?:\n\[|$)/u);
-  if (pkgMatch !== null) {
-    const body = pkgMatch[1] ?? "";
-    if (!/^\s*name\s*=\s*["'][^"']+["']/mu.test(body)) {
+async function checkRust(
+  deps: RuntimeValiditySmokeDeps,
+  cwd: string,
+  derivedDependsOn: readonly string[],
+): Promise<SmokeResult> {
+  const cargoTomlPath = join(cwd, "Cargo.toml");
+  if (deps.cargoInvoker !== undefined) {
+    const result = await deps.cargoInvoker({ cwd, cargoTomlPath });
+    if (result.kind === "ok") return { kind: "ok", dependsOn: derivedDependsOn };
+    if (result.kind === "failed") {
       return {
         kind: "failed",
-        reason: `runtime-validity smoke rejected: Cargo.toml [package] table is missing a \`name = "…"\` key`,
+        reason: `runtime-validity smoke rejected: cargo fetch rejected: ${result.message}`,
       };
     }
-    if (!/^\s*version\s*=\s*["'][^"']+["']/mu.test(body)) {
-      return {
-        kind: "failed",
-        reason: `runtime-validity smoke rejected: Cargo.toml [package] table is missing a \`version = "…"\` key`,
-      };
-    }
+    // unavailable → fall through to the shallow manifest sniff.
+    log.info("cargo unavailable on host — falling back to Cargo.toml shallow sniff", { cwd });
   }
-  return { kind: "ok", dependsOn: derivedDependsOn };
+  return checkCargoManifest(cwd, derivedDependsOn);
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -401,49 +375,4 @@ async function materializeVfsToDir(vfs: VirtualFileSystem, dir: string): Promise
     await mkdir(dirname(absPath), { recursive: true });
     await writeFile(absPath, flat[path] ?? "");
   }
-}
-
-/** Synchronous read helper the manifest checks use. Wrapping fs.readFileSync
- * keeps the check functions non-async so a call-site refactor doesn't accidentally
- * lose the failure envelope. Lifted here rather than inlined so we import the
- * one Node primitive once at file scope. */
-function readFileSyncSafe(path: string): string {
-  return readFileSync(path, "utf8");
-}
-
-// ── Pnpm error parser (pure — reused by the live invoker) ───────────────────
-
-/** Parse pnpm's combined output for the specific unresolved dep, so the writer
- * gets an ACTIONABLE rejection ("no matching version for vitest ^99.0.0") instead
- * of a generic "install failed".
- *
- * pnpm's ERR_PNPM_NO_MATCHING_VERSION message looks like:
- *   ERR_PNPM_NO_MATCHING_VERSION  No matching version found for vitest@^99.0.0
- * Also matches ERR_PNPM_FETCH_404 (dep not found on the registry) and the more
- * general "GET https://…/pkg/-/pkg-x.y.z.tgz: 404" line.
- *
- * Pure by design so the live invoker (which spawns pnpm — lives in
- * `runtimeValiditySmokeLive.ts`, allowlisted by `no-host-process-spawn`) can
- * import + reuse the parser without pulling `child_process` into this file. */
-export function parsePnpmError(output: string): string {
-  const noMatch = output.match(/No matching version found for\s+(\S+@\S+)/u);
-  if (noMatch !== null) return `no matching version for ${noMatch[1] ?? "unknown"}`;
-  const notFound = output.match(/(?:GET.*?)?(?:https?:\/\/\S+\/(\S+?)(?:-|\/)[-.\w]+(?:\.tgz)?)\s*[:\s]+\s*404/u);
-  if (notFound !== null) return `package not found on registry: ${notFound[1] ?? "unknown"}`;
-  const errCode = output.match(/(ERR_PNPM_[A-Z0-9_]+)/u);
-  if (errCode !== null) {
-    const firstLine = firstNonEmptyLine(output);
-    return `${errCode[1] ?? "ERR_PNPM_UNKNOWN"}: ${firstLine}`;
-  }
-  const peer = output.match(/unmet peer\s+(\S+@\S+)/u);
-  if (peer !== null) return `unmet peer dependency ${peer[1] ?? "unknown"}`;
-  return firstNonEmptyLine(output);
-}
-
-function firstNonEmptyLine(output: string): string {
-  const line = output
-    .split("\n")
-    .map((l) => l.trim())
-    .find((l) => l.length > 0);
-  return line ?? "install failed with no output";
 }
