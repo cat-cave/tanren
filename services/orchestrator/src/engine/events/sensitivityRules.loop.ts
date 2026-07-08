@@ -96,6 +96,11 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
     ["items[].title", "public"],
     ["items[].findingIds", "public"],
     ["items[].findingIds[]", "public"],
+    ["droppedSpecs", "public"],
+    ["droppedSpecs[].id", "public"],
+    ["droppedSpecs[].title", "public"],
+    ["droppedSpecs[].severity", "public"],
+    ["droppedSpecs[].reason", "public"],
   ]),
   ...rulesFor("convergence.started", [["taskKind", "public"]]),
   ...rulesFor("convergence.assessed", [
