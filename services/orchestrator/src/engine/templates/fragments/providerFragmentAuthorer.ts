@@ -42,6 +42,7 @@ import { z } from "zod";
 import { renderAnswererJsonSchema } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { exemplarFor, truncateExemplar } from "./fragmentAuthorerExemplars.js";
+import { RUNTIME_NODE_PNPM_OWNED_DEVDEPS, RUNTIME_NODE_PNPM_OWNED_FILES } from "./library/runtime-node-pnpm.js";
 import type {
   FragmentAuthorer,
   FragmentAuthorerInput,
@@ -108,12 +109,19 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "A FRONTEND fragment owns the CLIENT SURFACE:",
     "  - Routing config (React Router, Remix routes/, Next.js pages/, etc).",
     "  - Root layout / entry component (`app/root.tsx`, `src/main.tsx`, …).",
-    "  - Framework-specific dev-server hook on `just dev` (vite, next dev, …).",
-    "  - Framework build recipe on `just build` (when the frontend owns the build).",
+    "  - Framework dev-server / build config as a FILE (e.g. `vite.config.ts`,",
+    "    `next.config.js`) — NEVER a justfile target. There is no `just dev`; a dev",
+    "    server is a config file. If the frontend owns the compiled build, fold it",
+    '    into the base `build` hook: vfs.appendToJustfileTarget("build", [...]).',
     "  - Framework package deps (react, next, remix, svelte, …).",
     "  - AT LEAST ONE test asserting the root component / router mounts.",
     "MUST NOT: touch backend/server code (that's the backend fragment). Do not",
-    "define API routes here — the frontend calls them, it does not own them.",
+    "define API routes here — the frontend calls them, it does not own them. Do NOT",
+    "overwrite runtime-owned files or re-declare runtime-owned devDeps (the exact",
+    "set is listed in the RUNTIME-OWNED section below). To extend TS config write",
+    '`tsconfig.<label>.json` with `"extends": "./tsconfig.json"` (the shipped',
+    "frontend-remix exemplar writes `tsconfig.remix.json` + `vite.config.ts` this way,",
+    "and folds nothing new into the justfile).",
     "MUST DECLARE: `dependsOn: [runtime-<lang>-<pm>]` (the frontend cannot exist",
     "without the runtime that mounts its deps).",
   ],
@@ -121,11 +129,15 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "A BACKEND fragment owns the SERVER SURFACE:",
     "  - Server framework wiring (express, fastify, hono, sinatra, django, …).",
     "  - Routing table + a health-check route.",
-    "  - `just serve` justfile hook that starts the server.",
+    "  - A server-boot entry FILE (`src/server.ts`, …); the start command is config,",
+    "    NEVER a justfile target — there is no `just serve`. Any compile step folds",
+    '    into the base `build` hook: vfs.appendToJustfileTarget("build", [...]).',
     "  - Framework package deps.",
     "  - AT LEAST ONE test hitting a route (structural).",
     "MUST NOT: touch client-side code (the frontend fragment owns that). Do not",
-    "declare product env vars owned by the db/deploy/auth slots.",
+    "declare product env vars owned by the db/deploy/auth slots. Do NOT overwrite",
+    "runtime-owned files or re-declare runtime-owned devDeps (the exact set is in",
+    "the RUNTIME-OWNED section below) — reuse the runtime's.",
     "MUST DECLARE: `dependsOn: [runtime-<lang>-<pm>]`.",
   ],
   db: [
@@ -133,13 +145,19 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "  - ORM/query-builder config + schema file (prisma/schema.prisma, drizzle",
     "    schema, models.py, Elixir schemas, …).",
     "  - Migrations directory (empty gitkeep on first compose; the writer adds).",
-    "  - Migration recipe on `just migrate` / reset recipe on `just db-reset`.",
+    "  - Migration + seed logic as FILES — NEVER a justfile target. There is no",
+    "    `just migrate` / `just db-reset`; if a migrate step must run in CI, fold it",
+    "    into the base `bootstrap` or `build` hook via vfs.appendToJustfileTarget(...).",
+    "    A fragment CANNOT add a package.json script: there is no addPackageJsonScript",
+    "    op, and overwriting `package.json` clobbers the runtime's (VfsCollisionError).",
     "  - The DATABASE URL env var (`DATABASE_URL`, `POSTGRES_URL`, `MONGO_URL`, …)",
     "    — the DB slot is the AUTHORITATIVE owner; no other slot declares it.",
     "  - AT LEAST ONE test proving the client instantiates.",
     "MUST DECLARE: `contract.dbMigrationsDir` (the composer's evidence block reads",
     "this to detect pending migrations).",
-    "MUST NOT: set up the language test runner (that's the runtime fragment).",
+    "MUST NOT: set up the language test runner (that's the runtime fragment), or",
+    "overwrite runtime-owned files / re-declare runtime-owned devDeps (the exact set",
+    "is in the RUNTIME-OWNED section below).",
   ],
   auth: [
     "An AUTH fragment owns the SESSION / IDENTITY LAYER:",
@@ -175,11 +193,15 @@ const SLOT_KIND_GUIDANCE: Readonly<Record<FragmentKind, readonly string[]>> = {
     "A DEPLOY fragment owns the DELIVERY TARGET:",
     "  - Provider token env vars (`FLY_API_TOKEN`, `VERCEL_TOKEN`, …) — the deploy",
     "    slot is the AUTHORITATIVE owner; no other slot declares these.",
-    "  - Deploy config file (`fly.toml`, `vercel.json`, `render.yaml`, …).",
-    "  - Deploy recipe on `just deploy` (or the `deploy` justfile target).",
-    "MUST NOT: touch runtime deps, add test-runner config, or modify the",
-    "package.json scripts block. The deploy slot is the LAST phase at compose",
-    "time — it may only ADD deploy-specific artifacts, not restructure the app.",
+    "  - Deploy config file (`fly.toml`, `vercel.json`, `render.yaml`, …) as a FILE",
+    "    plus any CI wiring. A deploy is a CONFIG FILE, NEVER a justfile target —",
+    "    there is no `just deploy`. The base ci.yml already resolves the deploy verb",
+    "    to `just build` + Tanren's deploy-target-resolution from the org's",
+    "    integration grants (the shipped deploy-fly exemplar writes only `fly.toml`",
+    "    + the `FLY_API_TOKEN` env var, and adds NO justfile recipe).",
+    "MUST NOT: touch runtime deps, add test-runner config, modify the package.json",
+    "scripts block, or add a justfile target. The deploy slot is the LAST phase at",
+    "compose time — it may only ADD deploy-specific artifacts, not restructure the app.",
   ],
 } as const;
 
@@ -215,10 +237,19 @@ export function buildFragmentAuthorerPrompt(input: FragmentAuthorerInput): strin
     lines.push(``, ...productSection);
   }
 
+  lines.push(``, `## Slot-kind guidance (for ${spec.kind} fragments)`, ...SLOT_KIND_GUIDANCE[spec.kind]);
+
+  // RUNTIME-OWNED files + devDeps — derived from the runtime fragment's exported
+  // single-source-of-truth sets so this can NEVER drift from what the runtime
+  // actually writes/declares. Emitted for every NON-runtime kind (the runtime slot
+  // IS the owner, so it does not warn itself off its own files). A collision here is
+  // a guaranteed compose-time reject (VfsCollisionError on a re-write; a dep conflict
+  // on a different-version re-declare) — the class that stalled apex v81 F2 authoring.
+  if (spec.kind !== "runtime" && spec.kind !== "base") {
+    lines.push(``, ...runtimeOwnedGuidanceLines());
+  }
+
   lines.push(
-    ``,
-    `## Slot-kind guidance (for ${spec.kind} fragments)`,
-    ...SLOT_KIND_GUIDANCE[spec.kind],
     ``,
     `## What you must produce`,
     `Return JSON \`{ "bodyTs": "<string>" }\` where bodyTs is the TypeScript source`,
@@ -233,6 +264,11 @@ export function buildFragmentAuthorerPrompt(input: FragmentAuthorerInput): strin
     `     - vfs.addPackageJsonDevDep("name", "version") — register a dev dep`,
     `     - vfs.addEnvVar("KEY", "example-value")     — declare an env var`,
     `     - vfs.appendToJustfileTarget("target", ["line1", "line2"]) — fill a justfile hook`,
+    `       The ONLY fillable justfile targets are the base's CLOSED allowlist:`,
+    `       {bootstrap, tier-1, tier-2, tier-3, build, mutation}. Filling any other`,
+    `       target (dev, serve, migrate, deploy, start, …) is REJECTED at compose`,
+    `       time ("unknown justfile target"). A dev server / migration / deploy is a`,
+    `       CONFIG FILE (+ CI wiring), never a justfile target — do not invent one.`,
     `  3. NO other code in apply() — no conditionals, no loops, no fs/exec/http,`,
     `     no string concatenation in arguments. Each call must be one statement on`,
     `     its own line with literal string / array arguments. The parser is strict;`,
@@ -357,6 +393,34 @@ export function buildFragmentAuthorerPrompt(input: FragmentAuthorerInput): strin
     return rendered.slice(0, FRAGMENT_AUTHORER_PROMPT_MAX_CHARS) + "\n// … (prompt truncated at cap)\n";
   }
   return rendered;
+}
+
+// RUNTIME-OWNED collision guard — the exact files + devDeps the runtime fragment
+// owns, DERIVED from its exported single-source-of-truth sets. A fragment that
+// re-writes an owned file collides (VfsCollisionError); one that re-declares an
+// owned devDep at a DIFFERENT version throws the conflict check. Building this list
+// from the exported consts (rather than hand-maintaining a subset in the guidance)
+// means a future runtime change that adds an owned file/dep can't leave the writer
+// prompt stale — the drift-guard test asserts this list names every exported entry.
+function runtimeOwnedGuidanceLines(): readonly string[] {
+  const files = [...RUNTIME_NODE_PNPM_OWNED_FILES].sort();
+  const deps = Object.keys(RUNTIME_NODE_PNPM_OWNED_DEVDEPS).sort();
+  return [
+    `## RUNTIME-OWNED files + devDeps — DO NOT collide (compose-time reject)`,
+    `The runtime fragment (runtime-node-pnpm) already WRITES these files. Re-writing`,
+    `any of them is a VfsCollisionError at compose time — do NOT write them:`,
+    `  ${files.join(", ")}`,
+    `To extend TypeScript config, write \`tsconfig.<label>.json\` with`,
+    `\`"extends": "./tsconfig.json"\` (the shipped frontend-remix pattern) — never`,
+    `overwrite \`tsconfig.json\` itself. There is NO addPackageJsonScript op, so you`,
+    `cannot add a package.json script; overwriting \`package.json\` clobbers the`,
+    `runtime's and is rejected.`,
+    `The runtime fragment also DECLARES these devDeps. Re-declaring one at a DIFFERENT`,
+    `version throws the conflict check — reuse the runtime's; only add NEW deps your`,
+    `slot needs. If you must reference one below, use the SAME version (same-version`,
+    `re-declare is idempotent):`,
+    `  ${deps.map((d) => `${d}@${RUNTIME_NODE_PNPM_OWNED_DEVDEPS[d]}`).join(", ")}`,
+  ];
 }
 
 function renderProductContext(context: ProductContext | undefined): readonly string[] {

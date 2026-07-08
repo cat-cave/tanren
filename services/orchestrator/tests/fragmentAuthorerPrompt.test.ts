@@ -22,6 +22,10 @@ import {
   type ProductContext,
 } from "../src/engine/templates/index.js";
 import { FragmentKind } from "../src/engine/templates/index.js";
+import {
+  RUNTIME_NODE_PNPM_OWNED_DEVDEPS,
+  RUNTIME_NODE_PNPM_OWNED_FILES,
+} from "../src/engine/templates/fragments/library/runtime-node-pnpm.js";
 import type { CaptureLifecycle } from "../src/engine/forge/interview/index.js";
 
 function lifecycle(): CaptureLifecycle {
@@ -158,6 +162,57 @@ describe("buildFragmentAuthorerPrompt — slot-kind guidance (improvement #2)", 
 
     const examplePrompt = buildFragmentAuthorerPrompt(baseInput("example", "todo"));
     expect(examplePrompt).toContain("SEEDS a product-specific example");
+  });
+});
+
+// DRIFT GUARD (apex v81 audit). The RUNTIME-OWNED collision guidance is DERIVED from
+// runtime-node-pnpm.ts's exported single-source-of-truth sets. If a future runtime
+// change adds an owned file or devDep and the guidance goes stale, the F2 writer
+// would author a colliding fragment that stalls at the compose gate (the v81 halt
+// class). This test fails loudly on any drift.
+describe("buildFragmentAuthorerPrompt — runtime-owned collision guard (drift-proof)", () => {
+  // The non-runtime, non-base kinds are the ones that can COLLIDE with the runtime
+  // (they compose alongside it). Every one must carry the full owned-files/deps list.
+  const COLLISION_PRONE_KINDS = FragmentKind.options.filter((k) => k !== "runtime" && k !== "base");
+
+  it("names EVERY runtime-owned FILE in the guidance for each collision-prone kind", () => {
+    expect(RUNTIME_NODE_PNPM_OWNED_FILES.length).toBeGreaterThan(0);
+    for (const kind of COLLISION_PRONE_KINDS) {
+      const prompt = buildFragmentAuthorerPrompt(baseInput(kind, "foo"));
+      expect(prompt).toContain("RUNTIME-OWNED files + devDeps");
+      for (const file of RUNTIME_NODE_PNPM_OWNED_FILES) {
+        expect(prompt, `${kind} prompt must name runtime-owned file ${file}`).toContain(file);
+      }
+    }
+  });
+
+  it("names EVERY runtime-owned DEVDEP (with its version) in the guidance for each collision-prone kind", () => {
+    expect(Object.keys(RUNTIME_NODE_PNPM_OWNED_DEVDEPS).length).toBeGreaterThan(0);
+    for (const kind of COLLISION_PRONE_KINDS) {
+      const prompt = buildFragmentAuthorerPrompt(baseInput(kind, "foo"));
+      for (const [dep, version] of Object.entries(RUNTIME_NODE_PNPM_OWNED_DEVDEPS)) {
+        expect(prompt, `${kind} prompt must name runtime-owned devDep ${dep}`).toContain(dep);
+        expect(prompt, `${kind} prompt must pin ${dep}@${version}`).toContain(`${dep}@${version}`);
+      }
+    }
+  });
+
+  it("does NOT emit the runtime-owned collision section for the runtime slot itself (it IS the owner)", () => {
+    const runtimePrompt = buildFragmentAuthorerPrompt(baseInput("runtime", "python"));
+    expect(runtimePrompt).not.toContain("RUNTIME-OWNED files + devDeps");
+  });
+
+  it("steers the writer to the extends-overlay pattern instead of overwriting tsconfig.json", () => {
+    const frontendPrompt = buildFragmentAuthorerPrompt(baseInput("frontend", "next"));
+    expect(frontendPrompt).toContain("tsconfig.<label>.json");
+    expect(frontendPrompt).toContain(`"extends": "./tsconfig.json"`);
+  });
+
+  it("tells the writer a package.json script cannot be added by a fragment (no addPackageJsonScript op)", () => {
+    const dbPrompt = buildFragmentAuthorerPrompt(baseInput("db", "mongo"));
+    expect(dbPrompt).toContain("no addPackageJsonScript");
+    // The stale "(or package.json scripts)" phrasing must be gone.
+    expect(dbPrompt).not.toContain("or package.json scripts");
   });
 });
 
