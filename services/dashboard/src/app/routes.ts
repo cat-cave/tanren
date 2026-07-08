@@ -58,6 +58,7 @@ export const NAV_GROUPS: NavGroup[] = [
         spec: "P2B-0005",
       },
       { id: "dora", glyph: "↗", label: "DORA", path: "/dora", phase: "2b", spec: "P3-0019" },
+      { id: "mergeQueue", glyph: "⇄", label: "merge queue", path: "/merge-queue", phase: "2b" },
     ],
   },
   {

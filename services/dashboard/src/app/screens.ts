@@ -98,6 +98,12 @@ SCREEN_MOUNTS.push(mountGreenfieldOnboarding);
 import { mountAuditScreens } from "../routes/audits/index.js";
 SCREEN_MOUNTS.push(mountAuditScreens);
 
+// merge queue — the native-delivery operator window: rebase-vs-rebuild
+// economics (never-discard read-side) + native merge-queue statistics, both
+// reported from the engine's own events. Overrides the /merge-queue nav row.
+import { mountMergeQueueScreen } from "../routes/mergeQueue/index.js";
+SCREEN_MOUNTS.push(mountMergeQueueScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

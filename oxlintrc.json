@@ -142,13 +142,19 @@
       }
     },
     {
-      // Composition roots + route mount tables aggregate the whole service by
-      // design — main.ts assembles the app, and mountFeatureRoutes is the
-      // declarative create*Routes mount table. A leaf-module import ceiling does
-      // not apply to them; they are held to a higher bound (still capped so the
-      // list cannot grow without bound). max-dependencies counts runtime imports
-      // only — type-only imports are already ignored at the base config.
-      "files": ["services/orchestrator/src/main.ts", "services/orchestrator/src/mountFeatureRoutes.ts"],
+      // Composition roots + mount tables aggregate the whole service/app by
+      // design — main.ts assembles the app, mountFeatureRoutes is the declarative
+      // create*Routes mount table, and the dashboard's screens.ts is the
+      // SCREEN_MOUNTS registry (one import per mounted screen). A leaf-module
+      // import ceiling does not apply to them; they are held to a higher bound
+      // (still capped so the list cannot grow without bound). max-dependencies
+      // counts runtime imports only — type-only imports are already ignored at
+      // the base config.
+      "files": [
+        "services/orchestrator/src/main.ts",
+        "services/orchestrator/src/mountFeatureRoutes.ts",
+        "services/dashboard/src/app/screens.ts"
+      ],
       "rules": {
         "import/max-dependencies": ["error", { "max": 25, "ignoreTypeImports": true }]
       }
