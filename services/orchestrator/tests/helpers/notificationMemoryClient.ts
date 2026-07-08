@@ -22,6 +22,9 @@ export class NotificationMemoryClient {
     if (trimmed.startsWith("INSERT INTO notification_targets")) {
       return this.insertTarget(params);
     }
+    if (trimmed.startsWith("UPDATE notification_targets")) {
+      return this.updateTarget(trimmed, params);
+    }
     if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notification_targets WHERE id = $1")) {
       const row = this.targets.get(String(params[0]));
       return single(row);
@@ -91,6 +94,26 @@ export class NotificationMemoryClient {
     };
     this.targets.set(String(row.id), row);
     return { rowCount: 1, rows: [row] };
+  }
+
+  private updateTarget(sql: string, params: ReadonlyArray<unknown>): StubResult {
+    // Last two params are always id + org_id (store builds dynamic SET first).
+    const id = String(params.at(-2));
+    const orgId = String(params.at(-1));
+    const existing = this.targets.get(id);
+    if (existing === undefined || existing.org_id !== orgId) {
+      return { rowCount: 0, rows: [] };
+    }
+    let paramIdx = 0;
+    if (sql.includes("weekend_mute =")) {
+      existing.weekend_mute = params[paramIdx++];
+    }
+    if (sql.includes("enabled =")) {
+      existing.enabled = params[paramIdx++];
+    }
+    existing.updated_at = this.now;
+    this.targets.set(id, existing);
+    return { rowCount: 1, rows: [existing] };
   }
 
   private insertRoute(params: ReadonlyArray<unknown>): StubResult {

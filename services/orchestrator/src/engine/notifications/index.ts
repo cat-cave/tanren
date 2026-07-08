@@ -12,6 +12,7 @@ export {
   NotificationRouteRow,
   NotificationTargetCreateInput,
   NotificationTargetRow,
+  NotificationTargetUpdateInput,
   severityMeetsFloor,
   severityRank,
 } from "./schemas.js";

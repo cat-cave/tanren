@@ -12,7 +12,7 @@
 
 import type { DashboardSession } from "../auth/session.js";
 import type { DoraMetrics } from "./dora.js";
-import { OrchestratorOrgConfigClient } from "./orgConfigClient.js";
+import { OrchestratorNotificationsClient } from "./notificationsClient.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -24,11 +24,6 @@ import type {
   ForgeAnswer,
   InsightSummary,
   MilestoneSummary,
-  NotificationMatrix,
-  NotificationDeliveriesResponse,
-  NotificationDelivery,
-  NotificationRoute,
-  NotificationTarget,
   OrgSummary,
   PersonaSummary,
   ProjectConfig,
@@ -44,7 +39,7 @@ import type {
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
 
-export class OrchestratorClient extends OrchestratorOrgConfigClient {
+export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}/auth/me`, {
@@ -409,38 +404,6 @@ export class OrchestratorClient extends OrchestratorOrgConfigClient {
       return { ok: false, status: result.status, error: errBody?.message ?? errBody?.error };
     }
     return { ok: true, status: result.status, result: result.body as BrownfieldLinkResult };
-  }
-
-  /** The full notifications matrix for an org. Empty on failure. */
-  async notificationMatrix(orgId: string): Promise<NotificationMatrix> {
-    const json = await this.getJson<NotificationMatrix>(`/orgs/${encodeURIComponent(orgId)}/notifications/matrix`);
-    return json ?? { targets: [], routes: [], events: [] };
-  }
-
-  /** Recent notification dispatch attempts for the org. Empty on failure. */
-  async notificationDeliveries(orgId: string, limit = 24): Promise<NotificationDelivery[]> {
-    const query = new URLSearchParams({ limit: String(limit) });
-    const json = await this.getJson<NotificationDeliveriesResponse>(
-      `/orgs/${encodeURIComponent(orgId)}/notifications/deliveries?${query.toString()}`,
-    );
-    return json?.deliveries ?? [];
-  }
-
-  /** Create a notification target. */
-  async createNotificationTarget(
-    orgId: string,
-    body: Record<string, unknown>,
-  ): Promise<NotificationTarget | undefined> {
-    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/notifications/targets`, body);
-    if (!result.ok) return undefined;
-    return result.body as NotificationTarget;
-  }
-
-  /** Create/replace a notification route opt-in. */
-  async createNotificationRoute(orgId: string, body: Record<string, unknown>): Promise<NotificationRoute | undefined> {
-    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/notifications/routes`, body);
-    if (!result.ok) return undefined;
-    return result.body as NotificationRoute;
   }
 
   // ── run-detail / review / SSE ─────────────────────────────────

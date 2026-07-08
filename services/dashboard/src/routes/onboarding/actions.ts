@@ -14,10 +14,19 @@ import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { ShellDeps } from "../../app/mountShell.js";
 
-function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
+async function clientFor(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
+  const cookieHeader = c.req.header("cookie");
+  // Resolve session CSRF so orchestrator state-changing routes accept the
+  // cookie-forwarded BFF call (session writes require x-csrf-token).
+  const probe = new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader,
+  });
+  const session = await probe.session();
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie"),
+    cookieHeader,
+    ...(session?.csrfToken !== undefined && session.csrfToken !== "" ? { csrfToken: session.csrfToken } : {}),
   });
 }
 
@@ -36,7 +45,7 @@ function redirectTo(c: Context, path: string, notice?: string): Response {
 export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
   // ── credentials ────────────────────────────────────────────────────────
   app.post("/onboarding/credentials/org/apikey", async (c) => {
-    const client = clientFor(c, deps);
+    const client = await clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
     const label = formField(form, "label").trim();
@@ -58,7 +67,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
   });
 
   app.post("/onboarding/credentials/dev/codex", async (c) => {
-    const client = clientFor(c, deps);
+    const client = await clientFor(c, deps);
     const form = await c.req.parseBody();
     const ref = formField(form, "ref").trim();
     const authJson = formField(form, "authJson");
@@ -78,7 +87,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     // so a project can resolve it as the run's GitHub credential. The token is
     // forwarded write-only and never echoed back. Ref defaults into the
     // managed namespace (`credential/github/org/<orgId>/<label>`).
-    const client = clientFor(c, deps);
+    const client = await clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
     const label = formField(form, "label").trim();
@@ -97,7 +106,7 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
   });
 
   app.post("/onboarding/credentials/delete", async (c) => {
-    const client = clientFor(c, deps);
+    const client = await clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
     const ref = formField(form, "ref");
@@ -107,12 +116,14 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
 
   // ── notifications ────────────────────────────────────────────────────────
   app.post("/notifications/targets", async (c) => {
-    const client = clientFor(c, deps);
+    const client = await clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
     const label = formField(form, "label").trim();
     const destination = formField(form, "destination").trim();
     const channelKind = formField(form, "channelKind", "ntfy");
+    // Checkbox: only present when checked → default off.
+    const weekendMute = formField(form, "weekendMute") === "true";
     if (orgId === undefined || label === "" || destination === "") {
       return redirectTo(c, "/notifications", "missing label or destination");
     }
@@ -122,14 +133,37 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
       channelKind,
       scope: "org",
       enabled: true,
+      weekendMute,
     });
     return redirectTo(c, "/notifications", created ? `added ${label}` : "add failed");
+  });
+
+  // Quiet-posture toggle (weekend mute / enabled) on an existing target.
+  // HTML forms POST; the dashboard proxies to orchestrator PATCH.
+  app.post("/notifications/targets/update", async (c) => {
+    const client = await clientFor(c, deps);
+    const orgId = await firstOrgId(client);
+    const form = await c.req.parseBody();
+    const targetId = formField(form, "targetId").trim();
+    const weekendMuteRaw = formField(form, "weekendMute");
+    const enabledRaw = formField(form, "enabled");
+    if (orgId === undefined || targetId === "") {
+      return redirectTo(c, "/notifications", "missing target");
+    }
+    const body: { weekendMute?: boolean; enabled?: boolean } = {};
+    if (weekendMuteRaw !== "") body.weekendMute = weekendMuteRaw === "true";
+    if (enabledRaw !== "") body.enabled = enabledRaw === "true";
+    if (body.weekendMute === undefined && body.enabled === undefined) {
+      return redirectTo(c, "/notifications", "nothing to update");
+    }
+    const updated = await client.updateNotificationTarget(orgId, targetId, body);
+    return redirectTo(c, "/notifications", updated ? "quiet posture saved" : "update failed");
   });
 
   // Matrix cell toggle (called by the screen island as a form POST fallback /
   // progressive enhancement). Creates a route opt-in for (target × event).
   app.post("/notifications/routes", async (c) => {
-    const client = clientFor(c, deps);
+    const client = await clientFor(c, deps);
     const orgId = await firstOrgId(client);
     const form = await c.req.parseBody();
     const targetId = formField(form, "targetId");

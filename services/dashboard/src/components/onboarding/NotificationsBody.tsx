@@ -62,8 +62,9 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
       {CHANNELS.map((channel) => {
         const target = byKind.get(channel.kind);
         const configured = target !== undefined;
+        const enabled = configured ? (target?.enabled ?? false) : false;
         return (
-          <div class={`row-card ${configured && target?.enabled ? "on" : ""}`}>
+          <div class={`row-card ${configured && enabled ? "on" : ""}`}>
             <span class="glyph">{channel.glyph}</span>
             <div>
               <div class="name">{channel.label}</div>
@@ -72,14 +73,32 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             </div>
             <PhaseBadge phase={channel.phase} />
             <span class="mono-dim">{configured && target?.weekendMute ? "wknd-mute" : ""}</span>
-            <Toggle
-              on={configured ? (target?.enabled ?? false) : false}
-              dataAttrs={{
-                "data-notif-channel": channel.kind,
-                "data-notif-target": target?.id ?? "",
-                "data-notif-wired": channel.wired ? "1" : "0",
-              }}
-            />
+            {configured && target !== undefined ? (
+              <form method="post" action="/notifications/targets/update" style="margin:0">
+                <input type="hidden" name="targetId" value={target.id} />
+                <input type="hidden" name="enabled" value={enabled ? "false" : "true"} />
+                <button
+                  type="submit"
+                  class={`toggle ${enabled ? "on" : "off"}`}
+                  title={enabled ? "pause channel" : "resume channel"}
+                  data-notif-channel={channel.kind}
+                  data-notif-target={target.id}
+                  data-notif-enabled={enabled ? "1" : "0"}
+                  data-notif-pause-toggle={target.id}
+                >
+                  <span class="knob"></span>
+                </button>
+              </form>
+            ) : (
+              <Toggle
+                on={false}
+                dataAttrs={{
+                  "data-notif-channel": channel.kind,
+                  "data-notif-target": "",
+                  "data-notif-wired": channel.wired ? "1" : "0",
+                }}
+              />
+            )}
           </div>
         );
       })}
@@ -106,6 +125,12 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
           />
         </div>
         <input type="hidden" name="channelKind" value="ntfy" />
+        <label class="field" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" name="weekendMute" value="true" data-notif-create-weekend-mute="1" />
+          <span>
+            weekend mute <span class="mono-dim">· mute non-critical delivery on weekends</span>
+          </span>
+        </label>
         <div style="display:flex">
           <button type="submit" class="btn primary" style="margin-left:auto">
             save ntfy target
@@ -231,9 +256,10 @@ function deliveryTime(value: string | null): string {
 }
 
 function QuietHoursPanel(props: { targets: NotificationTarget[] }) {
-  const mutedTargets = props.targets.filter((target) => target.weekendMute);
+  const orgTargets = props.targets.filter((target) => target.scope === "org");
+  const mutedTargets = orgTargets.filter((target) => target.weekendMute);
   return (
-    <div class="col-card" style="gap:8px">
+    <div class="col-card" style="gap:8px" data-notif-quiet-hours="1">
       <div class="h">
         <span>
           quiet <em>posture</em>
@@ -253,16 +279,46 @@ function QuietHoursPanel(props: { targets: NotificationTarget[] }) {
           hard-fail and budget-cap events still route according to their severity floor.
         </div>
       </div>
-      {mutedTargets.length > 0 ? (
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          {mutedTargets.map((target) => (
-            <span class="pill hot">
-              <span class="d"></span>
-              {target.label}
-            </span>
+      {orgTargets.length > 0 ? (
+        <div style="display:flex;flex-direction:column;gap:6px">
+          {orgTargets.map((target) => (
+            <form
+              method="post"
+              action="/notifications/targets/update"
+              class="row-card"
+              style="align-items:center;gap:10px"
+              data-notif-target-mute={target.id}
+              data-notif-weekend-mute={target.weekendMute ? "1" : "0"}
+            >
+              <div style="flex:1;min-width:0">
+                <div class="name">{target.label}</div>
+                <div class="desc">
+                  {target.channelKind}
+                  {target.weekendMute ? " · muted weekends" : " · delivers weekends"}
+                </div>
+              </div>
+              {target.weekendMute ? (
+                <span class="pill hot">
+                  <span class="d"></span>
+                  weekend mute
+                </span>
+              ) : (
+                <span class="pill cold">
+                  <span class="d"></span>
+                  open weekends
+                </span>
+              )}
+              <input type="hidden" name="targetId" value={target.id} />
+              <input type="hidden" name="weekendMute" value={target.weekendMute ? "false" : "true"} />
+              <button type="submit" class="btn" data-notif-mute-toggle={target.id}>
+                {target.weekendMute ? "unmute weekends" : "mute weekends"}
+              </button>
+            </form>
           ))}
         </div>
-      ) : null}
+      ) : (
+        <div class="mono-dim">add a channel target to control weekend mute</div>
+      )}
     </div>
   );
 }
