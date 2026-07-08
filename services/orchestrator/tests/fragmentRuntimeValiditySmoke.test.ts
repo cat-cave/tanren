@@ -325,6 +325,9 @@ describe("buildFragmentAuthoring — runtime-validity failure short-circuits per
         created.push(input);
         return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
       },
+      async deleteById() {
+        /* Round-III H1 stub — runtime-validity tests don't exercise retract. */
+      },
     };
     const events: FragmentAuthoringEvents = { async emit() {} };
     const runner = buildFragmentAuthoring({
@@ -355,6 +358,9 @@ describe("buildFragmentAuthoring — runtime-validity failure short-circuits per
         created.push(input);
         return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
       },
+      async deleteById() {
+        /* Round-III H1 stub — runtime-validity tests don't exercise retract. */
+      },
     };
     const events: FragmentAuthoringEvents = { async emit() {} };
     const runner = buildFragmentAuthoring({
@@ -384,6 +390,9 @@ describe("buildFragmentAuthoring — runtime-validity failure short-circuits per
       async createValidated(input) {
         created.push(input);
         return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
+      },
+      async deleteById() {
+        /* Round-III H1 stub — runtime-validity tests don't exercise retract. */
       },
     };
     const events: FragmentAuthoringEvents = { async emit() {} };

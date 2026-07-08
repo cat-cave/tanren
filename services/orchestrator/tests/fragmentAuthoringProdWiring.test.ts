@@ -122,6 +122,12 @@ describe("F2 prod wiring — runtime-validity smoke reaches buildFragmentAuthori
     expect(deps.authorer).toBeInstanceOf(Function);
     expect(deps.persistence).toBeDefined();
     expect(deps.persistence.createValidated).toBeInstanceOf(Function);
+    // Round-III H1: `deleteById` is the retract seam the batch-compose retract
+    // calls to hard-delete a fragment row when the augmented library fails to
+    // compose. A future refactor that drops this wiring must fail this test
+    // loud rather than silently regressing to the "leave the row + emit failed"
+    // shape (which contaminated the org's library cross-run).
+    expect(deps.persistence.deleteById).toBeInstanceOf(Function);
     expect(deps.events).toBeDefined();
     expect(deps.events.emit).toBeInstanceOf(Function);
     expect(deps.priorFragmentsLookup).toBeInstanceOf(Function);

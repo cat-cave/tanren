@@ -53,6 +53,9 @@ function inMemoryPersistence(): { persistence: FragmentPersistence } {
     async createValidated(input) {
       return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
     },
+    async deleteById() {
+      /* Round-III H1 stub — observability tests don't exercise retract. */
+    },
   };
   return { persistence };
 }

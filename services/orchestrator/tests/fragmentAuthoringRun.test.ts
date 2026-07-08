@@ -48,13 +48,20 @@ function recordingEvents(): { events: FragmentAuthoringEvents; calls: unknown[] 
   return { events, calls };
 }
 
-function inMemoryPersistence(): { persistence: FragmentPersistence; created: unknown[]; validated: string[] } {
+function inMemoryPersistence(): {
+  persistence: FragmentPersistence;
+  created: unknown[];
+  validated: string[];
+  deleted: string[];
+} {
   // The in-memory persistence mirrors `FragmentsStore.createValidated`: a single
   // atomic call inserts the fragment as VALIDATED. Both `created` + `validated`
   // are populated by the one call — kept as separate lists so existing tests
   // asserting on either surface still work post-atomic refactor (task #150).
+  // `deleted` captures Round-III H1 retract calls.
   const created: unknown[] = [];
   const validated: string[] = [];
+  const deleted: string[] = [];
   const persistence: FragmentPersistence = {
     async createValidated(input) {
       created.push(input);
@@ -62,8 +69,11 @@ function inMemoryPersistence(): { persistence: FragmentPersistence; created: unk
       validated.push(fragmentId);
       return { fragmentId };
     },
+    async deleteById(fragmentId) {
+      deleted.push(fragmentId);
+    },
   };
-  return { persistence, created, validated };
+  return { persistence, created, validated, deleted };
 }
 
 describe("buildFragmentAuthoring — happy path", () => {

@@ -137,6 +137,17 @@ export function buildLiveFragmentAuthoringDeps(
         return { fragmentId: row.fragmentId };
       });
     },
+    // Round-III H1: RETRACT-WITH-DELETE. Called by the post-authoring batch-
+    // compose retract path when the augmented library fails to compose. Under
+    // `runWithOrgScope` the org-scoped client's DELETE is bound to the org's
+    // rows via RLS; a wrong-scope caller is a no-op. Delete on a missing row
+    // succeeds silently (0 rows affected) so a partial-retract from a prior
+    // run does not fail the current retract.
+    async deleteById(fragmentId) {
+      return runWithOrgScope(pool, orgId, async (client) => {
+        await FragmentsStore.deleteById(client, fragmentId, { kind: "operator" });
+      });
+    },
   };
 
   const events: FragmentAuthoringEvents = {

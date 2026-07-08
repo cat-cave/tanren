@@ -49,9 +49,15 @@ function noopEvents(): FragmentAuthoringEvents {
   return { async emit() {} };
 }
 
-function inMemoryPersistence(): { persistence: FragmentPersistence; created: unknown[]; validated: string[] } {
+function inMemoryPersistence(): {
+  persistence: FragmentPersistence;
+  created: unknown[];
+  validated: string[];
+  deleted: string[];
+} {
   const created: unknown[] = [];
   const validated: string[] = [];
+  const deleted: string[] = [];
   const persistence: FragmentPersistence = {
     async createValidated(input) {
       created.push(input);
@@ -59,8 +65,11 @@ function inMemoryPersistence(): { persistence: FragmentPersistence; created: unk
       validated.push(fragmentId);
       return { fragmentId };
     },
+    async deleteById(fragmentId) {
+      deleted.push(fragmentId);
+    },
   };
-  return { persistence, created, validated };
+  return { persistence, created, validated, deleted };
 }
 
 // An authorer producing an addon that WRITES A PATH bundled addon-biome already

@@ -91,6 +91,12 @@ export {
 } from "./fragmentAuthoringRun.js";
 export { sanitizeAuthorerErrorSignature } from "./sanitizeAuthorerErrorSignature.js";
 export { type BatchComposeResult, runPostAuthoringBatchCompose } from "./batchComposeAfterAuthoring.js";
+export {
+  type AuthoredForBatch,
+  drivePostAuthoringOutcome,
+  type PostAuthoringOutcome,
+  wrapEventsWithLogging,
+} from "./postAuthoringOutcome.js";
 export { validateFragmentBody } from "./validateFragmentBody.js";
 export { type PriorFragment, type ProductContext } from "./fragmentAuthoringContextTypes.js";
 export {

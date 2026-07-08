@@ -48,15 +48,19 @@ function recordingEvents(): { events: FragmentAuthoringEvents; calls: unknown[] 
   return { events, calls };
 }
 
-function inMemoryPersistence(): { persistence: FragmentPersistence; created: unknown[] } {
+function inMemoryPersistence(): { persistence: FragmentPersistence; created: unknown[]; deleted: string[] } {
   const created: unknown[] = [];
+  const deleted: string[] = [];
   const persistence: FragmentPersistence = {
     async createValidated(input) {
       created.push(input);
       return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
     },
+    async deleteById(fragmentId) {
+      deleted.push(fragmentId);
+    },
   };
-  return { persistence, created };
+  return { persistence, created, deleted };
 }
 
 const testActor = {
@@ -276,7 +280,7 @@ const nodeAddonAuthorer: FragmentAuthorer = async (input) => {
 };
 
 describe("Fix 3 — post-authoring batch compose catches cross-fragment dependency_runtime_mismatch", () => {
-  it("moves ALL freshly-authored fragments to failedIds when the batch compose throws", async () => {
+  it("moves ALL freshly-authored fragments to failedIds when the batch compose throws + RETRACTS persistence + emits failed ONLY (Round-III H1/H4)", async () => {
     // Author an addon that declares a NODE-only package.json op (implicit
     // `dependsOn: [runtime-node-pnpm]` — from `implicitDependsOn.ts`). The
     // captured lifecycle stack is python → the derived TemplateConfig has
@@ -292,7 +296,7 @@ describe("Fix 3 — post-authoring batch compose catches cross-fragment dependen
     // the CAPTURED runtime — exactly what the batch compose adds.
     // (The `nodeAddonAuthorer` is hoisted to module scope for oxlint.)
     const { events, calls } = recordingEvents();
-    const { persistence, created } = inMemoryPersistence();
+    const { persistence, created, deleted } = inMemoryPersistence();
     const runner = buildFragmentAuthoring({ authorer: nodeAddonAuthorer, persistence, events });
     // The lifecycle uses a python stack → derived config has runtime=python.
     const pythonLifecycle: CaptureLifecycle = {
@@ -308,6 +312,8 @@ describe("Fix 3 — post-authoring batch compose catches cross-fragment dependen
     });
     // Per-fragment smokes passed — the addon was authored + persisted.
     expect(created).toHaveLength(1);
+    // Round-III H1: the persisted row was RETRACTED via deleteById.
+    expect(deleted).toEqual(["org_a:addon-node-tool:1.0.0"]);
     // But the batch compose rejects: no runtime-python in the library. The
     // addon is moved to failedIds with the batch-compose reason.
     expect(result.failedIds).toEqual(["addon-node-tool"]);
@@ -316,16 +322,20 @@ describe("Fix 3 — post-authoring batch compose catches cross-fragment dependen
     const failedEvents = calls.filter((c) => (c as { kind: string }).kind === "fragment.authoring.failed") as {
       fragmentId: string;
       reason: string;
+      attempts: number;
     }[];
     expect(failedEvents.map((e) => e.fragmentId)).toEqual(["addon-node-tool"]);
     expect(failedEvents[0]?.reason).toContain("batch_compose_failed:");
-    // The stream ALSO shows the per-fragment succeeded event (the fragment
-    // did author + persist) — the batch compose is a POST-authoring gate that
-    // retracts the success. An observer sees both events + the retraction,
-    // which is the correct observability contract (the per-fragment path
-    // truly did succeed; the batch caught a cross-fragment issue after).
+    // Round-III H7: the failed event carries the REAL per-fragment attempts
+    // count (the nodeAddonAuthorer converges on attempt 1) — no more hardcoded
+    // `attempts: 1` disguising the real effort.
+    expect(failedEvents[0]?.attempts).toBe(1);
+    // Round-III H4: the stream shows NO fragment.authoring.succeeded event
+    // for this id — the batch compose retracted before the succeeded emit
+    // fired. Prior behavior emitted BOTH succeeded + failed for the same id;
+    // the corruption is now closed.
     const succeeded = calls.filter((c) => (c as { kind: string }).kind === "fragment.authoring.succeeded");
-    expect(succeeded).toHaveLength(1);
+    expect(succeeded).toHaveLength(0);
   });
 
   it("succeeds when the batch compose passes (fake authorer against a node-pnpm lifecycle)", async () => {
@@ -334,7 +344,7 @@ describe("Fix 3 — post-authoring batch compose catches cross-fragment dependen
     // the node-pnpm lifecycle, so the batch compose passes + the fragments
     // stay in the augmented library.
     const { events, calls } = recordingEvents();
-    const { persistence, created } = inMemoryPersistence();
+    const { persistence, created, deleted } = inMemoryPersistence();
     const runner = buildFragmentAuthoring({ authorer: buildFakeFragmentAuthorer(), persistence, events });
     const result = await runner({
       orgId: "org_a",
@@ -344,9 +354,15 @@ describe("Fix 3 — post-authoring batch compose catches cross-fragment dependen
     });
     expect(result.failedIds).toEqual([]);
     expect(created).toHaveLength(2);
+    // No retract on the happy path — the persisted rows stand.
+    expect(deleted).toEqual([]);
     // No failed events at all.
     const failedEvents = calls.filter((c) => (c as { kind: string }).kind === "fragment.authoring.failed");
     expect(failedEvents).toHaveLength(0);
+    // Both fragments emit `succeeded` — the emit deferred until the batch
+    // gate passed, then fired for each.
+    const succeededEvents = calls.filter((c) => (c as { kind: string }).kind === "fragment.authoring.succeeded");
+    expect(succeededEvents).toHaveLength(2);
   });
 });
 
@@ -365,6 +381,9 @@ describe("Fix 4 — persistence throw emits fragment.authoring.failed + does not
     const throwingPersistence: FragmentPersistence = {
       async createValidated() {
         throw new Error("unique constraint violation: fragments_org_kind_label_version_key");
+      },
+      async deleteById() {
+        /* Round-III H1 stub — no persisted rows to retract in this test. */
       },
     };
     const runner = buildFragmentAuthoring({
@@ -410,6 +429,9 @@ describe("Fix 4 — persistence throw emits fragment.authoring.failed + does not
         call += 1;
         if (call === 1) throw new Error("first-call collision");
         return { fragmentId: `${input.orgId}:${input.spec.id}:1.0.0` };
+      },
+      async deleteById() {
+        /* Round-III H1 stub — the second spec persists cleanly + batch OK, no retract. */
       },
     };
     const { events, calls } = recordingEvents();
