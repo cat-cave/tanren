@@ -430,14 +430,20 @@ describe.skipIf(process.env.TANREN_REAL_PNPM !== "1")("runRuntimeValiditySmoke â
 describe("live invoker factories â€” smoke-only wiring assertion", () => {
   // These builders are the production wirings the orchestrator's route wiring
   // hands into `FragmentAuthoringDeps.runtimeValiditySmoke`. Neither is
-  // exercised at the unit-test tier (both spawn real subprocesses); this test
-  // asserts the factory shape so knip sees the exports as used AND so a
+  // exercised at the unit-test tier (all five spawn real subprocesses); this
+  // test asserts the factory shape so knip sees the exports as used AND so a
   // refactor that accidentally breaks the factory signature fails here loudly.
-  it("both live invoker factories return typed callables", async () => {
+  it("all live invoker factories return typed callables", async () => {
     const liveMod = await import("../src/engine/templates/fragments/runtimeValiditySmokeLive.js");
     expect(typeof liveMod.buildLivePnpmInvoker).toBe("function");
     expect(typeof liveMod.buildLiveBundleInvoker).toBe("function");
+    expect(typeof liveMod.buildLivePipInvoker).toBe("function");
+    expect(typeof liveMod.buildLiveGoInvoker).toBe("function");
+    expect(typeof liveMod.buildLiveCargoInvoker).toBe("function");
     expect(typeof liveMod.buildLivePnpmInvoker()).toBe("function");
     expect(typeof liveMod.buildLiveBundleInvoker()).toBe("function");
+    expect(typeof liveMod.buildLivePipInvoker()).toBe("function");
+    expect(typeof liveMod.buildLiveGoInvoker()).toBe("function");
+    expect(typeof liveMod.buildLiveCargoInvoker()).toBe("function");
   });
 });
