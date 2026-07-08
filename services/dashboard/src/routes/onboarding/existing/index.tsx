@@ -71,7 +71,7 @@ function render(c: Context, ctx: ShellContext, body: unknown) {
 export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
   // Step 1 entry (GET): the minimal link form (reused) inside the full shell.
   app.get("/onboarding/existing", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
+    const ctx = await loadShellContext(c, deps, {});
     const githubAppUrl = await resolveGithubAppUrl(c, deps);
     return render(
       c,
@@ -84,14 +84,14 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
   // here (its action is `/onboarding/existing/link`); we create + link the
   // project, run recon, and advance into step 2.
   app.post("/onboarding/existing/link", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
+    const ctx = await loadShellContext(c, deps, {});
     const form = await c.req.parseBody();
     return handleLink(c, ctx, deps, form);
   });
 
   // POST: drives the active phase across steps 2-5.
   app.post("/onboarding/existing", async (c) => {
-    const ctx = await loadShellContext(c, deps, { activeNavId: "onb-exist" });
+    const ctx = await loadShellContext(c, deps, {});
     const form = await c.req.parseBody();
     const phase = formField(form, "phase", "advance");
     if (phase === "link") return handleLink(c, ctx, deps, form);
