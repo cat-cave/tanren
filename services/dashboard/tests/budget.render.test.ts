@@ -156,16 +156,33 @@ describe("budget-halt panel (/budget)", () => {
     expect(html).toContain("monthly");
   });
 
-  it("renders em-dash for null ceiling/remaining, never invents a ceiling zero", async () => {
+  it("renders em-dash for null ceiling and skipped-sum spend placeholders, never $0.00", async () => {
     projectBudgetPayload = PROJECT_BUDGET_SPARSE;
     const app = await build();
     const html = await (await app.request("/budget")).text();
-    // Null ceiling + remaining → "—". Real zero spend is still a number.
+    // Unlimited / no ceiling: gate skips the sum → spent/notional placeholders must
+    // render "—", not fabricated $0.00.
     expect(html).toContain("—");
-    expect(html).toContain("$0.00");
-    // Do not claim a $0.00 ceiling when ceilingUsd is null (the value cards still
-    // show spent/notional zeros; ceiling card must use the empty sentinel class).
+    expect(html).toContain("no ceiling · spend not summed by the gate");
+    expect(html).not.toContain("$0.00");
     expect(html).toMatch(/ceiling[\s\S]*?value empty[\s\S]*?—/u);
+  });
+
+  it("renders genuine zero spend as $0.00 when a ceiling is set and the sum ran", async () => {
+    projectBudgetPayload = {
+      ceilingUsd: 50,
+      period: "monthly",
+      spentUsd: 0,
+      notionalUsd: 0,
+      remainingUsd: 50,
+      paused: false,
+      failClosed: null,
+    };
+    const app = await build();
+    const html = await (await app.request("/budget")).text();
+    expect(html).toContain("$50.00");
+    expect(html).toContain("$0.00");
+    expect(html).toContain("gated figure · cost_usd billed");
   });
 
   it("renders 'unavailable', not fabricated zeros, when the project budget read fails", async () => {

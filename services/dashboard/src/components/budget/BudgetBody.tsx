@@ -45,16 +45,27 @@ function isEmpty(value: string): boolean {
 }
 
 /**
- * Spend is uncomputable when the gate is fail-closed. Prefer the explicit
- * `failClosed` field from the budget GET; fall back to shape heuristics for
- * older payloads that only expose `paused`.
+ * Spend is uncomputable when:
+ *   - `failClosed` is set (true spend unknown / untrusted), or
+ *   - no ceiling is resolved (`ceilingUsd === null`): the gate SKIPS the cost sum
+ *     and returns placeholder zeros — those must never render as measured $0.00.
+ * Genuine zeros only exist when a ceiling is set and the sum ran.
  */
 function isSpendUncomputable(b: ProjectBudgetView): boolean {
   if (b.failClosed !== undefined && b.failClosed !== null) return true;
-  if (!b.paused) return false;
-  // Heuristic for pre-failClosed payloads: null ceiling or spent still under ceiling.
-  if (b.ceilingUsd === null) return true;
-  return b.spentUsd < b.ceilingUsd;
+  return b.ceilingUsd === null;
+}
+
+function spendSub(b: ProjectBudgetView, uncomputable: boolean): string {
+  if (!uncomputable) return "gated figure · cost_usd billed";
+  if (b.failClosed !== undefined && b.failClosed !== null) return "unmeasured · fail-closed safety pause";
+  return "no ceiling · spend not summed by the gate";
+}
+
+function notionalSub(b: ProjectBudgetView, uncomputable: boolean): string {
+  if (!uncomputable) return "API-equivalent · not gated";
+  if (b.failClosed !== undefined && b.failClosed !== null) return "unmeasured · fail-closed safety pause";
+  return "no ceiling · notional not summed by the gate";
 }
 
 /** Cards from a successful project-budget read. */
@@ -69,17 +80,17 @@ function spendCards(b: ProjectBudgetView): StatCard[] {
     {
       label: "real spend",
       value: uncomputable ? "—" : budgetUsd(b.spentUsd),
-      sub: uncomputable ? "unmeasured · fail-closed safety pause" : "gated figure · cost_usd billed",
+      sub: spendSub(b, uncomputable),
     },
     {
       label: "notional",
       value: uncomputable ? "—" : budgetUsd(b.notionalUsd),
-      sub: uncomputable ? "unmeasured · fail-closed safety pause" : "API-equivalent · not gated",
+      sub: notionalSub(b, uncomputable),
     },
     {
       label: "remaining",
       value: uncomputable ? "—" : budgetUsd(b.remainingUsd),
-      sub: uncomputable ? "headroom uncomputable while spend is unknown" : "headroom vs real spend",
+      sub: uncomputable ? "headroom requires a project ceiling" : "headroom vs real spend",
     },
   ];
 }
