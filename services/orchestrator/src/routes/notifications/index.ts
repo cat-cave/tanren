@@ -20,6 +20,7 @@ import {
   NotificationRouteStore,
   NotificationTargetCreateInput,
   NotificationTargetStore,
+  NotificationTargetUpdateInput,
   type DispatchStatus,
 } from "../../engine/notifications/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -153,6 +154,31 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     }
     const created = await NotificationTargetStore.create(options.pool, parsed.data);
     return c.json(toTargetContract(created), 201);
+  });
+
+  // Quiet-posture mutation: weekend mute and/or enabled. Org-scoped; never
+  // echoes secrets (targets only hold destination + flags).
+  app.patch("/:orgId/notifications/targets/:targetId", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    const targetId = c.req.param("targetId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const raw = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const parsed = NotificationTargetUpdateInput.safeParse(raw);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_target_update", issues: parsed.error.issues }, 400);
+    }
+    const updated = await NotificationTargetStore.update(options.pool, {
+      id: targetId,
+      orgId,
+      ...parsed.data,
+    });
+    if (updated === undefined) {
+      return c.json({ error: "target_not_found" }, 404);
+    }
+    return c.json(toTargetContract(updated));
   });
 
   app.post("/:orgId/notifications/routes", async (c) => {

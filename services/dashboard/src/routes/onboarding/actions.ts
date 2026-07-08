@@ -113,6 +113,8 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
     const label = formField(form, "label").trim();
     const destination = formField(form, "destination").trim();
     const channelKind = formField(form, "channelKind", "ntfy");
+    // Checkbox: only present when checked → default off.
+    const weekendMute = formField(form, "weekendMute") === "true";
     if (orgId === undefined || label === "" || destination === "") {
       return redirectTo(c, "/notifications", "missing label or destination");
     }
@@ -122,8 +124,31 @@ export function mountOnboardingActions(app: Hono, deps: ShellDeps): void {
       channelKind,
       scope: "org",
       enabled: true,
+      weekendMute,
     });
     return redirectTo(c, "/notifications", created ? `added ${label}` : "add failed");
+  });
+
+  // Quiet-posture toggle (weekend mute / enabled) on an existing target.
+  // HTML forms POST; the dashboard proxies to orchestrator PATCH.
+  app.post("/notifications/targets/update", async (c) => {
+    const client = clientFor(c, deps);
+    const orgId = await firstOrgId(client);
+    const form = await c.req.parseBody();
+    const targetId = formField(form, "targetId").trim();
+    const weekendMuteRaw = formField(form, "weekendMute");
+    const enabledRaw = formField(form, "enabled");
+    if (orgId === undefined || targetId === "") {
+      return redirectTo(c, "/notifications", "missing target");
+    }
+    const body: { weekendMute?: boolean; enabled?: boolean } = {};
+    if (weekendMuteRaw !== "") body.weekendMute = weekendMuteRaw === "true";
+    if (enabledRaw !== "") body.enabled = enabledRaw === "true";
+    if (body.weekendMute === undefined && body.enabled === undefined) {
+      return redirectTo(c, "/notifications", "nothing to update");
+    }
+    const updated = await client.updateNotificationTarget(orgId, targetId, body);
+    return redirectTo(c, "/notifications", updated ? "quiet posture saved" : "update failed");
   });
 
   // Matrix cell toggle (called by the screen island as a form POST fallback /

@@ -118,6 +118,17 @@ export const NotificationTargetCreateInput = z
   });
 export type NotificationTargetCreateInput = z.infer<typeof NotificationTargetCreateInput>;
 
+/** Partial quiet-posture update for an existing target (weekend mute / enabled). */
+export const NotificationTargetUpdateInput = z
+  .object({
+    weekendMute: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+  })
+  .refine((value) => value.weekendMute !== undefined || value.enabled !== undefined, {
+    message: "at least one of weekendMute or enabled is required",
+  });
+export type NotificationTargetUpdateInput = z.infer<typeof NotificationTargetUpdateInput>;
+
 export const NotificationRouteRow = z.object({
   id: z.string().min(1),
   targetId: z.string().min(1),

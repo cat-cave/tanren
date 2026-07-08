@@ -18,6 +18,7 @@ const ORG = {
 interface MockState {
   credentialImports: Array<{ url: string; body: unknown }>;
   targetCreates: unknown[];
+  targetUpdates: Array<{ url: string; body: unknown }>;
   projectCreates: unknown[];
   brownfieldLinks: unknown[];
   brownfieldOk: boolean;
@@ -53,6 +54,7 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown; deliveries
   const state: MockState = {
     credentialImports: [],
     targetCreates: [],
+    targetUpdates: [],
     projectCreates: [],
     brownfieldLinks: [],
     brownfieldOk: true,
@@ -94,6 +96,11 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown; deliveries
           },
         ],
       });
+    }
+    if (url.includes("/notifications/targets") && method === "PATCH") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      state.targetUpdates.push({ url, body });
+      return json({ id: "notif_target_1", weekendMute: true, enabled: true, ...body });
     }
     if (url.includes("/notifications/targets") && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
@@ -281,7 +288,81 @@ describe("notifications matrix", () => {
     expect(state.targetCreates[0]).toMatchObject({
       channelKind: "ntfy",
       destination: "https://ntfy.sh/cat-cave",
+      weekendMute: false,
     });
+  });
+
+  it("add-target form forwards weekendMute when the checkbox is checked", async () => {
+    const state = mockOrchestrator();
+    const app = await build();
+    const res = await app.request("/notifications/targets", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "label=quiet&destination=https://ntfy.sh/quiet&channelKind=ntfy&weekendMute=true",
+    });
+    expect(res.status).toBe(303);
+    expect(state.targetCreates).toHaveLength(1);
+    expect(state.targetCreates[0]).toMatchObject({ weekendMute: true, label: "quiet" });
+  });
+
+  it("renders quiet-hours controls and live weekend-mute state per target", async () => {
+    mockOrchestrator({
+      matrix: {
+        targets: [
+          {
+            id: "target_muted",
+            orgId: "org_acme",
+            scope: "org",
+            userId: null,
+            channelKind: "ntfy",
+            destination: "https://ntfy.sh/muted",
+            label: "ops-muted",
+            enabled: true,
+            weekendMute: true,
+          },
+          {
+            id: "target_open",
+            orgId: "org_acme",
+            scope: "org",
+            userId: null,
+            channelKind: "slack",
+            destination: "#ops",
+            label: "ops-open",
+            enabled: true,
+            weekendMute: false,
+          },
+        ],
+        routes: [],
+        events: [{ eventName: "run.failed", defaultSeverity: "fail" }],
+      },
+    });
+    const app = await build();
+    const html = await (await app.request("/notifications")).text();
+    expect(html).toContain('data-notif-quiet-hours="1"');
+    expect(html).toContain('name="weekendMute"');
+    expect(html).toContain('data-notif-create-weekend-mute="1"');
+    expect(html).toContain("1 target mute non-critical delivery on weekends");
+    expect(html).toContain("ops-muted");
+    expect(html).toContain("ops-open");
+    expect(html).toContain("muted weekends");
+    expect(html).toContain("delivers weekends");
+    expect(html).toContain('action="/notifications/targets/update"');
+    expect(html).toContain("unmute weekends");
+    expect(html).toContain("mute weekends");
+  });
+
+  it("quiet-hours toggle POST proxies PATCH weekendMute to the orchestrator", async () => {
+    const state = mockOrchestrator();
+    const app = await build();
+    const res = await app.request("/notifications/targets/update", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "targetId=target_open&weekendMute=true",
+    });
+    expect(res.status).toBe(303);
+    expect(state.targetUpdates).toHaveLength(1);
+    expect(state.targetUpdates[0]?.url).toContain("/notifications/targets/target_open");
+    expect(state.targetUpdates[0]?.body).toEqual({ weekendMute: true });
   });
 });
 

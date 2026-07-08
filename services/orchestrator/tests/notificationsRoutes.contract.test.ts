@@ -145,6 +145,66 @@ describe("notifications routes (P2B-0002 over P2A-0017)", () => {
     expect(body.enabled).toBe(true);
   });
 
+  it("patches weekendMute on an existing target and reflects it in the matrix", async () => {
+    const { app } = harness();
+    const created = (await (
+      await app.request("/orgs/org_acme/notifications/targets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          channelKind: "ntfy",
+          destination: "https://ntfy.sh/quiet",
+          label: "quiet-alerts",
+          weekendMute: false,
+        }),
+      })
+    ).json()) as { id: string; weekendMute: boolean };
+    expect(created.weekendMute).toBe(false);
+
+    const patch = await app.request(`/orgs/org_acme/notifications/targets/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ weekendMute: true }),
+    });
+    expect(patch.status).toBe(200);
+    const updated = (await patch.json()) as { weekendMute: boolean; enabled: boolean; label: string };
+    expect(updated.weekendMute).toBe(true);
+    expect(updated.enabled).toBe(true);
+    expect(updated.label).toBe("quiet-alerts");
+
+    const matrix = (await (await app.request("/orgs/org_acme/notifications/matrix")).json()) as {
+      targets: Array<{ id: string; weekendMute: boolean }>;
+    };
+    expect(matrix.targets.find((t) => t.id === created.id)?.weekendMute).toBe(true);
+  });
+
+  it("rejects empty quiet-posture patch and cross-org target updates", async () => {
+    const { app } = harness();
+    const created = (await (
+      await app.request("/orgs/org_acme/notifications/targets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ channelKind: "ntfy", destination: "https://ntfy.sh/x", label: "x" }),
+      })
+    ).json()) as { id: string };
+
+    const empty = await app.request(`/orgs/org_acme/notifications/targets/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as { error: string }).error).toBe("invalid_target_update");
+
+    const crossOrg = await app.request(`/orgs/org_other/notifications/targets/${created.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ weekendMute: true }),
+    });
+    // Actor cannot access org_other → 403 (org guard) rather than leaking existence.
+    expect(crossOrg.status).toBe(403);
+  });
+
   it("returns recent delivery evidence scoped to the org without raw payload values", async () => {
     const { app, pool } = harness();
     pool.targets.set("notif_target_acme", {

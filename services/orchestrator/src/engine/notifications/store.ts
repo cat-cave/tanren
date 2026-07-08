@@ -7,11 +7,13 @@ import {
   type NotificationRouteRow,
   type NotificationTargetCreateInput,
   type NotificationTargetRow,
+  type NotificationTargetUpdateInput,
   NotificationDeliveryRow as NotificationDeliveryRowSchema,
   NotificationRouteCreateInput as NotificationRouteCreateInputSchema,
   NotificationRouteRow as NotificationRouteRowSchema,
   NotificationTargetCreateInput as NotificationTargetCreateInputSchema,
   NotificationTargetRow as NotificationTargetRowSchema,
+  NotificationTargetUpdateInput as NotificationTargetUpdateInputSchema,
 } from "./schemas.js";
 
 // repository layer for `notification_targets` and
@@ -170,6 +172,43 @@ export const NotificationTargetStore = {
       [orgId],
     );
     return result.rows.map((row) => decodeTargetRow(row));
+  },
+
+  /**
+   * Partial update of quiet posture (`weekendMute` / `enabled`) for an
+   * existing target. Org-scoped so a cross-tenant id never mutates a foreign
+   * row. Returns `undefined` when the target is missing or not in `orgId`.
+   */
+  async update(
+    client: QueryClient,
+    args: { id: string; orgId: string } & NotificationTargetUpdateInput,
+  ): Promise<NotificationTargetRow | undefined> {
+    const parsed = NotificationTargetUpdateInputSchema.parse({
+      weekendMute: args.weekendMute,
+      enabled: args.enabled,
+    });
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (parsed.weekendMute !== undefined) {
+      params.push(parsed.weekendMute ? 1 : 0);
+      sets.push(`weekend_mute = $${params.length}`);
+    }
+    if (parsed.enabled !== undefined) {
+      params.push(parsed.enabled ? 1 : 0);
+      sets.push(`enabled = $${params.length}`);
+    }
+    sets.push("updated_at = now()");
+    params.push(args.id, args.orgId);
+    const result = await client.query<RawTargetRow>(
+      `UPDATE notification_targets
+          SET ${sets.join(", ")}
+        WHERE id = $${params.length - 1} AND org_id = $${params.length}
+        RETURNING ${TARGET_COLUMNS}`,
+      params,
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    return decodeTargetRow(row);
   },
 } as const;
 
