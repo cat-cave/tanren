@@ -7,7 +7,21 @@
 // capture delta + completion flag). Kept tiny + deterministic so the contract
 // is auditable; the strict output schema enforces the rest.
 
+import { GOLDEN_BASELINE_TOOLCHAIN } from "../../environments/index.js";
 import type { InterviewAnswererContext } from "./types.js";
+
+// The illustrative toolchain versions in the prompt are DERIVED from the golden
+// baseline (GOLDEN_BASELINE_TOOLCHAIN) — never hardcoded — so they can never drift
+// out of lockstep with what the warm golden base actually pre-warms. A hardcoded
+// example (the prior `pnpm '10'` / `python '3.13'`) was a THIRD copy of the baseline
+// that silently rotted: an LLM copying the stale example declares an off-baseline
+// spec, defeating the golden-base coverage short-circuit (baselineCoverage.ts) and
+// forcing a needless JIT env build on a standard fresh node+pnpm project. Sourcing
+// the numbers from the map keeps a fresh project's default toolchain baseline-covered
+// by construction. A baselineCoverage test pins these to GOLDEN_BASELINE_TOOLCHAIN.
+const EX_NODE = GOLDEN_BASELINE_TOOLCHAIN["node"] ?? "24";
+const EX_PNPM = GOLDEN_BASELINE_TOOLCHAIN["pnpm"] ?? "11";
+const EX_PYTHON = GOLDEN_BASELINE_TOOLCHAIN["python"] ?? "3.14";
 
 export function buildInterviewPrompt(context: InterviewAnswererContext): string {
   // Compact (not pretty-printed) capture JSON: the pretty form ~doubles the token
@@ -104,14 +118,16 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     // It is a LIST of { name, version } entries — `name` is a `mise` tool name
     // (node/pnpm/python/go/rust/…); `version` is the version the PROJECT chose.
     // CURRENT/LTS BY DEFAULT (the anti-stale-version rule): pick the LATEST stable /
-    // current-LTS versions a fresh project would adopt today (e.g. node '24', pnpm '10',
-    // python '3.13') — NEVER years-old defaults — UNLESS the operator's intent explicitly
+    // current-LTS versions a fresh project would adopt today (the example versions below
+    // are DERIVED from GOLDEN_BASELINE_TOOLCHAIN — node/pnpm/python at the golden-base
+    // spec — so a standard fresh project mirrors the warm baseline and stays coverage-hit)
+    // — NEVER years-old defaults — UNLESS the operator's intent explicitly
     // calls for a legacy/pinned/nightly toolchain. Omit `toolchain` (or leave it empty)
     // ONLY for a stack with NO tool mise can provision (a pure-shell or system-package
     // project) — then the bootstrap shell provisions it.
     "  - `toolchain`: a list of { name, version } the stack needs, at CURRENT/LTS",
-    "      versions by default (e.g. [{ name: 'node', version: '24' }, { name: 'pnpm',",
-    "      version: '10' }] | [{ name: 'python', version: '3.13' }]). Pick the latest",
+    `      versions by default (e.g. [{ name: 'node', version: '${EX_NODE}' }, { name: 'pnpm',`,
+    `      version: '${EX_PNPM}' }] | [{ name: 'python', version: '${EX_PYTHON}' }]). Pick the latest`,
     "      stable / current LTS a fresh project adopts TODAY — never years-old versions —",
     "      unless the operator asks for a legacy/pinned/nightly toolchain. Omit it only",
     "      for a stack with no mise tool.",
