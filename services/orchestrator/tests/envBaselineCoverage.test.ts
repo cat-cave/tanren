@@ -124,4 +124,27 @@ describe("interview prompt toolchain example — derived from GOLDEN_BASELINE_TO
       ]),
     ).toBe(true);
   });
+
+  it("the toolchain guidance tells the answerer a deploy CLI is NOT a toolchain tool (apex v83)", () => {
+    // apex v83: the answerer put flyctl@latest in `toolchain` → off-baseline → a
+    // spurious `jit_build_required` halt. Deployment is provider-driven platform-side
+    // (deploy-fly writes only fly.toml/FLY_API_TOKEN; the Fly Machines REST API deploys
+    // on merge), so a deploy/hosting CLI must NOT be a provisioned toolchain tool. Pin
+    // that the prompt says so, naming the common CLIs and the platform-side rationale.
+    const prompt = buildInterviewPrompt({
+      round: 1,
+      totalRounds: 14,
+      answer: "",
+      capture: emptyCapture(),
+    });
+    expect(prompt).toContain("A DEPLOY/HOSTING CLI");
+    expect(prompt).toContain("does NOT belong");
+    expect(prompt).toContain("in `toolchain`");
+    // Names the concrete CLIs the answerer must not add.
+    for (const cli of ["flyctl", "vercel", "wrangler", "netlify"]) {
+      expect(prompt).toContain(cli);
+    }
+    // The `deploy` command may still name the human-facing convention.
+    expect(prompt).toContain("'flyctl deploy'");
+  });
 });

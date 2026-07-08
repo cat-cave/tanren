@@ -125,12 +125,31 @@ export function buildInterviewPrompt(context: InterviewAnswererContext): string 
     // calls for a legacy/pinned/nightly toolchain. Omit `toolchain` (or leave it empty)
     // ONLY for a stack with NO tool mise can provision (a pure-shell or system-package
     // project) — then the bootstrap shell provisions it.
+    //
+    // DEPLOY CLIs ARE NOT TOOLCHAIN (apex v83): a deploy/hosting CLI — flyctl,
+    // vercel, wrangler, netlify, etc. — must NEVER be listed in `toolchain`. The
+    // `toolchain` is ONLY the runtime/build tools the runner's OWN gates
+    // (bootstrap / tier1 / tier2 / tier3 / build) actually invoke. Deployment is
+    // performed by Tanren's LINKED deploy provider PLATFORM-SIDE (e.g. the Fly
+    // Machines REST API on merge), NOT by the project running a CLI on the runner —
+    // so a deploy CLI is off-baseline and would force a needless JIT env build (an
+    // apex v83 greenfield derive `jit_build_required` halt: flyctl@latest landed in
+    // the toolchain). The `deploy` lifecycle command above MAY still name the
+    // human-facing convention (e.g. `flyctl deploy`), but that CLI is NOT a
+    // provisioned toolchain tool.
     "  - `toolchain`: a list of { name, version } the stack needs, at CURRENT/LTS",
     `      versions by default (e.g. [{ name: 'node', version: '${EX_NODE}' }, { name: 'pnpm',`,
     `      version: '${EX_PNPM}' }] | [{ name: 'python', version: '${EX_PYTHON}' }]). Pick the latest`,
     "      stable / current LTS a fresh project adopts TODAY — never years-old versions —",
     "      unless the operator asks for a legacy/pinned/nightly toolchain. Omit it only",
     "      for a stack with no mise tool.",
+    "      A DEPLOY/HOSTING CLI (e.g. flyctl, vercel, wrangler, netlify) does NOT belong",
+    "      in `toolchain`: deployment is performed by Tanren's linked deploy provider",
+    "      platform-side (not by the runner running a CLI), so the CLI is not a",
+    "      provisioned toolchain tool. `toolchain` is ONLY the runtime/build tools the",
+    "      runner's own gates (bootstrap/tier1/tier2/tier3/build) actually invoke. The",
+    "      `deploy` command may still name e.g. 'flyctl deploy' as the convention, but",
+    "      do NOT add that CLI to `toolchain`.",
     "A tier that runs tests should write a machine-readable report to a known path",
     "(the test-report convention). The lifecycle is REQUIRED before the interview can",
     "complete — never leave it null and never assume Node/pnpm.",
