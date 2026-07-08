@@ -13,13 +13,28 @@
 // the `buildFakeFragmentAuthorer` fixture from `tests/fixtures/`. A missing
 // authorer is a wiring bug, not a degrade — `buildLiveRunFragmentAuthoring`
 // throws if `deps.authorer` is omitted.
+//
+// RUNTIME-VALIDITY SMOKE wiring (Codex HIGH fix — PR #789 was dead code). The
+// F2 validate pipeline includes a runtime-validity smoke that materializes the
+// composed VFS into a temp dir and runs the runtime's dep resolver (real pnpm
+// / real bundle) to reject fragments whose declared deps don't resolve —
+// composition-validity is NOT runtime-validity. `buildFragmentAuthoring` takes
+// `runtimeValiditySmoke` as an OPTIONAL dep and silently skips the runtime
+// step when it's absent (a fragment with `next@^99.0.0` would then persist as
+// validated and only blow up at project bootstrap — one full apex trial
+// wasted). `buildLiveRunFragmentAuthoring` MUST wire the live subprocess
+// invokers below so the gate actually runs in prod; a regression test in
+// `tests/fragmentAuthoringProdWiring.test.ts` pins this.
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
 import {
   buildFragmentAuthoring,
+  buildLiveBundleInvoker,
+  buildLivePnpmInvoker,
   type FragmentAuthoring,
   type FragmentAuthorer,
+  type FragmentAuthoringDeps,
   type FragmentAuthoringEvents,
   type FragmentPersistence,
   type LoadOrgFragments,
@@ -27,6 +42,7 @@ import {
   loadUnifiedFragmentLibrary,
   type FragmentLibrary,
   type PriorFragment,
+  type RuntimeValiditySmokeDeps,
 } from "../../engine/templates/index.js";
 import { FragmentsStore } from "../../engine/repositories/fragments.js";
 import type { EventStore } from "../../engine/eventStore.js";
@@ -45,18 +61,36 @@ export interface FragmentAuthoringFlowDeps {
   authorer: FragmentAuthorer;
 }
 
-/** Build the live per-fragment authoring seam for ONE (orgId) context. */
-export function buildLiveRunFragmentAuthoring(
+/** Build the LIVE `RuntimeValiditySmokeDeps` — real pnpm + real bundle subprocess
+ * invokers. Extracted (and exported) so a regression test can pin the shape is
+ * non-undefined + populated. PR #789 shipped the runtime-validity smoke
+ * WITHOUT wiring it into prod, so the module was dead code and a fragment
+ * declaring `next@^99.0.0` persisted as `validated` (Codex HIGH). The
+ * `mountFeatureRoutes` path routes through `buildLiveFragmentAuthoringDeps`
+ * below which calls this helper unconditionally. */
+export function buildLiveRuntimeValiditySmokeDeps(): RuntimeValiditySmokeDeps {
+  return {
+    pnpmInvoker: buildLivePnpmInvoker(),
+    bundleInvoker: buildLiveBundleInvoker(),
+  };
+}
+
+/** Assemble the full `FragmentAuthoringDeps` for the live wiring. Extracted so a
+ * regression test can assert `runtimeValiditySmoke` (and every other slot) is
+ * populated BEFORE the deps object reaches `buildFragmentAuthoring`. Removing
+ * any slot from this factory reproduces PR #789's dead-code bug — the test
+ * fails loud rather than the runtime step silently degrading. */
+export function buildLiveFragmentAuthoringDeps(
   deps: FragmentAuthoringFlowDeps,
   ctx: { orgId: string },
-): FragmentAuthoring {
+): FragmentAuthoringDeps {
   const { pool, eventStore, authorer } = deps;
   const { orgId } = ctx;
   // Loud-throw on a missing eventStore — silent-degradation is banned (v66 fix).
   // The TS signature already requires it; this guards against erased-type callers.
   if (eventStore === undefined) {
     throw new Error(
-      "buildLiveRunFragmentAuthoring: `eventStore` is required — the per-fragment authoring run " +
+      "buildLiveFragmentAuthoringDeps: `eventStore` is required — the per-fragment authoring run " +
         "must emit `fragment.authoring.*` events for operator observability. Wire " +
         "`new PgEventStore(scopedPool)` from the route mount (v66 fix).",
     );
@@ -141,7 +175,26 @@ export function buildLiveRunFragmentAuthoring(
     });
   };
 
-  return buildFragmentAuthoring({ authorer, persistence, events, priorFragmentsLookup });
+  // Runtime-validity smoke — the final F2 validate gate (Codex HIGH fix). Wires
+  // real pnpm + real bundle subprocess invokers so an authored fragment declaring
+  // `next@^99.0.0` (or any unresolvable dep) is REJECTED at authoring time
+  // instead of persisting as `validated` and detonating at project bootstrap.
+  // Absent this wiring the runtime step is silently skipped (see
+  // `fragmentAuthoringRun.ts:487`) — that was the bug PR #789 shipped as. The
+  // bundle invoker returns `unavailable` when `bundle` isn't on PATH; the smoke
+  // then falls back to the Gemfile syntax check, so wiring it unconditionally
+  // costs nothing on hosts without ruby.
+  const runtimeValiditySmoke = buildLiveRuntimeValiditySmokeDeps();
+
+  return { authorer, persistence, events, priorFragmentsLookup, runtimeValiditySmoke };
+}
+
+/** Build the live per-fragment authoring seam for ONE (orgId) context. */
+export function buildLiveRunFragmentAuthoring(
+  deps: FragmentAuthoringFlowDeps,
+  ctx: { orgId: string },
+): FragmentAuthoring {
+  return buildFragmentAuthoring(buildLiveFragmentAuthoringDeps(deps, ctx));
 }
 
 /** Build the live unified fragment library loader for ONE (orgId) context. */
