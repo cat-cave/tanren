@@ -17,13 +17,27 @@
  * pnpm's ERR_PNPM_NO_MATCHING_VERSION message looks like:
  *   ERR_PNPM_NO_MATCHING_VERSION  No matching version found for vitest@^99.0.0
  * Also matches ERR_PNPM_FETCH_404 (dep not found on the registry) and the more
- * general "GET https://…/pkg/-/pkg-x.y.z.tgz: 404" line. */
+ * general "GET https://…/pkg/-/pkg-x.y.z.tgz: 404" line.
+ *
+ * ERR_PNPM_IGNORED_BUILDS is deliberately NOT surfaced as a resolvability
+ * rejection: pnpm 10/11 blocks unapproved dependency build scripts by default
+ * and exits non-zero, but the deps RESOLVED fine — it merely declined to run
+ * their build scripts. This is a warning-class condition, not a resolvability
+ * failure, so this resolvability smoke tolerates it (the live invoker treats an
+ * ignored-builds-only outcome as `ok`; this parser skips it so a genuine
+ * resolvability code alongside it still wins). */
 export function parsePnpmError(output: string): string {
   const noMatch = output.match(/No matching version found for\s+(\S+@\S+)/u);
   if (noMatch !== null) return `no matching version for ${noMatch[1] ?? "unknown"}`;
   const notFound = output.match(/(?:GET.*?)?(?:https?:\/\/\S+\/(\S+?)(?:-|\/)[-.\w]+(?:\.tgz)?)\s*[:\s]+\s*404/u);
   if (notFound !== null) return `package not found on registry: ${notFound[1] ?? "unknown"}`;
-  const errCode = output.match(/(ERR_PNPM_[A-Z0-9_]+)/u);
+  // Skip the ignored-builds warning when picking an ERR_PNPM_* code so a real
+  // resolvability code (if present) is chosen instead; if it's the ONLY code,
+  // fall through to a clearly non-fatal "tolerated" message.
+  const errCode = output.replaceAll("ERR_PNPM_IGNORED_BUILDS", "").match(/(ERR_PNPM_[A-Z0-9_]+)/u);
+  if (errCode === null && output.includes("ERR_PNPM_IGNORED_BUILDS")) {
+    return "ERR_PNPM_IGNORED_BUILDS: dependency build scripts skipped (tolerated — deps resolved)";
+  }
   if (errCode !== null) {
     const firstLine = firstNonEmptyLine(output);
     return `${errCode[1] ?? "ERR_PNPM_UNKNOWN"}: ${firstLine}`;

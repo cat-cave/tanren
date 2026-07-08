@@ -38,7 +38,18 @@ const execFileAsync = promisify(execFile);
  *   - `--prefer-offline` — reuses the cache when possible so a validation run
  *     doesn't re-download the world,
  *   - `--no-strict-peer-dependencies` — peer warnings are a writer's rework
- *     concern, not a validation reject.
+ *     concern, not a validation reject,
+ *   - `--config.dangerouslyAllowAllBuilds=true` — pnpm 10/11 blocks unapproved
+ *     dependency build scripts by DEFAULT and exits non-zero with
+ *     `ERR_PNPM_IGNORED_BUILDS`. This is a RESOLVABILITY smoke (see
+ *     `runtimeValiditySmoke.ts`): the deps resolved fine — pnpm merely declined
+ *     to run their postinstall/build scripts. Approving all builds
+ *     non-interactively keeps a valid scaffold from being rejected on a
+ *     warning-class condition. Safe because the smoke runs in a THROWAWAY temp
+ *     dir (`runtimeValiditySmoke.ts` mkdtemp) — nothing here is ever shipped.
+ *     NOT `--ignore-scripts`, which would MASK real script failures. As
+ *     defense-in-depth, `parsePnpmError` also treats `ERR_PNPM_IGNORED_BUILDS`
+ *     as non-fatal so a pnpm that doesn't honor the flag still doesn't reject.
  *
  * NO wall-clock kill timer (feedback_no_timeouts_progress_based). Errors are
  * parsed for the specific broken dep so the rejection message names WHICH dep
@@ -49,7 +60,13 @@ export function buildLivePnpmInvoker(overrides: { readonly pnpmBinary?: string }
     try {
       await execFileAsync(
         pnpmBinary,
-        ["install", "--frozen-lockfile=false", "--prefer-offline", "--no-strict-peer-dependencies"],
+        [
+          "install",
+          "--frozen-lockfile=false",
+          "--prefer-offline",
+          "--no-strict-peer-dependencies",
+          "--config.dangerouslyAllowAllBuilds=true",
+        ],
         {
           cwd,
           maxBuffer: 32 * 1024 * 1024,
@@ -59,9 +76,27 @@ export function buildLivePnpmInvoker(overrides: { readonly pnpmBinary?: string }
       return { kind: "ok" };
     } catch (err) {
       const combined = collectExecOutput(err);
+      // ERR_PNPM_IGNORED_BUILDS is a warning-class condition (deps resolved;
+      // pnpm merely declined to run their build scripts), NOT a resolvability
+      // failure — tolerate it even when the flag above wasn't honored.
+      if (isIgnoredBuildsOnly(combined)) return { kind: "ok" };
       return { kind: "failed", message: parsePnpmError(combined) };
     }
   };
+}
+
+/** True when pnpm's combined output reports ONLY the ignored-build-scripts
+ * warning (`ERR_PNPM_IGNORED_BUILDS`) with no accompanying resolvability error
+ * code (e.g. `ERR_PNPM_NO_MATCHING_VERSION`, `ERR_PNPM_FETCH_404`). This is the
+ * defense-in-depth guard for a pnpm that doesn't honor
+ * `--config.dangerouslyAllowAllBuilds`: a scaffold whose deps resolved fine but
+ * whose build scripts were skipped must NOT be rejected by this resolvability
+ * smoke. A genuine resolvability failure that ALSO logs ignored builds still
+ * carries its own `ERR_PNPM_*` code and stays fatal. */
+function isIgnoredBuildsOnly(output: string): boolean {
+  if (!output.includes("ERR_PNPM_IGNORED_BUILDS")) return false;
+  const otherErr = output.replaceAll("ERR_PNPM_IGNORED_BUILDS", "").match(/ERR_PNPM_[A-Z0-9_]+/u);
+  return otherErr === null;
 }
 
 /** Build the production `BundleInvoker` — shells out to real bundle. Returns
