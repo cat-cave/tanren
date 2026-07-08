@@ -209,6 +209,28 @@ describe("budget-halt panel (/budget)", () => {
     expect(html).not.toContain("$0.00");
   });
 
+  it("renders unpriced_spend fail-closed (paused with headroom) as unmeasured, not partial $0", async () => {
+    // Ceiling set, spent still under ceiling, paused → unpriced_spend shape.
+    projectBudgetPayload = {
+      ceilingUsd: 50,
+      period: "monthly",
+      spentUsd: 0,
+      notionalUsd: 0,
+      remainingUsd: 50,
+      paused: true,
+    };
+    const app = await build();
+    const html = await (await app.request("/budget")).text();
+    expect(html).toContain("halted on budget");
+    expect(html).toContain("Fail-closed safety pause");
+    expect(html).toContain("unmeasured · fail-closed safety pause");
+    // Ceiling is still shown; only spend/notional/remaining go to "—".
+    expect(html).toContain("$50.00");
+    expect(html).not.toContain("gated figure · cost_usd billed");
+    // Do not paint partial zeros as the gated total.
+    expect(html).not.toMatch(/real spend[\s\S]*?\$0\.00/u);
+  });
+
   it("renders the config form with save and clear controls and scoped projectId", async () => {
     const app = await build();
     const html = await (await app.request("/budget")).text();

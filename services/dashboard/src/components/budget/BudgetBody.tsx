@@ -45,17 +45,22 @@ function isEmpty(value: string): boolean {
 }
 
 /**
- * True when pause is active with no resolved ceiling — the API maps fail-closed
- * unresolvable/unparseable states to spentUsd=0 placeholders. Do not paint those
- * as real zero spend.
+ * Spend is uncomputable when the walker is fail-closed. The budget GET does not
+ * expose `failClosed`, so recover it from the observation shape:
+ *   - paused + null ceiling → unresolvable/unparseable (backend zero placeholders)
+ *   - paused + ceiling set + spent < ceiling → unpriced_spend (true spend unknown;
+ *     partial sum must not be painted as the gated total, especially $0.00)
+ * A genuine ceiling-reached halt has spent ≥ ceiling and is NOT uncomputable.
  */
-function isFailClosedPlaceholder(b: ProjectBudgetView): boolean {
-  return b.paused && b.ceilingUsd === null;
+function isSpendUncomputable(b: ProjectBudgetView): boolean {
+  if (!b.paused) return false;
+  if (b.ceilingUsd === null) return true;
+  return b.spentUsd < b.ceilingUsd;
 }
 
 /** Cards from a successful project-budget read. */
 function spendCards(b: ProjectBudgetView): StatCard[] {
-  const failClosed = isFailClosedPlaceholder(b);
+  const uncomputable = isSpendUncomputable(b);
   return [
     {
       label: "ceiling",
@@ -64,18 +69,18 @@ function spendCards(b: ProjectBudgetView): StatCard[] {
     },
     {
       label: "real spend",
-      value: failClosed ? "—" : budgetUsd(b.spentUsd),
-      sub: failClosed ? "unmeasured · fail-closed safety pause" : "gated figure · cost_usd billed",
+      value: uncomputable ? "—" : budgetUsd(b.spentUsd),
+      sub: uncomputable ? "unmeasured · fail-closed safety pause" : "gated figure · cost_usd billed",
     },
     {
       label: "notional",
-      value: failClosed ? "—" : budgetUsd(b.notionalUsd),
-      sub: failClosed ? "unmeasured · fail-closed safety pause" : "API-equivalent · not gated",
+      value: uncomputable ? "—" : budgetUsd(b.notionalUsd),
+      sub: uncomputable ? "unmeasured · fail-closed safety pause" : "API-equivalent · not gated",
     },
     {
       label: "remaining",
-      value: budgetUsd(b.remainingUsd),
-      sub: "headroom vs real spend",
+      value: uncomputable ? "—" : budgetUsd(b.remainingUsd),
+      sub: uncomputable ? "headroom uncomputable while spend is unknown" : "headroom vs real spend",
     },
   ];
 }
@@ -144,14 +149,14 @@ function ConfigForm(props: { projectBudget: ProjectBudgetView | undefined; proje
 }
 
 function HaltBanner(props: { budget: ProjectBudgetView }) {
-  const failClosed = isFailClosedPlaceholder(props.budget);
+  const uncomputable = isSpendUncomputable(props.budget);
   return (
     <section class="halt-banner" role="alert">
       <span class="halt-title">halted on budget</span>
       <span class="halt-sub">
-        {failClosed
-          ? "Fail-closed safety pause: the budget gate could not resolve a ceiling or measure spend (unresolvable project org or unparseable config). Spend figures are unmeasured — not zero. Fix ownership/config, then re-check."
-          : "The DagWalker is paused on this project's budget (ceiling reached or fail-closed safety — e.g. unpriced spend). Raise or clear the ceiling when headroom should free; a successful write re-wakes the walk when the gate loosens."}
+        {uncomputable
+          ? "Fail-closed safety pause: true spend is unknown (unresolvable org, unparseable config, or unpriced spend rows). Figures are unmeasured — not zero. Fix pricing/config, then re-check; raising the ceiling does not invent missing spend facts."
+          : "The DagWalker is paused because real spend has reached this project's ceiling. Raise or clear the ceiling to free headroom; a successful write re-wakes the walk when the gate loosens."}
       </span>
     </section>
   );
