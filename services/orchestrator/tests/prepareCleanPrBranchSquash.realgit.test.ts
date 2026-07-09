@@ -409,4 +409,70 @@ describe("prepareCleanPrBranch — direct overlay onto cloneHead (apex v85; cove
       }),
     ).rejects.toThrow(/non-empty runId/u);
   });
+
+  // Codex residual: single-pass A-before-D drops writer content on dir↔file type changes
+  // (cacheinfo refuses file `d` while index still has `d/a`; pipeline hid the failure).
+  it("dir→file type change: PR_CLEAN_REF keeps the writer file (not an empty tree)", async () => {
+    const { repoPath } = initFixtureRepo();
+    writeFileAt(repoPath, "d/a", "dir-child\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "base: directory d/"]);
+    const cloneHead = git(repoPath, ["rev-parse", "HEAD"]);
+    writeFileAt(repoPath, "package-lock.json", "{}\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "bootstrap"]);
+    const bootstrapSha = git(repoPath, ["rev-parse", "HEAD"]);
+    rmSync(join(repoPath, "d"), { recursive: true, force: true });
+    writeFileAt(repoPath, "d", "writer-file-d\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "writer: dir-to-file"]);
+
+    const result = await prepareCleanPrBranch({
+      ssh: new LocalCommandSubstrate(),
+      target: LOCAL_HANDLE,
+      workspacePath: repoPath,
+      cloneHeadSha: cloneHead,
+      bootstrapSha,
+      runId: "run_dir_to_file",
+    });
+    expect(result.ref).toBe(PR_CLEAN_REF);
+    expect(result.headSha).toMatch(/^[0-9a-f]{40}$/u);
+    expect(git(repoPath, ["rev-parse", `${PR_CLEAN_REF}^`])).toBe(cloneHead);
+    const treeListing = git(repoPath, ["ls-tree", "-r", "--name-only", PR_CLEAN_REF]);
+    expect(treeListing.split("\n")).toEqual(["d"]);
+    expect(treeListing).not.toContain("package-lock.json");
+    expect(git(repoPath, ["cat-file", "-p", `${PR_CLEAN_REF}:d`])).toBe("writer-file-d");
+  });
+
+  it("file→dir type change: PR_CLEAN_REF keeps the writer nested path", async () => {
+    const { repoPath } = initFixtureRepo();
+    writeFileAt(repoPath, "d", "base-file-d\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "base: file d"]);
+    const cloneHead = git(repoPath, ["rev-parse", "HEAD"]);
+    writeFileAt(repoPath, "package-lock.json", "{}\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "bootstrap"]);
+    const bootstrapSha = git(repoPath, ["rev-parse", "HEAD"]);
+    rmSync(join(repoPath, "d"));
+    writeFileAt(repoPath, "d/a", "writer-nested\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "writer: file-to-dir"]);
+
+    const result = await prepareCleanPrBranch({
+      ssh: new LocalCommandSubstrate(),
+      target: LOCAL_HANDLE,
+      workspacePath: repoPath,
+      cloneHeadSha: cloneHead,
+      bootstrapSha,
+      runId: "run_file_to_dir",
+    });
+    expect(result.ref).toBe(PR_CLEAN_REF);
+    expect(result.headSha).toMatch(/^[0-9a-f]{40}$/u);
+    expect(git(repoPath, ["rev-parse", `${PR_CLEAN_REF}^`])).toBe(cloneHead);
+    const treeListing = git(repoPath, ["ls-tree", "-r", "--name-only", PR_CLEAN_REF]);
+    expect(treeListing.split("\n")).toEqual(["d/a"]);
+    expect(treeListing).not.toContain("package-lock.json");
+    expect(git(repoPath, ["cat-file", "-p", `${PR_CLEAN_REF}:d/a`])).toBe("writer-nested");
+  });
 });

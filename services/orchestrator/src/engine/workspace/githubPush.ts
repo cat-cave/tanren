@@ -148,8 +148,12 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       "set -eu",
       // Private index: never touch the real index, working tree, or HEAD. Dirty
       // per-iteration gate artifacts (rspec reports/, rubocop — apex v65) are irrelevant.
+      // `delta` materializes name-status so we can two-pass (D then A/M/T) without a
+      // pipeline: POSIX sh has no pipefail, so a mid-loop `update-index` failure would
+      // otherwise be swallowed when a later D succeeds (dir→file lost the writer file).
       "idx=$(mktemp)",
-      "trap 'rm -f \"$idx\"' EXIT",
+      "delta=$(mktemp)",
+      'trap \'rm -f "$idx" "$delta" "$idx.desc"\' EXIT',
       'export GIT_INDEX_FILE="$idx"',
       // Seed from cloneHead, then overlay the cumulative writer-vs-bootstrap delta.
       // Writer-untouched paths keep cloneHead (bootstrap-only lockfiles drop);
@@ -157,21 +161,62 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       `git read-tree ${cloneHead}`,
       // Overlay writer-vs-bootstrap path delta onto the private index.
       // --no-renames keeps statuses in {A,M,D,T}. IFS=tab keeps paths-with-spaces intact.
-      // Single shell fragment (newlines inside one &&-list element) so the while body is
-      // sequential, not split across &&.
+      // TWO-PASS (dir↔file type change): git refuses `cacheinfo` for file `d` while the
+      // index still has tree child `d/a`. diff-tree emits `A d` before `D d/a`, so a
+      // single-pass overlay drops the writer file and can still exit 0. Deletions first,
+      // then A/M/T; before each cacheinfo, clear exact/descendant/ancestor conflicts.
+      `git diff-tree -r --name-status --no-renames ${bootstrap} HEAD > "$delta"`,
       [
-        `git diff-tree -r --name-status --no-renames ${bootstrap} HEAD |`,
+        "while IFS=$(printf '\\t') read -r status path; do",
+        '  if [ -z "${status:-}" ]; then continue; fi',
+        '  if [ "$status" = "D" ]; then',
+        '    git update-index --force-remove -- "$path" 2>/dev/null || true',
+        "  fi",
+        'done < "$delta"',
+      ].join("\n"),
+      [
         "while IFS=$(printf '\\t') read -r status path; do",
         '  if [ -z "${status:-}" ]; then continue; fi',
         '  case "$status" in',
         "    D)",
-        '      git update-index --force-remove -- "$path" 2>/dev/null || true',
         "      ;;",
         "    A|M|T)",
+        // Clear index entries that would make `path` both a file and a directory:
+        // exact path, any child under path/, and each proper path-prefix (ancestor blob).
+        '      git update-index --force-remove -- "$path" 2>/dev/null || true',
+        '      git ls-files --cached -- "$path/" > "$idx.desc"',
+        "      while IFS= read -r child; do",
+        '        if [ -n "${child:-}" ]; then git update-index --force-remove -- "$child"; fi',
+        '      done < "$idx.desc"',
+        '      rm -f "$idx.desc"',
+        '      rest="$path"',
+        '      acc=""',
+        "      while :; do",
+        '        case "$rest" in',
+        "          */*)",
+        "            comp=${rest%%/*}",
+        "            rest=${rest#*/}",
+        '            if [ -z "$acc" ]; then acc="$comp"; else acc="$acc/$comp"; fi',
+        '            git update-index --force-remove -- "$acc" 2>/dev/null || true',
+        "            ;;",
+        "          *)",
+        "            break",
+        "            ;;",
+        "        esac",
+        "      done",
         // ls-tree: "<mode> <type> <sha>\\t<path>". cut is POSIX and present on runners.
         '      entry=$(git ls-tree HEAD -- "$path")',
+        '      if [ -z "$entry" ]; then',
+        '        printf "prepareCleanPrBranch: missing writer tree entry for %s\\n" "$path" >&2',
+        "        exit 1",
+        "      fi",
         '      mode=$(printf %s "$entry" | cut -d" " -f1)',
         '      sha=$(printf %s "$entry" | cut -d" " -f3 | cut -f1)',
+        '      if [ -z "$mode" ] || [ -z "$sha" ]; then',
+        '        printf "prepareCleanPrBranch: corrupt ls-tree entry for %s: %s\\n" "$path" "$entry" >&2',
+        "        exit 1",
+        "      fi",
+        // Fail loud — never continue to write-tree after a rejected type-change overlay.
         '      git update-index --add --cacheinfo "${mode},${sha},${path}"',
         "      ;;",
         "    *)",
@@ -179,10 +224,10 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
         "      exit 1",
         "      ;;",
         "  esac",
-        "done",
+        'done < "$delta"',
       ].join("\n"),
       "clean_tree=$(git write-tree)",
-      'rm -f "$idx"',
+      'rm -f "$idx" "$delta"',
       "unset GIT_INDEX_FILE",
       "trap - EXIT",
       // Provenance from the per-subtask commit range is appended to the composed message
