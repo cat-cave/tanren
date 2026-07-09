@@ -12,6 +12,7 @@
 // (line cap); re-exported so callers import them from one contract module unchanged.
 export {
   decodeBase64Content,
+  GreenfieldRepoNotEmptyError,
   RepositoryAlreadyExistsError,
   RepositoryCreationForbiddenError,
 } from "./repoHostErrors.js";

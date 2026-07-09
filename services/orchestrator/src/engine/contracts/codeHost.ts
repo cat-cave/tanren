@@ -102,6 +102,20 @@ export interface CodeHost {
   createRepo(input: CreateHostRepoInput): Promise<CreatedHostRepo>;
 
   /**
+   * PROBE whether a repository is at the BARE `auto_init` state — a single "Initial
+   * commit" whose tree carries nothing beyond a README — vs already carrying history
+   * (any additional commit, or a `tanren compose:` commit, or a non-trivial tree). The
+   * greenfield derive uses this before RE-ATTACHING to a repo that already exists (a
+   * `RepositoryAlreadyExistsError` on create): a re-attach is legitimate ONLY for a
+   * stranded, empty auto_init repo left by a crashed prior attempt; a repo already full
+   * of a PRIOR run's compose history must NOT be silently reused (it causes a cross-run
+   * base divergence that later fails PR-prep). The host HOSTS — this reads the commit
+   * graph, it never DECIDES. A future GitLab/Bitbucket impl maps it from its own
+   * commit-list read.
+   */
+  isRepoBareAutoInit(repo: CodeHostRepoRef): Promise<boolean>;
+
+  /**
    * DELETE a repository on the host (task #78 — derive atomic rollback). The
    * COMPENSATION primitive every host MUST expose: the greenfield derive registers
    * a rollback for each newly-created repo so a partial-create failure later in the

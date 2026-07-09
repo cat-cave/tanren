@@ -21,6 +21,7 @@
 
 import { decodeBase64Content } from "../contracts/repoHostErrors.js";
 import { createGitHubRepository, deleteGitHubRepository } from "./githubRepoCreate.js";
+import { githubRepoIsBareAutoInit } from "./githubRepoEmptiness.js";
 import {
   GitHubStatusService,
   repoPath,
@@ -154,6 +155,11 @@ export class GitHubCodeHost implements CodeHost {
       repoUrl: created.repoUrl,
       defaultBranch: created.defaultBranch,
     };
+  }
+
+  /** PROBE bare `auto_init` seed vs prior-history (greenfield re-attach guard, apex v84). */
+  async isRepoBareAutoInit(repo: CodeHostRepoRef): Promise<boolean> {
+    return githubRepoIsBareAutoInit(this.http, repo, await this.resolveToken(), (r, sha) => this.readCommit(r, sha));
   }
 
   /** DELETE a repo — derive-rollback compensation (task #78). See `deleteGitHubRepository`. */

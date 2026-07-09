@@ -34,6 +34,13 @@ export interface CodeHostConformanceHarness {
     parents: ReadonlyArray<string>,
     author: string,
   ): Promise<void> | void;
+  /**
+   * Mark the seeded `repo` as CARRYING prior content (compose commits on top of the
+   * bare auto_init seed) so the `isRepoBareAutoInit` false-case has a contaminated
+   * repo to observe. Optional: a harness that cannot synthesize a content state
+   * skips that case.
+   */
+  seedContent?(host: CodeHost, repo: CodeHostRepoRef): Promise<void> | void;
 }
 
 const REPO: CodeHostRepoRef = { owner: "owner", name: "repo" };
@@ -115,6 +122,20 @@ export function describeCodeHostConformance(label: string, harness: CodeHostConf
           expectedMainSha: "sha-main-0",
         }),
       ).rejects.toThrow(/reject|stale|expect|conflict|cas/iu);
+    });
+
+    it("isRepoBareAutoInit reports a freshly-seeded repo BARE, and a content-carrying repo NOT bare", async () => {
+      const host = harness.make();
+      await harness.seed(host, REPO, "main", "sha-main-0");
+      // A fresh seed models the bare auto_init seed (a single Initial commit / README).
+      expect(await host.isRepoBareAutoInit(REPO)).toBe(true);
+      // A harness that cannot synthesize a content state skips the false-case.
+      const seedContent = harness.seedContent;
+      if (seedContent === undefined) return;
+      await seedContent(host, REPO);
+      // The greenfield derive re-attach guard rejects exactly this: a repo already
+      // carrying a prior run's compose history.
+      expect(await host.isRepoBareAutoInit(REPO)).toBe(false);
     });
 
     it("deleteRepo REMOVES a repo (derive-rollback compensation, task #78) + is IDEMPOTENT on absent", async () => {

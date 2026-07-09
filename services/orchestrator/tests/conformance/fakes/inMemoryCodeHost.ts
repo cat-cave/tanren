@@ -25,6 +25,13 @@ interface RepoState {
   commits: Map<string, HostCommit>;
   /** sha -> the author/committer login attributed to that commit (for readCommitAuthors). */
   authors: Map<string, string>;
+  /**
+   * Whether the repo is still at the bare `auto_init` seed (a single Initial commit
+   * over a README-only tree) vs already carrying history. `createRepo(autoInit)` and
+   * a fresh `seed` leave it bare; `seedContent` marks it as carrying prior content
+   * (the cross-run contamination the derive re-attach guard must reject).
+   */
+  bareAutoInit: boolean;
 }
 
 function key(repo: CodeHostRepoRef): string {
@@ -43,7 +50,13 @@ export class InMemoryCodeHost implements CodeHost {
         [initialSha, { sha: initialSha, parents: [], message: "init", treeSha: `tree-${initialSha}` }],
       ]),
       authors: new Map(),
+      bareAutoInit: true,
     });
+  }
+
+  /** Mark a seeded repo as CARRYING prior content (no longer bare auto_init). */
+  seedContent(repo: CodeHostRepoRef): void {
+    this.require(repo).bareAutoInit = false;
   }
 
   /** Seed a commit with explicit parents + an attributed author login (test setup helper). */
@@ -59,6 +72,10 @@ export class InMemoryCodeHost implements CodeHost {
     const initialSha = input.autoInit ? `sha-init-${input.name}` : "sha-empty";
     this.seed(repo, defaultBranch, initialSha);
     return { repo, repoUrl: `https://example.com/${key(repo)}.git`, defaultBranch };
+  }
+
+  async isRepoBareAutoInit(repo: CodeHostRepoRef): Promise<boolean> {
+    return this.require(repo).bareAutoInit;
   }
 
   /** Has the test fixture seen this repo (used by tests to assert post-rollback state). */

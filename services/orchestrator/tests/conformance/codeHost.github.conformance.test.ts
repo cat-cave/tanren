@@ -35,6 +35,13 @@ interface RepoState {
   parents: Map<string, string[]>;
   /** sha -> the attributed author login (the `/compare` commits' author). */
   authors: Map<string, string>;
+  /**
+   * Whether the repo carries PRIOR CONTENT (a prior run's compose commits) vs the bare
+   * auto_init seed. Drives the `/commits` + `/git/trees` answers the `isRepoBareAutoInit`
+   * probe reads: false ⇒ a single Initial commit over a README-only tree (BARE); true ⇒
+   * a `tanren compose:` commit on top of the seed (NOT bare).
+   */
+  hasContent: boolean;
 }
 
 /**
@@ -61,7 +68,14 @@ class StatefulGitHubHttp implements GitHubHttpClient {
       ffBase: new Map(),
       parents: new Map(),
       authors: new Map(),
+      hasContent: false,
     });
+  }
+
+  /** Mark a seeded repo as carrying prior compose content (the `isRepoBareAutoInit` false-case). */
+  seedContent(owner: string, name: string): void {
+    const repo = this.repos.get(`${owner}/${name}`);
+    if (repo !== undefined) repo.hasContent = true;
   }
 
   /** Record that `sha` was built on `base` (so a ff-only update to it requires main == base). */
@@ -108,6 +122,36 @@ class StatefulGitHubHttp implements GitHubHttpClient {
       const baseSha = decodeURIComponent(compareMatch[1] ?? "");
       const headSha = decodeURIComponent(compareMatch[2] ?? "");
       return { status: 200, body: compareBody(repo, baseSha, headSha) };
+    }
+
+    // isRepoBareAutoInit commit list: GET /commits (per_page rides the query, stripped above).
+    if (input.method === "GET" && suffix === "/commits") {
+      const head = repo.branches.get(repo.defaultBranch) ?? "sha-initial";
+      if (!repo.hasContent) {
+        // The bare auto_init seed: a single "Initial commit" over a README-only tree.
+        return { status: 200, body: [{ sha: head, commit: { message: "Initial commit" } }] };
+      }
+      // A prior run pushed a `tanren compose:` commit on top of the seed → 2 commits.
+      return {
+        status: 200,
+        body: [
+          { sha: "sha-compose-1", commit: { message: "tanren compose: seed the project" } },
+          { sha: head, commit: { message: "Initial commit" } },
+        ],
+      };
+    }
+
+    // isRepoBareAutoInit commit read: GET /git/commits/:sha → the commit's tree sha.
+    const commitMatch = /^\/git\/commits\/(.+)$/u.exec(suffix);
+    if (input.method === "GET" && commitMatch !== null) {
+      const sha = decodeURIComponent(commitMatch[1] ?? "");
+      return { status: 200, body: { sha, message: "Initial commit", tree: { sha: `tree-${sha}` }, parents: [] } };
+    }
+
+    // isRepoBareAutoInit tree read: GET /git/trees/:sha → the bare seed's README-only tree.
+    const treeMatch = /^\/git\/trees\/(.+)$/u.exec(suffix);
+    if (input.method === "GET" && treeMatch !== null) {
+      return { status: 200, body: { tree: [{ type: "blob", path: "README.md" }] } };
     }
 
     // fetchRef / land-read: GET /git/ref/heads/:branch
@@ -307,6 +351,9 @@ describeCodeHostConformance(
       },
       seedCommit: (_host, repo, sha, parents, author) => {
         transport.seedCommit(repo.owner, repo.name, sha, parents, author);
+      },
+      seedContent: (_host, repo) => {
+        transport.seedContent(repo.owner, repo.name);
       },
     };
   })(),

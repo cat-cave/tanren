@@ -25,6 +25,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
+import type { CreateRepositoryInput } from "../../engine/contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import {
@@ -74,6 +75,7 @@ import {
   preflightGreenfieldDeploy,
 } from "../projects/greenfield.js";
 import { deleteGreenfieldRepository } from "../projects/greenfieldRepoDelete.js";
+import { probeGreenfieldRepositoryBareAutoInit } from "../projects/greenfieldRepoProbe.js";
 import { destroyGreenfieldDeployApp } from "../projects/greenfieldDeployDestroy.js";
 
 export interface OnboardingRoutesOptions {
@@ -116,6 +118,21 @@ const RoundBody = z
     capture: InterviewCapture.default(InterviewCapture.parse({})),
   })
   .strict();
+
+// Build the three greenfield repo-lifecycle callbacks the derive threads (all over the
+// SAME org credential context): CREATE (`CodeHost.createRepo`), DELETE (task #78
+// rollback compensation), and the apex-v84 emptiness PROBE gating the re-attach branch.
+// Extracted so the derive route handler stays under the per-function line cap.
+function buildGreenfieldRepoCallbacks(options: OnboardingRoutesOptions, githubHttp: GitHubHttpClient, orgId: string) {
+  const minter = options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter };
+  const base = { pool: options.pool, secrets: options.secrets, githubHttp, orgId, ...minter };
+  return {
+    createRepository: (input: CreateRepositoryInput) => createGreenfieldRepository({ ...base, input }),
+    deleteRepository: (target: { owner: string; name: string }) => deleteGreenfieldRepository({ ...base, target }),
+    probeRepoBareAutoInit: (target: { owner: string; name: string }) =>
+      probeGreenfieldRepositoryBareAutoInit({ ...base, target }),
+  };
+}
 
 const DeriveBody = z
   .object({
@@ -194,28 +211,9 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           owner: parsed.data.owner,
           ...(parsed.data.private === undefined ? {} : { private: parsed.data.private }),
           ...(parsed.data.description === undefined ? {} : { description: parsed.data.description }),
-          createRepository: (input) =>
-            createGreenfieldRepository({
-              pool: options.pool,
-              secrets: options.secrets,
-              githubHttp,
-              orgId,
-              ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
-              input,
-            }),
-          // TASK #78 — derive transactional rollback. Threads the repo-DELETE
-          // compensation through the same credential context the create uses,
-          // so a derive that creates a repo + then fails later in the call
-          // walks back and deletes it before re-raising.
-          deleteRepository: (target) =>
-            deleteGreenfieldRepository({
-              pool: options.pool,
-              secrets: options.secrets,
-              githubHttp,
-              orgId,
-              ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
-              target,
-            }),
+          // The greenfield repo-lifecycle callbacks (create + task-#78 delete rollback +
+          // the apex-v84 re-attach emptiness probe), all over the same org credential context.
+          ...buildGreenfieldRepoCallbacks(options, githubHttp, orgId),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
           ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
           // TASK #78 — derive transactional rollback. Threads the deploy-DESTROY
