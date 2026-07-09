@@ -70,6 +70,7 @@ function recordingWriter(calls: Calls): RunStateWriter {
     mergeRunVerifiedAncestorSha: () => Promise.reject(new Error("unexpected mergeRunVerifiedAncestorSha")),
     supersedeQueuedPlannerTask: () => Promise.reject(new Error("unexpected supersedeQueuedPlannerTask")),
     finalizeLand: () => Promise.reject(new Error("unexpected finalizeLand")),
+    recordDraftPrCreated: () => Promise.reject(new Error("unexpected recordDraftPrCreated")),
     insertTask: () => Promise.reject(new Error("unexpected insertTask")),
     updateTask: () => Promise.reject(new Error("unexpected updateTask")),
     updateTaskWithEvent: () => Promise.reject(new Error("unexpected updateTaskWithEvent")),

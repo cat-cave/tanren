@@ -27,6 +27,8 @@ import type {
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
+  RecordDraftPrCreatedInput,
+  RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
@@ -77,6 +79,7 @@ import {
   terminalPairSchema,
 } from "./runStateLifecycleSql.js";
 import { applyFinalizeLand } from "../merge/mergeAuthorityLandFinalizer.js";
+import { applyRecordDraftPrCreated } from "../merge/draftPrCreatedAtomic.js";
 
 /**
  * The in-process run-state writer. Constructed with the worker's pool (typically
@@ -159,6 +162,12 @@ export class DirectRunStateWriter implements RunStateWriter {
     // endpoint runs server-side.
     await runWithOrgScope(this.pool, input.orgId, (client) => applyFinalizeLand(client, input));
     return { auditId: input.runId };
+  }
+
+  async recordDraftPrCreated(input: RecordDraftPrCreatedInput): Promise<RecordDraftPrCreatedOutcome> {
+    // apex v86: post-PR-open 3-write block on ONE org-scoped client — same applier
+    // the control-plane `/internal/record-draft-pr-created` endpoint runs.
+    return runWithOrgScope(this.pool, input.orgId, (client) => applyRecordDraftPrCreated(client, input));
   }
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {
