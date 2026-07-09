@@ -114,23 +114,22 @@ describe("bootstrap-artifact isolation", () => {
     expect(state.diff).not.toContain("package-lock.json");
   });
 
-  it("(b) prepares the PR branch by squashing writer commits into ONE composed commit and rebasing that onto the clone HEAD (apex v71 fix)", async () => {
-    // prepareCleanPrBranch squashes the writer commit range (`bootstrapSha..HEAD`) into
-    // ONE composed commit (tree = HEAD tree, parent = bootstrapSha) via `git commit-tree`,
-    // then rebases that single commit onto the clone HEAD into PR_CLEAN_REF. This drops
-    // the bootstrap commit AND eliminates inter-writer-commit self-conflicts (the apex v71
-    // halt: 22 writer subtasks touching the same lines → linear rebase "could not apply").
-    // The trailing `git rev-parse PR_CLEAN_REF` echoes the cleaned tip (the future PR head)
-    // as the command's stdout — the COMMIT-BINDING sha the merge gate anchors on.
+  it("(b) prepares the PR branch by overlaying writer-vs-bootstrap onto cloneHead into ONE composed commit (apex v85 direct-overlay; supersedes v71 rebase)", async () => {
+    // prepareCleanPrBranch builds ONE composed commit parented on cloneHead whose tree is
+    // cloneHead + (writer − bootstrap): private index seeded from cloneHead, then each
+    // path in `git diff-tree bootstrap..HEAD` takes the writer blob/delete. No rebase, no
+    // checkout, no HEAD move — drops bootstrap artifacts, collapses writer drafts, and
+    // cannot 3-way-conflict (apex v85: single composed commit still conflicted under
+    // squash-then-rebase). Trailing `git rev-parse PR_CLEAN_REF` is the COMMIT-BINDING sha.
     const CLEAN_SHA = "4".repeat(40);
-    const ssh = new ScriptedSsh([{ match: "git rebase", stdout: `${CLEAN_SHA}\n` }]);
+    const ssh = new ScriptedSsh([{ match: "git write-tree", stdout: `${CLEAN_SHA}\n` }]);
     const pushSource = await prepareCleanPrBranch({
       ssh,
       target,
       workspacePath,
       cloneHeadSha: CLONE_HEAD,
       bootstrapSha: BOOTSTRAP_SHA,
-      runId: "run_apex_v71",
+      runId: "run_apex_v85",
       timeoutMs,
     });
 
@@ -138,41 +137,31 @@ describe("bootstrap-artifact isolation", () => {
     expect(pushSource.ref).toBe(PR_CLEAN_REF);
     expect(pushSource.headSha).toBe(CLEAN_SHA);
     const cmd = ssh.commands[0] ?? "";
-    // The SQUASH step: read the writer HEAD tree, gather provenance from the writer commit
-    // range, and stamp ONE commit whose parent is bootstrapSha. `git commit-tree` writes
-    // the object directly — no working-tree touch, no dirty-tree interaction.
-    expect(cmd).toContain("writer_tree=$(git rev-parse HEAD^{tree})");
+    // Private index overlay: seed cloneHead, apply writer-vs-bootstrap delta, write-tree.
+    expect(cmd).toContain(`git read-tree '${CLONE_HEAD}'`);
+    expect(cmd).toContain(`git diff-tree -r --name-status --no-renames '${BOOTSTRAP_SHA}' HEAD`);
+    expect(cmd).toContain("git write-tree");
+    expect(cmd).toContain("git update-index --add --cacheinfo");
+    // Composed commit parented on cloneHead (NOT bootstrap) — no rebase needed.
     expect(cmd).toContain(`git log --reverse --format='- %s' '${BOOTSTRAP_SHA}..HEAD'`);
-    expect(cmd).toContain(`git commit-tree "$writer_tree" -p '${BOOTSTRAP_SHA}'`);
-    // The composed message carries provenance: the runId anchors + the per-subtask
-    // subjects (the provenance shell var) are appended.
-    expect(cmd).toContain("run_apex_v71");
-    // Then rebase the ONE composed commit onto cloneHead — no inter-writer conflict possible.
-    // `--autostash` (apex v65) stashes per-iteration gate artifacts (rspec `reports/`,
-    // rubocop autocorrects, etc.) so `cannot rebase: You have unstaged changes` cannot block.
-    expect(cmd).toContain('git checkout --quiet --detach "$composed"');
-    expect(cmd).toContain(`git rebase --autostash --onto '${CLONE_HEAD}' '${BOOTSTRAP_SHA}'`);
-    // Capture the cleaned tip into the push ref, then restore the working HEAD
-    // (so a review-rework re-entry keeps its bootstrapSha diff base intact).
-    expect(cmd).toContain(`git update-ref '${PR_CLEAN_REF}' HEAD`);
-    expect(cmd).toContain('git checkout --quiet --detach "$orig_head"');
+    expect(cmd).toContain(`git commit-tree "$clean_tree" -p '${CLONE_HEAD}'`);
+    expect(cmd).toContain("run_apex_v85");
+    // No rebase / no detached checkout — those were the v65/v71/v85 halt surfaces.
+    expect(cmd).not.toContain("git rebase");
+    expect(cmd).not.toContain("git checkout");
+    // Stage into the push ref; HEAD is never moved (writer tip stays for rework).
+    expect(cmd).toContain(`git update-ref '${PR_CLEAN_REF}' "$composed"`);
     // The cleaned tip is echoed LAST so it is the command's stdout (the PR-head sha).
     expect(cmd).toContain(`git rev-parse '${PR_CLEAN_REF}'`);
   });
 
-  it("(b) apex v65 — the rebase uses `--autostash` so a dirty working tree from the per-iteration gates doesn't block the clean-PR prep", async () => {
-    // Regression: v65 ran writer → checker → tier-1/tier-2 gates → auditor → 4 design
-    // findings → designOracle → triage → plan.completed, then HALTED on
-    // `prepare clean PR branch failed: exit 1; stderr: cannot rebase: You have unstaged
-    // changes`. The gates (`just tier-1` running rubocop autocorrect, `just tier-2`
-    // writing `reports/`) legitimately dirty the working tree; that evidence is already
-    // captured in the gate's `gate.verdict` event payload and is never something we
-    // want in the PR commit. `--autostash` is git's native fix: stash dirty tracked +
-    // untracked changes before the rebase, pop them back after, leaving PR_CLEAN_REF
-    // resolved to the cleaned tip regardless. The v71 squash keeps this invariant: the
-    // rebase is now over the ONE composed commit, but --autostash still runs first.
+  it("(b) apex v65 — clean-PR prep never requires a clean working tree (object-DB overlay; no rebase)", async () => {
+    // Regression: v65 halted on `cannot rebase: You have unstaged changes` after gates
+    // dirtied the tree. v71 kept rebase + --autostash. v85 drops rebase entirely: the
+    // overlay uses a private GIT_INDEX_FILE + object-DB reads, so a dirty working tree
+    // cannot block the prep. Pin the absence of rebase/checkout and the private index.
     const CLEAN_SHA = "5".repeat(40);
-    const ssh = new ScriptedSsh([{ match: "git rebase", stdout: `${CLEAN_SHA}\n` }]);
+    const ssh = new ScriptedSsh([{ match: "git write-tree", stdout: `${CLEAN_SHA}\n` }]);
     await prepareCleanPrBranch({
       ssh,
       target,
@@ -183,13 +172,11 @@ describe("bootstrap-artifact isolation", () => {
       timeoutMs,
     });
     const cmd = ssh.commands[0] ?? "";
-    // The `--autostash` flag must precede `--onto` on the `git rebase` invocation — git
-    // applies it before the rebase plan runs, which is what makes a dirty tree survive.
-    expect(cmd).toContain("git rebase --autostash --onto");
-    // Specifically, the flag must NOT have been dropped or re-ordered after `--onto`
-    // (git would treat a post-`--onto` arg as the upstream ref and the rebase would
-    // refuse a flag-shaped value loudly).
-    expect(cmd).not.toMatch(/git rebase --onto[^|&;]*--autostash/u);
+    expect(cmd).toContain("GIT_INDEX_FILE=");
+    expect(cmd).toContain("git read-tree");
+    expect(cmd).not.toContain("git rebase");
+    expect(cmd).not.toContain("git checkout");
+    expect(cmd).not.toContain("--autostash");
   });
 
   it("(b) no-ops the PR-branch cleanup when there is no real bootstrap commit", async () => {

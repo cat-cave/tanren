@@ -1,28 +1,22 @@
-// The apex v71 halt closer: prepareCleanPrBranch SQUASHES the writer's per-subtask
-// commit range into ONE composed commit before rebasing onto the clone HEAD, so an
-// inter-writer-commit self-conflict (the linear replay's `Rebasing (1/22) → (2/22)`
-// halt at commit 3 on 2026-07-02 run_bcf3af59) cannot block the clean-PR prep. This is
-// the git behavior the sibling scripted-SSH test (workspaceBootstrapArtifacts.test.ts)
-// can't prove — the fix is entirely in the shell command's rebase semantics. We drive
-// it against a REAL git repo via LocalCommandSubstrate and assert the resulting
-// PR_CLEAN_REF tree + parent + message.
+// Real-git coverage for prepareCleanPrBranch's DIRECT OVERLAY (apex v85): build ONE
+// composed commit parented on cloneHead whose tree is cloneHead + (writer − bootstrap)
+// via a private-index path overlay — no rebase, no checkout, no HEAD move. This is the
+// git behavior the sibling scripted-SSH test (workspaceBootstrapArtifacts.test.ts) can't
+// prove. We drive a REAL git repo via LocalCommandSubstrate and assert PR_CLEAN_REF
+// tree + parent + message.
 //
-// apex v71 evidence:
-//   run_bcf3af59 (v71_postgres_1) — the writer emitted 22 subtask commits, the entire
-//   inner loop closed clean (checker complete, tier-2 12/12, auditor findings empty,
-//   designOracle verdict, plan.completed), and the run halted at:
-//     prepare clean PR branch failed: exit 1
-//     command: git rebase --autostash --onto 'a7d0e59a...' 'c7080406...'
-//     stderr: Rebasing (1/22) → (2/22) → (3/22)
-//             error: could not apply f27ffc8... codex writer
-//             hint: Resolve all conflicts manually.
+// History:
+//   v71 — squash writer N commits → one commit, then rebase onto cloneHead. Closed
+//         inter-writer draft self-conflicts (linear `Rebasing (1/22)…(3/22) could not
+//         apply` on run_bcf3af59). Still used a 3-way merge for that one commit.
+//   v85 — even ONE composed commit can 3-way-conflict when bootstrap diverges from
+//         cloneHead on paths the writer also touched (`Rebasing (1/1) could not apply
+//         … Tanren composed change` on scaffold run_63b8e8aa). Direct overlay drops
+//         the rebase; writer-wins path apply cannot conflict.
 //
-// The doctrine-aligned fix (per docs/architecture/tanren-owns-the-engine.md — jj-only
-// on Tanren's local WorkspaceVcsCore; the RUNNER-side workspace here is a git checkout
-// since the PR-branch it produces is pushed to the git-based forge): squash the
-// bootstrapSha..HEAD range into a single composed commit, then rebase THAT one commit —
-// N distinct 3-way merges collapse into one, and any inter-commit self-conflict is
-// eliminated by construction.
+// Doctrine (tanren-owns-the-engine.md): jj-only on Tanren's local WorkspaceVcsCore; the
+// RUNNER-side workspace here is a git checkout because the PR branch is pushed to the
+// git-based forge.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -69,14 +63,13 @@ function initFixtureRepo(): { root: string; repoPath: string } {
   return { root, repoPath };
 }
 
-describe("prepareCleanPrBranch — squash writer commits before clean-PR rebase (apex v71 fix)", () => {
+describe("prepareCleanPrBranch — direct overlay onto cloneHead (apex v85; covers v71 squash)", () => {
   it("NON-conflicting: N writer commits collapse to ONE composed commit whose parent is cloneHead and whose tree carries only the writer's changes (no bootstrap artifacts)", async () => {
     // Baseline invariant: the PR head is ONE composed commit, regardless of how many
-    // writer subtask commits emitted. Each subtask edits DIFFERENT files here so a linear
-    // rebase would ALSO succeed — the point is not conflict-avoidance in this case, but the
-    // SHAPE of PR_CLEAN_REF: one commit off cloneHead with the writer's tree contribution,
-    // no `bootstrap.package-lock.json` leakage. This is the invariant reviewers rely on
-    // (one commit per unit of work).
+    // writer subtask commits emitted. Each subtask edits DIFFERENT files so a linear
+    // rebase would ALSO succeed — the point is the SHAPE of PR_CLEAN_REF: one commit
+    // off cloneHead with the writer's tree contribution, no bootstrap lockfile leakage.
+    // Also pins overlay≡perfect-rebase equivalence on the non-conflict path.
     const { repoPath } = initFixtureRepo();
 
     writeFileAt(repoPath, "README.md", "# base\n");
@@ -142,17 +135,17 @@ describe("prepareCleanPrBranch — squash writer commits before clean-PR rebase 
     expect(finalHeadTree).toBe(writerHeadTree);
   });
 
-  it("apex v71 halt shape: LINEAR rebase FAILS (modify/delete conflict on a writer-modified bootstrap file), SQUASH-then-rebase SUCCEEDS", async () => {
+  it("apex v71 halt shape: LINEAR rebase FAILS (modify/delete on a writer-modified bootstrap file), direct overlay SUCCEEDS", async () => {
     // The v71 halt was `error: could not apply <sha> codex writer` — a 3-way merge conflict
     // partway through the linear replay. Reproduced HERE by a fixture where the writer
     // MODIFIES a file the bootstrap created: the linear replay auto-merges the earlier
     // commits into a tip WITHOUT the bootstrap file (cloneHead never had it), then the next
     // commit that MODIFIES that same file hits a modify/delete conflict against the tip.
     //
-    // The squash reduces N linear applications (each a chance to conflict) to ONE 3-way
-    // merge over the CUMULATIVE bootstrap..HEAD diff — and when the writer's cumulative
-    // change over the bootstrap file EQUALS the cloneHead-vs-bootstrap deletion (both
-    // remove it), the 3-way merge trivially resolves.
+    // v71's squash collapsed N applications into one 3-way that happened to resolve here
+    // (writer eventually deletes the bootstrap file). v85's direct overlay does not 3-way
+    // at all — same fixture still passes, and the v85 conflict fixture below covers the
+    // residual hole the squash could not.
     const { repoPath } = initFixtureRepo();
 
     writeFileAt(repoPath, "README.md", "# base\n");
@@ -212,7 +205,7 @@ describe("prepareCleanPrBranch — squash writer commits before clean-PR rebase 
     // Restore the writer branch tip so prepareCleanPrBranch runs from the same starting state.
     git(repoPath, ["checkout", "--quiet", "--detach", writerHead]);
 
-    // NOW the FIX path: squash-then-rebase MUST succeed on the same fixture.
+    // NOW the FIX path: direct overlay MUST succeed on the same fixture.
     const substrate = new LocalCommandSubstrate();
     const result = await prepareCleanPrBranch({
       ssh: substrate,
@@ -238,6 +231,110 @@ describe("prepareCleanPrBranch — squash writer commits before clean-PR rebase 
     expect(treeListing).toContain("src/helper.ts");
     expect(treeListing).not.toContain("src/scaffold.ts");
     expect(treeListing).not.toContain("package-lock.json");
+  });
+
+  it("apex v85 halt shape: SINGLE-commit squash-then-rebase FAILS (3-way content + modify/delete), direct overlay SUCCEEDS with writer-wins + no bootstrap artifacts", async () => {
+    // v85 residual after v71: even ONE composed commit (tree=writer, parent=bootstrap)
+    // 3-way-merges against cloneHead and can conflict when bootstrap introduced/changed
+    // content the writer also touched. Reproduced here:
+    //   cloneHead: package.json=base, README
+    //   bootstrap: package.json=bootstrap, +lockfile, +src/scaffold.ts
+    //   writer:    package.json=writer, scaffold refined, +app.ts
+    // Squash-then-rebase applies bootstrap→writer onto cloneHead and hits content
+    // conflict on package.json + modify/delete on scaffold.ts — the live v85 stderr:
+    //   git rebase --autostash --onto '<clone>' '<bootstrap>'
+    //   Rebasing (1/1)
+    //   error: could not apply <sha>... Tanren composed change
+    const { repoPath } = initFixtureRepo();
+
+    writeFileAt(repoPath, "README.md", "# base\n");
+    writeFileAt(repoPath, "package.json", '{"name":"base"}\n');
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "base"]);
+    const cloneHead = git(repoPath, ["rev-parse", "HEAD"]);
+
+    writeFileAt(repoPath, "package.json", '{"name":"bootstrap","private":true}\n');
+    writeFileAt(repoPath, "package-lock.json", '{"lockfileVersion": 3}\n');
+    writeFileAt(repoPath, "src/scaffold.ts", "export const scaffold = 'bootstrap-initial';\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "bootstrap: install artifacts + scaffold"]);
+    const bootstrapSha = git(repoPath, ["rev-parse", "HEAD"]);
+
+    writeFileAt(repoPath, "package.json", '{"name":"writer-app","private":true}\n');
+    writeFileAt(repoPath, "src/scaffold.ts", "export const scaffold = 'writer-final';\n");
+    writeFileAt(repoPath, "src/app.ts", "export const app = true;\n");
+    git(repoPath, ["add", "-A"]);
+    git(repoPath, ["commit", "--quiet", "-m", "writer: compose final tree"]);
+    const writerHead = git(repoPath, ["rev-parse", "HEAD"]);
+    const writerTree = git(repoPath, ["rev-parse", "HEAD^{tree}"]);
+
+    // FIRST prove the OLD single-commit squash-then-rebase fails on this fixture
+    // (the exact v85 halt class). Stage a composed commit parented on bootstrap with
+    // the writer tree, then rebase onto cloneHead — must conflict.
+    const composedOld = git(repoPath, [
+      "commit-tree",
+      writerTree,
+      "-p",
+      bootstrapSha,
+      "-m",
+      "Tanren composed change (run_v85_repro)",
+    ]);
+    git(repoPath, ["checkout", "--quiet", "--detach", composedOld]);
+    let singleRebaseFailure: string | undefined;
+    try {
+      execFileSync("git", ["rebase", "--onto", cloneHead, bootstrapSha], {
+        cwd: repoPath,
+        env: gitEnv(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      singleRebaseFailure = (error as { stderr?: Buffer }).stderr?.toString() ?? "single-commit rebase failed";
+    }
+    expect(singleRebaseFailure).toBeDefined();
+    expect(singleRebaseFailure).toMatch(/CONFLICT|could not apply/u);
+    execFileSync("git", ["rebase", "--abort"], { cwd: repoPath, env: gitEnv(), stdio: "ignore" });
+    git(repoPath, ["checkout", "--quiet", "--detach", writerHead]);
+
+    // Dirty the working tree the way per-iteration gates do (apex v65 class) so the
+    // overlay path also proves it does not need a clean tree / autostash.
+    writeFileAt(repoPath, "reports/junit.xml", "<testsuite/>\n");
+
+    // NOW the FIX path: direct overlay MUST succeed.
+    const substrate = new LocalCommandSubstrate();
+    const result = await prepareCleanPrBranch({
+      ssh: substrate,
+      target: LOCAL_HANDLE,
+      workspacePath: repoPath,
+      cloneHeadSha: cloneHead,
+      bootstrapSha,
+      runId: "run_63b8e8aa",
+    });
+
+    expect(result.ref).toBe(PR_CLEAN_REF);
+    expect(result.headSha).toMatch(/^[0-9a-f]{40}$/u);
+
+    const commitCount = git(repoPath, ["rev-list", "--count", `${cloneHead}..${PR_CLEAN_REF}`]);
+    expect(commitCount).toBe("1");
+    const parent = git(repoPath, ["rev-parse", `${PR_CLEAN_REF}^`]);
+    expect(parent).toBe(cloneHead);
+
+    // Writer-wins on conflicted paths; bootstrap-only lockfile dropped; new writer file kept.
+    const treeListing = git(repoPath, ["ls-tree", "-r", "--name-only", PR_CLEAN_REF]);
+    expect(treeListing).toContain("src/app.ts");
+    expect(treeListing).toContain("src/scaffold.ts");
+    expect(treeListing).toContain("package.json");
+    expect(treeListing).toContain("README.md");
+    expect(treeListing).not.toContain("package-lock.json");
+    expect(treeListing).not.toContain("reports/junit.xml");
+
+    const pkgContent = git(repoPath, ["cat-file", "-p", `${PR_CLEAN_REF}:package.json`]);
+    expect(pkgContent).toContain("writer-app");
+    const scaffoldContent = git(repoPath, ["cat-file", "-p", `${PR_CLEAN_REF}:src/scaffold.ts`]);
+    expect(scaffoldContent).toContain("writer-final");
+
+    // Working HEAD restored / never moved — still at writer tip; dirty reports/ may remain.
+    const finalHead = git(repoPath, ["rev-parse", "HEAD"]);
+    expect(finalHead).toBe(writerHead);
   });
 
   it("the composed commit's message carries provenance: the runId + the per-subtask commit subjects (in writer order)", async () => {
