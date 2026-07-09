@@ -4,7 +4,9 @@
 //   - mise.toml additions: node 24, pnpm 11
 //   - package.json (with workspaces declared so frontend/backend fragments can mount
 //     subpackages without rewriting it)
-//   - tsconfig.json (strict, ESM, modern target)
+//   - tsconfig.json (strict, ESM, modern target; noEmit typecheck config — src+tests)
+//   - tsconfig.build.json (emit config that extends tsconfig.json; src-only → dist/)
+//   - eslint.config.js (eslint 9 flat config so the `lint` script resolves)
 //   - vitest.config.ts (junit reporter wired so the gate's evidence block reads the
 //     report at the contract-declared path)
 //   - cucumber.cjs (Cucumber config rooted at `features/` — the BDD home base/ created)
@@ -16,6 +18,10 @@ import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../t
 
 export const RUNTIME_NODE_PNPM_ID = "runtime-node-pnpm" as const;
 
+// TYPECHECK-only config (the typecheck + IDE config). With `noEmit` and no rootDir,
+// typechecking src+tests is valid — no TS6059 ("File is not under rootDir"), which a
+// single tsconfig with `rootDir:"src"` + `include:["tests/**"]` triggers. The emit
+// config lives in TSCONFIG_BUILD (src-only include + rootDir src ⇒ clean flat dist).
 const TSCONFIG = `{
   "compilerOptions": {
     "target": "ES2022",
@@ -31,13 +37,39 @@ const TSCONFIG = `{
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "sourceMap": true,
-    "outDir": "dist",
-    "rootDir": "src"
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "tests/**/*.ts"]
 }
+`;
+
+// EMIT config — the build script (`tsc -p tsconfig.build.json`) compiles this. Extends
+// the typecheck config, flips `noEmit` off, restores `rootDir:"src"` + emit options, and
+// narrows `include` to src-only so `dist/` is a clean flat artifact (tests excluded).
+const TSCONFIG_BUILD = `{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts"]
+}
+`;
+
+// ESLint flat config — eslint 9 requires `eslint.config.js` at the root; shipping the
+// `lint` script (`eslint src tests`) without it aborts with "ESLint couldn't find an
+// eslint.config.js" on the tier-1 gate.
+const ESLINT_CONFIG = `import js from "@eslint/js";
+import tseslint from "typescript-eslint";
+
+export default tseslint.config(
+  { ignores: ["dist/**", "reports/**", "node_modules/**"] },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+);
 `;
 
 const VITEST_CONFIG = `import { defineConfig } from "vitest/config";
@@ -123,7 +155,7 @@ function packageJsonFor(config: TemplateConfig): string {
         lint: "eslint src tests",
         typecheck: "tsc -p tsconfig.json --noEmit",
         test: "vitest run",
-        build: "tsc -p tsconfig.json",
+        build: "tsc -p tsconfig.build.json",
       },
     },
     null,
@@ -144,6 +176,8 @@ function packageJsonFor(config: TemplateConfig): string {
 // (a re-write collides) but are written on their own lines in `apply()`.
 const STATIC_OWNED_FILES: Readonly<Record<string, string>> = {
   "tsconfig.json": TSCONFIG,
+  "tsconfig.build.json": TSCONFIG_BUILD,
+  "eslint.config.js": ESLINT_CONFIG,
   "vitest.config.ts": VITEST_CONFIG,
   "cucumber.cjs": CUCUMBER_CONFIG,
   "stryker.conf.mjs": STRYKER_CONFIG,
@@ -168,6 +202,8 @@ export const RUNTIME_NODE_PNPM_OWNED_DEVDEPS: Readonly<Record<string, string>> =
   vitest: "^4.0.0",
   typescript: "^5.6.0",
   eslint: "^9.0.0",
+  "@eslint/js": "^9.0.0",
+  "typescript-eslint": "^8.0.0",
   "@cucumber/cucumber": "^11.0.0",
   "@stryker-mutator/core": "^9.0.0",
   "@stryker-mutator/vitest-runner": "^9.0.0",
