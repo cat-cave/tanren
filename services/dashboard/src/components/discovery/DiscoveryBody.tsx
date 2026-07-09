@@ -26,6 +26,7 @@ import type {
 } from "../../api/discoveryTypes.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { PageHead } from "../project/shared.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { DiscoveryStyles } from "./discoveryStyles.js";
 import { VARIANT_EYEBROW } from "./seeds.js";
 
@@ -39,6 +40,8 @@ export interface DiscoveryBodyProps {
   /** Set when accept created specs — rendered as a success banner. */
   accepted?: { count: number; placementLabel: string };
   error?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 const VARIANTS: DiscoveryVariant[] = ["feature", "bug", "strategic"];
@@ -184,6 +187,7 @@ function ClassificationPanel(props: DiscoveryBodyProps & { result: DiscoveryResu
         ))}
 
         <form method="post" action={`/projects/${project.projectId}/discovery/accept`} data-discovery="accept-form">
+          <CsrfField token={props.csrfToken} />
           <input type="hidden" name="orgId" value={orgId} />
           <input type="hidden" name="variant" value={variant} />
           <input type="hidden" name="insight" value={JSON.stringify(insight)} />
@@ -265,6 +269,7 @@ export function DiscoveryBody(props: DiscoveryBodyProps) {
           class="disc-form"
           data-discovery="classify-form"
         >
+          <CsrfField token={props.csrfToken} />
           <input type="hidden" name="variant" value={variant} />
           <input type="hidden" name="source" value={insight.source} />
           <input type="hidden" name="sourceLabel" value={insight.sourceLabel} />

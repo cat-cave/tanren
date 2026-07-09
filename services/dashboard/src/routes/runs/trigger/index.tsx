@@ -128,6 +128,13 @@ async function renderSpecListWithError(
     c,
     ctx,
     { title: `tanren · ${ctx.project.name} specs` },
-    <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} error={error} errorSpecId={specId} />,
+    <SpecListBody
+      project={ctx.project}
+      specs={specs}
+      runBySpec={runBySpec}
+      error={error}
+      errorSpecId={specId}
+      csrfToken={ctx.csrfToken}
+    />,
   );
 }

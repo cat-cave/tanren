@@ -11,6 +11,7 @@
  */
 
 import type { ConfigInjectionResult, ReconReport } from "../../../api/existingBrownfieldTypes.js";
+import { CsrfField } from "../../shell/CsrfField.js";
 
 interface PreviewFile {
   path: string;
@@ -36,6 +37,7 @@ export function ConfigInjectionStep(props: {
   projectId?: string;
   opened?: ConfigInjectionResult;
   error?: string;
+  csrfToken?: string;
 }) {
   if (props.opened !== undefined) {
     return (
@@ -45,6 +47,7 @@ export function ConfigInjectionStep(props: {
         report={props.report}
         baseAction={props.baseAction}
         projectId={props.projectId}
+        csrfToken={props.csrfToken}
       />
     );
   }
@@ -70,6 +73,7 @@ export function ConfigInjectionStep(props: {
       {props.error === undefined ? null : <div class="alert fail">{props.error}</div>}
 
       <form method="post" action={props.baseAction}>
+        <CsrfField token={props.csrfToken} />
         <input type="hidden" name="phase" value="open-pr" />
         <input type="hidden" name="step" value="3" />
         <input type="hidden" name="repoUrl" value={props.repoUrl} />
@@ -156,6 +160,7 @@ function OpenedView(props: {
   report: ReconReport;
   baseAction: string;
   projectId?: string;
+  csrfToken?: string;
 }) {
   return (
     <>
@@ -190,6 +195,7 @@ function OpenedView(props: {
         ))}
       </div>
       <form method="post" action={props.baseAction}>
+        <CsrfField token={props.csrfToken} />
         <input type="hidden" name="phase" value="advance" />
         <input type="hidden" name="step" value="3" />
         <input type="hidden" name="repoUrl" value={props.repoUrl} />

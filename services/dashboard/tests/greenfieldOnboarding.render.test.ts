@@ -144,6 +144,9 @@ describe("greenfield · interview (step 1)", () => {
     // the round meta + the forge question from the mocked round.
     expect(html).toContain("round 3 of ~14");
     expect(html).toContain("nail the behaviors");
+    // pure-HTML interview posts need the server-rendered csrf field.
+    expect(html).toContain('name="csrf"');
+    expect(html).toContain('value="c"');
   });
 
   it("a round POST accumulates the capture into the live panel + offers suggestions", async () => {

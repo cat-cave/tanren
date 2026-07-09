@@ -39,6 +39,8 @@ export interface GreenfieldBodyProps {
     dag: ProjectDag;
   };
   error?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 function Journey(props: { step: number }) {
@@ -87,6 +89,7 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
             priorAnswer={props.interview.priorAnswer}
             capture={props.interview.capture}
             complete={props.interview.complete}
+            csrfToken={props.csrfToken}
           />
         )}
         {props.step === 2 && props.derived !== undefined && (
@@ -94,6 +97,7 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
             projectId={props.derived.projectId}
             projectName={props.derived.projectName}
             dag={props.derived.dag}
+            csrfToken={props.csrfToken}
           />
         )}
         {props.step === 3 && props.derived !== undefined && (

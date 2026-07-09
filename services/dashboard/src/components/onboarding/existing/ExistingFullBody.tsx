@@ -59,6 +59,8 @@ export interface ExistingFullBodyProps {
   configInjectionError?: string;
   seeded?: SeedDagResult;
   governance?: GovernanceResult;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 function Journey(props: { step: number }) {
@@ -98,6 +100,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
             githubAppUrl={props.githubAppUrl}
             error={props.link?.error}
             linked={props.link?.linked}
+            csrfToken={props.csrfToken}
           />
         ) : null}
         {props.step === 2 && props.recon !== undefined && props.repoUrl !== undefined ? (
@@ -106,6 +109,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
             result={props.recon}
             baseAction={EXISTING_FULL_BASE}
             projectId={props.projectId}
+            csrfToken={props.csrfToken}
           />
         ) : null}
         {props.step === 3 && props.report !== undefined && props.repoUrl !== undefined ? (
@@ -117,6 +121,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
             projectId={props.projectId}
             opened={props.configInjection}
             error={props.configInjectionError}
+            csrfToken={props.csrfToken}
           />
         ) : null}
         {props.step === 4 && props.report !== undefined && props.repoUrl !== undefined ? (
@@ -126,6 +131,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
             baseAction={EXISTING_FULL_BASE}
             projectId={props.projectId}
             seeded={props.seeded}
+            csrfToken={props.csrfToken}
           />
         ) : null}
         {props.step === 5 && props.projectId !== undefined && props.repoUrl !== undefined ? (
@@ -135,6 +141,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
             baseAction={EXISTING_FULL_BASE}
             current={props.posture ?? "strict"}
             saved={props.governance}
+            csrfToken={props.csrfToken}
           />
         ) : null}
       </div>

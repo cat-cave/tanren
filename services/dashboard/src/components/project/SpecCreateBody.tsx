@@ -12,6 +12,7 @@
  */
 
 import type { BehaviorSummary, MilestoneSummary, ProjectSummary, SpecSummary } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "./screenStyles.js";
 import { PageHead } from "./shared.js";
 
@@ -29,6 +30,8 @@ export interface SpecCreateBodyProps {
     acceptanceCriteria?: string[];
     milestoneId?: string;
   };
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function SpecCreateBody(props: SpecCreateBodyProps) {
@@ -63,6 +66,7 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
           </div>
           <div class="panel-body">
             <form method="post" action={`/projects/${props.project.projectId}/specs`}>
+              <CsrfField token={props.csrfToken} />
               <div class="form-field">
                 <label for="title">
                   title <span class="req">*</span>
@@ -189,6 +193,8 @@ export function SpecListBody(props: {
   error?: string;
   /** The spec id the trigger error belongs to. */
   errorSpecId?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }) {
   return (
     <div class="p2b">
@@ -247,6 +253,7 @@ export function SpecListBody(props: {
                         method="post"
                         action={`/projects/${props.project.projectId}/specs/${spec.specId}/run`}
                       >
+                        <CsrfField token={props.csrfToken} />
                         <button class="btn ghost" type="submit" title="start a live run from this spec">
                           ▶ start a run
                         </button>

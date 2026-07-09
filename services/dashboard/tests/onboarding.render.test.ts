@@ -255,6 +255,10 @@ describe("org-setup wizard", () => {
     expect(html).toContain("hetzner cloud");
     expect(html).toContain("phase 4+");
     expect(html).toContain("org is forged");
+    // pure-HTML posts need the server-rendered csrf field (injectFormCsrfFields is only a JS safety net).
+    expect(html).toContain('action="/onboarding/org/infra"');
+    expect(html).toContain('name="csrf"');
+    expect(html).toContain('value="c"');
   });
 });
 
@@ -453,6 +457,9 @@ describe("existing-project full track (P3-0016)", () => {
     expect(html).toContain("point at");
     expect(html).toContain("existing project · brownfield");
     expect(html).toContain("never push to main");
+    // pure-HTML link posts need the server-rendered csrf field.
+    expect(html).toContain('name="csrf"');
+    expect(html).toContain('value="c"');
   });
 
   it("link POST creates the project, calls brownfield link, then runs recon → step 2", async () => {

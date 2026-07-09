@@ -157,6 +157,8 @@ const PROJECT_DETAIL = {
 export const patchCalls: Array<{ url: string; body: unknown }> = [];
 export const toolCalls: Array<{ url: string; body: unknown }> = [];
 export const specCreateCalls: Array<{ url: string; body: unknown }> = [];
+/** State-changing forge POSTs (thread create / generate-project-view). */
+export const forgeMutationCalls: Array<{ url: string; method: string; body: unknown }> = [];
 
 export function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
@@ -234,10 +236,12 @@ export function mockOrchestrator(): void {
     if (url.includes("/behaviors")) {
       return new Response(JSON.stringify({ behaviors: BEHAVIORS }), { status: 200 });
     }
-    if (url.includes("/forge/threads") && url.endsWith("/threads")) {
+    if (url.includes("/forge/threads") && url.endsWith("/threads") && method === "POST") {
+      forgeMutationCalls.push({ url, method, body });
       return new Response(JSON.stringify({ id: "thread_1" }), { status: 201 });
     }
-    if (url.includes("/generate-project-view")) {
+    if (url.includes("/generate-project-view") && method === "POST") {
+      forgeMutationCalls.push({ url, method, body });
       return new Response(
         JSON.stringify({
           render: {

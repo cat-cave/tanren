@@ -7,6 +7,7 @@
  */
 
 import type { ReconReport, SeedDagResult } from "../../../api/existingBrownfieldTypes.js";
+import { CsrfField } from "../../shell/CsrfField.js";
 
 export function SeedDagStep(props: {
   repoUrl: string;
@@ -14,6 +15,7 @@ export function SeedDagStep(props: {
   baseAction: string;
   projectId?: string;
   seeded?: SeedDagResult;
+  csrfToken?: string;
 }) {
   return (
     <>
@@ -46,6 +48,7 @@ export function SeedDagStep(props: {
 
       {props.seeded === undefined ? (
         <form method="post" action={props.baseAction}>
+          <CsrfField token={props.csrfToken} />
           <input type="hidden" name="phase" value="seed" />
           <input type="hidden" name="step" value="4" />
           <input type="hidden" name="projectId" value={props.projectId ?? ""} />
@@ -80,6 +83,7 @@ export function SeedDagStep(props: {
             ))}
           </div>
           <form method="post" action={props.baseAction}>
+            <CsrfField token={props.csrfToken} />
             <input type="hidden" name="phase" value="advance" />
             <input type="hidden" name="step" value="4" />
             <input type="hidden" name="projectId" value={props.projectId ?? ""} />

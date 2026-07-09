@@ -56,7 +56,7 @@ function parseCapture(raw: unknown): InterviewCapture {
   }
 }
 
-function noOrgBody(error?: string) {
+function noOrgBody(error?: string, csrfToken?: string) {
   return (
     <GreenfieldBody
       step={1}
@@ -70,6 +70,7 @@ function noOrgBody(error?: string) {
         complete: false,
       }}
       error={error ?? "no org yet — finish org setup, then start a new project."}
+      csrfToken={csrfToken}
     />
   );
 }
@@ -79,7 +80,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
   app.get("/onboarding/new", async (c) => {
     const ctx = await loadShellContext(c, deps, {});
     if (ctx.org === undefined) {
-      return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody());
+      return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody(undefined, ctx.csrfToken));
     }
     const step = Number.parseInt(c.req.query("step") ?? "1", 10) || 1;
     const projectId = c.req.query("projectId");
@@ -110,6 +111,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
           complete: result?.complete ?? false,
         }}
         error={result === undefined ? "forge is unreachable — try again." : undefined}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });
@@ -118,7 +120,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
   app.post("/onboarding/new", async (c) => {
     const ctx = await loadShellContext(c, deps, {});
     if (ctx.org === undefined) {
-      return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody());
+      return renderShell(c, ctx, { title: "tanren · new project" }, noOrgBody(undefined, ctx.csrfToken));
     }
     const form = await c.req.parseBody();
     const phase = formField(form, "phase", "round");
@@ -137,7 +139,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
         c,
         ctx,
         { title: "tanren · new project" },
-        noOrgBody("lost the derived project — restart the interview."),
+        noOrgBody("lost the derived project — restart the interview.", ctx.csrfToken),
       );
     }
     return renderDerivedStep(c, ctx, deps, 3, projectId);
@@ -166,6 +168,7 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
         complete: result?.complete ?? false,
       }}
       error={result === undefined ? "forge is unreachable — your answer was kept; try again." : undefined}
+      csrfToken={ctx.csrfToken}
     />,
   );
 }
@@ -191,6 +194,7 @@ async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, capt
           complete: true,
         }}
         error="could not derive the spec dag — try again."
+        csrfToken={ctx.csrfToken}
       />,
     );
   }
@@ -216,7 +220,7 @@ async function renderDerivedStep(
     c,
     ctx,
     { title: "tanren · new project" },
-    <GreenfieldBody step={step} derived={{ projectId, projectName: name, dag }} />,
+    <GreenfieldBody step={step} derived={{ projectId, projectName: name, dag }} csrfToken={ctx.csrfToken} />,
   );
 }
 

@@ -151,6 +151,9 @@ describe("discovery entry + insight form", () => {
     expect(html).toContain("/projects/project_easy/discovery?variant=bug");
     expect(html).toContain('data-discovery="classify-form"');
     expect(html).toContain("classify with forge");
+    // pure-HTML classify/accept posts need the server-rendered csrf field.
+    expect(html).toContain('name="csrf"');
+    expect(html).toContain('value="c"');
   });
 
   it("honours the ?variant query (bug seed + triage eyebrow)", async () => {

@@ -309,6 +309,10 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
    * thread, generate the templated turn, and return its render payload. Any
    * failure yields `undefined` so the project view degrades to the
    * data-derived attention queue without the narration pulse line.
+   *
+   * **State-changing** (POST forge threads + turns). Call only from CSRF-
+   * protected write paths (e.g. `POST /forge/project-narration`) — never as a
+   * side effect of a safe GET page load.
    */
   async generateProjectNarration(
     orgId: string,

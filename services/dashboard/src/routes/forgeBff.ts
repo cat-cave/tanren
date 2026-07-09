@@ -31,6 +31,13 @@ const ForgeProposalDecisionBody = z.object({
   proposalId: z.string().min(1),
 });
 
+/** Body for on-demand project-view narration (must not run as a GET side effect). */
+const ForgeProjectNarrationBody = z.object({
+  orgId: z.string().min(1),
+  projectId: z.string().min(1),
+  budgetUsdPerWeek: z.number().optional(),
+});
+
 /** Mount cookie-forwarding forge write proxies on the dashboard app. */
 export function mountForgeBff(app: Hono, shellDeps: ShellDeps): void {
   // Operator-button write-action proxy: the palette POSTs here, we forward the
@@ -68,6 +75,26 @@ export function mountForgeBff(app: Hono, shellDeps: ShellDeps): void {
       return c.json({ error: "forge_ask_failed" }, 502);
     }
     return c.json(result);
+  });
+
+  // On-demand project-view narration: creates a forge thread + generate-project-view
+  // turn. Must never run as a side effect of GET /projects/:id (cross-site GET
+  // would otherwise mutate forge state with the session cookie).
+  app.post("/forge/project-narration", async (c) => {
+    const parsed = ForgeProjectNarrationBody.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_narration", issues: parsed.error.issues }, 400);
+    }
+    const client = new OrchestratorClient(await clientDepsFor(c, shellDeps));
+    const render = await client.generateProjectNarration(
+      parsed.data.orgId,
+      parsed.data.projectId,
+      parsed.data.budgetUsdPerWeek,
+    );
+    if (render === undefined) {
+      return c.json({ error: "narration_failed" }, 502);
+    }
+    return c.json({ render });
   });
 
   // write-action approval: approve/reject a proposed write. The palette

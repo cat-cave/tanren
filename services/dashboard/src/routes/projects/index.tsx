@@ -88,15 +88,16 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       );
     }
     const orgId = ctx.org.id;
-    // Narration creates forge threads/turns (POST) — needs session CSRF.
-    const client = await writeClient(c, deps);
+    // GET is read-only: never mint forge threads/turns from a safe method.
+    // Live narration is POST /forge/project-narration (inbound CSRF + outbound
+    // clientDepsFor). Pulse falls back to data-derived copy when undefined.
+    const client = clientFor(c, deps);
     const mode = resolveProjectMode(c);
-    const [runs, insights, milestones, feed, narration] = await Promise.all([
+    const [runs, insights, milestones, feed] = await Promise.all([
       client.listRuns(orgId, projectId),
       client.listInsights(orgId, projectId),
       client.listMilestones(orgId, projectId),
       client.listFeed(orgId, projectId),
-      client.generateProjectNarration(orgId, projectId),
     ]);
     const model = buildProjectViewModel({
       projectId,
@@ -105,7 +106,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       insights,
       milestones,
       feed,
-      narration,
+      narration: undefined,
       weekSpendUsd: sumRunCosts(runs),
     });
     if (mode === "dag") {
@@ -127,6 +128,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         orgId={orgId}
         model={model}
         insights={insights}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });
@@ -153,7 +155,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} specs` },
-      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} />,
+      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} csrfToken={ctx.csrfToken} />,
     );
   });
 
@@ -176,7 +178,13 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · new spec` },
-      <SpecCreateBody project={ctx.project} milestones={milestones} behaviors={behaviors} specs={specs} />,
+      <SpecCreateBody
+        project={ctx.project}
+        milestones={milestones}
+        behaviors={behaviors}
+        specs={specs}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 
@@ -337,6 +345,7 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
         saved={saved}
         orgCredentials={orgCredentials}
         boundCredentials={boundCredentials}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });
@@ -482,6 +491,7 @@ async function renderForm(
       specs={specs}
       error={error}
       values={values}
+      csrfToken={ctx.csrfToken}
     />,
   );
 }
