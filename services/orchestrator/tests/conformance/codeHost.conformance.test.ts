@@ -13,4 +13,7 @@ describeCodeHostConformance("InMemoryCodeHost (reference fake)", {
   seedCommit: (host, repo, sha, parents, author) => {
     (host as InMemoryCodeHost).seedCommit(repo, sha, parents, author);
   },
+  seedContent: (host, repo) => {
+    (host as InMemoryCodeHost).seedContent(repo);
+  },
 });

@@ -30,6 +30,7 @@
 // the route layer where the GitHub HTTP client + the deploy provisioner live.
 
 import { createLogger } from "../../observability/logger.js";
+import { GreenfieldRepoNotEmptyError, type CreatedRepository } from "../../contracts/codeHostTypes.js";
 
 const log = createLogger("derive-compensation");
 
@@ -184,4 +185,38 @@ export class DeriveRollbackError extends Error {
     if (originalError instanceof Error) this.cause = originalError;
     this.compensationFailures = compensationFailures;
   }
+}
+
+// GREENFIELD RE-ATTACH GUARD (apex v84) — lives with the compensation semantics
+// because it decides the ONE case that registers NO delete compensation: a re-attach.
+// On a `RepositoryAlreadyExistsError` the derive may RE-ATTACH to the existing repo,
+// but ONLY when it is the stranded, empty `auto_init` seed a crashed prior attempt
+// left. A repo already full of a PRIOR run's `tanren compose:` history must NOT be
+// silently reused: pushing THIS run's compose commits on top produces a cross-run
+// BASE DIVERGENCE that later fails "prepare clean PR branch" with an opaque
+// `WorkspaceCommandError`. We never auto-clean/force-reset a repo we did not create
+// THIS run (that would destroy operator data).
+
+/**
+ * Resolve the RE-ATTACH target for a greenfield repo that already exists (a
+ * `RepositoryAlreadyExistsError` on create + no bound project). Runs the emptiness
+ * probe and returns the re-attach `CreatedRepository` ONLY when the repo is the bare
+ * `auto_init` seed; throws {@link GreenfieldRepoNotEmptyError} when it already carries
+ * content. A missing probe (while a create is wired) is a loud WIRING BUG — never a
+ * silent fall-through to the unguarded reuse.
+ */
+export async function resolveGreenfieldReattach(
+  owner: string,
+  slug: string,
+  deterministicRepoUrl: string,
+  probeRepoBareAutoInit: ((target: { owner: string; name: string }) => Promise<boolean>) | undefined,
+): Promise<CreatedRepository> {
+  if (probeRepoBareAutoInit === undefined) {
+    throw new Error("greenfield re-attach requires a repo-emptiness probe (probeRepoBareAutoInit) but none was wired");
+  }
+  if (!(await probeRepoBareAutoInit({ owner, name: slug }))) {
+    throw new GreenfieldRepoNotEmptyError(owner, slug);
+  }
+  // The stranded-empty case: re-attach. The caller registers NO compensation.
+  return { fullName: `${owner}/${slug}`, repoUrl: deterministicRepoUrl, defaultBranch: "main" };
 }

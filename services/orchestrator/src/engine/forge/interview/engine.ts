@@ -148,6 +148,11 @@ export interface DeriveFromCaptureInput {
   // repo + walks them all back if a later step throws. Required in production
   // whenever `createRepository`/`materializeTemplate` are wired.
   deleteRepository?: DeleteRepositoryCallback;
+  // GREENFIELD RE-ATTACH GUARD (apex v84). Threaded into `deriveProductGraph` so the
+  // re-attach branch can probe whether an already-existing repo is a bare auto_init
+  // seed (safe to re-attach) vs one already carrying a prior run's compose history
+  // (fail loud — never silently reuse). Wired against `CodeHost.isRepoBareAutoInit`.
+  probeRepoBareAutoInit?: (target: { owner: string; name: string }) => Promise<boolean>;
   // GREENFIELD AUTONOMY: when `auto`/`simulated`, the derived project is created
   // already autonomous — atomically with `native_queue` + the matching review
   // policy + `AUTONOMOUS_AUDIT_POSTURE` + `insightThresholds.ciInsightFlakyMinShas:1`
@@ -192,6 +197,7 @@ export async function deriveFromCapture(
     ...(input.description === undefined ? {} : { description: input.description }),
     ...(input.createRepository === undefined ? {} : { createRepository: input.createRepository }),
     ...(input.deleteRepository === undefined ? {} : { deleteRepository: input.deleteRepository }),
+    ...(input.probeRepoBareAutoInit === undefined ? {} : { probeRepoBareAutoInit: input.probeRepoBareAutoInit }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
     ...(input.destroyDeployApp === undefined ? {} : { destroyDeployApp: input.destroyDeployApp }),

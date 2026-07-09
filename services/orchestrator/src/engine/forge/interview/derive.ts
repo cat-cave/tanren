@@ -75,6 +75,7 @@ import {
 import {
   DeriveRollbackError,
   newDeriveCompensation,
+  resolveGreenfieldReattach,
   type DeleteRepositoryCallback,
   type DestroyDeployAppCallback,
   type DeriveCompensation,
@@ -160,6 +161,13 @@ export interface DeriveInput {
    */
   deleteRepository?: DeleteRepositoryCallback;
   /**
+   * GREENFIELD RE-ATTACH GUARD (apex v84). Probes whether an already-existing repo is a
+   * bare `auto_init` seed (safe to re-attach) vs carrying a PRIOR run's compose history
+   * (fail loud). Wired against `CodeHost.isRepoBareAutoInit`; consulted ONLY on the
+   * re-attach branch. See `resolveGreenfieldReattach`. REQUIRED with `createRepository`.
+   */
+  probeRepoBareAutoInit?: (target: { owner: string; name: string }) => Promise<boolean>;
+  /**
    * COMPENSATION (task #78 — derive atomic rollback). The route layer wires this
    * against `DeployProvisioner.destroyApp` so the provisioned deploy app can be
    * undone if a LATER step in the derive throws. REQUIRED whenever
@@ -216,36 +224,29 @@ async function resolveOrCreateGreenfieldRepo(
   const deterministicRepoUrl = githubHttpsRemote({ owner, name: slug });
   const existingProject = await ProjectStore.findByRepoUrl(pool, deterministicRepoUrl, { kind: "operator" });
   if (existingProject !== undefined) return { kind: "resume", result: resumeDerivedProject(existingProject) };
-  let repository: CreatedRepository;
-  let weCreatedIt = false;
+  let created: CreatedRepository | undefined;
   try {
-    repository = await input.createRepository({
+    created = await input.createRepository({
       owner,
       name: slug,
       private: input.private ?? true,
       autoInit: true,
       ...(input.description === undefined ? {} : { description: input.description }),
     });
-    weCreatedIt = true;
   } catch (error) {
-    if (error instanceof RepositoryAlreadyExistsError) {
-      // RE-ATTACH (existing idempotency, audit §3.10): the repo exists from a prior
-      // stranded attempt + no project is bound. We do NOT register a compensation —
-      // a downstream failure must not delete a repo we did not create on THIS run
-      // (Tanren would silently delete a repo the operator just re-ran into).
-      repository = { fullName: `${owner}/${slug}`, repoUrl: deterministicRepoUrl, defaultBranch: "main" };
-    } else {
-      throw error;
-    }
+    // Non-already-exists propagates. Already-exists ⇒ the RE-ATTACH branch, GATED on an
+    // emptiness probe (apex v84) — see `resolveGreenfieldReattach`.
+    if (!(error instanceof RepositoryAlreadyExistsError)) throw error;
   }
-  // TRANSACTIONAL ROLLBACK (task #78): register the compensation IMMEDIATELY after a
-  // SUCCESSFUL create (never on the re-attach path). The compensation idempotently
-  // deletes the repo if a later step in this derive throws.
-  if (weCreatedIt && input.deleteRepository !== undefined) {
-    const repoForCompensation = repository;
+  const repository =
+    created ?? (await resolveGreenfieldReattach(owner, slug, deterministicRepoUrl, input.probeRepoBareAutoInit));
+  // TRANSACTIONAL ROLLBACK (task #78): register the delete compensation ONLY after a
+  // SUCCESSFUL create (`created !== undefined`) — NEVER on the re-attach path, so a
+  // downstream failure cannot delete a repo we did not create on THIS run.
+  if (created !== undefined && input.deleteRepository !== undefined) {
     compensation.register({
       kind: "github.repo",
-      label: repoForCompensation.fullName,
+      label: created.fullName,
       rollback: () => input.deleteRepository!({ owner, name: slug }),
     });
   }
