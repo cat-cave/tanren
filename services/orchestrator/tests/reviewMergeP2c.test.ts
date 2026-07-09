@@ -77,6 +77,7 @@ function mergeTaskWriter(pool: ReviewMergePool): {
       mergeRunVerifiedAncestorSha: () => Promise.reject(new Error("unexpected mergeRunVerifiedAncestorSha")),
       supersedeQueuedPlannerTask: () => Promise.reject(new Error("unexpected supersedeQueuedPlannerTask")),
       finalizeLand: () => Promise.reject(new Error("unexpected finalizeLand")),
+      recordDraftPrCreated: () => Promise.reject(new Error("unexpected recordDraftPrCreated")),
       updateTask: () => Promise.reject(new Error("unexpected updateTask")),
       finalizeRunWithEvent: () => Promise.reject(new Error("unexpected finalizeRunWithEvent")),
       updateSpecWithEvent: () => Promise.reject(new Error("unexpected updateSpecWithEvent")),

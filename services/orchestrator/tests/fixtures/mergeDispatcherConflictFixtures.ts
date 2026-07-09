@@ -88,6 +88,7 @@ export function noopFinalizeWriter(): RunStateWriter {
     mergeRunVerifiedAncestorSha: noop("mergeRunVerifiedAncestorSha"),
     supersedeQueuedPlannerTask: noop("supersedeQueuedPlannerTask"),
     finalizeLand: noop("finalizeLand"),
+    recordDraftPrCreated: noop("recordDraftPrCreated"),
     finalizeRunWithEvent: noop("finalizeRunWithEvent"),
     updateSpecWithEvent: noop("updateSpecWithEvent"),
     resumePausedRunAtomic: noop("resumePausedRunAtomic"),

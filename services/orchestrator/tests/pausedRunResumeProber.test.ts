@@ -127,6 +127,7 @@ function buildRecordingWriter(rows: RunRow[]): {
     mergeRunVerifiedAncestorSha: async () => {},
     supersedeQueuedPlannerTask: async () => {},
     finalizeLand: async () => ({ auditId: "a" }),
+    recordDraftPrCreated: async () => ({ created: false }),
     insertTask: async () => {},
     updateTask: async () => {},
     updateTaskWithEvent: async () => ({ alreadyTerminal: false }),

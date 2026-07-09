@@ -482,6 +482,7 @@ export function fakeMergeWriter(pool: ReviewMergePool, events: EventStore): RunS
     mergeRunVerifiedAncestorSha: unsupported("mergeRunVerifiedAncestorSha"),
     supersedeQueuedPlannerTask: unsupported("supersedeQueuedPlannerTask"),
     finalizeLand: unsupported("finalizeLand"),
+    recordDraftPrCreated: unsupported("recordDraftPrCreated"),
     finalizeRunWithEvent: unsupported("finalizeRunWithEvent"),
     resumePausedRunAtomic: unsupported("resumePausedRunAtomic"),
     updateSpecWithEvent: unsupported("updateSpecWithEvent"),
