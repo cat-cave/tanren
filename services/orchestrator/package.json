@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsgo -p tsconfig.json && node ../../scripts/copy-orchestrator-runtime-assets.mjs",
+    "build": "tsc -p tsconfig.json && node ../../scripts/copy-orchestrator-runtime-assets.mjs",
     "dev": "tsx src/main.ts",
     "dev:worker": "tsx src/worker-main.ts",
     "start": "node dist/main.js",
     "start:worker": "node dist/worker-main.js",
-    "typecheck": "tsgo -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@hono/node-server": "^2.0.4",

@@ -500,7 +500,7 @@ cite); the merge-engine cutover rationale is
   `docs/roadmap/timeout-eradication.md`.
 - **Type-aware lint strictness ratchet — `no-unsafe-type-assertion` tail (~310
   casts).** The type-aware pass (`oxlint --type-aware`, config
-  `oxlintrc.typeaware.json`, powered by oxlint-tsgolint/tsgo) is ratcheted
+  `oxlintrc.typeaware.json`, powered by oxlint-tsgolint) is ratcheted
   rule-by-rule and the bulk of the wave is **done**: the **`correctness` category is
   ON at error** (all its rules triaged to zero and the surfaced bugs fixed — a
   `[object Object]`-stringification class on raw pg rows + Hono bodies, `never`-
