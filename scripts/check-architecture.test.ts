@@ -87,6 +87,27 @@ describe("architecture checker", () => {
     expect(diagnostics.map((item) => item.rule)).toContain("no-unknown-cost-source");
   });
 
+  it("rejects a same-length billing_mode CHECK with a duplicate (omits unattributed)", async () => {
+    const root = await createFixture({
+      "package.json":
+        '{"type":"module","scripts":{"check":"pnpm run check:schema-drift && pnpm run check:state-drift && pnpm run check:answerer-schema-drift && pnpm run check:contract-schema-drift","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check","check:contract-schema-drift":"node scripts/contract-schema-export.mjs --check"}}\n',
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
+      "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
+      ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
+      // 4 values, but self_hosted twice — length-match alone would falsely pass.
+      "db/migrations/0001.sql": [
+        "CHECK (billing_",
+        "mode IN ('per_token','subscription','self_hosted','self_hosted'))\n",
+      ].join(""),
+      "services/orchestrator/src/engine/eventStore.ts": "export const ok = true;\n",
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toContain("no-unknown-cost-source");
+  });
+
   it("rejects architecture violations in fixture files", async () => {
     const root = await createFixture({
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v5\n",

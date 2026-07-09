@@ -255,7 +255,14 @@ function checkCostSources(projectFiles) {
         if (values.length === 0) {
           continue;
         }
-        if (values.some((value) => !allowed.has(value)) || values.length !== allowed.size) {
+        // Exact set equality: reject unknown values, duplicates, and omissions
+        // (e.g. 4 slots with a repeated mode cannot stand in for unattributed).
+        const unique = new Set(values);
+        const exact =
+          unique.size === allowed.size &&
+          unique.size === values.length &&
+          [...unique].every((value) => allowed.has(value));
+        if (!exact) {
           diagnostics.push(
             diagnostic(
               "no-unknown-cost-source",

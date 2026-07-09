@@ -94,6 +94,12 @@ describe("run-detail pg-row schemas (RC-6 trust-at-boundary)", () => {
       recorded_at: "2026-01-01T00:00:00.000Z",
       billing_mode: "per_token" as const,
       cost_basis: "provider_response" as const,
+      input_tokens: 0,
+      cached_input_tokens: 0,
+      cache_creation_tokens: 0,
+      output_tokens: 0,
+      reasoning_output_tokens: 0,
+      total_tokens: 0,
     };
 
     it("decodes recorded_at, enums, and token counts at the boundary", () => {
@@ -127,6 +133,11 @@ describe("run-detail pg-row schemas (RC-6 trust-at-boundary)", () => {
 
     it("THROWS on an unknown billing_mode", () => {
       expect(() => RawCostRowSchema.parse({ ...baseCost, billing_mode: "metered" })).toThrow(/invalid_/u);
+    });
+
+    it("THROWS when a required token column is missing", () => {
+      const { total_tokens: _drop, ...withoutTotal } = baseCost;
+      expect(() => RawCostRowSchema.parse(withoutTotal)).toThrow(/invalid_/u);
     });
   });
 });
