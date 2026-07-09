@@ -1,6 +1,6 @@
 /**
  * SideNav — server-rendered shell chrome (Hono JSX). Recreates the hi-fi
- * `SideNav`: four groups (org / projects / setup / onboarding) read from the
+ * `SideNav`: three groups (org / projects / system) read from the
  * `NAV_GROUPS` model. Rows whose surface ships in a later phase render with a
  * visible `phase 3+` label (the documented-placeholder marker). The active row
  * is highlighted from `activeId`.

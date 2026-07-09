@@ -114,6 +114,11 @@ SCREEN_MOUNTS.push(mountBudgetScreen);
 import { mountIntegrationsScreen } from "../routes/integrations/index.js";
 SCREEN_MOUNTS.push(mountIntegrationsScreen);
 
+// org overview command deck — projects grid, budget MTD, forge-org card
+// (honest empty), cross-project activity. Overrides the /overview nav row.
+import { mountOverviewScreen } from "../routes/overview/index.js";
+SCREEN_MOUNTS.push(mountOverviewScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

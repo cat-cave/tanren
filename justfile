@@ -365,12 +365,24 @@ up-dev: secrets-link runner-key gen-mtls-certs
   echo "up-dev: TANREN_DOCKER_SOCK=$TANREN_DOCKER_SOCK (allocator runtime socket; auto-detected — docker first, then rootless podman)"; \
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy registry
   # Seed PLATFORM-scoped secret-store refs (managed-LLM router key) so a fresh
-  # stack can resolve `providerMode: managed`. Skipped (with a notice) when the
-  # key env var is absent, so a BYOK-only dev stack still comes up cleanly.
-  if [ -n "$(node scripts/dev/dotenv-extract.mjs .env.validation.local TANREN_E2E_MANAGED_ROUTER_KEY 2>/dev/null)" ]; then \
+  # stack can resolve `providerMode: managed`. The seed SCRIPT resolves the key
+  # via the portable precedence (exported env > TANREN_SECRET_ENV_FILE >
+  # .env.validation.local). Here we replicate that precedence ONLY to decide
+  # whether the key is obtainable at all — a BYOK-only dev stack (no key from any
+  # source) still comes up cleanly by skipping the seed with a notice. When a key
+  # IS present the seed runs and fails loud on any real error.
+  key=""; \
+  if [ -n "${TANREN_E2E_MANAGED_ROUTER_KEY:-}" ]; then \
+    key="present-exported"; \
+  elif [ -n "${TANREN_SECRET_ENV_FILE:-}" ] && [ -n "$(node scripts/dev/dotenv-extract.mjs "$TANREN_SECRET_ENV_FILE" TANREN_E2E_MANAGED_ROUTER_KEY 2>/dev/null)" ]; then \
+    key="present-env-file"; \
+  elif [ -n "$(node scripts/dev/dotenv-extract.mjs .env.validation.local TANREN_E2E_MANAGED_ROUTER_KEY 2>/dev/null)" ]; then \
+    key="present-local"; \
+  fi; \
+  if [ -n "$key" ]; then \
     just seed-platform-creds; \
   else \
-    echo "up-dev: TANREN_E2E_MANAGED_ROUTER_KEY unset in .env.validation.local — skipping platform-cred seed (managed mode unavailable until you run 'just seed-platform-creds')"; \
+    echo "up-dev: TANREN_E2E_MANAGED_ROUTER_KEY not found in any source (exported env / TANREN_SECRET_ENV_FILE / .env.validation.local) — skipping platform-cred seed (managed mode unavailable until you run 'just seed-platform-creds')"; \
   fi
 
 # Print the effective host-port set without bringing the stack up (the same
@@ -419,19 +431,31 @@ stack-reset:
 # `credential/openrouter/platform/default` so `providerMode: managed` runs can
 # resolve it; a fresh `down-dev -v` wipes the dev Vault, leaving that ref unseeded
 # and managed mode hard-failing (correctly, no silent fallback). Idempotent and
-# fail-LOUD if the key env var is absent. Reads the key from
-# `TANREN_E2E_MANAGED_ROUTER_KEY` (sourced from `.env.validation.local` when
-# present — the same env the validation connections manifest points at).
+# fail-LOUD (`MissingSeedSecretError`) if NO source yields the key.
+#
+# PORTABLE key resolution (implemented in scripts/dev/seed-platform-creds.ts, so
+# `just seed-platform-creds` and `just up-dev` behave identically):
+#   1. an already-exported `TANREN_E2E_MANAGED_ROUTER_KEY` env var (highest);
+#   2. else `TANREN_SECRET_ENV_FILE=<path>` — a secure env-file rendered by ANY
+#      secret manager (sops / 1Password / Vault-agent / …). Only a fixed
+#      allowlist of known keys is read from it — never arbitrary vars. Pass the
+#      path as the recipe ARGUMENT: `just seed-platform-creds /path/to.env`;
+#   3. else the plaintext-local `.env.validation.local` fallback (0600, symlinked
+#      into cwd by `secrets-link`).
+# Tanren is AGNOSTIC to who produces the env-file — no Nix/sops dependency here.
 #
 # Vault targeting: the seeder runs HOST-side, so it talks to the host-exposed dev
 # Vault (default `http://127.0.0.1:18200`, `dev-root-token`). The manifest's own
 # `VAULT_ADDR`/`VAULT_TOKEN` are the CONTAINER-internal view (`vault:8200`/
 # `127.0.0.1:8200`) and must NOT leak into this host-side run — so the recipe
-# sources the file only for the key, then hard-overrides Vault targeting via
-# `TANREN_SEED_VAULT_ADDR`/`TANREN_SEED_VAULT_TOKEN` (override to point at a
-# different Vault). Folded into `up-dev`; also runnable on demand after a rebuild.
-seed-platform-creds:
-  TANREN_E2E_MANAGED_ROUTER_KEY="$(node scripts/dev/dotenv-extract.mjs .env.validation.local TANREN_E2E_MANAGED_ROUTER_KEY 2>/dev/null)" \
+# hard-overrides Vault targeting via `TANREN_SEED_VAULT_ADDR`/`TANREN_SEED_VAULT_TOKEN`
+# (override to point at a different Vault). Folded into `up-dev`; also runnable on
+# demand after a rebuild.
+#
+# `env_file` (optional arg) sets TANREN_SECRET_ENV_FILE for this run; if already
+# exported in the shell env it passes through unchanged when the arg is empty.
+seed-platform-creds env_file="":
+  TANREN_SECRET_ENV_FILE="{{ if env_file != "" { env_file } else { env_var_or_default("TANREN_SECRET_ENV_FILE", "") } }}" \
     TANREN_SECRET_STORE=vault \
     VAULT_ADDR="${TANREN_SEED_VAULT_ADDR:-http://127.0.0.1:18200}" \
     VAULT_TOKEN="${TANREN_SEED_VAULT_TOKEN:-dev-root-token}" \
