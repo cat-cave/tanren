@@ -99,9 +99,9 @@ const appendSpecSteeringSchema = z.object({
 const setRunSpeculativeBaseSchema = z.object({
   runId: z.string().min(1),
   orgId: z.string().min(1),
-  // jj-local (WS-B PR-9): the re-resolved ancestor stack is the ONLY base written (to
-  // `runs.ancestor_stack`); the legacy `speculative_base` column is NULLed. Empty when
-  // non-speculative (every ancestor merged ⇒ the dependent re-bases onto default_branch).
+  // jj-local (WS-B PR-9): the re-resolved ancestor stack is the sole jj-local base
+  // source (written to `runs.ancestor_stack`). Empty when non-speculative (every
+  // ancestor merged ⇒ the dependent re-bases onto default_branch).
   ancestorStack: ancestorStackSchema.optional(),
 });
 

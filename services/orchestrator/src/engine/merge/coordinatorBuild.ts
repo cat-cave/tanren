@@ -8,8 +8,8 @@
 // The drive REUSES the merge stage — it is NOT a second merge impl. `driveMergeForQueuedRun`
 // calls `mergeForRun({ queueDrive: true })` for the claimed head run, which runs the
 // SAME directMerge logic: up-to-date/auto-rebase (server-side GitHub update +
-// CI re-poll — no runner needed, it is all VcsProvider/CI calls), retarget,
-// then merge. A real CONFLICT on the drive pass — where the original run's
+// native re-gate that provisions a FRESH runner + clones the PR head + runs `pre_merge`
+// over SSH — the merge authority, no forge poll), retarget, then merge. A real CONFLICT on the drive pass — where the original run's
 // runner is gone — is now resolved by the REAL intent-preserving conflict resolver
 // driveConflictResolve.ts: the drive PROVISIONS a short-lived runner + workspace
 // and runs the SAME resolver the in-loop direct_merge path runs, then CLASSIFIES the

@@ -10,9 +10,9 @@
 // scheduler over the existing run executor.
 //
 // The queue logic here is PURE Tanren (DAG-order + priority + tiebreak) — only the
-// VCS/CI calls inside the per-run merge path go through the `VcsProvider`, so the
-// coordinator is provider-agnostic (§1.1: the pluggable seam is the VcsProvider,
-// NOT the queue).
+// VCS/CI calls inside the per-run merge path go through `CodeHost` (host/ref ops)
+// and the native gate (CI), so the coordinator is provider-agnostic (§1.1: the
+// pluggable seam is `CodeHost`, NOT the queue).
 //
 // This contract carries the SEAMS (queue model + per-run merge runner) and the
 // PURE selection core (`selectNextMerge`), so the ordering decision is conformance-

@@ -205,26 +205,13 @@ installed pnpm 11.6 anyway, a silent mismatch). Two **generic, stack-agnostic** 
 this so a freshly-created template is born current — neither bakes any pnpm/cargo/… branch
 into Tanren core:
 
-1. **Prompt latest-by-default.** The template-creation research/author prompt
-   (`engine/templates/creation/liveResearch.ts`) instructs the model to choose the **LATEST
-   stable** release for the toolchain (language/runtime/package-manager versions) AND for
-   every dependency, and to **NOT pin to the training cutoff** (assume newer versions exist).
-   The non-opinionated doctrine holds: a deliberately-pinned legacy/specific/nightly version
-   is allowed **when the brief explicitly requires it** (§4.5 motivation 1/4). The same
-   prompt steers the authored `upgrade` verb to cover both the toolchain pins and the deps.
-2. **Creation-time gated `upgrade`.** A freshly-born template never gets the ongoing
-   generator's periodic bump, so creation runs the project's declared `upgrade` verb **once,
-   at birth, gated.** After the scaffold/features reach a green gate and **before publish**,
-   the creation flow (`engine/templates/creation/creationUpgrade.ts`) inserts the **SAME
-   gated DAG node** the ongoing generator inserts (`generateUpgradeSpec`), made to depend on
-   the build specs so it runs only after the green gate. The build's existing convergence
-   drive runs it through the full gate: **green → the template is born at latest; red → it
-   routes through the EXISTING write→gate self-heal loop** (the writer fixes the bump), never
-   a hard fail and never a side pipeline. It is **bounded** by the build's existing
-   convergence budget. A project that declares **no** `upgrade` verb (or is pinned) **SKIPS
-   LOUDLY** — a durable `template.creation.upgrade_skipped` event — never a silent no-op; a
-   successful insert emits `template.creation.upgraded`. Tanren names no bump command here:
-   the inserted node runs the project's opaque `just upgrade`.
+1. **Prompt latest-by-default.** The fragment-authoring research/author prompt
+   instructs the model to choose the **LATEST stable** release for the toolchain
+   (language/runtime/package-manager versions) AND for every dependency, and to
+   **NOT pin to the training cutoff** (assume newer versions exist). The non-opinionated
+   doctrine holds: a deliberately-pinned legacy/specific/nightly version is allowed
+   **when the brief explicitly requires it** (§4.5 motivation 1/4). Missing fragments
+   enter the F2 authoring loop; operators inspect `fragment.authoring.{started,attempt,succeeded,failed}`.
 
 ## 4. How it composes (one paragraph)
 

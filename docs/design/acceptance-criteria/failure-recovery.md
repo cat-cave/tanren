@@ -22,7 +22,7 @@
   - **Resolve via conversation**: opens an inspection thread (Forge thread bound to the run with read access to the auditor/writer disagreement history). Operator reads + decides; the thread doesn't trigger any state change by itself.
   - **Last-resort · abandon**: cancels the run, moves the spec to backlog, preserves the workspace; downstream specs stay blocked.
 - [ ] **DAG impact strip**: flat list (not a layout) of downstream-blocked specs with a "→ M4 finish" rendering. (The full DAG canvas now ships in project view; this surface keeps the flat list.)
-- [ ] **Notifications**: halting fires `run.halted` through P2A-0017; the operator gets a ntfy notification per matrix config.
+- [ ] **Notifications**: halting fires `run.failed` through P2A-0017; the operator gets a ntfy notification per matrix config. The persisted run status may be `halted` while the terminal event is `run.failed`.
 
 ## Reductions from the hi-fi
 

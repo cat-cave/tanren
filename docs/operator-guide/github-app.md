@@ -53,11 +53,10 @@ private key is never returned.
 
 ## 3. Wire the orchestrator environment
 
-| Variable                           | Purpose                                                                       |
-| ---------------------------------- | ----------------------------------------------------------------------------- |
-| `TANREN_GITHUB_APP_CREDENTIAL_REF` | Vault ref of the App credential from step 2.                                  |
-| `TANREN_GITHUB_APP_INSTALL_URL`    | The App install URL from step 1.                                              |
-| `TANREN_GITHUB_APP_TOKEN_REF`      | (optional) static-token ref for the no-App path, e.g. `credential/github/...` |
+| Variable                           | Purpose                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `TANREN_GITHUB_APP_CREDENTIAL_REF` | Vault ref of the App credential from step 2. |
+| `TANREN_GITHUB_APP_INSTALL_URL`    | The App install URL from step 1.             |
 
 The install route (`/auth/github-app/*`) only mounts when both
 `TANREN_GITHUB_APP_CREDENTIAL_REF` and `TANREN_GITHUB_APP_INSTALL_URL` are set.
@@ -93,9 +92,10 @@ For repo clone, draft PR, and publishing the `tanren/gate` status, the resolver
    installation token. Tokens are cached per installation and re-minted before
    expiry, or immediately on a `401` (the HTTP client retries once with a fresh
    token).
-2. **Static token** — otherwise the configured `credential/github/...` ref (or
-   `TANREN_GITHUB_APP_TOKEN_REF`) is read from Vault. This is the path for a dev
-   or self-hosted deployment that has not installed the App.
+2. **Static token** — otherwise, the resolver reads the static `github_token`
+   credential ref resolved from the run override, project configuration, or org
+   default. If neither that ref nor an App installation exists, the run fails
+   configuration validation.
 
 Installation tokens are used over HTTPS as the `x-access-token` password for
 `git push`, identical to a PAT, so the workspace push command is unchanged.

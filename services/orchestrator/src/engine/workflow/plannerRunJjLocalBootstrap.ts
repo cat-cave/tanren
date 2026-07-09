@@ -2,8 +2,8 @@
 // variant of the run's workspace clone, extracted from plannerRunWorkspace.ts to keep that
 // file under the 500-line architecture cap.
 //
-// When a DEPENDENT speculative run carries a non-empty ancestor stack AND
-// `WALKER_JJ_LOCAL_BASE` is on (default-OFF), its base is jj-ASSEMBLED LOCALLY from the
+// When a DEPENDENT speculative run carries a non-empty ancestor stack, its base
+// is jj-ASSEMBLED LOCALLY from the
 // real ancestor PR-head refs on the run's OWN runner (`bootstrapDependentBase`) — REPLACING
 // the legacy single-ref clone of an orchestrator-synthesized `tanren/integ/<dep>` host ref.
 // The chooser lives in plannerRunWorkspace's `cloneWorkspace`; this module owns the

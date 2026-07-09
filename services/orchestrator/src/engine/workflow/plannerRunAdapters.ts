@@ -223,9 +223,10 @@ interface ConflictResolverDeps {
   checker: SubtaskLoopAdapters["checker"];
   auditor: SubtaskLoopAdapters["auditor"];
   // WS-A PR-4 (walker-jj-local-integration-design.md §4): the merge-time rebase base when
-  // the run's base was jj-ASSEMBLED locally from the ancestor stack (`WALKER_JJ_LOCAL_BASE`
-  // on) — the LOCAL assembly bookmark, used INSTEAD of `${targetBranch}@origin`. Absent on
-  // the legacy single-ref clone path ⇒ the conflict resolver keeps `${targetBranch}@origin`.
+  // the run's base was jj-ASSEMBLED locally from the ancestor stack (non-empty) — the
+  // LOCAL assembly bookmark, used INSTEAD of `${targetBranch}@origin`. Absent on the
+  // legacy single-ref clone path (empty stack) ⇒ the conflict resolver keeps
+  // `${targetBranch}@origin`.
   bootstrappedBaseRevision?: string;
 }
 
@@ -291,7 +292,7 @@ async function resolveOverLiveJj(
       repoUrl: context.repoUrl,
       baseBranch: context.targetBranch,
       // The merge-time base the PR head rebases onto (never-discard, conflict recorded).
-      // WS-A PR-4: when the run's base was jj-assembled locally (flag on + non-empty stack)
+      // WS-A PR-4: when the run's base was jj-assembled locally (non-empty stack)
       // the base is the LOCAL assembly bookmark `bootstrappedBaseRevision`, NOT the
       // freshly-cloned `${targetBranch}@origin` — the PR head rebases onto the re-assembled
       // stack head. (PR-6 makes the merge-time opener re-assemble that stack; PR-4 threads

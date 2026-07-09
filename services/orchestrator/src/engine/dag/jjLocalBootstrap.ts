@@ -28,9 +28,9 @@
 // walker HOLD/route control flow (§2.1.4, `walker.ts` HOLD-the-dependent) consumes
 // it unchanged when PR-4 wires this in.
 //
-// ADDITIVE (§7 PR-3): this seam is built + conformance-pinned but NOT wired into the
-// run path (`plannerRunWorkspace` / `runExecutionContext`) — that is PR-4, behind
-// the `WALKER_JJ_LOCAL_BASE` flag. Prod behavior is unchanged.
+// ADDITIVE (§7 PR-3): this seam is built + conformance-pinned and wired into the
+// run path when the ancestor stack is non-empty. The plain default-branch clone
+// path is taken for an empty stack.
 //
 // FAIL-CLOSED: a spec-vs-spec conflict during assembly RELEASES the workspace (there
 // is nothing to hand off) and returns the conflict; only a CLEAN assembly keeps the

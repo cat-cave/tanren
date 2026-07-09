@@ -76,5 +76,6 @@ run's history reads halt → revise → replan in the run-detail event list.
    is queued and runs to completion on the happy path.
 5. The run-detail history shows the halt → revise → replan chain.
 
-A `run.halted` notification fires through P2A-0017 per the operator's
-notification-matrix config when a run halts.
+A `run.failed` notification fires through P2A-0017 per the operator's
+notification-matrix config when a run halts. The persisted run status may be
+`halted` while the terminal event operators receive is `run.failed`.

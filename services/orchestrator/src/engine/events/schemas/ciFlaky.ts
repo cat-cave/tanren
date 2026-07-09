@@ -1,11 +1,10 @@
 import { z } from "zod";
 
-// Flaky-test detection + auto-quarantine (autonomy-engine.md §2d). Tanren records
-// per-run CI observations (ci.passed / ci.failed, each carrying the per-check
-// `checkRuns[]` and the `headSha`). The flaky detector reduces those
-// observations across runs/attempts and flags a CHECK that is DEMONSTRABLY
-// non-deterministic — it both PASSED and FAILED on the SAME head SHA (same
-// code, different result), or it failed then passed on retry on the same SHA.
+// Flaky-test detection + auto-quarantine (autonomy-engine.md §2d). Tanren derives
+// flaky-test evidence from native `gate.verdict` observations across runs/attempts
+// and flags a CHECK that is DEMONSTRABLY non-deterministic — it both PASSED and
+// FAILED on the SAME head SHA (same code, different result), or it failed then
+// passed on retry on the same SHA.
 //
 // A check that only ever fails (consistent failure → genuinely broken) is NOT
 // flaky and is NEVER quarantined: quarantine ≠ ignore-all-failures. These two
