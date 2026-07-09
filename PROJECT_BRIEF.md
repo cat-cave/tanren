@@ -844,7 +844,7 @@ Each pick is mechanical: pick the tool people are actually using in 2026, not th
 | Linter                          | oxlint 1.x                                                              | 50-100× faster than ESLint. CI gate.                                                                                                                                                                |
 | Formatter                       | oxfmt 1.x                                                               | Pairs with oxlint. Replaces Prettier.                                                                                                                                                               |
 | Type-aware lint                 | oxlint type-aware mode (or eslint-typescript fallback for the one rule) | `switch-exhaustiveness-check` is non-negotiable.                                                                                                                                                    |
-| Testing                         | Vitest 3                                                                | Standard for Node TS in 2026.                                                                                                                                                                       |
+| Testing                         | Vitest 4                                                                | Standard for Node TS in 2026.                                                                                                                                                                       |
 | Coverage                        | v8 native via Vitest                                                    | No c8.                                                                                                                                                                                              |
 | Bundler                         | tsdown                                                                  | Library-author default.                                                                                                                                                                             |
 | Queue                           | Postgres `SKIP LOCKED` + `LISTEN/NOTIFY`                                | Already in stack. No Redis. No BullMQ.                                                                                                                                                              |
@@ -1368,7 +1368,7 @@ Every version pin verified against current community consensus.
 | Zod             | 4.x                                 | npmjs.com/package/zod         |
 | oxlint          | 1.x stable since June 2025          | oxc.rs                        |
 | oxfmt           | 1.0 stable                          | oxc.rs                        |
-| Vitest          | 3.x                                 | vitest.dev                    |
+| Vitest          | 4.x                                 | vitest.dev                    |
 | Hono            | 4.12.x                              | hono.dev                      |
 | HTMX            | (vendored, 2.x)                     | htmx.org                      |
 | dockerode       | 5.0.x                               | npmjs.com/package/dockerode   |
