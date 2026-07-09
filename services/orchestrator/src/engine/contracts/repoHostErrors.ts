@@ -67,3 +67,29 @@ export class RepositoryCreationForbiddenError extends Error {
     this.name = "RepositoryCreationForbiddenError";
   }
 }
+
+/**
+ * GREENFIELD RE-ATTACH GUARD (apex v84): the derive tried to RE-ATTACH to a repo
+ * that already exists (a `RepositoryAlreadyExistsError` on create) — but the repo
+ * is NOT the stranded, empty auto_init seed the re-attach idempotency intends. It
+ * already carries content/history from a PRIOR derive run (a `tanren compose:`
+ * commit / commits beyond the bare initial one). Silently reusing it pushes the new
+ * run's compose commits on top of the old scaffold, causing a cross-run BASE
+ * DIVERGENCE that later fails the "prepare clean PR branch" step with an opaque
+ * `WorkspaceCommandError`. Fail LOUD instead: Tanren must NOT auto-clean/force-reset
+ * a repo it did not create THIS run (that would destroy operator data — same reason
+ * the re-attach path registers no delete compensation). Carries `owner`/`repoName`
+ * refs ONLY. The route maps it to a clean 409 `greenfield_repo_not_empty`.
+ */
+export class GreenfieldRepoNotEmptyError extends Error {
+  constructor(
+    readonly owner: string,
+    readonly repoName: string,
+  ) {
+    super(
+      `greenfield target repo ${owner}/${repoName} already contains content from a prior derive; ` +
+        `choose a unique project name or delete the repo`,
+    );
+    this.name = "GreenfieldRepoNotEmptyError";
+  }
+}

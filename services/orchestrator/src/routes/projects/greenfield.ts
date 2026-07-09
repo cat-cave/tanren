@@ -22,6 +22,7 @@ import {
 } from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
+  GreenfieldRepoNotEmptyError,
   RepositoryAlreadyExistsError,
   RepositoryCreationForbiddenError,
 } from "../../engine/contracts/codeHostTypes.js";
@@ -129,6 +130,20 @@ export function greenfieldRepositoryErrorResponse(
   }
   if (error instanceof RepositoryAlreadyExistsError) {
     return c.json(withOrphans({ error: "repository_already_exists", owner: error.owner, name: error.repoName }), 409);
+  }
+  // GREENFIELD RE-ATTACH GUARD (apex v84): the target repo already exists AND carries a
+  // prior run's compose history — a re-attach would cause a cross-run base divergence.
+  // Fail loud with guidance to use a unique name / delete the repo (409, not a 500).
+  if (error instanceof GreenfieldRepoNotEmptyError) {
+    return c.json(
+      withOrphans({
+        error: "greenfield_repo_not_empty",
+        owner: error.owner,
+        name: error.repoName,
+        message: error.message,
+      }),
+      409,
+    );
   }
   if (error instanceof RepositoryCreationForbiddenError) {
     return c.json(
