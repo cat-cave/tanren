@@ -9,6 +9,7 @@
  */
 
 import type { CredentialRecord } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { Field, SelectField } from "./primitives.js";
 
 const API_SCHEMAS: Array<[string, string]> = [
@@ -25,7 +26,7 @@ function kindLabel(kind: CredentialRecord["kind"]): string {
   return "api key · opaque";
 }
 
-function CredentialRow(props: { record: CredentialRecord; scope: "org" | "me" }) {
+function CredentialRow(props: { record: CredentialRecord; scope: "org" | "me"; csrfToken?: string }) {
   const { record } = props;
   const deleteAction = props.scope === "org" ? "/onboarding/credentials/delete" : undefined;
   return (
@@ -61,6 +62,7 @@ function CredentialRow(props: { record: CredentialRecord; scope: "org" | "me" })
         </span>
         {deleteAction ? (
           <form method="post" action={deleteAction} style="margin-left:auto">
+            <CsrfField token={props.csrfToken} />
             <input type="hidden" name="ref" value={record.ref} />
             <button type="submit" class="btn danger">
               remove
@@ -77,10 +79,13 @@ export interface CredentialsBodyProps {
   myCredentials: CredentialRecord[];
   operator: string;
   notice?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 /** The two-column credentials matrix. Reused by org-setup step 2 + /credentials. */
 export function CredentialsBody(props: CredentialsBodyProps) {
+  const csrfToken = props.csrfToken;
   return (
     <>
       {props.notice ? <div class="alert ok">{props.notice}</div> : null}
@@ -100,7 +105,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
           {props.orgCredentials.length === 0 ? (
             <div class="sunken mono-dim">No org credentials yet. Add an API key below.</div>
           ) : (
-            props.orgCredentials.map((record) => <CredentialRow record={record} scope="org" />)
+            props.orgCredentials.map((record) => <CredentialRow record={record} scope="org" csrfToken={csrfToken} />)
           )}
 
           <form
@@ -109,6 +114,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
             action="/onboarding/credentials/org/apikey"
             style="gap:8px;padding:12px"
           >
+            <CsrfField token={csrfToken} />
             <div class="h">+ add api key</div>
             <div class="grid-2">
               <Field name="label" label="label" placeholder='e.g. "anthropic-prod"' required />
@@ -138,6 +144,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
             action="/onboarding/credentials/github"
             style="gap:8px;padding:12px"
           >
+            <CsrfField token={csrfToken} />
             <div class="h">+ import github token</div>
             <Field name="label" label="label" placeholder='e.g. "tanren-bot"' required />
             <Field
@@ -171,7 +178,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
           {props.myCredentials.length === 0 ? (
             <div class="sunken mono-dim">No personal bundles yet. Import a Codex bundle below.</div>
           ) : (
-            props.myCredentials.map((record) => <CredentialRow record={record} scope="me" />)
+            props.myCredentials.map((record) => <CredentialRow record={record} scope="me" csrfToken={csrfToken} />)
           )}
 
           <form
@@ -180,6 +187,7 @@ export function CredentialsBody(props: CredentialsBodyProps) {
             action="/onboarding/credentials/dev/codex"
             style="gap:8px;padding:12px"
           >
+            <CsrfField token={csrfToken} />
             <div class="h">+ import codex chatgpt bundle</div>
             <Field name="ref" label="vault ref" placeholder="credential/codex_chatgpt_auth/me/auth" required />
             <div class="field">

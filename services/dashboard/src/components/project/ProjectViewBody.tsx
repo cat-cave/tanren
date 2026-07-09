@@ -8,6 +8,7 @@
  */
 
 import type { InsightSummary } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "./screenStyles.js";
 import { KpiStrip, PageHead, relativeTime } from "./shared.js";
 import type { ActivityRow, AttentionEntry, DagNode, ProjectViewModel, VelocityModel } from "./projectViewData.js";
@@ -18,6 +19,8 @@ export interface ProjectViewBodyProps {
   orgId: string | undefined;
   model: ProjectViewModel;
   insights: InsightSummary[];
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function ProjectViewBody(props: ProjectViewBodyProps) {
@@ -110,7 +113,12 @@ function ForgeNarrationCard(props: ProjectViewBodyProps) {
             <div class="turn-label">▮ {insights.length} workflow callouts</div>
             <div class="col" style="gap:8px">
               {insights.map((insight) => (
-                <SuboptCallout insight={insight} orgId={props.orgId} projectId={props.projectId} />
+                <SuboptCallout
+                  insight={insight}
+                  orgId={props.orgId}
+                  projectId={props.projectId}
+                  csrfToken={props.csrfToken}
+                />
               ))}
             </div>
           </div>
@@ -166,7 +174,12 @@ function AttentionRow(props: { entry: AttentionEntry }) {
  * action POSTs the carried Forge tool call through the dashboard's `/forge/tools`
  * proxy (which forwards to). Buttons only appear for declared tools.
  */
-function SuboptCallout(props: { insight: InsightSummary; orgId: string | undefined; projectId: string }) {
+function SuboptCallout(props: {
+  insight: InsightSummary;
+  orgId: string | undefined;
+  projectId: string;
+  csrfToken?: string;
+}) {
   const { insight } = props;
   return (
     <div class="subopt">
@@ -177,6 +190,7 @@ function SuboptCallout(props: { insight: InsightSummary; orgId: string | undefin
         <div class="acts">
           {insight.actions.map((action) => (
             <form method="post" action={`/projects/${props.projectId}/insights/act`}>
+              <CsrfField token={props.csrfToken} />
               <input type="hidden" name="orgId" value={props.orgId} />
               <input type="hidden" name="tool" value={action.toolCall.tool} />
               <input type="hidden" name="args" value={JSON.stringify(action.toolCall.args ?? {})} />

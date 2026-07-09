@@ -19,6 +19,7 @@ import type {
   NotificationRoute,
   NotificationTarget,
 } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { PhaseBadge, SevBadge, Toggle } from "./primitives.js";
 
 /** Channel catalog: glyph + phase badge + whether dispatch is wired in v0. */
@@ -46,7 +47,7 @@ function routeFor(routes: NotificationRoute[], targetId: string, eventName: stri
   return routes.find((r) => r.targetId === targetId && r.eventName === eventName);
 }
 
-function ChannelsColumn(props: { targets: NotificationTarget[] }) {
+function ChannelsColumn(props: { targets: NotificationTarget[]; csrfToken?: string }) {
   const byKind = new Map<ChannelKind, NotificationTarget>();
   for (const target of props.targets) {
     if (target.scope === "org" && !byKind.has(target.channelKind)) byKind.set(target.channelKind, target);
@@ -75,6 +76,7 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
             <span class="mono-dim">{configured && target?.weekendMute ? "wknd-mute" : ""}</span>
             {configured && target !== undefined ? (
               <form method="post" action="/notifications/targets/update" style="margin:0">
+                <CsrfField token={props.csrfToken} />
                 <input type="hidden" name="targetId" value={target.id} />
                 <input type="hidden" name="enabled" value={enabled ? "false" : "true"} />
                 <button
@@ -109,6 +111,7 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
         action="/notifications/targets"
         style="gap:8px;padding:12px;margin-top:4px"
       >
+        <CsrfField token={props.csrfToken} />
         <div class="h">+ add ntfy target</div>
         <div class="field">
           <label for="label">label</label>
@@ -144,7 +147,7 @@ function ChannelsColumn(props: { targets: NotificationTarget[] }) {
   );
 }
 
-function MatrixGrid(props: { matrix: NotificationMatrix }) {
+function MatrixGrid(props: { matrix: NotificationMatrix; csrfToken?: string }) {
   // Columns = configured org targets (one per channel kind). Cap to keep the
   // grid legible; if none are configured we still show the ntfy column shape.
   const orgTargets = props.matrix.targets.filter((t) => t.scope === "org");
@@ -184,6 +187,7 @@ function MatrixGrid(props: { matrix: NotificationMatrix }) {
                 return (
                   <div class="matrix-cell">
                     <form method="post" action="/notifications/routes" style="margin:0">
+                      <CsrfField token={props.csrfToken} />
                       <input type="hidden" name="targetId" value={target.id} />
                       <input type="hidden" name="eventName" value={event.eventName} />
                       <input type="hidden" name="minSeverity" value={event.defaultSeverity} />
@@ -255,7 +259,7 @@ function deliveryTime(value: string | null): string {
     .toLowerCase();
 }
 
-function QuietHoursPanel(props: { targets: NotificationTarget[] }) {
+function QuietHoursPanel(props: { targets: NotificationTarget[]; csrfToken?: string }) {
   const orgTargets = props.targets.filter((target) => target.scope === "org");
   const mutedTargets = orgTargets.filter((target) => target.weekendMute);
   return (
@@ -290,6 +294,7 @@ function QuietHoursPanel(props: { targets: NotificationTarget[] }) {
               data-notif-target-mute={target.id}
               data-notif-weekend-mute={target.weekendMute ? "1" : "0"}
             >
+              <CsrfField token={props.csrfToken} />
               <div style="flex:1;min-width:0">
                 <div class="name">{target.label}</div>
                 <div class="desc">
@@ -379,19 +384,22 @@ export interface NotificationsBodyProps {
   matrix: NotificationMatrix;
   deliveries: NotificationDelivery[];
   notice?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 /** The full notifications matrix surface. Reused by org-setup step 3 + /notifications. */
 export function NotificationsBody(props: NotificationsBodyProps) {
+  const csrfToken = props.csrfToken;
   return (
     <>
       {props.notice ? <div class="alert ok">{props.notice}</div> : null}
       <div class="cols-narrow">
-        <ChannelsColumn targets={props.matrix.targets} />
-        <MatrixGrid matrix={props.matrix} />
+        <ChannelsColumn targets={props.matrix.targets} csrfToken={csrfToken} />
+        <MatrixGrid matrix={props.matrix} csrfToken={csrfToken} />
       </div>
       <div class="cols-narrow">
-        <QuietHoursPanel targets={props.matrix.targets} />
+        <QuietHoursPanel targets={props.matrix.targets} csrfToken={csrfToken} />
         <DeliveryHistory deliveries={props.deliveries} />
       </div>
     </>

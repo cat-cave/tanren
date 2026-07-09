@@ -323,6 +323,8 @@ export interface OrgWizardBodyProps {
   operator: string;
   /** orchestrator install-flow href (`/auth/github-app/install?orgId=…`). */
   appInstallHref?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function OrgWizardBody(props: OrgWizardBodyProps) {
@@ -350,6 +352,7 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
             orgCredentials={props.orgCredentials}
             myCredentials={props.myCredentials}
             operator={props.operator}
+            csrfToken={props.csrfToken}
           />
         </>
       ) : step === 3 ? (
@@ -360,7 +363,7 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
             em="we tell you"
             sub="multi-channel routing per event. set the org defaults; devs layer personal overrides. all channels deliver once configured."
           />
-          <NotificationsBody matrix={props.matrix} deliveries={[]} />
+          <NotificationsBody matrix={props.matrix} deliveries={[]} csrfToken={props.csrfToken} />
         </>
       ) : (
         <Step4Infra orgLogin={props.orgLogin} />

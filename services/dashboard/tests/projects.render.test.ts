@@ -13,13 +13,21 @@
 //     audit-gate off caption, add/reorder/remove + save flows.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { build, mockOrchestrator, patchCalls, specCreateCalls, toolCalls } from "./projects.render.fixtures.js";
+import {
+  build,
+  forgeMutationCalls,
+  mockOrchestrator,
+  patchCalls,
+  specCreateCalls,
+  toolCalls,
+} from "./projects.render.fixtures.js";
 
 beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
   patchCalls.length = 0;
   toolCalls.length = 0;
   specCreateCalls.length = 0;
+  forgeMutationCalls.length = 0;
   mockOrchestrator();
 });
 
@@ -48,11 +56,24 @@ describe("project view (chat-primary)", () => {
     expect(html).toContain("$42.5");
   });
 
-  it("renders the Forge narration pulse from the generated turn", async () => {
+  it("renders a data-derived project pulse without forge mutations on GET", async () => {
+    const app = await build();
+    const res = await app.request("/projects/project_easy");
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain("project pulse");
+    // GET must not create forge threads / generate-project-view turns (CSRF residual #848).
+    expect(forgeMutationCalls).toHaveLength(0);
+    // Fallback pulse is data-derived from runs/spend (not the forge turn body).
+    expect(html).toMatch(/run\(s\) in flight|is idle/u);
+  });
+
+  it("embeds csrf on insight action forms for pure HTML posts", async () => {
     const app = await build();
     const html = await (await app.request("/projects/project_easy")).text();
-    expect(html).toContain("project pulse");
-    expect(html).toContain("1 PR review-ready");
+    expect(html).toContain('action="/projects/project_easy/insights/act"');
+    expect(html).toContain('name="csrf"');
+    expect(html).toContain('value="c"');
   });
 
   it("renders the attention queue with a review handoff routing to run detail", async () => {
@@ -109,6 +130,44 @@ describe("project view (chat-primary)", () => {
   });
 });
 
+describe("on-demand project narration (CSRF-protected POST)", () => {
+  const SESSION_COOKIE = "tanren_session=sess-project-narration";
+
+  it("rejects narration POST with session cookie but missing csrf (403, no forge mutation)", async () => {
+    const app = await build();
+    const res = await app.request("/forge/project-narration", {
+      method: "POST",
+      headers: {
+        cookie: SESSION_COOKIE,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ orgId: "org_acme", projectId: "project_easy" }),
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("csrf_token_invalid");
+    expect(forgeMutationCalls).toHaveLength(0);
+  });
+
+  it("accepts narration POST with matching x-csrf-token and mutates forge", async () => {
+    const app = await build();
+    const res = await app.request("/forge/project-narration", {
+      method: "POST",
+      headers: {
+        cookie: SESSION_COOKIE,
+        "content-type": "application/json",
+        "x-csrf-token": "c",
+      },
+      body: JSON.stringify({ orgId: "org_acme", projectId: "project_easy" }),
+    });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { render?: { body?: string } };
+    expect(json.render?.body).toContain("1 PR review-ready");
+    expect(forgeMutationCalls.length).toBeGreaterThanOrEqual(1);
+    expect(forgeMutationCalls.some((c) => c.url.includes("/forge/threads"))).toBe(true);
+    expect(forgeMutationCalls.some((c) => c.url.includes("/generate-project-view"))).toBe(true);
+  });
+});
+
 describe("spec creation + list", () => {
   it("renders a schema-bound spec form with milestone, behaviors, and locked repo — no JSON editor", async () => {
     const app = await build();
@@ -124,6 +183,9 @@ describe("spec creation + list", () => {
     expect(html).toContain("https://github.com/cat-cave/tanren-fixture-easy");
     // no free-text JSON editor.
     expect(html).not.toMatch(/JSON\s*editor/iu);
+    // pure-HTML posts need the server-rendered csrf field (injectFormCsrfFields is only a JS safety net).
+    expect(html).toContain('name="csrf"');
+    expect(html).toContain('value="c"');
   });
 
   it("creates a spec via P2A-0013 and redirects to the spec list", async () => {

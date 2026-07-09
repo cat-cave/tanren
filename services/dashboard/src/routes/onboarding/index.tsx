@@ -112,6 +112,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
           myCredentials={myCredentials}
           matrix={matrix}
           operator={ctx.operator}
+          csrfToken={ctx.csrfToken}
         />
       </>,
     );
@@ -149,6 +150,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
             myCredentials={myCredentials}
             operator={ctx.operator}
             notice={noticeOf(c)}
+            csrfToken={ctx.csrfToken}
           />
         </div>
       </>,
@@ -186,7 +188,7 @@ export function mountOnboardingScreens(app: Hono, deps: ShellDeps): void {
               </div>
             </div>
           </div>
-          <NotificationsBody matrix={matrix} deliveries={deliveries} notice={noticeOf(c)} />
+          <NotificationsBody matrix={matrix} deliveries={deliveries} notice={noticeOf(c)} csrfToken={ctx.csrfToken} />
         </div>
       </>,
     );

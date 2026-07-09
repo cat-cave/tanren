@@ -22,6 +22,7 @@ import {
   type RoleId,
   type RoutingTable,
 } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "./screenStyles.js";
 import { PageHead } from "./shared.js";
 
@@ -80,6 +81,8 @@ export interface SettingsBodyProps {
     defaultLlm?: { cli: string; model: string; authRef: string };
     githubCredentialRef?: string;
   };
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function SettingsBody(props: SettingsBodyProps) {
@@ -134,6 +137,7 @@ function RoutingPanel(props: SettingsBodyProps) {
             chain={props.routing[role]?.chain ?? []}
             orgId={props.orgId}
             projectId={props.project.projectId}
+            csrfToken={props.csrfToken}
           />
         ))}
         <div class="audit-caption" style="margin-top:8px">
@@ -149,6 +153,7 @@ function RoleRow(props: {
   chain: { cli: string; model: string; authRef: string; healthHint?: string }[];
   orgId: string;
   projectId: string;
+  csrfToken?: string;
 }) {
   const base = `/settings/routing/${props.projectId}`;
   return (
@@ -172,6 +177,7 @@ function RoleRow(props: {
             <span class="acts">
               {index > 0 && (
                 <form method="post" action={`${base}/reorder`}>
+                  <CsrfField token={props.csrfToken} />
                   <input type="hidden" name="orgId" value={props.orgId} />
                   <input type="hidden" name="role" value={props.role} />
                   <input type="hidden" name="index" value={String(index)} />
@@ -183,6 +189,7 @@ function RoleRow(props: {
               )}
               {index < props.chain.length - 1 && (
                 <form method="post" action={`${base}/reorder`}>
+                  <CsrfField token={props.csrfToken} />
                   <input type="hidden" name="orgId" value={props.orgId} />
                   <input type="hidden" name="role" value={props.role} />
                   <input type="hidden" name="index" value={String(index)} />
@@ -193,6 +200,7 @@ function RoleRow(props: {
                 </form>
               )}
               <form method="post" action={`${base}/remove`}>
+                <CsrfField token={props.csrfToken} />
                 <input type="hidden" name="orgId" value={props.orgId} />
                 <input type="hidden" name="role" value={props.role} />
                 <input type="hidden" name="index" value={String(index)} />
@@ -205,6 +213,7 @@ function RoleRow(props: {
         ))
       )}
       <form class="add-fallback" method="post" action={`${base}/add`}>
+        <CsrfField token={props.csrfToken} />
         <input type="hidden" name="orgId" value={props.orgId} />
         <input type="hidden" name="role" value={props.role} />
         <input type="text" name="cli" placeholder="cli (e.g. codex)" required />
@@ -267,6 +276,7 @@ function CredentialsPanel(props: SettingsBodyProps) {
           <a href="/onboarding/credentials">credentials ↗</a>
         </div>
         <form method="post" action={`/settings/routing/${props.project.projectId}/credentials`}>
+          <CsrfField token={props.csrfToken} />
           <input type="hidden" name="orgId" value={props.orgId} />
           <div class="settings-grid">
             <CredentialSelect
@@ -350,6 +360,7 @@ function AuditGatePanel(props: SettingsBodyProps) {
           class="audit-toggle"
           style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"
         >
+          <CsrfField token={props.csrfToken} />
           <input type="hidden" name="enable" value={props.auditGate ? "0" : "1"} />
           {!props.auditGate && (
             <input
