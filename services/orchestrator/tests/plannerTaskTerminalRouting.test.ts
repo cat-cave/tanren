@@ -126,6 +126,10 @@ class RecordingWriter implements RunStateWriter {
     return { auditId: "audit_x" };
   }
   // eslint-disable-next-line @typescript-eslint/require-await
+  async recordDraftPrCreated(): Promise<{ created: boolean }> {
+    return { created: false };
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
   async insertTask(input: InsertTaskInput): Promise<void> {
     this.insertedTasks.push(input);
   }

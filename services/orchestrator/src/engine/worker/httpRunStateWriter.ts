@@ -27,6 +27,8 @@ import type {
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
   RecordCostInput,
+  RecordDraftPrCreatedInput,
+  RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
@@ -125,6 +127,12 @@ export class HttpRunStateWriter implements RunStateWriter {
     // The §5 durable land transaction carries the org explicitly (the merge stage holds
     // the run context), so no ambient lookup is needed — mirroring finalizeRun.
     return this.post<{ auditId: string }>("/internal/finalize-land", input);
+  }
+
+  async recordDraftPrCreated(input: RecordDraftPrCreatedInput): Promise<RecordDraftPrCreatedOutcome> {
+    // apex v86: post-PR-open 3-write block runs server-side under the control plane's
+    // events grant — never as a direct INSERT on the de-privileged dataplane pool.
+    return this.post<RecordDraftPrCreatedOutcome>("/internal/record-draft-pr-created", input);
   }
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {

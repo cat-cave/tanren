@@ -98,3 +98,29 @@ export interface ResumePausedRunAtomicOutcome {
   /** The resumed run's project_id (the row UPDATE's RETURNING). */
   projectId?: string;
 }
+
+/**
+ * apex v86 / PR #724 follow-up plane-split fix: the ATOMIC post-PR-open block
+ * (`github.pr.created` + `merge_queue` INSERT + optional `merge.scheduled`) that
+ * `mergeQueueEarlyEnqueueSeam` drives after a successful draft-PR open. Routed
+ * through {@link RunStateWriter} so the de-privileged data plane never opens
+ * `PgEventStore` on its pool (baseline REVOKE → `permission denied for table events`).
+ */
+export interface RecordDraftPrCreatedInput {
+  orgId: string;
+  runId: string;
+  specId: string;
+  projectId: string;
+  repoUrl: string;
+  branch: string;
+  /** The PR base branch (immediate ancestor head when stacked, else default). */
+  baseBranch: string;
+  prUrl: string;
+  prNumber: number;
+}
+
+/** Outcome of the post-PR-open atomic block (`created` from the merge_queue INSERT). */
+export interface RecordDraftPrCreatedOutcome {
+  /** False when the partial unique index already held a queue row for this run. */
+  created: boolean;
+}

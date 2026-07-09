@@ -18,7 +18,23 @@ import {
   runPairSchema,
   specPairSchema,
 } from "../../engine/worker/runStateLifecycleSql.js";
+import { applyRecordDraftPrCreated } from "../../engine/merge/draftPrCreatedAtomic.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
+
+// apex v86: post-PR-open atomic block (github.pr.created + merge_queue + merge.scheduled).
+const recordDraftPrCreatedSchema = z
+  .object({
+    orgId: z.string().min(1),
+    runId: z.string().min(1),
+    specId: z.string().min(1),
+    projectId: z.string().min(1),
+    repoUrl: z.string().min(1),
+    branch: z.string().min(1),
+    baseBranch: z.string().min(1),
+    prUrl: z.string().min(1),
+    prNumber: z.number().int(),
+  })
+  .strict();
 
 // Route shape for the ATOMIC terminal RUN finalize + terminal event endpoint
 // (task #48 — RUN-LEVEL mirror of /internal/update-task-with-event). The
@@ -80,11 +96,33 @@ const updateSpecWithEventRouteShape = z
   })
   .strict();
 
-/** Register the two task #48 atomic-seam endpoints on the internal write app.
- * Called from `registerRunStateLifecycleRoutes` so the same `deps` thread
- * through; split here to keep that function under the per-function line cap. */
+/** Register the task #48 atomic-seam endpoints + the apex-v86 draft-PR atomic
+ * endpoint on the internal write app. Called from `registerRunStateLifecycleRoutes`. */
 export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRouteDeps): void {
   const authnPeer = (c: Context): boolean => verifyInternalPeer(deps.verifier, c);
+
+  // apex v86: ATOMIC post-PR-open writes under the control plane's events grant.
+  // Response: 200 `{ created: boolean }` (merge_queue INSERT outcome).
+  app.post("/internal/record-draft-pr-created", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = recordDraftPrCreatedSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_record_draft_pr_created", issues: parsed.error.issues }, 400);
+    }
+    try {
+      const outcome = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+        applyRecordDraftPrCreated(client, parsed.data),
+      );
+      return c.json(outcome, 200);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return c.json({ error: "invalid_event_payload", issues: error.issues }, 422);
+      }
+      throw error;
+    }
+  });
 
   // The ATOMIC terminal-RUN finalize + terminal `run.*` event endpoint (task #48
   // — RUN-LEVEL mirror). Row UPDATE + event INSERT in ONE org-scoped transaction.

@@ -39,6 +39,8 @@ import type {
   FinalizeRunWithEventOutcome,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
+  RecordDraftPrCreatedInput,
+  RecordDraftPrCreatedOutcome,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
   RunStateWriter,
@@ -291,6 +293,36 @@ export class InMemoryRunStateWriter implements RunStateWriter {
   async finalizeLand(input: FinalizeLandInput): Promise<{ auditId: string }> {
     this.finalizeLands.push(input);
     return { auditId: input.runId };
+  }
+
+  readonly draftPrCreated: RecordDraftPrCreatedInput[] = [];
+  async recordDraftPrCreated(input: RecordDraftPrCreatedInput): Promise<RecordDraftPrCreatedOutcome> {
+    this.draftPrCreated.push(input);
+    if (this.options.forwardAppend !== undefined) {
+      await this.options.forwardAppend({
+        runId: input.runId,
+        specId: input.specId,
+        projectId: input.projectId,
+        orgId: input.orgId,
+        eventType: "github.pr.created",
+        payload: {
+          repoUrl: input.repoUrl,
+          branch: input.branch,
+          targetBranch: input.baseBranch,
+          prUrl: input.prUrl,
+          prNumber: input.prNumber,
+        },
+      });
+      await this.options.forwardAppend({
+        runId: input.runId,
+        specId: input.specId,
+        projectId: input.projectId,
+        orgId: input.orgId,
+        eventType: "merge.scheduled",
+        payload: { prUrl: input.prUrl, prNumber: input.prNumber, integration: "native_queue" },
+      });
+    }
+    return { created: true };
   }
 
   async setSpecStatus(input: SetSpecStatusInput): Promise<void> {

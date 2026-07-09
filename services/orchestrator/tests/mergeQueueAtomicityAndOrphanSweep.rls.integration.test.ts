@@ -24,6 +24,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
+import { applyRecordDraftPrCreated } from "../src/engine/merge/draftPrCreatedAtomic.js";
 import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
 import { discoverOrphanedPrs } from "../src/engine/merge/orphanedPrSweep.js";
 
@@ -180,40 +181,22 @@ describeDb("merge_queue 3-write atomicity + orphaned-PR sweep (real PG)", () => 
       [run, spec, PROJECT, ORG],
     );
 
-    const model = new PgMergeQueueModel(ownerPool);
-    await runWithOrgScope(ownerPool, ORG, async (client) => {
-      const store = new PgEventStore(client);
-      await store.append({
-        runId: run,
-        specId: spec,
-        projectId: PROJECT,
+    // Drive the PRODUCTION applier (the same function Direct/Http + the control-plane
+    // endpoint call) so this test pins the real path, not a re-implemented 3-write copy.
+    const { created } = await runWithOrgScope(ownerPool, ORG, (client) =>
+      applyRecordDraftPrCreated(client, {
         orgId: ORG,
-        eventType: "github.pr.created",
-        payload: {
-          repoUrl: "https://github.com/acme/x.git",
-          branch: "tanren/run_atomicity_commit",
-          targetBranch: "main",
-          prUrl,
-          prNumber: 1002,
-        },
-      });
-      const { created } = await model.enqueueOnClient(client, ORG, {
-        projectId: PROJECT,
         runId: run,
         specId: spec,
+        projectId: PROJECT,
+        repoUrl: "https://github.com/acme/x.git",
+        branch: "tanren/run_atomicity_commit",
+        baseBranch: "main",
         prUrl,
         prNumber: 1002,
-      });
-      expect(created).toBe(true);
-      await store.append({
-        runId: run,
-        specId: spec,
-        projectId: PROJECT,
-        orgId: ORG,
-        eventType: "merge.scheduled",
-        payload: { prUrl, prNumber: 1002, integration: "native_queue" },
-      });
-    });
+      }),
+    );
+    expect(created).toBe(true);
 
     const events = await ownerPool.query<{ event_type: string }>(
       "SELECT event_type FROM events WHERE run_id = $1 ORDER BY ts, id",

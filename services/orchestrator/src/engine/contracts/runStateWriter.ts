@@ -1,24 +1,12 @@
-// The RUN-STATE WRITE seam between the data plane (worker) and
-// the control plane (orchestrator). Beyond the mTLS job-CLAIM, this routes the
-// worker's run-state WRITES — event-append, cost-record insert, and run finalize
-// (failed/halted/completed) — behind the same authenticated channel so a
-// compromised data-plane runner can no longer write the control DB directly.
+// The RUN-STATE WRITE seam between the data plane (worker) and the control
+// plane (orchestrator). Routes event-append / cost / finalize / lifecycle /
+// atomic multi-write ops behind mTLS so a compromised dataplane runner cannot
+// write the control DB directly.
 //
-// The seam is one interface — {@link RunStateWriter} — with two impls:
-//   - `DirectRunStateWriter` performs the SAME org-scoped in-process DB writes
-//     the worker does today (the unchanged `PgEventStore` / `CostRecorder` /
-//     `UPDATE runs` under the worker's per-job org scope). It is the DEFAULT —
-//     lower risk, behavior-identical — so nothing changes unless the remote-write
-//     flag is set. This keeps the cutover REVERSIBLE.
-//   - `HttpRunStateWriter` POSTs each write to the control-plane `/internal/*`
-//     write endpoints over the mTLS {@link MtlsFetch} channel. The control plane
-//     then performs the EXACT SAME org-scoped write server-side, under ITS DB
-//     access — so the data plane needs no broad tenant-table write grants.
-//
-// WHAT GETS WRITTEN IS IDENTICAL in both impls: same columns/values, same
-// org-scoping, same exactly-once semantics — the only difference is WHERE the
-// statement runs (in the data plane vs. server-side in the control plane). See
-// ROADMAP.md.
+// One interface — {@link RunStateWriter} — with two impls:
+//   - `DirectRunStateWriter` — org-scoped in-process DB writes (default; reversible).
+//   - `HttpRunStateWriter` — POST `/internal/*` over mTLS; control plane writes.
+// WHAT GETS WRITTEN is identical; only WHERE the statement runs differs.
 
 import type { AppendEventInput, EventStore, PriorEventInput } from "../eventStore.js";
 import type { CostRecordContext, RecordedCost } from "../costs/recorder.js";
@@ -30,6 +18,8 @@ import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,
+  RecordDraftPrCreatedInput,
+  RecordDraftPrCreatedOutcome,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
   UpdateSpecWithEventInput,
@@ -245,10 +235,12 @@ export interface UpdateTaskWithEventInput {
   priorEvents?: ReadonlyArray<PriorEventInput>;
 }
 
-// Task #48 atomic-seam types live in `./runStateAtomicSeam.ts` (file-size cap); re-exported.
+// Task #48 + draft-PR atomic-seam types live in `./runStateAtomicSeam.ts` (file-size cap).
 export type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,
+  RecordDraftPrCreatedInput,
+  RecordDraftPrCreatedOutcome,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
   UpdateSpecWithEventInput,
@@ -313,16 +305,7 @@ export interface ReconcileCostInput {
   basis: "ccusage" | "credits";
 }
 
-/**
- * The DURABLE merge-LAND finalize (tanren-owns-the-engine.md §5): the `merge.completed`
- * event + the guarded spec `merged` flip, recorded together in ONE org-scoped
- * transaction so the internal state can never silently disagree with the host. This is
- * the LAST step of `MergeAuthority.land` (after the external host land already advanced
- * `main`). It writes `events` + `specs` — both de-privileged on the data plane
- * (migrations 0031/0035) — so the worker-driven land routes the WHOLE transaction
- * through the control plane. A failure here is the `merge_state_unknown` reconcile
- * signal the authority maps; it is NEVER swallowed into a silent inconsistency.
- */
+/** Durable land finalize (§5): `merge.completed` + guarded spec `merged` in one org tx. */
 export interface FinalizeLandInput {
   /** The owning run's org, so the finalize transaction is org-scoped server-side (or in-process). */
   orgId: string;
@@ -448,6 +431,12 @@ export interface RunStateWriter extends EventStore {
    * `merged` flip in ONE org-scoped transaction. The last step of an authorized land.
    */
   finalizeLand(input: FinalizeLandInput): Promise<{ auditId: string }>;
+
+  /**
+   * apex v86: ATOMIC post-PR-open writes (`github.pr.created` + `merge_queue` +
+   * optional `merge.scheduled`). Plane-split: never `PgEventStore` on the data-plane pool.
+   */
+  recordDraftPrCreated(input: RecordDraftPrCreatedInput): Promise<RecordDraftPrCreatedOutcome>;
 
   /** Insert one `tasks` row (subtask / CI / review / merge). */
   insertTask(input: InsertTaskInput): Promise<void>;
