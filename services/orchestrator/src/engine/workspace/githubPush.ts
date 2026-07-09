@@ -186,7 +186,8 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
         '      git update-index --force-remove -- "$path" 2>/dev/null || true',
         '      git ls-files --cached -- "$path/" > "$idx.desc"',
         "      while IFS= read -r child; do",
-        '        if [ -n "${child:-}" ]; then git update-index --force-remove -- "$child"; fi',
+        // Same mid-list while + set -e caveat as cacheinfo: fail loud on a real remove.
+        '        if [ -n "${child:-}" ]; then git update-index --force-remove -- "$child" || exit 1; fi',
         '      done < "$idx.desc"',
         '      rm -f "$idx.desc"',
         '      rest="$path"',
@@ -217,7 +218,10 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
         "        exit 1",
         "      fi",
         // Fail loud — never continue to write-tree after a rejected type-change overlay.
-        '      git update-index --add --cacheinfo "${mode},${sha},${path}"',
+        // Explicit `|| exit 1`: under `set -e`, errexit is ignored inside a mid-list
+        // `while` body (`cmd && while …; do …; done && next`), so a bare failed
+        // update-index would otherwise continue and write a partial tree.
+        '      git update-index --add --cacheinfo "${mode},${sha},${path}" || exit 1',
         "      ;;",
         "    *)",
         '      printf "prepareCleanPrBranch: unexpected diff status %s for %s\\n" "$status" "$path" >&2',

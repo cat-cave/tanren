@@ -141,7 +141,9 @@ describe("bootstrap-artifact isolation", () => {
     expect(cmd).toContain(`git read-tree '${CLONE_HEAD}'`);
     expect(cmd).toContain(`git diff-tree -r --name-status --no-renames '${BOOTSTRAP_SHA}' HEAD`);
     expect(cmd).toContain("git write-tree");
+    // `|| exit 1` is required: set -e does not abort mid-list while bodies.
     expect(cmd).toContain("git update-index --add --cacheinfo");
+    expect(cmd).toContain('git update-index --add --cacheinfo "${mode},${sha},${path}" || exit 1');
     // Composed commit parented on cloneHead (NOT bootstrap) — no rebase needed.
     expect(cmd).toContain(`git log --reverse --format='- %s' '${BOOTSTRAP_SHA}..HEAD'`);
     expect(cmd).toContain(`git commit-tree "$clean_tree" -p '${CLONE_HEAD}'`);
