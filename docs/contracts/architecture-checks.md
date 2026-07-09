@@ -21,7 +21,7 @@
 - `no-raw-row-casts-in-workflow`: under `services/orchestrator/src/engine/workflow/**`, a raw `… .rows[N] as Something` or `row as Something` cast (other than `as const`) is forbidden — workflow code must decode rows through the typed repositories (`services/orchestrator/src/engine/repositories/**`). A small file allowlist covers the remaining un-migrated call sites.
 - `forbidden-failure-variants`: `Failure.kind` may not define host-prefixed variants. The guard helper may mention the prefix only to reject it.
 - `writer-answerer-separation`: non-dispatcher source files may not call or import both writer and answerer execution paths. Current dispatchers are files under `services/orchestrator/src/engine/workflow/**` and future files under `services/orchestrator/src/engine/dispatchers/**`.
-- `no-unknown-cost-source`: `legacy_unknown` is forbidden. SQL `cost_basis` CHECK constraints must stay within `ccusage`, `provider_response`, `credits`, `unknown`, and `unattributed`; SQL `billing_mode` CHECK constraints must stay within `per_token`, `subscription`, and `self_hosted`. `unknown` cost basis (with `cost_usd` NULL) is an honest, allowed state — token accounting is mandatory, but cost is best-effort.
+- `no-unknown-cost-source`: `legacy_unknown` is forbidden. SQL `cost_basis` CHECK constraints must stay within `ccusage`, `provider_response`, `credits`, `unknown`, and `unattributed`; SQL `billing_mode` CHECK constraints must stay within `per_token`, `subscription`, `self_hosted`, and `unattributed`. `unknown` cost basis (with `cost_usd` NULL) is an honest, allowed state — token accounting is mandatory, but cost is best-effort.
 - `github-actions-current-major`: CI must keep `actions/checkout@v6` and `actions/setup-node@v6`; older majors are blocked.
 - `schema-drift-check-wired`: root `package.json` must keep `check:schema-drift` wired to `scripts/check-schema-drift.sh`, and root `check` must run it.
 - `answerer-schema-drift-check-wired`: root `package.json` must keep `check:answerer-schema-drift` wired to `scripts/answerer-schema-export.mjs`, and root `check` must run it (directly or via `just ci`).
@@ -41,7 +41,7 @@ The allowlist is finite, enumerated in `scripts/check-architecture-stubs.mjs`, a
 
 The previous phase-pending entries are **gone** because the real impls shipped and became the production default: the `noopConflictResolver` was retired by the real intent-preserving conflict resolver (`engine/workflow/reviewMerge/conflictResolver/resolver.ts`), and `createNoopPassRunner` by the real audit pass runner.
 
-Note: a **hard-throw** unconfigured seam (`UnconfiguredAllocator`, `UnconfiguredVcsProvider`, the `*AnswererUnconfiguredError` throws) is the _correct_ default — failing loudly is not a stand-in — and is deliberately **not** in the taxonomy, so it needs no allowlist entry. The OSS quota no-op is also not here: it was deleted (budget enforcement is the universal gate).
+Note: a **hard-throw** unconfigured seam (`UnconfiguredAllocator`, `UnconfiguredIntegrationProvisioner`, the `*AnswererUnconfiguredError` throws) is the _correct_ default — failing loudly is not a stand-in — and is deliberately **not** in the taxonomy, so it needs no allowlist entry. The OSS quota no-op is also not here: it was deleted (budget enforcement is the universal gate). The retired `UnconfiguredVcsProvider` went away with the `VcsProvider` interface (see `docs/architecture/vcsprovider-codehost-decomposition.md`).
 
 ## Structural ratchets (Track B wave 3)
 

@@ -116,14 +116,15 @@ was the honest v80 frontier at the start of that window):
   contributed nothing) (#798); pip/go/cargo live invokers wired in prod
   (#799 — same class as #791).
 
-Two smaller documented gaps: scaffold specs (`specialize_seed` mode) see
+One smaller documented gap: scaffold specs (`specialize_seed` mode) see
 no design context after migration 0026 (intentional — scaffolds
 specialize toolchain, not product identity — but the design-oracle
-silent-skip surface is widened vs pre-#756 behavior); and
-`loadSpecWithProject` doesn't SELECT the new provenance columns, so a
-future feature that needs them at read-time will require the schema+join
-update. The autonomous-loop machinery AND the F2 authoring pipeline are
-complete and hardened by regression pins. **The honest open frontier for
+silent-skip surface is widened vs pre-#756 behavior). The triage
+provenance SELECT on `loadSpecWithProject` is **done** (migration 0025
+columns + `projectSpecRowSchema` decode +
+`loadSpecWithProjectProvenance` regression pin). The autonomous-loop
+machinery AND the F2 authoring pipeline are complete and hardened by
+regression pins. **The honest open frontier for
 v80 is closing the full autonomous loop end-to-end** — the F2 pre-
 hardening means the run should reach further into the greenfield
 product-build loop than any prior trial before surfacing the next real

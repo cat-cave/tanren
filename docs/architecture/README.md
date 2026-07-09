@@ -61,9 +61,10 @@ is swappable (the host just lands what Tanren authorized). See
   commit, **rebase-onto-a-shifting-base**, first-class conflict recording +
   resolution + descendant restack, and the clean-ref export. jj-only, no git
   fallback.
-- **`CodeHost`** (`engine/contracts/codeHost.ts`) — the **minimal** (8-method)
-  hosting half: create repo, read default branch, push/fetch a ref, read a
-  commit/diff/file, and land an already-authorized ref. GitHub becomes a code
+- **`CodeHost`** (`engine/contracts/codeHost.ts`) — the **minimal** hosting half:
+  create repo, read default branch, push/fetch a ref, read a commit/diff/file,
+  land an already-authorized ref, plus the absorbed host reads (`compareRefs`
+  ancestry, `readCommitAuthors`, `readBranchChecks`). GitHub becomes a code
   source / OAuth surface / issue source — **not** the engine.
 - **`MergeAuthority`** (`engine/contracts/mergeAuthority.ts`) — the owned,
   host-independent, **fail-closed** decision: what makes merging into `main`
