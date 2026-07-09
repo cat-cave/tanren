@@ -7,6 +7,10 @@ import {
   FakeNotificationOutbox,
   FakeSecretStore,
   FakeCommandSubstrate,
+  conflictToFinding,
+  type IdentityProvider,
+  type IssueSource,
+  type RecordedConflict,
 } from "../src/engine/contracts/index.js";
 
 describe("orchestrator scaffold contracts", () => {
@@ -71,5 +75,56 @@ describe("orchestrator scaffold contracts", () => {
     expect(job.id).toBe("job_1");
     expect(notification.id).toBe("notification_1");
     expect(rpcRun.status).toBe("queued");
+  });
+
+  // workspaceVcsCore.conflictToFinding — pure RecordedConflict → Finding adapter
+  // (MergeAuthority gates on conflicts-as-findings). Also pinned in the
+  // WorkspaceVcsCore conformance suite when a rebase records a conflict.
+  it("conflictToFinding maps a recorded conflict to a P0 finding", () => {
+    const conflict: RecordedConflict = {
+      conflictId: "c-1",
+      between: { specId: "spec_a", otherSpecId: "spec_b" },
+      paths: ["src/a.ts", "src/b.ts"],
+    };
+    const finding = conflictToFinding(conflict);
+    expect(finding).toEqual({
+      id: "conflict:c-1",
+      severity: "P0",
+      title: "Unresolved conflict between spec_a and spec_b",
+      body: "Conflicted paths: src/a.ts, src/b.ts",
+      fixHint: "Resolve the recorded conflict (intent-preserving) before export/land.",
+    });
+  });
+
+  // engineSeams.ts — pluggable IssueSource + IdentityProvider (tanren-owns-the-engine
+  // §6). Distinct from the auth-package IdentityProvider and the inbox SourceConnector;
+  // these are the purpose-based contract shapes Wave-2 aligns connectors onto.
+  it("engineSeams IssueSource + IdentityProvider are implementable shapes", async () => {
+    const source: IssueSource = {
+      async fetch(ref) {
+        expect(ref.sourceKind).toBe("github");
+        expect(ref.locator).toBe("owner/repo");
+        return [{ externalId: "1", title: "t", body: "b", sourceKind: "github" }];
+      },
+    };
+    const items = await source.fetch({ sourceKind: "github", locator: "owner/repo" });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.externalId).toBe("1");
+
+    const idp: IdentityProvider = {
+      buildAuthorizeUrl(input) {
+        return `https://idp.example/authorize?state=${input.state}&redirect_uri=${encodeURIComponent(input.redirectUri)}`;
+      },
+      async exchangeCode(input) {
+        expect(input.code).toBe("code_1");
+        return { subject: "user_1", login: "alice", accessToken: "tok" };
+      },
+    };
+    expect(idp.buildAuthorizeUrl({ state: "s", redirectUri: "https://cb", scopes: ["read"] })).toContain("state=s");
+    await expect(idp.exchangeCode({ code: "code_1", state: "s", redirectUri: "https://cb" })).resolves.toEqual({
+      subject: "user_1",
+      login: "alice",
+      accessToken: "tok",
+    });
   });
 });

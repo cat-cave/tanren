@@ -28,11 +28,7 @@
   "ignore": [
     "services/dashboard/src/design/index.ts",
     "services/dashboard/src/design/tokens.ts",
-    "services/orchestrator/src/routes/costs/index.ts",
-    "services/orchestrator/src/routes/events/index.ts",
-    "services/dashboard/src/api/http.gen.ts",
-    "services/orchestrator/src/engine/contracts/workspaceVcsCore.ts",
-    "services/orchestrator/src/engine/contracts/engineSeams.ts"
+    "services/dashboard/src/api/http.gen.ts"
   ],
   "ignoreDependencies": ["@playwright/test", "hono", "@commitlint/cli"],
   "ignoreBinaries": ["just", "playwright"],

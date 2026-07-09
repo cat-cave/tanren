@@ -17,7 +17,7 @@
 // VcsProvider suites.
 
 import { describe, expect, it } from "vitest";
-import type { WorkspaceVcsCore } from "../../src/engine/contracts/workspaceVcsCore.js";
+import { conflictToFinding, type WorkspaceVcsCore } from "../../src/engine/contracts/workspaceVcsCore.js";
 
 export interface WorkspaceVcsCoreConformanceHarness {
   /** A fresh, empty impl per call (no shared state across cases). */
@@ -40,6 +40,12 @@ export function describeWorkspaceVcsCoreConformance(label: string, harness: Work
       expect(result.outcome).toBe("conflicted");
       expect(result.conflict).toBeDefined();
       expect(result.headSha).not.toBe("");
+      // The pure adapter maps a recorded conflict into the Finding currency that
+      // MergeAuthority / the resolver gates on (P0, fail-closed until resolved).
+      const finding = conflictToFinding(result.conflict!);
+      expect(finding.severity).toBe("P0");
+      expect(finding.id).toBe(`conflict:${result.conflict!.conflictId}`);
+      expect(finding.body).toMatch(/Conflicted paths:/u);
     });
 
     it("a CLEAN rebaseOnto applies with no conflict", async () => {
