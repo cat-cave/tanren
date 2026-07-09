@@ -58,10 +58,20 @@ export const RawEventRowSchema = z
 
 // --- Cost rows -------------------------------------------------------------
 // `recorded_at` is the cost write timestamp (NOT NULL); `id` mirrors the event
-// cursor-key shape.
+// cursor-key shape. `billing_mode` / `cost_basis` are the DB CHECK enums (must
+// include `unattributed`); token columns are coerced from pg number/string so
+// loaders drop the bare `as` cast + `Number(...)` laundering.
 export const RawCostRowSchema = z
   .object({
     id: z.union([z.number(), z.string()]),
     recorded_at: z.coerce.date(),
+    billing_mode: z.enum(["per_token", "subscription", "self_hosted", "unattributed"]),
+    cost_basis: z.enum(["ccusage", "provider_response", "credits", "unknown", "unattributed"]),
+    input_tokens: z.coerce.number().int().nonnegative().default(0),
+    cached_input_tokens: z.coerce.number().int().nonnegative().default(0),
+    cache_creation_tokens: z.coerce.number().int().nonnegative().default(0),
+    output_tokens: z.coerce.number().int().nonnegative().default(0),
+    reasoning_output_tokens: z.coerce.number().int().nonnegative().default(0),
+    total_tokens: z.coerce.number().int().nonnegative().default(0),
   })
   .passthrough();

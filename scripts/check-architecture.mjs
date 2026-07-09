@@ -48,7 +48,7 @@ const requiredDocs = [
   "docs/contracts/architecture-checks.md",
 ];
 const costBases = new Set(["ccusage", "provider_response", "credits", "unknown", "unattributed"]);
-const billingModes = new Set(["per_token", "subscription", "self_hosted"]);
+const billingModes = new Set(["per_token", "subscription", "self_hosted", "unattributed"]);
 
 function normalizePath(path) {
   return path.split("\\").join("/");
@@ -215,16 +215,20 @@ function checkCostSources(projectFiles) {
   const diagnostics = [];
   const legacy = new RegExp(`${"legacy"}_${"unknown"}`, "gu");
   // Each column's SQL CHECK must exactly match its accepted value set.
+  // Real schema forms: plain SQL, quoted-identifier migration SQL
+  // ("t"."billing_mode"), and Drizzle sql templates (${table.billingMode}).
+  // Same shapes for cost_basis / costBasis. Skip zero-value matches so
+  // prose/docs that mention the column without a quoted enum list are inert.
   const enumChecks = [
     {
-      pattern: /cost_basis\s+IN\s*\(([^)]*)\)/giu,
+      pattern: /(?:cost_basis|costBasis)(?:["'`]|\})?\s*IN\s*\(([^)]*)\)/giu,
       allowed: costBases,
       label: "cost_basis (ccusage, provider_response, credits, unknown, unattributed)",
     },
     {
-      pattern: /billing_mode\s+IN\s*\(([^)]*)\)/giu,
+      pattern: /(?:billing_mode|billingMode)(?:["'`]|\})?\s*IN\s*\(([^)]*)\)/giu,
       allowed: billingModes,
-      label: "billing_mode (per_token, subscription, self_hosted)",
+      label: "billing_mode (per_token, subscription, self_hosted, unattributed)",
     },
   ];
   for (const { file, text } of projectFiles) {
@@ -243,7 +247,14 @@ function checkCostSources(projectFiles) {
     }
     for (const { pattern, allowed, label } of enumChecks) {
       for (const match of text.matchAll(pattern)) {
+        if (isCommentOnlyMatch(text, match.index)) {
+          continue;
+        }
         const values = [...match[1].matchAll(/'([^']+)'/gu)].map((value) => value[1]);
+        // No single-quoted values → not a real CHECK enum list (prose / regex src).
+        if (values.length === 0) {
+          continue;
+        }
         if (values.some((value) => !allowed.has(value)) || values.length !== allowed.size) {
           diagnostics.push(
             diagnostic(

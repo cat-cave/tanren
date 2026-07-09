@@ -41,11 +41,50 @@ describe("architecture checker", () => {
       "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
       ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
       "db/migrations/0001.sql":
-        "CHECK (cost_basis IN ('ccusage','provider_response','credits','unknown','unattributed'))\nCHECK (billing_mode IN ('per_token','subscription','self_hosted'))\n",
+        "CHECK (cost_basis IN ('ccusage','provider_response','credits','unknown','unattributed'))\nCHECK (billing_mode IN ('per_token','subscription','self_hosted','unattributed'))\n",
       "services/orchestrator/src/engine/eventStore.ts": "export const ok = true;\n",
     });
 
     await expect(runArchitectureChecks({ root })).resolves.toEqual([]);
+  });
+
+  it("accepts quoted-migration and Drizzle billing_mode/cost_basis CHECK forms with unattributed", async () => {
+    const root = await createFixture({
+      "package.json":
+        '{"type":"module","scripts":{"check":"pnpm run check:schema-drift && pnpm run check:state-drift && pnpm run check:answerer-schema-drift && pnpm run check:contract-schema-drift","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check","check:contract-schema-drift":"node scripts/contract-schema-export.mjs --check"}}\n',
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
+      "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
+      ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
+      // Real migration shape: table-qualified quoted identifiers.
+      "db/migrations/0000_collapsed_baseline.sql":
+        "CONSTRAINT \"cost_records_billing_mode_check\" CHECK (\"cost_records\".\"billing_mode\" IN ('per_token','subscription','self_hosted','unattributed')),\nCONSTRAINT \"cost_records_cost_basis_check\" CHECK (\"cost_records\".\"cost_basis\" IN ('ccusage','provider_response','credits','unknown','unattributed'))\n",
+      // Real Drizzle schema shape: camelCase template expression.
+      "db/src/schema.ts":
+        "check('cost_records_billing_mode_check', sql`${table.billingMode} IN ('per_token','subscription','self_hosted','unattributed')`);\ncheck('cost_records_cost_basis_check', sql`${table.costBasis} IN ('ccusage','provider_response','credits','unknown','unattributed')`);\n",
+      "services/orchestrator/src/engine/eventStore.ts": "export const ok = true;\n",
+    });
+
+    await expect(runArchitectureChecks({ root })).resolves.toEqual([]);
+  });
+
+  it("rejects a billing_mode CHECK missing unattributed", async () => {
+    const root = await createFixture({
+      "package.json":
+        '{"type":"module","scripts":{"check":"pnpm run check:schema-drift && pnpm run check:state-drift && pnpm run check:answerer-schema-drift && pnpm run check:contract-schema-drift","check:schema-drift":"bash scripts/check-schema-drift.sh","check:state-drift":"node scripts/generate-state-checks.mjs --check","check:answerer-schema-drift":"node scripts/answerer-schema-export.mjs --check","check:contract-schema-drift":"node scripts/contract-schema-export.mjs --check"}}\n',
+      "scripts/check-schema-drift.sh": "#!/usr/bin/env bash\n",
+      "scripts/generate-state-checks.mjs": "#!/usr/bin/env node\n",
+      "scripts/answerer-schema-export.mjs": "#!/usr/bin/env node\n",
+      "scripts/contract-schema-export.mjs": "#!/usr/bin/env node\n",
+      ".github/workflows/ci.yml": "steps:\n  - uses: actions/checkout@v6\n  - uses: actions/setup-node@v6\n",
+      // Split the identifier so this intentional 3-mode list is not itself a live CHECK hit.
+      "db/migrations/0001.sql": ["CHECK (billing_", "mode IN ('per_token','subscription','self_hosted'))\n"].join(""),
+      "services/orchestrator/src/engine/eventStore.ts": "export const ok = true;\n",
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    expect(diagnostics.map((item) => item.rule)).toContain("no-unknown-cost-source");
   });
 
   it("rejects architecture violations in fixture files", async () => {

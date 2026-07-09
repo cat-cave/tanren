@@ -38,9 +38,15 @@ import {
   type TaskTimelineEntry,
 } from "./contract.js";
 import { CostStore, EventStore } from "../../engine/repositories/index.js";
-import { RawCostRowSchema, RawEventRowSchema, scalarText } from "./rowSchemas.js";
+import { RawEventRowSchema, scalarText } from "./rowSchemas.js";
 import { systemActor } from "../../engine/state/actor.js";
-import { fetchRunCostsForSnapshot, fetchRunEventsForSnapshot, fetchRunSummary, fetchRunTasks } from "./list.js";
+import {
+  decodeCostRow,
+  fetchRunCostsForSnapshot,
+  fetchRunEventsForSnapshot,
+  fetchRunSummary,
+  fetchRunTasks,
+} from "./list.js";
 
 interface SseStreamArgs {
   pool: pg.Pool;
@@ -340,29 +346,8 @@ export class SseDriver {
       { runId: this.args.runId, orgId: this.args.orgId, sinceId: this.lastCostId },
       systemActor,
     );
-    return rows.map((row) => {
-      // Decode the cursor-key id + recorded_at timestamp at the boundary.
-      const decoded = RawCostRowSchema.parse(row);
-      return {
-        id: decoded.id,
-        runId: scalarText(row["run_id"]),
-        taskId: scalarText(row["task_id"]),
-        projectId: scalarText(row["project_id"]),
-        cli: scalarText(row["cli"]),
-        provider: scalarText(row["provider"]),
-        model: scalarText(row["model"]),
-        inputTokens: Number(row["input_tokens"] ?? 0),
-        cachedInputTokens: Number(row["cached_input_tokens"] ?? 0),
-        cacheCreationTokens: Number(row["cache_creation_tokens"] ?? 0),
-        outputTokens: Number(row["output_tokens"] ?? 0),
-        reasoningOutputTokens: Number(row["reasoning_output_tokens"] ?? 0),
-        totalTokens: Number(row["total_tokens"] ?? 0),
-        costUsd: row["cost_usd"] === null || row["cost_usd"] === undefined ? null : scalarText(row["cost_usd"]),
-        billingMode: row["billing_mode"] as RunCostRecord["billingMode"],
-        costBasis: row["cost_basis"] as RunCostRecord["costBasis"],
-        recordedAt: decoded.recorded_at,
-      };
-    });
+    // Same boundary decode as the snapshot path — enums + tokens via Zod, no `as`.
+    return rows.map((row) => decodeCostRow(row));
   }
 
   private async emit(name: SseEventName, data: unknown): Promise<void> {
