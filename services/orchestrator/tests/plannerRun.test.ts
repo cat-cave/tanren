@@ -267,11 +267,13 @@ describe("runPlannerLoopWorkflow", () => {
 
     // The writer diffs against the POST-BOOTSTRAP commit, not the clone HEAD.
     expect(writerBaseShas).toEqual([bootstrapSha]);
-    // The PR branch is built by replaying the writer commit onto the clone HEAD
-    // (bootstrap commit dropped) and pushed from the cleaned ref.
-    const rebase = ssh.commands.find((c) => c.includes("git rebase"));
-    // `--autostash` (apex v65) guards the cleanup against dirty per-iteration gate artifacts.
-    expect(rebase).toContain(`git rebase --autostash --onto '${cloneHead}' '${bootstrapSha}'`);
+    // The PR branch is the direct-overlay composed commit (apex v85): cloneHead +
+    // (writer − bootstrap), parented on cloneHead — bootstrap artifacts dropped, no rebase.
+    const cleanPrep = ssh.commands.find((c) => c.includes("git read-tree") && c.includes("git commit-tree"));
+    expect(cleanPrep).toContain(`git read-tree '${cloneHead}'`);
+    expect(cleanPrep).toContain(`git diff-tree -r --name-status --no-renames '${bootstrapSha}' HEAD`);
+    expect(cleanPrep).toContain(`git commit-tree "$clean_tree" -p '${cloneHead}'`);
+    expect(cleanPrep).not.toContain("git rebase");
     const push = ssh.commands.find((c) => c.includes("git push"));
     expect(push).toContain("refs/tanren/pr-clean:refs/heads/");
   });

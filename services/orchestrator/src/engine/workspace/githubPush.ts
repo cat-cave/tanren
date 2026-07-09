@@ -73,48 +73,40 @@ export interface CleanedPushSource {
   headSha: string;
 }
 
-// Builds a ref ({@link PR_CLEAN_REF}) holding the writer's cumulative diff SQUASHED
-// onto a single commit whose parent is the clone HEAD — i.e. with the synthetic
-// bootstrap commit (and its install artifacts: lockfiles, node_modules) dropped AND
-// the writer's per-subtask draft history collapsed into one composed commit. Points
-// the push branch at that ref; returns the gitref the caller pushes from instead of
-// the working HEAD.
+// Builds a ref ({@link PR_CLEAN_REF}) holding the writer's cumulative change as ONE
+// composed commit whose parent is the clone HEAD — i.e. with the synthetic bootstrap
+// commit (and its install artifacts: lockfiles, node_modules) dropped AND the writer's
+// per-subtask draft history collapsed. Points the push branch at that ref; returns the
+// gitref the caller pushes from instead of the working HEAD.
 //
-// SQUASH-THEN-REBASE (apex v71 fix): earlier revisions replayed the writer commit
-// range (`bootstrapSha..HEAD`) linearly onto the clone HEAD. When two writer
-// subtasks touched the same lines (successive drafts of the same file — the common
-// case when the writer refines its output), the linear replay hit "could not apply
-// <sha> ... Resolve all conflicts manually" — a self-conflict between drafts that
-// no strategy flag rescues because the LATER draft's context is not present in the
-// EARLIER draft. apex v71 halted here on run 3 after the entire writer → gate →
-// checker → auditor → designOracle → plan loop closed clean (22 writer commits,
-// junit 12/12, findings empty). The doctrine-aligned fix: the PR carries ONE
-// composed change, not the writer's local debugging trail. We build the composed
-// commit BEFORE the rebase (its tree = the writer HEAD tree, its parent =
-// bootstrapSha), then rebase THAT one commit onto the clone HEAD. Rebasing exactly
-// one commit cannot self-conflict; the writer's draft-vs-draft collisions are
-// eliminated by construction. The per-subtask history stays on the writer branch
-// for local forensics (auditor `git diff HEAD~N`); only the PR head is squashed.
+// DIRECT OVERLAY (apex v85 fix; supersedes v71 squash-then-rebase): the PR head must be
+// ONE commit parented on cloneHead with tree = "cloneHead + (writer − bootstrap)". The
+// v71 path built a single commit (tree = writer HEAD, parent = bootstrapSha) and
+// rebased it onto cloneHead. That eliminated inter-writer draft self-conflicts, but a
+// SINGLE composed commit can still 3-way-conflict when bootstrap content diverges from
+// cloneHead on paths the writer also touched (content conflict / modify-delete). apex
+// v85 halted there on scaffold (`could not apply … Tanren composed change`, Rebasing
+// 1/1) after fixed-point re-drives — needs_attention. Rebase is the wrong tool: the
+// desired tree is a pure path overlay, not a patch application.
 //
-// This does NOT move the working HEAD: the writer's diff base (bootstrapSha)
-// stays an ancestor of HEAD so a review-rework re-entry can keep diffing/
-// committing vs it. We stage the composed commit in a detached checkout, rebase it,
-// capture the tip into PR_CLEAN_REF, then restore the working HEAD.
+// Construction (object-DB only — never checks out, never moves HEAD, never needs a
+// clean working tree; apex v65 dirty-tree + v71 squash + v85 single-commit conflict
+// are all closed by construction):
+//   1. Private index seeded from cloneHead (`git read-tree`).
+//   2. For every path in `git diff-tree bootstrap..HEAD` (writer cumulative delta),
+//      force the writer blob (A/M/T) or deletion (D). Paths the writer did not touch
+//      keep cloneHead content ⇒ pure bootstrap artifacts drop; writer-touched paths
+//      take the writer final blob unconditionally (no 3-way merge ⇒ no conflict).
+//   3. `git write-tree` → `git commit-tree <tree> -p cloneHead -m <composed_msg>`.
+//   4. `git update-ref PR_CLEAN_REF` — working HEAD stays at the writer tip so a
+//      review-rework re-entry keeps its bootstrapSha diff base.
 //
-// The rebase runs with `--autostash` so dirty working-tree artifacts from the
-// per-iteration gates (rspec `reports/`, rubocop autocorrects, etc.) don't
-// block the cleanup with `cannot rebase: You have unstaged changes` — apex v65
-// halted exactly there. Those artifacts are disposable per-iteration evidence
-// already captured in the gate's `gate.verdict` event payload; they were never
-// something we want in the PR commit. Autostash pops them back after the
-// rebase, leaving the working tree intact. On a stash-pop conflict git leaves
-// the stash in `refs/stash` for manual recovery, but the rebase itself still
-// succeeds and PR_CLEAN_REF still gets the correct sha — which is all the
-// push needs (the runner is released right after).
+// Equivalence: when a perfect rebase of bootstrap→writer onto cloneHead would succeed,
+// the overlay tree matches it (pinned by the real-git non-conflict fixture). When the
+// rebase would conflict, the overlay still succeeds with writer-wins on those paths.
 //
-// When cloneHeadSha/bootstrapSha are empty (fake-SSH unit paths) or equal (no
-// real bootstrap commit), there is nothing to drop and the working HEAD is
-// pushed unchanged.
+// When cloneHeadSha/bootstrapSha are empty (fake-SSH unit paths) or equal (no real
+// bootstrap commit), there is nothing to drop and the working HEAD is pushed unchanged.
 //
 // Returns the push ref AND the sha it resolves to (the future PR head) — see
 // {@link CleanedPushSource}. The merge gate anchors its verdict on this sha so the
@@ -138,6 +130,10 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
     return { ref: "HEAD", headSha: validateResolvedSha(head.stdout.trim()) };
   }
   const composedMessage = buildComposedCommitMessage(input.runId);
+  const cloneHead = quoteSshShellArg(input.cloneHeadSha);
+  const bootstrap = quoteSshShellArg(input.bootstrapSha);
+  const writerRange = quoteSshShellArg(`${input.bootstrapSha}..HEAD`);
+  const prCleanRef = quoteSshShellArg(PR_CLEAN_REF);
   const result = await runWorkspaceSshCommand(input.ssh, input.target, {
     label: "prepare clean PR branch",
     cwd: input.workspacePath,
@@ -147,55 +143,120 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       cls: "vcs",
       workspace: input.workspacePath,
     }),
+    // POSIX /bin/sh (LocalCommandSubstrate + live runner SSH). No bash-only syntax.
     command: [
       "set -eu",
-      // Remember where the working HEAD sits so we can restore it after squashing +
-      // rebasing off a detached copy (the writer's base must stay reachable for reworks).
-      "orig_head=$(git rev-parse HEAD)",
-      // SQUASH FIRST (apex v71 fix): build a single composed commit whose tree IS the
-      // writer HEAD tree and whose parent IS bootstrapSha. Reading the tree via
-      // `HEAD^{tree}` inspects the object DB — no working-tree checkout, no dirty-tree
-      // interaction. `git commit-tree` writes the object and echoes its sha; we bind that
-      // to a shell var so the rebase below can replay exactly ONE commit onto the clone
-      // HEAD. Any inter-writer-commit self-conflict (successive subtask drafts editing
-      // the same lines) is eliminated by construction — there is only one commit.
+      // Private index: never touch the real index, working tree, or HEAD. Dirty
+      // per-iteration gate artifacts (rspec reports/, rubocop — apex v65) are irrelevant.
+      // `delta` materializes name-status so we can two-pass (D then A/M/T) without a
+      // pipeline: POSIX sh has no pipefail, so a mid-loop `update-index` failure would
+      // otherwise be swallowed when a later D succeeds (dir→file lost the writer file).
+      "idx=$(mktemp)",
+      "delta=$(mktemp)",
+      'trap \'rm -f "$idx" "$delta" "$idx.desc"\' EXIT',
+      'export GIT_INDEX_FILE="$idx"',
+      // Seed from cloneHead, then overlay the cumulative writer-vs-bootstrap delta.
+      // Writer-untouched paths keep cloneHead (bootstrap-only lockfiles drop);
+      // writer-touched paths take the writer blob/delete with no 3-way (apex v85).
+      `git read-tree ${cloneHead}`,
+      // Overlay writer-vs-bootstrap path delta onto the private index.
+      // --no-renames keeps statuses in {A,M,D,T}. IFS=tab keeps paths-with-spaces intact.
+      // TWO-PASS (dir↔file type change): git refuses `cacheinfo` for file `d` while the
+      // index still has tree child `d/a`. diff-tree emits `A d` before `D d/a`, so a
+      // single-pass overlay drops the writer file and can still exit 0. Deletions first,
+      // then A/M/T; before each cacheinfo, clear exact/descendant/ancestor conflicts.
+      `git diff-tree -r --name-status --no-renames ${bootstrap} HEAD > "$delta"`,
+      [
+        "while IFS=$(printf '\\t') read -r status path; do",
+        '  if [ -z "${status:-}" ]; then continue; fi',
+        '  if [ "$status" = "D" ]; then',
+        '    git update-index --force-remove -- "$path" 2>/dev/null || true',
+        "  fi",
+        'done < "$delta"',
+      ].join("\n"),
+      [
+        "while IFS=$(printf '\\t') read -r status path; do",
+        '  if [ -z "${status:-}" ]; then continue; fi',
+        '  case "$status" in',
+        "    D)",
+        "      ;;",
+        "    A|M|T)",
+        // Clear index entries that would make `path` both a file and a directory:
+        // exact path, any child under path/, and each proper path-prefix (ancestor blob).
+        '      git update-index --force-remove -- "$path" 2>/dev/null || true',
+        '      git ls-files --cached -- "$path/" > "$idx.desc"',
+        "      while IFS= read -r child; do",
+        // Same mid-list while + set -e caveat as cacheinfo: fail loud on a real remove.
+        '        if [ -n "${child:-}" ]; then git update-index --force-remove -- "$child" || exit 1; fi',
+        '      done < "$idx.desc"',
+        '      rm -f "$idx.desc"',
+        '      rest="$path"',
+        '      acc=""',
+        "      while :; do",
+        '        case "$rest" in',
+        "          */*)",
+        "            comp=${rest%%/*}",
+        "            rest=${rest#*/}",
+        '            if [ -z "$acc" ]; then acc="$comp"; else acc="$acc/$comp"; fi',
+        '            git update-index --force-remove -- "$acc" 2>/dev/null || true',
+        "            ;;",
+        "          *)",
+        "            break",
+        "            ;;",
+        "        esac",
+        "      done",
+        // ls-tree: "<mode> <type> <sha>\\t<path>". cut is POSIX and present on runners.
+        '      entry=$(git ls-tree HEAD -- "$path")',
+        '      if [ -z "$entry" ]; then',
+        '        printf "prepareCleanPrBranch: missing writer tree entry for %s\\n" "$path" >&2',
+        "        exit 1",
+        "      fi",
+        '      mode=$(printf %s "$entry" | cut -d" " -f1)',
+        '      sha=$(printf %s "$entry" | cut -d" " -f3 | cut -f1)',
+        '      if [ -z "$mode" ] || [ -z "$sha" ]; then',
+        '        printf "prepareCleanPrBranch: corrupt ls-tree entry for %s: %s\\n" "$path" "$entry" >&2',
+        "        exit 1",
+        "      fi",
+        // Fail loud — never continue to write-tree after a rejected type-change overlay.
+        // Explicit `|| exit 1`: under `set -e`, errexit is ignored inside a mid-list
+        // `while` body (`cmd && while …; do …; done && next`), so a bare failed
+        // update-index would otherwise continue and write a partial tree.
+        '      git update-index --add --cacheinfo "${mode},${sha},${path}" || exit 1',
+        "      ;;",
+        "    *)",
+        '      printf "prepareCleanPrBranch: unexpected diff status %s for %s\\n" "$status" "$path" >&2',
+        "      exit 1",
+        "      ;;",
+        "  esac",
+        'done < "$delta"',
+      ].join("\n"),
+      "clean_tree=$(git write-tree)",
+      'rm -f "$idx" "$delta"',
+      "unset GIT_INDEX_FILE",
+      "trap - EXIT",
       // Provenance from the per-subtask commit range is appended to the composed message
       // so the PR head carries `- <subject>` bullets back to the writer's draft trail.
-      "writer_tree=$(git rev-parse HEAD^{tree})",
-      `provenance=$(git log --reverse --format='- %s' ${quoteSshShellArg(`${input.bootstrapSha}..HEAD`)})`,
+      `provenance=$(git log --reverse --format='- %s' ${writerRange})`,
       `composed_msg=$(printf %s ${quoteSshShellArg(composedMessage)}; printf '\\n%s\\n' "$provenance")`,
-      // Explicit author + committer identity on the commit-tree invocation: `git commit-tree`
-      // fails hard if `user.name`/`user.email` aren't resolvable (the workspace bootstrap DOES
-      // set them on the live runner, but a substrate test path — or a runner whose bootstrap
-      // silently skipped the identity step — would hit `fatal: empty ident name` without this).
-      // The "Tanren Composer" identity is honest: this commit is Tanren's SYNTHESIS of the
-      // writer's per-subtask drafts, not the writer's own authored commit (those stay on the
-      // working HEAD, with their original identity, for local forensics).
-      `composed=$(${COMPOSER_GIT_IDENT_ENV} git commit-tree "$writer_tree" -p ${quoteSshShellArg(input.bootstrapSha)} -m "$composed_msg")`,
-      // Detach at the composed tip, then rebase the ONE composed commit onto the clone
-      // HEAD — dropping the bootstrap commit. `--autostash` handles dirty per-iteration
-      // gate artifacts (rspec `reports/`, rubocop autocorrects — apex v65). The same composer
-      // identity is threaded through the rebase (rebase writes a NEW commit with the composed
-      // commit's tree; it needs `user.name`/`user.email` for the SAME reason as commit-tree).
-      'git checkout --quiet --detach "$composed"',
-      `${COMPOSER_GIT_IDENT_ENV} git rebase --autostash --onto ${quoteSshShellArg(input.cloneHeadSha)} ${quoteSshShellArg(input.bootstrapSha)}`,
-      // Capture the cleaned tip into the push ref, then restore the working HEAD.
-      `git update-ref ${quoteSshShellArg(PR_CLEAN_REF)} HEAD`,
-      'git checkout --quiet --detach "$orig_head"',
+      // Explicit author + committer identity: `git commit-tree` fails hard if
+      // user.name/user.email aren't resolvable. "Tanren Composer" is honest — this is
+      // Tanren's synthesis of the writer's drafts, not a writer-authored commit.
+      `composed=$(${COMPOSER_GIT_IDENT_ENV} git commit-tree "$clean_tree" -p ${cloneHead} -m "$composed_msg")`,
+      // Stage the composed tip into the push ref. HEAD is untouched (writer tip stays
+      // reachable for review-rework re-entry against bootstrapSha).
+      `git update-ref ${prCleanRef} "$composed"`,
       // Echo the cleaned tip (the future PR head) LAST so it is the command's stdout —
       // the sha the merge gate anchors its verdict on (the gate↔land commit-binding).
-      `git rev-parse ${quoteSshShellArg(PR_CLEAN_REF)}`,
+      `git rev-parse ${prCleanRef}`,
     ].join(" && "),
   });
   return { ref: PR_CLEAN_REF, headSha: validateResolvedSha(result.stdout.trim()) };
 }
 
-// The composer git identity + fixed dates, threaded onto BOTH the `git commit-tree`
-// (writes the composed object) AND the `git rebase` (rebase authors a new commit with
-// the composed commit's tree). Both commands need `user.name`/`user.email` resolvable
-// or they fail hard with `fatal: empty ident name`. Held as a shared constant so a
-// future edit can't drift them apart (identity mismatch on rebase would produce a
-// commit whose author differs from the composed object we built).
+// The composer git identity + fixed dates for `git commit-tree` (writes the composed
+// object). Needs user.name/user.email resolvable or commit-tree fails with
+// `fatal: empty ident name`. Fixed dates keep the composed object deterministic across
+// re-preps of the same tree (helpful for tests + gate re-anchors).
 const COMPOSER_GIT_IDENT_ENV =
   "GIT_AUTHOR_NAME='Tanren Composer' GIT_AUTHOR_EMAIL='composer@tanren.invalid' " +
   "GIT_COMMITTER_NAME='Tanren Composer' GIT_COMMITTER_EMAIL='composer@tanren.invalid' " +
