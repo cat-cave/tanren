@@ -371,6 +371,12 @@ services:
       DATABASE_URL: postgres://tanren:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for the prod profile}@postgres:5432/tanren
       ORCHESTRATOR_URL: http://orchestrator:3100
       DASHBOARD_PORT: "3000"
+      # Fail-closed auth profile (CX-006): NODE_ENV=production makes
+      # TANREN_REQUIRE_AUTH default ON when unset, requires ORCHESTRATOR_URL,
+      # and refuses TANREN_DEV_LOGIN even if accidentally set. compose.dev.yml
+      # leaves NODE_ENV unset so local/CI smoke stays open unless opted in.
+      NODE_ENV: production
+      TANREN_ENV: production
     ports:
       - "${DASHBOARD_HOST_PORT:-3000}:3000"
     depends_on:
