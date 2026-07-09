@@ -1,8 +1,9 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript"],
-  // The TYPE-AWARE lint pass (oxlint --type-aware, powered by oxlint-tsgolint/tsgo).
-  // It replaced the old ESLint + typescript-eslint pass — same idea, no tsc.
+  // The TYPE-AWARE lint pass (oxlint --type-aware, powered by oxlint-tsgolint).
+  // It replaced the old ESLint + typescript-eslint pass. Typecheck/build use
+  // TypeScript 7 native `tsc`; oxlint-tsgolint remains the type-aware lint bridge.
   //
   // STRICTNESS RATCHET (WS-H1, rule-by-rule). The `correctness` category — the
   // highest-value typed bug-catchers — is now ON at error. Its rules

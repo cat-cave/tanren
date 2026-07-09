@@ -43,7 +43,6 @@
     "@types/node": "^25.9.1",
     "@types/pg": "^8.20.0",
     "@types/ssh2": "1.15.5",
-    "@typescript/native-preview": "7.0.0-dev.20260605.1",
     "@vitest/coverage-v8": "4.1.8",
     "cspell": "^10.0.1",
     "drizzle-kit": "^0.31.10",
@@ -54,6 +53,7 @@
     "oxlint-tsgolint": "^0.23.0",
     "tsx": "^4.22.4",
     "turbo": "^2.9.16",
+    "typescript": "7.0.2",
     "vitest": "^4.1.8"
   },
   "pnpm": {

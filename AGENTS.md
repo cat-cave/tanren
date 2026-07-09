@@ -8,10 +8,10 @@ Run the narrowest useful check while editing (e.g. **`just affected-typecheck`**
 **`affected-test`** — only what changed vs `origin/main`), then run the full gate
 before handing off. The canonical gate is the justfile — **`just fast-check`** (the
 non-build gate) and **`just ci`** (adds the build), then **`just smoke`**. The
-toolchain is oxc/native — **tsgo** (typecheck+build), **oxlint** +
-**`oxlint --type-aware`** (lint), **oxfmt** (format), **vitest 4** (test),
-**Turborepo** (build/typecheck cache); no `tsc`. The per-step pnpm scripts below
-are the same checks, lower-fidelity than the recipes:
+toolchain is oxc/native — **TypeScript 7** `tsc` (native compiler; typecheck+build),
+**oxlint** + **`oxlint --type-aware`** via **oxlint-tsgolint** (type-aware lint bridge),
+**oxfmt** (format), **vitest 4** (test), **Turborepo** (build/typecheck cache). The
+per-step pnpm scripts below are the same checks, lower-fidelity than the recipes:
 
 ```sh
 corepack pnpm run format:check

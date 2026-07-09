@@ -834,13 +834,13 @@ Each pick is mechanical: pick the tool people are actually using in 2026, not th
 
 | Concern                         | Pick                                                                    | Justification                                                                                                                                                                                       |
 | ------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Compiler                        | tsgo (TS 7.0)                                                           | 10× faster typecheck than tsc. Stable as of 2026-Q1.                                                                                                                                                |
+| Compiler                        | TypeScript 7 native `tsc`                                               | Native Go port; 8–12× faster typecheck than TS 6 `tsc`. GA as `typescript@7` (was `@typescript/native-preview` / `tsgo`).                                                                           |
 | Runtime                         | Node 24 LTS                                                             | Active LTS through 2028. Bun considered, deferred to v0+2-weeks evaluation pending its Rust-rewrite stabilization (open in §20).                                                                    |
 | Package mgr                     | pnpm 11.x                                                               | Current as of 2026-05.                                                                                                                                                                              |
 | Database                        | Postgres 18 (18.4 patch)                                                | One backend, one schema, no SQLite path. Compose service.                                                                                                                                           |
 | ORM                             | Drizzle (postgres-only)                                                 | Schema-as-code, drizzle-kit migrations, no per-dialect compat.                                                                                                                                      |
 | Validation                      | Zod 4                                                                   | Every external boundary (provider stdout, MCP call, dashboard request, secret-manager response) `schema.safeParse(raw)`.                                                                            |
-| Errors                          | Plain discriminated unions                                              | tsgo exhaustiveness via `switch (f.kind)`. No Effect, no neverthrow.                                                                                                                                |
+| Errors                          | Plain discriminated unions                                              | TypeScript exhaustiveness via `switch (f.kind)`. No Effect, no neverthrow.                                                                                                                          |
 | Linter                          | oxlint 1.x                                                              | 50-100× faster than ESLint. CI gate.                                                                                                                                                                |
 | Formatter                       | oxfmt 1.x                                                               | Pairs with oxlint. Replaces Prettier.                                                                                                                                                               |
 | Type-aware lint                 | oxlint type-aware mode (or eslint-typescript fallback for the one rule) | `switch-exhaustiveness-check` is non-negotiable.                                                                                                                                                    |
@@ -1273,7 +1273,7 @@ Every source file is bounded to 500 lines (§10.1). Every service is its own Doc
 | Bun in v0                                                                    | §10.2: ecosystem still has compat gaps for long-running daemon workloads as of 2026-05.                                               | v1 re-evaluation.                                                                                                  |
 | Prettier in v0                                                               | oxfmt is the 2026 standard, pairs with oxlint.                                                                                        | Never re-introduce.                                                                                                |
 | BullMQ / Redis                                                               | Postgres has SKIP LOCKED + LISTEN/NOTIFY; no extra service required.                                                                  | When team-builder hits Postgres queue throughput limits AND an observation in the event log shows it (not before). |
-| Effect / neverthrow / ts-pattern                                             | Plain discriminated unions with tsgo exhaustiveness are enough.                                                                       | When a documented case shows the plain pattern frays.                                                              |
+| Effect / neverthrow / ts-pattern                                             | Plain discriminated unions with TypeScript exhaustiveness are enough.                                                                 | When a documented case shows the plain pattern frays.                                                              |
 | OpenTelemetry in v0                                                          | Event log + dashboard + pino are sufficient.                                                                                          | When first enterprise customer requires OTLP export.                                                               |
 | Slack / Discord integrations in v0                                           | ntfy covers v0; chat-surface integrations are team-builder features.                                                                  | When team-builder names chat as the primary notification surface.                                                  |
 | schema_version column enforcement                                            | Nobody reads it in any prior attempt.                                                                                                 | When v1 has a second-version emitter and a read-side dispatch on the version.                                      |
@@ -1357,27 +1357,27 @@ This template is materialized in the roadmap doc; the brief just declares its sh
 
 Every version pin verified against current community consensus.
 
-| Tool              | v0 pin                              | Source                        |
-| ----------------- | ----------------------------------- | ----------------------------- |
-| Postgres          | 18 (18.4 patch released 2026-05-14) | postgresql.org news           |
-| Docker Engine     | 29.x (29.5.1 released 2026-05-18)   | docs.docker.com release notes |
-| Node.js           | 24 LTS (Active through 2028)        | endoflife.date/nodejs         |
-| pnpm              | 11.1.x                              | pnpm.io                       |
-| tsgo / TypeScript | 7.0 stable (Jan 2026)               | microsoft/typescript-go       |
-| Drizzle           | 0.45.x stable                       | orm.drizzle.team              |
-| Zod               | 4.x                                 | npmjs.com/package/zod         |
-| oxlint            | 1.x stable since June 2025          | oxc.rs                        |
-| oxfmt             | 1.0 stable                          | oxc.rs                        |
-| Vitest            | 3.x                                 | vitest.dev                    |
-| Hono              | 4.12.x                              | hono.dev                      |
-| HTMX              | (vendored, 2.x)                     | htmx.org                      |
-| dockerode         | 5.0.x                               | npmjs.com/package/dockerode   |
-| ssh2              | 1.17.x                              | npmjs.com/package/ssh2        |
-| pino              | 9.x                                 | getpino.io                    |
-| MCP SDK           | (deferred to v1)                    | modelcontextprotocol.io       |
-| Hashicorp Vault   | 1.18.x                              | hashicorp.com/products/vault  |
-| ntfy.sh           | 2.x                                 | ntfy.sh                       |
-| Cloudflared       | current                             | cloudflare.com                |
+| Tool            | v0 pin                              | Source                        |
+| --------------- | ----------------------------------- | ----------------------------- |
+| Postgres        | 18 (18.4 patch released 2026-05-14) | postgresql.org news           |
+| Docker Engine   | 29.x (29.5.1 released 2026-05-18)   | docs.docker.com release notes |
+| Node.js         | 24 LTS (Active through 2028)        | endoflife.date/nodejs         |
+| pnpm            | 11.1.x                              | pnpm.io                       |
+| TypeScript      | 7.0.2 (native `tsc`, GA)            | npmjs.com/package/typescript  |
+| Drizzle         | 0.45.x stable                       | orm.drizzle.team              |
+| Zod             | 4.x                                 | npmjs.com/package/zod         |
+| oxlint          | 1.x stable since June 2025          | oxc.rs                        |
+| oxfmt           | 1.0 stable                          | oxc.rs                        |
+| Vitest          | 3.x                                 | vitest.dev                    |
+| Hono            | 4.12.x                              | hono.dev                      |
+| HTMX            | (vendored, 2.x)                     | htmx.org                      |
+| dockerode       | 5.0.x                               | npmjs.com/package/dockerode   |
+| ssh2            | 1.17.x                              | npmjs.com/package/ssh2        |
+| pino            | 9.x                                 | getpino.io                    |
+| MCP SDK         | (deferred to v1)                    | modelcontextprotocol.io       |
+| Hashicorp Vault | 1.18.x                              | hashicorp.com/products/vault  |
+| ntfy.sh         | 2.x                                 | ntfy.sh                       |
+| Cloudflared     | current                             | cloudflare.com                |
 
 A `scripts/check-pin-rot.sh` runs quarterly and emits a soft CI advisory when a pin is more than 12 months behind upstream. The operator decides whether to bump.
 
