@@ -61,8 +61,13 @@ const envObjectSchema = z.object({
   // TANREN_ORCHESTRATOR_PUBLIC_URL dashboard name.) Validated as a URL when present.
   TANREN_PUBLIC_BASE_URL: emptyToUndefined(z.string().url().optional()),
   // DEV-ONLY local_dev escape hatch + prod-like cookie-secure guard ("0"/"1").
+  // Dev-login is refused outside an explicit non-prod profile (NODE_ENV /
+  // TANREN_ENV not production) — cookie-secure-off alone never enables it.
   TANREN_DEV_LOGIN: emptyToUndefined(boolFlagSchema.optional()),
   TANREN_COOKIE_SECURE: emptyToUndefined(boolFlagSchema.optional()),
+  // Profile markers used by the dev-login gate (fail-closed outside explicit dev).
+  NODE_ENV: emptyToUndefined(z.string().optional()),
+  TANREN_ENV: emptyToUndefined(z.string().optional()),
   // Internal control-plane mTLS listener port. Default 3110.
   TANREN_INTERNAL_MTLS_PORT: emptyToUndefined(portSchema.default(3110)),
   // Internal mTLS cert material paths — the listener starts only when all three
@@ -81,6 +86,44 @@ const envObjectSchema = z.object({
 });
 
 export type OrchestratorEnv = z.infer<typeof envObjectSchema>;
+
+/** Prod-like profile markers used by the dev-login refuse gate. */
+export function isProdProfile(source: { NODE_ENV?: string | undefined; TANREN_ENV?: string | undefined }): boolean {
+  if (source.NODE_ENV === "production") {
+    return true;
+  }
+  const profile = (source.TANREN_ENV ?? "").toLowerCase();
+  return profile === "prod" || profile === "production";
+}
+
+/**
+ * Explicit non-prod profile required for TANREN_DEV_LOGIN.
+ * Positive markers only — unset profile + cookie-secure-off never qualifies.
+ * COOKIE_SECURE=1 is an extra hard refuse.
+ *
+ * Accepted: NODE_ENV ∈ {development,dev,test} or TANREN_ENV ∈ {dev,development,test}.
+ */
+export function isExplicitDevProfile(source: {
+  NODE_ENV?: string | undefined;
+  TANREN_ENV?: string | undefined;
+  TANREN_COOKIE_SECURE?: string | undefined;
+}): boolean {
+  if (isProdProfile(source)) {
+    return false;
+  }
+  if (source.TANREN_COOKIE_SECURE === "1") {
+    return false;
+  }
+  const node = (source.NODE_ENV ?? "").toLowerCase();
+  if (node === "development" || node === "dev" || node === "test") {
+    return true;
+  }
+  const profile = (source.TANREN_ENV ?? "").toLowerCase();
+  if (profile === "dev" || profile === "development" || profile === "test") {
+    return true;
+  }
+  return false;
+}
 
 /** Parse `source` (defaults to process.env), throwing a LOUD aggregate on failure. */
 export function parseOrchestratorEnv(source: NodeJS.ProcessEnv = process.env): OrchestratorEnv {

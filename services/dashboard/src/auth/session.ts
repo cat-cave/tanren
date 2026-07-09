@@ -1,3 +1,6 @@
+import { resolveDevLoginEnabled } from "../envSchema.js";
+import { safeNextPath } from "./safeNext.js";
+
 export interface DashboardSession {
   userId: string;
   csrfToken: string;
@@ -33,18 +36,23 @@ export async function useSession(
 }
 
 /**
- * True when the DEV-ONLY sign-in escape hatch is enabled (TANREN_DEV_LOGIN=1).
- * Only ever set in compose.dev.yml; compose.prod.yml MUST never set it. When on,
- * the dashboard drives the orchestrator's `local_dev` provider so an operator can
- * land authenticated without a registered GitHub OAuth app.
+ * True when the DEV-ONLY sign-in escape hatch is enabled.
+ * Requires `TANREN_DEV_LOGIN=1` AND an explicit non-prod profile
+ * (`NODE_ENV`/`TANREN_ENV` not production, and not `TANREN_COOKIE_SECURE=1`).
+ * Cookie-secure-off alone never enables it. compose.prod.yml MUST never set
+ * the flag; when on, the dashboard drives the orchestrator's `local_dev`
+ * provider so an operator can land authenticated without a GitHub OAuth app.
  */
 export function devLoginEnabled(): boolean {
-  return process.env["TANREN_DEV_LOGIN"] === "1";
+  // Re-resolve from live process.env so tests/boot that flip the flag mid-process
+  // see the current value (mirrors orchestrator buildAuthFromEnv).
+  return resolveDevLoginEnabled(process.env);
 }
 
 export function loginUrl(orchestratorUrl: string, next: string = "/"): string {
   const provider = devLoginEnabled() ? "local_dev" : "github_oauth";
-  const params = new URLSearchParams({ provider, next });
+  const safeNext = safeNextPath(next);
+  const params = new URLSearchParams({ provider, next: safeNext });
   return `${orchestratorUrl}/auth/login?${params.toString()}`;
 }
 
@@ -129,9 +137,11 @@ export async function devLoginHandshake(
   next: string = "/",
   fetchImpl: typeof fetch = fetch,
 ): Promise<DevLoginHandshakeResult> {
+  // Open-redirect hardening: only ever return a same-origin relative path.
+  const safeNext = safeNextPath(next);
   // Step 1 — drive the orchestrator login. local_dev 302s straight to the callback
   // URL (carrying state+code) and sets the oauth-state cookie.
-  const loginParams = new URLSearchParams({ provider: "local_dev", next });
+  const loginParams = new URLSearchParams({ provider: "local_dev", next: safeNext });
   const loginResponse = await fetchImpl(`${orchestratorUrl}/auth/login?${loginParams.toString()}`, {
     redirect: "manual",
     headers: { Accept: "application/json" },
@@ -182,5 +192,5 @@ export async function devLoginHandshake(
     throw new DevLoginHandshakeError("callback step missing session cookie");
   }
 
-  return { sessionSetCookie, next };
+  return { sessionSetCookie, next: safeNext };
 }

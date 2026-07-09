@@ -69,6 +69,9 @@ services:
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:-}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:-}
       TANREN_PUBLIC_BASE_URL: ${TANREN_PUBLIC_BASE_URL:-http://localhost:3100}
+      # Explicit non-prod profile marker required for TANREN_DEV_LOGIN (the hatch
+      # refuses unset profiles — cookie-secure-off alone never enables it).
+      TANREN_ENV: dev
       # DEV-ONLY sign-in escape hatch (feat/dev-login-escape-hatch). OPT-IN via
       # host env, default OFF: when empty, buildAuthFromEnv returns undefined and
       # no auth middleware mounts (so the open smoke flow is unaffected). Set
@@ -289,6 +292,8 @@ services:
       DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       ORCHESTRATOR_URL: http://orchestrator:3100
       DASHBOARD_PORT: "3000"
+      # Explicit non-prod profile marker required for TANREN_DEV_LOGIN.
+      TANREN_ENV: dev
       # OPT-IN via host env, default OFF (keeps CI smoke open). Set to 1 to
       # exercise the auth gate so the sign-in flow is actually driven in dev.
       TANREN_REQUIRE_AUTH: ${TANREN_REQUIRE_AUTH:-}

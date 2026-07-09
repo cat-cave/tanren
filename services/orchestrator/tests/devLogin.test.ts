@@ -3,7 +3,9 @@
 //       /auth/login -> /auth/callback handshake mints a session and creates the
 //       synthetic dev org + admin user via the existing upsert path;
 //   (b) with the flag unset, local_dev is NOT registered (no behavior change);
-//   (c) the flag is refused under a prod-like (TANREN_COOKIE_SECURE=1) context.
+//   (c) the flag is refused under a prod-like profile (NODE_ENV=production,
+//       TANREN_ENV=prod, or TANREN_COOKIE_SECURE=1) — cookie-secure-off alone
+//       never enables it in a prod-marked process.
 // Deterministic: a fake identity pool, no real network, no DB.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +20,8 @@ const SAVED = {
   clientId: process.env.TANREN_GITHUB_OAUTH_CLIENT_ID,
   clientSecret: process.env.TANREN_GITHUB_OAUTH_CLIENT_SECRET,
   cookieSecure: process.env.TANREN_COOKIE_SECURE,
+  nodeEnv: process.env.NODE_ENV,
+  tanrenEnv: process.env.TANREN_ENV,
 };
 
 function restore(key: keyof typeof SAVED, envName: string): void {
@@ -34,6 +38,9 @@ beforeEach(() => {
   delete process.env.TANREN_GITHUB_OAUTH_CLIENT_ID;
   delete process.env.TANREN_GITHUB_OAUTH_CLIENT_SECRET;
   delete process.env.TANREN_COOKIE_SECURE;
+  delete process.env.TANREN_ENV;
+  // Keep vitest's NODE_ENV=test (explicit non-prod) rather than deleting it.
+  process.env.NODE_ENV = "test";
 });
 
 afterEach(() => {
@@ -41,6 +48,8 @@ afterEach(() => {
   restore("clientId", "TANREN_GITHUB_OAUTH_CLIENT_ID");
   restore("clientSecret", "TANREN_GITHUB_OAUTH_CLIENT_SECRET");
   restore("cookieSecure", "TANREN_COOKIE_SECURE");
+  restore("nodeEnv", "NODE_ENV");
+  restore("tanrenEnv", "TANREN_ENV");
 });
 
 describe("dev-login escape hatch (buildAuthFromEnv)", () => {
@@ -52,13 +61,24 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     expect(auth).toBeUndefined();
   });
 
-  it("registers local_dev only when TANREN_DEV_LOGIN=1", () => {
+  it("registers local_dev only when TANREN_DEV_LOGIN=1 and NODE_ENV is an explicit-dev marker", () => {
     process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "test";
     const pool = createFakeIdentityPool();
     const auth = buildAuthFromEnv(pool.asPgPool());
     expect(auth).toBeDefined();
     expect(auth?.providers.has("local_dev")).toBe(true);
     expect(auth?.providers.has("github_oauth")).toBe(false);
+  });
+
+  it("refuses the flag when profile markers are unset (cookie-secure-off alone is not enough)", () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    process.env.TANREN_COOKIE_SECURE = "0";
+    delete process.env.NODE_ENV;
+    delete process.env.TANREN_ENV;
+    const pool = createFakeIdentityPool();
+    const auth = buildAuthFromEnv(pool.asPgPool());
+    expect(auth).toBeUndefined();
   });
 
   it("refuses the flag under a prod-like TANREN_COOKIE_SECURE=1 context", () => {
@@ -67,6 +87,24 @@ describe("dev-login escape hatch (buildAuthFromEnv)", () => {
     const pool = createFakeIdentityPool();
     const auth = buildAuthFromEnv(pool.asPgPool());
     // No other providers => undefined; local_dev is not honored.
+    expect(auth).toBeUndefined();
+  });
+
+  it("refuses the flag under NODE_ENV=production even when cookie-secure is off", () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "production";
+    process.env.TANREN_COOKIE_SECURE = "0";
+    const pool = createFakeIdentityPool();
+    const auth = buildAuthFromEnv(pool.asPgPool());
+    expect(auth).toBeUndefined();
+  });
+
+  it("refuses the flag under TANREN_ENV=prod even when cookie-secure is off", () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    process.env.TANREN_ENV = "prod";
+    process.env.TANREN_COOKIE_SECURE = "0";
+    const pool = createFakeIdentityPool();
+    const auth = buildAuthFromEnv(pool.asPgPool());
     expect(auth).toBeUndefined();
   });
 

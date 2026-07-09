@@ -36,7 +36,7 @@ Three implementations ship:
 ## Browser flow
 
 1. Operator visits the dashboard.
-2. With `TANREN_REQUIRE_AUTH=1` set, the dashboard redirects to `/auth/login`, which 302s to the orchestrator's `/auth/login?provider=github_oauth`.
+2. With auth required (`TANREN_REQUIRE_AUTH=1`, or unset under a prod profile — `NODE_ENV=production` / `TANREN_ENV=prod|production`), the dashboard redirects to `/auth/login`, which 302s to the orchestrator's `/auth/login?provider=github_oauth`. The post-login `next` query is restricted to same-origin relative paths (`/`-prefixed, no `//`, no scheme).
 3. The orchestrator generates a random `state`, stores it in a short-lived cookie, and 302s to GitHub.
 4. GitHub returns to `/auth/callback?provider=github_oauth&code=...&state=...`.
 5. The orchestrator validates the state, exchanges the code, upserts the user and any orgs the user belongs to, creates a server-side session, and sets the `tanren_session` HTTP-only cookie. The JSON response includes the `csrfToken` the dashboard needs for state-changing calls.
@@ -51,17 +51,27 @@ For local UI testing you usually do **not** want to register a real GitHub OAuth
 - The dashboard serves a visible **`/signin`** page with a one-click "sign in (dev)" button. Unauthenticated requests (with `TANREN_REQUIRE_AUTH=1`) are redirected to `/signin` instead of straight to the orchestrator.
 - **Single-URL one-click flow (BFF proxy).** Because the dev stack runs the dashboard and orchestrator on different origins (the dashboard reaches the orchestrator at the docker-internal `http://orchestrator:3100`, which a browser cannot resolve), the dashboard does **not** redirect the browser cross-origin for dev-login. Instead, clicking "sign in (dev)" hits the dashboard's own `GET /auth/login`, which runs the entire `local_dev` login→callback handshake **server-side** against the internal `ORCHESTRATOR_URL`, then re-emits the minted `tanren_session` cookie on the dashboard's own (`localhost`) origin and `303`s the browser straight to `next`. The cookie is host-scoped to `localhost` (no `Domain`, not `Secure` in dev), so it is valid for every localhost port. Net effect: one click, no cross-origin hop, and you land authenticated at `next`. If the handshake fails, the dashboard bounces back to `/signin` with an error banner and never leaks the internal orchestrator URL. The `github_oauth` path is unchanged: real OAuth still redirects the browser to GitHub.
 
-**It is dev-only and opt-in.** The flag defaults **off**; with it unset, behavior is byte-for-byte unchanged (github_oauth only, and the open `just smoke` flow is unaffected because no auth middleware mounts). `compose.dev.yml` reads it from host env with an empty default (`${TANREN_DEV_LOGIN:-}` / `${TANREN_REQUIRE_AUTH:-}`), so you opt in by setting those vars; **`compose.prod.yml` never reads them**. As a defense-in-depth guard the orchestrator refuses the flag (logs a warning and ignores it) when `TANREN_COOKIE_SECURE=1` — i.e. under a prod-like context.
+**It is dev-only and opt-in.** The flag defaults **off**; with it unset, behavior is byte-for-byte unchanged (github_oauth only, and the open `just smoke` flow is unaffected because no auth middleware mounts). `compose.dev.yml` reads it from host env with an empty default (`${TANREN_DEV_LOGIN:-}` / `${TANREN_REQUIRE_AUTH:-}`), so you opt in by setting those vars; **`compose.prod.yml` never reads them**. Dev-login requires a **positive explicit-dev profile marker** (cookie-secure-off alone is never enough):
+
+| Condition                                                                                                                                           | Dev-login                             |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `TANREN_DEV_LOGIN` unset / `"0"`                                                                                                                    | off                                   |
+| `TANREN_DEV_LOGIN=1` + no profile marker (and/or only `TANREN_COOKIE_SECURE=0`)                                                                     | **refused**                           |
+| `TANREN_DEV_LOGIN=1` + `NODE_ENV` ∈ {`development`,`dev`,`test`} or `TANREN_ENV` ∈ {`dev`,`development`,`test`}, and `TANREN_COOKIE_SECURE` ≠ `"1"` | on                                    |
+| `TANREN_DEV_LOGIN=1` + `NODE_ENV=production` or `TANREN_ENV=prod\|production`                                                                       | **refused** (flag ignored, loud warn) |
+| `TANREN_DEV_LOGIN=1` + `TANREN_COOKIE_SECURE=1`                                                                                                     | **refused** (defense-in-depth)        |
+
+`compose.dev.yml` sets `TANREN_ENV=dev` on orchestrator + dashboard so opting in with `TANREN_DEV_LOGIN=1` works. `compose.prod.yml` sets `NODE_ENV=production` + `TANREN_ENV=production` on the dashboard so auth fail-closes even if a host env accidentally exports `TANREN_DEV_LOGIN=1`.
 
 **How to use it for manual UI testing:**
 
 1. Opt in by copying the example env (Docker Compose auto-reads `.env` in the repo root):
 
    ```sh
-   cp .env.example .env   # already sets TANREN_DEV_LOGIN=1 and TANREN_REQUIRE_AUTH=1
+   cp .env.example .env   # sets TANREN_ENV=dev, TANREN_DEV_LOGIN=1, TANREN_REQUIRE_AUTH=1
    ```
 
-   (Or, without a `.env` file: `export TANREN_DEV_LOGIN=1 TANREN_REQUIRE_AUTH=1` before `just up-dev`.)
+   (Or, without a `.env` file: `export TANREN_DEV_LOGIN=1 TANREN_REQUIRE_AUTH=1` before `just up-dev` — compose.dev already sets `TANREN_ENV=dev`.)
 
 2. `just up-dev`
 3. Open http://localhost:3000 — you are redirected to `/signin`. (If host `:3000` is already taken, set `DASHBOARD_HOST_PORT` in `.env` to remap the published port — e.g. `DASHBOARD_HOST_PORT=3003`, then open http://localhost:3003. The in-container port stays 3000.)

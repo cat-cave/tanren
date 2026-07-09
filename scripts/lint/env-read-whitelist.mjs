@@ -79,6 +79,7 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // ── the boot-time schemas (the intended home for env reads) ────────────────
   "services/orchestrator/src/envSchema.ts",
   "services/allocator/src/envSchema.ts",
+  "services/dashboard/src/envSchema.ts",
   // ── orchestrator boot / point-of-use config modules ────────────────────────
   // main.ts: migrations owner URL + the runner-identity key material seeder
   // (required-at-use, loud, file/key reads — not numeric/bool knobs).
@@ -118,10 +119,11 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // requireRunnerAuthorizedKey.ts: fail-closed authorized-key reader (extracted from runnerLifecycle).
   "services/allocator/src/requireRunnerAuthorizedKey.ts",
   // ── dashboard config ───────────────────────────────────────────────────────
-  // Dev-login flag + require-auth gate; onboarding's canonical-named URL
-  // fallbacks (preferred source is the orchestrator's /auth/providers).
-  "services/dashboard/src/auth/session.ts",
-  "services/dashboard/src/main.tsx",
+  // Boot knobs (ORCHESTRATOR_URL / REQUIRE_AUTH / DEV_LOGIN / port / profile)
+  // live in envSchema.ts above. session.ts re-resolves dev-login via
+  // resolveDevLoginEnabled(process.env) — that helper owns the read. Onboarding
+  // still carries canonical-named URL fallbacks (preferred source is the
+  // orchestrator's /auth/providers).
   "services/dashboard/src/routes/onboarding/index.tsx",
   "services/dashboard/src/routes/onboarding/existing/index.tsx",
   // ── cli config ─────────────────────────────────────────────────────────────

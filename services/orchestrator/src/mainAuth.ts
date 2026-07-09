@@ -2,8 +2,8 @@
  * mainAuth — assembles the orchestrator's identity providers from environment.
  * Extracted from main.ts to keep that file under the 500-line architecture cap.
  * Registers github_oauth / OIDC providers when their env is present, plus the
- * dev-only local_dev escape hatch (opt-in via TANREN_DEV_LOGIN=1, refused under
- * a prod-like cookie-secure context).
+ * dev-only local_dev escape hatch (opt-in via TANREN_DEV_LOGIN=1, refused
+ * outside an explicit non-prod profile — never solely because cookie-secure is off).
  */
 import type pg from "pg";
 import type { ActorContext, IdentityProviderId } from "./auth/index.js";
@@ -14,7 +14,7 @@ import {
   IdentityStore,
   type IdentityProvider,
 } from "./auth/index.js";
-import { parseOrchestratorEnv } from "./envSchema.js";
+import { isExplicitDevProfile, parseOrchestratorEnv } from "./envSchema.js";
 import { optionalSecretFromFileOrEnv } from "./engine/contracts/secretStoreFactory.js";
 import { createLogger } from "./engine/observability/logger.js";
 
@@ -71,15 +71,22 @@ export function buildAuthFromEnv(pool: pg.Pool, port?: number): BuildAppAuthOpti
   // registers a LocalDevProvider so `/auth/login?provider=local_dev` mints a
   // real session against the synthetic dev org, unblocking manual UI testing
   // without a registered GitHub OAuth app. Defaults off → byte-for-byte
-  // unchanged behavior. Refused (with a loud warning, flag ignored) under a
-  // prod-like cookie-secure context as a defense-in-depth guard.
+  // unchanged behavior. Refused outside an EXPLICIT non-prod profile:
+  //   - NODE_ENV=production or TANREN_ENV=prod|production → refuse
+  //   - TANREN_COOKIE_SECURE=1 → refuse (defense-in-depth)
+  // Cookie-secure-off alone never enables the hatch in a prod-like profile.
   if (env.TANREN_DEV_LOGIN === "1") {
-    if (env.TANREN_COOKIE_SECURE === "1") {
-      log.warn(
-        "TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch under TANREN_COOKIE_SECURE=1 (prod-like context)",
-      );
-    } else {
+    if (isExplicitDevProfile(env)) {
       providers.set("local_dev", createDevLoginProvider());
+    } else {
+      log.warn(
+        "TANREN_DEV_LOGIN=1 ignored: refusing dev-login escape hatch outside explicit dev profile (NODE_ENV/TANREN_ENV production or TANREN_COOKIE_SECURE=1)",
+        {
+          NODE_ENV: env.NODE_ENV,
+          TANREN_ENV: env.TANREN_ENV,
+          TANREN_COOKIE_SECURE: env.TANREN_COOKIE_SECURE,
+        },
+      );
     }
   }
   if (providers.size === 0) {

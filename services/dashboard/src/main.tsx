@@ -7,7 +7,8 @@ import { z } from "zod";
 import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
 import { mountScreens } from "./app/screens.js";
-import { devLoginEnabled, devLoginHandshake, loginUrl, useSession } from "./auth/index.js";
+import { devLoginEnabled, devLoginHandshake, loginUrl, safeNextPath, useSession } from "./auth/index.js";
+import { parseDashboardEnv } from "./envSchema.js";
 import { createLogger } from "./serverLogger.js";
 
 const log = createLogger("dashboard");
@@ -45,8 +46,11 @@ export interface CreateAppOptions {
 }
 
 export async function createApp(options: CreateAppOptions = {}) {
-  const orchestratorUrl = process.env["ORCHESTRATOR_URL"] ?? "http://localhost:3100";
-  const requireAuth = process.env["TANREN_REQUIRE_AUTH"] === "1";
+  // Boot-validated env (Zod, fail-loud — see envSchema.ts). Re-parsed per call so
+  // tests that flip process.env between cases see the live values.
+  const env = parseDashboardEnv();
+  const orchestratorUrl = env.ORCHESTRATOR_URL;
+  const requireAuth = env.requireAuth;
   const pool = options.pool ?? createDbPool();
   if (options.skipMigrate !== true) {
     await migrate(pool);
@@ -71,8 +75,9 @@ export async function createApp(options: CreateAppOptions = {}) {
   }
 
   // Auth gate. Public paths and static assets pass through; everything else
-  // requires a session when TANREN_REQUIRE_AUTH=1. Unauthenticated → orchestrator
-  // OAuth login with a `next` back to the requested path (lands into the shell).
+  // requires a session when requireAuth is on (explicit TANREN_REQUIRE_AUTH=1, or
+  // fail-closed default in a prod profile). Unauthenticated → orchestrator OAuth
+  // login with a safe same-origin `next` back to the requested path.
   app.use("*", async (c, next) => {
     if (PUBLIC_PATHS.has(c.req.path) || c.req.path.startsWith("/static/")) {
       return next();
@@ -82,13 +87,14 @@ export async function createApp(options: CreateAppOptions = {}) {
     }
     const session = await useSession(c.req.header("cookie"), { orchestratorUrl });
     if (session === undefined) {
+      const nextPath = safeNextPath(c.req.path);
       // DEV-ONLY: when the escape hatch is on, send unauthenticated operators to
       // a visible sign-in page with a one-click "sign in (dev)" button instead of
       // bouncing straight through. github_oauth behavior (flag off) is unchanged.
       if (devLoginEnabled()) {
-        return c.redirect(`/signin?next=${encodeURIComponent(c.req.path)}`);
+        return c.redirect(`/signin?next=${encodeURIComponent(nextPath)}`);
       }
-      return c.redirect(`/auth/login?next=${encodeURIComponent(c.req.path)}`);
+      return c.redirect(`/auth/login?next=${encodeURIComponent(nextPath)}`);
     }
     return next();
   });
@@ -101,7 +107,7 @@ export async function createApp(options: CreateAppOptions = {}) {
   // 303 the browser to the dashboard-relative `next`. The github_oauth path is left
   // untouched: real OAuth REQUIRES the browser to visit GitHub, so it still redirects.
   app.get("/auth/login", async (c) => {
-    const next = c.req.query("next") ?? "/";
+    const next = safeNextPath(c.req.query("next"));
     if (!devLoginEnabled()) {
       return c.redirect(loginUrl(orchestratorUrl, next));
     }
@@ -120,12 +126,12 @@ export async function createApp(options: CreateAppOptions = {}) {
 
   // DEV-ONLY sign-in landing: a visible one-click affordance that drives the
   // orchestrator's local_dev provider (through /auth/login). Only reachable when
-  // TANREN_DEV_LOGIN=1 — otherwise it 404s and operators use github_oauth.
+  // the explicit-dev-profile gate allows TANREN_DEV_LOGIN — otherwise 404.
   app.get("/signin", (c) => {
     if (!devLoginEnabled()) {
       return c.notFound();
     }
-    const next = c.req.query("next") ?? "/";
+    const next = safeNextPath(c.req.query("next"));
     const href = `/auth/login?next=${encodeURIComponent(next)}`;
     const hasError = c.req.query("error") !== undefined;
     return c.html(
@@ -241,8 +247,14 @@ export async function createApp(options: CreateAppOptions = {}) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const port = Number(process.env["DASHBOARD_PORT"] ?? 3000);
+  const bootEnv = parseDashboardEnv();
+  const port = bootEnv.DASHBOARD_PORT;
   const app = await createApp();
   serve({ fetch: app.fetch, port });
-  log.info("dashboard listening", { port });
+  log.info("dashboard listening", {
+    port,
+    requireAuth: bootEnv.requireAuth,
+    devLoginEnabled: bootEnv.devLoginEnabled,
+    isProdProfile: bootEnv.isProdProfile,
+  });
 }
