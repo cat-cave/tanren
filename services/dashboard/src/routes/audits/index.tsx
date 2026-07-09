@@ -21,6 +21,7 @@
 import type { Context, Hono } from "hono";
 import { AuditsClient } from "../../api/auditsClient.js";
 import type { AuditCadence, AuditKind, AuditsSnapshot } from "../../api/auditsTypes.js";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { CostRecord } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -32,11 +33,15 @@ const EMPTY: AuditsSnapshot = { jobs: [], recommended: [] };
 const VALID_KINDS = new Set<AuditKind>(["security", "deps", "a11y", "mutation", "perf", "license", "stale_specs"]);
 const VALID_CADENCES = new Set<AuditCadence>(["nightly", "weekly", "monthly"]);
 
-function auditsClient(c: Context, deps: ShellDeps): AuditsClient {
+function readAuditsClient(c: Context, deps: ShellDeps): AuditsClient {
   return new AuditsClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeAuditsClient(c: Context, deps: ShellDeps): Promise<AuditsClient> {
+  return new AuditsClient(await clientDepsFor(c, deps));
 }
 
 /** Gather subscription cost records across every visible project for the heatmap. */
@@ -79,10 +84,11 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
           windowColumns={[]}
           lowNames={[]}
           error="link an org to schedule audits."
+          csrfToken={ctx.csrfToken}
         />,
       );
     }
-    const snapshot = (await auditsClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
+    const snapshot = (await readAuditsClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
     const records = await gatherRecords(c, deps, ctx.org.id, ctx.projects);
     const matrix = buildHeatmap(records, { now: new Date() });
     const columns = windowFillColumns(matrix);
@@ -95,6 +101,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
         snapshot={snapshot}
         windowColumns={columns}
         lowNames={underfilledNames(columns)}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });
@@ -107,7 +114,9 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
       const cadence = str(form, "cadence") as AuditCadence;
       const name = str(form, "name") || (kind ? `${kind} audit` : "");
       if (VALID_KINDS.has(kind) && VALID_CADENCES.has(cadence) && name !== "") {
-        await auditsClient(c, deps).create(ctx.org.id, {
+        await (
+          await writeAuditsClient(c, deps)
+        ).create(ctx.org.id, {
           kind,
           name,
           cadence,
@@ -124,7 +133,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
     app.post(`/audits/:jobId/${verb}`, async (c) => {
       const ctx = await loadShellContext(c, deps, { activeNavId: "audits" });
       if (ctx.org !== undefined) {
-        await auditsClient(c, deps).setEnabled(ctx.org.id, c.req.param("jobId"), verb === "enable");
+        await (await writeAuditsClient(c, deps)).setEnabled(ctx.org.id, c.req.param("jobId"), verb === "enable");
       }
       return c.redirect("/audits");
     });
@@ -133,7 +142,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
   app.post("/audits/:jobId/run", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "audits" });
     if (ctx.org !== undefined) {
-      await auditsClient(c, deps).run(ctx.org.id, c.req.param("jobId"));
+      await (await writeAuditsClient(c, deps)).run(ctx.org.id, c.req.param("jobId"));
     }
     return c.redirect("/audits");
   });

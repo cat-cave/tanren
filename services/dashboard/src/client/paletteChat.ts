@@ -193,6 +193,56 @@ function buildProposalCard(orgId: string, proposal: ForgeProposal): HTMLElement 
   return node;
 }
 
+/**
+ * Read the session CSRF token the shell embeds (`meta[name=csrf-token]` or
+ * `body[data-csrf-token]`). Empty when unauthenticated / local-dev actor.
+ */
+export function readShellCsrfToken(doc?: Document): string {
+  const page = doc ?? (typeof document === "undefined" ? undefined : document);
+  if (page === undefined) return "";
+  const meta = page.querySelector('meta[name="csrf-token"]')?.getAttribute("content");
+  if (meta !== null && meta !== undefined && meta !== "") return meta;
+  return page.body?.dataset["csrfToken"] ?? "";
+}
+
+/**
+ * JSON write headers including x-csrf-token when a token is present.
+ * Pure: pass `token` (or leave default to read from the shell DOM).
+ */
+export function csrfWriteHeaders(token: string = readShellCsrfToken()): Record<string, string> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token !== "") headers["x-csrf-token"] = token;
+  return headers;
+}
+
+/**
+ * Ensure every POST form carries a hidden `csrf` field from the shell meta.
+ * Server-rendered forms should also embed `<CsrfField>` so pure HTML posts
+ * work without JS; this is the progressive-enhancement safety net for any
+ * form that missed a server field.
+ */
+export function injectFormCsrfFields(doc?: Document): void {
+  const page = doc ?? (typeof document === "undefined" ? undefined : document);
+  if (page === undefined) return;
+  const token = readShellCsrfToken(page);
+  if (token === "") return;
+  for (const form of page.querySelectorAll("form")) {
+    const method = (form.getAttribute("method") ?? "get").toLowerCase();
+    if (method !== "post") continue;
+    if (form.querySelector('input[name="csrf"], input[name="csrfToken"]') !== null) continue;
+    const input = page.createElement("input");
+    input.type = "hidden";
+    input.name = "csrf";
+    input.value = token;
+    form.append(input);
+  }
+}
+
+/** Operator-visible forge-tool failure body (palette never silent-closes on error). */
+export function forgeToolFailureMessage(status: number): string {
+  return `Tool failed${status > 0 ? ` (${status})` : ""} — try again.`;
+}
+
 // POSTs the decision to the dashboard proxy and resolves to the resulting
 // status string for the card. 409 (already decided) and 403 (denied) are
 // surfaced honestly so the operator sees the terminal state, never a re-run.
@@ -200,7 +250,7 @@ async function decideProposal(orgId: string, proposalId: string, decision: "appr
   try {
     const response = await fetch(`/forge/proposals/${decision}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: csrfWriteHeaders(),
       body: JSON.stringify({ orgId, proposalId }),
     });
     const body = (await response.json().catch(() => ({}))) as {
@@ -268,7 +318,7 @@ export async function askForge(
   try {
     const response = await fetch("/forge/ask", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: csrfWriteHeaders(),
       body: JSON.stringify(body),
     });
     if (!response.ok) return undefined;

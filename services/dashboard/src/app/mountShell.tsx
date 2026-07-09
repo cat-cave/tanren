@@ -61,10 +61,16 @@ export async function loadShellContext(
   deps: ShellDeps,
   args: LoadShellContextArgs = {},
 ): Promise<ShellContext> {
+  const cookieHeader = c.req.header("cookie");
   const client = new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie"),
+    cookieHeader,
   });
+  // Session CSRF is embedded in the shell so (1) client islands attach
+  // x-csrf-token on same-origin forge POSTs and (2) server-rendered forms can
+  // include a hidden csrf field. Inbound BFF verification compares that value
+  // before clientDepsFor mints outbound orchestrator CSRF.
+  const session = await client.session();
   const orgs = await client.listOrgs();
   const org: OrgSummary | undefined = orgs[0];
   const projects: ProjectSummary[] = org ? await client.listProjects(org.id) : [];
@@ -75,8 +81,9 @@ export async function loadShellContext(
     project,
     activeNavId: args.activeNavId,
     paletteGroups: buildPaletteGroups({ orgLogin: org?.login ?? "", projects }),
-    surface: surfaceFromCookie(c.req.header("cookie")),
+    surface: surfaceFromCookie(cookieHeader),
     operator: org?.login ?? "operator",
+    csrfToken: session?.csrfToken,
   };
 }
 

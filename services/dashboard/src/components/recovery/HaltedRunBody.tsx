@@ -14,6 +14,7 @@
  */
 
 import type { RunDetail } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { buildDownstreamImpact, buildFailureContext, type DownstreamImpact, type FailureContext } from "./model.js";
 import { RECOVERY_CSS } from "./recovery.css.js";
 
@@ -28,6 +29,8 @@ export interface HaltedRunBodyProps {
   projectHref: string;
   /** Back-to-run-detail link. */
   runHref: string;
+  /** Session CSRF for pure HTML form posts. */
+  csrfToken?: string;
 }
 
 function PageHead(props: { detail: RunDetail; ctx: FailureContext; runHref: string }) {
@@ -137,8 +140,8 @@ function RecoveryChat(props: { ctx: FailureContext }) {
   );
 }
 
-function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
-  const { actionBase, ctx } = props;
+function RecoveryCards(props: { actionBase: string; ctx: FailureContext; csrfToken: string | undefined }) {
+  const { actionBase, ctx, csrfToken } = props;
   const canRollback = ctx.lastGoodCommit !== null;
   return (
     <div class="recovery-rail">
@@ -154,6 +157,7 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
           form; on submit the planner is re-invoked with the revised spec.
         </div>
         <form class="card-actions" method="post" action={`${actionBase}/revise`}>
+          <CsrfField token={csrfToken} />
           <button class="btn primary" type="submit">
             open revision pane ↗
           </button>
@@ -169,6 +173,7 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
           wrong.
         </div>
         <form method="post" action={`${actionBase}/replan`}>
+          <CsrfField token={csrfToken} />
           <textarea
             name="steeringNote"
             required
@@ -198,6 +203,7 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
         </div>
         {canRollback ? (
           <form method="post" action={`${actionBase}/rollback`}>
+            <CsrfField token={csrfToken} />
             <div class="card-actions">
               <span class="commit-pick">
                 {ctx.lastGoodCommit} · {ctx.lastGoodAgo} · {ctx.lastGoodDetail}
@@ -233,6 +239,7 @@ function RecoveryCards(props: { actionBase: string; ctx: FailureContext }) {
           state.
         </div>
         <form class="card-actions" method="post" action={`${actionBase}/inspection-thread`}>
+          <CsrfField token={csrfToken} />
           <button class="btn ghost" style="color: var(--ember-08)" type="submit">
             open inspection thread ↗
           </button>
@@ -293,7 +300,7 @@ export function HaltedRunBody(props: HaltedRunBodyProps) {
         <FailureContextStrip ctx={ctx} impact={impact} />
         <div class="recovery-split">
           <RecoveryChat ctx={ctx} />
-          <RecoveryCards actionBase={props.actionBase} ctx={ctx} />
+          <RecoveryCards actionBase={props.actionBase} ctx={ctx} csrfToken={props.csrfToken} />
         </div>
         <DagImpactStrip impact={impact} specId={props.detail.run.specId} />
       </div>

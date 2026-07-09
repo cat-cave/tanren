@@ -9,6 +9,7 @@ import { initDagCanvas } from "./dagCanvas.js";
 import { initDiscovery } from "./discovery.js";
 import { initOrgSwitcher } from "./orgSwitcher.js";
 import { initPalette } from "./palette.js";
+import { injectFormCsrfFields } from "./paletteChat.js";
 import { initReviewHandoff } from "./reviewHandoff.js";
 import { initRunStream } from "./runStream.js";
 import { initTheme } from "./theme.js";
@@ -17,6 +18,9 @@ function boot(): void {
   initTheme();
   initOrgSwitcher();
   initPalette();
+  // Ensure POST forms carry the shell CSRF field (safety net if a form
+  // missed a server-rendered <CsrfField>).
+  injectFormCsrfFields();
   // run-detail + review islands (no-op when their markup is absent).
   initRunStream();
   initReviewHandoff();

@@ -152,6 +152,16 @@ describe("dashboard shell rendering", () => {
     expect(html).toContain('data-tool="tanren.create_spec"');
   });
 
+  it("embeds session CSRF for client islands (meta + body data attribute)", async () => {
+    mockOrchestrator();
+    const app = await build();
+    const html = await (await app.request("/projects")).text();
+    // Islands read meta[name=csrf-token] / body[data-csrf-token] for x-csrf-token.
+    expect(html).toContain('name="csrf-token"');
+    expect(html).toContain('content="c"');
+    expect(html).toContain('data-csrf-token="c"');
+  });
+
   it("renders the P3-0010 thick-Forge chat morph scaffold", async () => {
     mockOrchestrator();
     const app = await build();

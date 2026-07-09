@@ -74,6 +74,7 @@ let orgBudgetPayload: unknown = ORG_BUDGET;
 let failProjectRead = false;
 let failOrgRead = false;
 let lastPutBody: unknown;
+let lastPutHeaders: Record<string, string> | undefined;
 
 function mockOrchestrator(): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -92,6 +93,7 @@ function mockOrchestrator(): void {
     if (/\/projects\/[^/]+\/budget(\?|$)/u.test(url)) {
       if (method === "PUT") {
         lastPutBody = init?.body === undefined ? undefined : JSON.parse(String(init.body));
+        lastPutHeaders = (init?.headers ?? {}) as Record<string, string>;
         return new Response(JSON.stringify(projectBudgetPayload), { status: 200 });
       }
       if (failProjectRead) {
@@ -119,6 +121,7 @@ beforeEach(() => {
   failProjectRead = false;
   failOrgRead = false;
   lastPutBody = undefined;
+  lastPutHeaders = undefined;
   mockOrchestrator();
 });
 
@@ -293,6 +296,8 @@ describe("budget-halt panel (/budget)", () => {
     expect(res.headers.get("location")).toContain("ok=saved");
     expect(res.headers.get("location")).toContain("projectId=project_easy");
     expect(lastPutBody).toEqual({ ceilingUsd: 75, period: "quarterly" });
+    // Session CSRF from /auth/me must ride along for state-changing writes.
+    expect(lastPutHeaders?.["x-csrf-token"]).toBe("c");
   });
 
   it("POST clear proxies PUT with ceilingUsd null", async () => {

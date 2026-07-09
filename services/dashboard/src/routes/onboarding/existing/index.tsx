@@ -18,6 +18,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../../api/clientDeps.js";
 import { formField } from "../../formField.js";
 import { ExistingBrownfieldClient } from "../../../api/existingBrownfieldClient.js";
 import type { GovernancePosture, ReconReport } from "../../../api/existingBrownfieldTypes.js";
@@ -36,18 +37,21 @@ import { ExistingFullBody } from "../../../components/onboarding/existing/Existi
 const GITHUB_APP_URL_FALLBACK =
   process.env["TANREN_GITHUB_APP_INSTALL_URL"] ?? "https://github.com/apps/tanren/installations/new";
 
-function brownfieldClient(c: Context, deps: ShellDeps): ExistingBrownfieldClient {
-  return new ExistingBrownfieldClient({
-    orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie"),
-  });
-}
-
+/** Read-only product client (no CSRF — GETs only). */
 function orchestratorClient(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+/** Write clients always resolve session CSRF (local-dev actor omits it). */
+async function writeBrownfieldClient(c: Context, deps: ShellDeps): Promise<ExistingBrownfieldClient> {
+  return new ExistingBrownfieldClient(await clientDepsFor(c, deps));
+}
+
+async function writeOrchestratorClient(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
+  return new OrchestratorClient(await clientDepsFor(c, deps));
 }
 
 /** Prefer the orchestrator-published App install URL over the local env fallback. */
@@ -123,7 +127,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
     );
 
   if (orgId === undefined || repoUrl === "") return linkError("pick a repo first");
-  const product = orchestratorClient(c, deps);
+  const product = await writeOrchestratorClient(c, deps);
   const project = await product.createProject(orgId, {
     name,
     repoUrl,
@@ -137,7 +141,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
     return linkError(link.error ?? "link failed (is the repo reachable by the GitHub App?)");
   }
   // Kick off recon now so step 2 has the chapters.
-  const recon = await brownfieldClient(c, deps).recon(orgId, project.projectId, repoUrl);
+  const recon = await (await writeBrownfieldClient(c, deps)).recon(orgId, project.projectId, repoUrl);
   if (!recon.ok || recon.result === undefined) {
     // Recon failed — show the linked confirmation so the operator can retry.
     return linkError("linked, but recon could not read the repo — retry from the link step.", {
@@ -214,7 +218,9 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
     return baseStep3({ configInjectionError: "lost the recon report — restart from step 1." });
   }
   const excludePaths = ALL_PROPOSED_PATHS.filter((p) => !kept.includes(p));
-  const result = await brownfieldClient(c, deps).configInjection(orgId, projectId, {
+  const result = await (
+    await writeBrownfieldClient(c, deps)
+  ).configInjection(orgId, projectId, {
     repoUrl,
     baseBranch: "main",
     report,
@@ -249,7 +255,9 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       />,
     );
   }
-  const result = await brownfieldClient(c, deps).seedDag(orgId, projectId, {
+  const result = await (
+    await writeBrownfieldClient(c, deps)
+  ).seedDag(orgId, projectId, {
     repoUrl,
     report,
     includeIssues: true,
@@ -279,7 +287,7 @@ async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, 
   const projectId = projectIdFromForm(form, ctx);
   const saved =
     orgId !== undefined && projectId !== undefined
-      ? (await brownfieldClient(c, deps).governance(orgId, projectId, posture)).result
+      ? (await (await writeBrownfieldClient(c, deps)).governance(orgId, projectId, posture)).result
       : undefined;
   return render(
     c,

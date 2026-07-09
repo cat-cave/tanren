@@ -15,6 +15,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { formField } from "../formField.js";
 import { DiscoveryClient } from "../../api/discoveryClient.js";
 import type { DiscoveryInsight, PlacementKind, ProposedSpec } from "../../api/discoveryTypes.js";
@@ -22,11 +23,8 @@ import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountSh
 import { DiscoveryBody } from "../../components/discovery/DiscoveryBody.js";
 import { isVariant, SEED_INSIGHTS } from "../../components/discovery/seeds.js";
 
-function clientFor(c: Context, deps: ShellDeps): DiscoveryClient {
-  return new DiscoveryClient({
-    orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie"),
-  });
+async function writeClient(c: Context, deps: ShellDeps): Promise<DiscoveryClient> {
+  return new DiscoveryClient(await clientDepsFor(c, deps));
 }
 
 function resolveVariant(raw: string | undefined): DiscoveryInsight["variant"] {
@@ -119,7 +117,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       glyph: formField(form, "glyph", seed.glyph) || seed.glyph,
       body: formField(form, "body", seed.body).trim() || seed.body,
     };
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const { result } = await client.classify(ctx.org.id, projectId, insight);
     return renderShell(
       c,
@@ -169,7 +167,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       return reRender("could not read the accepted proposals — re-classify and try again.");
     }
 
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const { ok, result } = await client.accept(ctx.org.id, projectId, {
       insight,
       proposals,

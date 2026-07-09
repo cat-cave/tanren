@@ -10,24 +10,15 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { ShellDeps } from "../../app/mountShell.js";
 
 async function clientFor(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
-  const cookieHeader = c.req.header("cookie");
-  // Resolve session CSRF so orchestrator state-changing routes accept the
-  // cookie-forwarded BFF call (session writes require x-csrf-token).
-  const probe = new OrchestratorClient({
-    orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader,
-  });
-  const session = await probe.session();
-  return new OrchestratorClient({
-    orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader,
-    ...(session?.csrfToken !== undefined && session.csrfToken !== "" ? { csrfToken: session.csrfToken } : {}),
-  });
+  // Session CSRF from /auth/me so orchestrator state-changing routes accept the
+  // cookie-forwarded BFF call (local-dev actor omits token — no gate).
+  return new OrchestratorClient(await clientDepsFor(c, deps));
 }
 
 /** Resolve the operator's first org id (the onboarding scope). */

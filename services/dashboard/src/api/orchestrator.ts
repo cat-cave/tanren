@@ -133,17 +133,12 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
    * Invoke a Forge write tool (operator-button action) via
    * `POST /orgs/:orgId/forge/tools`. Returns the raw `{ tool, result }` body or
    * `undefined` on failure (the caller decides how to surface it).
+   * Goes through `sendJson` so session CSRF rides on the write.
    */
   async invokeForgeTool(orgId: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/forge/tools`, {
-      method: "POST",
-      headers: this.headers({ "content-type": "application/json" }),
-      body: JSON.stringify({ tool, args }),
-    }).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
-    return response.json();
+    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/forge/tools`, { tool, args });
+    if (!result.ok) return undefined;
+    return result.body;
   }
 
   // Product reads/writes below use shared getJson/sendJson; degrade empty on failure.

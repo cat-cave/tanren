@@ -14,6 +14,7 @@
  */
 
 import type { BudgetPeriod, OrgBudgetView, ProjectBudgetView } from "../../api/budget.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { budgetPeriodLabel, budgetUsd } from "./format.js";
 import { BUDGET_SCREEN_CSS } from "./styles.js";
 
@@ -30,6 +31,8 @@ export interface BudgetBodyProps {
   noProject: boolean;
   /** Flash after a form POST proxy (saved / cleared / error). */
   flash?: BudgetFlash;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 const PERIODS: BudgetPeriod[] = ["monthly", "quarterly", "annual", "total"];
@@ -110,12 +113,17 @@ function OrgDefaultLine(props: { orgBudget: OrgBudgetView | undefined }) {
   );
 }
 
-function ConfigForm(props: { projectBudget: ProjectBudgetView | undefined; projectId: string }) {
+function ConfigForm(props: {
+  projectBudget: ProjectBudgetView | undefined;
+  projectId: string;
+  csrfToken: string | undefined;
+}) {
   const b = props.projectBudget;
   const defaultCeiling = b?.ceilingUsd === null || b?.ceilingUsd === undefined ? "" : String(b.ceilingUsd);
   const defaultPeriod: BudgetPeriod = b?.period ?? "monthly";
   return (
     <form class="budget-form" method="post" action="/budget">
+      <CsrfField token={props.csrfToken} />
       <input type="hidden" name="projectId" value={props.projectId} />
       <div class="form-row">
         <div class="field">
@@ -173,7 +181,7 @@ function HaltBanner(props: { budget: ProjectBudgetView }) {
 }
 
 export function BudgetBody(props: BudgetBodyProps) {
-  const { projectBudget, orgBudget, projectId, projectName, noProject, flash } = props;
+  const { projectBudget, orgBudget, projectId, projectName, noProject, flash, csrfToken } = props;
   return (
     <>
       <style data-screen="budget" dangerouslySetInnerHTML={{ __html: BUDGET_SCREEN_CSS }} />
@@ -228,7 +236,7 @@ export function BudgetBody(props: BudgetBodyProps) {
                 <div class="panel-pad">
                   <div class="mini-eyebrow">configure project ceiling</div>
                   <OrgDefaultLine orgBudget={orgBudget} />
-                  <ConfigForm projectBudget={projectBudget} projectId={projectId} />
+                  <ConfigForm projectBudget={projectBudget} projectId={projectId} csrfToken={csrfToken} />
                 </div>
               </section>
             </>

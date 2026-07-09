@@ -152,6 +152,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         signOffHref={`${base}/review/sign-off`}
         settingsHref="/settings/routing"
         previewUrl={previewUrl}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });
