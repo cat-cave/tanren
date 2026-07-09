@@ -158,27 +158,35 @@ reference `VcsProvider` only in doc comments (they have their OWN grant-based
 type migration. The `sentryProvisioner`/`deployProvisioner` `resolveToken` is the
 _integration-grant_ resolver, NOT `VcsProvider.resolveToken` — do not conflate them.
 
-## 3. What's already in place (and what is not)
+## 3. What's in place (as-built — migration complete)
+
+> The bullets below were the pre-migration baseline when this plan was written.
+> **All migration steps landed** across the 9-PR series. Status banner at the top of
+> this doc is authoritative; this section is kept as the as-built inventory.
 
 - `CodeHost` (`codeHost.ts`) + `GitHubCodeHost` (`githubCodeHost.ts`) exist, conformance-
-  validated (`tests/conformance/codeHost*.ts`). The live `MergeAuthority` land ALREADY
-  uses the real `GitHubCodeHost` (`mergeAuthorityBundleBuild.ts:105` `codeHostFor`).
+  validated (`tests/conformance/codeHost*.ts`). Live land uses `GitHubCodeHost` via
+  `MergeAuthority`. Extra host reads absorbed during migration:
+  `compareRefs` (ancestry; severs `mergeable_state`), `readCommitAuthors`,
+  `readBranchChecks`.
 - `VisibilityProjection` + `GitHubVisibilityProjection` + `harden`/`SafeVisibilityProjection`
-  exist, conformance-validated. `reviewPolling.ts:368` ALREADY routes `submitReview`
-  through the hardened projection.
-- `buildProjectHostSeams` (`hostFactory.ts:53`) ALREADY builds the `{ codeHost, visibility }`
-  pair from the http client + a token supplier — but **no live path calls it yet** (it is
-  the wiring target for the migration).
-- The two **adapters** (`VcsProviderCodeHost`, `VcsProviderVisibilityProjection`) are
-  transitional bridges that back the seams with the OLD `VcsProvider`. They exist so
-  call sites that already hold a `VcsProvider`+token could route through the new seam
-  shape without re-plumbing. They are **scaffolding to delete** once callers construct
-  the real `GitHubCodeHost`/`GitHubVisibilityProjection` (or hold `ProjectHostSeams`).
+  exist, conformance-validated. Best-effort methods added per §4:
+  `openTrackingIssue?`, `markChangeRequestReady?`, plus external-approval reads.
+- `buildProjectHostSeams` (`hostFactory.ts`) builds `{ codeHost, visibility }` from the
+  http client + a token supplier — **live call sites** include greenfield repo
+  create/delete, post-merge watcher, review/draft PR paths, and merge dispatch.
+- The transitional adapters (`VcsProviderCodeHost`, `VcsProviderVisibilityProjection`),
+  the `VcsProvider` contract, `GitHubVcsProvider`, `buildVcsProvider`, and
+  `UnconfiguredVcsProvider` are **DELETED**. A `grep VcsProvider services/*/src` finds
+  only historical doc-comments.
+- Primitives rehomed off the God-interface: `resolveVcsToken` /
+  `resolveActorIdentity` (credentials), `parseGitHubRepository` /
+  `parseGitHubPullRequest` (`githubRepoRef.ts` / `codeHostTypes.ts`), SSH workspace
+  push stays a workspace helper (`pushWorkspaceBranchToGitHub` — §5c helper fork).
 
-So the seams + GitHub impls + conformance suites are DONE. The remaining work is:
-(1) add the few new best-effort methods (§4); (2) migrate the ~32 importers off
-`VcsProvider` onto the seams; (3) delete the contract + `GitHubVcsProvider` +
-`buildVcsProvider` + `UnconfiguredVcsProvider` + both adapters + the dead methods.
+So the seams + GitHub impls + conformance suites + importer migration + net-delete
+are **DONE**. The classification tables and PR sequence in §1–§6 below remain as the
+as-built design record (present-tense wording in those sections is historical).
 
 ## 4. New methods the target seams must absorb
 
@@ -319,13 +327,19 @@ Notes:
   shaped `VcsProvider` (→ an 8-method minimal `CodeHost`)" line is realized and should be
   marked landed.
 
-## 7. Open decisions for a maintainer (do not pre-choose)
+## 7. Open decisions (resolved as-built)
 
-1. §5c — `pushBranch`: new `CodeHost.pushWorkspaceRef` vs workspace-helper (rec: helper).
-2. §5d — `markReadyForReview`: keep as best-effort vs delete (rec: keep, non-gating).
-3. §5e — `readBranchChecks`: `CodeHost` host-read vs native post-merge gate (rec: host-read for now).
-4. §5f — `readReviewVerdict`: external-approval read vs internal-record-only (rec: two-step).
-5. §5g — `listContributors`: `CodeHost.readCommitAuthors` sha-range vs forge-PR-shaped (rec: sha-range).
-6. §5h — `readMergeability`/`updateBranch`: the freshness-coupling sever (rec: dedicated PR-7).
+The genuine forks from the design phase, resolved on `main`:
 
-These are the genuine forks; everything else in §1–§6 is mechanical once they are settled.
+1. §5c — `pushBranch`: **workspace-helper** (`pushWorkspaceBranchToGitHub`).
+2. §5d — `markReadyForReview`: **kept** as best-effort `VisibilityProjection.markChangeRequestReady?`.
+3. §5e — `readBranchChecks`: **`CodeHost.readBranchChecks`** (post-merge watcher host CI read).
+4. §5f — `readReviewVerdict`: external-approval read on the projection path (best-effort).
+5. §5g — `listContributors`: **`CodeHost.readCommitAuthors`** over a sha range.
+6. §5h — `readMergeability`/`updateBranch`: **severed** to `CodeHost.compareRefs` ancestry
+   (+ `fetchRef`); no host `mergeable_state` gate remains.
+
+Residual outside this decomposition (not VcsProvider work): the stacked-PR retarget walk
+(`resolveSpeculativeState` / `speculativeStackRetarget.ts`) still lives as the jj-local
+`ancestor_stack` base + PR-base retarget — possible rename off "speculative" vocabulary
+only. See `docs/architecture/tanren-owns-the-engine.md`.

@@ -20,9 +20,10 @@ format:
 lint:
   corepack pnpm run lint
 
-# Type-aware lint pass (eslint + @typescript-eslint). Slower than oxlint
-# because it loads type info; scoped to shipped src. Catches floating/misused
-# promises and awaited non-thenables that oxlint (AST-only) cannot.
+# Type-aware lint pass (oxlint --type-aware / oxlint-tsgolint). Slower than
+# AST-only oxlint because it loads type info; scoped to shipped src. Catches
+# floating/misused promises and awaited non-thenables that oxlint (AST-only)
+# cannot.
 types-lint:
   corepack pnpm run check:types-lint
 
