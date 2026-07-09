@@ -28,6 +28,19 @@ import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./co
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 
 /**
+ * apex v87: local both-or-neither settle (`PgMergeSettleTransaction`) opens
+ * `PgEventStore` on the worker pool — only legal when the writer declares
+ * `localMergeSettleCoTx` (Direct; pool can INSERT `events`). HttpRunStateWriter
+ * omits the flag; wiring the local settle would throw
+ * `permission denied for table events` on every dequeue (bisect / gate rework /
+ * needs_attention / infra escalate) and fail the coordinate pass every ~15s.
+ * Remote writers use sequential event-first through the writer-backed emitters.
+ */
+export function canCoTransactMergeSettle(writer: BuildMergeCoordinatorDeps["runStateWriter"]): boolean {
+  return writer.localMergeSettleCoTx === true;
+}
+
+/**
  * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
  * scope — the single config source of truth.
  *
@@ -54,18 +67,16 @@ export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Pro
 /** Assemble the production BatchMergeCoordinator (the native-queue driver). */
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   const queueModel = new PgMergeQueueModel(deps.pool);
+  // ATOMICITY (audit RC-4 #3) + plane-split (apex v87): co-transact event+queue UPDATE
+  // ONLY when the writer is Direct (local pool can INSERT events). HttpRunStateWriter
+  // omits `tx` → markDequeuedAfterEvent / markInfraBlockedAfterEvent use sequential
+  // event-first through the writer-backed emitters (control plane owns the INSERT).
+  const settleTx = canCoTransactMergeSettle(deps.runStateWriter)
+    ? new PgMergeSettleTransaction(deps.pool, queueModel)
+    : undefined;
   return new BatchMergeCoordinator({
     queue: queueModel,
-    // ATOMICITY (audit RC-4 #3): the both-or-neither dequeue settle transaction — the
-    // event append + the queue UPDATE share ONE org-scoped transaction so a crash
-    // between them can never split the bus from the row. Only meaningful for the
-    // in-process Direct writer (it can co-transact the event + UPDATE on the same
-    // local pool); the remote HTTP writer routes events through the control plane
-    // and cannot co-transact them locally, so it relies on the long-standing
-    // sequential event-first settle (split-brain guard preserved). The writer is
-    // now ALWAYS wired (audit D3/H3 sweep); detect the local/remote split by
-    // checking whether it IS the local pool's PgEventStore-equivalent (Direct).
-    tx: new PgMergeSettleTransaction(deps.pool, queueModel),
+    ...(settleTx !== undefined && { tx: settleTx }),
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
     // stage + the spec-status finalize + the conflict re-execution.
     runner: new PgMergeRunner(buildDriveMerge(deps)),

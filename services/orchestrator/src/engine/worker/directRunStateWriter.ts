@@ -89,6 +89,11 @@ import { applyRecordDraftPrCreated } from "../merge/draftPrCreatedAtomic.js";
  * identical to the worker's prior `withRunFinalizeScope`.
  */
 export class DirectRunStateWriter implements RunStateWriter {
+  /**
+   * apex v87: local pool can INSERT `events` — batch coordinator may co-transact
+   * dequeue settle with merge_queue UPDATEs (see `canCoTransactMergeSettle`).
+   */
+  readonly localMergeSettleCoTx = true as const;
   private readonly eventStore: PgEventStore;
   private readonly recorder: CostRecorder;
 

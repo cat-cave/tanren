@@ -449,9 +449,9 @@ export class PgMergeRunner implements MergeRunner {
  * "dequeued" while the row stayed `merging`. The event-first ordering inside `work` is
  * preserved by the caller (`markDequeuedAfterEvent`).
  *
- * Only wired in the in-process (non-plane-split) merge path: a plane-split data plane
- * cannot write `events` directly, so it cannot co-transact the append with the local
- * queue UPDATE; there the sequential event-first path runs (no `tx` provided).
+ * Wire ONLY when the pool can INSERT `events` (Direct / `canCoTransactMergeSettle`).
+ * Plane-split dataplane REVOKE INSERT on `events` makes co-tx throw 42501 on every
+ * coordinate dequeue (apex v87); omit `tx` for sequential event-first via the writer.
  */
 export class PgMergeSettleTransaction implements MergeSettleTransaction {
   constructor(
