@@ -7,7 +7,12 @@
 // covered by forgeProposalClient.test.ts). Unit-tested directly (no DOM).
 
 import { describe, expect, it } from "vitest";
-import { csrfWriteHeaders, forgeToolFailureMessage, routeForAction } from "../src/client/paletteChat.js";
+import {
+  csrfWriteHeaders,
+  forgeToolFailureMessage,
+  injectFormCsrfFields,
+  routeForAction,
+} from "../src/client/paletteChat.js";
 
 describe("routeForAction (Forge chat action cards)", () => {
   it("maps read_run to the run route (auto-navigate)", () => {
@@ -82,6 +87,51 @@ describe("csrfWriteHeaders (palette island)", () => {
     const headers = csrfWriteHeaders("");
     expect(headers["content-type"]).toBe("application/json");
     expect(headers["x-csrf-token"]).toBeUndefined();
+  });
+});
+
+describe("injectFormCsrfFields (progressive form enhancement)", () => {
+  it("injects hidden csrf into POST forms from shell meta", () => {
+    // Minimal DOM stub — enough for querySelector / createElement / appendChild.
+    const inputs: Array<{ name: string; value: string; type: string }> = [];
+    const form = {
+      getAttribute: (name: string) => (name === "method" ? "post" : null),
+      querySelector: () => null,
+      append: (el: { name: string; value: string; type: string }) => {
+        inputs.push(el);
+      },
+    };
+    const meta = { getAttribute: (n: string) => (n === "content" ? "meta-csrf" : null) };
+    const doc = {
+      querySelector: (sel: string) => (sel === 'meta[name="csrf-token"]' ? meta : null),
+      querySelectorAll: (sel: string) => (sel === "form" ? [form] : []),
+      createElement: () => ({ type: "", name: "", value: "" }),
+      body: { dataset: {} as Record<string, string> },
+    };
+    injectFormCsrfFields(doc as unknown as Document);
+    expect(inputs).toEqual([{ type: "hidden", name: "csrf", value: "meta-csrf" }]);
+  });
+
+  it("skips forms that already carry a csrf field", () => {
+    let appended = 0;
+    // querySelector non-null ⇒ form already has a csrf input.
+    const existingField = {};
+    const form = {
+      getAttribute: () => "post",
+      querySelector: () => existingField,
+      append: () => {
+        appended += 1;
+      },
+    };
+    const meta = { getAttribute: () => "meta-csrf" };
+    const doc = {
+      querySelector: (sel: string) => (sel === 'meta[name="csrf-token"]' ? meta : null),
+      querySelectorAll: () => [form],
+      createElement: () => ({ type: "", name: "", value: "" }),
+      body: { dataset: {} as Record<string, string> },
+    };
+    injectFormCsrfFields(doc as unknown as Document);
+    expect(appended).toBe(0);
   });
 });
 

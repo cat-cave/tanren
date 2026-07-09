@@ -8,7 +8,15 @@ import { clientDepsFor } from "./api/clientDeps.js";
 import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
 import { mountScreens } from "./app/screens.js";
-import { devLoginEnabled, devLoginHandshake, loginUrl, safeNextPath, useSession } from "./auth/index.js";
+import {
+  devLoginEnabled,
+  devLoginHandshake,
+  isStateChangingMethod,
+  loginUrl,
+  rejectIfInboundCsrfInvalid,
+  safeNextPath,
+  useSession,
+} from "./auth/index.js";
 import { parseDashboardEnv } from "./envSchema.js";
 import { createLogger } from "./serverLogger.js";
 
@@ -96,6 +104,24 @@ export async function createApp(options: CreateAppOptions = {}) {
         return c.redirect(`/signin?next=${encodeURIComponent(nextPath)}`);
       }
       return c.redirect(`/auth/login?next=${encodeURIComponent(nextPath)}`);
+    }
+    return next();
+  });
+
+  // Inbound CSRF for cookie-authenticated state-changing BFF writes. Must run
+  // before any route that mints outbound orchestrator CSRF via clientDepsFor —
+  // otherwise the dashboard is a CSRF-token minting proxy. Public paths skip
+  // (none are state-changing today). local-dev actor (no session cookie) skips.
+  app.use("*", async (c, next) => {
+    if (PUBLIC_PATHS.has(c.req.path) || c.req.path.startsWith("/static/")) {
+      return next();
+    }
+    if (!isStateChangingMethod(c.req.method)) {
+      return next();
+    }
+    const rejected = await rejectIfInboundCsrfInvalid(c, shellDeps);
+    if (rejected !== null) {
+      return rejected;
     }
     return next();
   });

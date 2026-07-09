@@ -96,6 +96,7 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
         actionBase={`${base}/recover`}
         projectHref={`/projects/${encodeURIComponent(loc.projectId)}`}
         runHref={base}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });

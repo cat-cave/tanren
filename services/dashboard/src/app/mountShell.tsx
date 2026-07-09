@@ -66,9 +66,10 @@ export async function loadShellContext(
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader,
   });
-  // Session CSRF is embedded in the shell so client islands can attach
-  // x-csrf-token on same-origin forge POSTs. Form BFF handlers resolve CSRF
-  // independently via clientDepsFor (prefer session over form token alone).
+  // Session CSRF is embedded in the shell so (1) client islands attach
+  // x-csrf-token on same-origin forge POSTs and (2) server-rendered forms can
+  // include a hidden csrf field. Inbound BFF verification compares that value
+  // before clientDepsFor mints outbound orchestrator CSRF.
   const session = await client.session();
   const orgs = await client.listOrgs();
   const org: OrgSummary | undefined = orgs[0];

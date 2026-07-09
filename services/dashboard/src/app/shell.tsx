@@ -34,10 +34,11 @@ export interface ShellContext {
   /** Operator handle for the avatar. */
   operator: string;
   /**
-   * Session CSRF for client islands (palette / forge POSTs). Empty when
-   * unauthenticated / local-dev actor (orchestrator skips the CSRF gate).
-   * Server-side form handlers read CSRF from the session via `clientDepsFor`,
-   * not from a form field alone.
+   * Session CSRF for client islands (palette / forge POSTs) and server-rendered
+   * form hidden fields. Empty when unauthenticated / local-dev actor
+   * (orchestrator + dashboard skip the CSRF gate). Cookie-authenticated writes
+   * must present this token inbound (`x-csrf-token` or form field `csrf`) before
+   * the BFF mints outbound orchestrator CSRF via `clientDepsFor`.
    */
   csrfToken: string | undefined;
 }

@@ -18,6 +18,7 @@
  */
 
 import type { RunDetail, RunEventRow } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { summarizeCosts, formatUsd, reviewMergeStateFromEvents, type ReviewMergeState } from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
@@ -50,6 +51,8 @@ export interface ReviewBodyProps {
    * configured / no PR exists yet — the preview pane renders its empty state.
    */
   previewUrl: string | null;
+  /** Session CSRF for pure HTML form posts. */
+  csrfToken?: string;
 }
 
 /** Human label + pill class for the derived review/merge phase. */
@@ -128,7 +131,13 @@ function repoFromUrl(url: string | null): string {
 // integration. The gesture posts to `signOffHref`; the orchestrator dispatches
 // to the configured integration (direct merge / native merge queue / external-
 // reviewer hand-off). `not_configured` has no merge path — only a settings link.
-function MergeActions(props: { mode: MergeIntegration; settingsHref: string; signOffHref: string; done: boolean }) {
+function MergeActions(props: {
+  mode: MergeIntegration;
+  settingsHref: string;
+  signOffHref: string;
+  done: boolean;
+  csrfToken: string | undefined;
+}) {
   if (props.mode === "not_configured") {
     return (
       <span class="merge-note">
@@ -147,6 +156,7 @@ function MergeActions(props: { mode: MergeIntegration; settingsHref: string; sig
         : "sign off · queue the merge";
   return (
     <form method="post" action={props.signOffHref} style="display:inline">
+      <CsrfField token={props.csrfToken} />
       <button class="btn primary notched" type="submit" data-review="signoff">
         {label}
       </button>
@@ -391,6 +401,7 @@ export function ReviewBody(props: ReviewBodyProps) {
           </span>
           <div class="grow">
             <form method="post" action={props.requestChangesHref} style="display:inline">
+              <CsrfField token={props.csrfToken} />
               <button class="btn danger" type="submit">
                 request changes ↗
               </button>
@@ -400,6 +411,7 @@ export function ReviewBody(props: ReviewBodyProps) {
               settingsHref={props.settingsHref}
               signOffHref={props.signOffHref}
               done={mergeDone}
+              csrfToken={props.csrfToken}
             />
           </div>
         </div>

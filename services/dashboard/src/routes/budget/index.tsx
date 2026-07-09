@@ -104,6 +104,7 @@ export function mountBudgetScreen(app: Hono, deps: ShellDeps): void {
         projectName={project?.name ?? ""}
         noProject={project === undefined}
         flash={flashFromQuery(c)}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });

@@ -14,6 +14,7 @@
  */
 
 import type { Candidate, InboxSnapshot, InboxSource, TriageVerdict } from "../../api/inboxTypes.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { KpiStrip, PageHead } from "../project/shared.js";
 import { InboxStyles } from "./inboxStyles.js";
@@ -82,17 +83,24 @@ function TriageReadout(props: { candidate: Candidate }) {
   );
 }
 
-function actionForm(orgId: string, candidateId: string, verb: string, children: unknown) {
+function actionForm(
+  orgId: string,
+  candidateId: string,
+  verb: string,
+  children: unknown,
+  csrfToken: string | undefined,
+) {
   return (
     <form method="post" action={`/inbox/candidates/${candidateId}/${verb}`} style="display:contents">
+      <CsrfField token={csrfToken} />
       <input type="hidden" name="orgId" value={orgId} />
       {children}
     </form>
   );
 }
 
-function CandidateActions(props: { orgId: string; candidate: Candidate }) {
-  const { candidate, orgId } = props;
+function CandidateActions(props: { orgId: string; candidate: Candidate; csrfToken: string | undefined }) {
+  const { candidate, orgId, csrfToken } = props;
   if (isResolved(candidate)) {
     const label = RESOLVED_LABEL[candidate.status] ?? candidate.status;
     return (
@@ -117,6 +125,7 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
           <button class="btn primary notched" style="font-size:11px" type="submit">
             close as done
           </button>,
+          csrfToken,
         )}
         {actionForm(
           orgId,
@@ -125,6 +134,7 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
           <button class="btn ghost" style="font-size:11px" type="submit">
             keep open
           </button>,
+          csrfToken,
         )}
       </div>
     );
@@ -143,6 +153,7 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
         <button class="btn" style="font-size:11px" type="submit" data-action="fold">
           fold into live run
         </button>,
+        csrfToken,
       )}
       {actionForm(
         orgId,
@@ -151,13 +162,14 @@ function CandidateActions(props: { orgId: string; candidate: Candidate }) {
         <button class="btn ghost" style="font-size:11px" type="submit" data-action="dismiss">
           dismiss
         </button>,
+        csrfToken,
       )}
     </div>
   );
 }
 
-function CandidateCard(props: { orgId: string; candidate: Candidate }) {
-  const { candidate, orgId } = props;
+function CandidateCard(props: { orgId: string; candidate: Candidate; csrfToken: string | undefined }) {
+  const { candidate, orgId, csrfToken } = props;
   const vm = VERDICT_META[candidate.triage?.verdict ?? "needs_call"];
   return (
     <div class={`candidate v-${vm.cls}${isResolved(candidate) ? " resolved" : ""}`} data-candidate-id={candidate.id}>
@@ -173,7 +185,7 @@ function CandidateCard(props: { orgId: string; candidate: Candidate }) {
       <div class="cand-title">{candidate.title}</div>
       {candidate.body !== "" && <div class="cand-body">{candidate.body.slice(0, 400)}</div>}
       <TriageReadout candidate={candidate} />
-      <CandidateActions orgId={orgId} candidate={candidate} />
+      <CandidateActions orgId={orgId} candidate={candidate} csrfToken={csrfToken} />
     </div>
   );
 }
@@ -182,10 +194,13 @@ export interface InboxBodyProps {
   orgId: string;
   snapshot: InboxSnapshot;
   error?: string;
+  /** Session CSRF for pure HTML form posts. */
+  csrfToken?: string;
 }
 
 export function InboxBody(props: InboxBodyProps) {
   const { sources, candidates } = props.snapshot;
+  const csrfToken = props.csrfToken;
   const enabledSources = sources.filter((s) => s.enabled);
   const counts = {
     auto: candidates.filter((c) => c.status === "auto_routed").length,
@@ -256,7 +271,7 @@ export function InboxBody(props: InboxBodyProps) {
               <div class="placeholder-card">No candidates yet — ingest a source to populate the inbox.</div>
             )}
             {candidates.map((candidate) => (
-              <CandidateCard orgId={props.orgId} candidate={candidate} />
+              <CandidateCard orgId={props.orgId} candidate={candidate} csrfToken={csrfToken} />
             ))}
           </div>
         </div>

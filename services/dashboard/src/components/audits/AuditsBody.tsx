@@ -14,6 +14,7 @@
  */
 
 import type { AuditJob, AuditsSnapshot, AuditKind } from "../../api/auditsTypes.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { PageHead, KpiStrip, relativeTime } from "../project/shared.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { AuditsStyles } from "./auditsStyles.js";
@@ -82,10 +83,11 @@ function WhyAudits(props: { columns: WindowFillColumn[]; lowNames: string[] }) {
   );
 }
 
-function toggleForm(jobId: string, enabled: boolean) {
+function toggleForm(jobId: string, enabled: boolean, csrfToken: string | undefined) {
   const verb = enabled ? "disable" : "enable";
   return (
     <form method="post" action={`/audits/${jobId}/${verb}`} style="display:contents">
+      <CsrfField token={csrfToken} />
       <button class={`btn ${enabled ? "" : "ghost"}`} style="font-size:10px" type="submit" data-action={verb}>
         {enabled ? "on" : "off"}
       </button>
@@ -93,8 +95,8 @@ function toggleForm(jobId: string, enabled: boolean) {
   );
 }
 
-function AuditRow(props: { job: AuditJob }) {
-  const { job } = props;
+function AuditRow(props: { job: AuditJob; csrfToken: string | undefined }) {
+  const { job, csrfToken } = props;
   const sev = job.enabled ? job.findings.severity : "off";
   const hasFinds = job.findings.count > 0;
   return (
@@ -122,17 +124,18 @@ function AuditRow(props: { job: AuditJob }) {
       <div class="alast">last · {relativeTime(job.lastRun)}</div>
       <div class="row-actions">
         <form method="post" action={`/audits/${job.id}/run`} style="display:contents">
+          <CsrfField token={csrfToken} />
           <button class="btn ghost" style="font-size:10px" type="submit" data-action="run">
             run now
           </button>
         </form>
-        {toggleForm(job.id, job.enabled)}
+        {toggleForm(job.id, job.enabled, csrfToken)}
       </div>
     </div>
   );
 }
 
-function Recommended(props: { snapshot: AuditsSnapshot; orgId: string }) {
+function Recommended(props: { snapshot: AuditsSnapshot; orgId: string; csrfToken: string | undefined }) {
   if (props.snapshot.recommended.length === 0) return <></>;
   return (
     <section class="panel" style="padding:14px 16px;gap:10px">
@@ -147,6 +150,7 @@ function Recommended(props: { snapshot: AuditsSnapshot; orgId: string }) {
             <div class="foot">
               <span class="win">{rec.window}</span>
               <form method="post" action="/audits" style="display:contents">
+                <CsrfField token={props.csrfToken} />
                 <input type="hidden" name="kind" value={rec.kind} />
                 <input type="hidden" name="name" value={rec.name} />
                 <input type="hidden" name="cadence" value={rec.cadence} />
@@ -163,11 +167,12 @@ function Recommended(props: { snapshot: AuditsSnapshot; orgId: string }) {
   );
 }
 
-function Composer() {
+function Composer(props: { csrfToken: string | undefined }) {
   return (
     <section class="panel" style="padding:14px 16px;gap:12px">
       <div class="sect-label">new scheduled audit</div>
       <form method="post" action="/audits" data-composer>
+        <CsrfField token={props.csrfToken} />
         <div class="audit-composer">
           <label class="field">
             <span class="label">kind</span>
@@ -218,10 +223,13 @@ export interface AuditsBodyProps {
   windowColumns: WindowFillColumn[];
   lowNames: string[];
   error?: string;
+  /** Session CSRF for pure HTML form posts. */
+  csrfToken?: string;
 }
 
 export function AuditsBody(props: AuditsBodyProps) {
   const { jobs } = props.snapshot;
+  const csrfToken = props.csrfToken;
   const active = jobs.filter((j) => j.enabled).length;
   const open = jobs.reduce((sum, j) => sum + (j.enabled ? j.findings.count : 0), 0);
   return (
@@ -274,7 +282,7 @@ export function AuditsBody(props: AuditsBodyProps) {
               </div>
             )}
             {jobs.map((job) => (
-              <AuditRow job={job} />
+              <AuditRow job={job} csrfToken={csrfToken} />
             ))}
           </div>
           <div class="audit-foot">
@@ -286,8 +294,8 @@ export function AuditsBody(props: AuditsBodyProps) {
           </div>
         </section>
 
-        <Recommended snapshot={props.snapshot} orgId={props.orgId} />
-        <Composer />
+        <Recommended snapshot={props.snapshot} orgId={props.orgId} csrfToken={csrfToken} />
+        <Composer csrfToken={csrfToken} />
       </div>
     </div>
   );

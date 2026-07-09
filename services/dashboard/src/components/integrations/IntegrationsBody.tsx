@@ -11,6 +11,7 @@
  */
 
 import { LINKABLE_PROVIDER_KINDS, PROJECT_CAPABILITIES, type OrgIntegrationSummary } from "../../api/integrations.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { capabilitiesLabel, isProviderLinked, providerLabel, statusLabel } from "./format.js";
 import { INTEGRATIONS_SCREEN_CSS } from "./styles.js";
 
@@ -32,10 +33,12 @@ export interface IntegrationsBodyProps {
    * 200 path, not an error. Rendered as a link-first affordance.
    */
   notLinked?: { providerKind: string; message?: string };
+  /** Session CSRF for pure HTML form posts. */
+  csrfToken?: string;
 }
 
 export function IntegrationsBody(props: IntegrationsBodyProps) {
-  const { integrations, projectId, projectName, noProject, isOrgAdmin, notice, notLinked } = props;
+  const { integrations, projectId, projectName, noProject, isOrgAdmin, notice, notLinked, csrfToken } = props;
   const unavailable = integrations === undefined;
   const grants = integrations ?? [];
 
@@ -85,6 +88,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
 
               {isOrgAdmin && !unavailable ? (
                 <form class="link-form" method="post" action="/integrations/link" data-link-form>
+                  <CsrfField token={csrfToken} />
                   <div class="field">
                     <label for="providerKind">provider</label>
                     <select id="providerKind" name="providerKind" required>
@@ -153,6 +157,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                         </span>
                         {linked ? (
                           <form method="post" action="/integrations/enable">
+                            <CsrfField token={csrfToken} />
                             <input type="hidden" name="projectId" value={projectId} />
                             <input type="hidden" name="capability" value={cap.capability} />
                             <input type="hidden" name="providerKind" value={cap.providerKind} />

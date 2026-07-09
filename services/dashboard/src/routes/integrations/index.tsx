@@ -75,6 +75,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
                 ...(notLinkedMessage === undefined || notLinkedMessage === "" ? {} : { message: notLinkedMessage }),
               }
         }
+        csrfToken={ctx.csrfToken}
       />,
     );
   });

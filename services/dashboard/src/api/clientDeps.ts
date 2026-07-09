@@ -1,13 +1,16 @@
 /**
- * Shared BFF client construction: cookie forward + session CSRF for writes.
+ * Shared BFF client construction: cookie forward + **outbound** session CSRF.
  *
  * Every dashboard→orchestrator state-changing call must send `x-csrf-token`
  * when `/auth/me` yields a session. local-dev actor mode (no session) omits the
  * token so the orchestrator CSRF gate is skipped — never invent a placeholder.
  *
- * Resolves CSRF via a probe `OrchestratorClient.session()` (same as the #822
- * onboarding path) rather than the cookie-gated `useSession` helper, so a mock
- * or actor that answers `/auth/me` without a browser cookie still works.
+ * Inbound browser→dashboard CSRF is enforced separately (`rejectIfInboundCsrfInvalid`
+ * middleware) so this helper never mints outbound CSRF for an unauthenticated
+ * cross-site form post. Resolves CSRF via a probe `OrchestratorClient.session()`
+ * (same as the #822 onboarding path) rather than the cookie-gated `useSession`
+ * helper, so a mock or actor that answers `/auth/me` without a browser cookie
+ * still works.
  */
 
 import type { Context } from "hono";

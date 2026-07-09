@@ -84,6 +84,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
           windowColumns={[]}
           lowNames={[]}
           error="link an org to schedule audits."
+          csrfToken={ctx.csrfToken}
         />,
       );
     }
@@ -100,6 +101,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
         snapshot={snapshot}
         windowColumns={columns}
         lowNames={underfilledNames(columns)}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });

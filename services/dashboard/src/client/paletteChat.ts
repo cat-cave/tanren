@@ -215,6 +215,29 @@ export function csrfWriteHeaders(token: string = readShellCsrfToken()): Record<s
   return headers;
 }
 
+/**
+ * Ensure every POST form carries a hidden `csrf` field from the shell meta.
+ * Server-rendered forms should also embed `<CsrfField>` so pure HTML posts
+ * work without JS; this is the progressive-enhancement safety net for any
+ * form that missed a server field.
+ */
+export function injectFormCsrfFields(doc?: Document): void {
+  const page = doc ?? (typeof document === "undefined" ? undefined : document);
+  if (page === undefined) return;
+  const token = readShellCsrfToken(page);
+  if (token === "") return;
+  for (const form of page.querySelectorAll("form")) {
+    const method = (form.getAttribute("method") ?? "get").toLowerCase();
+    if (method !== "post") continue;
+    if (form.querySelector('input[name="csrf"], input[name="csrfToken"]') !== null) continue;
+    const input = page.createElement("input");
+    input.type = "hidden";
+    input.name = "csrf";
+    input.value = token;
+    form.append(input);
+  }
+}
+
 /** Operator-visible forge-tool failure body (palette never silent-closes on error). */
 export function forgeToolFailureMessage(status: number): string {
   return `Tool failed${status > 0 ? ` (${status})` : ""} — try again.`;

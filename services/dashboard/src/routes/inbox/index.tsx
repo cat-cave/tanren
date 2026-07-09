@@ -44,7 +44,7 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
         c,
         ctx,
         { title: "tanren · candidate inbox" },
-        <InboxBody orgId="" snapshot={EMPTY} error="link an org to ingest issue sources." />,
+        <InboxBody orgId="" snapshot={EMPTY} error="link an org to ingest issue sources." csrfToken={ctx.csrfToken} />,
       );
     }
     const snapshot = (await readClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
@@ -52,7 +52,7 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: "tanren · candidate inbox" },
-      <InboxBody orgId={ctx.org.id} snapshot={snapshot} />,
+      <InboxBody orgId={ctx.org.id} snapshot={snapshot} csrfToken={ctx.csrfToken} />,
     );
   });
 
