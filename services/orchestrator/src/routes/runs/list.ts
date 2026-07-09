@@ -274,9 +274,10 @@ export async function fetchFeedPage(
 
 type CostQueryRow = Record<string, unknown>;
 
-function decodeCostRow(raw: CostQueryRow): RunCostRecord {
-  // Decode the cursor-key id + recorded_at timestamp at the boundary into a real
-  // Date (a malformed/missing timestamp throws here, never a laundered cast).
+export function decodeCostRow(raw: CostQueryRow): RunCostRecord {
+  // Decode id, recorded_at, billing_mode, cost_basis, and token counts at the
+  // boundary (a malformed enum / missing timestamp throws here — never a
+  // laundered `as` cast). Text identity columns still go through scalarText.
   const decoded = RawCostRowSchema.parse(raw);
   return RunCostRecord.parse({
     id: decoded.id,
@@ -286,15 +287,15 @@ function decodeCostRow(raw: CostQueryRow): RunCostRecord {
     cli: scalarText(raw["cli"]),
     provider: scalarText(raw["provider"]),
     model: scalarText(raw["model"]),
-    inputTokens: Number(raw["input_tokens"] ?? 0),
-    cachedInputTokens: Number(raw["cached_input_tokens"] ?? 0),
-    cacheCreationTokens: Number(raw["cache_creation_tokens"] ?? 0),
-    outputTokens: Number(raw["output_tokens"] ?? 0),
-    reasoningOutputTokens: Number(raw["reasoning_output_tokens"] ?? 0),
-    totalTokens: Number(raw["total_tokens"] ?? 0),
+    inputTokens: decoded.input_tokens,
+    cachedInputTokens: decoded.cached_input_tokens,
+    cacheCreationTokens: decoded.cache_creation_tokens,
+    outputTokens: decoded.output_tokens,
+    reasoningOutputTokens: decoded.reasoning_output_tokens,
+    totalTokens: decoded.total_tokens,
     costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : scalarText(raw["cost_usd"]),
-    billingMode: raw["billing_mode"] as RunCostRecord["billingMode"],
-    costBasis: raw["cost_basis"] as RunCostRecord["costBasis"],
+    billingMode: decoded.billing_mode,
+    costBasis: decoded.cost_basis,
     recordedAt: decoded.recorded_at,
   });
 }

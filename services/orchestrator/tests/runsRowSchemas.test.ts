@@ -89,14 +89,55 @@ describe("run-detail pg-row schemas (RC-6 trust-at-boundary)", () => {
   });
 
   describe("RawCostRowSchema", () => {
-    it("decodes recorded_at to a real Date", () => {
-      const decoded = RawCostRowSchema.parse({ id: 7, recorded_at: "2026-01-01T00:00:00.000Z" });
+    const baseCost = {
+      id: 7,
+      recorded_at: "2026-01-01T00:00:00.000Z",
+      billing_mode: "per_token" as const,
+      cost_basis: "provider_response" as const,
+      input_tokens: 0,
+      cached_input_tokens: 0,
+      cache_creation_tokens: 0,
+      output_tokens: 0,
+      reasoning_output_tokens: 0,
+      total_tokens: 0,
+    };
+
+    it("decodes recorded_at, enums, and token counts at the boundary", () => {
+      const decoded = RawCostRowSchema.parse({
+        ...baseCost,
+        input_tokens: "12",
+        total_tokens: 12,
+      });
       expect(decoded.recorded_at).toBeInstanceOf(Date);
       expect(decoded.id).toBe(7);
+      expect(decoded.billing_mode).toBe("per_token");
+      expect(decoded.cost_basis).toBe("provider_response");
+      expect(decoded.input_tokens).toBe(12);
+      expect(decoded.total_tokens).toBe(12);
+      expect(decoded.output_tokens).toBe(0);
+    });
+
+    it("accepts unattributed billing_mode and cost_basis", () => {
+      const decoded = RawCostRowSchema.parse({
+        ...baseCost,
+        billing_mode: "unattributed",
+        cost_basis: "unattributed",
+      });
+      expect(decoded.billing_mode).toBe("unattributed");
+      expect(decoded.cost_basis).toBe("unattributed");
     });
 
     it("THROWS on a malformed recorded_at", () => {
-      expect(() => RawCostRowSchema.parse({ id: 1, recorded_at: "" })).toThrow(/invalid_/u);
+      expect(() => RawCostRowSchema.parse({ ...baseCost, id: 1, recorded_at: "" })).toThrow(/invalid_/u);
+    });
+
+    it("THROWS on an unknown billing_mode", () => {
+      expect(() => RawCostRowSchema.parse({ ...baseCost, billing_mode: "metered" })).toThrow(/invalid_/u);
+    });
+
+    it("THROWS when a required token column is missing", () => {
+      const { total_tokens: _drop, ...withoutTotal } = baseCost;
+      expect(() => RawCostRowSchema.parse(withoutTotal)).toThrow(/invalid_/u);
     });
   });
 });
