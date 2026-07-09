@@ -17,6 +17,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { InboxClient } from "../../api/inboxClient.js";
 import type { InboxSnapshot } from "../../api/inboxTypes.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -24,11 +25,15 @@ import { InboxBody } from "../../components/inbox/InboxBody.js";
 
 const EMPTY: InboxSnapshot = { sources: [], candidates: [] };
 
-function clientFor(c: Context, deps: ShellDeps): InboxClient {
+function readClient(c: Context, deps: ShellDeps): InboxClient {
   return new InboxClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeClient(c: Context, deps: ShellDeps): Promise<InboxClient> {
+  return new InboxClient(await clientDepsFor(c, deps));
 }
 
 export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
@@ -42,7 +47,7 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
         <InboxBody orgId="" snapshot={EMPTY} error="link an org to ingest issue sources." />,
       );
     }
-    const snapshot = (await clientFor(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
+    const snapshot = (await readClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
     return renderShell(
       c,
       ctx,
@@ -55,7 +60,7 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
     app.post(`/inbox/candidates/:id/${verb}`, async (c) => {
       const ctx = await loadShellContext(c, deps, { activeNavId: "inbox" });
       if (ctx.org !== undefined) {
-        await clientFor(c, deps).resolve(ctx.org.id, c.req.param("id"), verb);
+        await (await writeClient(c, deps)).resolve(ctx.org.id, c.req.param("id"), verb);
       }
       return c.redirect("/inbox");
     });

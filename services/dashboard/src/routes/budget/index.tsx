@@ -16,6 +16,7 @@
 import type { Context, Hono } from "hono";
 import { BudgetClient } from "../../api/budgetClient.js";
 import type { BudgetPeriod, OrgBudgetView, ProjectBudgetView } from "../../api/budget.js";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import type { ProjectSummary } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { BudgetBody, type BudgetFlash } from "../../components/budget/BudgetBody.js";
@@ -23,11 +24,15 @@ import { formField } from "../formField.js";
 
 const PERIODS = new Set<BudgetPeriod>(["monthly", "quarterly", "annual", "total"]);
 
-function clientFor(c: Context, deps: ShellDeps): BudgetClient {
+function readClient(c: Context, deps: ShellDeps): BudgetClient {
   return new BudgetClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeClient(c: Context, deps: ShellDeps): Promise<BudgetClient> {
+  return new BudgetClient(await clientDepsFor(c, deps));
 }
 
 function parsePeriod(raw: string): BudgetPeriod | undefined {
@@ -77,7 +82,7 @@ export function mountBudgetScreen(app: Hono, deps: ShellDeps): void {
     let projectBudget: ProjectBudgetView | undefined;
     let orgBudget: OrgBudgetView | undefined;
     if (ctx.org !== undefined) {
-      const client = clientFor(c, deps);
+      const client = readClient(c, deps);
       if (project === undefined) {
         orgBudget = await client.getOrgBudget(ctx.org.id);
       } else {
@@ -122,7 +127,7 @@ export function mountBudgetScreen(app: Hono, deps: ShellDeps): void {
     }
 
     const action = formField(form, "action", "save");
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const pid = project.projectId;
 
     if (action === "clear") {

@@ -21,6 +21,7 @@
 
 import { RECOVERABLE_OUTCOMES_LIST } from "@tanren/db";
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import { isRecoverableRun, type RecoveryActionResult, type RunLocation } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -140,7 +141,8 @@ type ActionCall = (client: OrchestratorClient, loc: RunLocation, runId: string) 
 
 async function handleAction(c: Context, deps: ShellDeps, action: string, call: ActionCall): Promise<Response> {
   const runId = c.req.param("runId") ?? "";
-  const client = clientFor(c, deps);
+  // Recovery POSTs are state-changing — carry session CSRF to the orchestrator.
+  const client = await writeClient(c, deps);
   const loc = await client.findRunLocation(runId);
   if (loc === undefined) {
     return renderNotFound(c, deps, runId);
@@ -197,6 +199,10 @@ function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeClient(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
+  return new OrchestratorClient(await clientDepsFor(c, deps));
 }
 
 function renderNotFound(c: Context, deps: ShellDeps, runId: string) {

@@ -21,16 +21,21 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../../api/clientDeps.js";
 import { formField } from "../../formField.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../../app/mountShell.js";
 import { SpecListBody } from "../../../components/project/SpecCreateBody.js";
 
-function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
+function readClient(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeClient(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
+  return new OrchestratorClient(await clientDepsFor(c, deps));
 }
 
 /** Map a failed trigger response to an operator-facing message. */
@@ -66,7 +71,7 @@ export function mountTriggerScreens(app: Hono, deps: ShellDeps): void {
 
     const form = await c.req.parseBody();
     const branchRaw = formField(form, "branch").trim();
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const result = await client.triggerRun(ctx.org.id, projectId, specId, {
       trigger: "dashboard",
       ...(branchRaw === "" ? {} : { branch: branchRaw }),
@@ -110,7 +115,7 @@ async function renderSpecListWithError(
       </div>,
     );
   }
-  const client = clientFor(c, deps);
+  const client = readClient(c, deps);
   const [specs, runs] = await Promise.all([
     client.listSpecs(ctx.org.id, projectId),
     client.listRuns(ctx.org.id, projectId),

@@ -42,6 +42,19 @@ function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
   });
 }
 
+/** Session CSRF for writes — inlined to stay under max-dependencies (import cap). */
+async function writeClient(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
+  const cookieHeader = c.req.header("cookie");
+  const probe = new OrchestratorClient({ orchestratorUrl: deps.orchestratorUrl, cookieHeader });
+  const session = await probe.session();
+  const csrfToken = session?.csrfToken;
+  return new OrchestratorClient({
+    orchestratorUrl: deps.orchestratorUrl,
+    cookieHeader,
+    ...(csrfToken !== undefined && csrfToken !== "" ? { csrfToken } : {}),
+  });
+}
+
 function asArray(value: string | string[] | undefined): string[] {
   if (value === undefined) return [];
   return (Array.isArray(value) ? value : [value]).map((v) => v.trim()).filter((v) => v.length > 0);
@@ -75,7 +88,8 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       );
     }
     const orgId = ctx.org.id;
-    const client = clientFor(c, deps);
+    // Narration creates forge threads/turns (POST) — needs session CSRF.
+    const client = await writeClient(c, deps);
     const mode = resolveProjectMode(c);
     const [runs, insights, milestones, feed, narration] = await Promise.all([
       client.listRuns(orgId, projectId),
@@ -188,7 +202,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     const dependsOn = asArray(form["dependsOn"] as string | string[] | undefined);
     const milestoneId = formField(form, "milestoneId");
 
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const reRender = (error: string) =>
       renderForm(c, ctx, deps, projectId, error, {
         title,
@@ -238,11 +252,15 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     } catch {
       args = {};
     }
-    if (orgId !== "" && tool !== "") {
-      const client = clientFor(c, deps);
-      await client.invokeForgeTool(orgId, tool, args);
+    if (orgId === "" || tool === "") {
+      return c.redirect(`/projects/${projectId}?insightErr=missing`);
     }
-    return c.redirect(`/projects/${projectId}`);
+    const client = await writeClient(c, deps);
+    const result = await client.invokeForgeTool(orgId, tool, args);
+    if (result === undefined) {
+      return c.redirect(`/projects/${projectId}?insightErr=tool_failed`);
+    }
+    return c.redirect(`/projects/${projectId}?insightOk=1`);
   });
 
   // Routing & limits settings screens (+ their config-mutation POSTs) live in
@@ -420,7 +438,7 @@ async function mutateConfig(
   edit: (config: ProjectConfig) => void,
 ): Promise<void> {
   if (orgId === "") return;
-  const client = clientFor(c, deps);
+  const client = await writeClient(c, deps);
   const detail = await client.getProject(orgId, projectId);
   const resolved = resolveConfig(detail?.config);
   const working: ProjectConfig = {

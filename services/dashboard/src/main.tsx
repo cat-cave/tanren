@@ -4,6 +4,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { createDbPool, migrate } from "@tanren/db";
 import { Hono } from "hono";
 import { z } from "zod";
+import { clientDepsFor } from "./api/clientDeps.js";
 import { OrchestratorClient } from "./api/orchestrator.js";
 import { mountShell, type ShellDeps } from "./app/mountShell.js";
 import { mountScreens } from "./app/screens.js";
@@ -174,10 +175,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (!parsed.success) {
       return c.json({ error: "invalid_tool_call", issues: parsed.error.issues }, 400);
     }
-    const client = new OrchestratorClient({
-      orchestratorUrl,
-      cookieHeader: c.req.header("cookie"),
-    });
+    const client = new OrchestratorClient(await clientDepsFor(c, shellDeps));
     const result = await client.invokeForgeTool(parsed.data.orgId, parsed.data.tool, parsed.data.args);
     if (result === undefined) {
       return c.json({ error: "tool_invocation_failed" }, 502);
@@ -193,10 +191,7 @@ export async function createApp(options: CreateAppOptions = {}) {
     if (!parsed.success) {
       return c.json({ error: "invalid_ask", issues: parsed.error.issues }, 400);
     }
-    const client = new OrchestratorClient({
-      orchestratorUrl,
-      cookieHeader: c.req.header("cookie"),
-    });
+    const client = new OrchestratorClient(await clientDepsFor(c, shellDeps));
     const result = await client.askForge(
       parsed.data.orgId,
       parsed.data.question,
@@ -219,7 +214,7 @@ export async function createApp(options: CreateAppOptions = {}) {
       if (!parsed.success) {
         return c.json({ error: "invalid_decision", issues: parsed.error.issues }, 400);
       }
-      const client = new OrchestratorClient({ orchestratorUrl, cookieHeader: c.req.header("cookie") });
+      const client = new OrchestratorClient(await clientDepsFor(c, shellDeps));
       const result = await client.decideForgeProposal(parsed.data.orgId, parsed.data.proposalId, decision);
       const httpStatus =
         result.outcome === "decided"

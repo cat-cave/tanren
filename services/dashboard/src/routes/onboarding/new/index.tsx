@@ -25,6 +25,7 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../../api/clientDeps.js";
 import { formField } from "../../formField.js";
 import { OnboardingNewClient } from "../../../api/onboardingNewClient.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
@@ -34,11 +35,9 @@ import { loadShellContext, renderShell, type ShellDeps } from "../../../app/moun
 import type { ShellContext } from "../../../app/shell.js";
 import { GreenfieldBody } from "../../../components/onboarding/new/GreenfieldBody.js";
 
-function newClient(c: Context, deps: ShellDeps): OnboardingNewClient {
-  return new OnboardingNewClient({
-    orchestratorUrl: deps.orchestratorUrl,
-    cookieHeader: c.req.header("cookie"),
-  });
+/** Interview/derive POSTs always carry session CSRF when present. */
+async function writeNewClient(c: Context, deps: ShellDeps): Promise<OnboardingNewClient> {
+  return new OnboardingNewClient(await clientDepsFor(c, deps));
 }
 
 function orchestratorClient(c: Context, deps: ShellDeps): OrchestratorClient {
@@ -87,8 +86,10 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
     if (step >= 2 && projectId !== undefined && projectId !== "") {
       return renderDerivedStep(c, ctx, deps, step >= 3 ? 3 : 2, projectId);
     }
-    // Fresh round 1.
-    const { result } = await newClient(c, deps).round(ctx.org.id, {
+    // Fresh round 1 (orchestrator interview is a POST — carry CSRF).
+    const { result } = await (
+      await writeNewClient(c, deps)
+    ).round(ctx.org.id, {
       round: 1,
       answer: "",
       capture: emptyCapture(),
@@ -148,7 +149,7 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
   const round = Number.parseInt(formField(form, "round", "1"), 10) || 1;
   const answer = formField(form, "answer");
   const capture = parseCapture(form["capture"]);
-  const { result } = await newClient(c, deps).round(orgId, { round, answer, capture });
+  const { result } = await (await writeNewClient(c, deps)).round(orgId, { round, answer, capture });
   return renderShell(
     c,
     ctx,
@@ -171,7 +172,7 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
 
 async function handleDerive(c: Context, ctx: ShellContext, deps: ShellDeps, capture: InterviewCapture) {
   const orgId = ctx.org!.id;
-  const { ok, result } = await newClient(c, deps).derive(orgId, { capture });
+  const { ok, result } = await (await writeNewClient(c, deps)).derive(orgId, { capture });
   if (!ok || result === undefined) {
     // Re-render step 1's completed state so the operator can retry the derive.
     return renderShell(

@@ -10,17 +10,22 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { IntegrationsClient } from "../../api/integrationsClient.js";
 import type { OrgIntegrationSummary } from "../../api/integrations.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { IntegrationsBody } from "../../components/integrations/IntegrationsBody.js";
 import { formField } from "../formField.js";
 
-function clientFor(c: Context, deps: ShellDeps): IntegrationsClient {
+function readClient(c: Context, deps: ShellDeps): IntegrationsClient {
   return new IntegrationsClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeClient(c: Context, deps: ShellDeps): Promise<IntegrationsClient> {
+  return new IntegrationsClient(await clientDepsFor(c, deps));
 }
 
 function redirectTo(c: Context, path: string, notice?: string): Response {
@@ -44,7 +49,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
 
     let integrations: OrgIntegrationSummary[] | undefined;
     if (ctx.org !== undefined) {
-      const client = clientFor(c, deps);
+      const client = readClient(c, deps);
       const list = await client.list(ctx.org.id);
       // undefined list → read failure (unavailable). Present empty array only
       // when the orchestrator explicitly returned { integrations: [] }.
@@ -87,7 +92,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     if (providerKind === "" || token === "") {
       return redirectTo(c, "/integrations", "missing provider or token");
     }
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const result = await client.link(orgId, providerKind, { token });
     if (result.status === 403) {
       return redirectTo(c, "/integrations", "org admin required to link");
@@ -112,7 +117,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     if (projectId === "" || capability === "") {
       return redirectTo(c, "/integrations", "missing project or capability");
     }
-    const client = clientFor(c, deps);
+    const client = await writeClient(c, deps);
     const result = await client.provision(orgId, projectId, {
       capability,
       ...(providerKind === "" ? {} : { providerKind }),

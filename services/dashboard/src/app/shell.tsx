@@ -33,6 +33,13 @@ export interface ShellContext {
   surface: Surface;
   /** Operator handle for the avatar. */
   operator: string;
+  /**
+   * Session CSRF for client islands (palette / forge POSTs). Empty when
+   * unauthenticated / local-dev actor (orchestrator skips the CSRF gate).
+   * Server-side form handlers read CSRF from the session via `clientDepsFor`,
+   * not from a form field alone.
+   */
+  csrfToken: string | undefined;
 }
 
 /** `data-theme` is "dark" for ink, default (light/ash) is left unset. */
@@ -55,10 +62,13 @@ export function ShellLayout(props: ShellLayoutProps) {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{props.title}</title>
+        {ctx.csrfToken !== undefined && ctx.csrfToken !== "" ? (
+          <meta name="csrf-token" content={ctx.csrfToken} />
+        ) : null}
         <link rel="stylesheet" href="/static/tokens.css" />
         <link rel="stylesheet" href="/static/shell.css" />
       </head>
-      <body>
+      <body data-csrf-token={ctx.csrfToken ?? ""}>
         <div class="app">
           <TopBar org={ctx.org} project={ctx.project} projects={ctx.projects} operatorInitials={ctx.operator} />
           <SideNav activeId={ctx.activeNavId} activeProjectId={ctx.project?.projectId} />

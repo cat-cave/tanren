@@ -14,17 +14,22 @@
  */
 
 import type { Context, Hono } from "hono";
+import { clientDepsFor } from "../../api/clientDeps.js";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { OrgConfig } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ConfigView, type ConfigDiffLine, type ConfigHistoryEntry } from "../../components/config/ConfigView.js";
 
-function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
+function readClient(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
+}
+
+async function writeClient(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
+  return new OrchestratorClient(await clientDepsFor(c, deps));
 }
 
 /** Static history shown until a config-PR event store lands (documented punt). */
@@ -60,7 +65,7 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
     const ctx = await loadShellContext(c, deps, { activeNavId: "config" });
     let config: OrgConfig | undefined;
     if (ctx.org !== undefined) {
-      config = (await clientFor(c, deps).getOrg(ctx.org.id))?.config;
+      config = (await readClient(c, deps).getOrg(ctx.org.id))?.config;
     }
     const gateEnabled = config?.auditGateEnabled === true;
     const target = config?.auditGate;
@@ -109,7 +114,7 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
     const enable = formField(form, "enable") === "1";
     const repo = formField(form, "repo").trim();
     if (ctx.org !== undefined) {
-      const client = clientFor(c, deps);
+      const client = await writeClient(c, deps);
       const current = await client.getOrg(ctx.org.id);
       const config: OrgConfig = {
         version: 1,

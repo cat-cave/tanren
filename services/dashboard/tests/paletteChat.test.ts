@@ -1,4 +1,4 @@
-// thick-Forge chat island — action-card routing logic.
+// thick-Forge chat island — action-card routing logic + CSRF header helper.
 //
 // `routeForAction` is the seam that decides whether a ForgeAnswer action
 // renders as an AUTO-NAVIGATE card (read tools → in-shell route). Write tools
@@ -7,7 +7,7 @@
 // covered by forgeProposalClient.test.ts). Unit-tested directly (no DOM).
 
 import { describe, expect, it } from "vitest";
-import { routeForAction } from "../src/client/paletteChat.js";
+import { csrfWriteHeaders, forgeToolFailureMessage, routeForAction } from "../src/client/paletteChat.js";
 
 describe("routeForAction (Forge chat action cards)", () => {
   it("maps read_run to the run route (auto-navigate)", () => {
@@ -68,5 +68,26 @@ describe("routeForAction (Forge chat action cards)", () => {
         toolCall: { tool: "tanren.rerun_task", args: { taskId: "task_1" } },
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("csrfWriteHeaders (palette island)", () => {
+  it("attaches x-csrf-token when a shell token is provided", () => {
+    const headers = csrfWriteHeaders("shell-csrf");
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers["x-csrf-token"]).toBe("shell-csrf");
+  });
+
+  it("omits x-csrf-token when token is empty (local-dev actor)", () => {
+    const headers = csrfWriteHeaders("");
+    expect(headers["content-type"]).toBe("application/json");
+    expect(headers["x-csrf-token"]).toBeUndefined();
+  });
+});
+
+describe("forgeToolFailureMessage (palette error surface)", () => {
+  it("surfaces HTTP status so operators never see a silent close", () => {
+    expect(forgeToolFailureMessage(403)).toBe("Tool failed (403) — try again.");
+    expect(forgeToolFailureMessage(0)).toBe("Tool failed — try again.");
   });
 });

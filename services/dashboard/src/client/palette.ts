@@ -19,7 +19,15 @@
  * the browser).
  */
 
-import { appendForgeTurn, appendPending, appendProposals, appendUserTurn, askForge } from "./paletteChat.js";
+import {
+  appendForgeTurn,
+  appendPending,
+  appendProposals,
+  appendUserTurn,
+  askForge,
+  csrfWriteHeaders,
+  forgeToolFailureMessage,
+} from "./paletteChat.js";
 
 interface PaletteRefs {
   root: HTMLElement;
@@ -198,7 +206,7 @@ export function initPalette(): void {
   };
 
   const select = async (el: HTMLElement): Promise<void> => {
-    const route = el.dataset["route"] ?? "";
+    const itemRoute = el.dataset["route"] ?? "";
     const tool = el.dataset["tool"] ?? "";
     const isAsk = (el.dataset["ask"] ?? "") === "1";
     if (tool !== "" && refs.orgId !== "") {
@@ -208,16 +216,39 @@ export function initPalette(): void {
       } catch {
         args = {};
       }
-      await fetch(`/forge/tools`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ orgId: refs.orgId, tool, args }),
-      }).catch(() => {});
+      // Surface forge-tool failures instead of silent-close (CHK-033).
+      let response: Response | null = null;
+      try {
+        response = await fetch(`/forge/tools`, {
+          method: "POST",
+          headers: csrfWriteHeaders(),
+          body: JSON.stringify({ orgId: refs.orgId, tool, args }),
+        });
+      } catch {
+        response = null;
+      }
+      if (response === null || !response.ok) {
+        refs.input.value = "";
+        if (!inChat) setMode(true);
+        appendForgeTurn(
+          refs.chat,
+          {
+            body: forgeToolFailureMessage(response?.status ?? 0),
+            attentionItems: [],
+            prompts: [],
+          },
+          {
+            onChip: (t) => void send(t),
+            onNavigate: (href) => navigate(href),
+          },
+        );
+        return;
+      }
       close();
       return;
     }
-    if (route !== "") {
-      window.location.href = route;
+    if (itemRoute !== "") {
+      window.location.href = itemRoute;
       return;
     }
     // ask-forge item (no route, no tool) → morph to chat with its title.
