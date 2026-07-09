@@ -80,7 +80,12 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
     return render(
       c,
       ctx,
-      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={githubAppUrl} />,
+      <ExistingFullBody
+        step={1}
+        orgLogin={ctx.org?.login ?? "your org"}
+        githubAppUrl={githubAppUrl}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 
@@ -107,7 +112,12 @@ export function mountExistingBrownfield(app: Hono, deps: ShellDeps): void {
     return render(
       c,
       ctx,
-      <ExistingFullBody step={1} orgLogin={ctx.org?.login ?? "your org"} githubAppUrl={githubAppUrl} />,
+      <ExistingFullBody
+        step={1}
+        orgLogin={ctx.org?.login ?? "your org"}
+        githubAppUrl={githubAppUrl}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 }
@@ -123,7 +133,13 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
     render(
       c,
       ctx,
-      <ExistingFullBody step={1} orgLogin={orgLogin} githubAppUrl={githubAppUrl} link={{ error, linked }} />,
+      <ExistingFullBody
+        step={1}
+        orgLogin={orgLogin}
+        githubAppUrl={githubAppUrl}
+        link={{ error, linked }}
+        csrfToken={ctx.csrfToken}
+      />,
     );
 
   if (orgId === undefined || repoUrl === "") return linkError("pick a repo first");
@@ -161,6 +177,7 @@ async function handleLink(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       repoUrl={repoUrl}
       recon={recon.result}
       report={recon.result.report}
+      csrfToken={ctx.csrfToken}
     />,
   );
 }
@@ -184,6 +201,7 @@ async function handleAdvance(c: Context, ctx: ShellContext, deps: ShellDeps, for
       projectId={projectId}
       repoUrl={repoUrl}
       report={report}
+      csrfToken={ctx.csrfToken}
     />,
   );
 }
@@ -210,6 +228,7 @@ async function handleOpenPr(c: Context, ctx: ShellContext, deps: ShellDeps, form
         repoUrl={repoUrl}
         report={report}
         posture={posture}
+        csrfToken={ctx.csrfToken}
         {...extra}
       />,
     );
@@ -252,6 +271,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
         orgLogin={orgLogin}
         githubAppUrl={githubAppUrl}
         link={{ error: "lost the recon report — restart." }}
+        csrfToken={ctx.csrfToken}
       />,
     );
   }
@@ -273,6 +293,7 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       repoUrl={repoUrl}
       report={report}
       seeded={result.result}
+      csrfToken={ctx.csrfToken}
     />,
   );
 }
@@ -300,6 +321,7 @@ async function handleGovernance(c: Context, ctx: ShellContext, deps: ShellDeps, 
       repoUrl={repoUrl}
       posture={posture}
       governance={saved}
+      csrfToken={ctx.csrfToken}
     />,
   );
 }

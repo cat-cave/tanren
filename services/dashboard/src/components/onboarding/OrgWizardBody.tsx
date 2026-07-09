@@ -11,6 +11,7 @@
  */
 
 import type { CredentialRecord, DoctorReport, NotificationMatrix } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { CredentialsBody } from "./CredentialsBody.js";
 import { NotificationsBody } from "./NotificationsBody.js";
 import { JourneyStepper, StepHeading, WizardFoot, type WizardStep } from "./primitives.js";
@@ -199,7 +200,7 @@ function CloudAllocatorStub(props: { name: string; desc: string; glyph: string; 
   );
 }
 
-function Step4Infra(props: { orgLogin: string }) {
+function Step4Infra(props: { orgLogin: string; csrfToken?: string }) {
   return (
     <>
       <StepHeading
@@ -217,6 +218,7 @@ function Step4Infra(props: { orgLogin: string }) {
             </span>
           </div>
           <form class="col-card live" method="post" action="/onboarding/org/infra" style="gap:10px;position:relative">
+            <CsrfField token={props.csrfToken} />
             <span class="phase-badge phase-v0" style="position:absolute;top:-8px;right:12px">
               active default
             </span>
@@ -366,7 +368,7 @@ export function OrgWizardBody(props: OrgWizardBodyProps) {
           <NotificationsBody matrix={props.matrix} deliveries={[]} csrfToken={props.csrfToken} />
         </>
       ) : (
-        <Step4Infra orgLogin={props.orgLogin} />
+        <Step4Infra orgLogin={props.orgLogin} csrfToken={props.csrfToken} />
       )}
       <WizardFoot
         backHref={step > 1 ? `${BASE}?step=${step - 1}` : undefined}

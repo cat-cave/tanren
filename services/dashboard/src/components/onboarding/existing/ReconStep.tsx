@@ -8,13 +8,20 @@
  */
 
 import type { ReconResult } from "../../../api/existingBrownfieldTypes.js";
+import { CsrfField } from "../../shell/CsrfField.js";
 import { StepHeading } from "../primitives.js";
 
 function severityGlyph(severity: "info" | "warn" | "fail"): string {
   return severity === "fail" ? "!" : severity === "warn" ? "!" : "i";
 }
 
-export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAction: string; projectId?: string }) {
+export function ReconStep(props: {
+  repoUrl: string;
+  result: ReconResult;
+  baseAction: string;
+  projectId?: string;
+  csrfToken?: string;
+}) {
   const { report, filesIndexed } = props.result;
   return (
     <>
@@ -127,6 +134,7 @@ export function ReconStep(props: { repoUrl: string; result: ReconResult; baseAct
           ))}
 
           <form method="post" action={props.baseAction}>
+            <CsrfField token={props.csrfToken} />
             <input type="hidden" name="phase" value="advance" />
             <input type="hidden" name="step" value="2" />
             <input type="hidden" name="repoUrl" value={props.repoUrl} />

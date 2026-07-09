@@ -12,6 +12,7 @@
  */
 
 import type { InterviewCapture, InterviewSuggestion } from "../../../api/onboardingNewTypes.js";
+import { CsrfField } from "../../shell/CsrfField.js";
 import { CapturePanel } from "./CapturePanel.js";
 
 export interface InterviewStepProps {
@@ -22,6 +23,8 @@ export interface InterviewStepProps {
   priorAnswer: string;
   capture: InterviewCapture;
   complete: boolean;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function InterviewStep(props: InterviewStepProps) {
@@ -58,6 +61,7 @@ export function InterviewStep(props: InterviewStepProps) {
 
           {props.complete ? (
             <form method="post" action="/onboarding/new?step=2">
+              <CsrfField token={props.csrfToken} />
               <input type="hidden" name="capture" value={captureJson} />
               <input type="hidden" name="phase" value="advance" />
               <div class="gf-answer">
@@ -69,6 +73,7 @@ export function InterviewStep(props: InterviewStepProps) {
             </form>
           ) : (
             <form method="post" action="/onboarding/new?step=1">
+              <CsrfField token={props.csrfToken} />
               <input type="hidden" name="capture" value={captureJson} />
               <input type="hidden" name="round" value={String(props.round + 1)} />
               <input type="hidden" name="phase" value="round" />

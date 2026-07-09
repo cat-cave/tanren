@@ -8,6 +8,7 @@
  */
 
 import type { GovernancePosture, GovernanceResult } from "../../../api/existingBrownfieldTypes.js";
+import { CsrfField } from "../../shell/CsrfField.js";
 
 interface PostureOption {
   value: GovernancePosture;
@@ -43,6 +44,7 @@ export function GovernanceStep(props: {
   baseAction: string;
   current: GovernancePosture;
   saved?: GovernanceResult;
+  csrfToken?: string;
 }) {
   return (
     <>
@@ -61,6 +63,7 @@ export function GovernanceStep(props: {
 
       <div class="ex-cols">
         <form method="post" action={props.baseAction} style="display:flex;flex-direction:column;gap:10px">
+          <CsrfField token={props.csrfToken} />
           <input type="hidden" name="phase" value="governance" />
           <input type="hidden" name="step" value="5" />
           <input type="hidden" name="repoUrl" value={props.repoUrl} />

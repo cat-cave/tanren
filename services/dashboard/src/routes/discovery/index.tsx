@@ -93,7 +93,13 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} · discover` },
-      <DiscoveryBody project={ctx.project} orgId={ctx.org.id} variant={variant} insight={SEED_INSIGHTS[variant]} />,
+      <DiscoveryBody
+        project={ctx.project}
+        orgId={ctx.org.id}
+        variant={variant}
+        insight={SEED_INSIGHTS[variant]}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 
@@ -130,6 +136,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
         insight={insight}
         result={result}
         error={result === undefined ? "forge classification failed — try again." : undefined}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });
@@ -160,6 +167,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
           variant={variant}
           insight={insight ?? SEED_INSIGHTS[variant]}
           error={error}
+          csrfToken={ctx.csrfToken}
         />,
       );
 
@@ -187,6 +195,7 @@ export function mountDiscoveryScreens(app: Hono, deps: ShellDeps): void {
         variant={variant}
         insight={insight}
         accepted={{ count: result.accepted.length, placementLabel }}
+        csrfToken={ctx.csrfToken}
       />,
     );
   });

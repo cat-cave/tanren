@@ -13,6 +13,7 @@
  */
 
 import type { BrownfieldDetectedFile } from "../../api/types.js";
+import { CsrfField } from "../shell/CsrfField.js";
 import { Field, SelectField, StepHeading } from "./primitives.js";
 
 const ALLOCATORS: Array<[string, string]> = [["local_docker", "local-docker (v0 default)"]];
@@ -124,6 +125,8 @@ export interface ExistingProjectBodyProps {
   /** Result of a just-completed link (rendered after submit). */
   linked?: { repoUrl: string; files: BrownfieldDetectedFile[]; projectId: string };
   error?: string;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function ExistingProjectBody(props: ExistingProjectBodyProps) {
@@ -154,6 +157,7 @@ export function ExistingProjectBody(props: ExistingProjectBodyProps) {
         </>
       ) : (
         <form method="post" action="/onboarding/existing/link">
+          <CsrfField token={props.csrfToken} />
           <div class="cols-2-1">
             <div class="col-card" style="padding:0;overflow:hidden">
               <div class="h" style="padding:12px 14px;border-bottom:1px solid var(--line-1)">

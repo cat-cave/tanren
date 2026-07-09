@@ -10,11 +10,14 @@
 import type { ProjectDag } from "../../../api/projectDag.js";
 import { DagCanvas } from "../../project/DagCanvas.js";
 import { DagStyles } from "../../project/dagStyles.js";
+import { CsrfField } from "../../shell/CsrfField.js";
 
 export interface DerivedDagStepProps {
   projectId: string;
   projectName: string;
   dag: ProjectDag;
+  /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
+  csrfToken?: string;
 }
 
 export function DerivedDagStep(props: DerivedDagStepProps) {
@@ -48,6 +51,7 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
       </div>
 
       <form method="post" action="/onboarding/new?step=3" data-derived-summary>
+        <CsrfField token={props.csrfToken} />
         <input type="hidden" name="projectId" value={props.projectId} />
         <input type="hidden" name="phase" value="advance" />
         <div class="gf-foot">
