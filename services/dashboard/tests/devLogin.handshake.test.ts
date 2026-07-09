@@ -125,4 +125,12 @@ describe("devLoginHandshake", () => {
     expect(calls[1]).toBeDefined();
     expect(calls[1].url).toBe(`${ORCH}/auth/callback?provider=local_dev&state=${STATE}&code=local-dev`);
   });
+
+  it("returns a sanitized next for open-redirect payloads", async () => {
+    const { fetchImpl, calls } = makeFetchMock();
+    const result = await devLoginHandshake(ORCH, "https://evil.example/phish", fetchImpl);
+    expect(result.next).toBe("/");
+    expect(calls[0].url).toContain("next=%2F");
+    expect(calls[0].url).not.toContain("evil.example");
+  });
 });

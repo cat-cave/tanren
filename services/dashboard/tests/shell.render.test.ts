@@ -223,6 +223,18 @@ describe("dashboard auth flow", () => {
     expect(location).toContain("provider=github_oauth");
     expect(location).toContain("next=%2Fprojects");
   });
+
+  it("sanitizes open-redirect next values on /auth/login to /", async () => {
+    process.env.TANREN_REQUIRE_AUTH = "1";
+    mockOrchestrator({ authed: false });
+    const app = await build();
+    const res = await app.request("/auth/login?next=https://evil.example/phish");
+    expect(res.status).toBe(302);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("provider=github_oauth");
+    expect(location).toContain("next=%2F");
+    expect(location).not.toContain("evil.example");
+  });
 });
 
 // DEV-ONLY: with the local_dev escape hatch on, /auth/login must NOT 302 the
@@ -249,10 +261,16 @@ function mockDevLoginOrchestrator(): void {
 describe("dashboard dev-login proxy (TANREN_DEV_LOGIN=1)", () => {
   afterEach(() => {
     delete process.env.TANREN_DEV_LOGIN;
+    delete process.env.TANREN_ENV;
+    delete process.env.TANREN_COOKIE_SECURE;
+    delete process.env.ORCHESTRATOR_URL;
+    // Restore vitest's usual NODE_ENV so later suites stay in non-prod.
+    process.env.NODE_ENV = "test";
   });
 
   it("303s to next with a re-emitted tanren_session cookie instead of a cross-origin redirect", async () => {
     process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "test";
     mockDevLoginOrchestrator();
     const app = await build();
     const res = await app.request("/auth/login?next=/projects");
@@ -264,8 +282,29 @@ describe("dashboard dev-login proxy (TANREN_DEV_LOGIN=1)", () => {
     expect(setCookie).not.toContain("orchestrator:3100");
   });
 
+  it("refuses open-redirect next values and lands on / instead", async () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "test";
+    mockDevLoginOrchestrator();
+    const app = await build();
+    const res = await app.request("/auth/login?next=//evil.example/phish");
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/");
+  });
+
+  it("404s /signin when NODE_ENV=production even with TANREN_DEV_LOGIN=1", async () => {
+    process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "production";
+    process.env.ORCHESTRATOR_URL = "http://orchestrator:3100";
+    mockDevLoginOrchestrator();
+    const app = await build();
+    const res = await app.request("/signin");
+    expect(res.status).toBe(404);
+  });
+
   it("bounces back to /signin with an error when the handshake fails", async () => {
     process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "test";
     vi.stubGlobal("fetch", async () => new Response("boom", { status: 500 }));
     const app = await build();
     const res = await app.request("/auth/login?next=/projects");
@@ -278,6 +317,7 @@ describe("dashboard dev-login proxy (TANREN_DEV_LOGIN=1)", () => {
 
   it("renders the sign-in error banner when /signin carries an error param", async () => {
     process.env.TANREN_DEV_LOGIN = "1";
+    process.env.NODE_ENV = "test";
     mockDevLoginOrchestrator();
     const app = await build();
     const html = await (await app.request("/signin?error=dev_login_failed")).text();
