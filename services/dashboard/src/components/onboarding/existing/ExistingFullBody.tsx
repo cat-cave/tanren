@@ -58,6 +58,7 @@ export interface ExistingFullBodyProps {
   configInjection?: ConfigInjectionResult;
   configInjectionError?: string;
   seeded?: SeedDagResult;
+  seedError?: string;
   governance?: GovernanceResult;
   /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
   csrfToken?: string;
@@ -131,6 +132,7 @@ export function ExistingFullBody(props: ExistingFullBodyProps) {
             baseAction={EXISTING_FULL_BASE}
             projectId={props.projectId}
             seeded={props.seeded}
+            error={props.seedError}
             csrfToken={props.csrfToken}
           />
         ) : null}

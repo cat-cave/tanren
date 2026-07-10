@@ -85,9 +85,14 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       forgeTurn?: TurnPayload;
       toolsUsed?: string[];
       proposals?: ForgeActionProposal[];
-    }>("POST", `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`, {
-      question,
-    });
+    }>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`,
+      {
+        question,
+      },
+      { expectBody: true },
+    );
     const render = result.body?.forgeTurn?.render;
     if (!result.ok || render === undefined) {
       return undefined;
@@ -115,6 +120,8 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     const result = await this.sendJson<{ proposal?: ForgeActionProposal; status?: string }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/proposals/${encodeURIComponent(proposalId)}/${decision}`,
+      undefined,
+      { expectBody: true },
     );
     if (result.ok) {
       return { proposal: result.body?.proposal, outcome: "decided" };
@@ -143,6 +150,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
       body,
+      { expectBody: true },
     );
     return thread.ok ? thread.body?.id : undefined;
   }

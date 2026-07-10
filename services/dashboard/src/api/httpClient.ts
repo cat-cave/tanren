@@ -6,8 +6,9 @@
  * header (forwarded for session auth), and the two defensive JSON helpers.
  * `getJson` swallows network + parse failures (→ `undefined`); `sendJson`
  * serves every write caller (POST/PATCH/PUT/DELETE, optional body — content-type
- * is only set when a body is present). Both degrade to an empty/undefined result
- * so a page never 500s when one panel's data source is unavailable.
+ * is only set when a body is present). Typed write callers can mark a response
+ * body required so a 2xx with an empty or malformed body is surfaced as failure
+ * instead of being treated as a successful-but-undefined contract.
  *
  * Split out of `orchestrator.ts` so the product surface stays under the
  * 500-line architecture cap; it is a pure transport detail with no product
@@ -25,6 +26,10 @@ export interface OrchestratorClientDeps {
    */
   csrfToken?: string;
   fetchImpl?: typeof fetch;
+}
+
+export interface SendJsonOptions {
+  expectBody?: boolean;
 }
 
 export abstract class OrchestratorHttpClient {
@@ -62,6 +67,7 @@ export abstract class OrchestratorHttpClient {
     method: "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
     body?: unknown,
+    options: SendJsonOptions = {},
   ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
     const writeHeaders: Record<string, string> = body === undefined ? {} : { "content-type": "application/json" };
     // Session-auth state-changing routes require x-csrf-token (orchestrator auth
@@ -79,6 +85,9 @@ export abstract class OrchestratorHttpClient {
       return { ok: false, status: 0, body: undefined };
     }
     const json = (await response.json().catch(() => {})) as T | undefined;
+    if (response.ok && options.expectBody === true && json === undefined) {
+      return { ok: false, status: response.status, body: undefined };
+    }
     return { ok: response.ok, status: response.status, body: json };
   }
 }

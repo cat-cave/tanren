@@ -148,6 +148,18 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
   }
 }
 
+export function setStreamState(root: HTMLElement, state: "live" | "stale" | "unavailable", reason?: string): void {
+  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+  if (flag === null) return;
+  if (state === "live") {
+    flag.textContent = "↻ live";
+    flag.removeAttribute("title");
+    return;
+  }
+  flag.textContent = state === "stale" ? "⚠ stream stale" : "⚠ stream unavailable";
+  if (reason !== undefined) flag.title = reason;
+}
+
 function applyTask(root: HTMLElement, task: TaskFrame): void {
   const row = root.querySelector<HTMLElement>(`[data-rd-moment="${task.taskId}"]`);
   if (row === null) return;
@@ -192,6 +204,7 @@ export function initRunStream(): void {
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
       } = JSON.parse(event.data);
+      setStreamState(root, "live");
       totals.perTokenUsd = 0;
       totals.inputTokens = 0;
       totals.outputTokens = 0;
@@ -202,17 +215,18 @@ export function initRunStream(): void {
       renderCostBar(root, totals);
       if (data.run !== undefined) applyStatus(root, data.run.status, data.run.outcome);
     } catch {
-      /* ignore malformed frame */
+      setStreamState(root, "stale", "Malformed snapshot frame from the live stream.");
     }
   });
 
   source.addEventListener("costs", (event) => {
     try {
       const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
+      setStreamState(root, "live");
       for (const cost of data.costs ?? []) applyCost(totals, cost);
       renderCostBar(root, totals);
     } catch {
-      /* ignore */
+      setStreamState(root, "stale", "Malformed costs frame from the live stream.");
     }
   });
 
@@ -222,26 +236,28 @@ export function initRunStream(): void {
         status: string;
         outcome: string | null;
       } = JSON.parse(event.data);
+      setStreamState(root, "live");
       applyStatus(root, data.status, data.outcome);
       if (["completed", "failed", "halted", "cancelled", "done"].includes(data.status)) {
         source.close();
       }
     } catch {
-      /* ignore */
+      setStreamState(root, "stale", "Malformed status frame from the live stream.");
     }
   });
 
   source.addEventListener("task", (event) => {
     try {
       const frame: TaskFrame = JSON.parse(event.data);
+      setStreamState(root, "live");
       applyTask(root, frame);
     } catch {
-      /* ignore */
+      setStreamState(root, "stale", "Malformed task frame from the live stream.");
     }
   });
 
   source.addEventListener("error", () => {
-    // EventSource auto-reconnects on transient errors; nothing to do.
+    setStreamState(root, "unavailable", "The browser lost the run event stream; EventSource will keep reconnecting.");
   });
 
   // Click a trajectory moment → re-render the reasoning pane server-side with

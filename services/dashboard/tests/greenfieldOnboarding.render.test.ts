@@ -111,7 +111,7 @@ function mockOrchestrator(): void {
       return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
     if (url.endsWith("/milestones") && method === "GET")
       return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
-    if (url.endsWith("/runs") && method === "GET") return new Response(JSON.stringify({ runs: [] }), { status: 200 });
+    if (url.endsWith("/runs") && method === "GET") return new Response(JSON.stringify({ items: [] }), { status: 200 });
     if (url.endsWith("/personas") && method === "GET")
       return new Response(JSON.stringify({ personas: [] }), { status: 200 });
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
@@ -209,6 +209,35 @@ describe("greenfield · derive → spec dag (step 2)", () => {
     expect(html).toContain("clock in with badge");
     // advance form carries the derived projectId forward to arrival.
     expect(html).toContain('value="project_derived"');
+  });
+
+  it("renders DAG unavailable separately from an empty derived graph", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url))
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (url.endsWith("/specs") && method === "GET")
+        return new Response(JSON.stringify({ error: "orchestrator_unavailable" }), { status: 503 });
+      if (url.endsWith("/milestones") && method === "GET")
+        return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+      if (url.endsWith("/runs") && method === "GET")
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url.endsWith("/personas") && method === "GET")
+        return new Response(JSON.stringify({ personas: [] }), { status: 200 });
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const html = await (await app.request("/onboarding/new?step=2&projectId=project_derived")).text();
+    expect(html).toContain("data-derived-dag-unavailable");
+    expect(html).toContain("This is not an empty project");
+    expect(html).not.toContain("no specs derived yet");
   });
 });
 
