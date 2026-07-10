@@ -236,7 +236,7 @@ describe("greenfield · derive → spec dag (step 2)", () => {
     const app = await build();
     const html = await (await app.request("/onboarding/new?step=2&projectId=project_derived")).text();
     expect(html).toContain("data-derived-dag-unavailable");
-    expect(html).toContain("This is not an empty project");
+    expect(html).toMatch(/this is not an empty project/iu);
     expect(html).not.toContain("no specs derived yet");
   });
 });
@@ -256,6 +256,42 @@ describe("greenfield · arrival (step 3)", () => {
     expect(html).toContain("data-arrival-card");
     expect(html).toContain("your smithy is ready");
     expect(html).toContain("/projects/project_derived?mode=dag");
+  });
+
+  it("renders arrival unavailable instead of fake zero metrics when the DAG read fails", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url))
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (url.endsWith("/specs") && method === "GET")
+        return new Response(JSON.stringify({ error: "orchestrator_unavailable" }), { status: 503 });
+      if (url.endsWith("/milestones") && method === "GET")
+        return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+      if (url.endsWith("/runs") && method === "GET")
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      if (url.endsWith("/personas") && method === "GET")
+        return new Response(JSON.stringify({ personas: [] }), { status: 200 });
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const res = await app.request("/onboarding/new?step=3", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ phase: "advance", projectId: "project_derived" }),
+    });
+    const html = await res.text();
+    expect(html).toContain("graph read");
+    expect(html).toContain("unavailable");
+    expect(html).toMatch(/this is not an empty project/iu);
+    expect(html).not.toContain("0 specs");
+    expect(html).not.toContain("/projects/project_derived?mode=dag");
   });
 
   it("GET /onboarding/new?step=2&projectId=… re-renders the derived dag (resume)", async () => {

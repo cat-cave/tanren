@@ -73,6 +73,47 @@ export function ProjectDagBody(props: ProjectDagBodyProps) {
   );
 }
 
+export function ProjectDagUnavailableBody(props: { projectId: string; projectName: string; model: ProjectViewModel }) {
+  return (
+    <div class="p2b" data-project-mode="dag" data-project-dag-unavailable>
+      <ScreenStyles />
+      <PageHead
+        eyebrow={`▮ project · ${props.projectName} · full dag`}
+        title={
+          <>
+            the <em>smithy</em>, top-down
+          </>
+        }
+        actions={
+          <>
+            <span class="pill warn">
+              <span class="d"></span>
+              dag unavailable
+            </span>
+            <div class="mode-toggle" data-mode-toggle data-project-id={props.projectId}>
+              <a class="seg-btn" data-mode-value="chat" href={`/projects/${props.projectId}?mode=chat`}>
+                鍛 forge
+              </a>
+              <a class="seg-btn active" data-mode-value="dag" href={`/projects/${props.projectId}?mode=dag`}>
+                ↹ dag
+              </a>
+            </div>
+            <a class="btn primary" href={`/projects/${props.projectId}/specs/new`}>
+              + discover spec ↗
+            </a>
+          </>
+        }
+      />
+      <KpiStrip items={props.model.kpis} />
+      <div class="page-body">
+        <section class="placeholder-card">
+          <p>Project DAG unavailable — the orchestrator spec/run reads failed. This is not an empty graph.</p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function ForgePill(props: { projectId: string; model: ProjectViewModel; attention: number }) {
   return (
     <a class="forge-pill" href={`/projects/${props.projectId}?mode=chat`}>
