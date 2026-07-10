@@ -142,10 +142,24 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
     chip.append(`run · ${status}${outcome === null ? "" : ` · ${outcome}`}`);
   }
   setText(root, "header-status", status);
-  if (["completed", "failed", "halted", "cancelled", "done"].includes(status)) {
+  if (isTerminalRunStatus(status)) {
     const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
     if (flag !== null) flag.textContent = "● final";
   }
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  return ["completed", "failed", "halted", "cancelled", "done"].includes(status);
+}
+
+export function isFinalStreamState(root: HTMLElement): boolean {
+  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+  return flag?.textContent === "● final";
+}
+
+export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: string): void {
+  if (isFinalStreamState(root)) return;
+  setStreamState(root, "unavailable", reason);
 }
 
 export function setStreamState(root: HTMLElement, state: "live" | "stale" | "unavailable", reason?: string): void {
@@ -213,7 +227,10 @@ export function initRunStream(): void {
       totals.bySource.clear();
       for (const cost of data.costs ?? []) applyCost(totals, cost);
       renderCostBar(root, totals);
-      if (data.run !== undefined) applyStatus(root, data.run.status, data.run.outcome);
+      if (data.run !== undefined) {
+        applyStatus(root, data.run.status, data.run.outcome);
+        if (isTerminalRunStatus(data.run.status)) source.close();
+      }
     } catch {
       setStreamState(root, "stale", "Malformed snapshot frame from the live stream.");
     }
@@ -238,7 +255,7 @@ export function initRunStream(): void {
       } = JSON.parse(event.data);
       setStreamState(root, "live");
       applyStatus(root, data.status, data.outcome);
-      if (["completed", "failed", "halted", "cancelled", "done"].includes(data.status)) {
+      if (isTerminalRunStatus(data.status)) {
         source.close();
       }
     } catch {
@@ -257,7 +274,10 @@ export function initRunStream(): void {
   });
 
   source.addEventListener("error", () => {
-    setStreamState(root, "unavailable", "The browser lost the run event stream; EventSource will keep reconnecting.");
+    markStreamUnavailableUnlessFinal(
+      root,
+      "The browser lost the run event stream; EventSource will keep reconnecting.",
+    );
   });
 
   // Click a trajectory moment → re-render the reasoning pane server-side with
