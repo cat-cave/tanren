@@ -208,13 +208,8 @@ const Toggle = ({ on }) => (
   </div>
 );
 
-const PhaseBadge = ({ phase }) => (
-  <span className={"phase-badge phase-" + phase}>{phase === "v0" ? "v0" : phase}</span>
-);
-
-// StatusBadge — the long-term vision treatment for integrations.
-// Every integration is *available*; this badge reflects its current
-// connection state, not a roadmap phase.
+// StatusBadge — connection state for integrations (available | auth needed | off).
+// Every integration is *available*; this badge reflects live connection state.
 const StatusBadge = ({ status }) => {
   const kind =
     status === "connected" || status === "always-on" ? "on" :
@@ -230,5 +225,5 @@ Object.assign(window, {
   OnbShell, StepHeading, OnbFoot,
   ForgeChat, Turn, InlineActions,
   InsightBanner, DeltaCard, DAGImpact,
-  Field, Toggle, PhaseBadge, StatusBadge,
+  Field, Toggle, StatusBadge,
 });

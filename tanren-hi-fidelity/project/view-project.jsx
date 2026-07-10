@@ -5,12 +5,8 @@
 
 // =====================================================================
 // DAG SNAPSHOT (svg)
-// Node click routing:
-//   live    → run detail (the in-flight agent run)
-//   review  → review handoff
-//   done    → run detail (the completed run, history view)
-//   blocked → ask forge "why blocked?" inline (no nav — would be spec page in v1)
-//   queued  → no-op (would be a quick "spec card" peek in v1)
+// Every node click opens the SpecDrawer (via onOpenSpec) — live, review,
+// done, blocked, and queued all surface the same finished spec detail.
 // =====================================================================
 
 // Attention-queue badges: maps a node text to its priority number (1, 2, 3).
@@ -130,16 +126,6 @@ const DagSnapshot = ({ onNodeClick }) => (
   </svg>
 );
 
-// Smart node-click router — drives navigation based on node state.
-//   live/done → run detail (for done, future v1 would show the completed/merged run)
-//   review    → review handoff page
-//   blocked   → no-op (would open a "why blocked?" forge thread)
-//   queued    → no-op
-const routeForNode = (node) => {
-  if (node.s === "review") return "review";
-  if (node.s === "live" || node.s === "done") return "run";
-  return null;
-};
 const VelocityCard = ({ compact }) => (
   <div className="velocity">
     <div className="head">

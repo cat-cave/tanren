@@ -73,13 +73,11 @@ const SideNav = ({ active, onNav }) => {
     <a
       key={it.id}
       className={active === it.id || (it.id === "project" && (active === "run" || active === "review" || active === "spec")) ? "active" : ""}
-      onClick={() => !it.soon && onNav?.(it.id)}
-      style={it.soon ? { opacity: 0.5, cursor: "default" } : null}
+      onClick={() => onNav?.(it.id)}
     >
       <span className={"glyph" + (it.kanji ? " kanji" : "")} style={it.kanji ? { fontFamily: "var(--font-jp)", fontSize: 13, color: "var(--ember-08)" } : null}>{it.glyph}</span>
       {it.label}
       {it.count != null && <span className={"count" + (it.countWarn ? " warn" : "")}>{it.countWarn ? "× " : "↻ "}{it.count}</span>}
-      {it.soon && <span className="soon">SOON</span>}
     </a>
   );
   return (
