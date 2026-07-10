@@ -29,6 +29,7 @@
 // `passed`, a throw is `failed` — the merge stage never merges an unverified rebase.
 
 import type { RunnerHandle } from "../contracts/allocator.js";
+import type { ActorIdentity } from "../contracts/codeHostTypes.js";
 import { resolveWorkspaceHeadSha } from "../workspace/index.js";
 import { prepareCleanPrBranch } from "../workspace/githubPush.js";
 import { type CiWhen } from "../ci/index.js";
@@ -118,7 +119,7 @@ export async function publishCleanedDraftPr(
   input: RunPlannerLoopInput,
   ctx: { target: RunnerHandle; workspacePath: string; eventStore: EventStore },
   context: PlannerRunContext,
-  shas: { cloneHeadSha: string; bootstrapSha: string },
+  shas: { cloneHeadSha: string; bootstrapSha: string; pushIdentity?: ActorIdentity },
 ): Promise<PublishCleanedDraftPrResult> {
   const pushSource = await prepareCleanPrBranch({
     ssh: input.ssh,
@@ -129,6 +130,10 @@ export async function publishCleanedDraftPr(
     // Stamped into the composed commit's message so the PR head carries provenance
     // back to the run whose writer produced it (apex v71 squash-then-rebase).
     runId: context.runId,
+    // MERGE-SAFETY (self-identity): author the composed PR-head commit as the run's
+    // resolved pushing identity so GitHub attributes it to the bot login the
+    // external-change gate treats as Tanren's own (never `<unknown>`, which blocks).
+    ...(shas.pushIdentity !== undefined && { pushIdentity: shas.pushIdentity }),
   });
   try {
     // `PlannerRunContext.orgId` is a REQUIRED non-empty string (hydration enforces
@@ -261,6 +266,9 @@ export async function runPublishGateStage(
   stage: {
     cloneHeadSha: string;
     bootstrapSha: string;
+    // MERGE-SAFETY (self-identity): the run's resolved pushing identity, threaded into the
+    // clean-PR prep so the composed PR-head commit attributes to the bot login (not `<unknown>`).
+    pushIdentity?: ActorIdentity;
     finalizeRunState: FinalizeRunState;
     appendEvent: <N extends EventName>(eventType: N, payload: EventPayload<N>, taskId?: string) => Promise<void>;
     seedRejections: PlannerRejectionFeedback[];
@@ -270,6 +278,7 @@ export async function runPublishGateStage(
   const published = await publishCleanedDraftPr(input, ctx, context, {
     cloneHeadSha: stage.cloneHeadSha,
     bootstrapSha: stage.bootstrapSha,
+    ...(stage.pushIdentity !== undefined && { pushIdentity: stage.pushIdentity }),
   });
   if (published.kind === "no_commits") {
     // The branch had NOTHING ahead of the base: emit the OBSERVABLE disposition (never a
