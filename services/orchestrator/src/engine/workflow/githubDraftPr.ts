@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { z } from "zod";
 import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { sshRunnerHandle } from "../contracts/allocator.js";
@@ -21,6 +22,28 @@ import { draftPrBranchName, pushWorkspaceBranchToGitHub } from "../workspace/git
 import { type AncestorStack, resolveAncestorStack } from "../dag/ancestorStack.js";
 
 type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+/** Zod-decoded join row for the draft-PR run context load (no raw row cast). */
+const DraftPrRunRow = z.object({
+  run_id: z.string(),
+  spec_id: z.string(),
+  project_id: z.string(),
+  org_id: z.string(),
+  branch: z.string(),
+  ancestor_stack: z.unknown().nullable().optional(),
+  repo_url: z.string(),
+  default_branch: z.string(),
+  config: z.unknown().nullable().optional(),
+  // LEFT JOIN organizations — absent org / test fakes may omit or null the column.
+  org_config: z.unknown().nullable().optional(),
+  spec_title: z.string(),
+  spec_description: z.string(),
+  // LEFT JOIN LATERAL runners — no runner ⇒ nulls.
+  ssh_host: z.string().nullable().optional(),
+  ssh_port: z.number().nullable().optional(),
+  host_key_fingerprint: z.string().nullable().optional(),
+});
+type DraftPrRunRow = z.infer<typeof DraftPrRunRow>;
 
 export interface PublishDraftPullRequestInput {
   pool: RunStateClient;
@@ -366,10 +389,11 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
      WHERE r.run_id = $1`,
     [runId],
   );
-  const row = result.rows[0] as DraftPrRunRow | undefined;
-  if (row === undefined) {
+  const raw = result.rows[0];
+  if (raw === undefined) {
     return undefined;
   }
+  const row = DraftPrRunRow.parse(raw);
   // Re-hydrate the ordered ancestor stack from `runs.ancestor_stack` (the jj-local base
   // source). Empty for a non-speculative run. The stacked-PR base reads it so the operator
   // route opens the same base the loop does.
@@ -383,12 +407,17 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     ...(ancestorStack.length > 0 && { ancestorStack }),
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
-    configuredGithubCredentialRef: readGithubCredentialRef(row.config),
+    configuredGithubCredentialRef: readGithubCredentialRef(row.config ?? null),
     installation: installationFromOrgConfig(row.org_config),
     specTitle: row.spec_title,
     specDescription: row.spec_description,
     runner:
-      row.ssh_host === null || row.ssh_port === null || row.host_key_fingerprint === null
+      row.ssh_host === undefined ||
+      row.ssh_host === null ||
+      row.ssh_port === undefined ||
+      row.ssh_port === null ||
+      row.host_key_fingerprint === undefined ||
+      row.host_key_fingerprint === null
         ? undefined
         : {
             sshHost: row.ssh_host,
@@ -448,24 +477,6 @@ interface DraftPrRunContext {
     sshPort: number;
     hostKeyFingerprint: string;
   };
-}
-
-interface DraftPrRunRow {
-  run_id: string;
-  spec_id: string;
-  project_id: string;
-  org_id: string;
-  branch: string;
-  ancestor_stack: unknown;
-  repo_url: string;
-  default_branch: string;
-  config: unknown;
-  org_config: unknown;
-  spec_title: string;
-  spec_description: string;
-  ssh_host: string | null;
-  ssh_port: number | null;
-  host_key_fingerprint: string | null;
 }
 
 function readGithubCredentialRef(config: unknown): string | undefined {

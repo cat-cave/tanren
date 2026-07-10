@@ -8,12 +8,12 @@
 // the production default is now the REAL resolver, resolved from the project's
 // routing table like every other Answerer.
 
-import type pg from "pg";
 import type { CheckAnswer, AuditAnswer, ConflictAnswer } from "../../../answerers/schemas/index.js";
 import type { RunnerHandle } from "../../../contracts/allocator.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import type { CommandSubstrate } from "../../../contracts/commandSubstrate.js";
 import type { WorkspaceConflictApplier } from "../../../contracts/conflictResolution.js";
+import type { QueryClient } from "../../../data/orgScopedDb.js";
 import type { EventStore } from "../../../eventStore.js";
 import { buildConflictResolverAdapter } from "../../../providers/adapterSelector.js";
 import type { AnswererAdapter } from "../../../providers/types.js";
@@ -31,9 +31,6 @@ import { SpecStatusReplanRouter } from "./replanRouter.js";
 import { SpecStatusGateReworkRouter } from "./gateReworkRouter.js";
 import { buildPriorGateReworkReader, buildPriorReplanReader, buildReplanEnqueuer } from "./replanEnqueuerPg.js";
 import { buildIntentPreservingConflictResolver, type EntityMergeFirstPassHook } from "./resolver.js";
-
-/** A pool or a checked-out (org-scoped) client — the run's already-scoped client. */
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface DefaultConflictResolverDeps {
   pool: QueryClient;
@@ -167,12 +164,11 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,
-      // The enqueuer + counter open their OWN connections (the run-create + the
-      // events-count read), so they need a real pool — every call site passes one (the
-      // `QueryClient` static type is for the in-loop query ergonomics; the same cast the
-      // budget gate uses for `deps.pool`).
-      enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
-      priorReplans: buildPriorReplanReader(deps.pool as pg.Pool),
+      // The enqueuer is writer-only (no pool). The prior-replan reader accepts
+      // QueryClient and resolves a real Pool via the system pool / isPool narrow
+      // — no `as pg.Pool` cast at the workflow seam.
+      enqueuer: buildReplanEnqueuer(deps.pool, deps.runStateWriter),
+      priorReplans: buildPriorReplanReader(deps.pool),
     }),
     // v35 RE-GATE GATE-FAIL → WRITER REWORK: a re-gate that fails a deterministic GATE TIER
     // on a CLEANLY-rebased-or-resolved tree (no merge conflict) is the WRITER's to fix on the
@@ -189,8 +185,8 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       runId: deps.runId,
       projectId: deps.projectId,
       prNumber: deps.prNumber ?? 0,
-      enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
-      priorReworks: buildPriorGateReworkReader(deps.pool as pg.Pool),
+      enqueuer: buildReplanEnqueuer(deps.pool, deps.runStateWriter),
+      priorReworks: buildPriorGateReworkReader(deps.pool),
     }),
     ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),
   });

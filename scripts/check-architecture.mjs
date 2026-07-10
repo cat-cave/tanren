@@ -303,13 +303,10 @@ function checkGitHubActions(projectFiles) {
   return diagnostics;
 }
 
-// Files that still contain pre-Phase-2A raw row casts. New casts in workflow
-// code are rejected; clearing this allowlist as those files migrate is part
-// of the typed-state contract owned by.
-const workflowRowCastAllowlist = new Set([
-  "services/orchestrator/src/engine/workflow/ciPolling.ts",
-  "services/orchestrator/src/engine/workflow/githubDraftPr.ts",
-]);
+// Pre-Phase-2A raw row casts under workflow/**. Cleared (#833): ciPolling.ts
+// was deleted; githubDraftPr.ts now Zod-decodes. Keep the empty set so a
+// future un-migrated site can be allowlisted explicitly rather than silently.
+const workflowRowCastAllowlist = new Set([]);
 
 function checkNoRowCastsInWorkflow(projectFiles) {
   const diagnostics = [];
