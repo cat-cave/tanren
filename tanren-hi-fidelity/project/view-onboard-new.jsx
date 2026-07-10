@@ -90,7 +90,7 @@ const NewVision = () => (
             <div style={{ color: "var(--ember-08)", marginTop: 4 }}>↑ confirm or override when interview is done</div>
           </div> },
           { ch: "rulesets · required, locked", state: "locked", body: <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-1)", lineHeight: 1.6 }}>
-            {["main protected · pr required", "linear history", "status checks required", "no force push", "mergify on"].map((r, i) => (
+            {["main protected · pr required", "linear history", "tanren/gate required", "no force push", "native queue on"].map((r, i) => (
               <div key={i}><span style={{ color: "var(--status-ok)", marginRight: 6 }}>●</span>{r}</div>
             ))}
             <div style={{ marginTop: 4, color: "var(--fg-3)" }}>↑ tanren can't operate without these</div>

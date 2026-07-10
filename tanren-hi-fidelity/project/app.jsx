@@ -6,7 +6,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showSubopt": true,
   "discoveryVariant": "feature",
   "auditGate": true,
-  "mergeIntegration": "mergify"
+  "mergeIntegration": "native"
 }/*EDITMODE-END*/;
 
 // Onboarding routes are designer-convenience shells (no sidebar). In a real
@@ -212,7 +212,7 @@ const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
             label="merge integration"
             value={t.mergeIntegration}
             options={[
-              { label: "mergify queue (default)",   value: "mergify" },
+              { label: "native queue (default)",   value: "native" },
               { label: "direct github merge",      value: "direct" },
               { label: "external reviewer handoff", value: "external" },
               { label: "no merge integration",     value: "none" },

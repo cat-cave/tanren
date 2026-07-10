@@ -144,8 +144,8 @@ const TRAJECTORY = [
   { ph: "write", t: "subtask 3 · profile sync (deferred)",         dt: "—",    st: "queued" },
   { ph: "audit", t: "audit ⊢ acceptance",                          dt: "—",    st: "queued" },
   { ph: "pr",    t: "open draft pr",                               dt: "—",    st: "queued" },
-  { ph: "ci",    t: "github actions",                              dt: "—",    st: "queued" },
-  { ph: "merge", t: "merge",                                       dt: "—",    st: "queued" },
+  { ph: "ci",    t: "tanren/gate · delivery",                      dt: "—",    st: "queued" },
+  { ph: "merge", t: "native queue · merge",                        dt: "—",    st: "queued" },
 ];
 
 const RUN_TOOLS = [
