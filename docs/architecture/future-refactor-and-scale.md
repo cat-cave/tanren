@@ -32,13 +32,10 @@ service of keeping that true as the system grows three to six orders of magnitud
 
 Read before trusting any claim below. The shape, as actually built on `main`:
 
-- **One process, one pool.** `services/orchestrator` is a single Node service that
-  opens **one** `pg.Pool` (`db/src/client.ts`: `new Pool({ connectionString })`,
-  constructed once in `main.ts`). Every repository, route loader, SSE stream, and
-  the worker share it.
-- **The worker is in-process and event-driven.** `engine/worker/runWorker.ts` runs
-  _inside_ the HTTP server, gated behind `TANREN_RUN_WORKER=1` (default OFF); slots
-  loop claim→execute→idle. No separate worker fleet, no external queue.
+- **Control/data-plane split.** The HTTP control plane (`main.ts`) and standalone
+  run-executor data plane (`worker-main.ts`) are separate processes/services. The
+  API starts an in-process worker only for the `TANREN_RUN_WORKER=1` single-process
+  development convenience; each process constructs its own database pool.
 - **The queue is Postgres-native and already correct in shape.**
   `engine/contracts/jobQueue.ts` `claim()` is the textbook
   `… FOR UPDATE SKIP LOCKED LIMIT 1` CTE + CAS to `running` with a lease
@@ -215,36 +212,37 @@ promoting them to Zod closes the last hand-typed contract boundary.
 
 ## 3. Architecture restructuring — is the monolith the right shape?
 
-**For now: yes, keep the monolith-with-flagged-worker.** It honors PROJECT*BRIEF
-§1.2 (one DB, one process model, no host code), the queue is already correct in
-shape, and a single deployable is right while the binding constraint is \_workflow
-correctness*, not throughput. The flag (`TANREN_RUN_WORKER=1`) is already the seam:
-the worker is a separable concern wearing a process boundary it hasn't put on yet.
+**For now: keep the standalone worker data plane.** Scale the existing standalone
+worker data plane horizontally; the Postgres `FOR UPDATE SKIP LOCKED` queue is
+the coordination seam. Don't pre-split; let the bottleneck analysis (§4) trigger
+each step. The planes that want to become first-class, in the order scale forces
+them:
 
-**The first real split is forced by scale, not aesthetics, and it is the one the
-RLS + plane-split plan already anticipates.** Don't pre-split; let the bottleneck
-analysis (§4) trigger each step. The planes that want to become first-class, in
-the order scale forces them:
-
-- **Data plane (worker fleet) first.** The worker is already claim-loop-isolated;
-  only the flag + shared pool keep it in-process. Promoting it to a horizontal
-  fleet (N processes running the same `runSlot` against the same `FOR UPDATE SKIP
-LOCKED` queue) is the lowest-friction split — the queue contract was built for
-  exactly this, and the SSH substrate already makes the _execution_ remote.
+- **Data plane (worker fleet) first.** The worker's run-executor claim loop is
+  already isolated in `worker-main.ts`. Promoting it to a horizontal fleet (N
+  processes running the same `runSlot` against the same `FOR UPDATE SKIP LOCKED`
+  queue) is the lowest-friction split — the queue contract was built for exactly
+  this, and the SSH substrate already makes the _execution_ remote. Caveat: the
+  worker process also co-hosts the per-process autonomy loops (`bootRunWorker` →
+  `startAutonomyLoops`): the live DagWalker subscriber, the intake poller, and the
+  audit scheduler — NONE queue-coordinated. Running N worker processes first needs
+  those loops elected to a singleton (or given their own claim-coordination), else
+  they duplicate across the fleet. Only the run-executor claim loop is naively N-safe today.
 - **Control plane (HTTP API + dashboard BFF) second.** Stateless handlers scale
   horizontally trivially once they stop sharing a process with the worker. The
   `internalRpc.ts` contract (`createRun`/`getRun`) is the already-defined seam
-  between "accept work" (control) and "execute work" (data) — in-process today,
-  designed to become a network call.
+  between "accept work" (control) and "execute work" (data).
 - **Edge plane (SSE/event fan-out) third**, when connection count is the constraint.
 
 **Tie-in, not duplication:** the **RLS direction is what makes the plane split
 safe.** A worker fleet + a control-plane API touching one Postgres is only
 tenant-safe if isolation is enforced _in the database_ (RLS keyed on a session-set
 `org_id`), not in hand-written `WHERE` clauses spread across parallel processes.
-**RLS landed first (enforced today), so the worker fleet is now a safe split** —
-the shipped policies (`db/src/orgScope.ts` + the collapsed baseline) own the
-session-variable / role mechanics.
+**RLS landed first (enforced today), so scaling the worker's run-executor loop into a
+fleet is now tenant-safe** — the shipped policies (`db/src/orgScope.ts` + the collapsed
+baseline) own the session-variable / role mechanics. (The co-hosted autonomy loops
+still need singleton coordination before N worker processes, per the §2 caveat — RLS
+makes the split _tenant_-safe, not the autonomy loops _duplication_-safe.)
 
 ---
 
@@ -259,23 +257,24 @@ named against the **current** design, with the concrete change.
 ### 10 concurrent — works today, essentially unchanged
 
 - **Binding constraint:** none that bites. `DEFAULT_CONCURRENCY = 2` is the only
-  obstacle, and it's a config bump. One Postgres, one pool, one worker process
-  handle 10 easily; the runs are agent-bound, not DB-bound.
+  obstacle, and it's a config bump. One Postgres and a single worker process (with
+  its own pool, separate from the API's) handle 10 easily; the runs are agent-bound,
+  not DB-bound.
 - **Change:** raise worker concurrency; size the pool (`new Pool` takes a `max`).
   `LISTEN/NOTIFY` is already wired (`db/src/notify.ts`), so the worker and SSE are
   event-driven, not 1s-polling — that latency + load win is banked.
 
-### 100 concurrent — first real pressure: the shared pool & in-process worker
+### 100 concurrent — first real pressure: the worker's pool + event loop
 
-- **Binding constraint:** the **single in-process worker + single shared pool**.
-  100 concurrent runs means 100 live SSH sessions orchestrated from one Node event
-  loop, plus 100 SSE streams, plus the worker — all on _one_ pool. Pool
-  exhaustion and event-loop contention (one process doing fan-out + execution +
-  HTTP) are the first ceilings.
-- **Change:** (a) **split the worker out of the HTTP process** into a small fleet
-  (the flag → a deployment boundary; the queue already supports N claimers via
-  `SKIP LOCKED`). (b) a **pooler** (PgBouncer/transaction pooling) so worker + API + SSE don't
-  fight over one `pg.Pool`. Postgres itself is nowhere near its ceiling here.
+- **Binding constraint:** the **worker process's own pool + its single event loop**
+  (the API is a separate process with its own pool since the control/data-plane split,
+  so this is per-process, not one global pool). 100 concurrent runs means 100 live SSH
+  sessions orchestrated from one worker event loop, plus the SSE fan-out on the API
+  side — the worker's pool exhaustion and its event-loop contention are the first ceilings.
+- **Change:** (a) **scale the worker fleet horizontally** (the queue already
+  supports N claimers via `SKIP LOCKED`). (b) a **pooler** (PgBouncer/transaction
+  pooling) so worker + API + SSE don't fight over one `pg.Pool`. Postgres itself
+  is nowhere near its ceiling here.
 
 ### 1,000 concurrent — Postgres write contention & job-queue hot rows
 
@@ -306,8 +305,8 @@ named against the **current** design, with the concrete change.
 - **Binding constraint:** **a single Postgres instance, full stop.** No partition
   scheme, replica fan, or pooler keeps one primary serving the write rate of 1M
   concurrent agent orchestrations. Every "single X" in the current design is now
-  the ceiling simultaneously: single pool, single primary, single queue table,
-  single event store, in-process anything.
+  the ceiling simultaneously: per-process pools, single primary, single queue table,
+  single event store, un-sharded everything.
 - **Change (the SaaS / multi-region end-state, deliberately far past the current
   product):**
   - **Tenant sharding:** partition orgs across many Postgres clusters
@@ -316,8 +315,8 @@ named against the **current** design, with the concrete change.
     - the RLS plan are prerequisites, not afterthoughts.
   - **A distributed / partitioned-per-shard queue** rather than one `job_queue`
     table. The `JobQueue` _contract_ + conformance suite is the asset: a
-    Kafka/NATS/partitioned-PG impl slots behind the same interface the in-process
-    claimer satisfies today — no workflow-code rewrite.
+    Kafka/NATS/partitioned-PG impl slots behind the same interface the PG
+    `SKIP LOCKED` claimer satisfies today — no workflow-code rewrite.
   - **First-class control/data/edge planes**, independently scaled fleets, edge on
     a dedicated pub/sub bus.
   - **Cost-recording as a streaming write path** (batched/async ingestion into a
@@ -329,8 +328,8 @@ every fix is enabled by a **contract** that already exists (RLS and `LISTEN/NOTI
 now among them) or by the **data-access seam** that doesn't yet. The
 conformance-suited seams (`JobQueue`, `EventStore`, `Allocator`, `SecretStore`) are
 the ones that scale by impl-swap with no rewrite; the un-seamed surfaces (raw SQL
-data access, the in-process worker) are the ones that force code change at each
-step. **That asymmetry
+data access, the worker's co-hosted autonomy loops) are the ones that force code
+change at each step. **That asymmetry
 is the entire argument for the early moves in §7.**
 
 ---
@@ -487,13 +486,13 @@ immediately in the current system.**
 
 ## Appendix: the map in one line per layer
 
-| Layer            | Today (real)                                                      | Forces a change at | Fix                                                |
-| ---------------- | ----------------------------------------------------------------- | ------------------ | -------------------------------------------------- |
-| Data access      | `Repositories` seam shipped; ~85 raw `.query` sites unmigrated    | 100 → 1k → 1M      | finish seam adoption (§1) + RLS (§3/§5)            |
-| Worker           | in-process, event-driven (`NOTIFY`), flagged off                  | 100                | split to fleet (queue supports it)                 |
-| Queue            | PG `FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY` wired               | 1k → 1M            | partition; impl-swap seam                          |
-| DB               | one primary, one shared pool                                      | 100 → 1k → 1M      | pooler → replicas → partition → shard              |
-| SSE / fan-out    | `NOTIFY`-wake per stream (1s poll gone)                           | 1k                 | event-bus edge plane at high stream count          |
-| Type sharing     | Zod→JSON-Schema gated; run-detail codegen'd; residual hand-mirror | now (correctness)  | extend FE gen beyond run-detail (§2)               |
-| Tenant isolation | Postgres RLS (denies by default) + org-scoped client              | done               | RLS enforced; sharding follows at 1M               |
-| Proof of port    | ~21 conformance seams + Stryker (floor 42%) + JSON-Schema export  | before rewrite     | conformance for last un-seamed surfaces + fixtures |
+| Layer            | Today (real)                                                                                               | Forces a change at | Fix                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- | ------------------ | -------------------------------------------------- |
+| Data access      | `Repositories` seam shipped; ~85 raw `.query` sites unmigrated                                             | 100 → 1k → 1M      | finish seam adoption (§1) + RLS (§3/§5)            |
+| Worker           | standalone (`worker-main.ts`), `NOTIFY`-wake; run-executor loop fleet-ready, autonomy loops need singleton | 100                | scale fleet (queue supports it)                    |
+| Queue            | PG `FOR UPDATE SKIP LOCKED` + `LISTEN/NOTIFY` wired                                                        | 1k → 1M            | partition; impl-swap seam                          |
+| DB               | one primary, separate per-process pools                                                                    | 100 → 1k → 1M      | pooler → replicas → partition → shard              |
+| SSE / fan-out    | `NOTIFY`-wake per stream (1s poll gone)                                                                    | 1k                 | event-bus edge plane at high stream count          |
+| Type sharing     | Zod→JSON-Schema gated; run-detail codegen'd; residual hand-mirror                                          | now (correctness)  | extend FE gen beyond run-detail (§2)               |
+| Tenant isolation | Postgres RLS (denies by default) + org-scoped client                                                       | done               | RLS enforced; sharding follows at 1M               |
+| Proof of port    | ~21 conformance seams + Stryker (floor 42%) + JSON-Schema export                                           | before rewrite     | conformance for last un-seamed surfaces + fixtures |

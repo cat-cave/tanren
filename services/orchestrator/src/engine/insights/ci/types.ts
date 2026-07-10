@@ -19,14 +19,14 @@ export const CiCheckStat = z
   .strict();
 export type CiCheckStat = z.infer<typeof CiCheckStat>;
 
-/** A timed CI run (a `ci.started` → terminal pair) and its duration. */
+/** A timed native gate verdict and its duration. */
 export const CiTimingStat = z
   .object({
-    /** Median wall-clock seconds from ci.started to its terminal ci.* event. */
+    /** Median wall-clock seconds from each `gate.verdict` payload's `durationMs`. */
     medianSeconds: z.number().nonnegative().nullable(),
     /** Slowest observed CI run duration in seconds. */
     maxSeconds: z.number().nonnegative().nullable(),
-    /** How many ci.started→terminal pairs contributed to the timing. */
+    /** How many gate verdicts contributed to the timing. */
     sample: z.number().int().nonnegative(),
   })
   .strict();

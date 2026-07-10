@@ -351,9 +351,9 @@ cite); the merge-engine cutover rationale is
   second backend (GitLab/Gitea) is a new `CodeHost` impl, held until a real
   second-backend requirement exists (§5).
 - **The strictness & testing ladder is the standing quality posture.** The gate is
-  a 15-step `just fast-check` (format-check, lint, types-lint, architecture,
-  schema/state/event/answerer/contract drift, knip, spelling, typecheck, test,
-  compose-config) with coverage floors + structural ratchets; oxlint warnings were
+  a 16-step `just fast-check` (format-check, lint, types-lint, architecture,
+  no-pg-as-date, schema/state/event/answerer/contract drift, knip, spelling,
+  typecheck, test, compose-config) with coverage floors + structural ratchets; oxlint warnings were
   driven to ~5 (~25 rules warn→error); ~13 Stryker mutation clusters plus a weekly
   full-repo job. Stubs/shells/mocks are test-fixtures-only, mechanically enforced
   by `no-production-stubs`.

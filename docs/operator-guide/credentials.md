@@ -16,7 +16,7 @@ The credential registry supports these kinds (`engine/credentials/`):
 
 ## Secret-store backends + tenant namespacing
 
-The secret store is **pluggable** (`buildSecretStore`): **Vault** (default), **GCP Secret Manager**, **AWS Secrets Manager**, or **1Password**, selected by env. See [`deploy.md`](deploy.md).
+The secret store is **pluggable** (`buildSecretStore`): **Vault**, **GCP Secret Manager**, **AWS Secrets Manager**, **1Password**, or **`memory`** (tests), selected by `TANREN_SECRET_STORE`. See [`deploy.md`](deploy.md).
 
 Vault refs are **tenant-namespaced**: the import route derives the ref server-side from the authenticated actor as `credential/<slug>/<scope>/<ownerId>/<name>` (`<scope>` is `org` or `me`), so an org admin cannot write to another tenant's key. The read side enforces the same scope/owner on any caller-supplied full ref. There is no bare-ref (`credential/<slug>/<name>`) path and no unscoped top-level import endpoint — the org-scoped and `/credentials/me` routes are the only import surface.
 
