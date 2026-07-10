@@ -9,6 +9,9 @@
 //   - eslint.config.js (eslint 9 flat config so the `lint` script resolves)
 //   - vitest.config.ts (junit reporter wired so the gate's evidence block reads the
 //     report at the contract-declared path)
+//   - pnpm-workspace.yaml (nodeLinker: hoisted — a FLAT node_modules so Stryker's
+//     sibling-glob plugin discovery finds @stryker-mutator/vitest-runner; see the
+//     PNPM_WORKSPACE constant for the full root-cause)
 //   - cucumber.cjs (Cucumber config rooted at `features/` — the BDD home base/ created)
 //   - justfile hook fills for bootstrap / tier-1 / tier-2 / tier-3 / build
 //   - contract: { testRunner: "vitest", reportPath: "reports/junit.xml",
@@ -137,6 +140,36 @@ describe("tanren demo", () => {
 });
 `;
 
+// pnpm settings — pnpm 10+ reads its OWN settings from pnpm-workspace.yaml, NOT
+// .npmrc (which now holds only npm-compatible keys: registry, auth). We need
+// `nodeLinker: hoisted` so the composed scaffold gets a FLAT, npm-like node_modules
+// with the packages' real directories at the top level.
+//
+// ROOT CAUSE (apex v90 `just mutation` halt): `pnpm stryker run` failed with
+// "Cannot find TestRunner plugin \"vitest\". In fact, no TestRunner plugins were
+// loaded." even though @stryker-mutator/vitest-runner WAS installed and
+// root-resolvable. Stryker's default `plugins: ["@stryker-mutator/*"]` is a glob:
+// its PluginLoader discovers plugins by readdir-ing the directory that is a SIBLING
+// of @stryker-mutator/core, resolved from core's OWN `import.meta.url`. Under pnpm's
+// default isolated linker, node_modules/@stryker-mutator/core is a symlink into
+// `.pnpm/@stryker-mutator+core@<v>/node_modules/@stryker-mutator/`, and Node resolves
+// import.meta.url to that realpath. The only siblings of core THERE are its own deps
+// (api, util, instrumenter — all on Stryker's IGNORED list); vitest-runner lives in a
+// DIFFERENT `.pnpm/@stryker-mutator+vitest-runner@.../` dir, so the glob finds zero
+// plugins. `nodeLinker: hoisted` places core + vitest-runner as real sibling
+// directories under a single top-level node_modules/@stryker-mutator/, so the glob
+// finds vitest-runner. (An .npmrc `node-linker=hoisted` does NOT work: pnpm 11 ignores
+// node-linker in .npmrc.) Verified live: with this file the scaffold's `pnpm stryker
+// run` completes and writes reports/mutation/mutation.json.
+const PNPM_WORKSPACE = `# pnpm reads its own settings from HERE (not .npmrc) since pnpm 10.
+# nodeLinker: hoisted → a flat, npm-like node_modules. REQUIRED so Stryker's
+# plugin-discovery glob (@stryker-mutator/*) finds the vitest-runner as a real
+# sibling of @stryker-mutator/core; under the default isolated linker the symlinked
+# realpath isolates each plugin in its own .pnpm dir and \`just mutation\` fails with
+# "no TestRunner plugins were loaded". Do not remove without re-proving mutation runs.
+nodeLinker: hoisted
+`;
+
 const MISE_TOML = `# Tanren base/ — toolchain pin. Runtime fragments fill the [tools] block; do not
 # add deps via env vars (mise pins the version we ran the gate on).
 [tools]
@@ -179,6 +212,7 @@ const STATIC_OWNED_FILES: Readonly<Record<string, string>> = {
   "tsconfig.build.json": TSCONFIG_BUILD,
   "eslint.config.js": ESLINT_CONFIG,
   "vitest.config.ts": VITEST_CONFIG,
+  "pnpm-workspace.yaml": PNPM_WORKSPACE,
   "cucumber.cjs": CUCUMBER_CONFIG,
   "stryker.conf.mjs": STRYKER_CONFIG,
   "src/demo.ts": DEMO_ENTRY,
