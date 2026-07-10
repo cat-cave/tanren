@@ -8,10 +8,11 @@ import type { Severity } from "./schemas.js";
 //
 // Severity taxonomy:
 //   ok    - happy-path completion that an operator wants to celebrate
-//           (run.completed, gate.passed, github.pr.merged).
+//           (run.completed, github.pr.merged, review.approved).
 //   info  - normal-flight progress that some operators want, most don't
-//           (lifecycle started/queued, subtask progress, redaction audit).
-//   warn  - degraded but recoverable (gate.failed, checker rejection, github
+//           (lifecycle started/queued, subtask progress, the per-tier native
+//           gate results gate.passed/gate.failed, redaction audit).
+//   warn  - degraded but recoverable (task.failed, checker rejection, github
 //           failures, planner re-request) — usually surfaces in dashboards
 //           regardless of opt-in.
 //   fail  - run-halting / lost-work signals (run.failed, cost.unattributed,
@@ -63,6 +64,24 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "auditor.failed": "warn",
   // dispatcher promotes to warn when passed=false
   "auditor.verdict": "info",
+
+  // Native gate (in-loop, per-tier, exit-code driven). These fire on EVERY tier
+  // evaluation of EVERY writer iteration — routine trajectory noise, NOT per-event
+  // operator signals — so they stay at `info` (the matrix row defaults off; an
+  // operator debugging a run can opt in). The operator-actionable failure signals
+  // surface elsewhere at their own severity: `task.failed`/`*.failed` (warn),
+  // `run.failed` (fail), `dag.spec.needs_attention` (fail). `gate.verdict` is the
+  // informational per-run pass/fail roll-up — there is NO dispatcher promotion for
+  // any gate event (see effectiveSeverityFor); the terminal `run.*` carries the loud
+  // signal. Listed explicitly (rather than left to the `?? "info"` fallback) so the
+  // intent is visible and the matrix UI is honest.
+  "gate.started": "info",
+  "gate.passed": "info",
+  "gate.failed": "info",
+  "gate.advisory_failed": "info",
+  "gate.quarantine_excluded": "info",
+  "gate.publish_failed": "info",
+  "gate.verdict": "info",
 
   // Runner / allocator
   "runner.allocated": "info",

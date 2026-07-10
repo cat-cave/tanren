@@ -39,12 +39,12 @@ slack route while leaving the org's ntfy route active.
 Every event in the P2A-0007 registry has a default severity in
 `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`:
 
-| Severity | When                                                                                           |
-| -------- | ---------------------------------------------------------------------------------------------- |
-| `ok`     | Happy-path completions: `run.completed`, `gate.passed`, `github.pr.merged`.                    |
-| `info`   | Normal-flight progress: `*.started`, `*.queued`, `writer.subtask.completed`, audit reads.      |
-| `warn`   | Recoverable degradation: `gate.failed`, `*.failed`, an answerer verdict that found work to do. |
-| `fail`   | Run-halting / budget-defeating misconfig: `run.failed`, `cost.unattributed`.                   |
+| Severity | When                                                                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ok`     | Happy-path completions: `run.completed`, `github.pr.merged`, `review.approved`.                                                                   |
+| `info`   | Normal-flight progress: `*.started`, `*.queued`, `writer.subtask.completed`, the per-tier native gate (`gate.passed`/`gate.failed`), audit reads. |
+| `warn`   | Recoverable degradation: `task.failed`, `*.failed`, an answerer verdict that found work to do.                                                    |
+| `fail`   | Run-halting / budget-defeating misconfig: `run.failed`, `cost.unattributed`.                                                                      |
 
 A few payload shapes promote at fire time:
 
