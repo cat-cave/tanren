@@ -229,7 +229,6 @@ export function initRunStream(): void {
       renderCostBar(root, totals);
       if (data.run !== undefined) {
         applyStatus(root, data.run.status, data.run.outcome);
-        if (isTerminalRunStatus(data.run.status)) source.close();
       }
     } catch {
       setStreamState(root, "stale", "Malformed snapshot frame from the live stream.");
@@ -255,9 +254,6 @@ export function initRunStream(): void {
       } = JSON.parse(event.data);
       setStreamState(root, "live");
       applyStatus(root, data.status, data.outcome);
-      if (isTerminalRunStatus(data.status)) {
-        source.close();
-      }
     } catch {
       setStreamState(root, "stale", "Malformed status frame from the live stream.");
     }
