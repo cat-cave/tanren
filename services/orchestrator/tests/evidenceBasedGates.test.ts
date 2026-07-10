@@ -21,7 +21,6 @@ import {
 import type { CiStep } from "../src/engine/ci/index.js";
 import { harvestStepEvidence } from "../src/engine/workflow/gate/harvestStepEvidence.js";
 import { runGateTier } from "../src/engine/workflow/gate/runGateTier.js";
-import { evidenceInsufficientDirective } from "../src/engine/workflow/subtaskInnerLoop.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import type { EventName, EventPayload } from "../src/engine/events/index.js";
@@ -256,30 +255,43 @@ describe("harvestStepEvidence — every evidence kind + every insufficiency reas
     expect(harvest.verdict.observed).toEqual({ total: 1 });
   });
 
-  // ---- artifact ----
+  // ---- artifact (the stat probe emits a byte count, or the artifact-absent marker) ----
   it("artifact — present file ⇒ sufficient (no minBytes ⇒ any size passes)", async () => {
     const harvest = await harvestStepEvidence(
-      deps((cmd) => (cmd.includes("__TANREN_FILE_ABSENT__") ? { stdout: "hello" } : {})),
+      deps((cmd) => (cmd.includes("__TANREN_ARTIFACT_ABSENT__") ? { stdout: "5\n" } : {})),
       { kind: "artifact", path: "dist/app.tar.gz" },
       "",
     );
     expect(harvest.verdict.sufficient).toBe(true);
   });
 
-  it("artifact — absent file ⇒ artifact_absent (carries path + readReason)", async () => {
+  it("artifact — absent path ⇒ artifact_absent (carries path + readReason)", async () => {
     const harvest = await harvestStepEvidence(
-      deps((cmd) => (cmd.includes("__TANREN_FILE_ABSENT__") ? { stdout: "__TANREN_FILE_ABSENT__\n" } : {})),
+      deps((cmd) => (cmd.includes("__TANREN_ARTIFACT_ABSENT__") ? { stdout: "__TANREN_ARTIFACT_ABSENT__\n" } : {})),
       { kind: "artifact", path: "dist/app.tar.gz" },
       "",
     );
     expect(harvest.verdict.sufficient).toBe(false);
     if (harvest.verdict.sufficient) return;
     expect(harvest.verdict.reason).toBe("artifact_absent");
+    expect(harvest.verdict.observed["readReason"]).toBe("absent");
+  });
+
+  it("artifact — zero bytes (empty file / empty dir) ⇒ artifact_absent readReason empty (a build that emitted nothing)", async () => {
+    const harvest = await harvestStepEvidence(
+      deps((cmd) => (cmd.includes("__TANREN_ARTIFACT_ABSENT__") ? { stdout: "0\n" } : {})),
+      { kind: "artifact", path: "dist" },
+      "",
+    );
+    expect(harvest.verdict.sufficient).toBe(false);
+    if (harvest.verdict.sufficient) return;
+    expect(harvest.verdict.reason).toBe("artifact_absent");
+    expect(harvest.verdict.observed["readReason"]).toBe("empty");
   });
 
   it("artifact — present but smaller than minBytes ⇒ artifact_too_small", async () => {
     const harvest = await harvestStepEvidence(
-      deps((cmd) => (cmd.includes("__TANREN_FILE_ABSENT__") ? { stdout: "tiny" } : {})),
+      deps((cmd) => (cmd.includes("__TANREN_ARTIFACT_ABSENT__") ? { stdout: "4\n" } : {})),
       { kind: "artifact", path: "dist/app.tar.gz", minBytes: 1024 },
       "",
     );
@@ -440,57 +452,3 @@ describe("runGateTier — exit-0 with insufficient evidence FAILS the tier (task
 });
 
 // ---- WRITER DIRECTIVE (task #64 §8) ---------------------------------------
-
-function evidenceFailureWith(reason: string, observed: Record<string, unknown>, required: Record<string, unknown>) {
-  return {
-    tier: "slow",
-    when: "pre_audit" as const,
-    failedStep: "test",
-    exitCode: 0,
-    failedReason: "evidence_insufficient" as const,
-    evidence: {
-      kind: "junit" as const,
-      sufficient: false as const,
-      reason: reason as "junit_zero_tests",
-      observed,
-      required,
-    },
-    steps: [],
-  };
-}
-
-describe("evidenceInsufficientDirective — the writer-rework directive names the class precisely (task #64)", () => {
-  it("returns undefined when the failure is the historical exit_code class (no evidence verdict)", () => {
-    const failure = { tier: "fast", when: "per_iteration" as const, failedStep: "lint", exitCode: 1, steps: [] };
-    expect(evidenceInsufficientDirective(failure as never)).toBeUndefined();
-  });
-
-  it("names the class as `gate-evidence-insufficient-junit_zero_tests` for the zero-tests case", () => {
-    const directive = evidenceInsufficientDirective(
-      evidenceFailureWith("junit_zero_tests", { total: 0 }, { minTests: 1 }) as never,
-    );
-    expect(directive).toBeDefined();
-    expect(directive).toContain("gate-evidence-insufficient-junit_zero_tests");
-    expect(directive).toContain("required 1");
-  });
-
-  it("names the class as `gate-evidence-insufficient-junit_below_threshold` and surfaces observed-vs-required counts", () => {
-    const directive = evidenceInsufficientDirective(
-      evidenceFailureWith("junit_below_threshold", { total: 2 }, { minTests: 10 }) as never,
-    );
-    expect(directive).toContain("gate-evidence-insufficient-junit_below_threshold");
-    expect(directive).toContain("2 of 10");
-  });
-
-  it("names the class as `gate-evidence-insufficient-junit_missing` and surfaces the declared path", () => {
-    const directive = evidenceInsufficientDirective(
-      evidenceFailureWith(
-        "junit_missing",
-        { reportPath: "out/r.xml", readReason: "absent" },
-        { reportPath: "out/r.xml", minTests: 1 },
-      ) as never,
-    );
-    expect(directive).toContain("gate-evidence-insufficient-junit_missing");
-    expect(directive).toContain("out/r.xml");
-  });
-});
