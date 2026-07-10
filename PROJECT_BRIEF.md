@@ -565,7 +565,7 @@ Tanren's credential system is a v0 requirement, not a layered-on feature. Prior 
 
 ### §8.2 The flow: store, transport, load
 
-**Storage**: a dedicated secret manager service in the compose stack. v0 default: HashiCorp Vault (free, well-supported, fits the compose pattern). Alternative for low-friction setups: a postgres-backed encrypted-column scheme using `pgcrypto`, where the master encryption key lives in a Docker secret (managed via `docker compose secrets`). Both options are tracked in §20 as open issues; the brief commits to "a real secret manager service, not envvars," and the choice between Vault and pgcrypto is settled before v0 ship.
+**Storage**: a dedicated secret manager service in the compose stack. The backend is selected explicitly via `TANREN_SECRET_STORE` (no implicit runtime default); the shipped Compose sets `vault` — HashiCorp Vault (free, well-supported, fits the compose pattern). Alternative for low-friction setups: a postgres-backed encrypted-column scheme using `pgcrypto`, where the master encryption key lives in a Docker secret (managed via `docker compose secrets`). Both options are tracked in §20 as open issues; the brief commits to "a real secret manager service, not envvars," and the choice between Vault and pgcrypto is settled before v0 ship.
 
 **Configuration is separate from secrets.** Settings (Hetzner VM tier, default branch, runner-image override) live in Postgres-backed configuration tables. Secrets (Hetzner API token, Wafer API key, claude OAuth refresh-token) live in the secret manager. The dashboard and CLI surface both, but the storage and access paths are distinct.
 

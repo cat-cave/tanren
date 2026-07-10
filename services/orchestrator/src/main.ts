@@ -74,9 +74,8 @@ async function vaultHealth() {
 export async function createApp() {
   const pool = getProductionPool();
   await runMigrationsAsOwner();
-  // The secret-store backend is selected by TANREN_SECRET_STORE
-  // (default `vault`, so existing deployments are unchanged). See
-  // engine/contracts/secretStoreFactory.ts.
+  // The secret-store backend is selected explicitly by required TANREN_SECRET_STORE;
+  // Compose sets `vault`. See engine/contracts/secretStoreFactory.ts.
   const runnerSecrets = buildSecretStore();
   await seedRunnerIdentitySecret(runnerSecrets);
   return await buildApp({

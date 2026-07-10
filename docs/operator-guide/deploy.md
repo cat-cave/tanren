@@ -158,9 +158,10 @@ Service AppRoles created by the init script have 1-hour token TTLs (24-hour max)
 
 ## Secret-store backend selection
 
-Vault is the default secret store, but the backend is **pluggable**
-(`buildSecretStore`, selected by env): `vault`, `gcp_sm` (GCP Secret Manager),
-`aws_sm` (AWS Secrets Manager), `onepassword` (1Password), or `memory` (tests).
+A secret-store backend must be selected explicitly with `TANREN_SECRET_STORE`; the
+shipped Compose profiles set it to `vault`. Supported backends are `vault`,
+`gcp_sm` (GCP Secret Manager), `aws_sm` (AWS Secrets Manager), `onepassword`
+(1Password), and `memory` (tests).
 A SaaS / cloud-native deployment can point Tanren at a managed secret manager
 instead of running Vault; credential refs and tenant namespacing
 (`credential/<slug>/<scope>/<ownerId>/<name>`) are uniform across backends. See

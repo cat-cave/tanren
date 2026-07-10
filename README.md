@@ -179,7 +179,7 @@ cells` CRUD + `report` / `compare`. See `docs/roadmap/tanren-method-benchmark.md
   Allocator / JobQueue / EventStore / SecretStore / CostResolver / Repositories,
   ~13 Stryker mutation clusters + a weekly full-repo job (`mutation-weekly.yml`),
   oxlint warnings driven to ~5 with ~25 rules flipped warn→error, and a hardened
-  15-step strictness gate.
+  16-step strictness gate.
 
 ### What is still ahead
 
@@ -341,7 +341,7 @@ credentials, link a repo, submit a spec, and trigger a run. The full runbook is
 ```sh
 corepack enable
 pnpm install
-just fast-check                   # the 15-step non-build gate (format/lint/types/arch/drift/knip/spell/test)
+just fast-check                   # the 16-step non-build gate (format/lint/types/arch/drift/knip/spell/test)
 just smoke
 ```
 
