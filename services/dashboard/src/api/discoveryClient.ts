@@ -25,6 +25,7 @@ export class DiscoveryClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/discovery/classify`,
       insight,
+      { expectBody: true },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -44,6 +45,7 @@ export class DiscoveryClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/discovery/accept`,
       input,
+      { expectBody: true },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }

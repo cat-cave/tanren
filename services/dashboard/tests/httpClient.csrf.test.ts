@@ -8,6 +8,10 @@ class ProbeClient extends OrchestratorHttpClient {
   write(path: string, body?: unknown) {
     return this.sendJson("POST", path, body);
   }
+
+  writeExpectingBody(path: string, body?: unknown) {
+    return this.sendJson("POST", path, body, { expectBody: true });
+  }
 }
 
 type FetchFn = typeof fetch;
@@ -54,6 +58,30 @@ describe("OrchestratorHttpClient CSRF headers", () => {
     const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
     const headers = init.headers as Record<string, string>;
     expect(headers["x-csrf-token"]).toBeUndefined();
+  });
+
+  it("fails a typed write when a 2xx response has no JSON body", async () => {
+    const fetchImpl = vi.fn<FetchFn>(async () => new Response(null, { status: 204 }));
+    const client = new ProbeClient({
+      orchestratorUrl: "http://orch",
+      fetchImpl,
+    });
+    const result = await client.writeExpectingBody("/orgs/o1/thing");
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(204);
+    expect(result.body).toBeUndefined();
+  });
+
+  it("allows a no-body success when the caller does not require a body", async () => {
+    const fetchImpl = vi.fn<FetchFn>(async () => new Response(null, { status: 204 }));
+    const client = new ProbeClient({
+      orchestratorUrl: "http://orch",
+      fetchImpl,
+    });
+    const result = await client.write("/orgs/o1/thing");
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(204);
+    expect(result.body).toBeUndefined();
   });
 });
 

@@ -126,9 +126,9 @@ export function initPalette(): void {
       threadId,
     });
     pending.remove();
-    if (response === undefined) {
+    if ("error" in response) {
       const fallback = {
-        body: "I couldn't reach Forge just now — try again.",
+        body: response.error,
         attentionItems: [],
         prompts: [],
       };

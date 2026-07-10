@@ -35,6 +35,7 @@ export const GREENFIELD_CSS = `
 
 .gf-dag-frame { border: 1px solid var(--line-1); background: var(--bg-sunken); border-radius: 4px; padding: 12px; min-height: 360px; }
 .gf-dag-empty { font-family: var(--font-mono); font-size: 12px; color: var(--fg-3); padding: 24px; text-align: center; }
+.gf-dag-empty.unavailable { color: var(--status-warn); border: 1px solid var(--status-warn); background: var(--bg-canvas); border-radius: 3px; }
 
 .gf-cols3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; align-items: start; }
 .gf-panel { border: 1px solid var(--line-1); background: var(--bg-sunken); border-radius: 4px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }

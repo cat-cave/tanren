@@ -217,10 +217,16 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   /** Project specs (spec list + dependency picker). */
   async listSpecs(orgId: string, projectId: string): Promise<SpecSummary[]> {
+    return (await this.listSpecsMaybe(orgId, projectId)) ?? [];
+  }
+
+  /** listSpecs, but undefined on failure (unavailable, not a fake empty DAG). */
+  async listSpecsMaybe(orgId: string, projectId: string): Promise<SpecSummary[] | undefined> {
     const json = await this.getJson<{ specs?: SpecSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
     );
-    return json?.specs ?? [];
+    if (json === undefined || !Array.isArray(json.specs)) return undefined;
+    return json.specs;
   }
 
   /** Project personas — needed to enumerate behaviors. */
@@ -280,6 +286,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
       input,
+      { expectBody: true },
     );
   }
 
@@ -303,6 +310,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
         trigger: input.trigger ?? "dashboard",
         ...(input.branch === undefined ? {} : { branch: input.branch }),
       },
+      { expectBody: true },
     );
   }
 
@@ -321,10 +329,15 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     projectId: string,
     budgetUsdPerWeek?: number,
   ): Promise<ForgeAnswer | undefined> {
-    const thread = await this.sendJson<{ id?: string }>("POST", `/orgs/${encodeURIComponent(orgId)}/forge/threads`, {
-      scope: "project",
-      projectId,
-    });
+    const thread = await this.sendJson<{ id?: string }>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
+      {
+        scope: "project",
+        projectId,
+      },
+      { expectBody: true },
+    );
     const threadId = thread.body?.id;
     if (!thread.ok || threadId === undefined) {
       return undefined;
@@ -333,6 +346,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(threadId)}/turns/generate-project-view`,
       budgetUsdPerWeek === undefined ? { projectId } : { projectId, budgetUsdPerWeek },
+      { expectBody: true },
     );
     return turn.body?.render;
   }
@@ -381,7 +395,9 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   /** Create a project row (non-brownfield create path). */
   async createProject(orgId: string, body: Record<string, unknown>): Promise<CreatedProject | undefined> {
-    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body);
+    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body, {
+      expectBody: true,
+    });
     if (!result.ok) return undefined;
     return result.body as CreatedProject;
   }

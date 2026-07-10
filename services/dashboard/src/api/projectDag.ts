@@ -18,6 +18,13 @@ import type { RunListItem, SpecTriageProvenance } from "./types.js";
 
 export type { DagAttentionItem, DagEdge, DagMilestone, DagNode, DagStatus, ProjectDag };
 
+export class ProjectDagUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectDagUnavailableError";
+  }
+}
+
 // HALTED-outcome policy set is imported from @tanren/db so the dashboard and the
 // orchestrator's `assertRecoverable` gate read the SAME source-of-truth. The prior
 // private `HALTED` copy here was missing `convergence_stalled` + `window_exhausted`,
@@ -197,11 +204,14 @@ function attentionSub(kind: DagStatus, node: DagNode): string {
  */
 export async function getProjectDag(client: OrchestratorClient, orgId: string, projectId: string): Promise<ProjectDag> {
   const [specs, milestones, runs, behaviors] = await Promise.all([
-    client.listSpecs(orgId, projectId),
+    client.listSpecsMaybe(orgId, projectId),
     client.listMilestones(orgId, projectId),
-    client.listRuns(orgId, projectId),
+    client.listRunsMaybe(orgId, projectId),
     client.listAllBehaviors(orgId, projectId),
   ]);
+  if (specs === undefined || runs === undefined) {
+    throw new ProjectDagUnavailableError("Project DAG unavailable: required spec or run reads failed.");
+  }
 
   // Behaviour linkage is not yet exposed per-spec by the read API, so we leave
   // `behaviorsBySpec` empty for now and surface the project behaviour count via

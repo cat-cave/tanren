@@ -292,7 +292,8 @@ async function handleSeed(c: Context, ctx: ShellContext, deps: ShellDeps, form: 
       projectId={projectId}
       repoUrl={repoUrl}
       report={report}
-      seeded={result.result}
+      seeded={result.ok ? result.result : undefined}
+      seedError={result.ok ? undefined : (result.error ?? "could not seed the spec dag — try again.")}
       csrfToken={ctx.csrfToken}
     />,
   );
