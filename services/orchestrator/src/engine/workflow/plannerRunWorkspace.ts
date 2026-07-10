@@ -70,11 +70,11 @@ export interface PreparedRunWorkspace {
   // the PR — only the answerer REVIEW base excludes them; the human/merge still sees them.
   baseSha: string;
   // WS-A PR-4 (walker-jj-local-integration-design.md §4): the merge-time rebase base when
-  // the run's base was jj-ASSEMBLED locally from the ancestor stack (`WALKER_JJ_LOCAL_BASE`
-  // on + a non-empty stack) — the LOCAL assembly bookmark name the bootstrap materialized.
+  // the run's base was jj-ASSEMBLED locally from the ancestor stack (non-empty stack) —
+  // the LOCAL assembly bookmark name the bootstrap materialized.
   // It REPLACES `${targetBranch}@origin` as the conflict-resolver's `baseRevision` (the PR
   // head rebases onto the re-assembled stack head, not a synthesized host ref). Absent on
-  // the legacy single-ref clone path (flag off / empty stack) ⇒ the conflict resolver keeps
+  // the legacy single-ref clone path (empty stack) ⇒ the conflict resolver keeps
   // `${targetBranch}@origin` exactly as today.
   bootstrappedBaseRevision?: string;
   // SELF-HEAL (apex v35): set when the workspace-PREP `just bootstrap` (deps install) failed
@@ -204,7 +204,7 @@ export async function prepareRunWorkspace(
     bootstrapSha,
     baseSha,
     // WS-A PR-4: surface the locally-assembled base revision ONLY when the bootstrap path
-    // ran (flag on + non-empty stack); absent ⇒ the conflict resolver keeps the legacy
+    // ran (non-empty stack); absent ⇒ the conflict resolver keeps the legacy
     // `${targetBranch}@origin` base.
     ...(cloned.bootstrappedBaseRevision !== undefined && {
       bootstrappedBaseRevision: cloned.bootstrappedBaseRevision,

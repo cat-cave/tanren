@@ -14,9 +14,10 @@ import type { Severity } from "./schemas.js";
 //   warn  - degraded but recoverable (gate.failed, checker rejection, github
 //           failures, planner re-request) — usually surfaces in dashboards
 //           regardless of opt-in.
-//   fail  - run-halting / lost-work signals (run.failed, run.halted,
-//           cost.unattributed, task.failed). These should be reachable on
-//           every operator's pager-style channel by default.
+//   fail  - run-halting / lost-work signals (run.failed, cost.unattributed,
+//           task.failed). The persisted run status may be `halted` while the
+//           terminal event operators receive is `run.failed`. These should be
+//           reachable on every operator's pager-style channel by default.
 //
 // A few events are not operator-actionable (allocator internals,
 // notification.* meta-events) and stay at `info` so the matrix UI defaults

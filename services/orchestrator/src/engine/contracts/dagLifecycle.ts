@@ -9,7 +9,7 @@
 //
 // These states are NOT a new column. They are DERIVED (projected) from the
 // SOURCE-OF-TRUTH rows already written under RLS — the spec's status + the
-// terminal lifecycle events of its latest run (github.pr.created, ci.passed,
+// terminal lifecycle events of its latest run (github.pr.created, gate.verdict,
 // auditor.verdict, review.approved / review.changes_requested / review.auto_approved,
 // merge.completed). DAG state is the source of truth (§1.7): the projection reads
 // fresh each tick, never caches. This module carries the PURE projection core
@@ -181,7 +181,7 @@ export interface SpecLifecycleSignals {
  *      genuinely reached the real base), `halted`/`cancelled` ⇒ blocked.
  *   2. Else derive from the latest run's lifecycle events, climbing the ladder:
  *      merge.completed ⇒ merged, a review verdict ⇒ review, an audit verdict ⇒
- *      audited, ci.passed ⇒ ci_green, pr.created ⇒ pr_open, a started run ⇒
+ *      audited, gate.verdict ⇒ ci_green, pr.created ⇒ pr_open, a started run ⇒
  *      building, no run ⇒ pending. A terminally-halted run with no merge ⇒ blocked.
  */
 export function projectSpecLifecycle(signals: SpecLifecycleSignals): SpecLifecycle {

@@ -158,17 +158,17 @@ migration to the DORA inputs.
 These are the _why_ behind a DORA delta and the real differentiators of a process
 benchmark. Mapping each to where it already lives:
 
-| Signal                       | Where it lives today                                                                                                        |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Tokens by type (mandatory)   | `cost_records.{input,cached_input,cache_creation,output,reasoning_output,total}_tokens` — first-class, always present.      |
-| Cost by source (best-effort) | `cost_records.{cost_usd,billing_mode,cost_basis}` — bases `provider_response`/`ccusage`/`credits`/`unknown`/`unattributed`. |
-| Audited-concern count        | scheduled-audits library + auditor rejections; auditor `loop_to_planner` shows as `planner.rerequested` (producer=auditor). |
-| Retry / re-plan count        | `planner.rerequested` events (producer `gate` vs `auditor`); `tasks.attempt`; retry-hotspot insight (`engine/insights`).    |
-| Halt count + reason          | `runs.status='halted'` + `runs.outcome` (`retry_budget_exhausted`/`escape_hatch_hit`/`window_exhausted`/`quota_exceeded`).  |
-| Time-to-green                | derivable from `gate.*` / `ci.passed` event timestamps relative to run start.                                               |
-| Gate pass-rate               | in-loop gate events (`engine/workflow/gate/`) + `gate.failed`/`ci.passed` in the event log.                                 |
-| Review iterations            | `review.*` events (P3-0008); `review_stall` insight (P3-0020).                                                              |
-| Per-subtask pace             | `pace_anomaly` insight; task `started_at`/`ended_at`.                                                                       |
+| Signal                       | Where it lives today                                                                                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tokens by type (mandatory)   | `cost_records.{input,cached_input,cache_creation,output,reasoning_output,total}_tokens` — first-class, always present.                                             |
+| Cost by source (best-effort) | `cost_records.{cost_usd,billing_mode,cost_basis}` — bases `provider_response`/`ccusage`/`credits`/`unknown`/`unattributed`.                                        |
+| Audited-concern count        | scheduled-audits library + auditor rejections; auditor `loop_to_planner` shows as `planner.rerequested` (producer=auditor).                                        |
+| Retry / re-plan count        | `planner.rerequested` events (producer `gate` vs `auditor`); `tasks.attempt`; retry-hotspot insight (`engine/insights`).                                           |
+| Halt count + reason          | `runs.status='halted'` + `runs.outcome` (`retry_budget_exhausted`/`escape_hatch_hit`/`window_exhausted`/`quota_exceeded`).                                         |
+| Time-to-green                | derivable from `gate.*` / `gate.passed` event timestamps relative to run start.                                                                                    |
+| Gate pass-rate               | in-loop gate events (`engine/workflow/gate/`) + `gate.verdict` roll-ups in the event log (the per-run pass/fail signal; `gate.passed`/`gate.failed` are per-tier). |
+| Review iterations            | `review.*` events (P3-0008); `review_stall` insight (P3-0020).                                                                                                     |
+| Per-subtask pace             | `pace_anomaly` insight; task `started_at`/`ended_at`.                                                                                                              |
 
 **The recurring theme: collection is solved; cross-run aggregation per
 experiment-cell is the net-new work.** Existing insights compute _within a

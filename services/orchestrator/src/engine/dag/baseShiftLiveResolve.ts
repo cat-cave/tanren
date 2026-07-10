@@ -63,9 +63,9 @@ export async function resolveBaseShiftConflict(input: {
   /** The shifted base the conflict is gathered + re-gated against (NOT the project default). */
   shiftedBase: string;
   /**
-   * WS-A PR-6b (§2.2): the RE-RESOLVED ordered ancestor stack. With `WALKER_JJ_LOCAL_BASE`
-   * ON + a non-empty stack, the resolver ASSEMBLES it LOCALLY and gathers the conflict against
-   * the assembled head instead of cloning `${shiftedBase}@origin`. Empty/absent/flag-off ⇒ the
+   * WS-A PR-6b (§2.2): the RE-RESOLVED ordered ancestor stack. With a non-empty
+   * stack, the resolver ASSEMBLES it LOCALLY and gathers the conflict against the
+   * assembled head instead of cloning `${shiftedBase}@origin`. Empty/absent ⇒ the
    * single-ref clone.
    */
   ancestorStack?: AncestorStack;
@@ -130,7 +130,7 @@ interface PreparedResolveWorkspace {
 
 /**
  * Materialize the shifted base the conflict is gathered + re-gated against:
- *   • jj-local path (flag-ON + non-empty stack): ASSEMBLE `main + ordered ancestors` LOCALLY
+ *   • jj-local path (non-empty ancestor stack): ASSEMBLE `main + ordered ancestors` LOCALLY
  *     (`assembleBaseShiftStackLive`) and hand the applier the OPEN workspace + the assembled
  *     head SHA as the rebase target — NO synthesized-ref clone.
  *   • legacy path: a fresh live workspace the applier clones `${shiftedBase}@origin` into,

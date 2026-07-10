@@ -17,11 +17,10 @@ export interface GitHubWorkspacePushInput {
   repoUrl: string;
   branch: string;
   /**
-   * the pre-resolved push token. The caller (the VcsProvider) mints an
-   * App installation token (or reads the static secret) via the token resolver
-   * and passes it here. Installation tokens are used over HTTPS as the
-   * `x-access-token` password, exactly like a PAT, so the `git push` command
-   * below is unchanged.
+   * the pre-resolved push token. The caller resolves it via `resolveVcsToken`
+   * (App installation token or static secret) and passes it here. Installation
+   * tokens are used over HTTPS as the `x-access-token` password, exactly like a
+   * PAT, so the `git push` command below is unchanged.
    */
   token: string;
   /**

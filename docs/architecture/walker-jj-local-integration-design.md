@@ -19,36 +19,36 @@ end-state: the host holds only the things a human would push (per-spec PR head b
 `main`); the prospective merged world is assembled **locally on the dependent's runner**,
 exactly as the batch gate already does.
 
-## 1. Why a synthesized ref exists today, and why it can be removed
+## 1. Why a synthesized ref existed, and why it was removed
 
-### 1.1 The current server-side path (what we delete)
+### 1.1 Pre-cutover server-side path (deleted)
 
-When the walker decides a dependent `B` is ready speculatively, `enqueueOne`
-(`engine/dag/walker.ts:287`) calls `integrator.buildIntegration(...)`, which resolves to
+When the walker decided a dependent `B` was ready speculatively, `enqueueOne`
+(`engine/dag/walker.ts:287`) called `integrator.buildIntegration(...)`, which resolved to
 `PgSpeculativeIntegrator.buildIntegration` (`engine/dag/speculativeIntegrator.ts:59`). That
-drives `VcsProvider.buildIntegrationBranch` (`speculativeIntegrator.ts:99` →
+drove `VcsProvider.buildIntegrationBranch` (`speculativeIntegrator.ts:99` →
 `githubVcsProvider.ts:342`) to assemble a **server-side host ref** `tanren/integ/<dep>`
 (`speculativeIntegrator.ts:29-34`) = `default_branch + each unmerged ancestor branch`
-merged in DAG order via the GitHub `/merges` API (409-prone). The walker then persists that
+merged in DAG order via the GitHub `/merges` API (409-prone). The walker then persisted that
 ref name as the dependent run's single `runs.speculative_base`
 (`walker.ts:310`, schema `db/migrations/0000_collapsed_baseline.sql:469`).
 
-The dependent run — a **separate runner allocation** — consumes it as a host-fetchable
+The dependent run — a **separate runner allocation** — consumed it as a host-fetchable
 branch:
 
 - `engine/worker/runExecutionContext.ts:173` — `targetBranch = speculative_base ?? default_branch`.
 - `engine/workflow/plannerRunWorkspace.ts:197,291-311` — `git clone --depth 1 --branch <targetBranch>`
-  from the **remote host** (it must be a real remote branch).
+  from the **remote host** (it had to be a real remote branch).
 - `engine/workflow/plannerRunAdapters.ts:262-265` — the merge-time rebase base
   `baseRevision = ${targetBranch}@origin` (a remote-tracking bookmark).
 - `engine/workflow/githubDraftPr.ts:141,211` — the draft PR's `baseBranch`.
 - `engine/dag/baseShiftLiveSeams.ts:89,103` — even the never-discard base-shift rebase
-  resolves `newBaseSha = ${newBaseRef}@origin`, i.e. it re-clones the integration ref as a
+  resolved `newBaseSha = ${newBaseRef}@origin`, i.e. it re-cloned the integration ref as a
   remote bookmark.
 
-So **the only reason a synthesized host ref exists is that the dependent's runner fetches
-its base via `git clone --branch <single-ref>`** — a single fetchable ref. That is the
-exact assumption we break.
+So **the only reason a synthesized host ref existed was that the dependent's runner fetched
+its base via `git clone --branch <single-ref>`** — a single fetchable ref. That was the
+exact assumption we broke.
 
 ### 1.2 The batch path already proves the jj-native pattern
 

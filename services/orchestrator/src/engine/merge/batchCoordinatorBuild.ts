@@ -2,7 +2,7 @@
 // — speculative batch-check + bisect), wired from the merge-coordinator subscriber.
 // It is the native-queue DRIVER: it forms a batch, proves the prospective merged
 // state (`default_branch + batch PRs`) green as a COMBINED unit (the PgBatchChecker:
-// speculative integration + the VcsProvider branch-CI seam), then drives
+// speculative integration + the `CodeHost` ref-read seam + native jj/gate execution), then drives
 // the SAME per-run merges in DAG order — a bad interaction is bisected to ONE
 // PR (recoverable dequeue → re-execution) rather than stalling the batch.
 //

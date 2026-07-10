@@ -156,29 +156,28 @@ export function collectRotatingCredentialRefPaths(context: PlannerRunContext): s
 }
 
 /**
- * The default run-hours ceiling — the SAME value the allocator's abandoned-runner
- * sweeper uses (`TANREN_MAX_RUN_HOURS`, default 6h, in `services/allocator`). Kept
- * in sync structurally: the scoped-token TTL below DERIVES from this ceiling so the
- * token can never expire before the runner it scopes is reaped.
+ * The default scoped-credential token TTL ceiling (`TANREN_MAX_RUN_HOURS`,
+ * default 6h). The scoped-token TTL below DERIVES from this ceiling so the token
+ * can never expire before the run it scopes ends.
  */
 const DEFAULT_MAX_RUN_HOURS = 6;
 
 /**
- * How long a run may hold its scoped credential token. The token must outlive the
- * ENTIRE run: credentials are NOT read once up front — the codex/claude writer AND
- * every Answerer (checker/auditor) re-materialize the per-role auth bundle on each
- * call, so a multi-iteration run (planner reruns × writer iterations × roles) reads
- * its credentials many times over many minutes. The token is non-renewable, so this
- * TTL is the hard ceiling on the whole run's credential lifetime.
+ * How long a run may hold its scoped credential token. Credentials are NOT read
+ * once up front — the codex/claude writer AND every Answerer (checker/auditor)
+ * re-materialize the per-role auth bundle on each call, so a multi-iteration run
+ * (planner reruns × writer iterations × roles) reads its credentials many times
+ * over many minutes. The token is non-renewable, so the `TANREN_MAX_RUN_HOURS`
+ * TTL is the hard ceiling on the scoped credential's lifetime.
  *
- * It is DERIVED FROM THE RUN-HOURS CEILING (`TANREN_MAX_RUN_HOURS`, the same env the
- * allocator's abandoned-runner sweeper uses) so the two CANNOT DRIFT: a token TTL
- * shorter than the runner ceiling means a run crossing the TTL loses every credential
- * materialization (the §3.14 finding — a 2h TTL vs a 6h runner). The TTL is the FULL
- * ceiling (not a fraction) so the token outlives any run the sweeper would still let
- * live.
+ * The TTL is the configured `TANREN_MAX_RUN_HOURS` value — there is NO separate
+ * run-duration cap; this env solely bounds the scoped credential's lifetime. A TTL
+ * set too short means a long run crossing it loses every later credential
+ * materialization (the §3.14 finding — a 2h TTL starving a 6h run). Setting the TTL
+ * to the FULL configured hours (not a fraction) is what keeps a long run's
+ * credentials alive for its whole duration.
  *
- * No-silent-fallback (Codex r4 §1), CONSISTENT WITH THE ALLOCATOR SCHEMA: the 6h
+ * No-silent-fallback (Codex r4 §1): the 6h
  * default applies ONLY when the var is genuinely UNSET/blank. A PRESENT non-positive
  * / non-finite value is a deploy-config PARSE failure and THROWS loud — it must NOT
  * quietly degrade to the default (which the old `log.error + return default` did,

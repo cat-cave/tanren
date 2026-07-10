@@ -202,7 +202,7 @@ export const runs = pgTable(
     // NULL until the worker resolves the writer credential (or no credential-priced spend).
     authRef: text("auth_ref"),
     // WS-A PR-1 (walker-jj-local-integration-design.md §2.3): the ORDERED ancestor stack
-    // `[{ specId, runId, branch, headSha }]`. ADDITIVE — dual-written but UNREAD for now.
+    // `[{ specId, runId, branch, headSha }]`. The sole jj-local base source.
     ancestorStack: jsonb("ancestor_stack"),
   },
   (table) => [

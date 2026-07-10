@@ -1,15 +1,13 @@
 // The pg-backed `integration_nodes` persistence model (tanren-owns-the-engine.md
 // §3 — the ONE unified run model). Wave 2 / Slice S0 is OBSERVE-ONLY: this model is
-// WRITTEN ALONGSIDE the existing `runs.speculative_base` + percolation columns and
-// drives NO control flow. It exists so the never-discard rebase + the proof-reuse
-// cache (Wave 3) have a durable substrate, and so the §8 guardrail holds — the old
-// speculative/percolation state migrates through an EXPLICIT compatibility
+// written and drives NO control flow. It exists so the never-discard rebase + the
+// proof-reuse cache (Wave 3) have a durable substrate, and so the §8 guardrail holds
+// — the old speculative/percolation state migrates through an EXPLICIT compatibility
 // read-model (`projectRunRowToNode` below), never silent abandonment.
 //
 // Three responsibilities:
 //   1. UPSERT a node + record/lookup a proof (insert/update + lookup by memberKey).
-//   2. The compatibility READ-MODEL: project an existing `speculative_base` +
-//      `integrated_ancestor_shas`/`verified_ancestor_shas` run row into the FROZEN
+//   2. The compatibility READ-MODEL: project an existing run row into the FROZEN
 //      `IntegrationNode` shape — so a reader can see the OLD run model AS the new
 //      one without a backfill, the explicit-read-model half of the §8 guardrail.
 //   3. The OBSERVE-ONLY hook (`observeRunAsIntegrationNode`): an additive,
