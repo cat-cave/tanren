@@ -2,7 +2,7 @@
 
 One file per operator surface. Each file is the contract a dashboard surface must satisfy. Files are written against the hi-fi vision and the workflow inventory in [`ROADMAP.md`](../../../ROADMAP.md).
 
-**Most of these surfaces have shipped.** The earlier "reduced in v0, deferred to Phase 3" framing is largely superseded: the thick real-LLM Forge (composer answers, propose→approve→execute write actions), the native merge queue (`native_queue` is the merge engine), the DAG canvas + DAG-primary mode, the `stuck` / `review_stall` / `ci_flaky` insights, and the brownfield recon + config-injection PR flow are all built. The genuinely-still-deferred surfaces are the org-level `/overview`, `/roadmap`, and `/personas` screens (still `phase: "3+"` in `services/dashboard/src/app/routes.ts`). Each file marks the shipped items done and keeps only the real remaining reductions.
+**Most of these surfaces have shipped.** The earlier "reduced in v0, deferred to Phase 3" framing is largely superseded: the thick real-LLM Forge (composer answers, propose→approve→execute write actions), the native merge queue (`native_queue` is the merge engine), the DAG canvas + DAG-primary mode, the `stuck` / `review_stall` / `ci_flaky` insights, the brownfield recon + config-injection PR flow, and the org **Overview** command deck (`/overview`, `phase: "2b"`, mounted) are all built. The genuinely-still-unmounted org nav rows are only `/roadmap` and `/personas` (`phase: "3+"` in `services/dashboard/src/app/routes.ts`, absent from `SCREEN_MOUNTS`). Each file marks the shipped items done and keeps only the real remaining reductions.
 
 ## Surfaces and owning specs
 
