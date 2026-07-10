@@ -106,6 +106,7 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
             projectName={props.derived.projectName}
             specCount={props.derived.dag?.counts.total ?? 0}
             readyCount={readyLeafCount(props.derived.dag)}
+            unavailable={props.derived.dag === undefined}
           />
         )}
       </div>

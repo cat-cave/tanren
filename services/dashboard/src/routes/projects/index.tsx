@@ -9,25 +9,15 @@
  * adds a DAG-primary mode (`?mode=dag` + persisted cookie) and
  * delegates the spec drawer / full-page routes to `./specRoutes`.
  *
- * Routes registered:
- *   GET  /projects/:projectId                          project view (chat | dag)
- *   GET  /projects/:projectId/specs                    spec list
- *   GET  /projects/:projectId/specs/new                spec creation form
- *   POST /projects/:projectId/specs                    create spec
- *   POST /projects/:projectId/insights/act             subopt callout action
- *   GET  /settings/routing                             routing & limits (active project)
- *   GET  /settings/routing/:projectId                  routing & limits (explicit project)
- *   POST /settings/routing/:projectId/add|remove|reorder          routing mutations
- *   POST /settings/routing/:projectId/credentials                 bind codex+github refs
  */
 
 import type { Context, Hono } from "hono";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import { getProjectDag } from "../../api/projectDag.js";
+import { getProjectDag, ProjectDagUnavailableError } from "../../api/projectDag.js";
 import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
-import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
+import { ProjectDagBody, ProjectDagUnavailableBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
 import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
@@ -110,7 +100,18 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       weekSpendUsd: sumRunCosts(runs),
     });
     if (mode === "dag") {
-      const dag = await getProjectDag(client, orgId, projectId);
+      let dag;
+      try {
+        dag = await getProjectDag(client, orgId, projectId);
+      } catch (error) {
+        if (!(error instanceof ProjectDagUnavailableError)) throw error;
+        return renderShell(
+          c,
+          ctx,
+          { title: `tanren · ${ctx.project.name} · dag` },
+          <ProjectDagUnavailableBody projectId={projectId} projectName={ctx.project.name} model={model} />,
+        );
+      }
       return renderShell(
         c,
         ctx,
