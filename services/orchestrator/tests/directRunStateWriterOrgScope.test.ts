@@ -1,13 +1,16 @@
 // Issue #827 / CX-005: DirectRunStateWriter tenant task writes must FAIL CLOSED
-// when no org can be resolved (explicit orgId or ambient getJobOrgId). The old
-// bare-pool fallback is removed — an unscoped task op must not touch `this.pool`.
+// when no org can be resolved. Ambient resolution delegates to the canonical
+// 4-arm `withJobOrgScope` (open connection scope → job org → system job scope →
+// MissingOrgScopeError). Explicit orgId short-circuits to runWithOrgScope.
+// The old bare-pool fallback is removed — an unscoped task op must not touch
+// `this.pool`.
 //
 // DB-free: a fake pool records which receiver (pool vs scoped client) saw each
 // statement, mirroring rlsR2WriteRouting / orgScopeResolvers.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
-import { runWithJobOrgId } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemJobScope } from "@tanren/db";
 import { MissingOrgScopeError } from "../src/engine/data/orgScopedDb.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 
@@ -152,7 +155,7 @@ describe("DirectRunStateWriter — fail-closed tenant task scope (#827)", () => 
     expect(fp.onPool.filter(isTaskUpdate)).toHaveLength(0);
   });
 
-  it("explicit orgId wins over ambient job org for the SET LOCAL GUC", async () => {
+  it("matching explicit orgId + ambient job org routes via runWithOrgScope", async () => {
     const clientSql: string[] = [];
     const client = {
       query: async (sql: string) => {
@@ -166,9 +169,19 @@ describe("DirectRunStateWriter — fail-closed tenant task scope (#827)", () => 
       connect: async () => client,
     } as unknown as pg.Pool;
     const writer = new DirectRunStateWriter(pool);
-    await runWithJobOrgId("org_job", () => writer.insertTask({ ...insertInput, orgId: "org_explicit" }));
-    expect(clientSql).toContain("SET LOCAL app.current_org_id = 'org_explicit'");
-    expect(clientSql.some((s) => s.includes("org_job"))).toBe(false);
+    await runWithJobOrgId("org_acme", () => writer.insertTask({ ...insertInput, orgId: "org_acme" }));
+    expect(clientSql).toContain("SET LOCAL app.current_org_id = 'org_acme'");
+  });
+
+  it("mismatched explicit orgId vs ambient job org throws (defense-in-depth)", async () => {
+    const fp = fakePool();
+    const writer = new DirectRunStateWriter(fp.pool);
+    await expect(
+      runWithJobOrgId("org_job", () => writer.insertTask({ ...insertInput, orgId: "org_explicit" })),
+    ).rejects.toThrow(/conflicts with ambient job org/u);
+    expect(fp.onPool.filter(isTaskInsert)).toHaveLength(0);
+    expect(fp.onClient.filter(isTaskInsert)).toHaveLength(0);
+    expect(fp.connects).toBe(0);
   });
 
   it("updateTask with ambient job org routes to scoped client (not bare pool)", async () => {
@@ -177,6 +190,41 @@ describe("DirectRunStateWriter — fail-closed tenant task scope (#827)", () => 
     await runWithJobOrgId("org_job", () =>
       writer.updateTask({ taskId: "task_x", transition: "done", outcome: "passed" }),
     );
+    expect(fp.onClient.filter(isTaskUpdate)).toHaveLength(1);
+    expect(fp.onPool.filter(isTaskUpdate)).toHaveLength(0);
+  });
+
+  // withJobOrgScope arm 1: already-open connection scope is reused (no nested connect).
+  it("insertTask inside open runWithOrgScope reuses ambient client (arm 1)", async () => {
+    const fp = fakePool();
+    const writer = new DirectRunStateWriter(fp.pool);
+    await runWithOrgScope(fp.pool, "org_acme", async () => {
+      await writer.insertTask(insertInput);
+    });
+    expect(fp.onClient.filter(isTaskInsert)).toHaveLength(1);
+    expect(fp.onPool.filter(isTaskInsert)).toHaveLength(0);
+    // Outer runWithOrgScope connects once; inTaskScope must NOT open a nested scope.
+    expect(fp.connects).toBe(1);
+  });
+
+  // withJobOrgScope arm 3: per-job SYSTEM scope opens a short system-scope txn.
+  it("insertTask under system job scope opens system-scope txn (arm 3)", async () => {
+    const fp = fakePool();
+    const writer = new DirectRunStateWriter(fp.pool);
+    await runWithSystemJobScope(async () => {
+      await writer.insertTask(insertInput);
+    });
+    expect(fp.onClient.filter(isTaskInsert)).toHaveLength(1);
+    expect(fp.onPool.filter(isTaskInsert)).toHaveLength(0);
+    expect(fp.connects).toBe(1);
+  });
+
+  it("updateTask under system job scope routes to scoped client, not bare pool", async () => {
+    const fp = fakePool();
+    const writer = new DirectRunStateWriter(fp.pool);
+    await runWithSystemJobScope(async () => {
+      await writer.updateTask({ taskId: "task_x", transition: "running" });
+    });
     expect(fp.onClient.filter(isTaskUpdate)).toHaveLength(1);
     expect(fp.onPool.filter(isTaskUpdate)).toHaveLength(0);
   });

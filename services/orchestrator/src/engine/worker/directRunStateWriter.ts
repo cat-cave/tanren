@@ -11,7 +11,7 @@
 // is fully REVERSIBLE: flipping the flag off restores the direct write path.
 
 import { getJobOrgId, runWithOrgScope } from "@tanren/db";
-import { MissingOrgScopeError } from "../data/orgScopedDb.js";
+import { withJobOrgScope, type QueryClient } from "../data/orgScopedDb.js";
 import { scalarTextOr } from "../data/scalarText.js";
 import type pg from "pg";
 import type {
@@ -275,12 +275,13 @@ export class DirectRunStateWriter implements RunStateWriter {
   }
 
   /**
-   * Run a tenant task op under an org-scoped short transaction. Resolves org
-   * from an explicit `orgId` or the ambient per-job scope (`getJobOrgId`).
-   * Missing both throws {@link MissingOrgScopeError} — NEVER falls back to the
-   * bare pool (issue #827 / CX-005; mirrors `withJobOrgScope` arm-4).
+   * Run a tenant task op under the right org scope. An explicit `orgId` opens a
+   * short `runWithOrgScope`; otherwise resolution delegates entirely to the
+   * canonical 4-arm {@link withJobOrgScope} (ambient connection scope → job org
+   * → system job scope → {@link MissingOrgScopeError}). NEVER falls back to the
+   * bare pool (issue #827 / CX-005).
    */
-  private async inTaskScope(orgId: string | undefined, op: (client: pg.PoolClient) => Promise<void>): Promise<void> {
+  private async inTaskScope(orgId: string | undefined, op: (client: QueryClient) => Promise<void>): Promise<void> {
     await this.inTaskScopeResult(orgId, op);
   }
 
@@ -288,12 +289,22 @@ export class DirectRunStateWriter implements RunStateWriter {
    * Value-returning variant of {@link inTaskScope} (task #40 Class B): the
    * idempotent-retry outcome (`alreadyTerminal: true/false`) flows out of the
    * applier inside the same fail-closed org-scoped transaction.
+   *
+   * Explicit `orgId` short-circuits to `runWithOrgScope` (and defense-in-depth
+   * asserts it matches the ambient job org when both are present). All ambient
+   * resolution goes through {@link withJobOrgScope} so arms 1 (open connection)
+   * and 3 (system job scope) are preserved — not re-implemented here.
    */
-  private async inTaskScopeResult<T>(orgId: string | undefined, op: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    const resolved = orgId ?? getJobOrgId();
-    if (resolved === undefined) {
-      throw new MissingOrgScopeError("DirectRunStateWriter.inTaskScope");
+  private async inTaskScopeResult<T>(orgId: string | undefined, op: (client: QueryClient) => Promise<T>): Promise<T> {
+    if (orgId !== undefined) {
+      const jobOrgId = getJobOrgId();
+      if (jobOrgId !== undefined && jobOrgId !== orgId) {
+        throw new Error(
+          `DirectRunStateWriter.inTaskScope: explicit orgId ${JSON.stringify(orgId)} conflicts with ambient job org ${JSON.stringify(jobOrgId)}`,
+        );
+      }
+      return runWithOrgScope(this.pool, orgId, (client) => op(client));
     }
-    return runWithOrgScope(this.pool, resolved, (client) => op(client));
+    return withJobOrgScope(this.pool, op);
   }
 }
