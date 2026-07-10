@@ -164,14 +164,15 @@ const ExistRecon = () => (
             <div><span style={{ color: "var(--fg-3)" }}>web</span> · next.js 14 · turborepo</div>
             <div><span style={{ color: "var(--fg-3)" }}>data</span> · postgres · prisma</div>
             <div><span style={{ color: "var(--fg-3)" }}>deploy</span> · vercel · main → prod</div>
-            <div><span style={{ color: "var(--fg-3)" }}>ci</span> · github actions · 3 workflows</div>
+            <div><span style={{ color: "var(--fg-3)" }}>ci</span> · github actions · 3 workflows <span style={{ color: "var(--fg-4)" }}>(repo)</span></div>
+            <div><span style={{ color: "var(--fg-3)" }}>delivery</span> · tanren/gate · not seeded</div>
             <div><span style={{ color: "var(--fg-3)" }}>tests</span> · vitest · 1 file (gap 2)</div>
           </div> },
           { ch: "design dna · needs your input", state: "gap", body: <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--status-warn)" }}>↑ awaiting answer · gap 1 in chat</div> },
           { ch: "risks · 3 flagged", state: "warn", body: <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-2)", lineHeight: 1.55 }}>
             <div><span style={{ color: "var(--status-warn)", marginRight: 6 }}>!</span>14 direct-push contributors</div>
             <div><span style={{ color: "var(--status-warn)", marginRight: 6 }}>!</span>no codeowners file</div>
-            <div><span style={{ color: "var(--steel-08)", marginRight: 6 }}>i</span>no mergify config detected</div>
+            <div><span style={{ color: "var(--steel-08)", marginRight: 6 }}>i</span>no .tanren/ci.yml · native gate not seeded</div>
           </div> },
         ].map((c, i) => (
           <div key={i} className={"col-card" + (c.state === "gap" || c.state === "warn" ? " warn" : "")} style={{ padding: "10px 12px", gap: 6 }}>
@@ -201,11 +202,10 @@ const ExistConfig = () => (
     />
     <div className="cols-2-narrow" style={{ gridTemplateColumns: "260px 1fr" }}>
       <div className="col-card" style={{ padding: 0, overflow: "hidden", minHeight: 0 }}>
-        <div className="h" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}><span>files · <em style={{ color: "var(--ember-08)" }}>6</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+218 −0</span></div>
+        <div className="h" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}><span>files · <em style={{ color: "var(--ember-08)" }}>5</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+166 −0</span></div>
         {[
           { f: ".tanren/PROJECT.md", add: 64, sel: true, snapshot: true },
-          { f: ".github/workflows/tanren-ci.yml", add: 84 },
-          { f: ".mergify.yml", add: 42 },
+          { f: ".tanren/ci.yml", add: 48 },
           { f: "CODEOWNERS", add: 14 },
           { f: ".gitignore", add: 4, note: "mod" },
           { f: "PULL_REQUEST_TEMPLATE.md", add: 36, note: "mod" },
@@ -269,7 +269,8 @@ const ExistConfig = () => (
 - **web** · next.js 14 · turborepo · pnpm
 - **data** · postgres · prisma
 - **deploy** · vercel · main → prod
-- **ci** · github actions · 3 workflows
+- **ci (repo)** · github actions · 3 workflows · domain content, not delivery
+- **delivery** · tanren/gate via .tanren/ci.yml · native queue
 
 ## guardrails
 
@@ -358,7 +359,7 @@ const ExistDag = () => (
           { x: 280, y: 175, t: "e2e for runner ssh", tag: "#108" },
           { x: 280, y: 210, t: "add test coverage", tag: "gap·2", agent: true },
           { x: 280, y: 245, t: "codeowners scaffold", tag: "risk", agent: true },
-          { x: 280, y: 280, t: "mergify config", tag: "risk", agent: true },
+          { x: 280, y: 280, t: "native gate · .tanren/ci.yml", tag: "risk", agent: true },
           { x: 280, y: 315, t: "auditor flake on snapshot", tag: "#93" },
           { x: 280, y: 350, t: "fix workflow yaml lint", tag: "#88" },
           { x: 280, y: 385, t: "preserve auth.json across runs", tag: "#83" },

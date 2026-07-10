@@ -201,7 +201,7 @@ const PreviewPane = () => {
   );
 };
 
-window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
+window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "native" }) => {
   const [behaviors, setBehaviors] = React.useState(REVIEW_BEHAVIORS);
   const [deferralStates, setDeferralStates] = React.useState({});
 
@@ -268,7 +268,7 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
 };
 
 // Repo-level merge-integration controls the sign-off CTAs.
-// Modes: mergify | direct | external | none
+// Modes: native (MergeAuthority / native queue) | direct | external | none
 // `request changes` lives above this and is always available.
 const MergeActions = ({ mode, canSignOff }) => {
   if (mode === "none") {
@@ -301,10 +301,10 @@ const MergeActions = ({ mode, canSignOff }) => {
       </button>
     );
   }
-  // mergify (default)
+  // native queue / MergeAuthority (default finished path)
   return (
     <>
-      <button className="btn" disabled={!canSignOff}>sign off · queue with mergify</button>
+      <button className="btn" disabled={!canSignOff}>sign off · enqueue native queue</button>
       <button className="btn primary notched" disabled={!canSignOff}>sign off · merge now ↗</button>
     </>
   );
