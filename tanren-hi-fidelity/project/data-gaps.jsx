@@ -5,7 +5,7 @@
 //   • INBOX          — configurable issue-source candidate inbox
 //   • CONFIG_PR      — the tanren-config audit-gate PR review
 // Grounded in PROJECT_BRIEF §2 (the loop), §3 (writers/answerers),
-// §4 (cost models), §9 (specs/runs schema), §2.2 (cron audits, deferred).
+// §4 (cost models), §9 (specs/runs schema), §2.2 (scheduled / cron audits).
 
 // =====================================================================
 // FORGE · canned chat answers (the ⌘K palette → chat morph)
@@ -173,8 +173,9 @@ const specForNode = (node) => {
 };
 
 // =====================================================================
-// SCHEDULED AUDITS (PROJECT_BRIEF §2.2 — cron audits, deferred surface)
+// SCHEDULED AUDITS (PROJECT_BRIEF §2.2 — finished audits library mock)
 // Recurring read-only Answerer passes that fill idle subscription windows.
+// Consumed by view-audits.jsx (scheduled audits surface).
 // =====================================================================
 const AUDIT_JOBS = [
   {
