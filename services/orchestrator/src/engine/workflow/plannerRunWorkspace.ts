@@ -77,6 +77,13 @@ export interface PreparedRunWorkspace {
   // the legacy single-ref clone path (empty stack) ⇒ the conflict resolver keeps
   // `${targetBranch}@origin` exactly as today.
   bootstrappedBaseRevision?: string;
+  // MERGE-SAFETY (self-identity): the run's RESOLVED GitHub pushing identity (the SAME
+  // one that authenticated the clone AND set the workspace git author). Threaded to the
+  // clean-PR prep so the COMPOSED PR-head commit is authored as this login too — GitHub
+  // attributes the PR head to the bot login the external-change gate treats as Tanren's
+  // own (never `<unknown>`, which blocks auto-merge). Absent on the unauthenticated
+  // public-repo clone (no identity resolved) — that path never pushes as Tanren.
+  pushIdentity?: ActorIdentity;
   // SELF-HEAL (apex v35): set when the workspace-PREP `just bootstrap` (deps install) failed
   // and was DEFERRED to the gate's self-healing path instead of terminally stranding the
   // spec — see the prep-bootstrap block + the `workspace.bootstrap_deferred` schema. Absent
@@ -211,6 +218,10 @@ export async function prepareRunWorkspace(
     }),
     // apex v35: surface a deferred prep-bootstrap failure so the caller emits the event.
     ...(prepBootstrapDeferred !== undefined && { prepBootstrapDeferred }),
+    // MERGE-SAFETY (self-identity): surface the resolved pushing identity so the clean-PR
+    // prep authors the composed PR-head commit as the bot login (attributable ⇒ not
+    // flagged `<unknown>` external). Absent on the unauthenticated clone (never pushes).
+    ...(resolved.identity !== undefined && { pushIdentity: resolved.identity }),
   };
 }
 
