@@ -142,10 +142,9 @@ export class DirectRunStateWriter implements RunStateWriter {
   //
   // The run/spec ops carry an explicit org, so they open their OWN
   // `runWithOrgScope(orgId)` (like `finalizeRun`). The task ops resolve org from
-  // the ambient per-job scope when omitted and run on `this.pool` — which, handed
-  // the worker's `orgScopingPool`, self-routes each write through the per-job
-  // org-scoped short transaction, byte-identical to the workflow's prior direct
-  // task writes.
+  // an explicit input or the ambient per-job scope (`getJobOrgId`) and ALWAYS
+  // open a short `runWithOrgScope` — never a bare-pool fallback. Missing both
+  // throws `MissingOrgScopeError` (issue #827 / CX-005).
 
   async setRunStatus(input: SetRunStatusInput): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, (client) => applySetRunStatus(client, input));
@@ -225,15 +224,13 @@ export class DirectRunStateWriter implements RunStateWriter {
     // (the type-specific decode lives in ONE place); the refinement here only
     // pins the pairing shape.
     terminalPairSchema.parse(input);
-    // The atomic primitive REQUIRES a transactional scope — the bare-pool fallback
-    // in `inTaskScope` would degrade silently to two separate statements (the row
-    // UPDATE + the event INSERT each on their own connection), defeating the whole
-    // point of this seam. Other `inTaskScope` callers stay unchanged; THIS method
-    // is the only one that fails loud on an unresolved org (mirrors `withJobOrgScope`).
+    // Atomic terminal-row + terminal-event seam: ONE org-scoped transaction so
+    // the row UPDATE + event INSERT commit together. Fails loud on unresolved
+    // org (same fail-closed path as every other tenant task op — issue #827).
     // Returns the IDEMPOTENT-retry outcome the applier surfaces — `alreadyTerminal:
     // true` when the partial unique index `events_task_terminal_unique` deduped
     // the event INSERT (the original landed, this is a retry; task #40 Class B).
-    return this.inTaskScopeOrThrowResult(input.task.orgId, (client) => applyUpdateTaskWithEvent(client, input));
+    return this.inTaskScopeResult(input.task.orgId, (client) => applyUpdateTaskWithEvent(client, input));
   }
 
   async finalizeRunWithEvent(input: FinalizeRunWithEventInput): Promise<FinalizeRunWithEventOutcome> {
@@ -278,56 +275,24 @@ export class DirectRunStateWriter implements RunStateWriter {
   }
 
   /**
-   * Run a task op under its org scope: an explicit org (or the ambient per-job
-   * org) opens a short `runWithOrgScope`; absent both, run on `this.pool`
-   * verbatim (the `orgScopingPool` self-routes through any open ambient scope) —
-   * identical to the workflow's prior in-process task write.
+   * Run a tenant task op under an org-scoped short transaction. Resolves org
+   * from an explicit `orgId` or the ambient per-job scope (`getJobOrgId`).
+   * Missing both throws {@link MissingOrgScopeError} — NEVER falls back to the
+   * bare pool (issue #827 / CX-005; mirrors `withJobOrgScope` arm-4).
    */
-  private async inTaskScope(
-    orgId: string | undefined,
-    op: (client: pg.Pool | pg.PoolClient) => Promise<void>,
-  ): Promise<void> {
-    const resolved = orgId ?? getJobOrgId();
-    if (resolved === undefined) {
-      await op(this.pool);
-      return;
-    }
-    await runWithOrgScope(this.pool, resolved, (client) => op(client));
+  private async inTaskScope(orgId: string | undefined, op: (client: pg.PoolClient) => Promise<void>): Promise<void> {
+    await this.inTaskScopeResult(orgId, op);
   }
 
   /**
-   * Same as {@link inTaskScope} but FAILS LOUDLY when no org can be resolved
-   * (task #39): the atomic terminal-row + terminal-event seam REQUIRES a single
-   * `runWithOrgScope` transaction so the row UPDATE + event INSERT COMMIT
-   * together. Falling back to the bare pool would silently split them into two
-   * separate statements (each on its own pool connection) — defeating the whole
-   * point of `updateTaskWithEvent`. Mirrors `withJobOrgScope`'s arm-4 throw.
+   * Value-returning variant of {@link inTaskScope} (task #40 Class B): the
+   * idempotent-retry outcome (`alreadyTerminal: true/false`) flows out of the
+   * applier inside the same fail-closed org-scoped transaction.
    */
-  private async inTaskScopeOrThrow(
-    orgId: string | undefined,
-    op: (client: pg.PoolClient) => Promise<void>,
-  ): Promise<void> {
+  private async inTaskScopeResult<T>(orgId: string | undefined, op: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const resolved = orgId ?? getJobOrgId();
     if (resolved === undefined) {
-      throw new MissingOrgScopeError("DirectRunStateWriter.updateTaskWithEvent");
-    }
-    await runWithOrgScope(this.pool, resolved, (client) => op(client));
-  }
-
-  /**
-   * Value-returning variant of {@link inTaskScopeOrThrow} (task #40 Class B):
-   * the idempotent-retry outcome (`alreadyTerminal: true/false`) flows out of
-   * the applier inside the org-scoped transaction. Same arm-4 LOUD throw on a
-   * missing org as the void variant — atomicity is the contract, not a
-   * silent degrade.
-   */
-  private async inTaskScopeOrThrowResult<T>(
-    orgId: string | undefined,
-    op: (client: pg.PoolClient) => Promise<T>,
-  ): Promise<T> {
-    const resolved = orgId ?? getJobOrgId();
-    if (resolved === undefined) {
-      throw new MissingOrgScopeError("DirectRunStateWriter.updateTaskWithEvent");
+      throw new MissingOrgScopeError("DirectRunStateWriter.inTaskScope");
     }
     return runWithOrgScope(this.pool, resolved, (client) => op(client));
   }
