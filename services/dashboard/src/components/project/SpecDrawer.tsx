@@ -221,6 +221,71 @@ function EconomicsPanel(props: { spec: SpecDetail }) {
   );
 }
 
+function specDepPrompt(chips: SpecDepChip[]): string {
+  if (chips.length === 0) return "none";
+  return chips.map((chip) => `${chip.title} (${chip.specId}, ${chip.status})`).join("; ");
+}
+
+function specRunsPrompt(spec: SpecDetail): string {
+  if (!spec.runsAvailable) return "unavailable";
+  if (spec.runs.length === 0) return "none";
+  return spec.runs
+    .slice(0, 5)
+    .map((run) => `${run.runId}: ${run.status}/${run.outcome}, cost ${run.costLabel}, activity ${run.when}`)
+    .join("; ");
+}
+
+const SPEC_FORGE_PROMPT_MAX = 3800;
+const SPEC_FORGE_DESCRIPTION_MAX = 1200;
+
+function truncatePrompt(value: string, max: number): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 3)}...`;
+}
+
+export function specForgePrompt(spec: SpecDetail): string {
+  const prompt = [
+    `For spec ${spec.specId} "${spec.title}" currently ${spec.statusLabel}:`,
+    `Description: ${truncatePrompt(spec.description, SPEC_FORGE_DESCRIPTION_MAX)}`,
+    `Blocked reason: ${spec.blockedReason ?? "none"}`,
+    `Depends on: ${specDepPrompt(spec.dependsOn)}`,
+    `Blocks: ${specDepPrompt(spec.blocks)}`,
+    `Run history: ${specRunsPrompt(spec)}`,
+    `Economics: spend ${spec.economics.spendUsd}, attempts ${spec.economics.attempts}, avg ${spec.economics.avgCostUsd}, priced attempts ${spec.economics.pricedAttempts}, unpriced attempts ${spec.economics.unpricedAttempts}`,
+    "Explain blockers, next best action, dependency risk, and run cost posture.",
+  ].join("\n");
+  return truncatePrompt(prompt, SPEC_FORGE_PROMPT_MAX);
+}
+
+function SpecForgeCard(props: { spec: SpecDetail }) {
+  const { spec } = props;
+  return (
+    <div class="forge-card" data-spec-forge-card>
+      <div class="head">
+        <span class="stamp">鍛</span>
+        <span class="title">
+          ask Forge <em>this spec</em>
+        </span>
+        <span class="meta">{spec.specId}</span>
+      </div>
+      <div class="body">
+        <div class="spec-desc">
+          Open a Forge thread with this spec's title, status, dependencies, run history, and economics as the starting
+          question.
+        </div>
+        <button
+          type="button"
+          class="btn primary"
+          data-island-trigger="palette"
+          data-palette-prefill={specForgePrompt(spec)}
+        >
+          ask forge · this spec
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The escalated full-page spec view. */
 export function SpecPageBody(props: { spec: SpecDetail; projectName: string }) {
   const { spec } = props;
@@ -294,6 +359,7 @@ export function SpecPageBody(props: { spec: SpecDetail; projectName: string }) {
             </div>
           </div>
           <div class="col">
+            <SpecForgeCard spec={spec} />
             <div class="panel" data-run-history-panel>
               <div class="panel-head">
                 <h3>run history</h3>
