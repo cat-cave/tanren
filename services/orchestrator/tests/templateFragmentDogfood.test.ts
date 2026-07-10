@@ -39,6 +39,10 @@ import {
   type TemplateConfig,
   VirtualFileSystem,
 } from "../src/engine/templates/index.js";
+import {
+  RUNTIME_NODE_PNPM_OWNED_DEVDEPS,
+  RUNTIME_NODE_PNPM_OWNED_FILES,
+} from "../src/engine/templates/fragments/library/runtime-node-pnpm.js";
 
 const SNAPSHOT_DIR = join(import.meta.dirname, "__snapshots__", "templates");
 const UPDATE = process.env["TANREN_UPDATE_FRAGMENT_SNAPSHOTS"] === "1";
@@ -174,6 +178,44 @@ describe("template-fragment library — runtime mutation contract (PR-B NB-2)", 
       ).toBe(true);
     });
   }
+});
+
+// REGRESSION (apex v90 `just mutation` halt). `pnpm stryker run` failed with "no
+// TestRunner plugins were loaded" even though @stryker-mutator/vitest-runner was
+// installed and root-resolvable. Under pnpm's DEFAULT isolated linker, Stryker's
+// plugin-discovery glob (`@stryker-mutator/*`, resolved relative to @stryker-mutator/
+// core's symlink realpath) never sees vitest-runner — each plugin is isolated in its
+// own `.pnpm/...` dir. The node-pnpm runtime therefore MUST ship a pnpm-workspace.yaml
+// with `nodeLinker: hoisted` (a flat, npm-like node_modules) so the glob finds the
+// vitest-runner as a real sibling of core. NB: pnpm 10+ ignores `node-linker` in
+// .npmrc, so the fix lives in pnpm-workspace.yaml — an .npmrc would be a silent no-op.
+describe("template-fragment library — node-pnpm Stryker/pnpm-linker coherence (apex v90)", () => {
+  it("node-pnpm scaffold ships pnpm-workspace.yaml with nodeLinker: hoisted, coherent with the stryker/vitest wiring", async () => {
+    const library = loadFragmentLibrary();
+    const vfs = await composeTemplate(
+      { slug: "node-pnpm-minimal", runtime: "node-pnpm", deploy: "none", addons: [], examples: [] },
+      library,
+    );
+
+    // The pnpm settings file exists and selects the hoisted (flat) node linker.
+    expect(vfs.has("pnpm-workspace.yaml"), "node-pnpm scaffold must ship pnpm-workspace.yaml").toBe(true);
+    const workspace = vfs.read("pnpm-workspace.yaml");
+    expect(workspace, "pnpm-workspace.yaml must select the hoisted node linker").toMatch(
+      /^\s*nodeLinker:\s*hoisted\s*$/mu,
+    );
+
+    // The owned-files single source of truth must list it (drives the authorer
+    // collision guidance + the compose snapshot — it cannot silently drop).
+    expect(RUNTIME_NODE_PNPM_OWNED_FILES).toContain("pnpm-workspace.yaml");
+
+    // Coherence: the mutation runner Stryker loads (vitest) is exactly the flat-layout
+    // plugin the hoisted linker makes discoverable, and the `just mutation` hook drives
+    // stryker. If any of these three drift apart the gate breaks again.
+    const stryker = vfs.read("stryker.conf.mjs");
+    expect(stryker, "stryker must use the vitest test runner").toMatch(/testRunner:\s*["']vitest["']/u);
+    expect(RUNTIME_NODE_PNPM_OWNED_DEVDEPS).toHaveProperty("@stryker-mutator/vitest-runner");
+    expect(vfs.justHookLines("mutation").join("\n")).toMatch(/stryker\s+run/u);
+  });
 });
 
 describe("template-fragment library — functional-test contract (PR-B NB-1)", () => {
