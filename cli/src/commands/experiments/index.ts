@@ -5,12 +5,67 @@
 // print the raw JSON (the default); `report` / `compare` render a table for an
 // operator and honor `--json` to print the raw response instead.
 
+import { parseJsonObject, requireNonEmptyString } from "../../json.js";
 import { jsonRequest, request } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required, type ParsedArgs } from "../args.js";
 import { renderCellComparison, renderCellScorecard, type CellComparison, type CellScorecard } from "./render.js";
 
+/** Matches server `SeedTaskRef` shape (engine/benchmark/entities.ts). */
+export interface SeedTaskRefInput {
+  repo: string;
+  sha: string;
+  acceptTierHash: string;
+  corpusTier: 0 | 1 | 2;
+}
+
+/** Minimum trials per cell (mirrors DB check + CreateCellBody z.number().int().min(1)). */
+export const MIN_TRIALS_TARGET = 1;
+
+/** Soft upper bound so typos like 1000000 fail fast at the CLI. */
+export const MAX_TRIALS_TARGET = 10_000;
+
 function orgPath(args: ParsedArgs): string {
   return `/orgs/${encodeURIComponent(required(args, "org-id"))}`;
+}
+
+/**
+ * Parse `--seed-task-ref` JSON into the SeedTaskRef shape the orchestrator expects.
+ * Rejects non-objects, missing fields, and corpusTier outside {0,1,2}.
+ */
+export function parseSeedTaskRef(raw: string): SeedTaskRefInput {
+  const value = parseJsonObject(raw, "seed-task-ref");
+  const repo = requireNonEmptyString(value, "repo", "--seed-task-ref");
+  const sha = requireNonEmptyString(value, "sha", "--seed-task-ref");
+  const acceptTierHash = requireNonEmptyString(value, "acceptTierHash", "--seed-task-ref");
+  const corpusTier = value["corpusTier"];
+  if (corpusTier !== 0 && corpusTier !== 1 && corpusTier !== 2) {
+    throw new Error("--seed-task-ref.corpusTier must be 0, 1, or 2");
+  }
+  return { repo, sha, acceptTierHash, corpusTier };
+}
+
+/**
+ * Parse `--frozen-config` as a plain JSON object. Full FrozenConfig shape is
+ * enforced server-side; the CLI only rejects non-objects / invalid JSON.
+ */
+export function parseFrozenConfig(raw: string): Record<string, unknown> {
+  return parseJsonObject(raw, "frozen-config");
+}
+
+/**
+ * Parse `--trials-target` as an integer in [MIN_TRIALS_TARGET, MAX_TRIALS_TARGET].
+ */
+export function parseTrialsTarget(raw: string): number {
+  if (!/^-?\d+$/u.test(raw.trim())) {
+    throw new Error(`--trials-target must be an integer (got ${JSON.stringify(raw)})`);
+  }
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isInteger(n) || n < MIN_TRIALS_TARGET || n > MAX_TRIALS_TARGET) {
+    throw new Error(
+      `--trials-target must be an integer between ${MIN_TRIALS_TARGET} and ${MAX_TRIALS_TARGET} (got ${raw})`,
+    );
+  }
+  return n;
 }
 
 // ---- Experiments ----
@@ -21,7 +76,7 @@ export async function experimentsCreate(argv: string[]): Promise<void> {
     title: required(args, "title"),
     knob: required(args, "knob"),
     hypothesis: required(args, "hypothesis"),
-    seedTaskRef: JSON.parse(required(args, "seed-task-ref")) as unknown,
+    seedTaskRef: parseSeedTaskRef(required(args, "seed-task-ref")),
   });
   jsonOutput(args, result);
 }
@@ -89,8 +144,8 @@ export async function cellsCreate(argv: string[]): Promise<void> {
   const experimentId = required(args, "experiment-id");
   const result = await jsonRequest(`${orgPath(args)}/experiments/${encodeURIComponent(experimentId)}/cells`, {
     label: required(args, "label"),
-    frozenConfig: JSON.parse(required(args, "frozen-config")) as unknown,
-    trialsTarget: Number.parseInt(required(args, "trials-target"), 10),
+    frozenConfig: parseFrozenConfig(required(args, "frozen-config")),
+    trialsTarget: parseTrialsTarget(required(args, "trials-target")),
   });
   jsonOutput(args, result);
 }

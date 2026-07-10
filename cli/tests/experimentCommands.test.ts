@@ -214,3 +214,79 @@ describe("benchmark render helpers", () => {
     expect(out).toContain("A=cell_a");
   });
 });
+
+describe("experiment / cell input validation (CX-016)", () => {
+  it("parseSeedTaskRef accepts a valid shape and rejects non-objects / bad tiers", async () => {
+    const exp = await import("../src/commands/experiments/index.js");
+    expect(exp.parseSeedTaskRef(SEED)).toEqual({
+      repo: "o/r",
+      sha: "abc12345",
+      acceptTierHash: "h",
+      corpusTier: 1,
+    });
+    expect(() => exp.parseSeedTaskRef("[]")).toThrow(/must be a JSON object/u);
+    expect(() => exp.parseSeedTaskRef("null")).toThrow(/must be a JSON object/u);
+    expect(() => exp.parseSeedTaskRef("not-json")).toThrow(/not valid JSON/u);
+    expect(() => exp.parseSeedTaskRef('{"repo":"o/r","sha":"x","acceptTierHash":"h","corpusTier":9}')).toThrow(
+      /corpusTier/u,
+    );
+    expect(() => exp.parseSeedTaskRef('{"repo":"","sha":"x","acceptTierHash":"h","corpusTier":0}')).toThrow(/repo/u);
+  });
+
+  it("parseFrozenConfig requires a plain object", async () => {
+    const exp = await import("../src/commands/experiments/index.js");
+    expect(exp.parseFrozenConfig(FROZEN)).toMatchObject({ governance: "strict" });
+    expect(() => exp.parseFrozenConfig("[]")).toThrow(/must be a JSON object/u);
+    expect(() => exp.parseFrozenConfig('"string"')).toThrow(/must be a JSON object/u);
+  });
+
+  it("parseTrialsTarget enforces integer bounds", async () => {
+    const exp = await import("../src/commands/experiments/index.js");
+    expect(exp.parseTrialsTarget("5")).toBe(5);
+    expect(exp.parseTrialsTarget("1")).toBe(1);
+    expect(() => exp.parseTrialsTarget("0")).toThrow(/between/u);
+    expect(() => exp.parseTrialsTarget("-1")).toThrow(/between/u);
+    expect(() => exp.parseTrialsTarget("1.5")).toThrow(/integer/u);
+    expect(() => exp.parseTrialsTarget("nope")).toThrow(/integer/u);
+    expect(() => exp.parseTrialsTarget("10001")).toThrow(/between/u);
+  });
+
+  it("experiments create fails before the network on bad seed-task-ref", async () => {
+    const exp = await withStub({ experiment: { experimentId: "experiment_1" } });
+    await expect(
+      exp.experimentsCreate([
+        "--org-id",
+        "org_acme",
+        "--title",
+        "T",
+        "--knob",
+        "governance",
+        "--hypothesis",
+        "H",
+        "--seed-task-ref",
+        "[]",
+      ]),
+    ).rejects.toThrow(/must be a JSON object/u);
+    // No request should have been issued.
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
+  it("cells create fails before the network on bad trials-target", async () => {
+    const exp = await withStub({ cell: { cellId: "cell_1" } });
+    await expect(
+      exp.cellsCreate([
+        "--org-id",
+        "org_acme",
+        "--experiment-id",
+        "experiment_1",
+        "--label",
+        "control",
+        "--frozen-config",
+        FROZEN,
+        "--trials-target",
+        "0",
+      ]),
+    ).rejects.toThrow(/trials-target/u);
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+});

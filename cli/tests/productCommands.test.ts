@@ -95,6 +95,24 @@ describe("P2A-0013 product CLI commands", () => {
     expect(sent.json).toEqual({ config: { version: 1 } });
   });
 
+  it("orgs config-set rejects non-object and invalid JSON (CX-015)", async () => {
+    const { orgs } = await withStub({ id: "org_acme" });
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", "[]"])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", "null"])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", "not-json"])).rejects.toThrow(
+      /not valid JSON/u,
+    );
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", '"string"'])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    // Fail-closed: nothing reached the stub.
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
   it("projects create POSTs to the org-scoped projects route", async () => {
     const body = { projectId: "project_1" };
     const { projects } = await withStub(body);
