@@ -31,12 +31,23 @@ import { outputOnlyWatchdog } from "../../ssh/activityWatchdog.js";
 // from "file present but empty" (body is whitespace) — no second stat round-trip.
 export const TANREN_FILE_ABSENT_MARKER = "__TANREN_FILE_ABSENT__";
 
+// The marker the artifact STAT emits when the path does not exist at all. Distinct
+// from the file-read marker so the two probes never alias each other.
+export const TANREN_ARTIFACT_ABSENT_MARKER = "__TANREN_ARTIFACT_ABSENT__";
+
 // Why a workspace file could not be read. Mirrors `ingestGateJunit`'s discrimination.
 export type FileAbsence = "absent" | "read_failed" | "empty";
 
 export type WorkspaceFileRead =
   | { present: true; contents: string; bytes: number }
   | { present: false; reason: FileAbsence };
+
+// The result of an artifact STAT (a build-output presence probe). Unlike the
+// file-read primitive, the artifact path may be a FILE **or** a DIRECTORY (a `tsc`
+// `dist/` tree, a `reports/mutation` report dir). Presence is measured in total
+// bytes of regular-file content at/under the path; an empty file or empty directory
+// is `empty` (a build that emitted nothing), never `present`.
+export type WorkspaceArtifactStat = { present: true; bytes: number } | { present: false; reason: FileAbsence };
 
 export interface HarvesterDeps {
   ssh: CommandSubstrate;
@@ -69,6 +80,55 @@ export async function readWorkspaceFile(deps: HarvesterDeps, relPath: string): P
     return { present: false, reason: trimmed === "" ? "empty" : "absent" };
   }
   return { present: true, contents: result.stdout, bytes: Buffer.byteLength(result.stdout, "utf8") };
+}
+
+/**
+ * STAT a workspace-relative ARTIFACT path over SSH and return a discriminated
+ * presence verdict. The artifact contract (CiStepEvidence `kind: "artifact"`) asserts
+ * the build WROTE output at `path` — but a build output is frequently a DIRECTORY (a
+ * `tsc -p tsconfig.build.json` `dist/` tree, a `reports/mutation` report dir), NOT a
+ * single file. A plain `[ -f ]` file test reports a directory as ABSENT — the exact
+ * false-negative that halted apex v89 (the build emitted `dist/` with `demo.js` et al,
+ * yet the artifact probe's `-f dist` test failed for the directory → `artifact_absent`
+ * at merge time). So this probe handles BOTH shapes:
+ *   - a regular FILE      → its byte size (`wc -c`);
+ *   - a DIRECTORY         → the SUM of regular-file bytes under it (recursively);
+ *   - absent (`! -e`)     → the absent marker (`reason: "absent"`);
+ *   - zero bytes          → `reason: "empty"` (an empty file OR a directory with no
+ *                           file content — a build that produced nothing).
+ * STACK-AGNOSTIC: it names no artifact tool/format; it only measures presence+size.
+ */
+export async function statWorkspaceArtifact(deps: HarvesterDeps, relPath: string): Promise<WorkspaceArtifactStat> {
+  const path = `${deps.workspacePath.replace(/\/+$/u, "")}/${relPath.replace(/^\/+/u, "")}`;
+  const p = quoteSshShellArg(path);
+  const result = await deps.ssh.run(deps.target, {
+    // File-or-directory presence + total content bytes, in ONE round-trip. A directory
+    // sums its regular files' bytes via `find … -type f -exec cat + | wc -c` (POSIX;
+    // no GNU-only flags). An absent path echoes the marker; anything else is a byte
+    // count (possibly 0 → empty).
+    command:
+      `if [ ! -e ${p} ]; then echo ${TANREN_ARTIFACT_ABSENT_MARKER}; ` +
+      `elif [ -f ${p} ]; then wc -c < ${p}; ` +
+      `elif [ -d ${p} ]; then find ${p} -type f -exec cat {} + 2>/dev/null | wc -c; ` +
+      `else echo ${TANREN_ARTIFACT_ABSENT_MARKER}; fi`,
+    // INFRA stat read: output-driven watchdog, no wall-clock kill.
+    watchdog: outputOnlyWatchdog(),
+  });
+  if (result.failure !== undefined || result.stalled === true || result.exitCode !== 0) {
+    return { present: false, reason: "read_failed" };
+  }
+  const trimmed = result.stdout.trim();
+  if (trimmed === TANREN_ARTIFACT_ABSENT_MARKER) {
+    return { present: false, reason: "absent" };
+  }
+  const bytes = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(bytes)) {
+    return { present: false, reason: "read_failed" };
+  }
+  if (bytes === 0) {
+    return { present: false, reason: "empty" };
+  }
+  return { present: true, bytes };
 }
 
 // Why a step's evidence is insufficient. Discriminated so the gate.failed payload
@@ -214,29 +274,32 @@ async function harvestArtifact(
 ): Promise<EvidenceVerdict> {
   const required: Record<string, number | string> = { path: evidence.path };
   if (evidence.minBytes !== undefined) required["minBytes"] = evidence.minBytes;
-  const read = await readWorkspaceFile(deps, evidence.path);
-  if (!read.present) {
+  // Stat the artifact path — handles a FILE or a DIRECTORY build output (the `dist/`
+  // false-negative fix). A file-only `[ -f ]` read would report the `dist` directory
+  // as absent even though the build wrote it.
+  const stat = await statWorkspaceArtifact(deps, evidence.path);
+  if (!stat.present) {
     return {
       sufficient: false,
       kind: "artifact",
       reason: "artifact_absent",
-      observed: { path: evidence.path, readReason: read.reason },
+      observed: { path: evidence.path, readReason: stat.reason },
       required,
     };
   }
-  if (evidence.minBytes !== undefined && read.bytes < evidence.minBytes) {
+  if (evidence.minBytes !== undefined && stat.bytes < evidence.minBytes) {
     return {
       sufficient: false,
       kind: "artifact",
       reason: "artifact_too_small",
-      observed: { bytes: read.bytes },
+      observed: { bytes: stat.bytes },
       required,
     };
   }
   return {
     sufficient: true,
     kind: "artifact",
-    observed: { bytes: read.bytes },
+    observed: { bytes: stat.bytes },
     required: { minBytes: evidence.minBytes ?? 0 },
   };
 }
