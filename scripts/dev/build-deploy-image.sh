@@ -5,7 +5,7 @@
 # and PUSHES it, so a Fly release (`flyDeployProvisioner.triggerDeploy`) runs a
 # MERGE-REFLECTING image instead of a static grant image.
 #
-# REUSE the BuildKit doctrine: docker buildx build --push. Unlike build-env-image.sh
+# REUSE the BuildKit doctrine: docker buildx build, then docker push. Unlike build-env-image.sh
 # (which targets an insecure localhost dev registry and needs a docker-container
 # builder + insecure-registry config), registry.fly.io is a real HTTPS registry, so
 # the DEFAULT builder + a plain --push suffice. No cache-export complexity: per-SHA
@@ -50,15 +50,19 @@ echo "[build-deploy-image] image ref      : ${IMAGE_REF}"
 # Fly's registry authenticates with username `x` + the Fly API token as the password.
 docker login registry.fly.io -u x --password-stdin <<< "$FLY_TOKEN" >&2
 
-# Build + push the per-commit image. NO wall-clock timeout (feedback_no_timeouts_progress_based):
-# the build runs to its own terminal exit; a non-zero exit surfaces LOUD to the driver
-# (FlyImageBuildFailedError). The default buildx builder is fine for an HTTPS registry.
+# Build the per-commit image, THEN push it — in TWO steps, deliberately. The buildkit
+# `--push` convenience flag is NOT portable: podman's `docker buildx` shim rejects it
+# (`Error: unknown flag: --push`). Building with `--tag` (no `--push`) leaves the image in
+# local storage under BOTH the docker default builder and podman, so a following
+# `docker push` uploads it — cross-runtime, no docker-daemon assumption.
+# NO wall-clock timeout (feedback_no_timeouts_progress_based): each step runs to its own
+# terminal exit; a non-zero exit surfaces LOUD to the driver (FlyImageBuildFailedError).
 set -x
 docker buildx build \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
-  --push \
   "$CONTEXT"
+docker push "$IMAGE_REF"
 set +x
 
 echo "[build-deploy-image] built + pushed ${IMAGE_REF}"

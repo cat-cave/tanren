@@ -32,6 +32,7 @@
     "BAREWORD",
     "BYPASSRLS",
     "Backgrounded",
+    "buildah",
     "buildctx",
     "buildpacks",
     "paketobuildpacks",

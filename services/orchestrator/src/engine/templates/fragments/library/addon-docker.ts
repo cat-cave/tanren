@@ -53,11 +53,18 @@ function nodeDockerfile(): string {
 # ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY inside a docker build (task #141 —
 # apex v71/v78 halt class). Downstream tools (next.js build, turborepo) key off
 # CI=true too.
+# pnpm-workspace.yaml is copied WITH package.json (before install), NOT later via
+# \`COPY . .\`: the runtime ships a pnpm-workspace.yaml (nodeLinker: hoisted). If it
+# only arrived with \`COPY . .\` AFTER \`pnpm install\`, the subsequent \`pnpm build\`
+# would see a newly workspace-rooted project, RE-RESOLVE the install mid-build, and
+# that re-resolve HANGS under buildah/podman's \`RUN\` (the process never returns —
+# a rootless-podman multi-stage-build wedge). Installing workspace-aware from the
+# start keeps \`pnpm build\` a pure \`tsc\` with no re-install.
 FROM node:24-alpine AS builder
 ENV CI=true
 RUN corepack enable
 WORKDIR /app
-COPY package.json pnpm-lock.yaml* ./
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
 RUN pnpm install --no-frozen-lockfile
 COPY . .
 RUN pnpm build
