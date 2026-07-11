@@ -105,6 +105,28 @@ describe("cli package", () => {
     });
   });
 
+  it("project create rejects non-object and invalid --config-json before the network", async () => {
+    const { createProjectCommand } = await withStub({ projectId: "project_1" });
+    const base = ["--name", "Tanren", "--repo-url", "https://github.com/cat-cave/x"];
+    await expect(createProjectCommand([...base, "--config-json", "[]"])).rejects.toThrow(/must be a JSON object/u);
+    await expect(createProjectCommand([...base, "--config-json", "null"])).rejects.toThrow(/must be a JSON object/u);
+    await expect(createProjectCommand([...base, "--config-json", '"string"'])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    await expect(createProjectCommand([...base, "--config-json", "not-json"])).rejects.toThrow(/not valid JSON/u);
+    // Redaction: sentinel secret in truncated JSON must not appear in the error.
+    const secret = "tnt_sentinel_SECRET_never_leak_9f3a";
+    const error = await createProjectCommand([...base, "--config-json", `{"token":"${secret}"`]).then(
+      () => {
+        throw new Error("expected createProjectCommand to reject");
+      },
+      (e: unknown) => e,
+    );
+    expect((error as Error).message).toMatch(/not valid JSON/u);
+    expect((error as Error).message).not.toContain(secret);
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
   it("creates specs with repeated acceptance criteria and dependencies", async () => {
     const { createSpecCommand } = await withStub({ specId: "spec_1", projectId: "project_1" });
 
