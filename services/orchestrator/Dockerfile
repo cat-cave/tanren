@@ -1,5 +1,15 @@
 FROM node:24-bookworm-slim
 
+# podman (remote client) + the `docker`→podman shim: the worker boots the merge-reflecting
+# Fly deploy builder (autonomyLoops → liveFlyImageBuilder), which shells
+# `scripts/dev/build-deploy-image.sh` (`docker build` + `docker push`). In the dev stack the
+# host podman socket is mounted into the worker and CONTAINER_HOST points at it, so these
+# `docker` calls run as `podman --remote`, streaming the build to the host podman (which
+# owns the storage + registry auth). Only the CLIENT is needed here — no local daemon.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends podman podman-docker \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY . .
