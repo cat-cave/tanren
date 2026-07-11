@@ -128,6 +128,37 @@ if (import.meta.url === \`file://\${process.argv[1] ?? ""}\`) {
 }
 `;
 
+// The HTTP server entry — the SINGLE artifact that satisfies all three launch
+// surfaces at once: the Dockerfile `CMD ["node", "dist/index.js"]` (addon-docker),
+// the buildpacks launch `pnpm start` (package.json `scripts.start`), and
+// package.json `main`. `tsc -p tsconfig.build.json` compiles `src/index.ts` →
+// `dist/index.js` (TSCONFIG_BUILD.include = ["src/**/*.ts"]). Uses `node:http`
+// (zero deps) and serves `tanrenDemo()` so the served surface is tied to the same
+// demo function the behavioral test asserts. Listens on `process.env.PORT ?? 3000`
+// (Fly injects PORT == fly.toml internal_port 3000) on `0.0.0.0` so the container
+// edge can reach it. A frontend/backend fragment MAY replace this entry wholesale
+// to serve its real UI; removing it drops the served surface the deploy verifies.
+const SERVER_ENTRY = `import { createServer } from "node:http";
+import { tanrenDemo } from "./demo.js";
+
+// Tanren node-pnpm runtime — minimal HTTP server so the composed scaffold SERVES
+// on Fly's internal_port. Fly injects PORT (== fly.toml internal_port 3000);
+// fall back to 3000 for local/dev. \`Number(...) || 3000\` coerces a missing, empty,
+// or non-numeric PORT to 3000 (an empty string would otherwise become 0 = a random
+// port). A frontend/backend fragment may replace this entry wholesale, but removing
+// it drops the served surface the deploy verifies.
+const port = Number(process.env.PORT) || 3000;
+
+const server = createServer((_req, res) => {
+  res.writeHead(200, { "content-type": "text/plain" });
+  res.end(tanrenDemo());
+});
+
+server.listen(port, "0.0.0.0", () => {
+  console.log(\`tanren listening on \${port}\`);
+});
+`;
+
 const DEMO_TEST = `// A test that exercises the demo entry — proves the public surface actually returns
 // a result, beyond base/'s presence-only structural assertion.
 import { describe, expect, it } from "vitest";
@@ -184,11 +215,13 @@ function packageJsonFor(config: TemplateConfig): string {
       version: "0.0.0",
       private: true,
       type: "module",
+      main: "dist/index.js",
       scripts: {
         lint: "eslint src tests",
         typecheck: "tsc -p tsconfig.json --noEmit",
         test: "vitest run",
         build: "tsc -p tsconfig.build.json",
+        start: "node dist/index.js",
       },
     },
     null,
@@ -216,6 +249,7 @@ const STATIC_OWNED_FILES: Readonly<Record<string, string>> = {
   "cucumber.cjs": CUCUMBER_CONFIG,
   "stryker.conf.mjs": STRYKER_CONFIG,
   "src/demo.ts": DEMO_ENTRY,
+  "src/index.ts": SERVER_ENTRY,
   "tests/demo.test.ts": DEMO_TEST,
   "features/step_definitions/.gitkeep": "",
 } as const;
@@ -235,6 +269,12 @@ export const RUNTIME_NODE_PNPM_OWNED_FILES: readonly string[] = [
 export const RUNTIME_NODE_PNPM_OWNED_DEVDEPS: Readonly<Record<string, string>> = {
   vitest: "^4.0.0",
   typescript: "^5.6.0",
+  // Explicit: `src/index.ts` imports `node:http` + reads `process.env`, and `src/demo.ts`
+  // reads `process.argv`. Declaring @types/node (matching the node:24-alpine Docker base)
+  // makes the scaffold's `tsc -p tsconfig.build.json` resolve node builtins DIRECTLY,
+  // rather than relying on a transitively-hoisted @types/node (fragile — a dep bump could
+  // drop it and break the build gate + the Docker image build).
+  "@types/node": "^24.0.0",
   eslint: "^9.0.0",
   "@eslint/js": "^9.0.0",
   "typescript-eslint": "^8.0.0",

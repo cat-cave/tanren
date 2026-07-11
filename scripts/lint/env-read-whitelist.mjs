@@ -68,6 +68,10 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   ["npm_package_version", "service /healthz version stamp (npm-injected)"],
   ["ORCHESTRATOR_URL", "dashboard → orchestrator base URL (documented default)"],
   ["DASHBOARD_PORT", "dashboard HTTP listen port (documented default)"],
+  [
+    "PORT",
+    "composed scaffold HTTP listen port (Fly injects PORT == fly.toml internal_port; template literal in runtime-node-pnpm.ts, not an orchestrator boot-path read)",
+  ],
 ]);
 
 // Files allowed to read `TANREN_*` directly. The envSchema files are the intended
