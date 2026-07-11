@@ -109,6 +109,16 @@ describe("P2A-0013 product CLI commands", () => {
     await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", '"string"'])).rejects.toThrow(
       /must be a JSON object/u,
     );
+    // Redaction: sentinel secret in truncated JSON must not appear in the error.
+    const secret = "tnt_sentinel_SECRET_never_leak_9f3a";
+    const error = await orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", `{"token":"${secret}"`]).then(
+      () => {
+        throw new Error("expected orgsConfigSet to reject");
+      },
+      (e: unknown) => e,
+    );
+    expect((error as Error).message).toMatch(/not valid JSON/u);
+    expect((error as Error).message).not.toContain(secret);
     // Fail-closed: nothing reached the stub.
     expect(() => server.lastRequest()).toThrow(/no requests/u);
   });

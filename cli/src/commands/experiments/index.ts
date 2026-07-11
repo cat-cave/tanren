@@ -5,7 +5,7 @@
 // print the raw JSON (the default); `report` / `compare` render a table for an
 // operator and honor `--json` to print the raw response instead.
 
-import { parseJsonObject, requireNonEmptyString } from "../../json.js";
+import { isPlainObject, parseJsonObject, rejectUnknownKeys, requireNonEmptyString } from "../../json.js";
 import { jsonRequest, request } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required, type ParsedArgs } from "../args.js";
 import { renderCellComparison, renderCellScorecard, type CellComparison, type CellScorecard } from "./render.js";
@@ -18,11 +18,35 @@ export interface SeedTaskRefInput {
   corpusTier: 0 | 1 | 2;
 }
 
-/** Minimum trials per cell (mirrors DB check + CreateCellBody z.number().int().min(1)). */
-export const MIN_TRIALS_TARGET = 1;
+/** Matches server `FrozenConfig` top-level shape (engine/benchmark/entities.ts). */
+export interface FrozenConfigInput {
+  routing: Record<string, unknown>;
+  ciTiers: {
+    tiers: Record<string, unknown>;
+    when: Record<string, unknown>;
+  };
+  governance: GovernancePosture;
+  mergeIntegration: MergeIntegration;
+}
 
-/** Soft upper bound so typos like 1000000 fail fast at the CLI. */
-export const MAX_TRIALS_TARGET = 10_000;
+/** Server `GovernancePosture` enum. */
+export const GOVERNANCE_POSTURES = ["strict", "open", "audit_only", "lenient"] as const;
+export type GovernancePosture = (typeof GOVERNANCE_POSTURES)[number];
+
+/** Server `MergeIntegration` enum. */
+export const MERGE_INTEGRATIONS = ["native_queue", "direct_merge", "external_reviewer", "not_configured"] as const;
+export type MergeIntegration = (typeof MERGE_INTEGRATIONS)[number];
+
+/** Server `CiWhen` enum values allowed inside a when-policy array. */
+const CI_WHEN = new Set(["per_iteration", "pre_audit", "pre_merge"]);
+
+const SEED_TASK_REF_KEYS = new Set(["repo", "sha", "acceptTierHash", "corpusTier"]);
+const FROZEN_CONFIG_KEYS = new Set(["routing", "ciTiers", "governance", "mergeIntegration"]);
+const CI_TIER_SNAPSHOT_KEYS = new Set(["tiers", "when"]);
+const ROUTING_ROLE_KEYS = new Set(["plan", "write", "check", "audit", "demo", "forge"]);
+
+/** Minimum trials per cell (mirrors CreateCellBody z.number().int().min(1)). */
+export const MIN_TRIALS_TARGET = 1;
 
 function orgPath(args: ParsedArgs): string {
   return `/orgs/${encodeURIComponent(required(args, "org-id"))}`;
@@ -30,10 +54,11 @@ function orgPath(args: ParsedArgs): string {
 
 /**
  * Parse `--seed-task-ref` JSON into the SeedTaskRef shape the orchestrator expects.
- * Rejects non-objects, missing fields, and corpusTier outside {0,1,2}.
+ * Strict: rejects unknown fields (server SeedTaskRef is `.strict()`).
  */
 export function parseSeedTaskRef(raw: string): SeedTaskRefInput {
   const value = parseJsonObject(raw, "seed-task-ref");
+  rejectUnknownKeys(value, SEED_TASK_REF_KEYS, "--seed-task-ref");
   const repo = requireNonEmptyString(value, "repo", "--seed-task-ref");
   const sha = requireNonEmptyString(value, "sha", "--seed-task-ref");
   const acceptTierHash = requireNonEmptyString(value, "acceptTierHash", "--seed-task-ref");
@@ -45,25 +70,135 @@ export function parseSeedTaskRef(raw: string): SeedTaskRefInput {
 }
 
 /**
- * Parse `--frozen-config` as a plain JSON object. Full FrozenConfig shape is
- * enforced server-side; the CLI only rejects non-objects / invalid JSON.
+ * Parse `--frozen-config` aligned with server `FrozenConfig` (strict top-level
+ * keys + required nested structure). Full nested RoutingTable / CiStep detail
+ * is still enforced server-side; the CLI fails closed on shape mismatches and
+ * unknown fields so typos never silently strip.
  */
-export function parseFrozenConfig(raw: string): Record<string, unknown> {
-  return parseJsonObject(raw, "frozen-config");
+export function parseFrozenConfig(raw: string): FrozenConfigInput {
+  const value = parseJsonObject(raw, "frozen-config");
+  rejectUnknownKeys(value, FROZEN_CONFIG_KEYS, "--frozen-config");
+
+  for (const key of FROZEN_CONFIG_KEYS) {
+    if (!(key in value)) {
+      throw new Error(`--frozen-config must include field "${key}"`);
+    }
+  }
+
+  const governance = value["governance"];
+  if (typeof governance !== "string" || !GOVERNANCE_POSTURES.includes(governance as GovernancePosture)) {
+    throw new Error(`--frozen-config.governance must be one of ${GOVERNANCE_POSTURES.join(", ")}`);
+  }
+
+  const mergeIntegration = value["mergeIntegration"];
+  if (typeof mergeIntegration !== "string" || !MERGE_INTEGRATIONS.includes(mergeIntegration as MergeIntegration)) {
+    throw new Error(`--frozen-config.mergeIntegration must be one of ${MERGE_INTEGRATIONS.join(", ")}`);
+  }
+
+  const routing = value["routing"];
+  if (!isPlainObject(routing)) {
+    throw new Error("--frozen-config.routing must be a JSON object");
+  }
+  rejectUnknownKeys(routing, ROUTING_ROLE_KEYS, "--frozen-config.routing");
+  for (const [role, chainObj] of Object.entries(routing)) {
+    if (!isPlainObject(chainObj)) {
+      throw new Error(`--frozen-config.routing.${role} must be a JSON object`);
+    }
+    rejectUnknownKeys(chainObj, new Set(["chain"]), `--frozen-config.routing.${role}`);
+    const chain = chainObj["chain"];
+    if (chain !== undefined && !Array.isArray(chain)) {
+      throw new Error(`--frozen-config.routing.${role}.chain must be an array when present`);
+    }
+    if (Array.isArray(chain)) {
+      for (let i = 0; i < chain.length; i++) {
+        const entry = chain[i];
+        if (!isPlainObject(entry)) {
+          throw new Error(`--frozen-config.routing.${role}.chain[${i}] must be an object`);
+        }
+        for (const field of ["cli", "model", "authRef"] as const) {
+          const v = entry[field];
+          if (typeof v !== "string" || v.trim() === "") {
+            throw new Error(`--frozen-config.routing.${role}.chain[${i}].${field} must be a non-empty string`);
+          }
+        }
+      }
+    }
+  }
+
+  const ciTiers = value["ciTiers"];
+  if (!isPlainObject(ciTiers)) {
+    throw new Error("--frozen-config.ciTiers must be a JSON object");
+  }
+  rejectUnknownKeys(ciTiers, CI_TIER_SNAPSHOT_KEYS, "--frozen-config.ciTiers");
+  if (!("tiers" in ciTiers) || !("when" in ciTiers)) {
+    throw new Error('--frozen-config.ciTiers must include "tiers" and "when"');
+  }
+
+  const tiers = ciTiers["tiers"];
+  if (!isPlainObject(tiers)) {
+    throw new Error("--frozen-config.ciTiers.tiers must be a JSON object");
+  }
+  for (const requiredTier of ["fast", "slow"] as const) {
+    const steps = tiers[requiredTier];
+    if (!Array.isArray(steps) || steps.length === 0) {
+      throw new Error(`--frozen-config.ciTiers.tiers.${requiredTier} must be a non-empty array`);
+    }
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (!isPlainObject(step)) {
+        throw new Error(`--frozen-config.ciTiers.tiers.${requiredTier}[${i}] must be an object`);
+      }
+      if (typeof step["name"] !== "string" || step["name"].trim() === "") {
+        throw new Error(`--frozen-config.ciTiers.tiers.${requiredTier}[${i}].name must be a non-empty string`);
+      }
+      if (typeof step["run"] !== "string" || step["run"].trim() === "") {
+        throw new Error(`--frozen-config.ciTiers.tiers.${requiredTier}[${i}].run must be a non-empty string`);
+      }
+    }
+  }
+  for (const [tierName, steps] of Object.entries(tiers)) {
+    if (tierName === "fast" || tierName === "slow") continue;
+    if (!Array.isArray(steps) || steps.length === 0) {
+      throw new Error(`--frozen-config.ciTiers.tiers.${tierName} must be a non-empty array`);
+    }
+  }
+
+  const when = ciTiers["when"];
+  if (!isPlainObject(when)) {
+    throw new Error("--frozen-config.ciTiers.when must be a JSON object");
+  }
+  for (const [tierName, points] of Object.entries(when)) {
+    if (!Array.isArray(points) || points.length === 0) {
+      throw new Error(`--frozen-config.ciTiers.when.${tierName} must be a non-empty array`);
+    }
+    for (const point of points) {
+      if (typeof point !== "string" || !CI_WHEN.has(point)) {
+        throw new Error(
+          `--frozen-config.ciTiers.when.${tierName} entries must be one of per_iteration, pre_audit, pre_merge`,
+        );
+      }
+    }
+  }
+
+  return {
+    routing,
+    ciTiers: { tiers, when },
+    governance: governance as GovernancePosture,
+    mergeIntegration: mergeIntegration as MergeIntegration,
+  };
 }
 
 /**
- * Parse `--trials-target` as an integer in [MIN_TRIALS_TARGET, MAX_TRIALS_TARGET].
+ * Parse `--trials-target` as an integer >= MIN_TRIALS_TARGET.
+ * Matches server CreateCellBody: `z.number().int().min(1)` (no upper bound).
  */
 export function parseTrialsTarget(raw: string): number {
   if (!/^-?\d+$/u.test(raw.trim())) {
     throw new Error(`--trials-target must be an integer (got ${JSON.stringify(raw)})`);
   }
   const n = Number.parseInt(raw, 10);
-  if (!Number.isInteger(n) || n < MIN_TRIALS_TARGET || n > MAX_TRIALS_TARGET) {
-    throw new Error(
-      `--trials-target must be an integer between ${MIN_TRIALS_TARGET} and ${MAX_TRIALS_TARGET} (got ${raw})`,
-    );
+  if (!Number.isInteger(n) || n < MIN_TRIALS_TARGET) {
+    throw new Error(`--trials-target must be an integer >= ${MIN_TRIALS_TARGET} (got ${raw})`);
   }
   return n;
 }

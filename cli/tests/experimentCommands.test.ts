@@ -31,8 +31,12 @@ afterEach(async () => {
 });
 
 const SEED = '{"repo":"o/r","sha":"abc12345","acceptTierHash":"h","corpusTier":1}';
+// Valid FrozenConfig shape matching server entities (no obsolete escapeHatches).
 const FROZEN =
-  '{"routing":{"write":{"chain":[{"cli":"codex","model":"x","authRef":"credential/codex/org/x"}]}},"escapeHatches":{},"ciTiers":{"tiers":{"fast":[{"name":"lint","run":"pnpm lint"}],"slow":[{"name":"test","run":"pnpm test"}]},"when":{"fast":["per_iteration"],"slow":["pre_merge"]}},"governance":"strict","mergeIntegration":"not_configured"}';
+  '{"routing":{"write":{"chain":[{"cli":"codex","model":"x","authRef":"credential/codex/org/x"}]}},"ciTiers":{"tiers":{"fast":[{"name":"lint","run":"pnpm lint"}],"slow":[{"name":"test","run":"pnpm test"}]},"when":{"fast":["per_iteration"],"slow":["pre_merge"]}},"governance":"strict","mergeIntegration":"not_configured"}';
+
+/** Sentinel that must never appear in redacted parse-error messages. */
+const SECRET = "tnt_sentinel_SECRET_never_leak_9f3a";
 
 describe("benchmark CLI dispatch", () => {
   it("registers experiments + cells verbs", () => {
@@ -98,6 +102,13 @@ describe("benchmark CLI dispatch", () => {
     const sent = server.lastRequest();
     expect(sent.path).toBe("/orgs/org_acme/experiments/experiment_1/cells");
     expect(sent.json).toMatchObject({ label: "control", trialsTarget: 5 });
+    expect(sent.json).toMatchObject({
+      frozenConfig: {
+        governance: "strict",
+        mergeIntegration: "not_configured",
+        ciTiers: { tiers: { fast: [{ name: "lint", run: "pnpm lint" }] } },
+      },
+    });
   });
 
   it("experiments run targets the cell run route when --cell-id is given", async () => {
@@ -216,7 +227,7 @@ describe("benchmark render helpers", () => {
 });
 
 describe("experiment / cell input validation (CX-016)", () => {
-  it("parseSeedTaskRef accepts a valid shape and rejects non-objects / bad tiers", async () => {
+  it("parseSeedTaskRef accepts a valid shape and rejects non-objects / bad tiers / unknown fields", async () => {
     const exp = await import("../src/commands/experiments/index.js");
     expect(exp.parseSeedTaskRef(SEED)).toEqual({
       repo: "o/r",
@@ -231,24 +242,96 @@ describe("experiment / cell input validation (CX-016)", () => {
       /corpusTier/u,
     );
     expect(() => exp.parseSeedTaskRef('{"repo":"","sha":"x","acceptTierHash":"h","corpusTier":0}')).toThrow(/repo/u);
+    // Strict: typo'd / unknown field is rejected (server SeedTaskRef is .strict()).
+    expect(() =>
+      exp.parseSeedTaskRef('{"repo":"o/r","sha":"x","acceptTierHash":"h","corpusTier":1,"repos":"typo"}'),
+    ).toThrow(/unknown field/u);
+    expect(() =>
+      exp.parseSeedTaskRef('{"repo":"o/r","sha":"x","acceptTierHash":"h","corpusTier":1,"extra":true}'),
+    ).toThrow(/unknown field/u);
   });
 
-  it("parseFrozenConfig requires a plain object", async () => {
+  it("parseSeedTaskRef redacts secrets from invalid-JSON errors", async () => {
     const exp = await import("../src/commands/experiments/index.js");
-    expect(exp.parseFrozenConfig(FROZEN)).toMatchObject({ governance: "strict" });
+    // Truncated JSON containing a sentinel secret.
+    const bad = `{"repo":"${SECRET}","sha":`;
+    let message = "";
+    try {
+      exp.parseSeedTaskRef(bad);
+      message = "expected throw";
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/not valid JSON/u);
+    expect(message).not.toContain(SECRET);
+  });
+
+  it("parseFrozenConfig accepts a valid shape and rejects incomplete / unknown / bad enums", async () => {
+    const exp = await import("../src/commands/experiments/index.js");
+    const ok = exp.parseFrozenConfig(FROZEN);
+    expect(ok).toMatchObject({
+      governance: "strict",
+      mergeIntegration: "not_configured",
+      ciTiers: {
+        tiers: {
+          fast: [{ name: "lint", run: "pnpm lint" }],
+          slow: [{ name: "test", run: "pnpm test" }],
+        },
+      },
+    });
+
+    // Non-objects
     expect(() => exp.parseFrozenConfig("[]")).toThrow(/must be a JSON object/u);
     expect(() => exp.parseFrozenConfig('"string"')).toThrow(/must be a JSON object/u);
+    expect(() => exp.parseFrozenConfig("null")).toThrow(/must be a JSON object/u);
+
+    // Empty object is NOT enough — required fields
+    expect(() => exp.parseFrozenConfig("{}")).toThrow(/must include field/u);
+
+    // Obsolete escapeHatches (and any unknown top-level key) rejected
+    expect(() => exp.parseFrozenConfig(FROZEN.slice(0, -1) + ',"escapeHatches":{}}')).toThrow(/unknown field/u);
+
+    // Bad governance / mergeIntegration enums
+    expect(() => exp.parseFrozenConfig(FROZEN.replace('"governance":"strict"', '"governance":"nope"'))).toThrow(
+      /governance/u,
+    );
+    expect(() =>
+      exp.parseFrozenConfig(FROZEN.replace('"mergeIntegration":"not_configured"', '"mergeIntegration":"mergify"')),
+    ).toThrow(/mergeIntegration/u);
+
+    // Missing nested tiers.fast
+    expect(() =>
+      exp.parseFrozenConfig(
+        '{"routing":{},"ciTiers":{"tiers":{"slow":[{"name":"t","run":"x"}]},"when":{"slow":["pre_merge"]}},"governance":"strict","mergeIntegration":"not_configured"}',
+      ),
+    ).toThrow(/fast/u);
   });
 
-  it("parseTrialsTarget enforces integer bounds", async () => {
+  it("parseFrozenConfig redacts secrets from invalid-JSON errors", async () => {
+    const exp = await import("../src/commands/experiments/index.js");
+    const bad = `{"token":"${SECRET}"`;
+    let message = "";
+    try {
+      exp.parseFrozenConfig(bad);
+      message = "expected throw";
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/not valid JSON/u);
+    expect(message).not.toContain(SECRET);
+  });
+
+  it("parseTrialsTarget enforces integer >= 1 (no artificial upper bound)", async () => {
     const exp = await import("../src/commands/experiments/index.js");
     expect(exp.parseTrialsTarget("5")).toBe(5);
     expect(exp.parseTrialsTarget("1")).toBe(1);
-    expect(() => exp.parseTrialsTarget("0")).toThrow(/between/u);
-    expect(() => exp.parseTrialsTarget("-1")).toThrow(/between/u);
+    // Server accepts every integer >= 1 — large targets must pass.
+    expect(exp.parseTrialsTarget("10001")).toBe(10001);
+    expect(exp.parseTrialsTarget("1000000")).toBe(1_000_000);
+    expect(() => exp.parseTrialsTarget("0")).toThrow(/>= 1|trials-target/u);
+    expect(() => exp.parseTrialsTarget("-1")).toThrow(/>= 1|trials-target/u);
     expect(() => exp.parseTrialsTarget("1.5")).toThrow(/integer/u);
     expect(() => exp.parseTrialsTarget("nope")).toThrow(/integer/u);
-    expect(() => exp.parseTrialsTarget("10001")).toThrow(/between/u);
   });
 
   it("experiments create fails before the network on bad seed-task-ref", async () => {
@@ -271,6 +354,25 @@ describe("experiment / cell input validation (CX-016)", () => {
     expect(() => server.lastRequest()).toThrow(/no requests/u);
   });
 
+  it("experiments create fails before the network on typo'd seed-task-ref field", async () => {
+    const exp = await withStub({ experiment: { experimentId: "experiment_1" } });
+    await expect(
+      exp.experimentsCreate([
+        "--org-id",
+        "org_acme",
+        "--title",
+        "T",
+        "--knob",
+        "governance",
+        "--hypothesis",
+        "H",
+        "--seed-task-ref",
+        '{"repo":"o/r","sha":"x","acceptTierHash":"h","corpusTier":1,"repos":"typo"}',
+      ]),
+    ).rejects.toThrow(/unknown field/u);
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
   it("cells create fails before the network on bad trials-target", async () => {
     const exp = await withStub({ cell: { cellId: "cell_1" } });
     await expect(
@@ -288,5 +390,43 @@ describe("experiment / cell input validation (CX-016)", () => {
       ]),
     ).rejects.toThrow(/trials-target/u);
     expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
+  it("cells create fails before the network on incomplete frozen-config", async () => {
+    const exp = await withStub({ cell: { cellId: "cell_1" } });
+    await expect(
+      exp.cellsCreate([
+        "--org-id",
+        "org_acme",
+        "--experiment-id",
+        "experiment_1",
+        "--label",
+        "control",
+        "--frozen-config",
+        "{}",
+        "--trials-target",
+        "5",
+      ]),
+    ).rejects.toThrow(/frozen-config/u);
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
+  it("cells create accepts large trials-target matching server contract", async () => {
+    const exp = await withStub({ cell: { cellId: "cell_1" } });
+    await captureStdout(() =>
+      exp.cellsCreate([
+        "--org-id",
+        "org_acme",
+        "--experiment-id",
+        "experiment_1",
+        "--label",
+        "control",
+        "--frozen-config",
+        FROZEN,
+        "--trials-target",
+        "10001",
+      ]),
+    );
+    expect(server.lastRequest().json).toMatchObject({ trialsTarget: 10001 });
   });
 });

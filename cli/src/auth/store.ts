@@ -23,6 +23,30 @@ export class InvalidAuthFileError extends Error {
   }
 }
 
+/**
+ * Control characters are not header-safe (Fetch Headers / undici rejects
+ * C0 controls + DEL). Tokens with CR/LF/NUL etc. must fail at the auth-store
+ * boundary so `httpClient` never throws while building `Authorization` with
+ * the bearer value in the error text.
+ *
+ * Char-code loop (not a control-char regex) keeps eslint no-control-regex quiet.
+ */
+function hasNonHeaderSafeChar(token: string): boolean {
+  for (let i = 0; i < token.length; i++) {
+    const code = token.codePointAt(i) ?? 0;
+    // C0 controls (0x00–0x1F) and DEL (0x7F).
+    if (code <= 0x1f || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True when a token is non-empty and safe to put in an HTTP header value. */
+export function isHeaderSafeToken(token: string): boolean {
+  return token.length > 0 && !hasNonHeaderSafeChar(token);
+}
+
 export function defaultAuthPath(): string {
   return process.env["TANREN_AUTH_FILE"] ?? join(homedir(), ".config", "tanren", "auth.json");
 }
@@ -44,6 +68,9 @@ export function parseStoredAuth(value: unknown, path = defaultAuthPath()): Store
   }
   if (typeof token !== "string" || token === "") {
     throw new InvalidAuthFileError(path, 'missing non-empty string "token"');
+  }
+  if (!isHeaderSafeToken(token)) {
+    throw new InvalidAuthFileError(path, '"token" contains non-header-safe control characters');
   }
   if (typeof createdAt !== "string" || createdAt.trim() === "") {
     throw new InvalidAuthFileError(path, 'missing non-empty string "createdAt"');
@@ -84,8 +111,9 @@ export async function readAuth(path = defaultAuthPath()): Promise<StoredAuth | u
     try {
       parsed = JSON.parse(raw) as unknown;
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new InvalidAuthFileError(path, `not valid JSON (${detail})`, { cause: error });
+      // Stable redacted reason — never embed JSON.parse's message (may include
+      // a snippet of the raw file, which can contain a token).
+      throw new InvalidAuthFileError(path, "not valid JSON", { cause: error });
     }
     return parseStoredAuth(parsed, path);
   } catch (error) {

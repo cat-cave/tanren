@@ -112,10 +112,26 @@ describe("CLI auth flow", () => {
     expect(await readAuth()).toBeUndefined();
   });
 
-  it("readAuth rejects malformed non-empty auth JSON", async () => {
+  it("readAuth rejects schema-invalid auth objects (valid JSON, incomplete shape)", async () => {
     const path = process.env.TANREN_AUTH_FILE ?? "";
     await writeFile(path, '{"token":"only"}\n');
     await expect(readAuth()).rejects.toBeInstanceOf(InvalidAuthFileError);
+  });
+
+  it("readAuth rejects syntactically invalid JSON with a redacted stable error", async () => {
+    const path = process.env.TANREN_AUTH_FILE ?? "";
+    const secret = "tnt_sentinel_SECRET_never_leak_9f3a";
+    // Truncated JSON: real syntax error, embedding a secret in the raw blob.
+    await writeFile(path, `{"token":"${secret}","orchestratorUrl":`);
+    const error = await readAuth().then(
+      () => {
+        throw new Error("expected readAuth to reject");
+      },
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(InvalidAuthFileError);
+    expect((error as Error).message).toMatch(/not valid JSON/u);
+    expect((error as Error).message).not.toContain(secret);
   });
 
   it("writeAuth rejects incomplete StoredAuth before persisting", async () => {
@@ -126,6 +142,16 @@ describe("CLI auth flow", () => {
         createdAt: new Date().toISOString(),
       }),
     ).rejects.toBeInstanceOf(InvalidAuthFileError);
+  });
+
+  it("writeAuth / parseStoredAuth reject tokens with CR/LF/control characters", async () => {
+    const base = {
+      orchestratorUrl: "http://localhost:3100",
+      createdAt: new Date().toISOString(),
+    };
+    await expect(writeAuth({ ...base, token: "tnt_ok\r\ninjected" })).rejects.toBeInstanceOf(InvalidAuthFileError);
+    await expect(writeAuth({ ...base, token: "tnt_ok\ninjected" })).rejects.toThrow(/control characters/u);
+    await expect(writeAuth({ ...base, token: "tnt_ok\0null" })).rejects.toThrow(/control characters/u);
   });
 });
 
@@ -159,5 +185,12 @@ describe("parseStoredAuth schema", () => {
     expect(() => parseStoredAuth({ ...valid, token: "" })).toThrow(/token/u);
     expect(() => parseStoredAuth({ ...valid, orchestratorUrl: 1 })).toThrow(/orchestratorUrl/u);
     expect(() => parseStoredAuth({ ...valid, scopes: ["a", 2] })).toThrow(/scopes/u);
+  });
+
+  it("rejects non-header-safe tokens (CR/LF and other C0 controls)", () => {
+    expect(() => parseStoredAuth({ ...valid, token: "a\rb" })).toThrow(/control characters/u);
+    expect(() => parseStoredAuth({ ...valid, token: "a\nb" })).toThrow(/control characters/u);
+    expect(() => parseStoredAuth({ ...valid, token: "a\tb" })).toThrow(/control characters/u);
+    expect(() => parseStoredAuth({ ...valid, token: "a\u001Fb" })).toThrow(/control characters/u);
   });
 });
