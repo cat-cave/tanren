@@ -254,14 +254,30 @@ const ORG_ROW = {
 
 const authJson = JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "a", refresh_token: "r" } });
 
-// A pool stub that answers the project read, the org-config read, and any other
-// read with empty rows. Mirrors the shape `loadProjectRunnerContext` queries.
+// A permissive pool stub (ignores RLS) that answers the project read, the org-config
+// read, and any other read with empty rows. `loadProjectRunnerContext` now runs the
+// project read system-scoped (`runWithSystemScope`) and the credential read org-scoped
+// (`runWithOrgScope`) — both check out a client via `.connect()` — so the stub also
+// serves a `.connect()` client that routes the same way (BEGIN/COMMIT/SET LOCAL are
+// no-ops here; the scoping is asserted in the dedicated RLS-reproducing test below).
 function stubPool() {
+  const answer = (sql: string) => {
+    if (sql.includes("FROM projects")) return { rows: [PROJECT_ROW] };
+    if (sql.includes("FROM organizations")) return { rows: [ORG_ROW] };
+    return { rows: [] };
+  };
+  const client = {
+    async query(sql: string) {
+      return answer(sql);
+    },
+    release() {},
+  };
   return {
     async query(sql: string) {
-      if (sql.includes("FROM projects")) return { rows: [PROJECT_ROW] };
-      if (sql.includes("FROM organizations")) return { rows: [ORG_ROW] };
-      return { rows: [] };
+      return answer(sql);
+    },
+    async connect() {
+      return client;
     },
   } as never;
 }
