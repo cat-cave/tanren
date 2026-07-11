@@ -75,17 +75,30 @@ docker build \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
-# Push with NATIVE `podman` when present, not the `docker`→podman shim: the shim
-# mis-parses podman's push-results stream ("failed to parse push results stream,
-# unexpected input: { }") and exits NON-ZERO even though the image pushed cleanly (the
-# manifest IS written to the registry). Native `podman push` returns 0. Fall back to
-# `docker push` on a real-docker host (no podman).
+# Push, then VERIFY THE REGISTRY — never trust the push exit code. podman-remote (both
+# the `docker`→podman shim AND native `podman` against a remote service) mis-parses the
+# push-results stream ("failed to parse push results stream, unexpected input: { }") and
+# exits 125 on a FRESH push even though the image uploaded cleanly (the manifest IS written
+# to the registry; a subsequent `manifest inspect` returns it). A re-push of an
+# already-present image short-circuits and exits 0, which masked this. So the exit code is
+# unreliable in BOTH directions: tolerate a non-zero push, then confirm the image is
+# actually in the registry via `manifest inspect` — that is the real source of truth.
 if command -v podman >/dev/null 2>&1; then
-  podman push "$IMAGE_REF"
+  RUNTIME=podman
 else
-  docker push "$IMAGE_REF"
+  RUNTIME=docker
 fi
+PUSH_RC=0
+"$RUNTIME" push "$IMAGE_REF" || PUSH_RC=$?
 set +x
+if "$RUNTIME" manifest inspect "$IMAGE_REF" >/dev/null 2>&1; then
+  if [ "$PUSH_RC" -ne 0 ]; then
+    echo "[build-deploy-image] push exited ${PUSH_RC} but manifest IS in the registry (podman-remote parse-stream quirk) — treating as success" >&2
+  fi
+else
+  echo "[build-deploy-image] FATAL: push exited ${PUSH_RC} and image is NOT in the registry" >&2
+  exit 1
+fi
 
 echo "[build-deploy-image] built + pushed ${IMAGE_REF}"
 # Emit the image ref on the LAST line so liveFlyImageBuilder.ts captures it.
