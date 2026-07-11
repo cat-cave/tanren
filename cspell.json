@@ -32,6 +32,7 @@
     "BAREWORD",
     "BYPASSRLS",
     "Backgrounded",
+    "buildctx",
     "buildpacks",
     "paketobuildpacks",
     "BerriAI",

@@ -33,6 +33,15 @@ export function checkNoHostProcessSpawn(projectFiles) {
       // engine WORKLOAD spawning, not the host-side image build; this single driver is
       // the only env-creation file permitted to import child_process.
       file === "services/orchestrator/src/engine/environments/creation/liveEnvBuildDriver.ts" ||
+      // The live Fly image-build driver (PR3) is the deploy-layer counterpart of
+      // liveEnvBuildDriver: a confined host-side image-build seam that shells
+      // build-deploy-image.sh on the ORCHESTRATOR HOST to build+push the merged commit
+      // to registry.fly.io. It is NOT workload execution (that still routes through the
+      // SSH CommandSubstrate seam) — it is a deploy-image build, analogous to a
+      // `just deploy` run. It exports its real side-effect bindings so the config reader
+      // (flyImageBuilderConfig.ts) wires them WITHOUT importing child_process itself; only
+      // THIS file imports child_process (the exec runner + tar extraction).
+      file === "services/orchestrator/src/engine/provisioners/liveFlyImageBuilder.ts" ||
       // The F2 runtime-validity smoke's LIVE invoker (fragment authoring, not workload
       // execution). It spawns pnpm/bundle on the ORCHESTRATOR HOST to prove an
       // authored fragment's manifest is runtime-resolvable BEFORE the fragment

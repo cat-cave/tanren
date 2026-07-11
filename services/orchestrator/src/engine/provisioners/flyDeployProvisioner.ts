@@ -310,6 +310,14 @@ class FlyDeployApi implements DeployProviderApi {
   }
 
   async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult> {
+    // Ensure the app has a shared IPv4 so `https://<app>.fly.dev` routes. Idempotent, and
+    // runs on EVERY deploy path (greenfield, brownfield-reuse, `bind()`) — unlike createApp,
+    // which greenfield-only apps hit. Done BEFORE the image resolution (P2 registry-hygiene
+    // finding): allocation is idempotent + cheap, so ordering it first means an allocation
+    // failure never triggers a WASTED build+push. A per-sha tag OVERWRITES on retry (same
+    // sha → same tag, no accumulation), so a failed release after a successful build+push
+    // leaves a harmless overwrite-on-retry image (no GC compensation needed for same-sha).
+    await this.allocateSharedIpv4(app.name, token);
     // Resolve the image to release per the merge-reflecting precedence (see header):
     //   1. builder present → build a per-commit image from the merged source (DEFAULT).
     //   2. no builder + allowStaticDeploy → static grant `image` (escape hatch).
@@ -343,11 +351,6 @@ class FlyDeployApi implements DeployProviderApi {
           "TANREN_ALLOW_FLY_STATIC_DEPLOY=1 to explicitly accept the static-image semantics.",
       );
     }
-    // Ensure the app has a shared IPv4 so `https://<app>.fly.dev` routes. Idempotent, and
-    // runs on EVERY deploy path (greenfield, brownfield-reuse, `bind()`) — unlike createApp,
-    // which greenfield-only apps hit. Done BEFORE the machine release so a live machine is
-    // never left routing-less.
-    await this.allocateSharedIpv4(app.name, token);
     // POST /v1/apps/{app}/machines creates + runs a machine from the resolved image —
     // the Machines-API release equivalent of `fly deploy`. Fly keys an app by its
     // globally-unique NAME in the path (`app.name`). The config carries the full

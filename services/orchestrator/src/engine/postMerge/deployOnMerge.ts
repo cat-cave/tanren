@@ -44,6 +44,7 @@ import {
 } from "./deployTargetResolution.js";
 import { type EgressPolicy, defaultEgressPolicy } from "../security/egressPolicy.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
+import type { FlyImageBuilder } from "../provisioners/flyImageBuilder.js";
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
@@ -113,6 +114,15 @@ export interface DeployOnMergeWatcherDeps {
    * to the permissive policy (OSS posture); a managed build slots a restrictive one.
    */
   egressPolicy?: EgressPolicy;
+  /**
+   * The merge-reflecting image builder for Fly deploys (`deploy.flyio`). When present,
+   * `triggerDeploy` builds the merged commit into `registry.fly.io/<app>:<sha>` and
+   * releases THAT (the DEFAULT path — no flag). When absent, a Fly deploy fails loud
+   * unless `TANREN_ALLOW_FLY_STATIC_DEPLOY=1` (the explicit non-merge-reflecting escape
+   * hatch). Supplied by the boot wiring from `buildFlyImageBuilderFromEnv`; undefined
+   * when the builder is not opted in. Ignored by non-Fly providers (Vercel builds its own).
+   */
+  flyImageBuilder?: FlyImageBuilder;
 }
 
 /**
@@ -253,6 +263,10 @@ export class DeployOnMergeWatcher {
     const provisioner = deployProvisionerFor(target.provider, {
       transport: this.deps.transport,
       secrets: this.deps.secrets,
+      // Thread the merge-reflecting Fly builder so a Fly deploy builds the merged commit
+      // (the seam PR2 added was unreachable until this wiring; without it prod Fly deploys
+      // could never be merge-reflecting). Spread only when set (Vercel ignores it).
+      ...(this.deps.flyImageBuilder === undefined ? {} : { flyImageBuilder: this.deps.flyImageBuilder }),
     });
 
     // ENV BEFORE TRIGGER: attach the project's RUNTIME-scoped app env onto the app FIRST,
@@ -459,12 +473,20 @@ export function buildDeployOnMergeWatcher(deps: {
   pool: pg.Pool;
   secrets: SecretStore;
   runStateWriter?: RunStateWriter;
+  /**
+   * The merge-reflecting Fly image builder (from `buildFlyImageBuilderFromEnv`). When
+   * present, Fly deploys build the merged commit; absent, a Fly deploy fails loud at
+   * trigger time unless the static-image escape hatch is on. Optional — Vercel-only
+   * installs leave it unset.
+   */
+  flyImageBuilder?: FlyImageBuilder;
 }): DeployOnMergeWatcher {
   return new DeployOnMergeWatcher({
     pool: deps.pool,
     secrets: deps.secrets,
     transport: fetchDeployTransport(),
     ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
+    ...(deps.flyImageBuilder !== undefined && { flyImageBuilder: deps.flyImageBuilder }),
   });
 }
 
