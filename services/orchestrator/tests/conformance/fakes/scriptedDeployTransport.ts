@@ -52,6 +52,21 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
    * env was attached (`set_env`) BEFORE the deploy was triggered (`deploy_trigger`).
    */
   requestLog(): Array<"set_env" | "deploy_trigger" | "create">;
+  /**
+   * Every Fly GraphQL allocate-IP request the transport served (the target URL + the
+   * request body), so a test can prove `createApp` allocated a shared IPv4 with the right
+   * `allocateIpAddress` mutation + `type: "shared_v4"` variables. Fly-only — the Vercel
+   * arm never hits the GraphQL endpoint.
+   */
+  allocateIpRequests(): { url: string; body: Record<string, unknown> }[];
+  /**
+   * Script the response the emulated Fly GraphQL endpoint returns for an allocate-IP
+   * call. Default is a 200 success carrying the allocated `ipAddress`. Set `errors` to
+   * emulate a GraphQL error response (an "already allocated" message is swallowed by the
+   * provisioner; any other throws LOUD); set a non-2xx `status` to emulate a transport
+   * failure. Applies to ALL subsequent allocate calls on this transport.
+   */
+  scriptAllocateIpResponse(resp: { status: number; json: unknown; text?: string }): void;
 }
 
 /**
@@ -87,6 +102,21 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   const pollsByDeployment = new Map<string, number>();
   // Ordered kinds of the mutating requests served, so a test can assert env-before-trigger.
   const reqLog: Array<"set_env" | "deploy_trigger" | "create"> = [];
+  // Fly GraphQL allocate-IP requests the transport served (url + body), so a test can
+  // prove createApp allocated a shared IPv4 with the right mutation + variables.
+  const allocateIpCalls: { url: string; body: Record<string, unknown> }[] = [];
+  // Scripted response for the Fly GraphQL allocate-IP endpoint. Default is a 200 success
+  // carrying the allocated ipAddress (the happy path). A test overrides it to emulate a
+  // GraphQL error (already-allocated vs other) or a non-2xx transport failure.
+  let scriptedAllocateIp: { status: number; json: unknown; text: string } = {
+    status: 200,
+    json: {
+      data: {
+        allocateIpAddress: { ipAddress: { id: "fly_ip_shared_v4_1", address: "66.241.124.40", type: "shared_v4" } },
+      },
+    },
+    text: "",
+  };
 
   const listBody = (): unknown =>
     flavor === "vercel"
@@ -99,12 +129,27 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     envByApp: () => structuredClone(envByApp),
     deploysTriggered: () => structuredClone(triggered),
     requestLog: () => [...reqLog],
+    allocateIpRequests: () => structuredClone(allocateIpCalls),
+    scriptAllocateIpResponse: (resp) => {
+      scriptedAllocateIp = { status: resp.status, json: resp.json, text: resp.text ?? "" };
+    },
     scriptDeploymentStates: (deploymentId, states) => {
       stateScripts.set(deploymentId, [...states]);
     },
     statusPolls: (deploymentId) => pollsByDeployment.get(deploymentId) ?? 0,
     async request(req: DeployHttpRequest): Promise<DeployHttpResponse> {
       bearersSeen.push(req.headers["authorization"] ?? "");
+
+      // Fly GraphQL allocate-IP call (createApp → allocateSharedIpv4). The Machines REST
+      // API does NOT allocate IPs, so this is a SEPARATE host (api.fly.io/graphql). Serve
+      // the scripted response; a test overrides it to drive the already-allocated / other-
+      // error / non-2xx branches. Intercept BEFORE the generic POST-create handler, which
+      // would otherwise reject the body for carrying no `app_name`. Fly-only.
+      if (req.method === "POST" && req.url === "https://api.fly.io/graphql") {
+        allocateIpCalls.push({ url: req.url, body: (req.body ?? {}) as Record<string, unknown> });
+        const { status, json, text } = scriptedAllocateIp;
+        return { status, ok: status >= 200 && status < 300, json, text };
+      }
 
       if (req.method === "DELETE") {
         // App destroy (task #78 derive-rollback compensation): Vercel
