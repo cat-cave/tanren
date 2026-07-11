@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
-import { FlyDeployProvisioner } from "../../src/engine/provisioners/flyDeployProvisioner.js";
+import { FlyDeployProvisioner, flyMachineConfig } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { VercelDeployProvisioner } from "../../src/engine/provisioners/vercelDeployProvisioner.js";
 import { DEPLOY_APP_NAME_MAX_LEN, deployAppName } from "../../src/engine/provisioners/deployProvisioner.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
@@ -303,7 +303,8 @@ describe("FlyDeployProvisioner", () => {
     expect(triggered).toHaveLength(1);
     // task #27: the Fly app's name in the path is the namespaced slug.
     expect(triggered[0]!.appId).toBe("tanren-acme-web");
-    expect(triggered[0]!.body["config"]).toEqual({ image: "registry.fly.io/acme-web:deployment-1" });
+    // The release body now carries the full Machines config (services/ports/checks/guest); the explicit shape is pinned in flyDeployReleaseConfig.test.ts.
+    expect(triggered[0]!.body["config"]).toEqual(flyMachineConfig("registry.fly.io/acme-web:deployment-1"));
     expect(result.url).toBe("https://tanren-acme-web.fly.dev");
     expect(result.deploymentId).toMatch(/^fly_deploy_/u);
   });
