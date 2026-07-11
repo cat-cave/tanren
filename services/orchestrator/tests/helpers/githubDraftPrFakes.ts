@@ -93,6 +93,8 @@ export class RecordingRunPool extends RecordingPool {
             repo_url: "https://github.com/cat-cave/repo.git",
             default_branch: "main",
             config: { githubCredentialRef: "credential/github/dev" },
+            // LEFT JOIN organizations — SQL always returns the key (null when absent).
+            org_config: null,
             spec_title: this.specTitle,
             spec_description: this.specDescription,
             ssh_host: "runner",

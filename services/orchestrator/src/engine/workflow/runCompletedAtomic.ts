@@ -44,7 +44,8 @@ export async function finalizeRunCompletedAtomic(
     return;
   }
   // Real pool (or orgScopingPool proxy) → org-scoped atomic finalize; unit-test
-  // fakes lack `.connect` and take the split path below. `isPool` narrows without cast.
+  // fakes lack pool counters (`totalCount`) and take the split path below.
+  // `isPool` narrows without cast (must not key on `connect` alone — PoolClient has it).
   if (isPool(input.pool)) {
     const finalizeInput = {
       runId: context.runId,

@@ -303,35 +303,27 @@ function checkGitHubActions(projectFiles) {
   return diagnostics;
 }
 
-// Pre-Phase-2A raw row casts under workflow/**. Cleared (#833): ciPolling.ts
-// was deleted; githubDraftPr.ts now Zod-decodes. Keep the empty set so a
-// future un-migrated site can be allowlisted explicitly rather than silently.
+// Empty allowlist (#833): every workflow row cast must be Zod/repo-decoded.
+// Patterns catch identifier casts AND object-literal casts (`as { … }`) so the
+// empty set is actually enforced (a bare `[A-Za-z_$]` stem misses `as { … }`).
 const workflowRowCastAllowlist = new Set([]);
+const ROW_CAST_RE =
+  /\.rows\[[^\]]*\]\s+as\s+(?!const\b)(?:[A-Za-z_$]|\{)|\brows?\s+as\s+(?!const\b)(?:[A-Za-z_$]|\{)/gu;
 
 function checkNoRowCastsInWorkflow(projectFiles) {
   const diagnostics = [];
-  // Detect `... as Something` where the cast immediately follows .rows[N] or
-  // a variable named `row`/`rows`. Allow `as const` casts (they're not row
-  // shape casts) and exempt the explicit allowlist above.
-  const rowCastPatterns = [/\.rows\[[^\]]*\]\s+as\s+(?!const\b)[A-Za-z_$]/gu, /\brow\s+as\s+(?!const\b)[A-Za-z_$]/gu];
   for (const { file, text } of projectFiles) {
-    if (!file.startsWith("services/orchestrator/src/engine/workflow/")) {
-      continue;
-    }
-    if (workflowRowCastAllowlist.has(file)) {
-      continue;
-    }
-    for (const pattern of rowCastPatterns) {
-      for (const match of text.matchAll(pattern)) {
-        diagnostics.push(
-          diagnostic(
-            "no-raw-row-casts-in-workflow",
-            file,
-            "workflow code must decode rows through typed repositories (see services/orchestrator/src/engine/repositories)",
-            lineFor(text, match.index),
-          ),
-        );
-      }
+    if (!file.startsWith("services/orchestrator/src/engine/workflow/")) continue;
+    if (workflowRowCastAllowlist.has(file)) continue;
+    for (const match of text.matchAll(ROW_CAST_RE)) {
+      diagnostics.push(
+        diagnostic(
+          "no-raw-row-casts-in-workflow",
+          file,
+          "workflow code must decode rows through typed repositories (see services/orchestrator/src/engine/repositories)",
+          lineFor(text, match.index),
+        ),
+      );
     }
   }
   return diagnostics;

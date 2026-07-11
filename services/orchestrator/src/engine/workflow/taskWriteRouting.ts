@@ -7,9 +7,13 @@
 
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
+import { z } from "zod";
 import type { RunStateWriter, UpdateTaskInput } from "../contracts/runStateWriter.js";
 
 type TaskQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+
+/** Zod-decoded `tasks` lookup row (no raw row cast — architecture `no-raw-row-casts-in-workflow`). */
+const ExistingTaskRow = z.object({ task_id: z.string() });
 
 /** The fixed shape of a SYSTEM task (CI / review / merge): `agent_kind='system'`, `cli='github'`. */
 export interface SystemTaskSpec {
@@ -37,7 +41,8 @@ export async function ensureSystemTask(
     `SELECT task_id FROM tasks WHERE run_id = $1 AND kind = $2 ORDER BY started_at DESC NULLS LAST, task_id ASC LIMIT 1`,
     [spec.runId, spec.kind],
   );
-  const existingTask = existing.rows[0] as { task_id: string } | undefined;
+  const raw = existing.rows[0];
+  const existingTask = raw === undefined ? undefined : ExistingTaskRow.parse(raw);
   if (existingTask !== undefined) {
     await routeTaskUpdate(
       writer,

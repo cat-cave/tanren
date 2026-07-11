@@ -30,18 +30,19 @@ const DraftPrRunRow = z.object({
   project_id: z.string(),
   org_id: z.string(),
   branch: z.string(),
-  ancestor_stack: z.unknown().nullable().optional(),
+  // Always selected; jsonb may be SQL NULL on non-speculative runs.
+  ancestor_stack: z.unknown().nullable(),
   repo_url: z.string(),
   default_branch: z.string(),
-  config: z.unknown().nullable().optional(),
-  // LEFT JOIN organizations — absent org / test fakes may omit or null the column.
-  org_config: z.unknown().nullable().optional(),
+  config: z.unknown().nullable(),
+  // LEFT JOIN organizations — no org match ⇒ SQL NULL (required key, null ok).
+  org_config: z.unknown().nullable(),
   spec_title: z.string(),
   spec_description: z.string(),
-  // LEFT JOIN LATERAL runners — no runner ⇒ nulls.
-  ssh_host: z.string().nullable().optional(),
-  ssh_port: z.number().nullable().optional(),
-  host_key_fingerprint: z.string().nullable().optional(),
+  // LEFT JOIN LATERAL runners — no runner ⇒ SQL NULLs (required keys, null ok).
+  ssh_host: z.string().nullable(),
+  ssh_port: z.number().nullable(),
+  host_key_fingerprint: z.string().nullable(),
 });
 type DraftPrRunRow = z.infer<typeof DraftPrRunRow>;
 
@@ -412,12 +413,7 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     specTitle: row.spec_title,
     specDescription: row.spec_description,
     runner:
-      row.ssh_host === undefined ||
-      row.ssh_host === null ||
-      row.ssh_port === undefined ||
-      row.ssh_port === null ||
-      row.host_key_fingerprint === undefined ||
-      row.host_key_fingerprint === null
+      row.ssh_host === null || row.ssh_port === null || row.host_key_fingerprint === null
         ? undefined
         : {
             sshHost: row.ssh_host,
