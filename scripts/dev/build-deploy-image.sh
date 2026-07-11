@@ -75,14 +75,19 @@ docker build \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
-# Push, then VERIFY THE REGISTRY — never trust the push exit code. podman-remote (both
-# the `docker`→podman shim AND native `podman` against a remote service) mis-parses the
-# push-results stream ("failed to parse push results stream, unexpected input: { }") and
-# exits 125 on a FRESH push even though the image uploaded cleanly (the manifest IS written
-# to the registry; a subsequent `manifest inspect` returns it). A re-push of an
-# already-present image short-circuits and exits 0, which masked this. So the exit code is
-# unreliable in BOTH directions: tolerate a non-zero push, then confirm the image is
-# actually in the registry via `manifest inspect` — that is the real source of truth.
+# Push, then VERIFY THE REGISTRY — never trust the push exit code. When the podman-remote
+# CLIENT is an older major than the SERVICE it dials over CONTAINER_HOST (here a 4.x client
+# against a 5.x service), `podman push` mis-parses the service's push-results stream
+# ("failed to parse push results stream, unexpected input: { }") and exits 125 — even though
+# the SERVICE completed the push and wrote the manifest to the registry (verified server-side
+# via the registry v2 API: the manifest is really there). The exit code is a false negative.
+#
+# VERIFY with `pull`, NOT `manifest inspect`: `manifest inspect` only inspects a multi-arch
+# manifest LIST and errors (125) on a single-arch image REGARDLESS of registry presence, so
+# it is the wrong probe. `pull` contacts the registry and resolves the manifest — exit 0 iff
+# the image is really there (the just-built layers are already local, so it only checks the
+# manifest and returns fast). Authoritative + no extra deps. (The proper long-term fix is to
+# match the worker's podman client major to the host service so push exits 0 outright.)
 if command -v podman >/dev/null 2>&1; then
   RUNTIME=podman
 else
@@ -91,12 +96,12 @@ fi
 PUSH_RC=0
 "$RUNTIME" push "$IMAGE_REF" || PUSH_RC=$?
 set +x
-if "$RUNTIME" manifest inspect "$IMAGE_REF" >/dev/null 2>&1; then
+if "$RUNTIME" pull "$IMAGE_REF" >/dev/null 2>&1; then
   if [ "$PUSH_RC" -ne 0 ]; then
-    echo "[build-deploy-image] push exited ${PUSH_RC} but manifest IS in the registry (podman-remote parse-stream quirk) — treating as success" >&2
+    echo "[build-deploy-image] push exited ${PUSH_RC} but the image IS in the registry (podman-remote client/server version-skew parse quirk) — treating as success" >&2
   fi
 else
-  echo "[build-deploy-image] FATAL: push exited ${PUSH_RC} and image is NOT in the registry" >&2
+  echo "[build-deploy-image] FATAL: push exited ${PUSH_RC} and the image is NOT in the registry" >&2
   exit 1
 fi
 
