@@ -50,15 +50,21 @@ echo "[build-deploy-image] image ref      : ${IMAGE_REF}"
 # Fly's registry authenticates with username `x` + the Fly API token as the password.
 docker login registry.fly.io -u x --password-stdin <<< "$FLY_TOKEN" >&2
 
-# Build the per-commit image, THEN push it — in TWO steps, deliberately. The buildkit
-# `--push` convenience flag is NOT portable: podman's `docker buildx` shim rejects it
-# (`Error: unknown flag: --push`). Building with `--tag` (no `--push`) leaves the image in
-# local storage under BOTH the docker default builder and podman, so a following
-# `docker push` uploads it — cross-runtime, no docker-daemon assumption.
-# NO wall-clock timeout (feedback_no_timeouts_progress_based): each step runs to its own
+# Build the per-commit image, THEN push it — in TWO steps, and with plain `docker build`
+# (NOT `docker buildx build`), deliberately, for maximum portability across the runtimes
+# this must work on:
+#   • real docker (host or daemon)              — `docker build` = classic/buildkit, fine
+#   • podman on the host (`docker`→podman shim) — `docker build` = `podman build`, fine
+#   • podman-REMOTE from the worker container    — `docker build` = `podman build` streaming
+#     the context to the host podman over the mounted socket (CONTAINER_HOST). buildkit's
+#     `docker buildx` is NOT served by podman's API socket, so buildx-over-socket fails;
+#     classic `docker build` IS. And buildkit's `--push` convenience flag is unsupported by
+#     podman's buildx shim anyway (`Error: unknown flag: --push`) — hence build-then-push.
+# `--tag` (no `--push`) leaves the tagged image in the (host) storage; `docker push` uploads
+# it. NO wall-clock timeout (feedback_no_timeouts_progress_based): each step runs to its own
 # terminal exit; a non-zero exit surfaces LOUD to the driver (FlyImageBuildFailedError).
 set -x
-docker buildx build \
+docker build \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
