@@ -64,7 +64,14 @@ docker login registry.fly.io -u x --password-stdin <<< "$FLY_TOKEN" >&2
 # it. NO wall-clock timeout (feedback_no_timeouts_progress_based): each step runs to its own
 # terminal exit; a non-zero exit surfaces LOUD to the driver (FlyImageBuildFailedError).
 set -x
+# --security-opt seccomp=unconfined: podman-REMOTE resolves the seccomp profile by PATH on
+# the CLIENT (the worker's Debian default /usr/share/containers/seccomp.json) and passes that
+# path to the SERVICE (the host podman), which on a non-Debian host (e.g. NixOS) does not have
+# it → `opening seccomp profile failed: no such file`. Running the build unconfined avoids the
+# client/server path mismatch entirely; it is safe here — the build RUN steps compile the
+# MERGED, CI-gated product source, not arbitrary input, and the result is a throwaway image.
 docker build \
+  --security-opt seccomp=unconfined \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
