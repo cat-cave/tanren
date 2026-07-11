@@ -3,6 +3,7 @@
 import { CliLoginIncomplete, deleteAuth, login, readAuth, writeAuth } from "./auth/index.js";
 import { findProductHandler, listProductCommands } from "./commands/dispatch.js";
 import { jsonRequest, orchestratorUrl, request } from "./httpClient.js";
+import { parseJsonObject } from "./json.js";
 
 export { jsonRequest, request };
 
@@ -303,14 +304,6 @@ function optionalMany(args: ParsedArgs, key: string): string[] {
     return [];
   }
   return Array.isArray(value) ? value : [value];
-}
-
-function parseJsonObject(raw: string, flag: string): Record<string, unknown> {
-  const value = JSON.parse(raw) as unknown;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`--${flag} must be a JSON object`);
-  }
-  return value as Record<string, unknown>;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
