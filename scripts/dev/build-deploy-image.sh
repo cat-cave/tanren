@@ -75,7 +75,16 @@ docker build \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
-docker push "$IMAGE_REF"
+# Push with NATIVE `podman` when present, not the `docker`→podman shim: the shim
+# mis-parses podman's push-results stream ("failed to parse push results stream,
+# unexpected input: { }") and exits NON-ZERO even though the image pushed cleanly (the
+# manifest IS written to the registry). Native `podman push` returns 0. Fall back to
+# `docker push` on a real-docker host (no podman).
+if command -v podman >/dev/null 2>&1; then
+  podman push "$IMAGE_REF"
+else
+  docker push "$IMAGE_REF"
+fi
 set +x
 
 echo "[build-deploy-image] built + pushed ${IMAGE_REF}"
