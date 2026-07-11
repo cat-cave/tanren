@@ -60,6 +60,7 @@ import { DeployProvisioner } from "../provisioners/deployProvisioner.js";
 import { FlyDeployProvisioner, FLY_PROVIDER_KIND } from "../provisioners/flyDeployProvisioner.js";
 import { VercelDeployProvisioner, VERCEL_PROVIDER_KIND } from "../provisioners/vercelDeployProvisioner.js";
 import { fetchDeployTransport, type DeployHttpTransport } from "../provisioners/deployTransport.js";
+import type { FlyImageBuilder } from "../provisioners/flyImageBuilder.js";
 
 /**
  * The capability ids a provisioner can satisfy. Kept a free `string` (not a closed
@@ -276,6 +277,15 @@ export interface IntegrationProvisionerDeps {
    * factory in the registry (Sentry / Slack / Vercel).
    */
   allowFlyStaticDeploy?: boolean;
+  /**
+   * Fly-only: the injected image-build seam that turns the merged commit into a
+   * per-commit image so `triggerDeploy` releases a merge-reflecting image. Named on
+   * `DeployProvisionerDeps` too; carried here so the unified registry can propagate
+   * it the same way `allowFlyStaticDeploy` flows. Ignored by every non-Fly factory
+   * (Sentry / Slack / Vercel). When present, this is the DEFAULT release path; the
+   * static-image `allowFlyStaticDeploy` becomes the flagged escape hatch.
+   */
+  flyImageBuilder?: FlyImageBuilder;
 }
 
 /**
@@ -301,12 +311,13 @@ function makeDeployProvisioner(kind: string, deps: IntegrationProvisionerDeps): 
   if (deps.secrets === undefined) {
     throw new Error(`integration provisioner '${kind}' requires a SecretStore in deps.secrets`);
   }
-  // `allowFlyStaticDeploy` propagates only when set; the Fly provisioner falls back
-  // to the env-parsed default when omitted. Every non-Fly path ignores it.
+  // `allowFlyStaticDeploy` + `flyImageBuilder` propagate only when set; the Fly
+  // provisioner applies its own defaults when omitted. Every non-Fly path ignores them.
   const deployDeps = {
     transport,
     secrets: deps.secrets,
     ...(deps.allowFlyStaticDeploy === undefined ? {} : { allowFlyStaticDeploy: deps.allowFlyStaticDeploy }),
+    ...(deps.flyImageBuilder === undefined ? {} : { flyImageBuilder: deps.flyImageBuilder }),
   };
   return kind === VERCEL_PROVIDER_KIND ? new VercelDeployProvisioner(deployDeps) : new FlyDeployProvisioner(deployDeps);
 }

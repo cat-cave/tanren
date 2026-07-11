@@ -42,17 +42,21 @@
 // machine from the app's image — the Machines-API release equivalent of `fly deploy`
 // — and returns the machine id + the app's stable URL + its reported state.
 //
-// ⚠ NOT MERGE-REFLECTING (apex guard): this arm releases a STATIC image from the grant
-// metadata (`image`) — it IGNORES the merged source (`DeploySource`), spins a NEW machine
-// per trigger. It DOES wire port mapping (edge 80/443 → internal_port 3000) + allocate a
-// shared IPv4 so `<app>.fly.dev` routes — but the image is whatever the build last
-// published, NOT the merged commit. So a Fly release does NOT prove "the live product
-// reflects THIS merge". apex's live-reflects-merge proof MUST run on `deploy.vercel`
-// (gitSource = the merged commit). To prevent a Fly release from being mistaken for a
-// merge-reflecting deploy, `triggerDeploy` FAILS LOUD unless
-// `TANREN_ALLOW_FLY_STATIC_DEPLOY=1` explicitly acknowledges the static-image semantics.
-// Making Fly merge-reflecting (build-from-source + image-per-commit) is deferred — it is a
-// build-pipeline change, not a patch.
+// MERGE-REFLECTING PRECEDENCE (PR2): `triggerDeploy` now has TWO image sources,
+// tried in this order:
+//   1. builder present → `builder.build({ repo, ref, appName, flyToken })` produces a
+//      per-commit image (`registry.fly.io/<app>:<sha>`) and the release runs THAT. This
+//      is the DEFAULT merge-reflecting path — no flag needed — so a Fly release CAN now
+//      prove "the live product reflects THIS merge" (the merged SHA tags the image). The
+//      builder is an injected seam (`FlyImageBuilder`); the live impl (real docker/GitHub)
+//      lands in PR3, and a fake exercises the seam in tests today.
+//   2. no builder + `allowStaticDeploy === true` → release the STATIC grant `image`
+//      (the pre-PR2 behavior). This is now the EXPLICIT escape hatch (the flag opts into
+//      the non-merge-reflecting static-image semantics) — used only when no builder is
+//      configured.
+//   3. no builder + flag off → FAIL LOUD (as before PR2).
+// Both image paths share the PR1 port-mapped `services`/`ports`/`checks`/`guest` config
+// (`flyMachineConfig`), so the release is reachable at `<app>.fly.dev` either way.
 
 import { parsedEnv } from "../../envSchema.js";
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
@@ -66,6 +70,7 @@ import {
   type DeployResult,
   type DeploySource,
 } from "./deployProvisioner.js";
+import type { FlyImageBuilder } from "./flyImageBuilder.js";
 
 const FLY_API_BASE = "https://api.machines.dev";
 // The Fly GraphQL API — the ONLY surface that allocates app IP addresses (the Machines
@@ -167,6 +172,7 @@ class FlyDeployApi implements DeployProviderApi {
   constructor(
     private readonly transport: DeployProvisionerDeps["transport"],
     private readonly allowStaticDeploy: boolean,
+    private readonly builder?: FlyImageBuilder,
   ) {}
 
   async listApps(grant: OrgGrant, token: string): Promise<DeployApp[]> {
@@ -303,15 +309,37 @@ class FlyDeployApi implements DeployProviderApi {
     }
   }
 
-  async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, _source: DeploySource): Promise<DeployResult> {
-    // NOT MERGE-REFLECTING GUARD: this releases a STATIC `image` and ignores the merged
-    // `_source`, so it cannot prove "the live product reflects this merge". Fail LOUD
-    // unless the operator explicitly opts into the static-image semantics — so apex
-    // never accidentally "proves" deploy on Fly (it must use `deploy.vercel`). See header.
-    if (!this.allowStaticDeploy) {
+  async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult> {
+    // Resolve the image to release per the merge-reflecting precedence (see header):
+    //   1. builder present → build a per-commit image from the merged source (DEFAULT).
+    //   2. no builder + allowStaticDeploy → static grant `image` (escape hatch).
+    //   3. no builder + flag off → FAIL LOUD.
+    let image: string;
+    if (this.builder !== undefined) {
+      // The builder turns the merged repo+ref into a per-commit image
+      // (`registry.fly.io/<app>:<sha>`); the token doubles as the registry push password.
+      // A build failure (FlyImageBuildFailedError) propagates LOUD — never a fallback to a
+      // stale image (that would silently undo the merge-reflecting guarantee).
+      const { imageRef } = await this.builder.build({
+        repo: source.repo,
+        ref: source.ref,
+        appName: app.name,
+        flyToken: token,
+      });
+      image = imageRef;
+    } else if (this.allowStaticDeploy) {
+      // ESCAPE HATCH: no builder configured, so release the STATIC grant `image`. This is
+      // NOT merge-reflecting (it ignores `source`), so the operator must explicitly opt in.
+      image = deployImage(grant);
+    } else {
+      // No builder + flag off: refuse. A Fly release with no builder releases a static
+      // image and ignores the merged `source`, so it cannot prove "the live product
+      // reflects this merge" — fail LOUD so apex never accidentally "proves" deploy on Fly
+      // (it must use `deploy.vercel`, or configure a builder, or accept the static semantics).
       throw new Error(
-        "fly deploy is NOT merge-reflecting (it releases a static image, ignores the merged source) — " +
-          "it cannot prove 'the live product reflects this merge'. Use `deploy.vercel` for that, or set " +
+        "fly deploy is NOT merge-reflecting (no image builder configured; it would release a static image and " +
+          "ignore the merged source) — it cannot prove 'the live product reflects this merge'. Configure a " +
+          "flyImageBuilder to build the merged commit, use `deploy.vercel` for that, or set " +
           "TANREN_ALLOW_FLY_STATIC_DEPLOY=1 to explicitly accept the static-image semantics.",
       );
     }
@@ -320,12 +348,12 @@ class FlyDeployApi implements DeployProviderApi {
     // which greenfield-only apps hit. Done BEFORE the machine release so a live machine is
     // never left routing-less.
     await this.allocateSharedIpv4(app.name, token);
-    // POST /v1/apps/{app}/machines creates + runs a machine from the built image —
+    // POST /v1/apps/{app}/machines creates + runs a machine from the resolved image —
     // the Machines-API release equivalent of `fly deploy`. Fly keys an app by its
     // globally-unique NAME in the path (`app.name`). The config carries the full
     // release shape (image + guest + port-mapped services + an HTTP check) via
-    // `flyMachineConfig` so the machine is reachable at the app's stable hostname.
-    const image = deployImage(grant);
+    // `flyMachineConfig` so the machine is reachable at the app's stable hostname. Both
+    // the built-image and the static-image path use the SAME config (only the image differs).
     const response = await this.transport.request({
       method: "POST",
       url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(app.name)}/machines`,
@@ -391,9 +419,12 @@ class FlyDeployApi implements DeployProviderApi {
 export class FlyDeployProvisioner extends DeployProvisioner {
   // The static-image opt-in is a boot-time env knob (TANREN_ALLOW_FLY_STATIC_DEPLOY,
   // parsed once by envSchema.ts). It flows in via the injected deps — defaulting to
-  // the parsed env when the deps omit it (callers/tests may set it explicitly).
+  // the parsed env when the deps omit it (callers/tests may set it explicitly). The
+  // optional `flyImageBuilder` flows through to `FlyDeployApi` the same way; when
+  // present it is the DEFAULT (merge-reflecting) release path, and `allowStaticDeploy`
+  // becomes the flagged escape hatch.
   constructor(deps: DeployProvisionerDeps) {
     const allowStaticDeploy = deps.allowFlyStaticDeploy ?? parsedEnv.TANREN_ALLOW_FLY_STATIC_DEPLOY === "1";
-    super(new FlyDeployApi(deps.transport, allowStaticDeploy), deps);
+    super(new FlyDeployApi(deps.transport, allowStaticDeploy, deps.flyImageBuilder), deps);
   }
 }
