@@ -6,8 +6,15 @@ FROM node:24-bookworm-slim
 # host podman socket is mounted into the worker and CONTAINER_HOST points at it, so these
 # `docker` calls run as `podman --remote`, streaming the build to the host podman (which
 # owns the storage + registry auth). Only the CLIENT is needed here — no local daemon.
+# ca-certificates is REQUIRED alongside podman: node:24-bookworm-slim ships no system CA
+# bundle, and podman verifies the deploy registry's TLS against the SYSTEM store
+# (/etc/ssl/certs) — without it `docker login registry.fly.io` fails
+# `x509: certificate signed by unknown authority` and the merge-reflecting build never
+# pushes. (Node's own bundled CA is separate, so JS HTTPS still worked — which is why
+# only the podman registry auth tripped.)
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends podman podman-docker \
+  && apt-get install -y --no-install-recommends podman podman-docker ca-certificates \
+  && update-ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
