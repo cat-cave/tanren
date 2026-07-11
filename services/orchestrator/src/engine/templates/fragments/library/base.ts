@@ -32,7 +32,7 @@
 import type { Fragment, TemplateConfig, VirtualFileSystem } from "../types.js";
 
 export const BASE_FRAGMENT_ID = "base" as const;
-export const BASE_FRAGMENT_VERSION = "1.2.0" as const;
+export const BASE_FRAGMENT_VERSION = "1.3.0" as const;
 
 /** The set of justfile targets the base fragment declares. `processJustfile` rejects
  * a fragment fill against an unknown target name. The `mutation` target was added in
@@ -62,7 +62,14 @@ const JUSTFILE = `# Tanren template — DO NOT remove or rename targets. Fragmen
 # # TANREN-HOOK markers via VirtualFileSystem.appendToJustfileTarget; the
 # composer's processJustfile splices them in. Wholesale target replacement
 # throws at compose time (the user's load-bearing constraint).
-set shell := ["bash", "-euo", "pipefail", "-c"]
+# POSIX sh, NOT bash: the composed repo's Dockerfile builds in node:24-alpine (busybox
+# sh, NO bash), and \`just build\` there fails \`just could not find the shell\` when the
+# justfile demands bash. All base recipes are plain \`pnpm\`/\`mkdir\` commands with no
+# bash-isms (no [[ ]], arrays, \${x:-}, <<<), so POSIX sh runs them identically on the
+# runner AND in the alpine deploy build. \`-eu\` (not \`-euo pipefail\`): busybox ash has
+# pipefail but Debian dash does not, so pipefail would break \`sh\` on a dash host; no base
+# recipe pipes a failure-significant stage, so dropping it is safe.
+set shell := ["sh", "-eu", "-c"]
 
 # NON-INTERACTIVE CI SIGNAL (task #141 — apex v71/v78 halt class).
 # Every recipe inherits CI=true — the industry-standard signal that a build is
