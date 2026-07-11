@@ -99,6 +99,9 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   constructor(private readonly pool: pg.Pool) {
     this.eventStore = new PgEventStore(pool);
+    // Notional is priced from the recorder's default LIVE, self-healing price
+    // source (LiteLLM upstream on a short TTL, vendored seed as offline fallback;
+    // frozen to the seed under the test runner) — see CostRecorder.
     this.recorder = new CostRecorder(pool, this.eventStore);
   }
 
