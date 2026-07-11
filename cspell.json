@@ -32,6 +32,8 @@
     "BAREWORD",
     "BYPASSRLS",
     "Backgrounded",
+    "buildpacks",
+    "paketobuildpacks",
     "BerriAI",
     "Bitbucket",
     "CANONICALIZER",

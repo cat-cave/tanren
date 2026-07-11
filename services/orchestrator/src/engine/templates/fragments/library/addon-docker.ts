@@ -18,7 +18,7 @@ import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../t
 
 export const ADDON_DOCKER_ID = "addon-docker" as const;
 
-const DOCKERIGNORE = `node_modules
+export const DOCKERIGNORE = `node_modules
 dist
 .git
 .env
@@ -28,6 +28,20 @@ coverage
 .turbo
 .stryker-tmp
 `;
+
+/**
+ * Runtime-aware Dockerfile recipe — the single source of truth for the
+ * host-image build surface. Shared with `deploy-fly.ts` so a Fly web app gets
+ * the identical build recipe whether or not `addons: ["docker"]` is declared
+ * (the deploy phase runs LAST, so when both apply, deploy-fly uses
+ * `vfs.overwrite` against addon-docker's identical bytes — zero collision,
+ * zero drift). Returns the ruby recipe for `"ruby-bundler"`, else the node
+ * recipe. The content encodes audit-finding #10 + task #141 fixes — preserve
+ * every comment and line.
+ */
+export function dockerfileFor(runtime: TemplateConfig["runtime"]): string {
+  return runtime === "ruby-bundler" ? rubyDockerfile() : nodeDockerfile();
+}
 
 function nodeDockerfile(): string {
   return `# Multi-stage node-pnpm build — runs the project's \`just build\` and ships the dist/.
@@ -80,7 +94,7 @@ export const addonDockerFragment: Fragment = {
   kind: "addon",
   contract: {},
   async apply(vfs: VirtualFileSystem, config: TemplateConfig): Promise<void> {
-    vfs.write("Dockerfile", config.runtime === "ruby-bundler" ? rubyDockerfile() : nodeDockerfile());
+    vfs.write("Dockerfile", dockerfileFor(config.runtime));
     vfs.write(".dockerignore", DOCKERIGNORE);
   },
 };
