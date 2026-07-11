@@ -1,5 +1,16 @@
-// DEPLOY — Fly.io. Adds the fly.toml + a deploy README section.
+// DEPLOY — Fly.io. Adds the fly.toml (a Dockerfile build, not buildpacks) +
+// FLY_API_TOKEN env var, AND ships a runtime-aware Dockerfile + .dockerignore
+// for the host image build. The orchestrator builds the merged commit into an
+// image on the host via `docker buildx build --push` and releases it; that host
+// build needs a Dockerfile in the composed repo. A Fly web app does NOT get
+// `addon-docker` by default, so this fragment ships the recipe itself. The
+// Dockerfile content is shared with `addon-docker.ts` (`dockerfileFor` +
+// `DOCKERIGNORE`) so a project that ALSO declares `addons: ["docker"]` composes
+// with zero collision (deploy runs LAST; a `has`-guarded write skips when a
+// Dockerfile already exists — addon-docker's identical one, or an org-custom one
+// which is PRESERVED, never clobbered) and zero drift.
 
+import { dockerfileFor, DOCKERIGNORE } from "./addon-docker.js";
 import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../types.js";
 
 export const DEPLOY_FLY_ID = "deploy-fly" as const;
@@ -11,7 +22,7 @@ app = "TANREN_APP_NAME"
 primary_region = "iad"
 
 [build]
-  builder = "paketobuildpacks/builder:base"
+  dockerfile = "Dockerfile"
 
 [http_service]
   internal_port = 3000
@@ -26,8 +37,20 @@ export const deployFlyFragment: Fragment = {
   version: "1.0.0",
   kind: "deploy",
   contract: {},
-  async apply(vfs: VirtualFileSystem, _config: TemplateConfig): Promise<void> {
+  async apply(vfs: VirtualFileSystem, config: TemplateConfig): Promise<void> {
     vfs.write("fly.toml", FLY_TOML);
+    // The deploy phase runs LAST (after addons). ENSURE-A-RECIPE, don't clobber: write the
+    // host-build Dockerfile only if none exists yet. When `addon-docker` already wrote one
+    // (built-ins are byte-identical), or an org-shadowed fragment supplied a CUSTOM one,
+    // this preserves it; when nothing did, this guarantees the recipe exists so the
+    // merge-reflecting host build has something to `docker build`. (A guarded write, not
+    // `overwrite`, so a custom Dockerfile is never silently replaced.)
+    if (!vfs.has("Dockerfile")) {
+      vfs.write("Dockerfile", dockerfileFor(config.runtime));
+    }
+    if (!vfs.has(".dockerignore")) {
+      vfs.write(".dockerignore", DOCKERIGNORE);
+    }
     vfs.addEnvVar("FLY_API_TOKEN", "fly_token_provisioned_via_tanren_integration_grant");
   },
 };
