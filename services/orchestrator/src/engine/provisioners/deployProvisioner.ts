@@ -26,6 +26,7 @@ import type {
   ProvisionedArtifact,
 } from "../contracts/integrationProvisioner.js";
 import type { DeployHttpTransport } from "./deployTransport.js";
+import type { FlyImageBuilder } from "./flyImageBuilder.js";
 
 /** Dependencies every deploy provisioner runs over (injectable for unit tests). */
 export interface DeployProvisionerDeps {
@@ -37,13 +38,20 @@ export interface DeployProvisionerDeps {
    */
   secrets: SecretStore;
   /**
-   * Fly-only: opt into the NON-merge-reflecting static-image deploy. The boot-time
-   * value is the orchestrator env knob TANREN_ALLOW_FLY_STATIC_DEPLOY (parsed once
-   * by envSchema.ts); it flows in here as injected config so the use-site never
-   * re-reads a mutable global. Defaults to the parsed env when omitted. Ignored by
-   * the merge-reflecting Vercel arm.
+   * Fly-only: opt into the NON-merge-reflecting static-image deploy (env knob
+   * TANREN_ALLOW_FLY_STATIC_DEPLOY, parsed once by envSchema.ts; injected so the
+   * use-site never re-reads a mutable global). Ignored by Vercel. This is the
+   * escape hatch used only when NO `flyImageBuilder` is configured.
    */
   allowFlyStaticDeploy?: boolean;
+  /**
+   * Fly-only: injected image-build seam (`FlyImageBuilder`) that turns the merged commit
+   * into a per-commit image so `triggerDeploy` releases a MERGE-REFLECTING image. When
+   * present this is the DEFAULT path (no flag); `allowFlyStaticDeploy` is the escape
+   * hatch for when the builder is absent. Ignored by Vercel. Mirrors
+   * `EnvImageBuildDriver`'s doctrine (live = `docker buildx --push`). See `flyImageBuilder.ts`.
+   */
+  flyImageBuilder?: FlyImageBuilder;
 }
 
 /**

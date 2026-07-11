@@ -20,9 +20,12 @@ export function deployProvisionerFor(providerKind: string, deps: DeployProvision
   return buildDeployProvisioner(providerKind, {
     transport: deps.transport,
     secrets: deps.secrets,
-    // Fly-only opt-in flows through — the pre-fix path passed the whole `deps` to
+    // Fly-only opt-ins flow through — the pre-fix path passed the whole `deps` to
     // `new FlyDeployProvisioner(deps)` directly; the unified registry propagates
-    // the same field so the Fly static-image opt-in still reaches the provisioner.
+    // the same fields so the Fly static-image opt-in + the merge-reflecting image
+    // builder still reach the provisioner. Spread only when set (matching the
+    // `IntegrationProvisionerDeps` optional-field convention).
     ...(deps.allowFlyStaticDeploy === undefined ? {} : { allowFlyStaticDeploy: deps.allowFlyStaticDeploy }),
+    ...(deps.flyImageBuilder === undefined ? {} : { flyImageBuilder: deps.flyImageBuilder }),
   });
 }
