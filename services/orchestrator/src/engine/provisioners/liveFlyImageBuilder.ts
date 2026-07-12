@@ -29,6 +29,8 @@ import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger } from "../observability/logger.js";
+import { DOCKERIGNORE, dockerfileFor } from "../templates/fragments/library/addon-docker.js";
+import type { TemplateConfig } from "../templates/fragments/types.js";
 import {
   type BuiltDeployImage,
   FlyImageBuildFailedError,
@@ -82,8 +84,18 @@ export interface LiveFlyImageBuilderDeps {
   execFile: (file: string, args: readonly string[], options: { env: NodeJS.ProcessEnv }) => Promise<{ stdout: string }>;
   /** Make a temp build-context dir. Production = `mkdtemp`; the test fakes it. */
   makeTempDir: () => Promise<string>;
-  /** Ensure the context has a `Dockerfile` (fail loud pre-build). Production = `access`. */
-  assertDockerfilePresent: (dir: string) => Promise<void>;
+  /**
+   * Does `path` exist? Drives BOTH the "does the context already carry a `Dockerfile`?"
+   * check (respect a product-authored one) and the runtime-detection marker probes
+   * (`package.json`/`go.mod`/…). Production = `access` (true) / catch (false); the test
+   * fakes a set of present paths so the ensure/detect logic is exercised with no real fs.
+   */
+  fileExists: (path: string) => Promise<boolean>;
+  /**
+   * Write a file into the build context (the generated `Dockerfile` + `.dockerignore`
+   * when the repo authored none). Production = `writeFile`; the test records the writes.
+   */
+  writeContextFile: (path: string, content: string) => Promise<void>;
   /** Remove the temp dir (best-effort; never throws on cleanup). Production = `rm -rf`. */
   removeDir: (dir: string) => Promise<void>;
 }
@@ -133,7 +145,7 @@ async function buildPushedImage(
     const tarballUrl = githubTarballUrl(repo, ref);
     const tarball = await deps.fetchTarball(tarballUrl, sourceToken);
     await deps.extractTarball(tarball, dir);
-    await deps.assertDockerfilePresent(dir);
+    await ensureDockerfile(dir, appName, ref, deps);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       APP: appName,
@@ -161,6 +173,76 @@ async function buildPushedImage(
 }
 
 /**
+ * ENSURE the build context carries a `Dockerfile` — the merge-reflecting build's one hard
+ * precondition. Two paths, LOGGED so the run trail shows which fired:
+ *   1. FOUND-IN-REPO — the extracted source already has a `Dockerfile` (a product-authored
+ *      one, e.g. an F2-authored Dockerfile or the `deploy-fly` fragment's). Respect it
+ *      verbatim; the product owns its build recipe.
+ *   2. GENERATED — the source authored none (e.g. a `deploy.railway`-scaffolded ts/pnpm
+ *      template never hand-authors a Dockerfile). DETECT the runtime from the context and
+ *      write `dockerfileFor(runtime)` + `.dockerignore` (the SAME recipe the `addon-docker`
+ *      fragment emits — single source of truth for the host-image build surface).
+ * Fail LOUD (never a wrong guess): a context whose runtime is undetectable throws
+ * {@link FlyImageBuildFailedError} naming the app + ref (never a token).
+ */
+async function ensureDockerfile(
+  dir: string,
+  appName: string,
+  ref: string,
+  deps: LiveFlyImageBuilderDeps,
+): Promise<void> {
+  if (await deps.fileExists(join(dir, "Dockerfile"))) {
+    log.info("using product-authored Dockerfile from the merged source", { appName, ref });
+    return;
+  }
+  const runtime = await detectContextRuntime(dir, appName, ref, deps);
+  await deps.writeContextFile(join(dir, "Dockerfile"), dockerfileFor(runtime));
+  await deps.writeContextFile(join(dir, ".dockerignore"), DOCKERIGNORE);
+  log.info("generated a Dockerfile for the detected runtime (repo authored none)", { appName, ref, runtime });
+}
+
+// The marker files that identify a runtime, probed in preference order. FIRST match wins:
+// a repo carrying `package.json` is the node-pnpm runtime `dockerfileFor` builds, etc. The
+// two runtimes `dockerfileFor` has a first-class recipe for (node-pnpm, ruby-bundler) lead;
+// python/go/rust are recognized so the failure is a clear "no Dockerfile recipe" rather
+// than a silent node guess. Maps to a `TemplateConfig["runtime"]` id (an OPEN string).
+const RUNTIME_MARKERS: ReadonlyArray<{ marker: readonly string[]; runtime: TemplateConfig["runtime"] }> = [
+  { marker: ["package.json"], runtime: "node-pnpm" },
+  { marker: ["Gemfile"], runtime: "ruby-bundler" },
+  { marker: ["pyproject.toml", "requirements.txt"], runtime: "python" },
+  { marker: ["go.mod"], runtime: "go-modules" },
+  { marker: ["Cargo.toml"], runtime: "rust-cargo" },
+];
+
+/**
+ * Detect the extracted context's runtime from its manifest files (see {@link RUNTIME_MARKERS}).
+ * Returns the runtime id for `dockerfileFor`; throws {@link FlyImageBuildFailedError} (naming
+ * the app + ref, NEVER a token) when NO marker is present — a deliberate LOUD halt over
+ * silently defaulting to a wrong runtime.
+ */
+async function detectContextRuntime(
+  dir: string,
+  appName: string,
+  ref: string,
+  deps: LiveFlyImageBuilderDeps,
+): Promise<TemplateConfig["runtime"]> {
+  for (const { marker, runtime } of RUNTIME_MARKERS) {
+    for (const file of marker) {
+      if (await deps.fileExists(join(dir, file))) {
+        return runtime;
+      }
+    }
+  }
+  throw new FlyImageBuildFailedError(
+    appName,
+    ref,
+    "the merged source has no Dockerfile and no recognized runtime manifest " +
+      "(package.json / Gemfile / pyproject.toml / requirements.txt / go.mod / Cargo.toml) " +
+      "— cannot generate a Dockerfile for an undetectable runtime",
+  );
+}
+
+/**
  * The production side-effect bindings for {@link LiveFlyImageBuilderDeps} (everything
  * EXCEPT `scriptPath` + `mintSourceToken`, which the config reader supplies). Exported so
  * `flyImageBuilderConfig.ts` wires the real execFile/fs/tar/fetch WITHOUT importing
@@ -169,7 +251,7 @@ async function buildPushedImage(
  */
 export function realFlyImageBuilderSideEffects(): Pick<
   LiveFlyImageBuilderDeps,
-  "execFile" | "fetchTarball" | "extractTarball" | "makeTempDir" | "assertDockerfilePresent" | "removeDir"
+  "execFile" | "fetchTarball" | "extractTarball" | "makeTempDir" | "fileExists" | "writeContextFile" | "removeDir"
 > {
   return {
     execFile: async (file, args, options) =>
@@ -177,9 +259,11 @@ export function realFlyImageBuilderSideEffects(): Pick<
     fetchTarball: realFetchTarball,
     extractTarball: realExtractTarball,
     makeTempDir: () => mkdtemp(join(tmpdir(), "tanren-fly-build-")),
-    assertDockerfilePresent: async (dir) => {
-      await access(join(dir, "Dockerfile"));
-    },
+    fileExists: async (path) =>
+      access(path)
+        .then(() => true)
+        .catch(() => false),
+    writeContextFile: (path, content) => writeFile(path, content),
     removeDir: (dir) => rm(dir, { recursive: true, force: true }),
   };
 }
