@@ -29,6 +29,18 @@ const WindowFill = () => {
 window.AuditsView = ({ onNav }) => {
   const [jobs, setJobs] = React.useState(window.AUDIT_JOBS);
   const toggle = (i) => setJobs(js => js.map((j, k) => k === i ? { ...j, status: j.status === "on" ? "paused" : "on" } : j));
+  const scheduleRecommended = (recommendation) => {
+    setJobs(js => js.some(j => j.name === recommendation.name) ? js : [...js, {
+      name: recommendation.name,
+      kind: recommendation.name.startsWith("performance") ? "perf" : "license",
+      status: "on",
+      schedule: "nightly · next idle window",
+      window: recommendation.window,
+      cli: "claude · haiku-4.5",
+      lastRun: "scheduled · pending",
+      findings: { n: 0, sev: "ok", pending: true, note: "first pass queued for the next window" },
+    }]);
+  };
 
   return (
     <>
@@ -76,7 +88,7 @@ window.AuditsView = ({ onNav }) => {
                   <div className="w">{j.window}</div>
                 </div>
                 <div className={"afind sev-" + j.findings.sev} onClick={() => j.findings.n > 0 && onNav?.("inbox")}>
-                  <div className="n">{j.findings.n > 0 ? `${j.findings.n} found` : "clean"}</div>
+                  <div className="n">{j.findings.pending ? "pending" : j.findings.n > 0 ? `${j.findings.n} found` : "clean"}</div>
                   <div className="note">{j.findings.note}</div>
                 </div>
                 <div className="alast">last · {j.lastRun}</div>
@@ -99,7 +111,12 @@ window.AuditsView = ({ onNav }) => {
                 <div className="rw">{r.why}</div>
                 <div className="foot">
                   <span className="win">{r.window}</span>
-                  <button className="btn primary notched" style={{ fontSize: 11 }}>schedule ↗</button>
+                  <button
+                    className="btn primary notched"
+                    style={{ fontSize: 11 }}
+                    disabled={jobs.some(j => j.name === r.name)}
+                    onClick={() => scheduleRecommended(r)}
+                  >{jobs.some(j => j.name === r.name) ? "scheduled ✓" : "schedule ↗"}</button>
                 </div>
               </div>
             ))}
