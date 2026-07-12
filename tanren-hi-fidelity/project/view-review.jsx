@@ -2,7 +2,7 @@
 // Forge-led chat review with inline behavior checklist + deferral resolutions,
 // preview pane alongside, readiness gate at the bottom.
 
-const ReviewChat = ({ behaviors, toggleBehavior, deferralStates, setDeferralState, showSubopt }) => (
+const ReviewChat = ({ behaviors, toggleBehavior, deferralStates, setDeferralState, showSubopt, changesRequested }) => (
   <div className="forge-card">
     <div className="head">
       <span className="stamp">鍛</span>
@@ -87,10 +87,24 @@ const ReviewChat = ({ behaviors, toggleBehavior, deferralStates, setDeferralStat
         </div>
       </ForgeTurn>
 
-      {/* 5. Forge nudge with prompts */}
+      {/* 5. Return-to-writer narrative */}
+      {changesRequested && (
+        <ForgeTurn>
+          <div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-warn)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>
+              changes requested · writer re-engaged
+            </div>
+            I returned {REVIEW.pr} to the writer with your behavior checks and review context attached. The run is back in write → check → audit; sign-off stays locked until Forge presents a fresh revision here.
+          </div>
+        </ForgeTurn>
+      )}
+
+      {/* 6. Forge nudge with prompts */}
       <ForgeTurn>
         <div>
-          {behaviors.filter(b => !b.done).length > 0 ? (
+          {changesRequested ? (
+            <>I’ll bring this review back when the writer’s revision clears check + audit. Your verification state stays attached.</>
+          ) : behaviors.filter(b => !b.done).length > 0 ? (
             <>{behaviors.filter(b => !b.done).length} behavior{behaviors.filter(b => !b.done).length > 1 ? "s" : ""} left to eyeball. Want quick prompts, or have a question about the change?</>
           ) : (
             <>All behaviors verified ✓. {Object.keys(deferralStates).length === REVIEW_DEFERRALS.length ? "Deferrals settled. Ready to sign off." : "Settle the deferrals to unlock sign-off."}</>
@@ -204,6 +218,7 @@ const PreviewPane = () => {
 window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "native" }) => {
   const [behaviors, setBehaviors] = React.useState(REVIEW_BEHAVIORS);
   const [deferralStates, setDeferralStates] = React.useState({});
+  const [changesRequested, setChangesRequested] = React.useState(false);
 
   const toggleBehavior = (n) => {
     setBehaviors(bs => bs.map(b => b.n === n ? { ...b, done: !b.done } : b));
@@ -214,7 +229,7 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "native" }) => {
 
   const allBehaviorsDone = behaviors.every(b => b.done);
   const allDeferralsResolved = Object.keys(deferralStates).length === REVIEW_DEFERRALS.length;
-  const canSignOff = allBehaviorsDone && allDeferralsResolved;
+  const canSignOff = allBehaviorsDone && allDeferralsResolved && !changesRequested;
   const verifiedCount = behaviors.filter(b => b.done).length;
   const resolvedCount = Object.keys(deferralStates).length;
 
@@ -239,6 +254,7 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "native" }) => {
             deferralStates={deferralStates}
             setDeferralState={setDeferralState}
             showSubopt={showSubopt}
+            changesRequested={changesRequested}
           />
           <PreviewPane />
         </div>
@@ -254,12 +270,18 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "native" }) => {
           <span className="d"></span>{REVIEW_DEFERRALS.length} deferred · {resolvedCount} resolved
         </span>
         <span className="note">
-          {canSignOff
+          {changesRequested
+            ? "· writer re-engaged · awaiting fresh revision"
+            : canSignOff
             ? "· ready to sign off"
             : "· can't sign off until behaviors + deferrals are settled"}
         </span>
         <div className="grow">
-          <button className="btn danger">request changes ↗</button>
+          <button
+            className="btn danger"
+            disabled={changesRequested}
+            onClick={() => setChangesRequested(true)}
+          >{changesRequested ? "changes requested ✓" : "request changes ↗"}</button>
           <MergeActions mode={mergeIntegration} canSignOff={canSignOff} />
         </div>
       </div>
