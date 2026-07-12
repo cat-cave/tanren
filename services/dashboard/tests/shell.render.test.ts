@@ -136,7 +136,8 @@ describe("dashboard shell rendering", () => {
     expect(html).toContain('data-theme-value="ash"');
     expect(html).toContain("ask forge");
     expect(html).toContain("⌘K");
-    expect(html).toContain('title="notifications"');
+    expect(html).toContain('class="icon-btn" href="/notifications" title="notifications"');
+    expect(html).toContain('aria-label="notifications"');
     expect(html).toContain('class="avatar"');
   });
 
