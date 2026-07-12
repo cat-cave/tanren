@@ -20,6 +20,7 @@ import {
 } from "../../src/engine/provisioners/flyImageBuilderConfig.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { GithubAppTokenMinter } from "../../src/engine/providers/githubAppTokenMinter.js";
+import { DOCKERIGNORE, dockerfileFor } from "../../src/engine/templates/fragments/library/addon-docker.js";
 
 const FLY_TOKEN = "fly_secret_registry_token";
 const SOURCE_TOKEN = "ghs_fake_installation_token";
@@ -35,10 +36,20 @@ interface FakeCalls {
   mintRepos: string[];
   fetchCalls: Array<{ url: string; token: string }>;
   execCalls: Array<{ file: string; args: readonly string[]; env: NodeJS.ProcessEnv }>;
+  writes: Array<{ path: string; content: string }>;
   removedDirs: string[];
 }
 
-function fakeLiveDeps(overrides?: Partial<LiveFlyImageBuilderDeps>): {
+/**
+ * Build fake deps over an in-memory context. `contextFiles` is the set of paths the
+ * extracted build context "contains" (basenames under `/fake/tmp-buildctx`) — it drives
+ * both the "does the repo already have a Dockerfile?" check and runtime detection. A write
+ * into the context adds to the set (so a generated Dockerfile is then "present").
+ */
+function fakeLiveDeps(
+  overrides?: Partial<LiveFlyImageBuilderDeps>,
+  contextFiles: readonly string[] = ["Dockerfile"],
+): {
   deps: LiveFlyImageBuilderDeps;
   calls: FakeCalls;
 } {
@@ -46,8 +57,10 @@ function fakeLiveDeps(overrides?: Partial<LiveFlyImageBuilderDeps>): {
     mintRepos: [],
     fetchCalls: [],
     execCalls: [],
+    writes: [],
     removedDirs: [],
   };
+  const present = new Set(contextFiles.map((f) => `/fake/tmp-buildctx/${f}`));
   const deps: LiveFlyImageBuilderDeps = {
     scriptPath: "/fake/build-deploy-image.sh",
     mintSourceToken: async (repo) => {
@@ -64,7 +77,11 @@ function fakeLiveDeps(overrides?: Partial<LiveFlyImageBuilderDeps>): {
       return { stdout: "[build-deploy-image] built + pushed\nregistry.fly.io/tanren-acme-web:abc123def" };
     },
     makeTempDir: async () => "/fake/tmp-buildctx",
-    assertDockerfilePresent: async () => {},
+    fileExists: async (path) => present.has(path),
+    writeContextFile: async (path, content) => {
+      calls.writes.push({ path, content });
+      present.add(path);
+    },
     removeDir: async (dir) => {
       calls.removedDirs.push(dir);
     },
@@ -161,6 +178,81 @@ describe("liveFlyImageBuilder — the live Fly image-build driver", () => {
     });
     const builder = buildLiveFlyImageBuilder(deps);
     await expect(builder.build(REQUEST)).rejects.toBeInstanceOf(FlyImageBuildFailedError);
+  });
+});
+
+describe("liveFlyImageBuilder — ensure a Dockerfile is present (generate one when the repo lacks it)", () => {
+  const DOCKERFILE_PATH = "/fake/tmp-buildctx/Dockerfile";
+  const DOCKERIGNORE_PATH = "/fake/tmp-buildctx/.dockerignore";
+
+  it("(a) leaves a product-authored Dockerfile untouched (does NOT overwrite it)", async () => {
+    // Context already carries a Dockerfile — the product owns its build recipe.
+    const { deps, calls } = fakeLiveDeps(undefined, ["Dockerfile", "package.json"]);
+    const builder = buildLiveFlyImageBuilder(deps);
+    await builder.build(REQUEST);
+    // Nothing written into the context; the build proceeds over the existing Dockerfile.
+    expect(calls.writes).toEqual([]);
+    expect(calls.execCalls).toHaveLength(1);
+  });
+
+  it("(b) generates dockerfileFor(runtime) + .dockerignore when the repo has none, then builds", async () => {
+    // A ts/pnpm scaffold that authored NO Dockerfile (only package.json).
+    const { deps, calls } = fakeLiveDeps(undefined, ["package.json"]);
+    const builder = buildLiveFlyImageBuilder(deps);
+    const result = await builder.build(REQUEST);
+    // Both files were written into the context with the SAME bytes addon-docker emits.
+    const paths = calls.writes.map((w) => w.path);
+    expect(paths).toContain(DOCKERFILE_PATH);
+    expect(paths).toContain(DOCKERIGNORE_PATH);
+    expect(calls.writes.find((w) => w.path === DOCKERFILE_PATH)?.content).toBe(dockerfileFor("node-pnpm"));
+    expect(calls.writes.find((w) => w.path === DOCKERIGNORE_PATH)?.content).toBe(DOCKERIGNORE);
+    // The build still proceeds and returns the pushed ref.
+    expect(calls.execCalls).toHaveLength(1);
+    expect(result.imageRef).toBe("registry.fly.io/tanren-acme-web:abc123def");
+  });
+
+  it("(c) detects the runtime from context manifests (node-pnpm vs ruby-bundler vs python/go/rust)", async () => {
+    const cases: Array<{ files: string[]; runtime: Parameters<typeof dockerfileFor>[0] }> = [
+      { files: ["package.json"], runtime: "node-pnpm" },
+      { files: ["Gemfile"], runtime: "ruby-bundler" },
+      { files: ["pyproject.toml"], runtime: "python" },
+      { files: ["requirements.txt"], runtime: "python" },
+      { files: ["go.mod"], runtime: "go-modules" },
+      { files: ["Cargo.toml"], runtime: "rust-cargo" },
+    ];
+    for (const { files, runtime } of cases) {
+      const { deps, calls } = fakeLiveDeps(undefined, files);
+      const builder = buildLiveFlyImageBuilder(deps);
+      await builder.build(REQUEST);
+      expect(calls.writes.find((w) => w.path === DOCKERFILE_PATH)?.content).toBe(dockerfileFor(runtime));
+    }
+  });
+
+  it("(c') a package.json wins over a lower-preference marker (node recipe, not python)", async () => {
+    const { deps, calls } = fakeLiveDeps(undefined, ["package.json", "requirements.txt"]);
+    const builder = buildLiveFlyImageBuilder(deps);
+    await builder.build(REQUEST);
+    expect(calls.writes.find((w) => w.path === DOCKERFILE_PATH)?.content).toBe(dockerfileFor("node-pnpm"));
+  });
+
+  it("(d) throws FlyImageBuildFailedError (naming app + ref, no token) when the runtime is undetectable", async () => {
+    // No Dockerfile and no recognized manifest — a LOUD halt, never a wrong-runtime guess.
+    const { deps, calls } = fakeLiveDeps(undefined, ["README.md"]);
+    const builder = buildLiveFlyImageBuilder(deps);
+    let caught: unknown;
+    try {
+      await builder.build(REQUEST);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(FlyImageBuildFailedError);
+    expect((caught as Error).message).toContain("tanren-acme-web");
+    expect((caught as Error).message).toContain("abc123def");
+    expect((caught as Error).message).not.toContain(FLY_TOKEN);
+    expect((caught as Error).message).not.toContain(SOURCE_TOKEN);
+    // Undetectable → never shells the build script; temp dir still cleaned up.
+    expect(calls.execCalls).toEqual([]);
+    expect(calls.removedDirs).toEqual(["/fake/tmp-buildctx"]);
   });
 });
 

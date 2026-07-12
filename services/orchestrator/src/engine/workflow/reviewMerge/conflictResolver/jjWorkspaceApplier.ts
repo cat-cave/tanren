@@ -41,6 +41,7 @@ import type { OrgGithubAppInstallation } from "../../../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "../../../providers/githubAppTokenMinter.js";
 import type { LiveJjWorkspace } from "../../../providers/liveJjWorkspace.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
+import { trackPublishedHeadCommands } from "../../../providers/jjPublishedHead.js";
 import { buildActivityWatchdog } from "../../../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../../../workspace/ssh.js";
 import { pushJjHead } from "./jjAuthedPush.js";
@@ -139,12 +140,15 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
     // Prepare the just-cloned workspace for the rebase of a LIVE published head:
     //  1. `jj git clone` imports a NON-default branch only as a REMOTE-tracking
     //     bookmark (`<head>@origin`), so create the LOCAL `<head>` bookmark that
-    //     `rebaseOnto` names by tracking the remote one.
+    //     `rebaseOnto` names by FETCHING + tracking + asserting the remote one
+    //     (`trackPublishedHeadCommands` — robust against the "head not in the initial
+    //     clone" race and FAIL-CLOSED on a genuinely-missing head, closing the apex-v94
+    //     silent-no-op that left the rebase `-b <head>` target missing).
     //  2. The PR head is a PUBLISHED bookmark (jj treats it as immutable), so rebasing
     //     it onto the shifted base would refuse with "would rewrite immutable commits".
     //     The workspace is short-lived + the resolution is pushed back to the SAME head,
     //     so empty the immutable set for THIS workspace.
-    // FAIL-CLOSED: this setup runs through the throwing SSH helper — a clone/track/config
+    // FAIL-CLOSED: this setup runs through the throwing SSH helper — a fetch/track/assert/config
     // failure aborts the resolve (no `|| true`). The conformance substrate builds a
     // mutable local feature, so it never needs this; it is the live-published-head path.
     await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
@@ -158,8 +162,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       }),
       command: [
         "set -eu",
-        // jj 0.42 `bookmark track` takes the bare NAME (not `<name>@origin`) + `--remote`.
-        `jj bookmark track ${quoteSshShellArg(facts.headBranch)} --remote origin`,
+        ...trackPublishedHeadCommands(facts.headBranch),
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
     });

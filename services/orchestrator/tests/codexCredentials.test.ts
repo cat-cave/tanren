@@ -110,6 +110,10 @@ describe("Codex credential contracts", () => {
     expect(ssh.command).toContain("openrouter.env");
     expect(ssh.command).toContain("config.toml");
     expect(ssh.command).toContain('model_provider = "openrouter"');
+    // The run default model + reasoning are pinned in the config.toml (OpenRouter
+    // path) so codex does not fall back to its built-in default model.
+    expect(ssh.command).toContain('model = "openai/gpt-5.6-luna"');
+    expect(ssh.command).toContain('model_reasoning_effort = "high"');
     expect(ssh.command).toContain('base_url = "https://openrouter.ai/api/v1"');
     expect(ssh.command).toContain('env_key = "OPENROUTER_API_KEY"');
     expect(ssh.command).not.toContain("sk-or-v1-managed-key");

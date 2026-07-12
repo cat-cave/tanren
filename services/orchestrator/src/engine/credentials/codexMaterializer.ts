@@ -8,6 +8,7 @@ import { validateCodexAuthBundle, validateCodexCredentialRef, validateCredential
 import { resolveRawProviderKey } from "./managedKey.js";
 import { credentialTypeForRef, providerSlugForRef } from "./credentialType.js";
 import { DEFAULT_MANAGED_ENDPOINT } from "../config/managedProvider.js";
+import { CODEX_OPENROUTER_MODEL, CODEX_REASONING_EFFORT } from "../providers/codexModel.js";
 
 export interface MaterializeCodexAuthInput {
   secrets: SecretStore;
@@ -304,8 +305,14 @@ export function buildManagedCodexMaterializationCommand(codexHome: string, endpo
 
 // The OpenRouter provider block + selector, per OpenRouter's Codex-CLI cookbook.
 // `env_key` names the env var (OPENROUTER_API_KEY) the sourced env file exports.
+// Also pins the run default `model` (the OpenRouter-namespaced `openai/gpt-5.6-luna`)
+// + `model_reasoning_effort = "high"` so codex does NOT fall back to its built-in
+// default model. Top-level keys precede the `[model_providers.openrouter]` table
+// header (required TOML ordering).
 export function managedCodexConfigToml(endpointBaseUrl: string): string {
   return [
+    `model = "${CODEX_OPENROUTER_MODEL}"`,
+    `model_reasoning_effort = "${CODEX_REASONING_EFFORT}"`,
     `model_provider = "openrouter"`,
     ``,
     `[model_providers.openrouter]`,
