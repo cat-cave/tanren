@@ -82,9 +82,9 @@ export function TopBar(props: TopBarProps) {
           ask forge
           <span class="kbd">⌘K</span>
         </button>
-        <button class="icon-btn" title="notifications" type="button">
+        <a class="icon-btn" href="/notifications" title="notifications" aria-label="notifications">
           ✉<span class="badge">3</span>
-        </button>
+        </a>
         <div class="avatar" title={props.org?.login ?? "operator"}>
           {initialsOf(props.operatorInitials)}
         </div>
