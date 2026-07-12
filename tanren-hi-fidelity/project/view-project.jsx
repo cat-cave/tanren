@@ -389,6 +389,11 @@ const ProjectViewDag = ({ onNav, onOpenSpec, setMode, showSubopt }) => {
                   <span style={{ fontFamily: "var(--font-jp)", fontSize: 18, color: "var(--ember-08)" }}>鍛</span>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>forge · collapsed</span>
                   <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-warn)" }}>{PROJECT_FORGE.attention.length} need you</span>
+                  {showSubopt && PROJECT_FORGE.subopt.length > 0 && (
+                    <span className="pill warn" style={{ fontSize: 8 }}>
+                      <span className="d"></span>quality · {PROJECT_FORGE.subopt.length}
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-1)", lineHeight: 1.4 }}>
                   {PROJECT_FORGE.state.headline}
