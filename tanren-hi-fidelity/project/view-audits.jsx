@@ -28,6 +28,14 @@ const WindowFill = () => {
 
 window.AuditsView = ({ onNav }) => {
   const [jobs, setJobs] = React.useState(window.AUDIT_JOBS);
+  const [composerFocused, setComposerFocused] = React.useState(false);
+  const composerRef = React.useRef(null);
+  const composerAudit = {
+    name: "security deep scan", kind: "security", status: "on",
+    schedule: "nightly · 03:00", window: "night (00–05) · 22% filled",
+    cli: "claude · haiku-4.5", lastRun: "scheduled · pending",
+    findings: { n: 0, sev: "ok", pending: true, note: "first pass queued for tonight" },
+  };
   const toggle = (i) => setJobs(js => js.map((j, k) => k === i ? { ...j, status: j.status === "on" ? "paused" : "on" } : j));
   const scheduleRecommended = (recommendation) => {
     setJobs(js => js.some(j => j.name === recommendation.name) ? js : [...js, {
@@ -41,6 +49,16 @@ window.AuditsView = ({ onNav }) => {
       findings: { n: 0, sev: "ok", pending: true, note: "first pass queued for the next window" },
     }]);
   };
+  const focusComposer = () => {
+    setComposerFocused(true);
+    composerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    composerRef.current?.focus({ preventScroll: true });
+  };
+  const createComposerAudit = () => {
+    setJobs(js => js.some(j => j.name === composerAudit.name) ? js : [...js, composerAudit]);
+    setComposerFocused(false);
+  };
+  const composerCreated = jobs.some(j => j.name === composerAudit.name);
 
   return (
     <>
@@ -51,7 +69,7 @@ window.AuditsView = ({ onNav }) => {
         actions={
           <>
             <button className="btn ghost" onClick={() => onNav?.("costs")}>cost windows ↗</button>
-            <button className="btn primary notched">+ new scheduled audit</button>
+            <button className="btn primary notched" onClick={focusComposer}>+ new scheduled audit</button>
           </>
         }
       />
@@ -123,18 +141,19 @@ window.AuditsView = ({ onNav }) => {
           </div>
         </div>
 
-        {/* Composer (visual) */}
-        <div className="panel" style={{ padding: "14px 16px", gap: 12 }}>
+        {/* Composer */}
+        <div ref={composerRef} tabIndex="-1" className="panel" style={{ padding: "14px 16px", gap: 12, outline: composerFocused ? "2px solid var(--ember-08)" : "none" }}>
           <div className="spec-h">new scheduled audit</div>
           <div className="audit-composer">
-            <div className="field"><span className="label">kind</span><div className="input filled">security scan <span className="caret">▾</span></div></div>
+            <div className="field"><span className="label">kind</span><div className="input filled">security deep scan <span className="caret">▾</span></div></div>
             <div className="field"><span className="label">cadence</span><div className="input filled">nightly · 03:00 <span className="caret">▾</span></div></div>
             <div className="field"><span className="label">target window</span><div className="input filled">night (00–05) · 22% filled <span className="caret">▾</span></div></div>
             <div className="field"><span className="label">answerer cli</span><div className="input filled">claude · haiku-4.5 <span className="caret">▾</span></div></div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn primary notched">create audit ↗</button>
+            <button className="btn primary notched" disabled={composerCreated} onClick={createComposerAudit}>{composerCreated ? "audit created ✓" : "create audit ↗"}</button>
             <button className="btn ghost">ask forge to configure it</button>
+            {composerCreated && <span className="pill ok"><span className="d"></span>scheduled for tonight · first pass pending</span>}
           </div>
         </div>
       </div>
