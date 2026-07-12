@@ -60,7 +60,7 @@ describe("Codex Answerer adapter", () => {
     // CODEX_HOME never clobber each other. Assert the command shape allowing the suffix.
     const execCommand = ssh.commands[3]?.command.command ?? "";
     expect(execCommand).toMatch(
-      /^CODEX_HOME='\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home' codex exec --sandbox read-only --json --ignore-user-config --ignore-rules --skip-git-repo-check --cd '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/tanren\.check_answer\.v1-[0-9a-f]+' --output-schema '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home\/tanren\.check_answer\.v1-[0-9a-f]+\.schema\.json' --output-last-message '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home\/tanren\.check_answer\.v1-[0-9a-f]+\.response\.json' -$/u,
+      /^CODEX_HOME='\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home' codex exec --sandbox read-only --json -m 'gpt-5\.6-luna' -c 'model_reasoning_effort="high"' --ignore-user-config --ignore-rules --skip-git-repo-check --cd '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/tanren\.check_answer\.v1-[0-9a-f]+' --output-schema '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home\/tanren\.check_answer\.v1-[0-9a-f]+\.schema\.json' --output-last-message '\/home\/tanren\/\.tanren\/runs\/run_answerer_1\/codex-home\/tanren\.check_answer\.v1-[0-9a-f]+\.response\.json' -$/u,
     );
     expect(execCommand).not.toContain("workspace-write");
     expect(ssh.commands[3]?.command.stdin).toBe("judge this diff");

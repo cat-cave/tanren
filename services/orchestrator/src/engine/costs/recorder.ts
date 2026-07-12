@@ -20,7 +20,7 @@ import {
   computeNotionalUsd,
   resolveCostSource,
 } from "./sources.js";
-import { defaultModelPriceSource, type ModelPriceSource } from "./pricing/modelPriceSource.js";
+import { liveModelPriceSource, type ModelPriceSource } from "./pricing/modelPriceSource.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("cost-recorder");
 
@@ -120,10 +120,10 @@ export class CostRecorder {
     // cost_records directly. Absent (in-process control plane / tests) it writes
     // in-process, unchanged.
     private readonly reconcile?: CostReconcile,
-    // The maintained per-model price source the NOTIONAL estimate is computed from
-    // (LiteLLM's vendored data). Defaults to the vendored snapshot; a test injects a
-    // small fixture map so notional is deterministic without the 1.3 MB file.
-    private readonly priceSource: ModelPriceSource = defaultModelPriceSource(),
+    // The per-model price source the NOTIONAL estimate is computed from. Defaults to
+    // the LIVE, self-healing source (LiteLLM upstream on a short TTL; vendored file =
+    // offline seed; frozen to the seed under tests). A test injects a fixture instead.
+    private readonly priceSource: ModelPriceSource = liveModelPriceSource(),
   ) {}
 
   // record persists a single cost_records row with the full typed token

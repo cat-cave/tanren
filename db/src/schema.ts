@@ -167,13 +167,13 @@ export const events = pgTable(
     index("events_org_id").on(table.orgId),
     index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
     index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
-    // Terminal task/run events: AT MOST ONCE per type (#40 Class B + #48).
+    // Terminal task/run events AT MOST ONCE per type (#40 Class B + #48); run.resumed too (mig 0033).
     uniqueIndex("events_task_terminal_unique")
       .on(table.taskId, table.eventType)
       .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
     uniqueIndex("events_run_terminal_unique")
       .on(table.runId, table.eventType)
-      .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled')`),
+      .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled', 'run.resumed')`),
     // Round-3 H-R3.2: priorEvents dedupe on (run_id, idempotency_key).
     uniqueIndex("events_prior_idempotency_unique")
       .on(table.runId, table.idempotencyKey)
