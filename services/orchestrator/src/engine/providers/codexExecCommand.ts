@@ -6,6 +6,7 @@
 
 import { quoteSshShellArg } from "../ssh/command.js";
 import { codexManagedEnvPath } from "../credentials/codexMaterializer.js";
+import { CODEX_DEFAULT_MODEL, CODEX_REASONING_EFFORT } from "./codexModel.js";
 
 export function buildCodexExecCommand(input: {
   codexHome: string;
@@ -19,6 +20,11 @@ export function buildCodexExecCommand(input: {
     "codex exec",
     "--sandbox workspace-write",
     "--json",
+    // Pin the run default model + reasoning on the DIRECT paths (BYOK bundle / BYOK
+    // native-OpenAI) via CLI flags — those paths write no config.toml. The OpenRouter
+    // paths (managed OR BYOK key) carry the model in the per-run config.toml instead,
+    // so this is empty there (see codexModelFlags).
+    ...codexModelFlags(input.managed),
     // BYOK bundle / BYOK native-OpenAI: ignore any host-level codex config (no
     // config.toml is written). OpenRouter (managed OR BYOK key): we DELIBERATELY do
     // NOT pass --ignore-user-config so codex reads the per-run CODEX_HOME/config.toml
@@ -44,6 +50,9 @@ export function buildCodexAnswererExecCommand(input: {
     "codex exec",
     "--sandbox read-only",
     "--json",
+    // Same model/reasoning pin as the writer — CLI flags on the direct paths, the
+    // config.toml on the OpenRouter paths (empty here for managed).
+    ...codexModelFlags(input.managed),
     ...codexUserConfigFlag(input.managed),
     "--ignore-rules",
     "--skip-git-repo-check",
@@ -79,6 +88,25 @@ function codexKeyEnvPrefix(codexHome: string, managed?: boolean, nativeApiKeyEnv
 // native-OpenAI) pins it. (UNVERIFIED LIVE — see the NOTE below.)
 function codexUserConfigFlag(managed?: boolean): string[] {
   return managed === true ? [] : ["--ignore-user-config"];
+}
+
+// The model + reasoning-effort pin for the DIRECT codex paths (BYOK ChatGPT bundle
+// / BYOK native-OpenAI key) — those paths write no config.toml, so the model
+// (`-m gpt-5.6-luna`) and reasoning (`-c model_reasoning_effort="high"`) are passed
+// as CLI flags. The OpenRouter paths (managed OR a BYOK OpenRouter key, `managed:
+// true`) carry BOTH in the per-run config.toml the materializer writes — codex reads
+// it because those runs DROP `--ignore-user-config` — so this returns nothing there
+// (a bare `-m gpt-5.6-luna` would be the wrong, non-namespaced id for OpenRouter).
+function codexModelFlags(managed?: boolean): string[] {
+  if (managed === true) {
+    return [];
+  }
+  return [
+    "-m",
+    quoteSshShellArg(CODEX_DEFAULT_MODEL),
+    "-c",
+    quoteSshShellArg(`model_reasoning_effort="${CODEX_REASONING_EFFORT}"`),
+  ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
