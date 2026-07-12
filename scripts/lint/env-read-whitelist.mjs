@@ -65,6 +65,7 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   ["TANREN_OP_CONNECT_TOKEN_FILE", "mounted 1Password-Connect-token secret-file path"],
   // ── process / runtime ───────────────────────────────────────────────────────
   ["NODE_ENV", "dev/prod mode discriminator"],
+  ["VITEST", "unit-test-runner discriminator — disables the live model-price fetch so fast-check stays offline"],
   ["npm_package_version", "service /healthz version stamp (npm-injected)"],
   ["ORCHESTRATOR_URL", "dashboard → orchestrator base URL (documented default)"],
   ["DASHBOARD_PORT", "dashboard HTTP listen port (documented default)"],
@@ -148,6 +149,13 @@ const ENV_READ_FILE_WHITELIST = new Set([
   "services/orchestrator/src/engine/observability/logger.ts",
   "services/allocator/src/logger.ts",
   "services/dashboard/src/serverLogger.ts",
+  // ── live model-price cache knobs ───────────────────────────────────────────
+  // TANREN_MODEL_PRICE_TTL_SECONDS (live-refresh interval, default 1h) +
+  // TANREN_MODEL_PRICE_LIVE (=0 kill switch → freeze to the vendored seed): both
+  // loud-at-use, defaulted RUNTIME knobs read lazily when the live price source
+  // singleton is first built (same posture as TANREN_LOG_LEVEL above), NOT boot
+  // config the Zod schema owns.
+  "services/orchestrator/src/engine/costs/pricing/modelPriceSource.ts",
   // ── db ─────────────────────────────────────────────────────────────────────
   // The system (BYPASSRLS) DB URL the org-scope seam reads.
   "db/src/orgScope.ts",

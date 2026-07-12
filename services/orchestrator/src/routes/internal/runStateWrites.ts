@@ -183,7 +183,8 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
     const recorded = await runWithOrgScope(deps.pool, orgId, async (client) => {
       const eventStore = new PgEventStore(client);
       // The SAME CostRecorder.record — cost_records INSERT + cost.resolved event,
-      // both in this org scope, identical to the worker's in-process write.
+      // both in this org scope, identical to the worker's in-process write. Notional
+      // prices from the recorder's default LIVE, self-healing source (seed fallback).
       return new CostRecorder(client, eventStore).record(context as never, tokens as never, rawUsage);
     });
     return c.json(recorded);
