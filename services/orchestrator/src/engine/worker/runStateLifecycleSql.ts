@@ -350,6 +350,10 @@ type TerminalTaskEventType = (typeof TERMINAL_TASK_EVENT_TYPES)[number];
  * The list mirrors `TERMINAL_DEDUPED_EVENT_TYPES` in `eventStore.ts` (the
  * partial-unique-index-covered set), plus `task.cancelled` for completeness
  * even though the atomic seam does not currently admit a cancelled transition.
+ * `run.resumed` joins the set because it is now an at-most-once terminal-deduped
+ * run event (covered by `events_run_terminal_unique`); leaking it into the
+ * general `priorEvents` bundle would silently double-emit it, same as any other
+ * terminal `run.*` event.
  */
 const TERMINAL_EVENT_TYPES_REJECTED_IN_PRIOR_EVENTS = [
   "task.completed",
@@ -358,6 +362,7 @@ const TERMINAL_EVENT_TYPES_REJECTED_IN_PRIOR_EVENTS = [
   "run.completed",
   "run.failed",
   "run.cancelled",
+  "run.resumed",
 ] as const;
 
 /** Map a terminal transition to the matching event type (the pairing constraint). */

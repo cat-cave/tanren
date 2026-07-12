@@ -77,6 +77,13 @@ const TERMINAL_DEDUPED_EVENT_TYPES = new Set<string>([
   "run.completed",
   "run.failed",
   "run.cancelled",
+  // `run.resumed` is the window-pause RESUME event: the prober atomically flips
+  // the run `paused → halted` (the run TERMINATES; the spec is re-driven fresh),
+  // so it is genuinely ONCE-per-run — `(run_id, 'run.resumed')` is legitimately
+  // unique. The prober may retry the resume on a dropped HTTP response, so the
+  // atomic seam inserts it via `appendIfAbsent`; it is covered by the
+  // `events_run_terminal_unique` partial unique index (migration 0033).
+  "run.resumed",
 ]);
 
 function parseEventPayload<N extends EventName>(eventType: N, payload: unknown): EventPayload<N> {

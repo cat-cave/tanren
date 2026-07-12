@@ -75,11 +75,15 @@ docker build \
   --file "$CONTEXT/Dockerfile" \
   --tag "$IMAGE_REF" \
   "$CONTEXT"
-# Push with NATIVE `podman` when present, not the `docker`→podman shim: the shim
-# mis-parses podman's push-results stream ("failed to parse push results stream,
-# unexpected input: { }") and exits NON-ZERO even though the image pushed cleanly (the
-# manifest IS written to the registry). Native `podman push` returns 0. Fall back to
-# `docker push` on a real-docker host (no podman).
+# Push. The push exit code is trustworthy ONLY when the podman client major matches the
+# service it dials over CONTAINER_HOST. A 4.x client against a 5.x service mis-parses the
+# push-results stream ("failed to parse push results stream, unexpected input: { }") and
+# exits 125 — and the manifest does NOT reliably land, so the exit code is a genuine failure
+# signal, not cosmetic. The worker image pins a matching podman-remote 5.x client (see
+# services/orchestrator/Dockerfile), so a non-zero push here is a REAL failure — fail loud
+# (set -e) rather than mask it behind an unreliable post-push probe (`podman pull` reads
+# LOCAL storage and `manifest inspect` only handles multi-arch lists — neither is a sound
+# registry-presence check).
 if command -v podman >/dev/null 2>&1; then
   podman push "$IMAGE_REF"
 else
