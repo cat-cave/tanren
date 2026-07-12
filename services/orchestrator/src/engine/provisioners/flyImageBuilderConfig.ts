@@ -63,13 +63,14 @@ function defaultScriptPath(): string {
 }
 
 /**
- * Is the live Fly image-builder opted in? A `true` return means `TANREN_FLY_IMAGE_BUILDER`
- * is set and the builder will be constructed (or fail loud if a dep is missing). Mirrors
- * `jitEnvRegistryConfigured` (trim + empty-string check), read at the point of use.
+ * Is the live Fly image-builder opted in? Opt-in ONLY on the canonical truthy tokens
+ * (`1`/`true`/`yes`/`on`) — NOT any-non-empty. Otherwise a compose default of `"0"` (or
+ * `"false"`) reads as ON and the worker fail-loud-crashes at boot when the cred ref is
+ * unset — a real trap, since `"0"` universally means OFF. Empty/unset/`0`/`false` → off.
  */
 export function flyImageBuilderConfigured(): boolean {
-  const value = process.env["TANREN_FLY_IMAGE_BUILDER"]?.trim();
-  return value !== undefined && value !== "";
+  const value = process.env["TANREN_FLY_IMAGE_BUILDER"]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
 /**

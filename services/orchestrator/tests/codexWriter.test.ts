@@ -50,7 +50,7 @@ describe("Codex writer adapter", () => {
     expect(ssh.commands[0]?.command.command).toContain("/run_codex_1/codex-home");
     expect(ssh.commands[0]?.command.stdin).toBe(authJson);
     expect(ssh.commands[2]?.command.command).toBe(
-      "CODEX_HOME='/home/tanren/.tanren/runs/run_codex_1/codex-home' codex exec --sandbox workspace-write --json --ignore-user-config --cd '/workspace/repo' -",
+      `CODEX_HOME='/home/tanren/.tanren/runs/run_codex_1/codex-home' codex exec --sandbox workspace-write --json -m 'gpt-5.6-luna' -c 'model_reasoning_effort="high"' --ignore-user-config --cd '/workspace/repo' -`,
     );
     expect(ssh.commands[2]?.command.stdin).toBe("make a tiny edit");
     expect(ssh.commands[4]?.command.command).toContain("git commit -m 'codex writer'");

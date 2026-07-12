@@ -226,8 +226,21 @@ services:
       TANREN_NTFY_BASE_URL: ${TANREN_NTFY_BASE_URL:-http://ntfy:80}
       TANREN_NOTIFICATION_DEFAULT_CHANNEL: ${TANREN_NOTIFICATION_DEFAULT_CHANNEL:-ntfy}
       TANREN_NOTIFICATION_DEFAULT_DESTINATION: ${TANREN_NOTIFICATION_DEFAULT_DESTINATION:-tanren-default-alerts}
+      # Merge-reflecting Fly deploy builder (opt-in). The worker boots liveFlyImageBuilder,
+      # which shells build-deploy-image.sh (`docker build` + `docker push`). CONTAINER_HOST
+      # points the in-image podman client at the MOUNTED host podman socket, so those builds
+      # run as `podman --remote` on the host (which owns storage + registry auth). Set
+      # TANREN_GITHUB_APP_CREDENTIAL_REF at drive time (the vault ref for the App key that
+      # mints the merged-commit tarball token). Absent the builder, a Fly deploy fails loud.
+      TANREN_FLY_IMAGE_BUILDER: ${TANREN_FLY_IMAGE_BUILDER:-0}
+      TANREN_GITHUB_APP_CREDENTIAL_REF: ${TANREN_GITHUB_APP_CREDENTIAL_REF:-}
+      CONTAINER_HOST: unix:///run/podman/podman.sock
     volumes:
       - /tmp/tanren-mtls:/etc/tanren/mtls:ro
+      # The host podman socket — the worker's podman client drives it in REMOTE mode to build
+      # + push the per-commit Fly deploy image on the host (rootless podman auto-detected by
+      # `just up-dev` into TANREN_DOCKER_SOCK; defaults to the per-user podman socket).
+      - ${TANREN_DOCKER_SOCK:-/run/user/1000/podman/podman.sock}:/run/podman/podman.sock
     secrets:
       - tanren_runner_identity_key
     depends_on:
