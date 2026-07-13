@@ -578,7 +578,20 @@ window.PersonasView = ({ onNav }) => {
   const [behaviorsView, setBehaviorsView] = React.useState(false);
   const [forgePersona, setForgePersona] = React.useState(null);
   const [shapedPersona, setShapedPersona] = React.useState(null);
+  const [forgeInstructions, setForgeInstructions] = React.useState({});
   const [expandedScenarios, setExpandedScenarios] = React.useState({});
+
+  const instructionFor = (persona) => forgeInstructions[persona.name] ?? (persona.draft
+    ? "Help define this shared persona and its first behavior."
+    : `Refine ${persona.name}'s behaviors for the next spec pass.`);
+
+  const shapePersona = (persona) => {
+    const instruction = instructionFor(persona).trim();
+    setShapedPersona({
+      name: persona.name,
+      instruction: instruction || "No additional Forge instructions provided.",
+    });
+  };
   const personas = sharedPersona ? [...ORG_PERSONAS, sharedPersona] : ORG_PERSONAS;
 
   const addSharedPersona = () => {
@@ -655,12 +668,12 @@ window.PersonasView = ({ onNav }) => {
               <div style={{ padding: 10, background: "var(--bg-sunken)", border: "1px solid var(--ember-08)", display: "flex", flexDirection: "column", gap: 7 }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.16em", textTransform: "uppercase", fontWeight: 700 }}>▸ Forge · persona narrative</div>
                 <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.45 }}>Forge is ready to turn this persona’s context into scoped behaviors, BDD scenarios, and acceptance criteria.</div>
-                <textarea aria-label={`Forge instructions for ${p.name}`} defaultValue={p.draft ? "Help define this shared persona and its first behavior." : `Refine ${p.name}'s behaviors for the next spec pass.`} style={{ minHeight: 52, resize: "vertical", background: "var(--bg-canvas)", border: "1px solid var(--line-2)", color: "var(--fg-1)", padding: 7, fontFamily: "var(--font-ui)", fontSize: 12 }} />
+                <textarea aria-label={`Forge instructions for ${p.name}`} value={instructionFor(p)} onChange={(event) => setForgeInstructions((current) => ({ ...current, [p.name]: event.target.value }))} style={{ minHeight: 52, resize: "vertical", background: "var(--bg-canvas)", border: "1px solid var(--line-2)", color: "var(--fg-1)", padding: 7, fontFamily: "var(--font-ui)", fontSize: 12 }} />
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button className="btn" style={{ fontSize: 10 }} onClick={() => setShapedPersona(p.name)}>shape with forge</button>
+                  <button className="btn" style={{ fontSize: 10 }} onClick={() => shapePersona(p)}>shape with forge</button>
                   <button className="btn ghost" style={{ fontSize: 10 }} onClick={() => setForgePersona(null)}>close</button>
                 </div>
-                {shapedPersona === p.name && <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-ok)", lineHeight: 1.45 }}>▸ Forge shaped the narrative into the next behavior and BDD pass.</div>}
+                {shapedPersona?.name === p.name && <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-ok)", lineHeight: 1.45 }}>▸ Forge shaped the narrative into the next behavior and BDD pass: {shapedPersona.instruction}</div>}
               </div>
             )}
 
