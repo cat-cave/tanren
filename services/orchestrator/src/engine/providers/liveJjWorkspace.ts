@@ -105,6 +105,14 @@ export interface LiveJjWorkspace {
   workspacePath: string;
   /** Which credential the clone token came from (diagnostics). */
   tokenSource: "github_app" | "static" | "anonymous";
+  /**
+   * The credential the `jj git clone` authenticated the workspace's HTTPS `origin` remote
+   * with — threaded into any POST-clone `jj git fetch` (e.g. the base-shift / conflict-resolve
+   * published-head track, `trackPublishedHeadCommands`) so that fetch authenticates the SAME
+   * way against the SAME private remote. `undefined` on the anonymous/public clone path (a
+   * bare fetch is correct there). Never surfaced in a log/event — see the clone module header.
+   */
+  cloneCredential?: JjCloneCredential;
   /** Release the allocated runner. LOUD on a leak (re-throws after logging). */
   release: () => Promise<void>;
 }
@@ -234,6 +242,9 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
       target: allocation.target,
       workspacePath: workspaceRepoPathForRun(handle),
       tokenSource,
+      // Surface the clone credential so a POST-clone `jj git fetch` (the published-head track)
+      // authenticates the SAME private `origin` remote identically. Absent on the anonymous path.
+      ...(cloneCredential !== undefined && { cloneCredential }),
       release,
     };
   } catch (error) {

@@ -109,7 +109,11 @@ describe("base-shift published-head track — silent-no-op fix (real jj)", () =>
 
     // THE FIX: fetch (repair the race) → track → assert. The chain succeeds and `feat-dep` now
     // resolves to the PUSHED head sha — the rebase `-b feat-dep` target exists.
-    const fixed = await sh(substrate, wsPath, ["set -eu", ...trackPublishedHeadCommands("feat-dep")].join(" && "));
+    const fixed = await sh(
+      substrate,
+      wsPath,
+      ["set -eu", ...trackPublishedHeadCommands("feat-dep").commands].join(" && "),
+    );
     expect(fixed.exitCode).toBe(0);
     const afterFix = await resolves(substrate, wsPath, "feat-dep");
     expect(afterFix.exitCode).toBe(0);
@@ -123,7 +127,11 @@ describe("base-shift published-head track — silent-no-op fix (real jj)", () =>
     // `feat-missing` was NEVER published to the forge. The fetch is a no-match warning (exit 0),
     // so the post-track ASSERT is what fails the `set -eu` chain LOUDLY — the run HOLDS rather
     // than proceeding to a rebase with a silently-missing target.
-    const chain = await sh(substrate, wsPath, ["set -eu", ...trackPublishedHeadCommands("feat-missing")].join(" && "));
+    const chain = await sh(
+      substrate,
+      wsPath,
+      ["set -eu", ...trackPublishedHeadCommands("feat-missing").commands].join(" && "),
+    );
     expect(chain.exitCode).not.toBe(0);
     const afterChain = await resolves(substrate, wsPath, "feat-missing");
     expect(afterChain.exitCode).not.toBe(0);
