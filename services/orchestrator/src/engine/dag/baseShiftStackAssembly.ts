@@ -184,6 +184,10 @@ export async function assembleBaseShiftStackLive(input: {
     // for THIS short-lived workspace. (The member bookmarks + immutable set were already
     // prepared by `integrateOverWorkspace`; this adds the dependent's head, which is NOT a
     // stack member.) FAIL-CLOSED: a failure throws.
+    // AUTH: the fetch authenticates the private `origin` remote with the SAME credential the
+    // workspace was cloned with (`live.cloneCredential`) — else (public) a bare fetch. The token
+    // travels only through the command's stdin, never the logged command string.
+    const trackPrep = trackPublishedHeadCommands(ctx.headBranch, live.cloneCredential);
     await runWorkspaceSshCommand(deps.ssh, live.target, {
       label: "base-shift stack assembly: track the dependent's published head + allow rewriting it",
       cwd: live.workspacePath,
@@ -195,9 +199,10 @@ export async function assembleBaseShiftStackLive(input: {
       }),
       command: [
         "set -eu",
-        ...trackPublishedHeadCommands(ctx.headBranch),
+        ...trackPrep.commands,
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
+      ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
     return { live, workspace, assembledHeadSha: integration.headSha };
   } catch (error) {
