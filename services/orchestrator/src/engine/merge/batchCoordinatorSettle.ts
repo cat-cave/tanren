@@ -7,8 +7,13 @@
 //     the entry `needs_attention` (NEVER re-queued). NOT the recoverable conflict path.
 //   - `blocked` → bounded recoverable hold: release the claim so the same candidate
 //     re-drives with backoff, then alert and continue on a slower retry at the ceiling.
-//   - `conflict` / `failed` → dequeue with `merge.dequeued`; `conflict` usually means
-//     the resolver already routed autonomous re-plan/re-execution.
+//   - `conflict` / `failed` → dequeue with `merge.dequeued`. This settle is only reached
+//     AFTER the per-run resolver has DRIVEN the culprit (`driveConflictCulprit` — see below):
+//     a `conflict` outcome here means the resolver already routed an autonomous re-plan
+//     (re-opened the spec + enqueued a fresh run), so retiring the stale entry is correct.
+//     A bisect culprit is NEVER dequeued `conflict` WITHOUT first being driven — that was the
+//     apex v95/v96 stall (a `conflict` dequeue with no re-drive owner, since
+//     `recoverDequeuedCandidates` revives only `blocked`).
 //
 // `merged` is handled inline by the caller (it advances rather than settling out), so
 // this maps only the NON-merged outcomes.
@@ -69,12 +74,12 @@ export interface BatchSettleDeps {
  *     the old code MISSED: it dequeued a gate-fail culprit with `reason: "conflict"`, which
  *     has NO re-execution consumer (the recovery SQL only re-queues `blocked`), so the spec
  *     sat `in_flight` forever.
- *   - CONFLICT — a spec-vs-spec conflict (a base conflict already short-circuited): dequeue
- *     RECOVERABLY (`reason: "conflict"`) — the conflict resolver / replan owns the re-drive
- *     (#585/#587). UNCHANGED — the gate-fail route never touches it.
- *
- * When no `gateRework` router is wired (a degenerate assembly), a gate-fail falls back to
- * the recoverable `conflict` dequeue (the prior behavior) — production always wires it.
+ * A spec-vs-spec CONFLICT culprit is NO LONGER settled here — the caller now DRIVES it through
+ * the per-run resolver ({@link driveConflictCulprit}) so the work survives + is rebased/resolved
+ * in place, then classifies the drive outcome. `settleBisectCulprit` is therefore invoked ONLY
+ * for a GATE-FAIL culprit. (The `conflict`-dequeue fallback below survives solely for a
+ * degenerate no-router assembly where a gate-fail cannot reach the writer; production always
+ * wires the router.)
  */
 export async function settleBisectCulprit(
   deps: BatchSettleDeps,
@@ -99,8 +104,9 @@ export async function settleBisectCulprit(
     });
     return;
   }
-  // The CONFLICT (or no-router fallback) path: a RECOVERABLE conflict dequeue — the
-  // conflict resolver / replan owns the re-drive (#585/#587).
+  // Degenerate no-router fallback ONLY: a gate-fail culprit that cannot reach the writer
+  // (production always wires the router). A spec-vs-spec conflict never reaches here — the
+  // caller drives it through the resolver (`driveConflictCulprit`) instead of dequeuing.
   await markDequeuedAfterEvent({
     queue: deps.queue,
     events: deps.events,
@@ -250,6 +256,37 @@ export async function driveBaseConflict(
     return { projectId, holdReason: "all_blocked", queueDepth };
   }
 
+  // The culprit is identified from the verdict; drive it through the resolver.
+  return driveConflictCulprit(deps, projectId, culprit, queueDepth);
+}
+
+/**
+ * DRIVE an already-identified CONFLICT culprit through the EXISTING per-run merge path
+ * (`runner.driveMerge`) + settle its outcome — the NEVER-DISCARD conflict re-drive shared by
+ * BOTH the base-conflict short-circuit ({@link driveBaseConflict}) AND the spec-vs-spec
+ * bisect tail. `driveMerge` rebases the culprit onto the CURRENT base (a sibling that merged
+ * first is now in base), runs the intent-preserving resolver, re-gates, and CLASSIFIES the
+ * outcome:
+ *   - `merged`  → `markMerged` (advance);
+ *   - `blocked` → bounded recoverable hold (stays queued, re-driven with backoff);
+ *   - `conflict`/`failed` → dequeue — but the resolver has ALREADY routed a bounded replan
+ *     (re-opened the spec + enqueued a fresh re-plan run, the never-discard re-author), so
+ *     the WORK survives via that run; the stale entry is correctly retired;
+ *   - `needs_attention` → PARK the spec at `needs_attention` (the resolver's fixed-point
+ *     genuine-product-clash verdict — loud, never silent, never a forever-dequeue).
+ *
+ * This is what a bare `markDequeued(..,"conflict")` on the bisect culprit MISSED: no resolver
+ * ever ran for a dequeued spec, and `recoverDequeuedCandidates` only revives `blocked` — so a
+ * spec-vs-spec bisect culprit sat `dequeued=conflict` forever, blocking every dependent. We
+ * CLAIM the culprit first (the same serialization lease the merge step takes) so a concurrent
+ * pass can't double-drive it; a lost claim holds serialized (another pass owns it).
+ */
+export async function driveConflictCulprit(
+  deps: BatchBaseConflictDeps,
+  projectId: string,
+  culprit: MergeQueueEntry,
+  queueDepth: number,
+): Promise<CoordinateResult | BatchDriveInfraHold> {
   // CLAIM first (the serialization lease — mirror the merge step) so a concurrent pass
   // can't double-drive. A lost claim means another pass is already driving it — hold.
   const claimed = await deps.queue.claim(culprit.queueId);

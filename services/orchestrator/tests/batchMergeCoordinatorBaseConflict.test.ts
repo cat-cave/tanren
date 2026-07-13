@@ -8,7 +8,10 @@
 //   - a resolved/merged drive outcome → markMerged;
 //   - a needs_attention drive outcome → the spec parks at needs_attention (the resolver's
 //     genuine-product-clash verdict — the bounded resolver already decided this);
-//   - a SPEC-vs-SPEC conflict (`conflictsWithBase` false) STILL bisects (unchanged).
+//   - a SPEC-vs-SPEC conflict (`conflictsWithBase` false) is BISECTED to a culprit and then
+//     that culprit is DRIVEN through the SAME per-run resolver (never-discard) — NOT dequeued
+//     `conflict` with no re-drive owner (the apex v95/v96 forever-stall). A genuinely
+//     irreconcilable one escalates to `needs_attention`, never a silent forever-dequeue.
 
 import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
@@ -168,22 +171,73 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     expect(h.runner.drives).toEqual([{ runId: "run_spec_b" }]);
   });
 
-  it("a SPEC-vs-SPEC conflict (conflictsWithBase false) STILL bisects-and-dequeues (unchanged)", async () => {
+  it("a SPEC-vs-SPEC conflict culprit is BISECTED then DRIVEN through the resolver (never-discard), NOT silently dequeued", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
-    // A genuine spec-vs-spec integration conflict — the bisect-and-dequeue path is unchanged.
+    // A genuine spec-vs-spec integration conflict — the bisect NAMES the culprit, then the
+    // culprit is DRIVEN through the SAME per-run resolver the base-conflict path uses.
     h.checker.conflictWhenContains("spec_b");
+    const dequeueSpy = vi.spyOn(h.queue, "markDequeued");
+
+    const result = await h.coordinator.coordinate(PROJECT);
+
+    // The bisect still identifies the culprit ...
+    expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(true);
+    expect(h.batchEvents.events.find((e) => e.type === "culprit")?.culpritSpecId).toBe("spec_b");
+    // ... but it is then DRIVEN (driveMerge) and the resolved (default merged) outcome merges it —
+    // NOT dequeued `conflict` with no re-drive owner (the old apex v95/v96 forever-stall).
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
+    expect(result.mergedSpecId).toBe("spec_b");
+    expect(dequeueSpy).not.toHaveBeenCalledWith(expect.anything(), "conflict");
+  });
+
+  it("a genuinely-irreconcilable spec-vs-spec conflict ESCALATES to needs_attention (never a silent forever-dequeue)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    h.checker.conflictWhenContains("spec_b");
+    // The per-run resolver reached its FIXED POINT (re-planning would re-conflict identically) →
+    // needs_attention (a product decision — which behavior wins). Bounded + loud, not a count.
+    h.runner.script("run_spec_b", {
+      kind: "needs_attention",
+      message: "resolver fixed point: genuine product clash",
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
+    // The culprit was DRIVEN (the resolver ran) then PARKED at needs_attention via the escalator —
+    // never a silent `dequeued=conflict` with no owner.
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
+    expect(h.escalator.escalations).toEqual([
+      { specId: "spec_b", message: "resolver fixed point: genuine product clash" },
+    ]);
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    // It went through bisect (the culprit was named) — NOT the driveMerge resolver path.
-    expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(true);
-    expect(h.batchEvents.events.find((e) => e.type === "culprit")?.culpritSpecId).toBe("spec_b");
-    expect(h.runner.drives.map((d) => d.runId)).not.toContain("run_spec_b");
+    const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
+    expect(dq?.reason).toBe("needs_attention");
+  });
+
+  it("a recoverable-conflict drive outcome retires the entry only AFTER the resolver drove + routed a replan (work survives)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    h.checker.conflictWhenContains("spec_b");
+    // The resolver routed a BOUNDED replan (a fresh run re-authors the work on the new base) →
+    // the recoverable `conflict` drive outcome. Retiring the stale entry is now correct BECAUSE
+    // the resolver actually ran — unlike the old bare dequeue that had no re-drive owner.
+    h.runner.script("run_spec_b", { kind: "conflict", message: "resolver routed a bounded replan" });
+
+    const result = await h.coordinator.coordinate(PROJECT);
+
+    // The culprit WAS driven (the resolver ran) before the entry retired — never a bare dequeue.
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
+    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
     const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("conflict");
+    expect(result.dequeuedSpecId).toBe("spec_b");
   });
 });

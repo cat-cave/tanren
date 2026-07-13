@@ -10,8 +10,8 @@
 //
 // THE FIX (these tests): a GATE-fail bisect culprit is routed to the WRITER for REWORK
 // (carrying the batch gate's failing output as steering) and the OLD entry is retired as
-// `superseded` — distinct from a CONFLICT culprit (which still routes to the conflict
-// resolver / replan). A culprit is handled by exactly ONE of the two routes.
+// `superseded` — distinct from a CONFLICT culprit (which is DRIVEN through the per-run
+// conflict resolver, the never-discard re-drive). A culprit is handled by exactly ONE route.
 
 import { describe, expect, it, vi } from "vitest";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
@@ -106,7 +106,7 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     expect(h.queue.statusOf("run_spec_d")).toBe("merged");
   });
 
-  it("a batch CONFLICT culprit still routes to the conflict resolver / replan (reason `conflict`) — NOT writer rework (no regression on #585/#587)", async () => {
+  it("a batch CONFLICT culprit is DRIVEN through the conflict resolver (never-discard) — NOT writer rework, NOT a bare dequeue (no regression on #585/#587)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     // spec_b is a real spec-vs-spec integration CONFLICT (not a gate failure).
@@ -116,14 +116,17 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
 
     await h.coordinator.coordinate(PROJECT);
 
-    // The conflict culprit is dequeued RECOVERABLY as `conflict` (the resolver/replan owns
-    // the re-drive) — it is NOT routed through the gate-rework writer path.
-    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
-    expect(dq?.reason).toBe("conflict");
+    // The conflict culprit is DRIVEN through the per-run resolver (the default resolved outcome
+    // merges it) — the never-discard re-drive, NOT the gate-rework writer path, and NOT a bare
+    // `conflict` dequeue with no re-drive owner (the apex v95/v96 forever-stall).
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
     // Never double-handled: a conflict is NOT a gate-rework.
     expect(h.gateRework.routed).toEqual([]);
-    // The innocents still merge.
+
+    // The innocents merge on the NEXT pass — the conflict drive returns after the culprit (like
+    // the base-conflict short-circuit); the following coordinate re-forms the remaining batch.
+    await h.coordinator.coordinate(PROJECT);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_c")).toBe("merged");
   });

@@ -54,8 +54,8 @@ export class InMemoryBatchChecker implements BatchChecker {
    * Report a BASE conflict (a single PR dirty against `default_branch`) when the checked
    * set contains `specId` — the verdict carries `conflictsWithBase: true` and names
    * `specId` as the culprit. The coordinator drives this through the per-run resolver
-   * (driveMerge), NOT bisect/dequeue. Distinct from `conflictWhenContains` (a spec-vs-spec
-   * conflict that still bisects).
+   * (driveMerge) WITHOUT bisecting. Distinct from `conflictWhenContains` (a spec-vs-spec
+   * conflict that is BISECTED to a culprit first, then driven through the same resolver).
    */
   baseConflictWhenContains(specId: string): void {
     this.baseConflictSpecs.add(specId);

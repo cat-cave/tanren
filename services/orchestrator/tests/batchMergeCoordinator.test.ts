@@ -231,7 +231,7 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     expect(result.retryAfterMs).toBe(12_000);
   });
 
-  it("routes an integration-conflict batch through bisect (the conflicting PR is the culprit)", async () => {
+  it("routes an integration-conflict batch through bisect, then DRIVES the culprit through the resolver (never-discard)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     // spec_b conflicts on the integration ref (an A-vs-B build conflict).
@@ -241,7 +241,13 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
 
     await h.coordinator.coordinate(PROJECT);
 
-    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+    // The culprit is bisected then DRIVEN through the per-run resolver (default resolved → merged)
+    // — never a bare `conflict` dequeue with no re-drive owner.
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
+
+    // The innocents merge on the next pass (the conflict drive returns after driving the culprit).
+    await h.coordinator.coordinate(PROJECT);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_c")).toBe("merged");
   });
@@ -470,14 +476,19 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
   });
 
-  it("a GENUINE conflict STILL bisects → culprit → merge.dequeued(conflict) (no regression)", async () => {
+  it("a GENUINE conflict bisects → culprit → DRIVEN through the resolver; a recoverable-conflict outcome retires the entry only after the resolver ran", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
+    // The per-run resolver routed a bounded replan → the recoverable `conflict` drive outcome.
+    // Retiring the entry is correct BECAUSE the resolver actually ran (re-opened the spec +
+    // enqueued a fresh run) — unlike the old bare dequeue that had NO re-drive owner.
+    h.runner.script("run_spec_b", { kind: "conflict", message: "resolver routed a bounded replan" });
 
     await h.coordinator.coordinate(PROJECT);
 
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
     const dq = h.events.events.find((e) => e.type === "merge.dequeued");
     expect(dq?.reason).toBe("conflict");
