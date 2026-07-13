@@ -508,6 +508,7 @@
     "thenables",
     "throughline",
     "timestamptz",
+    "tmpfiles",
     "tmpfs",
     "toctou",
     "toggleable",
