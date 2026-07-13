@@ -186,3 +186,73 @@ describe("FlyDeployProvisioner — shared-IPv4 allocation (triggerDeploy)", () =
     expect(message).not.toContain(TOKEN_VALUE);
   });
 });
+
+describe("FlyDeployProvisioner — machine reap (single-instance convergence, triggerDeploy)", () => {
+  // apex v96 root cause: Fly `POST /v1/apps/{app}/machines` CREATES a new machine on every
+  // deploy and never retires the prior one, so over N deploys an app accumulates N machines —
+  // fatal for a single-instance, file-backed app (each machine has its own local store, so the
+  // data fragments across machines). `triggerDeploy` now reaps every machine but the newly-
+  // created one, converging the app to exactly one machine per release. Driven over the scripted
+  // in-memory transport — NO live Fly calls.
+
+  it("reaps every PRIOR machine (force=true) and keeps ONLY the newly-created one", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const prov = staticProv(transport);
+    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    // Two prior releases each left their own machine behind (Fly never retires them).
+    transport.seedMachines("tanren-acme-web", ["m_prior_1", "m_prior_2"]);
+
+    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    // The new release created + returned machine `fly_deploy_1` — the one the reap must KEEP.
+    expect(result.deploymentId).toBe("fly_deploy_1");
+
+    const deleted = transport.machinesDeleted();
+    // The reap DELETEd every PRIOR machine — and NONE for the newly-created (kept) id.
+    expect(deleted.map((d) => d.machineId).sort()).toEqual(["m_prior_1", "m_prior_2"]);
+    expect(deleted.map((d) => d.machineId)).not.toContain("fly_deploy_1");
+    // Every reap DELETE targeted this app and carried ?force=true.
+    expect(deleted.every((d) => d.appName === "tanren-acme-web" && d.force)).toBe(true);
+    // Convergence: the app is left with exactly the one new machine.
+    expect(transport.machineIdsFor("tanren-acme-web")).toEqual(["fly_deploy_1"]);
+  });
+
+  it("issues NO reap DELETE when the app has only the newly-created machine (nothing prior)", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const prov = staticProv(transport);
+    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    // No seeded priors: the only machine after the release is the new one → nothing to reap.
+    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    expect(result.deploymentId).toBe("fly_deploy_1");
+    expect(transport.machinesDeleted()).toHaveLength(0);
+    expect(transport.machineIdsFor("tanren-acme-web")).toEqual(["fly_deploy_1"]);
+  });
+
+  it("a machines-LIST failure does NOT fail the deploy (reap is best-effort) — deploy still returns", async () => {
+    const transport = scriptedDeployTransport("fly");
+    transport.seedMachines("tanren-acme-web", ["m_prior_1"]);
+    // The reap's `GET /machines` list read fails (non-2xx) → the reap returns early, but the
+    // new release is already live, so the deploy STILL succeeds and no machine is deleted.
+    transport.scriptMachinesListResponse({ status: 500, json: {}, text: "machines list unavailable" });
+    const prov = staticProv(transport);
+    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+
+    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    expect(result.deploymentId).toBe("fly_deploy_1");
+    expect(transport.machinesDeleted()).toHaveLength(0);
+  });
+
+  it("a single reap DELETE rejecting does NOT fail the deploy and does NOT stop the other reaps", async () => {
+    const transport = scriptedDeployTransport("fly");
+    const prov = staticProv(transport);
+    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    transport.seedMachines("tanren-acme-web", ["m_prior_1", "m_prior_2"]);
+    // The DELETE of one prior machine rejects at the transport — best-effort per DELETE, so the
+    // deploy still succeeds AND the other prior machine is still reaped.
+    transport.throwOnMachineDelete("m_prior_1");
+
+    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    expect(result.deploymentId).toBe("fly_deploy_1");
+    // The surviving-attempt DELETE (m_prior_2) was still recorded; the rejected one was not.
+    expect(transport.machinesDeleted().map((d) => d.machineId)).toEqual(["m_prior_2"]);
+  });
+});

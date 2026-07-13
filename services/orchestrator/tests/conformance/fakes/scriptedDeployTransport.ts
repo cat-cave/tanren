@@ -67,6 +67,33 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
    * failure. Applies to ALL subsequent allocate calls on this transport.
    */
   scriptAllocateIpResponse(resp: { status: number; json: unknown; text?: string }): void;
+  /**
+   * Pre-populate the machines the emulated provider reports for an app (the "prior
+   * releases" a single-instance app accumulates via `POST /machines`). A subsequent
+   * successful `triggerDeploy` appends its newly-created machine, then reaps every other
+   * one — so a test can assert the reap DELETEs the priors and keeps the new machine.
+   */
+  seedMachines(appName: string, ids: string[]): void;
+  /** The machine ids the emulated provider currently reports for an app. */
+  machineIdsFor(appName: string): string[];
+  /**
+   * Every machine DELETE the transport served (the reap): the target app + machine id +
+   * whether `?force=true` was sent, so a test can assert the reap deleted every prior
+   * machine (force) and NONE for the kept (newly-created) id.
+   */
+  machinesDeleted(): { appName: string; machineId: string; force: boolean }[];
+  /**
+   * Script the response the emulated `GET /v1/apps/{app}/machines` (machines LIST) call
+   * returns, to drive the reap's best-effort failure path (a non-2xx list ⇒ the reap
+   * returns early and the deploy STILL succeeds). Default lists the app's machines.
+   */
+  scriptMachinesListResponse(resp: { status: number; json: unknown; text?: string }): void;
+  /**
+   * Make the emulated `DELETE .../machines/{id}` REJECT for a given machine id, to drive
+   * the reap's per-DELETE best-effort path (a rejected DELETE must not fail the deploy,
+   * and must not stop the reap from attempting the other machines).
+   */
+  throwOnMachineDelete(machineId: string): void;
 }
 
 /**
@@ -117,6 +144,17 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     },
     text: "",
   };
+  // Fly-only: the machines an app currently has (appName → machine ids). A deploy TRIGGER
+  // (`POST /machines`) appends its new machine; the reap (`GET /machines` then `DELETE
+  // /machines/{id}?force=true`) lists + removes them. `machineDeletes` records every reap
+  // DELETE (with the `force` flag) so a test can prove the priors were reaped and the new
+  // machine kept.
+  const machinesByApp = new Map<string, string[]>();
+  const machineDeletes: { appName: string; machineId: string; force: boolean }[] = [];
+  // Optional overrides for the reap's best-effort failure paths: a scripted non-2xx machines
+  // LIST, and a set of machine ids whose DELETE rejects.
+  let scriptedMachinesList: { status: number; json: unknown; text: string } | undefined;
+  const machineDeleteThrows = new Set<string>();
 
   const listBody = (): unknown =>
     flavor === "vercel"
@@ -132,6 +170,17 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     allocateIpRequests: () => structuredClone(allocateIpCalls),
     scriptAllocateIpResponse: (resp) => {
       scriptedAllocateIp = { status: resp.status, json: resp.json, text: resp.text ?? "" };
+    },
+    seedMachines: (appName, ids) => {
+      machinesByApp.set(appName, [...(machinesByApp.get(appName) ?? []), ...ids]);
+    },
+    machineIdsFor: (appName) => [...(machinesByApp.get(appName) ?? [])],
+    machinesDeleted: () => structuredClone(machineDeletes),
+    scriptMachinesListResponse: (resp) => {
+      scriptedMachinesList = { status: resp.status, json: resp.json, text: resp.text ?? "" };
+    },
+    throwOnMachineDelete: (machineId) => {
+      machineDeleteThrows.add(machineId);
     },
     scriptDeploymentStates: (deploymentId, states) => {
       stateScripts.set(deploymentId, [...states]);
@@ -172,6 +221,26 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
           }
           return { status: 404, ok: false, json: undefined, text: "not found" };
         }
+        // Machine reap: Fly `DELETE /v1/apps/{name}/machines/{id}?force=true`. Records the
+        // delete (+ the `force` flag, parsed from the RAW url since `path` dropped the query)
+        // and removes the machine from the app's set. A scripted throw emulates a transport
+        // rejection (the reap's per-DELETE best-effort path). Matched BEFORE the app-destroy
+        // match below (whose regex would not match a `/machines/{id}` suffix anyway).
+        const machineMatch = /\/v1\/apps\/([^/]+)\/machines\/([^/]+)$/u.exec(path);
+        if (machineMatch !== null) {
+          const appName = decodeURIComponent(machineMatch[1] ?? "");
+          const machineId = decodeURIComponent(machineMatch[2] ?? "");
+          if (machineDeleteThrows.has(machineId)) {
+            throw new Error(`scripted deploy transport: machine delete '${machineId}' rejected`);
+          }
+          const force = /[?&]force=true(?:&|$)/u.test(req.url);
+          machineDeletes.push({ appName, machineId, force });
+          machinesByApp.set(
+            appName,
+            (machinesByApp.get(appName) ?? []).filter((id) => id !== machineId),
+          );
+          return { status: 200, ok: true, json: { ok: true }, text: "" };
+        }
         const match = /\/v1\/apps\/([^/]+)$/u.exec(path);
         if (match === null) {
           return { status: 405, ok: false, json: undefined, text: "method not allowed" };
@@ -197,6 +266,26 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
             ? okResponse({ readyState: state, url: `${status.appOrDeploymentRef}.vercel.app` })
             : okResponse({ state });
         }
+        // Machines LIST (the reap's discover step): Fly `GET /v1/apps/{name}/machines` — no
+        // trailing id, so `parseStatusRead` returned undefined. The live API returns a TOP-LEVEL
+        // JSON ARRAY of machines, so serve `[{ id }, …]` (what `reapOtherMachines` reads). A
+        // scripted override drives the best-effort non-2xx list path.
+        if (flavor === "fly") {
+          const listMatch = /\/v1\/apps\/([^/]+)\/machines$/u.exec(req.url.split("?")[0] ?? "");
+          if (listMatch !== null) {
+            if (scriptedMachinesList !== undefined) {
+              const listResp = scriptedMachinesList;
+              return {
+                status: listResp.status,
+                ok: listResp.status >= 200 && listResp.status < 300,
+                json: listResp.json,
+                text: listResp.text,
+              };
+            }
+            const appName = decodeURIComponent(listMatch[1] ?? "");
+            return okResponse((machinesByApp.get(appName) ?? []).map((id) => ({ id })));
+          }
+        }
         return okResponse(listBody());
       }
       // Deploy TRIGGER requests: Vercel `/v13/deployments`, Fly
@@ -208,6 +297,12 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
         reqLog.push("deploy_trigger");
         triggered.push({ appId: deploy.appId, body: deploy.body });
         const id = `${flavor}_deploy_${deployCounter}`;
+        if (flavor === "fly") {
+          // A Fly release CREATES a new machine (never retires the prior); model that so the
+          // reap sees the new machine alongside any seeded priors. `deploy.appId` is the app
+          // NAME (from the `/v1/apps/{name}/machines` path).
+          machinesByApp.set(deploy.appId, [...(machinesByApp.get(deploy.appId) ?? []), id]);
+        }
         return flavor === "vercel"
           ? okResponse({ id, url: `${deploy.appId}.vercel.app`, readyState: "QUEUED" }, 200)
           : okResponse({ id, state: "started" }, 200);

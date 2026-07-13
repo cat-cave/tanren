@@ -18,9 +18,11 @@
 // via `OrganizationsStore.getLogin` before this provisioner is called).
 //
 // API surface used (Fly Machines REST API):
-//   - GET  /v1/apps?org_slug=<org>      → list the org's apps (discover)
-//   - POST /v1/apps                     → create an app under the org (provision)
-//   - POST /v1/apps/{app}/machines      → TRIGGER a release (run the app's image)
+//   - GET    /v1/apps?org_slug=<org>            → list the org's apps (discover)
+//   - POST   /v1/apps                           → create an app under the org (provision)
+//   - POST   /v1/apps/{app}/machines            → TRIGGER a release (run the app's image)
+//   - GET    /v1/apps/{app}/machines            → list the app's machines (reap: find prior ones)
+//   - DELETE /v1/apps/{app}/machines/{id}?force → reap a prior machine (single-instance convergence)
 // And the Fly GraphQL API (https://api.fly.io/graphql) for IP allocation — the Machines
 // REST *release* path does not allocate IPs (the `allocateIpAddress` GraphQL mutation is
 // the surface used here; the Machines REST `ip_assignments` endpoint is an alternative):
@@ -40,7 +42,10 @@
 //
 // Deploy trigger: `triggerDeploy` POSTs `/v1/apps/{app}/machines` to create + run a
 // machine from the app's image — the Machines-API release equivalent of `fly deploy`
-// — and returns the machine id + the app's stable URL + its reported state.
+// — and returns the machine id + the app's stable URL + its reported state. It then
+// REAPS every other machine of the app (`reapOtherMachines`) so a single-instance,
+// file-backed app converges to exactly one machine per release instead of accumulating
+// one per deploy (which fragments a local store across machines — apex v96 root cause).
 //
 // MERGE-REFLECTING PRECEDENCE (PR2): `triggerDeploy` now has TWO image sources,
 // tried in this order:
@@ -370,7 +375,48 @@ class FlyDeployApi implements DeployProviderApi {
     if (body.id === undefined) {
       throw new Error(`fly trigger deploy for '${app.name}' returned no machine id: ${response.text}`);
     }
+    // Reap every OTHER machine of this app so a single-instance app converges to exactly ONE
+    // machine per release. Fly's `POST /v1/apps/{app}/machines` CREATES a NEW machine on every
+    // deploy and never retires the prior one, so over N deploys an app accumulates N machines.
+    // For a single-instance, file-backed app that is fatal: each machine has its OWN local store,
+    // so a write that lands on one machine and a later read that hits another reads the record as
+    // "missing" — the data FRAGMENTS across machines (confirmed live on apex v96: ~30 machines →
+    // persistence appears broken; reaping to 1 → persistence works). Runs AFTER the new machine is
+    // created (`body.id` is now serving), so there is NO serving gap. Best-effort by contract — the
+    // new release is already live, so a listing/transport failure here must NEVER fail the deploy.
+    await this.reapOtherMachines(app.name, token, body.id);
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
+  }
+
+  // Destroy every machine of `appName` except `keepId`, so a single-instance app
+  // converges to exactly one machine per deploy instead of accumulating one per
+  // release. Best-effort by contract (see the call site).
+  private async reapOtherMachines(appName: string, token: string, keepId: string): Promise<void> {
+    try {
+      const list = await this.transport.request({
+        method: "GET",
+        url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!list.ok) {
+        return;
+      }
+      const machines = (list.json ?? []) as ReadonlyArray<{ id?: string }>;
+      for (const machine of machines) {
+        if (machine.id === undefined || machine.id === keepId) {
+          continue;
+        }
+        await this.transport
+          .request({
+            method: "DELETE",
+            url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machine.id)}?force=true`,
+            headers: { authorization: `Bearer ${token}` },
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // Reap is best-effort: a listing/transport failure must not fail the deploy.
+    }
   }
 
   async destroyApp(_grant: OrgGrant, token: string, app: DeployApp): Promise<void> {
