@@ -58,7 +58,7 @@ const ORG_KPIS = [
   { l: "halted runs",   v: "1",      k: "edi-mapping · 4h 12m", warn: true },
 ];
 
-window.OverviewView = ({ onNav }) => (
+window.OverviewView = ({ onNav, onAsk }) => (
   <>
     <PageHead
       eyebrow="▮ org · cat-cave"
@@ -120,9 +120,23 @@ window.OverviewView = ({ onNav }) => (
               <span className="title">forge · <em>org-wide</em></span>
               <span className="meta">ask across all projects</span>
             </div>
-            <div style={{ padding: "8px 10px", background: "var(--bg-sunken)", border: "1px solid var(--line-1)", fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-3)", borderRadius: 2 }}>
-              <span style={{ color: "var(--ember-08)", marginRight: 8 }}>▸</span>
-              "which project will hit budget first?" · "any halted runs older than 2h?" · "where is the loop slowest?"
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", background: "var(--bg-sunken)", border: "1px solid var(--line-1)", borderRadius: 2 }}>
+              {[
+                ["org_budget_risk", "which project will hit budget first?"],
+                ["org_halted_runs", "any halted runs older than 2h?"],
+                ["org_loop_speed", "where is the loop slowest?"],
+              ].map(([key, question], i) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="btn ghost"
+                  style={{ justifyContent: "flex-start", border: 0, borderBottom: i < 2 ? "1px solid var(--line-1)" : 0, borderRadius: 0, padding: "7px 10px", fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)" }}
+                  onClick={() => onAsk?.(key)}
+                >
+                  <span style={{ color: "var(--ember-08)", marginRight: 8 }}>▸</span>
+                  {question}
+                </button>
+              ))}
             </div>
           </div>
 
