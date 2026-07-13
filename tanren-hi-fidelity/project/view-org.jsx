@@ -58,7 +58,7 @@ const ORG_KPIS = [
   { l: "halted runs",   v: "1",      k: "edi-mapping · 4h 12m", warn: true },
 ];
 
-window.OverviewView = ({ onNav }) => (
+window.OverviewView = ({ onNav, onAsk }) => (
   <>
     <PageHead
       eyebrow="▮ org · cat-cave"
@@ -120,9 +120,23 @@ window.OverviewView = ({ onNav }) => (
               <span className="title">forge · <em>org-wide</em></span>
               <span className="meta">ask across all projects</span>
             </div>
-            <div style={{ padding: "8px 10px", background: "var(--bg-sunken)", border: "1px solid var(--line-1)", fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-3)", borderRadius: 2 }}>
-              <span style={{ color: "var(--ember-08)", marginRight: 8 }}>▸</span>
-              "which project will hit budget first?" · "any halted runs older than 2h?" · "where is the loop slowest?"
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", background: "var(--bg-sunken)", border: "1px solid var(--line-1)", borderRadius: 2 }}>
+              {[
+                ["org_budget_risk", "which project will hit budget first?"],
+                ["org_halted_runs", "any halted runs older than 2h?"],
+                ["org_loop_speed", "where is the loop slowest?"],
+              ].map(([key, question], i) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="btn ghost"
+                  style={{ justifyContent: "flex-start", border: 0, borderBottom: i < 2 ? "1px solid var(--line-1)" : 0, borderRadius: 0, padding: "7px 10px", fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)" }}
+                  onClick={() => onAsk?.(key)}
+                >
+                  <span style={{ color: "var(--ember-08)", marginRight: 8 }}>▸</span>
+                  {question}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -347,91 +361,141 @@ window.NotificationsView = ({ onNav }) => {
 // ROADMAP · cross-project milestones in a horizontal timeline
 // =====================================================================
 
-window.RoadmapView = ({ onNav }) => (
-  <>
+const ROADMAP_MONTHS = ["may", "jun", "jul", "aug", "sep", "oct"];
+
+const ROADMAP_PROJECTS = [
+  {
+    proj: "tanren-fixture-easy",
+    track: "live",
+    ms: [
+      { col: 0, w: 1, state: "done",  label: "M1–M2" },
+      { col: 1, w: 1, state: "done",  label: "M3 · ops dash" },
+      { col: 2, w: 1, state: "live",  label: "M4 · handheld" },
+      { col: 3, w: 1, state: "queue", label: "M5 · edi" },
+      { col: 4, w: 1, state: "queue", label: "M6 · cfo" },
+      { col: 5, w: 1, state: "queue", label: "M7 · perf" },
+    ],
+  },
+  {
+    proj: "supply-chain-os",
+    track: "interview",
+    ms: [
+      { col: 0, w: 1, state: "interview", label: "interview" },
+      { col: 1, w: 2, state: "plan",      label: "M1–M2 · scaffold + auth" },
+      { col: 3, w: 1, state: "plan",      label: "M3 · ops" },
+      { col: 4, w: 1, state: "plan",      label: "M4 · handheld" },
+      { col: 5, w: 1, state: "plan",      label: "M5 · edi" },
+    ],
+  },
+  {
+    proj: "cat-cave-www",
+    track: "idle",
+    ms: [
+      { col: 0, w: 1, state: "done", label: "launch" },
+      { col: 2, w: 1, state: "plan", label: "case studies" },
+      { col: 4, w: 1, state: "plan", label: "blog v2" },
+    ],
+  },
+];
+
+const RoadmapMilestone = ({ milestone }) => {
+  const bg = milestone.state === "live" ? "var(--ember-08)" : milestone.state === "done" ? "var(--status-ok)" : "var(--bg-canvas)";
+  const fg = milestone.state === "live" || milestone.state === "done" ? "var(--ink-12)" : "var(--fg-1)";
+  return (
+    <div style={{
+      gridColumn: milestone.gridColumn || `span ${milestone.w}`,
+      height: 32, padding: "4px 8px",
+      background: bg, color: fg,
+      border: "1px solid " + (milestone.state === "live" ? "var(--ember-08)" : milestone.state === "done" ? "var(--status-ok)" : "var(--line-2)"),
+      display: "flex", alignItems: "center",
+      fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 600,
+      borderRadius: 1, position: "relative",
+      ...(milestone.state === "live" ? { backgroundImage: "repeating-linear-gradient(135deg, transparent 0, transparent 4px, oklch(60% 0.22 40) 4px, oklch(60% 0.22 40) 5px)" } : {}),
+    }}>
+      {milestone.label}
+    </div>
+  );
+};
+
+const RoadmapProject = ({ project, onNav }) => (
+  <div onClick={project.proj === "tanren-fixture-easy" ? () => onNav?.("project") : undefined} style={{ cursor: project.proj === "tanren-fixture-easy" ? "pointer" : "default" }}>
+    <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, color: "var(--fg-1)", textTransform: "lowercase" }}>{project.proj}</div>
+    <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: project.track === "live" ? "var(--ember-08)" : project.track === "interview" ? "var(--status-warn)" : "var(--fg-3)", letterSpacing: "0.16em", textTransform: "uppercase" }}>{project.track}</div>
+  </div>
+);
+
+window.RoadmapView = ({ onNav }) => {
+  const [grouping, setGrouping] = React.useState("project");
+  const quarterGroups = [
+    { label: "Q2 · May–Jun", start: 0, end: 1 },
+    { label: "Q3 · Jul–Sep", start: 2, end: 4 },
+    { label: "Q4 · Oct", start: 5, end: 5 },
+  ];
+  const rowsByQuarter = quarterGroups.map((quarter) => ({
+    ...quarter,
+    rows: ROADMAP_PROJECTS.flatMap((project) => project.ms
+      .filter((milestone) => milestone.col <= quarter.end && milestone.col + milestone.w - 1 >= quarter.start)
+      .map((milestone) => {
+        const start = Math.max(milestone.col, quarter.start);
+        const end = Math.min(milestone.col + milestone.w - 1, quarter.end);
+        return {
+          project,
+          milestone: {
+            ...milestone,
+            w: end - start + 1,
+            gridColumn: `${start - quarter.start + 2} / span ${end - start + 1}`,
+            label: start > milestone.col ? `↳ ${milestone.label}` : milestone.label,
+          },
+        };
+      })),
+  }));
+
+  return (
+    <>
     <PageHead
       eyebrow="▮ org · cat-cave"
       title={<>the <em>roadmap</em></>}
-      sub={<>milestones across all projects · forge tracks dependencies; you set the order</>}
-      actions={
-        <>
-          <button className="btn ghost">group · by project</button>
-          <button className="btn">group · by quarter</button>
-        </>
-      }
-    />
-    <div className="page-body scrolls">
-      <div className="col-card" style={{ padding: 14, gap: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "180px repeat(6, 1fr)", gap: 8, paddingBottom: 8, borderBottom: "1px solid var(--line-1)" }}>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>project ↓</span>
-          {["may", "jun", "jul", "aug", "sep", "oct"].map((m, i) => (
-            <span key={i} style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: i === 0 ? "var(--ember-08)" : "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, textAlign: "center" }}>{m} · 2026</span>
-          ))}
-        </div>
-
-        {[
-          {
-            proj: "tanren-fixture-easy",
-            track: "live",
-            ms: [
-              { col: 0, w: 1, state: "done",  label: "M1–M2" },
-              { col: 1, w: 1, state: "done",  label: "M3 · ops dash" },
-              { col: 2, w: 1, state: "live",  label: "M4 · handheld" },
-              { col: 3, w: 1, state: "queue", label: "M5 · edi" },
-              { col: 4, w: 1, state: "queue", label: "M6 · cfo" },
-              { col: 5, w: 1, state: "queue", label: "M7 · perf" },
-            ],
-          },
-          {
-            proj: "supply-chain-os",
-            track: "interview",
-            ms: [
-              { col: 0, w: 1, state: "interview", label: "interview" },
-              { col: 1, w: 2, state: "plan",      label: "M1–M2 · scaffold + auth" },
-              { col: 3, w: 1, state: "plan",      label: "M3 · ops" },
-              { col: 4, w: 1, state: "plan",      label: "M4 · handheld" },
-              { col: 5, w: 1, state: "plan",      label: "M5 · edi" },
-            ],
-          },
-          {
-            proj: "cat-cave-www",
-            track: "idle",
-            ms: [
-              { col: 0, w: 1, state: "done", label: "launch" },
-              { col: 2, w: 1, state: "plan", label: "case studies" },
-              { col: 4, w: 1, state: "plan", label: "blog v2" },
-            ],
-          },
-        ].map((row, i) => (
-          <div key={i} style={{ display: "grid", gridTemplateColumns: "180px repeat(6, 1fr)", gap: 8, alignItems: "center" }}>
-            <div onClick={() => onNav?.("project")} style={{ cursor: "pointer" }}>
-              <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 13, color: "var(--fg-1)", textTransform: "lowercase" }}>{row.proj}</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: row.track === "live" ? "var(--ember-08)" : row.track === "interview" ? "var(--status-warn)" : "var(--fg-3)", letterSpacing: "0.16em", textTransform: "uppercase" }}>{row.track}</div>
-            </div>
-            {[0,1,2,3,4,5].map((col) => {
-              const m = row.ms.find(x => x.col === col);
-              if (!m) {
-                return <div key={col} style={{ height: 32, background: "var(--bg-sunken)", border: "1px dashed var(--line-1)", borderRadius: 1 }}></div>;
-              }
-              const bg = m.state === "live" ? "var(--ember-08)" : m.state === "done" ? "var(--status-ok)" : "var(--bg-canvas)";
-              const fg = m.state === "live" || m.state === "done" ? "var(--ink-12)" : "var(--fg-1)";
-              return (
-                <div key={col} style={{
-                  gridColumn: `span ${m.w}`,
-                  height: 32, padding: "4px 8px",
-                  background: bg, color: fg,
-                  border: "1px solid " + (m.state === "live" ? "var(--ember-08)" : m.state === "done" ? "var(--status-ok)" : "var(--line-2)"),
-                  display: "flex", alignItems: "center",
-                  fontFamily: "var(--font-mono)", fontSize: 10.5, fontWeight: 600,
-                  borderRadius: 1, position: "relative",
-                  ...(m.state === "live" ? { backgroundImage: "repeating-linear-gradient(135deg, transparent 0, transparent 4px, oklch(60% 0.22 40) 4px, oklch(60% 0.22 40) 5px)" } : {}),
-                }}>
-                  {m.label}
-                </div>
-              );
-            })}
+        sub={<>milestones across all projects · forge tracks dependencies; you set the order</>}
+        actions={
+          <>
+            <button type="button" className={"btn" + (grouping === "project" ? " primary notched" : " ghost")} aria-pressed={grouping === "project"} onClick={() => setGrouping("project")}>group · by project</button>
+            <button type="button" className={"btn" + (grouping === "quarter" ? " primary notched" : " ghost")} aria-pressed={grouping === "quarter"} onClick={() => setGrouping("quarter")}>group · by quarter</button>
+          </>
+        }
+      />
+      <div className="page-body scrolls">
+        <div className="col-card" style={{ padding: 14, gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: grouping === "project" ? "180px repeat(6, 1fr)" : "180px 1fr", gap: 8, paddingBottom: 8, borderBottom: "1px solid var(--line-1)" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>{grouping === "project" ? "project ↓" : "quarter ↓"}</span>
+            {grouping === "project" ? ROADMAP_MONTHS.map((m, i) => (
+              <span key={i} style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: i === 0 ? "var(--ember-08)" : "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, textAlign: "center" }}>{m} · 2026</span>
+            )) : <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>milestone · project attribution</span>}
           </div>
-        ))}
+
+          {grouping === "project" ? ROADMAP_PROJECTS.map((project) => (
+            <div key={project.proj} style={{ display: "grid", gridTemplateColumns: "180px repeat(6, 1fr)", gap: 8, alignItems: "center" }}>
+              <RoadmapProject project={project} onNav={onNav} />
+              {[0, 1, 2, 3, 4, 5].map((col) => {
+                const milestone = project.ms.find((item) => item.col === col);
+                const covered = project.ms.some((item) => item.col <= col && item.col + item.w > col);
+                return milestone ? <RoadmapMilestone key={col} milestone={{ ...milestone, gridColumn: `${col + 2} / span ${milestone.w}` }} /> : !covered && <div key={col} style={{ gridColumn: `${col + 2}`, height: 32, background: "var(--bg-sunken)", border: "1px dashed var(--line-1)", borderRadius: 1 }}></div>;
+              })}
+            </div>
+          )) : rowsByQuarter.map((quarter) => (
+            <div key={quarter.label} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, paddingTop: 4 }}>{quarter.label}</div>
+              <div style={{ display: "grid", gridTemplateColumns: `180px repeat(${quarter.end - quarter.start + 1}, 1fr)`, gap: 8 }}>
+                <span></span>
+                {ROADMAP_MONTHS.slice(quarter.start, quarter.end + 1).map((month) => <span key={month} style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.14em", textAlign: "center", textTransform: "uppercase" }}>{month}</span>)}
+              </div>
+              {quarter.rows.map(({ project, milestone }) => (
+                <div key={`${project.proj}-${milestone.col}-${quarter.label}`} style={{ display: "grid", gridTemplateColumns: `180px repeat(${quarter.end - quarter.start + 1}, 1fr)`, gap: 8, alignItems: "center" }}>
+                  <RoadmapProject project={project} onNav={onNav} />
+                  <RoadmapMilestone milestone={milestone} />
+                </div>
+              ))}
+            </div>
+          ))}
 
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--line-1)", display: "flex", gap: 14, flexWrap: "wrap", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>
           <span><span style={{ display: "inline-block", width: 12, height: 8, background: "var(--status-ok)", verticalAlign: "middle", marginRight: 4 }}></span>done</span>
@@ -461,8 +525,9 @@ window.RoadmapView = ({ onNav }) => (
         </div>
       </div>
     </div>
-  </>
-);
+    </>
+  );
+};
 
 // =====================================================================
 // PERSONAS · cross-project people-models
@@ -508,7 +573,44 @@ const ORG_PERSONAS = [
   },
 ];
 
-window.PersonasView = ({ onNav }) => (
+window.PersonasView = ({ onNav }) => {
+  const [sharedPersona, setSharedPersona] = React.useState(null);
+  const [behaviorsView, setBehaviorsView] = React.useState(false);
+  const [forgePersona, setForgePersona] = React.useState(null);
+  const [shapedPersona, setShapedPersona] = React.useState(null);
+  const [forgeInstructions, setForgeInstructions] = React.useState({});
+  const [expandedScenarios, setExpandedScenarios] = React.useState({});
+
+  const instructionFor = (persona) => forgeInstructions[persona.name] ?? (persona.draft
+    ? "Help define this shared persona and its first behavior."
+    : `Refine ${persona.name}'s behaviors for the next spec pass.`);
+
+  const shapePersona = (persona) => {
+    const instruction = instructionFor(persona).trim();
+    setShapedPersona({
+      name: persona.name,
+      instruction: instruction || "No additional Forge instructions provided.",
+    });
+  };
+  const personas = sharedPersona ? [...ORG_PERSONAS, sharedPersona] : ORG_PERSONAS;
+
+  const addSharedPersona = () => {
+    setSharedPersona({
+      name: "new shared persona",
+      proj: "all projects",
+      desc: "a shared draft ready for Forge to shape into behaviors",
+      behaviors: ["describe the first cross-project behavior"],
+      devices: ["desktop"],
+      draft: true,
+    });
+    setForgePersona("new shared persona");
+  };
+
+  const toggleScenarios = (name) => {
+    setExpandedScenarios((current) => ({ ...current, [name]: !current[name] }));
+  };
+
+  return (
   <>
     <PageHead
       eyebrow="▮ org · cat-cave"
@@ -516,8 +618,8 @@ window.PersonasView = ({ onNav }) => (
       sub={<>5 personas across 3 projects · each owns the behaviors that drive specs and acceptance tests</>}
       actions={
         <>
-          <button className="btn ghost">+ shared persona</button>
-          <button className="btn">behaviors view ↗</button>
+          <button className="btn ghost" onClick={addSharedPersona} disabled={Boolean(sharedPersona)}>+ shared persona</button>
+          <button className="btn" onClick={() => setBehaviorsView((current) => !current)}>{behaviorsView ? "persona overview ↙" : "behaviors view ↗"}</button>
         </>
       }
     />
@@ -529,15 +631,23 @@ window.PersonasView = ({ onNav }) => (
         </span>
       </div>
 
+      {behaviorsView && (
+        <div className="col-card live" style={{ padding: "10px 14px", flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>▸ behaviors view</span>
+          <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.45 }}>each card is now organized around its executable behaviors and BDD coverage.</span>
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-        {ORG_PERSONAS.map((p, i) => (
+        {personas.map((p, i) => (
           <div key={i} className={"col-card" + (p.hot ? " live" : "")} style={{ padding: 14, gap: 8 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, color: "var(--fg-1)", letterSpacing: "-0.025em", textTransform: "lowercase" }}>{p.name}</div>
               {p.inferred && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--status-warn)", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 700 }}>inferred</span>}
+              {p.draft && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 700 }}>shared draft</span>}
               <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--ember-08)", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 700, cursor: "pointer" }} onClick={() => onNav?.("project")}>{p.proj} ↗</span>
             </div>
-            <div style={{ fontFamily: "var(--font-ui)", fontSize: 12.5, color: "var(--fg-2)", lineHeight: 1.45 }}>{p.desc}</div>
+            {!behaviorsView && <div style={{ fontFamily: "var(--font-ui)", fontSize: 12.5, color: "var(--fg-2)", lineHeight: 1.45 }}>{p.desc}</div>}
 
             <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
               {p.devices.map((d, j) => (
@@ -546,7 +656,7 @@ window.PersonasView = ({ onNav }) => (
             </div>
 
             <div style={{ paddingTop: 8, borderTop: "1px solid var(--line-1)" }}>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>behaviors · {p.behaviors.length}</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: behaviorsView ? "var(--ember-08)" : "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, marginBottom: 4 }}>{behaviorsView ? "executable behaviors" : "behaviors"} · {p.behaviors.length}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 3, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-1)", lineHeight: 1.5 }}>
                 {p.behaviors.map((b, j) => (
                   <div key={j}><span style={{ color: "var(--ember-08)", marginRight: 6 }}>b{j+1}</span>{b}</div>
@@ -554,22 +664,128 @@ window.PersonasView = ({ onNav }) => (
               </div>
             </div>
 
+            {forgePersona === p.name && (
+              <div style={{ padding: 10, background: "var(--bg-sunken)", border: "1px solid var(--ember-08)", display: "flex", flexDirection: "column", gap: 7 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.16em", textTransform: "uppercase", fontWeight: 700 }}>▸ Forge · persona narrative</div>
+                <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.45 }}>Forge is ready to turn this persona’s context into scoped behaviors, BDD scenarios, and acceptance criteria.</div>
+                <textarea aria-label={`Forge instructions for ${p.name}`} value={instructionFor(p)} onChange={(event) => setForgeInstructions((current) => ({ ...current, [p.name]: event.target.value }))} style={{ minHeight: 52, resize: "vertical", background: "var(--bg-canvas)", border: "1px solid var(--line-2)", color: "var(--fg-1)", padding: 7, fontFamily: "var(--font-ui)", fontSize: 12 }} />
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="btn" style={{ fontSize: 10 }} onClick={() => shapePersona(p)}>shape with forge</button>
+                  <button className="btn ghost" style={{ fontSize: 10 }} onClick={() => setForgePersona(null)}>close</button>
+                </div>
+                {shapedPersona?.name === p.name && <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-ok)", lineHeight: 1.45 }}>▸ Forge shaped the narrative into the next behavior and BDD pass: {shapedPersona.instruction}</div>}
+              </div>
+            )}
+
+            {expandedScenarios[p.name] && (
+              <div style={{ padding: 10, background: "var(--bg-sunken)", border: "1px solid var(--line-1)", display: "flex", flexDirection: "column", gap: 7 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.16em", textTransform: "uppercase", fontWeight: 700 }}>bdd scenarios · {p.behaviors.length}</div>
+                {p.behaviors.map((behavior, j) => (
+                  <div key={j} style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-2)", lineHeight: 1.5 }}>
+                    <span style={{ color: "var(--fg-1)" }}>scenario {j + 1}:</span> given {p.name} is ready, when they {behavior}, then Tanren verifies the intended outcome.
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div style={{ display: "flex", gap: 6, paddingTop: 4 }}>
-              <button className="btn ghost" style={{ fontSize: 11 }}>edit · ask forge</button>
-              <button className="btn ghost" style={{ fontSize: 11, color: "var(--ember-08)" }}>view bdd scenarios</button>
+              <button className="btn ghost" style={{ fontSize: 11 }} onClick={() => setForgePersona((current) => current === p.name ? null : p.name)}>{forgePersona === p.name ? "close forge" : "edit · ask forge"}</button>
+              <button className="btn ghost" style={{ fontSize: 11, color: "var(--ember-08)" }} onClick={() => toggleScenarios(p.name)}>{expandedScenarios[p.name] ? "hide bdd scenarios" : "view bdd scenarios"}</button>
             </div>
           </div>
         ))}
       </div>
     </div>
   </>
-);
+  );
+};
 
 // =====================================================================
 // DORA · observed delivery metrics
 // =====================================================================
 
-window.DoraView = ({ onNav }) => (
+const DORA_RANGES = {
+  "30d": {
+    label: "rolling 30d",
+    shortLabel: "30d",
+    metrics: [
+      { l: "lead time · spec → merge", v: "4h 12m", d: "median · 24 merges", trend: "↓ 59% · chart start → today", elite: true },
+      { l: "deploy frequency", v: "2.1/d", d: "rolling 7d · weekday avg", trend: "↑ 0.4/d", elite: true },
+      { l: "change failure rate", v: "8.3%", d: "2 of 24 merges reverted", trend: "↓ from 12%", elite: false },
+      { l: "mean time to restore", v: "32m", d: "from revert merged", trend: "↓ 18m", elite: true },
+    ],
+    chart: {
+      heading: "30-day trend",
+      points: [22, 30, 18, 25, 20, 16, 14, 12, 18, 22, 14, 11, 9, 13, 17, 11, 9, 14, 12, 8, 10, 7, 11, 9],
+      max: 32,
+      scaleTop: "32h",
+      axisStart: "apr 28",
+      axisEnd: "today",
+      narrative: <><span style={{ color: "var(--ember-08)" }}>↓ 59%</span> from the first to latest observed merge. M3 specs (smaller, well-scoped) drove the cliff at week 3. M5's larger specs may flatten it.</>,
+    },
+    rows: [
+      { p: "tanren-fixture-easy", lead: "4h 12m", dep: "2.4/d", cfr: "8.3%" },
+      { p: "supply-chain-os", lead: "—", dep: "—", cfr: "—" },
+      { p: "cat-cave-www", lead: "1d 4h", dep: "0.4/d", cfr: "0%" },
+    ],
+  },
+  "90d": {
+    label: "rolling 90d",
+    shortLabel: "90d",
+    metrics: [
+      { l: "lead time · spec → merge", v: "6h 48m", d: "median · 61 merges", trend: "↓ 66% · chart start → today", elite: true },
+      { l: "deploy frequency", v: "1.7/d", d: "rolling 30d · weekday avg", trend: "↑ 0.2/d", elite: true },
+      { l: "change failure rate", v: "9.8%", d: "6 of 61 merges reverted", trend: "↓ from 13.1%", elite: false },
+      { l: "mean time to restore", v: "46m", d: "from incident resolved", trend: "↓ 11m", elite: true },
+    ],
+    chart: {
+      heading: "90-day trend",
+      points: [35, 31, 29, 27, 32, 25, 28, 24, 26, 22, 25, 21, 19, 23, 20, 18, 21, 17, 19, 15, 16, 13, 15, 12],
+      max: 40,
+      scaleTop: "40h",
+      axisStart: "feb 27",
+      axisEnd: "today",
+      narrative: <><span style={{ color: "var(--ember-08)" }}>↓ 66%</span> from the first to latest observed merge. Smaller milestone slices are holding lead time below one workday despite the recent M5 ramp.</>,
+    },
+    rows: [
+      { p: "tanren-fixture-easy", lead: "6h 48m", dep: "1.9/d", cfr: "9.8%" },
+      { p: "supply-chain-os", lead: "—", dep: "—", cfr: "—" },
+      { p: "cat-cave-www", lead: "1d 9h", dep: "0.3/d", cfr: "0%" },
+    ],
+  },
+  all: {
+    label: "all-time",
+    shortLabel: "all-time",
+    metrics: [
+      { l: "lead time · spec → merge", v: "8h 06m", d: "median · 98 merges", trend: "↓ 75% · chart start → today", elite: true },
+      { l: "deploy frequency", v: "1.3/d", d: "all observed weekdays", trend: "↑ 0.8/d", elite: true },
+      { l: "change failure rate", v: "11.2%", d: "11 of 98 merges reverted", trend: "↓ from 16.7%", elite: false },
+      { l: "mean time to restore", v: "54m", d: "from incident resolved", trend: "↓ 28m", elite: true },
+    ],
+    chart: {
+      heading: "all-time trend",
+      points: [48, 43, 46, 39, 37, 40, 34, 32, 35, 29, 31, 27, 25, 28, 23, 22, 20, 24, 18, 17, 15, 13, 14, 12],
+      max: 56,
+      scaleTop: "56h",
+      axisStart: "first merge",
+      axisEnd: "today",
+      narrative: <><span style={{ color: "var(--ember-08)" }}>↓ 75%</span> from the first to latest observed merge. The portfolio has steadily shortened the path from scoped spec to merged change.</>,
+    },
+    rows: [
+      { p: "tanren-fixture-easy", lead: "7h 24m", dep: "1.5/d", cfr: "11.2%" },
+      { p: "supply-chain-os", lead: "—", dep: "—", cfr: "—" },
+      { p: "cat-cave-www", lead: "1d 14h", dep: "0.2/d", cfr: "0%" },
+    ],
+  },
+};
+
+window.DoraView = ({ onNav }) => {
+  const [range, setRange] = React.useState("30d");
+  const data = DORA_RANGES[range];
+  const { chart } = data;
+  const eliteY = 240 - (24 / chart.max) * 200;
+
+  return (
   <>
     <PageHead
       eyebrow="▮ org · cat-cave"
@@ -577,20 +793,16 @@ window.DoraView = ({ onNav }) => (
       sub={<>delivery metrics across all projects · tanren reports your numbers; setting targets comes after you find steady-state</>}
       actions={
         <>
-          <button className="btn">rolling 30d</button>
-          <button className="btn ghost">90d</button>
-          <button className="btn ghost">all-time</button>
+          {Object.entries(DORA_RANGES).map(([key, option]) => {
+            const active = key === range;
+            return <button key={key} type="button" className={"btn" + (active ? "" : " ghost")} aria-pressed={active} onClick={() => setRange(key)}>{option.label}</button>;
+          })}
         </>
       }
     />
     <div className="page-body scrolls">
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
-        {[
-          { l: "lead time · spec → merge",   v: "4h 12m",  d: "median · 24 merges",  trend: "↓ 38% · vs last 30d", elite: true },
-          { l: "deploy frequency",            v: "2.1/d",    d: "rolling 7d · weekday avg", trend: "↑ 0.4/d",                elite: true },
-          { l: "change failure rate",         v: "8.3%",     d: "2 of 24 merges reverted",    trend: "↓ from 12%",             elite: false },
-          { l: "mean time to restore",        v: "32m",      d: "from revert merged",         trend: "↓ 18m",                  elite: true },
-        ].map((m, i) => (
+        {data.metrics.map((m, i) => (
           <div key={i} className={"col-card" + (m.elite ? " live" : "")} style={{ padding: 14, gap: 6, position: "relative" }}>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>{m.l}</div>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 28, fontWeight: 600, color: "var(--fg-1)", lineHeight: 1, marginTop: 4 }}>{m.v}</div>
@@ -603,7 +815,7 @@ window.DoraView = ({ onNav }) => (
 
       <div className="split-row" style={{ gridTemplateColumns: "1.5fr 1fr", minHeight: 360 }}>
         <div className="col-card" style={{ padding: 14, gap: 10 }}>
-          <div className="h"><span>lead time · <em style={{ color: "var(--ember-08)" }}>30-day trend</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>per merge · lower is better</span></div>
+          <div className="h"><span>lead time · <em style={{ color: "var(--ember-08)" }}>{chart.heading}</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>per merge · lower is better</span></div>
           <svg viewBox="0 0 600 260" preserveAspectRatio="none" style={{ width: "100%", height: 260, background: "var(--bg-sunken)", border: "1px solid var(--line-1)" }}>
             <defs>
               <pattern id="dora-grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -611,11 +823,13 @@ window.DoraView = ({ onNav }) => (
               </pattern>
             </defs>
             <rect width="600" height="260" fill="url(#dora-grid)" />
-            <line x1="0" y1="190" x2="600" y2="190" stroke="var(--steel-08)" strokeWidth="1" strokeDasharray="3 3" />
-            <text x="595" y="186" textAnchor="end" fontFamily="var(--font-mono)" fontSize="9" fill="var(--steel-08)">elite · &lt; 1d</text>
+            <text x="5" y="14" fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg-3)">{chart.scaleTop}</text>
+            <text x="5" y="240" fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg-3)">0h</text>
+            <line x1="0" y1={eliteY} x2="600" y2={eliteY} stroke="var(--steel-08)" strokeWidth="1" strokeDasharray="3 3" />
+            <text x="595" y={eliteY - 4} textAnchor="end" fontFamily="var(--font-mono)" fontSize="9" fill="var(--steel-08)">elite · &lt; 1d</text>
             {(() => {
-              const pts = [22, 30, 18, 25, 20, 16, 14, 12, 18, 22, 14, 11, 9, 13, 17, 11, 9, 14, 12, 8, 10, 7, 11, 9];
-              const max = 32;
+              const pts = chart.points;
+              const max = chart.max;
               const path = pts.map((p, i) => {
                 const x = 20 + (i * 560) / (pts.length - 1);
                 const y = 240 - (p / max) * 200;
@@ -634,27 +848,23 @@ window.DoraView = ({ onNav }) => (
                 </>
               );
             })()}
-            <text x="20"  y="255" fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg-3)">apr 28</text>
-            <text x="580" y="255" textAnchor="end" fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg-3)">today</text>
+            <text x="20"  y="255" fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg-3)">{chart.axisStart}</text>
+            <text x="580" y="255" textAnchor="end" fontFamily="var(--font-mono)" fontSize="9" fill="var(--fg-3)">{chart.axisEnd}</text>
           </svg>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-2)", lineHeight: 1.55 }}>
-            <span style={{ color: "var(--ember-08)" }}>↓ 38%</span> over 30 days. M3 specs (smaller, well-scoped) drove the cliff at week 3. M5's larger specs may flatten it.
+            {chart.narrative}
           </div>
         </div>
 
         <div className="col-card" style={{ padding: 14, gap: 8 }}>
-          <div className="h"><span>per-project · <em style={{ color: "var(--ember-08)" }}>30d</em></span></div>
+          <div className="h"><span>per-project · <em style={{ color: "var(--ember-08)" }}>{data.shortLabel}</em></span></div>
           <div className="matrix-head" style={{ gridTemplateColumns: "1.4fr 0.7fr 0.7fr 0.7fr" }}>
             <span>project</span>
             <span style={{ textAlign: "right" }}>lead</span>
             <span style={{ textAlign: "right" }}>deploys</span>
             <span style={{ textAlign: "right" }}>cfr</span>
           </div>
-          {[
-            { p: "tanren-fixture-easy", lead: "4h 12m", dep: "2.4/d", cfr: "8.3%" },
-            { p: "supply-chain-os",     lead: "—",      dep: "—",     cfr: "—" },
-            { p: "cat-cave-www",        lead: "1d 4h",  dep: "0.4/d", cfr: "0%" },
-          ].map((r, i) => (
+          {data.rows.map((r, i) => (
             <div key={i} className="matrix-row" style={{ gridTemplateColumns: "1.4fr 0.7fr 0.7fr 0.7fr" }}>
               <span style={{ color: "var(--fg-1)" }}>{r.p}</span>
               <span style={{ textAlign: "right", color: "var(--fg-1)" }}>{r.lead}</span>
@@ -673,4 +883,5 @@ window.DoraView = ({ onNav }) => (
       </div>
     </div>
   </>
-);
+  );
+};

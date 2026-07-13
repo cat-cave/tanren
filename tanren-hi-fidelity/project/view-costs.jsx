@@ -35,32 +35,59 @@ const SOURCE_COLOR = {
   infra: "var(--steel-08)",
 };
 
-window.CostsView = ({ onNav }) => (
-  <>
-    <PageHead
-      eyebrow="▮ history · cost of forging · all sources"
-      title={<>where the <em>money</em> goes</>}
-      actions={
-        <>
-          <span className="pill cold">7d</span>
-          <span className="pill hot">30d</span>
-          <span className="pill cold">90d</span>
-          <span className="pill cold">all</span>
-          <button className="btn">export csv</button>
-        </>
-      }
-    />
-    <div className="page-body scrolls">
+const PERIODS = ["7d", "30d", "90d", "all"];
+
+window.CostsView = ({ onNav }) => {
+  const [period, setPeriod] = React.useState("30d");
+  const [exportMessage, setExportMessage] = React.useState("");
+  const periodLabel = period === "all" ? "all observed time" : period;
+  const heatmapDays = period === "7d" ? 7 : 30;
+  const heatmapWindowLabel = period === "7d"
+    ? "may 13–19"
+    : period === "30d"
+      ? "may 13–jun 7"
+      : period === "90d"
+        ? "latest 30d within the 90d view"
+        : "latest 30d of observed history";
+
+  const selectPeriod = (nextPeriod) => {
+    setPeriod(nextPeriod);
+    setExportMessage("");
+  };
+
+  return (
+    <>
+      <PageHead
+        eyebrow="▮ history · cost of forging · all sources"
+        title={<>where the <em>money</em> goes</>}
+        actions={
+          <>
+            <span role="group" aria-label="Cost reporting period" style={{ display: "inline-flex", gap: 4 }}>
+              {PERIODS.map((option) => {
+                const selected = option === period;
+                return <button key={option} type="button" className={"pill " + (selected ? "hot" : "cold")} aria-pressed={selected} onClick={() => selectPeriod(option)}>{option}</button>;
+              })}
+            </span>
+            <button type="button" className="btn" onClick={() => setExportMessage(`CSV preparation ready for the ${periodLabel} prototype view. No file was downloaded.`)}>export csv</button>
+          </>
+        }
+      />
+      <div className="page-body scrolls">
+      {exportMessage && <div role="status" aria-live="polite" className="col-card live" style={{ padding: "9px 12px", flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)", letterSpacing: "0.16em", textTransform: "uppercase", fontWeight: 700 }}>export</span>
+        <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-1)" }}>{exportMessage}</span>
+      </div>}
       {/* Total spend stacked bar */}
       <div className="panel" style={{ padding: "14px 18px", gap: 10 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 14 }}>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.22em", textTransform: "uppercase", fontWeight: 700 }}>total · 30d</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.22em", textTransform: "uppercase", fontWeight: 700 }}>total · {periodLabel}</span>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 32, color: "var(--fg-1)", fontWeight: 600, letterSpacing: "-0.025em", fontVariantNumeric: "tabular-nums" }}>$84.62</span>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--status-ok)" }}>↘ 18% under projected · $103 budget</span>
           </div>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>across 4 cost sources</span>
         </div>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.08em", textTransform: "uppercase" }}>prototype snapshot · local illustrative figures · no live billing connection</span>
 
         <div className="cost-stacked" style={{ marginTop: 6 }}>
           <i className="token" style={{ flex: 5840 }}>
@@ -94,11 +121,12 @@ window.CostsView = ({ onNav }) => (
       <div className="panel" style={{ padding: "12px 16px", gap: 10 }}>
         <div className="panel-head" style={{ background: "transparent", padding: 0, borderBottom: "none" }}>
           <h3>subscription window <em>utilization</em></h3>
-          <span className="meta">chatgpt · 5-hour windows · 30d · % of cap filled</span>
+          <span className="meta">chatgpt · 5-hour windows · {periodLabel} · % of cap filled</span>
         </div>
         <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.45 }}>
           every dark cell is usage you paid for and didn't use. light cells = filling the window well. patterns reveal where the engine could be running harder.
         </div>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--fg-3)" }}>local prototype window · {heatmapWindowLabel}</div>
 
         <div className="heatmap-grid">
           <div className="heatmap-labels-y">
@@ -110,9 +138,9 @@ window.CostsView = ({ onNav }) => (
             <div className="heatmap-rows">
               {[0, 1, 2, 3, 4].map((row) => (
                 <div key={row} className="heatmap-row">
-                  {Array.from({ length: 30 }, (_, dayCol) => {
+                  {Array.from({ length: heatmapDays }, (_, dayCol) => {
                     const v = heatmapValue(row, dayCol);
-                    const isToday = dayCol === 29 && row === 2;
+                    const isToday = dayCol === heatmapDays - 1 && row === 2;
                     return (
                       <div key={dayCol} className={"heatmap-cell" + (isToday ? " today" : "")} style={{ background: `oklch(60% 0.22 36 / ${0.05 + v * 0.85})` }}>
                         {isToday && <div className="now-label">now</div>}
@@ -122,13 +150,10 @@ window.CostsView = ({ onNav }) => (
                 </div>
               ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(30, 1fr)", gap: 2, marginTop: 6, fontFamily: "var(--font-mono)", fontSize: 8.5, color: "var(--fg-3)", letterSpacing: "0.04em", textAlign: "center" }}>
-              <span style={{ gridColumn: "1 / 5" }}>may 13</span>
-              <span style={{ gridColumn: "5 / 10" }}>may 18</span>
-              <span style={{ gridColumn: "10 / 15" }}>may 23</span>
-              <span style={{ gridColumn: "15 / 20" }}>may 28</span>
-              <span style={{ gridColumn: "20 / 25" }}>jun 2</span>
-              <span style={{ gridColumn: "25 / 30" }}>jun 7</span>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${heatmapDays}, 1fr)`, gap: 2, marginTop: 6, fontFamily: "var(--font-mono)", fontSize: 8.5, color: "var(--fg-3)", letterSpacing: "0.04em", textAlign: "center" }}>
+              <span style={{ gridColumn: "1 / span 1" }}>may 13</span>
+              <span style={{ gridColumn: `${Math.ceil(heatmapDays / 2)} / span 1` }}>{period === "7d" ? "may 16" : "may 28"}</span>
+              <span style={{ gridColumn: `${heatmapDays} / span 1` }}>{period === "7d" ? "may 19" : period === "30d" ? "jun 7" : period === "90d" ? "90d" : "history"}</span>
             </div>
           </div>
           <div className="heatmap-avg">
@@ -152,7 +177,7 @@ window.CostsView = ({ onNav }) => (
       <div className="split-row" style={{ gridTemplateColumns: "1.2fr 1fr", minHeight: 520 }}>
         <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
           <div className="panel-head">
-            <h3>breakdown · <em>by provider · 30d</em></h3>
+            <h3>breakdown · <em>by provider · {periodLabel}</em></h3>
             <span className="meta">per-token + window-equiv + infra share</span>
           </div>
           <div className="cost-table-head">
@@ -190,12 +215,12 @@ window.CostsView = ({ onNav }) => (
               ))}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>
-              <span>last 14d · daily spend</span>
+              <span>{period === "all" ? "observed history" : `last ${period}`} · daily spend</span>
               <span style={{ color: "var(--fg-1)" }}>$2.82/d avg</span>
             </div>
             <div style={{ paddingTop: 6, borderTop: "1px solid var(--line-1)", display: "grid", gridTemplateColumns: "1fr auto", gap: 4, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-1)" }}>
-              <span style={{ color: "var(--fg-3)" }}>at current rate · this month</span><span style={{ color: "var(--ember-08)" }}>$84.62 / $200 cap</span>
-              <span style={{ color: "var(--fg-3)" }}>next 30d projection</span><span>$96 ± $14</span>
+              <span style={{ color: "var(--fg-3)" }}>at current rate · {periodLabel}</span><span style={{ color: "var(--ember-08)" }}>$84.62 / $200 cap</span>
+              <span style={{ color: "var(--fg-3)" }}>next {period === "all" ? "30d" : period} projection</span><span>$96 ± $14</span>
             </div>
           </div>
 
@@ -221,7 +246,7 @@ window.CostsView = ({ onNav }) => (
           </div>
 
           <div className="panel" style={{ padding: 12, gap: 6 }}>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>observed · 30d (dora-like)</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>observed · {periodLabel} (dora-like)</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 5, fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-1)" }}>
               <span style={{ color: "var(--fg-3)" }}>specs merged</span><b>42</b>
               <span style={{ color: "var(--fg-3)" }}>avg cost per merged spec</span><b>$2.01</b>
@@ -235,6 +260,7 @@ window.CostsView = ({ onNav }) => (
           </div>
         </div>
       </div>
-    </div>
-  </>
-);
+      </div>
+    </>
+  );
+};

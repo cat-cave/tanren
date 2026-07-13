@@ -38,10 +38,10 @@ import { request as httpsRequest } from "node:https";
 import { createDbPool } from "../../db/src/index.js";
 import { proveDataPlaneWriteDenied, proveDeprivilegeEnabled } from "./plane-split-deprivilege.js";
 
-// The dev mTLS material `just gen-mtls-certs` writes to /tmp/tanren-mtls (the
-// host dir compose bind-mounts into the orchestrator + worker). The smoke reads
-// it from the HOST to act as a data-plane client against the live endpoint.
-const MTLS_DIR = process.env["TANREN_MTLS_DIR"] ?? "/tmp/tanren-mtls";
+// The dev mTLS material `just gen-mtls-certs` writes to $TANREN_RUNTIME_DIR/mtls — a
+// PERSISTENT host dir (default ~/.config/tanren/runtime/mtls), NOT /tmp which is cleaned mid-run. TANREN_MTLS_DIR overrides.
+const RUNTIME_DIR = process.env["TANREN_RUNTIME_DIR"] ?? `${process.env["HOME"] ?? ""}/.config/tanren/runtime`;
+const MTLS_DIR = process.env["TANREN_MTLS_DIR"] ?? `${RUNTIME_DIR}/mtls`;
 // The orchestrator's internal mTLS listener, reachable on the host (compose maps
 // no host port for :3110, so the smoke talks to it via the published API host —
 // override with TANREN_CLAIM_ENDPOINT_HOST when the listener is host-exposed).

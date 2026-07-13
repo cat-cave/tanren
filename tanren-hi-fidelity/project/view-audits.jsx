@@ -28,6 +28,21 @@ const WindowFill = () => {
 
 window.AuditsView = ({ onNav }) => {
   const [jobs, setJobs] = React.useState(window.AUDIT_JOBS);
+  const [composerFocused, setComposerFocused] = React.useState(false);
+  const [forgeConfigured, setForgeConfigured] = React.useState(false);
+  const composerRef = React.useRef(null);
+  const composerAudit = {
+    name: "security deep scan", kind: "security", status: "on",
+    schedule: "nightly · 03:00", window: "night (00–05) · 22% filled",
+    cli: "claude · haiku-4.5", lastRun: "scheduled · pending",
+    findings: { n: 0, sev: "ok", pending: true, note: "first pass queued for tonight" },
+  };
+  const composerFields = [
+    ["kind", composerAudit.name],
+    ["cadence", composerAudit.schedule],
+    ["target window", composerAudit.window],
+    ["answerer cli", composerAudit.cli],
+  ];
   const toggle = (i) => setJobs(js => js.map((j, k) => k === i ? { ...j, status: j.status === "on" ? "paused" : "on" } : j));
   const scheduleRecommended = (recommendation) => {
     setJobs(js => js.some(j => j.name === recommendation.name) ? js : [...js, {
@@ -41,6 +56,16 @@ window.AuditsView = ({ onNav }) => {
       findings: { n: 0, sev: "ok", pending: true, note: "first pass queued for the next window" },
     }]);
   };
+  const focusComposer = () => {
+    setComposerFocused(true);
+    composerRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    composerRef.current?.focus({ preventScroll: true });
+  };
+  const createComposerAudit = () => {
+    setJobs(js => js.some(j => j.name === composerAudit.name) ? js : [...js, composerAudit]);
+    setComposerFocused(false);
+  };
+  const composerCreated = jobs.some(j => j.name === composerAudit.name);
 
   return (
     <>
@@ -51,7 +76,7 @@ window.AuditsView = ({ onNav }) => {
         actions={
           <>
             <button className="btn ghost" onClick={() => onNav?.("costs")}>cost windows ↗</button>
-            <button className="btn primary notched">+ new scheduled audit</button>
+            <button className="btn primary notched" onClick={focusComposer}>+ new scheduled audit</button>
           </>
         }
       />
@@ -123,18 +148,37 @@ window.AuditsView = ({ onNav }) => {
           </div>
         </div>
 
-        {/* Composer (visual) */}
-        <div className="panel" style={{ padding: "14px 16px", gap: 12 }}>
+        {/* Composer */}
+        <div ref={composerRef} tabIndex="-1" className="panel" style={{ padding: "14px 16px", gap: 12, outline: composerFocused ? "2px solid var(--ember-08)" : "none" }}>
           <div className="spec-h">new scheduled audit</div>
           <div className="audit-composer">
-            <div className="field"><span className="label">kind</span><div className="input filled">security scan <span className="caret">▾</span></div></div>
-            <div className="field"><span className="label">cadence</span><div className="input filled">nightly · 03:00 <span className="caret">▾</span></div></div>
-            <div className="field"><span className="label">target window</span><div className="input filled">night (00–05) · 22% filled <span className="caret">▾</span></div></div>
-            <div className="field"><span className="label">answerer cli</span><div className="input filled">claude · haiku-4.5 <span className="caret">▾</span></div></div>
+            {composerFields.map(([label, value]) => (
+              <div className="field" key={label}><span className="label">{label}</span><div className="input filled">{value} <span className="caret">▾</span></div></div>
+            ))}
           </div>
+          {forgeConfigured && (
+            <div className="col-card live" role="status" aria-live="polite" style={{ padding: "12px 14px", gap: 9, borderColor: "var(--ember-08)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div className="spec-h" style={{ margin: 0 }}>forge-assisted configuration</div>
+                <span className="pill ok"><span className="d"></span>{composerCreated ? "created · first pass pending" : "ready for operator review"}</span>
+              </div>
+              <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.5 }}>
+                Forge selected a read-only <b style={{ color: "var(--fg-1)" }}>{composerAudit.name}</b> in the underfilled night window for its 03:00 cadence. {composerCreated ? "The operator-approved configuration is scheduled." : "Review the configuration, then create it when ready."}
+              </div>
+              <div className="audit-composer">
+                {composerFields.map(([label, value]) => (
+                  <div key={label} style={{ padding: "8px 10px", background: "var(--bg-sunken)", border: "1px solid var(--line-1)" }}>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 8.5, color: "var(--fg-3)", letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-1)" }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn primary notched">create audit ↗</button>
-            <button className="btn ghost">ask forge to configure it</button>
+            <button className="btn primary notched" disabled={composerCreated} onClick={createComposerAudit}>{composerCreated ? "audit created ✓" : "create audit ↗"}</button>
+            <button className="btn ghost" aria-pressed={forgeConfigured} disabled={composerCreated} onClick={() => setForgeConfigured(true)}>{composerCreated ? "configuration created ✓" : forgeConfigured ? "forge configured ✓" : "ask forge to configure it"}</button>
+            {composerCreated && <span className="pill ok"><span className="d"></span>scheduled for tonight · first pass pending</span>}
           </div>
         </div>
       </div>

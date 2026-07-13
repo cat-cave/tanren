@@ -64,7 +64,8 @@ services:
       # wired below) — never a plaintext env VALUE, so it never lands in `docker
       # inspect` / container env. Mirrors compose.prod.yml. The boot seeder reads
       # the file at this in-container path and stores it in the secret store. The
-      # `runner-key` justfile recipe generates the dev key at /tmp/tanren_runner_key.
+      # `runner-key` justfile recipe generates the dev key at
+      # $TANREN_RUNTIME_DIR/tanren_runner_key (persistent, not /tmp).
       TANREN_RUNNER_IDENTITY_KEY_PATH: /run/secrets/tanren_runner_identity_key
       TANREN_GITHUB_OAUTH_CLIENT_ID: ${TANREN_GITHUB_OAUTH_CLIENT_ID:-}
       TANREN_GITHUB_OAUTH_CLIENT_SECRET: ${TANREN_GITHUB_OAUTH_CLIENT_SECRET:-}
@@ -99,7 +100,7 @@ services:
       # Plane-split P2: the control-plane INTERNAL mTLS listener serving
       # `/internal/claim-job` (the endpoint the worker claims through). Certs are
       # the dev self-signed material `just gen-mtls-certs` writes to
-      # /tmp/tanren-mtls (bind-mounted below). When unset the listener does not
+      # $TANREN_RUNTIME_DIR/mtls (bind-mounted below). When unset the listener does not
       # start (single-process dev); here we always wire it so the worker can claim
       # over mTLS. See ROADMAP.md.
       TANREN_INTERNAL_MTLS_PORT: "3110"
@@ -107,7 +108,7 @@ services:
       TANREN_INTERNAL_TLS_KEY: /etc/tanren/mtls/server.key
       TANREN_INTERNAL_TLS_CA: /etc/tanren/mtls/ca.crt
     volumes:
-      - /tmp/tanren-mtls:/etc/tanren/mtls:ro
+      - ${TANREN_RUNTIME_DIR}/mtls:/etc/tanren/mtls:ro
     secrets:
       - tanren_runner_identity_key
     ports:
@@ -236,7 +237,7 @@ services:
       TANREN_GITHUB_APP_CREDENTIAL_REF: ${TANREN_GITHUB_APP_CREDENTIAL_REF:-}
       CONTAINER_HOST: unix:///run/podman/podman.sock
     volumes:
-      - /tmp/tanren-mtls:/etc/tanren/mtls:ro
+      - ${TANREN_RUNTIME_DIR}/mtls:/etc/tanren/mtls:ro
       # The host podman socket — the worker's podman client drives it in REMOTE mode to build
       # + push the per-commit Fly deploy image on the host (rootless podman auto-detected by
       # `just up-dev` into TANREN_DOCKER_SOCK; defaults to the per-user podman socket).
@@ -403,7 +404,12 @@ secrets:
   # MOUNTED FILE under /run/secrets (never a plaintext env value — so it never lands
   # in `docker inspect`). Mirrors compose.prod.yml's pattern; the boot seeder reads
   # the file and stores it in the secret store. The dev key is generated at
-  # /tmp/tanren_runner_key by the `runner-key` justfile recipe (`up-dev` depends on
-  # it); override via TANREN_RUNNER_IDENTITY_KEY_FILE.
+  # $TANREN_RUNTIME_DIR/tanren_runner_key by the `runner-key` justfile recipe
+  # (`up-dev` depends on it). This is a PERSISTENT user dir (default
+  # $HOME/.config/tanren/runtime), NOT /tmp — so a systemd-tmpfiles sweep can't
+  # delete the key from under a multi-hour run and break worker restarts. Override
+  # the base dir via TANREN_RUNTIME_DIR. NOTE: podman-compose (1.5.x) cannot expand
+  # a nested `${A:-${B}}` default, so this consumes the resolved base directly; the
+  # justfile exports it, and .env.example seeds it for raw `docker compose` use.
   tanren_runner_identity_key:
-    file: ${TANREN_RUNNER_IDENTITY_KEY_FILE:-/tmp/tanren_runner_key}
+    file: ${TANREN_RUNTIME_DIR}/tanren_runner_key
