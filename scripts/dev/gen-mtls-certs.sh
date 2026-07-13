@@ -5,12 +5,14 @@
 # via the same env (TANREN_INTERNAL_TLS_* on the control plane,
 # TANREN_DATA_PLANE_TLS_* on the worker). Idempotent: skips if the CA exists.
 #
-# Output dir defaults to /tmp/tanren-mtls (bind-mounted into the orchestrator +
-# worker containers by compose.dev.yml). NOT a PKI — one CA, two leaf certs.
+# Output dir defaults to $TANREN_RUNTIME_DIR/mtls (a PERSISTENT user dir, NOT /tmp
+# which systemd-tmpfiles cleans out from under a long run), bind-mounted into the
+# orchestrator + worker containers by compose.dev.yml. Override the exact dir with
+# TANREN_MTLS_DIR, or the base with TANREN_RUNTIME_DIR. NOT a PKI — one CA, two leaf certs.
 set -euo pipefail
 
-DIR="${TANREN_MTLS_DIR:-/tmp/tanren-mtls}"
-mkdir -p "$DIR"
+DIR="${TANREN_MTLS_DIR:-${TANREN_RUNTIME_DIR:-$HOME/.config/tanren/runtime}/mtls}"
+mkdir -p -m 0700 "$DIR"
 
 if [ -f "$DIR/ca.crt" ]; then
   echo "[gen-mtls-certs] $DIR/ca.crt already exists — reusing"

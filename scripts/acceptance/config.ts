@@ -50,6 +50,14 @@ interface StackConfig {
   ci_poll_delay_ms: number;
 }
 
+// The persistent dev runtime dir the runner key lives in (default
+// $HOME/.config/tanren/runtime — NOT /tmp, which systemd-tmpfiles cleans out from
+// under a long run). Mirrors the justfile TANREN_RUNTIME_DIR resolution.
+const RUNTIME_DIR =
+  process.env.TANREN_RUNTIME_DIR !== undefined && process.env.TANREN_RUNTIME_DIR !== ""
+    ? process.env.TANREN_RUNTIME_DIR
+    : resolve(homedir(), ".config/tanren/runtime");
+
 // These match compose.dev.yml. Production overrides every value via env.
 const DEV_COMPOSE_DEFAULTS: StackConfig = {
   database_url: "postgres://tanren:tanren@127.0.0.1:5432/tanren",
@@ -58,7 +66,7 @@ const DEV_COMPOSE_DEFAULTS: StackConfig = {
   ssh_host: "127.0.0.1",
   ssh_port: 2222,
   ssh_user: "tanren",
-  ssh_key_path: "/tmp/tanren_runner_key",
+  ssh_key_path: resolve(RUNTIME_DIR, "tanren_runner_key"),
   timeout_ms: 300_000,
   max_ci_polls: 18,
   ci_poll_delay_ms: 10_000,
