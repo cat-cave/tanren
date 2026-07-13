@@ -7,7 +7,7 @@
 // (mergeQueueEarlyEnqueueSeam) closes the on-the-fly case; this sweep is the catch-up
 // path for any orphan that pre-existed the fix or escaped it.
 //
-// Per-orphan, this opens ONE `runWithOrgScope` and:
+// Per-orphan, this opens ONE `runWithSystemScope` transaction and:
 //   1. SELECTs to confirm no `merge_queue` row exists (idempotent guard against a race
 //      with a concurrent enqueue);
 //   2. INSERTs the merge_queue row using `PgMergeQueueModel.enqueueOnClient`;
@@ -15,10 +15,23 @@
 //      catch-up as a real schedule event (not a silent recovery).
 // All three are in ONE transaction (the same atomicity guarantee the seam enforces).
 //
-// The discovery query joins `events`/`runs`/`projects` system-scoped (BYPASSRLS) because
-// it spans every project; the per-orphan write is org-scoped per run.
+// SCOPE (apex v95 root cause): BOTH the discovery query AND the per-orphan recovery
+// writes run system-scoped on the BYPASSRLS `tanren_system` pool. The sweep is an
+// inherently cross-org SYSTEM operation (discovery spans every project), and — critically
+// — the pool this sweep is handed is the coordinator subscriber's runtime pool, which in
+// the worker is the NARROW `tanren_dataplane` role (SELECT-only on `events`). Routing the
+// recovery through `runWithOrgScope` ran the merge_queue INSERT + the `events` append on
+// THAT dataplane connection: the merge_queue INSERT passed (dataplane has write grants +
+// the org GUC satisfied RLS) but the `events` append raised `permission denied for table
+// events`, rolling back the WHOLE recovery transaction. So every dequeued/orphaned PR
+// failed to recover on every sweep tick — a run stalled ~10h with the stacked PRs behind
+// it stuck. `runWithSystemScope` connects as `tanren_system` (BYPASSRLS, full grants on
+// both tables) and writes the explicit `org_id` the rows carry, so RLS is bypassed and
+// the recovery lands. A genuine failure still surfaces loudly (the per-orphan catch logs
+// + re-tries next boot); only the scope mismatch that BLOCKED a legitimate recovery is
+// fixed — no GRANT broadening, no RLS disable.
 
-import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
+import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { PgEventStore } from "../eventStore.js";
 import { createLogger } from "../observability/logger.js";
@@ -119,7 +132,7 @@ async function recoverOrphan(pool: pg.Pool, model: PgMergeQueueModel, orphan: Or
     });
     return false;
   }
-  return runWithOrgScope(pool, orphan.org_id, async (client) => {
+  return runWithSystemScope(pool, async (client) => {
     const { created } = await model.enqueueOnClient(client, orphan.org_id, {
       projectId: orphan.project_id,
       runId: orphan.run_id,
