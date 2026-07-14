@@ -3,7 +3,7 @@
 // behavior spec EVERY host impl (the Wave-1 GitHub impl; later GitLab/Bitbucket)
 // must satisfy — the MINIMAL host surface where the host HOSTS but never DECIDES:
 //   - pushRef / fetchRef round-trip (a pushed ref is fetchable at its sha);
-//   - landAuthorizedRef ADVANCES main via compare-and-swap (it is a plain push of
+//   - landAuthorizedIntegration ADVANCES main via compare-and-swap (it is a plain push of
 //     the AUTHORIZED commit, not a "merge PR" API), and REJECTS a stale CAS;
 //   - readDefaultBranch returns the host default branch.
 //
@@ -69,15 +69,16 @@ export function describeCodeHostConformance(label: string, harness: CodeHostConf
       expect(await host.readDefaultBranch(REPO)).toBe("main");
     });
 
-    it("landAuthorizedRef ADVANCES main (compare-and-swap push of the authorized commit)", async () => {
+    it("landAuthorizedIntegration ADVANCES main (compare-and-swap push of the authorized commit)", async () => {
       const host = harness.make();
       await harness.seed(host, REPO, "main", "sha-main-0");
 
-      const result = await host.landAuthorizedRef({
+      const result = await host.landAuthorizedIntegration({
         repo: REPO,
         intoMain: "main",
         authorizedSha: "sha-authorized-1",
         expectedMainSha: "sha-main-0",
+        idempotencyKey: "intent-conf-1",
       });
 
       expect(result.mainSha).toBe("sha-authorized-1");
@@ -107,19 +108,20 @@ export function describeCodeHostConformance(label: string, harness: CodeHostConf
       expect(authors.logins).not.toContain("tanren[bot]");
     });
 
-    it("landAuthorizedRef REJECTS a stale compare-and-swap (main moved underneath)", async () => {
+    it("landAuthorizedIntegration REJECTS a stale compare-and-swap (main moved underneath)", async () => {
       const host = harness.make();
       await harness.seed(host, REPO, "main", "sha-main-0");
       // main advanced to a different sha out-of-band.
       await host.pushRef({ repo: REPO, localRef: "refs/heads/main", remoteBranch: "main", sha: "sha-main-1" });
 
       await expect(
-        host.landAuthorizedRef({
+        host.landAuthorizedIntegration({
           repo: REPO,
           intoMain: "main",
           authorizedSha: "sha-authorized-1",
           // A stale expectation: main already advanced to sha-main-1.
           expectedMainSha: "sha-main-0",
+          idempotencyKey: "intent-conf-2",
         }),
       ).rejects.toThrow(/reject|stale|expect|conflict|cas/iu);
     });

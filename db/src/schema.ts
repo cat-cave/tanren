@@ -13,7 +13,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { eventTypeNames } from "./eventTypes.js";
+import { eventTypes } from "./schemaEventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
 import {
   enumCheck,
@@ -152,7 +152,12 @@ export const events = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
-    eventType: text("event_type").notNull(),
+    // SP-8: FK to the platform-global event_types catalog (migration 0040)
+    // REPLACES the former generated events_event_type_check CHECK constraint —
+    // the FK is now the sole event-name enforcement.
+    eventType: text("event_type")
+      .notNull()
+      .references(() => eventTypes.name),
     payload: jsonb("payload")
       .notNull()
       .default(sql`'{}'::jsonb`),
@@ -163,17 +168,16 @@ export const events = pgTable(
   (table) => [
     index("events_run_id_ts").on(table.runId, table.ts),
     index("events_event_type").on(table.eventType),
-    enumCheck("events_event_type_check", table.eventType, eventTypeNames),
     index("events_org_id").on(table.orgId),
     index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
     index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
-    // Terminal task/run events: AT MOST ONCE per type (#40 Class B + #48).
+    // Terminal task/run events AT MOST ONCE per type (#40 Class B + #48); run.resumed too (mig 0033).
     uniqueIndex("events_task_terminal_unique")
       .on(table.taskId, table.eventType)
       .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
     uniqueIndex("events_run_terminal_unique")
       .on(table.runId, table.eventType)
-      .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled')`),
+      .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled', 'run.resumed')`),
     // Round-3 H-R3.2: priorEvents dedupe on (run_id, idempotency_key).
     uniqueIndex("events_prior_idempotency_unique")
       .on(table.runId, table.idempotencyKey)
@@ -467,25 +471,9 @@ export const specMilestones = pgTable(
     index("spec_milestones_milestone_id").on(table.milestoneId),
   ],
 );
-
-export const specDependencies = pgTable(
-  "spec_dependencies",
-  {
-    fromSpecId: text("from_spec_id")
-      .notNull()
-      .references(() => specs.specId),
-    toSpecId: text("to_spec_id")
-      .notNull()
-      .references(() => specs.specId),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.fromSpecId, table.toSpecId] }),
-    check("spec_dependencies_no_self_loop", sql`${table.fromSpecId} <> ${table.toSpecId}`),
-    index("spec_dependencies_to_spec_id").on(table.toSpecId),
-  ],
-);
 // Sub-schema files split for file-line-max-500; re-exported as `schema.*`.
+export { specDependencies } from "./schemaSpecGraph.js";
+export { eventTypes } from "./schemaEventTypes.js";
 export { notificationTargets, notificationRoutes } from "./schemaNotifications.js";
 export { forgeThreads, forgeTurns, forgeActionProposals } from "./schemaForge.js";
 export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsights.js";

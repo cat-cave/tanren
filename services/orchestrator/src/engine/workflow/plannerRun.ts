@@ -299,7 +299,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
     // Clone (single-ref OR — WS-A PR-4, flag-gated — the jj-local ancestor-stack bootstrap) +
     // bootstrap-install + commit + materialize contract files. `baseSha` = answerer review base;
     // `cloneHeadSha` = writer's replay base; `bootstrappedBaseRevision` set ONLY on jj-local.
-    const { cloneHeadSha, bootstrapSha, baseSha, bootstrappedBaseRevision, prepBootstrapDeferred } =
+    const { cloneHeadSha, bootstrapSha, baseSha, bootstrappedBaseRevision, prepBootstrapDeferred, pushIdentity } =
       await prepareRunWorkspace(input, allocation.target, workspacePath);
     await appendEvent("workspace.prepared", {
       workspacePath,
@@ -402,6 +402,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       const stage = await runPublishGateStage(input, mergeGateCtx, context, {
         cloneHeadSha,
         bootstrapSha,
+        ...(pushIdentity !== undefined && { pushIdentity }),
         finalizeRunState,
         appendEvent,
         seedRejections,

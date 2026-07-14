@@ -2,7 +2,12 @@
 // Forge-led chat review with inline behavior checklist + deferral resolutions,
 // preview pane alongside, readiness gate at the bottom.
 
-const ReviewChat = ({ behaviors, toggleBehavior, deferralStates, setDeferralState, showSubopt }) => (
+const REVIEW_REPLAN_SUBTASKS = {
+  0: ["thread the deploy target nonce into SSR", "prove strict CSP with a no-flash check"],
+  1: ["minify the first-paint bootstrap", "re-run the bundle budget check"],
+};
+
+const ReviewChat = ({ behaviors, toggleBehavior, deferralStates, setDeferralState, showSubopt, changesRequested, handledNow }) => (
   <div className="forge-card">
     <div className="head">
       <span className="stamp">鍛</span>
@@ -87,10 +92,44 @@ const ReviewChat = ({ behaviors, toggleBehavior, deferralStates, setDeferralStat
         </div>
       </ForgeTurn>
 
-      {/* 5. Forge nudge with prompts */}
+      {/* 5. Handle-now replanning narrative */}
+      {handledNow.map(i => (
+        <ForgeTurn key={i}>
+          <div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-warn)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>
+              replanned · 2 subtasks added to {REVIEW.spec}
+            </div>
+            <b className="accent">{REVIEW_DEFERRALS[i].title}</b> is back with the writer. I kept it in this spec and added:
+            <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: 8 }}>
+              {REVIEW_REPLAN_SUBTASKS[i].map((task, j) => (
+                <div key={task} style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-2)" }}>
+                  <span style={{ color: "var(--ember-08)", marginRight: 7 }}>t{j + 1}</span>{task}
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 8 }}>The run is back in write → check → audit. Sign-off stays locked until the revised PR returns here.</div>
+          </div>
+        </ForgeTurn>
+      ))}
+
+      {/* 6. Return-to-writer narrative */}
+      {changesRequested && (
+        <ForgeTurn>
+          <div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-warn)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, marginBottom: 6 }}>
+              changes requested · writer re-engaged
+            </div>
+            I returned {REVIEW.pr} to the writer with your behavior checks and review context attached. The run is back in write → check → audit; sign-off stays locked until Forge presents a fresh revision here.
+          </div>
+        </ForgeTurn>
+      )}
+
+      {/* 7. Forge nudge with prompts */}
       <ForgeTurn>
         <div>
-          {behaviors.filter(b => !b.done).length > 0 ? (
+          {changesRequested || handledNow.length > 0 ? (
+            <>I’ll bring this review back when the writer’s revision clears check + audit. Your verification state stays attached.</>
+          ) : behaviors.filter(b => !b.done).length > 0 ? (
             <>{behaviors.filter(b => !b.done).length} behavior{behaviors.filter(b => !b.done).length > 1 ? "s" : ""} left to eyeball. Want quick prompts, or have a question about the change?</>
           ) : (
             <>All behaviors verified ✓. {Object.keys(deferralStates).length === REVIEW_DEFERRALS.length ? "Deferrals settled. Ready to sign off." : "Settle the deferrals to unlock sign-off."}</>
@@ -201,9 +240,10 @@ const PreviewPane = () => {
   );
 };
 
-window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
+window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "native" }) => {
   const [behaviors, setBehaviors] = React.useState(REVIEW_BEHAVIORS);
   const [deferralStates, setDeferralStates] = React.useState({});
+  const [changesRequested, setChangesRequested] = React.useState(false);
 
   const toggleBehavior = (n) => {
     setBehaviors(bs => bs.map(b => b.n === n ? { ...b, done: !b.done } : b));
@@ -214,7 +254,11 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
 
   const allBehaviorsDone = behaviors.every(b => b.done);
   const allDeferralsResolved = Object.keys(deferralStates).length === REVIEW_DEFERRALS.length;
-  const canSignOff = allBehaviorsDone && allDeferralsResolved;
+  const handledNow = Object.keys(deferralStates)
+    .filter(i => deferralStates[i] === "handle now")
+    .map(Number);
+  const revisionPending = changesRequested || handledNow.length > 0;
+  const canSignOff = allBehaviorsDone && allDeferralsResolved && !revisionPending;
   const verifiedCount = behaviors.filter(b => b.done).length;
   const resolvedCount = Object.keys(deferralStates).length;
 
@@ -239,6 +283,8 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
             deferralStates={deferralStates}
             setDeferralState={setDeferralState}
             showSubopt={showSubopt}
+            changesRequested={changesRequested}
+            handledNow={handledNow}
           />
           <PreviewPane />
         </div>
@@ -254,12 +300,18 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
           <span className="d"></span>{REVIEW_DEFERRALS.length} deferred · {resolvedCount} resolved
         </span>
         <span className="note">
-          {canSignOff
+          {revisionPending
+            ? "· writer re-engaged · awaiting fresh revision"
+            : canSignOff
             ? "· ready to sign off"
             : "· can't sign off until behaviors + deferrals are settled"}
         </span>
         <div className="grow">
-          <button className="btn danger">request changes ↗</button>
+          <button
+            className="btn danger"
+            disabled={revisionPending}
+            onClick={() => setChangesRequested(true)}
+          >{changesRequested ? "changes requested ✓" : "request changes ↗"}</button>
           <MergeActions mode={mergeIntegration} canSignOff={canSignOff} />
         </div>
       </div>
@@ -268,7 +320,7 @@ window.ReviewView = ({ onNav, showSubopt, mergeIntegration = "mergify" }) => {
 };
 
 // Repo-level merge-integration controls the sign-off CTAs.
-// Modes: mergify | direct | external | none
+// Modes: native (MergeAuthority / native queue) | direct | external | none
 // `request changes` lives above this and is always available.
 const MergeActions = ({ mode, canSignOff }) => {
   if (mode === "none") {
@@ -301,10 +353,10 @@ const MergeActions = ({ mode, canSignOff }) => {
       </button>
     );
   }
-  // mergify (default)
+  // native queue / MergeAuthority (default finished path)
   return (
     <>
-      <button className="btn" disabled={!canSignOff}>sign off · queue with mergify</button>
+      <button className="btn" disabled={!canSignOff}>sign off · enqueue native queue</button>
       <button className="btn primary notched" disabled={!canSignOff}>sign off · merge now ↗</button>
     </>
   );

@@ -25,6 +25,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { trackPublishedHeadCommands } from "../providers/jjPublishedHead.js";
 import type { WorkspaceHandle } from "../contracts/workspaceVcsCore.js";
 import { integrateOverWorkspace, type JjIntegrationMember } from "./jjLocalIntegration.js";
 import type { AncestorStack } from "./ancestorStack.js";
@@ -176,11 +177,17 @@ export async function assembleBaseShiftStackLive(input: {
     }
     // Prepare the dependent's OWN published head for an in-place rebase onto the assembled
     // head (the SAME track + immutable-heads prep `openLiveBaseShiftWorkspace` does for the
-    // single-ref path): `jj git clone` imported the head only as a remote-tracking bookmark,
-    // so track it as the LOCAL `<headBranch>` `rebaseOnto` names; the published head is
-    // jj-immutable, so empty the immutable set for THIS short-lived workspace. (The member
-    // bookmarks + immutable set were already prepared by `integrateOverWorkspace`; this adds
-    // the dependent's head, which is NOT a stack member.) FAIL-CLOSED: a failure throws.
+    // single-ref path): FETCH + track + assert the head as the LOCAL `<headBranch>` bookmark
+    // `rebaseOnto` names — robust against the "head not in the initial clone" race and
+    // FAIL-CLOSED on a genuinely-missing head (`trackPublishedHeadCommands`, closing the
+    // apex-v94 silent-no-op); the published head is jj-immutable, so empty the immutable set
+    // for THIS short-lived workspace. (The member bookmarks + immutable set were already
+    // prepared by `integrateOverWorkspace`; this adds the dependent's head, which is NOT a
+    // stack member.) FAIL-CLOSED: a failure throws.
+    // AUTH: the fetch authenticates the private `origin` remote with the SAME credential the
+    // workspace was cloned with (`live.cloneCredential`) — else (public) a bare fetch. The token
+    // travels only through the command's stdin, never the logged command string.
+    const trackPrep = trackPublishedHeadCommands(ctx.headBranch, live.cloneCredential);
     await runWorkspaceSshCommand(deps.ssh, live.target, {
       label: "base-shift stack assembly: track the dependent's published head + allow rewriting it",
       cwd: live.workspacePath,
@@ -192,9 +199,10 @@ export async function assembleBaseShiftStackLive(input: {
       }),
       command: [
         "set -eu",
-        `jj bookmark track ${quoteSshShellArg(ctx.headBranch)} --remote origin`,
+        ...trackPrep.commands,
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
+      ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
     return { live, workspace, assembledHeadSha: integration.headSha };
   } catch (error) {

@@ -70,14 +70,14 @@ Dashboard screen registry (`services/dashboard/src/app/screens.ts`) mounts:
 projects (chat-primary + DAG + spec drawer/page + routing settings), onboarding
 (org/credentials/notifications + brownfield + greenfield), costs, run-detail +
 review, halted-runs, run-trigger, DORA, discovery, config, inbox, greenfield,
-audits. The ⌘K Forge palette + thick-Forge chat morph ships
-(`components/palette/ForgePalette.tsx`, `client/palette.ts`,
-`api/forgeConversationClient.ts`). DAG canvas is real
+audits, merge queue, budget, integrations, and overview. The ⌘K Forge palette +
+thick-Forge chat morph ships (`components/palette/ForgePalette.tsx`,
+`client/palette.ts`, `api/forgeConversationClient.ts`). DAG canvas is real
 (`components/project/DagCanvas.tsx`, `DagNodes/DagEdges/DagLegend/dagLayout.ts`).
 
-**Not mounted** (render as `phase 3+` placeholders): `/overview`, `/roadmap`,
-`/personas` — they remain `phase: "3+"` in `services/dashboard/src/app/routes.ts`
-and are absent from `SCREEN_MOUNTS`.
+**Not mounted** (render as `phase 3+` placeholders): `/roadmap` and `/personas`
+remain `phase: "3+"` in `services/dashboard/src/app/routes.ts` and are absent
+from `SCREEN_MOUNTS`.
 
 ---
 
@@ -226,53 +226,124 @@ treat them as open work.
 
 ---
 
+# Resolved since the prior audit
+
+These were previously tracked as implementation-behind-hi-fi gaps. Current
+`main` has shipped or verified them, so they are no longer Set 2 work.
+
+### R.1 Forge in-conversation write-action approval — shipped
+
+- **Hi-fi**: `shared.jsx` `ForgePalette` chat mode renders **action cards** that
+  act mid-conversation; the design intent (chat1/chat4) is Forge that can
+  _propose → operator confirms → execute_ inside the thread.
+- **Implementation**: the safe **propose → approve → execute** pattern is live.
+  `engine/answerers/schemas/forge.ts` allows `proposedActions`, the conversation
+  engine persists pending proposals in `forge_action_proposals`, and
+  `routes/forge/proposals.ts` re-validates + authz-checks approve/reject decisions
+  before executing writes. The dashboard palette cards render approve/reject and
+  executed/rejected/failed states (`client/paletteChat.ts`, `client/palette.ts`).
+- **Remaining follow-up**: the proposed-tool set is intentionally limited to the
+  existing write tools (`tanren.create_spec`, `tanren.trigger_run`,
+  `tanren.rerun_task`, `tanren.acknowledge_insight`). Broadening it is future
+  product work, not a missing hi-fi baseline.
+- **Confidence: high.**
+
+### R.2 Overview (org command deck) — mostly shipped
+
+- **Hi-fi**: `view-org.jsx` `OverviewView` — projects grid, budget MTD, forge-org
+  card, activity feed.
+- **Implementation**: `/overview` is now `phase: "2b"` and mounted via
+  `mountOverviewScreen` in `services/dashboard/src/app/screens.ts`. The route
+  (`routes/overview/index.tsx`) renders the org command deck backed by
+  `components/overview/*`, including project rows, MTD budget state, and
+  cross-project activity.
+- **Remaining gap**: the mounted `ForgeOrgCard` still renders the org-wide Forge
+  affordance as unavailable because there is no org-wide Forge API yet. Tracked in
+  Set 2 below.
+- **Confidence: high for the mounted command deck; high that org-wide Forge
+  remains missing.**
+
+### R.3 Nav model cleanup — shipped
+
+- **Hi-fi**: chat4 split nav into **org / projects / system** and pulled
+  one-time onboarding routes out of standing product nav.
+- **Implementation**: `services/dashboard/src/app/routes.ts` now uses the three
+  standing groups **org / projects / system**. Onboarding routes still mount, but
+  they are no longer permanent sidenav rows.
+- **Confidence: high.**
+
+### R.4 Spec full-page depth — run/economics depth verified
+
+- **Hi-fi**: `view-spec.jsx` full page shows BDD acceptance, dependencies,
+  blocked reason, run history, economics, and contextual "ask Forge" controls for
+  the spec.
+- **Implementation**: `components/project/SpecDrawer.tsx` now documents and
+  renders the full-depth spec page. Tests pin BDD acceptance, dependency chain,
+  run history, spend/attempt/average economics, and unavailable/unpriced handling
+  (`services/dashboard/tests/projectDag.render.test.ts`).
+- **Remaining gap**: the spec-scoped Forge action card/chips from the hi-fi are
+  not present in the mounted spec page. Tracked in Set 2 below.
+- **Confidence: high for run-history/economics depth; high that spec-scoped Forge
+  remains missing.**
+
+### R.5 Notifications delivery history + org-target quiet posture — shipped
+
+- **Hi-fi**: `view-org.jsx` `NotificationsView` shows channel list, per-event
+  matrix, delivery history, and pause/quiet-hours controls.
+- **Implementation**: `/notifications` reads the org delivery ledger
+  (`GET /orgs/:orgId/notifications/deliveries`) and renders delivery history.
+  `NotificationsBody` also renders target-level pause/resume and weekend-mute
+  controls, with POST proxies through `/notifications/targets/update`.
+- **Remaining gap**: the hi-fi's personal pause/deep-work mode and local
+  quiet-hours controls are not implemented by the org-target controls. Tracked in
+  Set 2 below.
+- **Confidence: high for shipped delivery history and org-target quiet posture;
+  high that personal quiet hours remain missing.**
+
+---
+
 # Set 2 — Implementation is BEHIND the hi-fi
 
 Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build.
 
-### 2.1 Forge **in-conversation write-action approval** — MERGED (PR #139) (was the single biggest gap)
+### 2.1 Overview org-wide Forge card — unavailable
 
-- **Hi-fi**: `shared.jsx` `ForgePalette` chat mode renders **action cards** that
-  act mid-conversation; the design intent (chat1/chat4) is Forge that can _propose
-  → operator confirms → execute_ inside the thread. The hi-fi also shows write
-  affordances throughout (create spec, trigger run, etc.).
-- **Merged (PR #139)**: implemented the safe **propose → approve → execute**
-  pattern. The model never executes a write; a human approves it and the write runs
-  under the **approving operator's** authz.
-  - The Forge answerer's final `ForgeAnswer` may carry optional `proposedActions`
-    (`engine/answerers/schemas/forge.ts`); the conversation engine
-    (`engine/forge/conversation/engine.ts`) no longer drops these — it persists
-    each as a **pending** `forge_action_proposals` row (`db/src/schemaForge.ts`;
-    `org_id` NOT NULL + indexed, part of the collapsed baseline). Read-tool
-    behavior is unchanged; mid-loop write-tool _dispatch_ is still dropped.
-  - Approve/reject routes (`routes/forge/proposals.ts`) re-validate + authz the
-    deciding operator against the underlying write (reusing
-    `engine/forge/tools/write.ts`), execute it, append a forge turn, and advance
-    the proposal to `executed`/`failed`/`rejected`. Decisions are **idempotent** —
-    an already-decided proposal returns a typed **409**, never double-executing.
-  - The dashboard palette write-action cards are now **LIVE**
-    (`client/paletteChat.ts` + `client/palette.ts`): pending proposals render
-    approve/reject controls that POST to a same-origin BFF proxy
-    (`/forge/proposals/{approve,reject}` in `main.tsx`) and show
-    executed/rejected/failed states. (The old INERT-card path is removed.)
-  - **Tools the model may propose**: the existing four write tools
-    (`tanren.create_spec`, `tanren.trigger_run`, `tanren.rerun_task`,
-    `tanren.acknowledge_insight`).
-- **Follow-up**: the proposed-tool set starts at exactly those four; broadening it
-  is future work.
+- **Hi-fi**: `view-org.jsx` `OverviewView` includes a forge-org card for asking
+  Forge across all projects.
+- **Code state — PARTIAL**: `/overview` is mounted, but `ForgeOrgCard` renders the
+  org-wide Forge affordance as unavailable because the backing org-wide Forge API
+  does not exist yet.
+- **Gap**: add the org-wide Forge read surface/API, then wire the overview card's
+  prompt chips to it.
+- **Size/priority: small / medium.**
 - **Confidence: high.**
 
-### 2.2 Overview (org command deck) — placeholder only
+### 2.2 Spec-scoped Forge action card — missing
 
-- **Hi-fi**: `view-org.jsx` `OverviewView` — projects grid, budget MTD, forge-org
-  card, activity feed.
-- **Code state — MISSING**: `/overview` is `phase: "3+"` in
-  `app/routes.ts` and absent from `SCREEN_MOUNTS`; it renders the documented
-  placeholder.
-- **Size/priority: medium / medium.**
+- **Hi-fi**: `view-spec.jsx` shows a contextual "ask Forge · this spec" card and
+  prompt chips on the full spec page.
+- **Code state — PARTIAL**: `SpecPageBody` renders description, blocked state,
+  BDD, dependencies, run history, and economics, but not the spec-scoped Forge
+  card/chips.
+- **Gap**: add the spec-context Forge affordance to the full spec page and bind it
+  to the existing Forge entrypoint with the selected spec context.
+- **Size/priority: small / low.**
 - **Confidence: high.**
 
-### 2.3 Roadmap (cross-project Gantt) — placeholder only
+### 2.3 Personal notification pause / quiet hours — missing
+
+- **Hi-fi**: `view-org.jsx` `NotificationsView` includes personal channels,
+  "pause · deep work mode" with auto-resume, and local quiet-hours controls under
+  "what tanren tells you".
+- **Code state — PARTIAL**: `/notifications` has org-scoped delivery history and
+  target-level pause/weekend-mute controls, but no per-user pause/deep-work model
+  or local quiet-hours persistence surface.
+- **Gap**: add the personal notification posture model/API, then wire the
+  personal pause and local quiet-hours controls in the notifications UI.
+- **Size/priority: small / low.**
+- **Confidence: high.**
+
+### 2.4 Roadmap (cross-project Gantt) — placeholder only
 
 - **Hi-fi**: `view-org.jsx` `RoadmapView` — cross-project Gantt-style timeline +
   upcoming-30d.
@@ -280,7 +351,7 @@ Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build
 - **Size/priority: medium / low.**
 - **Confidence: high.**
 
-### 2.4 Personas (cross-project people-models) — placeholder only
+### 2.5 Personas (cross-project people-models) — placeholder only
 
 - **Hi-fi**: `view-org.jsx` `PersonasView` — cross-project persona models with
   behaviors.
@@ -290,55 +361,6 @@ Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build
 - **Size/priority: medium / low.**
 - **Confidence: high.**
 
-### 2.5 Nav model not cleaned up to the hi-fi's realistic-product nav
-
-- **Hi-fi**: chat4 deliberately split nav into **org / projects / system** and
-  **pulled onboarding OUT of standing nav** (onboarding is a once-per-org first-
-  run flow, reachable only from Tweaks "all flows" / Overview buttons — see
-  `app.jsx` `ONBOARDING_ROUTES` comment and `shared.jsx` `SideNav`).
-- **Code state — DIVERGENT**: the dashboard nav (`app/routes.ts` `NAV_GROUPS`,
-  `components/shell/SideNav.tsx`) still has **four groups org / projects / set up /
-  onboarding** with **onboarding as standing nav**. Group label is "set up" not
-  "system".
-- **Gap**: pull the onboarding group out of the product sidebar (keep the routes,
-  reach them from onboarding entry points), and reconcile the "set up"→"system"
-  grouping. Note this is a deliberate _later_ hi-fi decision; the dashboard nav
-  predates it.
-- **Size/priority: small / medium.**
-- **Confidence: high.**
-
-### 2.6 Spec full-page depth — verify against the hi-fi's run-history/economics
-
-- **Hi-fi**: `view-spec.jsx` full page shows run history, dependency chains,
-  economics, BDD acceptance, blocked-reason, contextual "ask forge".
-- **Code state — PARTIAL (verify)**: `routes/projects/specRoutes.tsx` ships both
-  `/specs/:id/drawer` and `/specs/:id` full page (156 lines), but is noticeably
-  thinner than the hi-fi (few references to economics/run-history in the file).
-  The drawer + full-page **escalation exists**; the depth of run-history /
-  economics panels may be partial.
-- **Gap**: confirm and, if needed, fill run-history + economics panels on the full
-  spec page.
-- **Size/priority: small / low.**
-- **Confidence: medium** (route exists; panel completeness not fully verified).
-
-### 2.7 Notifications — delivery history mounted; quiet hours still partial
-
-- **Hi-fi**: `view-org.jsx` `NotificationsView` shows the channel list + per-event
-  matrix **plus delivery history and pause/quiet-hours**.
-- **Code state — PARTIAL**: `/notifications` is mounted
-  (`routes/onboarding/index.tsx`) and renders the channels + per-event × severity
-  matrix (`components/onboarding/NotificationsBody`). It now also reads the
-  orchestrator's org-scoped notification dispatch ledger
-  (`GET /orgs/:orgId/notifications/deliveries`) and renders a real delivery
-  history panel. Quiet posture is visible from persisted per-target weekend mute,
-  but the hi-fi's personal pause/deep-work controls still have no dashboard
-  persistence surface.
-- **Gap**: add a real quiet-hours/pause model + endpoint, then wire controls in
-  the notifications UI.
-- **Size/priority: small / low.**
-- **Confidence: high for delivery history; medium for the remaining quiet-hours
-  product shape.**
-
 ---
 
 ## Ambiguities / could not fully resolve
@@ -347,8 +369,6 @@ Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build
   seams. Whether the _vision_ hi-fi (explicitly a self-host-leaning product
   vision) should depict hosting-tier surfaces at all is a product call for the
   user, not a code fact. Flagged rather than asserted.
-- **2.6 / 2.7** — the routes exist; I confirmed the _files_ but not every rendered
-  panel pixel-for-pixel against the hi-fi. Marked medium and called "verify".
 - **DORA** — `/dora` is mounted (P3-0019, `routes/dora/index.tsx`) and the hi-fi
   `DoraView` exists; I did not diff tile-by-tile but both sides are present, so no
   Set-2 item is raised for it.

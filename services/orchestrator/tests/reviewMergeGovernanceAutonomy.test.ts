@@ -129,3 +129,109 @@ describe("mergeForRun governance — autonomous-tier known-bot auto-approve (GAP
     expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({ posture: "strict" });
   });
 });
+
+// apex v91 ROOT CAUSE (composer-attributable): the greenfield PR head was the COMPOSED
+// commit, authored `Tanren Composer <composer@tanren.invalid>` → GitHub `author.login = null`
+// → the external-change gate keyed it `<unknown>` external → BLOCKED every auto-merge under
+// lenient/strict (173× `merge.blocked` on v91, not one PR merged). The fix authors the
+// composed commit as the run's RESOLVED bot login — the SAME login the merge stage's
+// `resolveTanrenLogins` puts in the Tanren identity set — so a clean greenfield PR reads as
+// Tanren's OWN change (NOT external) and auto-merges, while a genuine outside human still
+// blocks. Proven here both as the pure gate decision AND end-to-end through `mergeForRun`.
+describe("governance — Tanren's own resolved push identity is internal (apex v91 composer block)", () => {
+  const identity = tanrenIdentity([FIXTURE_TANREN_LOGIN]);
+
+  it("the resolved bot login on the PR's only commit is NOT an external change (its own greenfield PR)", () => {
+    const assessment = assessExternalChange({ logins: [FIXTURE_TANREN_LOGIN] }, identity);
+    expect(assessment.hasExternalChange).toBe(false);
+    expect(assessment.externalLogins).toEqual([]);
+    // lenient (mirrors strict for external coexistence) PROCEEDS — no operator approval, and
+    // it does NOT depend on the known-bot auto-approve set (the identity match is the reason).
+    expect(decidePosture("lenient", assessment, { autonomousTier: true, platformLogins: new Set() }).kind).toBe(
+      "proceed",
+    );
+  });
+
+  it("the pre-fix `<unknown>` (unattributed composer commit) IS external and blocks even on the autonomous tier", () => {
+    // The v91 shape: an empty/unmapped login. It is NEVER a known-bot, so the autonomous-tier
+    // auto-approve can't rescue it — documenting exactly why the unattributable commit blocked.
+    const unattributed = assessExternalChange({ logins: [""] }, identity);
+    expect(unattributed.hasExternalChange).toBe(true);
+    expect(unattributed.externalLogins).toEqual(["<unknown>"]);
+    expect(decidePosture("lenient", unattributed, { autonomousTier: true, platformLogins: new Set() }).kind).toBe(
+      "block",
+    );
+  });
+
+  it("a genuine OUTSIDE human committer still blocks under lenient (real external detection intact)", () => {
+    const human = assessExternalChange({ logins: [FIXTURE_TANREN_LOGIN, "mallory"] }, identity);
+    expect(human.hasExternalChange).toBe(true);
+    expect(human.externalLogins).toEqual(["mallory"]);
+    expect(decidePosture("lenient", human, { autonomousTier: true, platformLogins: new Set() }).kind).toBe("block");
+  });
+
+  // End-to-end through mergeForRun: the merge stage RESOLVES the bot login from the active
+  // credential (`resolveTanrenLogins` → `GET /user` → tanren[bot]) and merges it into the
+  // identity set — so a PR whose only committer is that resolved login auto-merges under
+  // LENIENT with NO configured platformLogins (proving it is the self-identity recognition,
+  // not the GAP#3 known-bot set, that clears the block).
+  it("lenient + native_queue + auto + ONLY the resolved bot login committer → auto-merges (no strand, no platformLogins needed)", async () => {
+    const pool = new ReviewMergePool("native_queue", "lenient", "auto");
+    const events = new FakeEventStore();
+    const host = authorityHost();
+    const landed: string[] = [];
+    const botOnlyProbe: ContributorProbe = { listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN] }) };
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
+      secrets: await tanrenSecrets(),
+      resolveConflict: noopConflictResolver,
+      githubHttp: tanrenUserHttp(),
+      runId: "run_1",
+      mergeProbe: recordingMergeProbe(),
+      mergeAuthority: authorityBundle(host, landed, { events }),
+      contributorProbe: botOnlyProbe,
+      enqueueNativeQueue: async () => ({ queueId: "mq_1", created: true }),
+    });
+
+    expect(result.outcome).toBe("queued");
+    expect(events.events.find((e) => e.eventType === "merge.blocked")).toBeUndefined();
+    expect(events.events.some((e) => e.eventType === "merge.queued")).toBe(true);
+  });
+
+  // The contrast case: a genuine outside human on the same lenient/autonomous run STILL
+  // blocks (with NO known-bot set to rescue it) — Tanren's own-identity clearance must not
+  // weaken real external detection.
+  it("lenient + native_queue + auto + a genuine outside human committer → STILL blocks", async () => {
+    const pool = new ReviewMergePool("native_queue", "lenient", "auto");
+    const events = new FakeEventStore();
+    const host = authorityHost();
+    const landed: string[] = [];
+    const humanProbe: ContributorProbe = {
+      listContributors: async () => ({ logins: [FIXTURE_TANREN_LOGIN, "mallory"] }),
+    };
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
+      secrets: await tanrenSecrets(),
+      resolveConflict: noopConflictResolver,
+      githubHttp: tanrenUserHttp(),
+      runId: "run_1",
+      mergeProbe: recordingMergeProbe(),
+      mergeAuthority: authorityBundle(host, landed, { events }),
+      contributorProbe: humanProbe,
+      enqueueNativeQueue: async () => ({ queueId: "mq_1", created: true }),
+    });
+
+    expect(result.outcome).toBe("blocked");
+    expect(events.events.find((e) => e.eventType === "merge.blocked")?.payload).toMatchObject({
+      posture: "lenient",
+      externalLogins: ["mallory"],
+    });
+    expect(landed).toEqual([]);
+  });
+});

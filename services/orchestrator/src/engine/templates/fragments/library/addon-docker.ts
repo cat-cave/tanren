@@ -18,7 +18,7 @@ import { type Fragment, type TemplateConfig, type VirtualFileSystem } from "../t
 
 export const ADDON_DOCKER_ID = "addon-docker" as const;
 
-const DOCKERIGNORE = `node_modules
+export const DOCKERIGNORE = `node_modules
 dist
 .git
 .env
@@ -28,6 +28,20 @@ coverage
 .turbo
 .stryker-tmp
 `;
+
+/**
+ * Runtime-aware Dockerfile recipe — the single source of truth for the
+ * host-image build surface. Shared with `deploy-fly.ts` so a Fly web app gets
+ * the identical build recipe whether or not `addons: ["docker"]` is declared
+ * (the deploy phase runs LAST, so when both apply, deploy-fly uses
+ * `vfs.overwrite` against addon-docker's identical bytes — zero collision,
+ * zero drift). Returns the ruby recipe for `"ruby-bundler"`, else the node
+ * recipe. The content encodes audit-finding #10 + task #141 fixes — preserve
+ * every comment and line.
+ */
+export function dockerfileFor(runtime: TemplateConfig["runtime"]): string {
+  return runtime === "ruby-bundler" ? rubyDockerfile() : nodeDockerfile();
+}
 
 function nodeDockerfile(): string {
   return `# Multi-stage node-pnpm build — runs the project's \`just build\` and ships the dist/.
@@ -39,11 +53,18 @@ function nodeDockerfile(): string {
 # ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY inside a docker build (task #141 —
 # apex v71/v78 halt class). Downstream tools (next.js build, turborepo) key off
 # CI=true too.
+# pnpm-workspace.yaml is copied WITH package.json (before install), NOT later via
+# \`COPY . .\`: the runtime ships a pnpm-workspace.yaml (nodeLinker: hoisted). If it
+# only arrived with \`COPY . .\` AFTER \`pnpm install\`, the subsequent \`pnpm build\`
+# would see a newly workspace-rooted project, RE-RESOLVE the install mid-build, and
+# that re-resolve HANGS under buildah/podman's \`RUN\` (the process never returns —
+# a rootless-podman multi-stage-build wedge). Installing workspace-aware from the
+# start keeps \`pnpm build\` a pure \`tsc\` with no re-install.
 FROM node:24-alpine AS builder
 ENV CI=true
 RUN corepack enable
 WORKDIR /app
-COPY package.json pnpm-lock.yaml* ./
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
 RUN pnpm install --no-frozen-lockfile
 COPY . .
 RUN pnpm build
@@ -80,7 +101,7 @@ export const addonDockerFragment: Fragment = {
   kind: "addon",
   contract: {},
   async apply(vfs: VirtualFileSystem, config: TemplateConfig): Promise<void> {
-    vfs.write("Dockerfile", config.runtime === "ruby-bundler" ? rubyDockerfile() : nodeDockerfile());
+    vfs.write("Dockerfile", dockerfileFor(config.runtime));
     vfs.write(".dockerignore", DOCKERIGNORE);
   },
 };

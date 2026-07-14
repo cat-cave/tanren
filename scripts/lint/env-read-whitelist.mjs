@@ -65,9 +65,14 @@ const NON_TANREN_ENV_ALLOWLIST = new Map([
   ["TANREN_OP_CONNECT_TOKEN_FILE", "mounted 1Password-Connect-token secret-file path"],
   // ── process / runtime ───────────────────────────────────────────────────────
   ["NODE_ENV", "dev/prod mode discriminator"],
+  ["VITEST", "unit-test-runner discriminator — disables the live model-price fetch so fast-check stays offline"],
   ["npm_package_version", "service /healthz version stamp (npm-injected)"],
   ["ORCHESTRATOR_URL", "dashboard → orchestrator base URL (documented default)"],
   ["DASHBOARD_PORT", "dashboard HTTP listen port (documented default)"],
+  [
+    "PORT",
+    "composed scaffold HTTP listen port (Fly injects PORT == fly.toml internal_port; template literal in runtime-node-pnpm.ts, not an orchestrator boot-path read)",
+  ],
 ]);
 
 // Files allowed to read `TANREN_*` directly. The envSchema files are the intended
@@ -111,6 +116,12 @@ const ENV_READ_FILE_WHITELIST = new Set([
   // image name + push posture + build/validate timeouts + the build-script path —
   // read once at worker boot to build the EnvCreationDeps (gated on TANREN_ENV_REGISTRY).
   "services/orchestrator/src/engine/environments/creation/envCreationConfig.ts",
+  // Live Fly image-builder boot config (PR3): the opt-in flag
+  // (TANREN_FLY_IMAGE_BUILDER) + the App credential ref (TANREN_GITHUB_APP_CREDENTIAL_REF,
+  // to sign repo→installation JWTs) + the build-script path — read once at boot to
+  // construct the merge-reflecting FlyImageBuilder (gated on the opt-in flag). The
+  // deploy-layer counterpart of envCreationConfig.ts above.
+  "services/orchestrator/src/engine/provisioners/flyImageBuilderConfig.ts",
   // ── allocator boot ─────────────────────────────────────────────────────────
   // main.ts: the BYPASSRLS system DB URL pool selection.
   "services/allocator/src/main.ts",
@@ -138,6 +149,13 @@ const ENV_READ_FILE_WHITELIST = new Set([
   "services/orchestrator/src/engine/observability/logger.ts",
   "services/allocator/src/logger.ts",
   "services/dashboard/src/serverLogger.ts",
+  // ── live model-price cache knobs ───────────────────────────────────────────
+  // TANREN_MODEL_PRICE_TTL_SECONDS (live-refresh interval, default 1h) +
+  // TANREN_MODEL_PRICE_LIVE (=0 kill switch → freeze to the vendored seed): both
+  // loud-at-use, defaulted RUNTIME knobs read lazily when the live price source
+  // singleton is first built (same posture as TANREN_LOG_LEVEL above), NOT boot
+  // config the Zod schema owns.
+  "services/orchestrator/src/engine/costs/pricing/modelPriceSource.ts",
   // ── db ─────────────────────────────────────────────────────────────────────
   // The system (BYPASSRLS) DB URL the org-scope seam reads.
   "db/src/orgScope.ts",

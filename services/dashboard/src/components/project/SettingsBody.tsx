@@ -217,7 +217,7 @@ function RoleRow(props: {
         <input type="hidden" name="orgId" value={props.orgId} />
         <input type="hidden" name="role" value={props.role} />
         <input type="text" name="cli" placeholder="cli (e.g. codex)" required />
-        <input type="text" name="model" placeholder="model (e.g. gpt-5.5)" required />
+        <input type="text" name="model" placeholder="model (e.g. gpt-5.6-luna)" required />
         <input type="text" name="authRef" placeholder="auth ref (vault://…)" required />
         <button type="submit">+ add fallback</button>
       </form>

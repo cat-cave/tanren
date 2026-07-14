@@ -18,9 +18,18 @@
 // via `OrganizationsStore.getLogin` before this provisioner is called).
 //
 // API surface used (Fly Machines REST API):
-//   - GET  /v1/apps?org_slug=<org>      → list the org's apps (discover)
-//   - POST /v1/apps                     → create an app under the org (provision)
-//   - POST /v1/apps/{app}/machines      → TRIGGER a release (run the app's image)
+//   - GET    /v1/apps?org_slug=<org>            → list the org's apps (discover)
+//   - POST   /v1/apps                           → create an app under the org (provision)
+//   - POST   /v1/apps/{app}/machines            → TRIGGER a release (run the app's image)
+//   - GET    /v1/apps/{app}/machines            → list the app's machines (reap: find prior ones)
+//   - DELETE /v1/apps/{app}/machines/{id}?force → reap a prior machine (single-instance convergence)
+// And the Fly GraphQL API (https://api.fly.io/graphql) for IP allocation — the Machines
+// REST *release* path does not allocate IPs (the `allocateIpAddress` GraphQL mutation is
+// the surface used here; the Machines REST `ip_assignments` endpoint is an alternative):
+//   - mutation allocateIpAddress        → allocate the app's shared IPv4 (so <app>.fly.dev
+//                                         routes). Idempotent: shared_v4 is one-per-app, so
+//                                         a duplicate "already has a shared IPv4" error is
+//                                         swallowed. Called from triggerDeploy (all paths).
 // Org scoping: the org grant's metadata carries `orgSlug` (the Fly org). The org
 // grant's `credentialRef` resolves to the Fly API token (a bearer) — resolved by
 // the base, never held here. The app's deploy IMAGE is read from the grant
@@ -33,23 +42,33 @@
 //
 // Deploy trigger: `triggerDeploy` POSTs `/v1/apps/{app}/machines` to create + run a
 // machine from the app's image — the Machines-API release equivalent of `fly deploy`
-// — and returns the machine id + the app's stable URL + its reported state.
+// — and returns the machine id + the app's stable URL + its reported state. It then
+// REAPS every other machine of the app (`reapOtherMachines`) so a single-instance,
+// file-backed app converges to exactly one machine per release instead of accumulating
+// one per deploy (which fragments a local store across machines — apex v96 root cause).
 //
-// ⚠ NOT MERGE-REFLECTING (apex guard): this arm releases a STATIC image from the grant
-// metadata (`image`) — it IGNORES the merged source (`DeploySource`), spins a NEW machine
-// per trigger, and wires NO port mapping. So a Fly release does NOT prove "the live
-// product reflects THIS merge" — the image is whatever the build last published, not the
-// merged commit. apex's live-reflects-merge proof MUST run on `deploy.vercel` (gitSource =
-// the merged commit). To prevent a Fly release from being mistaken for a merge-reflecting
-// deploy, `triggerDeploy` FAILS LOUD unless `TANREN_ALLOW_FLY_STATIC_DEPLOY=1` explicitly
-// acknowledges the static-image semantics. Making Fly merge-reflecting (build-from-source +
-// port mapping + image-per-commit) is deferred — it is a build-pipeline change, not a patch.
+// MERGE-REFLECTING PRECEDENCE (PR2): `triggerDeploy` now has TWO image sources,
+// tried in this order:
+//   1. builder present → `builder.build({ repo, ref, appName, flyToken })` produces a
+//      per-commit image (`registry.fly.io/<app>:<sha>`) and the release runs THAT. This
+//      is the DEFAULT merge-reflecting path — no flag needed — so a Fly release CAN now
+//      prove "the live product reflects THIS merge" (the merged SHA tags the image). The
+//      builder is an injected seam (`FlyImageBuilder`); the live impl (real docker/GitHub)
+//      lands in PR3, and a fake exercises the seam in tests today.
+//   2. no builder + `allowStaticDeploy === true` → release the STATIC grant `image`
+//      (the pre-PR2 behavior). This is now the EXPLICIT escape hatch (the flag opts into
+//      the non-merge-reflecting static-image semantics) — used only when no builder is
+//      configured.
+//   3. no builder + flag off → FAIL LOUD (as before PR2).
+// Both image paths share the PR1 port-mapped `services`/`ports`/`checks`/`guest` config
+// (`flyMachineConfig`), so the release is reachable at `<app>.fly.dev` either way.
 
 import { parsedEnv } from "../../envSchema.js";
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
 import {
   DeployProvisioner,
   type DeployApp,
+  type DeployArtifactIdentity,
   type DeployEnvVar,
   type DeploymentStatus,
   type DeployProviderApi,
@@ -57,8 +76,21 @@ import {
   type DeployResult,
   type DeploySource,
 } from "./deployProvisioner.js";
+import type { FlyImageBuilder } from "./flyImageBuilder.js";
+import { flyMachineConfig } from "./flyMachineConfig.js";
+import {
+  FLY_API_BASE,
+  resolveFlyArtifactIdentity,
+  teardownFlyDeployment,
+  transitionFlyDeployment,
+} from "./flyReleaseLifecycle.js";
 
-const FLY_API_BASE = "https://api.machines.dev";
+export { flyMachineConfig } from "./flyMachineConfig.js";
+
+// The Fly GraphQL API — the ONLY surface that allocates app IP addresses (the Machines
+// REST API does not). Used right after app creation to give the app a shared IPv4 so
+// `https://<app>.fly.dev` routes.
+const FLY_GRAPHQL_URL = "https://api.fly.io/graphql";
 export const FLY_PROVIDER_KIND = "deploy.flyio";
 
 interface FlyApp {
@@ -69,6 +101,17 @@ interface FlyApp {
 interface FlyAppsListResponse {
   apps?: FlyApp[];
 }
+
+/**
+ * Matches ONLY a Fly GraphQL "shared IPv4 already allocated" duplicate error — the desired
+ * end state of an idempotent re-allocation, which `allocateSharedIpv4` swallows. The match
+ * REQUIRES both "already" and a shared-v4 phrase to co-occur, so a genuine failure that
+ * merely contains "already" — e.g. "already reached your IP allocation limit" (a QUOTA
+ * error where NO IP was allocated) — does NOT match and throws LOUD. Fly's duplicate
+ * message is "App already has a shared IPv4 address"; a non-IP error (e.g. "not authorized")
+ * also does not match.
+ */
+const ALREADY_ALLOCATED_RE = /(already\b.*shared[\s_-]*(?:ipv4|v4|ip)|shared[\s_-]*(?:ipv4|v4)\b.*already)/iu;
 
 /** Read the required Fly org slug from the org grant metadata. */
 function orgSlug(grant: OrgGrant): string {
@@ -106,6 +149,7 @@ class FlyDeployApi implements DeployProviderApi {
   constructor(
     private readonly transport: DeployProvisionerDeps["transport"],
     private readonly allowStaticDeploy: boolean,
+    private readonly builder?: FlyImageBuilder,
   ) {}
 
   async listApps(grant: OrgGrant, token: string): Promise<DeployApp[]> {
@@ -157,11 +201,67 @@ class FlyDeployApi implements DeployProviderApi {
     // name we requested, which is the stable handle.
     const created = (response.json ?? {}) as FlyApp;
     const appName = created.name ?? name;
+    // NOTE: shared-IPv4 allocation is deliberately NOT done here. Allocating inside
+    // createApp would (a) ORPHAN the just-created Fly app if allocation throws before
+    // `provision()` returns — the derive destroy-compensation is registered only AFTER
+    // this returns — and (b) SKIP brownfield / `bind()` apps that reuse an existing app
+    // without calling createApp. Allocation lives in `triggerDeploy` instead: it runs on
+    // EVERY deploy path, after the app + its compensation exist, and is idempotent.
     return {
       appId: created.id ?? appName,
       name: appName,
       previewUrlPattern: previewUrlPattern(appName),
     };
+  }
+
+  /**
+   * Allocate the app's shared IPv4 (Fly GraphQL `allocateIpAddress` mutation) so
+   * `https://<app>.fly.dev` routes — the Machines REST release path does not do this.
+   * Called from `triggerDeploy` (every deploy path), so it MUST be idempotent: a shared_v4
+   * is one-per-app, so a duplicate "already has a shared IPv4" error is the desired end
+   * state and is swallowed — but ONLY when EVERY returned GraphQL error is a duplicate (a
+   * mixed batch with any auth/quota error throws), a non-2xx throws, and a malformed 2xx
+   * (no `data.allocateIpAddress` AND no errors) throws — never a silent "assumed allocated".
+   * The token is used ONLY as a bearer — NEVER interpolated into an error/log string (only
+   * the app name reaches the message), mirroring this file's "only KEYS in errors" discipline.
+   */
+  private async allocateSharedIpv4(appName: string, token: string): Promise<void> {
+    const response = await this.transport.request({
+      method: "POST",
+      url: FLY_GRAPHQL_URL,
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: {
+        query:
+          "mutation($input: AllocateIPAddressInput!){ allocateIpAddress(input:$input){ ipAddress { id address type } } }",
+        variables: { input: { appId: appName, type: "shared_v4" } },
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`fly allocate shared IPv4 for '${appName}' failed: ${response.status} ${response.text}`);
+    }
+    const body = (response.json ?? {}) as {
+      data?: { allocateIpAddress?: unknown };
+      errors?: Array<{ message?: string }>;
+    };
+    const errors = body.errors ?? [];
+    if (errors.length === 0) {
+      // A well-formed success carries `data.allocateIpAddress`. A 2xx with neither that nor
+      // any errors (e.g. `{}` / non-JSON) is malformed — throw rather than assume allocated.
+      const allocated = body.data?.allocateIpAddress;
+      if (allocated !== undefined && allocated !== null) {
+        return;
+      }
+      throw new Error(
+        `fly allocate shared IPv4 for '${appName}' failed: malformed GraphQL 2xx (no allocateIpAddress, no errors)`,
+      );
+    }
+    // Idempotent ONLY when EVERY error is a shared-v4 duplicate. A mixed batch (a duplicate
+    // AND an auth/quota error) means the allocation did NOT succeed → throw LOUD.
+    if (errors.every((error) => ALREADY_ALLOCATED_RE.test(error.message ?? ""))) {
+      return;
+    }
+    const messages = errors.map((error) => error.message ?? "").join("; ");
+    throw new Error(`fly allocate shared IPv4 for '${appName}' failed: ${messages}`);
   }
 
   async setEnvVars(_grant: OrgGrant, token: string, appId: string, vars: ReadonlyArray<DeployEnvVar>): Promise<void> {
@@ -186,28 +286,59 @@ class FlyDeployApi implements DeployProviderApi {
     }
   }
 
-  async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, _source: DeploySource): Promise<DeployResult> {
-    // NOT MERGE-REFLECTING GUARD: this releases a STATIC `image` and ignores the merged
-    // `_source`, so it cannot prove "the live product reflects this merge". Fail LOUD
-    // unless the operator explicitly opts into the static-image semantics — so apex
-    // never accidentally "proves" deploy on Fly (it must use `deploy.vercel`). See header.
-    if (!this.allowStaticDeploy) {
+  async triggerDeploy(grant: OrgGrant, token: string, app: DeployApp, source: DeploySource): Promise<DeployResult> {
+    // Ensure the app has a shared IPv4 so `https://<app>.fly.dev` routes. Idempotent, and
+    // runs on EVERY deploy path (greenfield, brownfield-reuse, `bind()`) — unlike createApp,
+    // which greenfield-only apps hit. Done BEFORE the image resolution (P2 registry-hygiene
+    // finding): allocation is idempotent + cheap, so ordering it first means an allocation
+    // failure never triggers a WASTED build+push. A per-sha tag OVERWRITES on retry (same
+    // sha → same tag, no accumulation), so a failed release after a successful build+push
+    // leaves a harmless overwrite-on-retry image (no GC compensation needed for same-sha).
+    await this.allocateSharedIpv4(app.name, token);
+    // Resolve the image to release per the merge-reflecting precedence (see header):
+    //   1. builder present → build a per-commit image from the merged source (DEFAULT).
+    //   2. no builder + allowStaticDeploy → static grant `image` (escape hatch).
+    //   3. no builder + flag off → FAIL LOUD.
+    let image: string;
+    if (this.builder !== undefined) {
+      // The builder turns the merged repo+ref into a per-commit image
+      // (`registry.fly.io/<app>:<sha>`); the token doubles as the registry push password.
+      // A build failure (FlyImageBuildFailedError) propagates LOUD — never a fallback to a
+      // stale image (that would silently undo the merge-reflecting guarantee).
+      const { imageRef } = await this.builder.build({
+        repo: source.repo,
+        ref: source.ref,
+        appName: app.name,
+        flyToken: token,
+      });
+      image = imageRef;
+    } else if (this.allowStaticDeploy) {
+      // ESCAPE HATCH: no builder configured, so release the STATIC grant `image`. This is
+      // NOT merge-reflecting (it ignores `source`), so the operator must explicitly opt in.
+      image = deployImage(grant);
+    } else {
+      // No builder + flag off: refuse. A Fly release with no builder releases a static
+      // image and ignores the merged `source`, so it cannot prove "the live product
+      // reflects this merge" — fail LOUD so apex never accidentally "proves" deploy on Fly
+      // (it must use `deploy.vercel`, or configure a builder, or accept the static semantics).
       throw new Error(
-        "fly deploy is NOT merge-reflecting (it releases a static image, ignores the merged source) — " +
-          "it cannot prove 'the live product reflects this merge'. Use `deploy.vercel` for that, or set " +
+        "fly deploy is NOT merge-reflecting (no image builder configured; it would release a static image and " +
+          "ignore the merged source) — it cannot prove 'the live product reflects this merge'. Configure a " +
+          "flyImageBuilder to build the merged commit, use `deploy.vercel` for that, or set " +
           "TANREN_ALLOW_FLY_STATIC_DEPLOY=1 to explicitly accept the static-image semantics.",
       );
     }
-    // POST /v1/apps/{app}/machines creates + runs a machine from the built image —
+    // POST /v1/apps/{app}/machines creates + runs a machine from the resolved image —
     // the Machines-API release equivalent of `fly deploy`. Fly keys an app by its
-    // globally-unique NAME in the path (`app.name`). The app URL is its stable
-    // hostname.
-    const image = deployImage(grant);
+    // globally-unique NAME in the path (`app.name`). The config carries the full
+    // release shape (image + guest + port-mapped services + an HTTP check) via
+    // `flyMachineConfig` so the machine is reachable at the app's stable hostname. Both
+    // the built-image and the static-image path use the SAME config (only the image differs).
     const response = await this.transport.request({
       method: "POST",
       url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(app.name)}/machines`,
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-      body: { config: { image } },
+      body: { config: flyMachineConfig(image) },
     });
     if (!response.ok) {
       throw new Error(`fly trigger deploy for '${app.name}' failed: ${response.status} ${response.text}`);
@@ -216,7 +347,91 @@ class FlyDeployApi implements DeployProviderApi {
     if (body.id === undefined) {
       throw new Error(`fly trigger deploy for '${app.name}' returned no machine id: ${response.text}`);
     }
+    // Reap every OTHER machine of this app so a single-instance app converges to exactly ONE
+    // machine per release. Fly's `POST /v1/apps/{app}/machines` CREATES a NEW machine on every
+    // deploy and never retires the prior one, so over N deploys an app accumulates N machines.
+    // For a single-instance, file-backed app that is fatal: each machine has its OWN local store,
+    // so a write that lands on one machine and a later read that hits another reads the record as
+    // "missing" — the data FRAGMENTS across machines (confirmed live on apex v96: ~30 machines →
+    // persistence appears broken; reaping to 1 → persistence works). Runs AFTER the new machine is
+    // created (`body.id` is now serving), so there is NO serving gap. Best-effort by contract — the
+    // new release is already live, so a listing/transport failure here must NEVER fail the deploy.
+    await this.reapOtherMachines(app.name, token, body.id);
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
+  }
+
+  // Destroy every machine of `appName` except `keepId`, so a single-instance app
+  // converges to exactly one machine per deploy instead of accumulating one per
+  // release. Best-effort by contract (see the call site).
+  private async reapOtherMachines(appName: string, token: string, keepId: string): Promise<void> {
+    try {
+      const list = await this.transport.request({
+        method: "GET",
+        url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!list.ok) {
+        return;
+      }
+      const machines = (list.json ?? []) as ReadonlyArray<{ id?: string }>;
+      for (const machine of machines) {
+        if (machine.id === undefined || machine.id === keepId) {
+          continue;
+        }
+        await this.transport
+          .request({
+            method: "DELETE",
+            url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machine.id)}?force=true`,
+            headers: { authorization: `Bearer ${token}` },
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // Reap is best-effort: a listing/transport failure must not fail the deploy.
+    }
+  }
+
+  async resolveArtifactIdentity(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployArtifactIdentity> {
+    return resolveFlyArtifactIdentity({ transport: this.transport, token, appName: app.name, deploymentId });
+  }
+
+  async promoteToProduction(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployResult> {
+    return transitionFlyDeployment({
+      transport: this.transport,
+      token,
+      appName: app.name,
+      deploymentId,
+      operation: "promote",
+    });
+  }
+
+  async rollbackToDeployment(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    targetDeploymentId: string,
+  ): Promise<DeployResult> {
+    return transitionFlyDeployment({
+      transport: this.transport,
+      token,
+      appName: app.name,
+      deploymentId: targetDeploymentId,
+      operation: "rollback",
+    });
+  }
+
+  async teardownDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void> {
+    await teardownFlyDeployment({ transport: this.transport, token, appName: app.name, deploymentId });
   }
 
   async destroyApp(_grant: OrgGrant, token: string, app: DeployApp): Promise<void> {
@@ -268,9 +483,12 @@ class FlyDeployApi implements DeployProviderApi {
 export class FlyDeployProvisioner extends DeployProvisioner {
   // The static-image opt-in is a boot-time env knob (TANREN_ALLOW_FLY_STATIC_DEPLOY,
   // parsed once by envSchema.ts). It flows in via the injected deps — defaulting to
-  // the parsed env when the deps omit it (callers/tests may set it explicitly).
+  // the parsed env when the deps omit it (callers/tests may set it explicitly). The
+  // optional `flyImageBuilder` flows through to `FlyDeployApi` the same way; when
+  // present it is the DEFAULT (merge-reflecting) release path, and `allowStaticDeploy`
+  // becomes the flagged escape hatch.
   constructor(deps: DeployProvisionerDeps) {
     const allowStaticDeploy = deps.allowFlyStaticDeploy ?? parsedEnv.TANREN_ALLOW_FLY_STATIC_DEPLOY === "1";
-    super(new FlyDeployApi(deps.transport, allowStaticDeploy), deps);
+    super(new FlyDeployApi(deps.transport, allowStaticDeploy, deps.flyImageBuilder), deps);
   }
 }

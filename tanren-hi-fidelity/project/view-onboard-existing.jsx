@@ -164,14 +164,15 @@ const ExistRecon = () => (
             <div><span style={{ color: "var(--fg-3)" }}>web</span> · next.js 14 · turborepo</div>
             <div><span style={{ color: "var(--fg-3)" }}>data</span> · postgres · prisma</div>
             <div><span style={{ color: "var(--fg-3)" }}>deploy</span> · vercel · main → prod</div>
-            <div><span style={{ color: "var(--fg-3)" }}>ci</span> · github actions · 3 workflows</div>
+            <div><span style={{ color: "var(--fg-3)" }}>ci</span> · github actions · 3 workflows <span style={{ color: "var(--fg-4)" }}>(repo)</span></div>
+            <div><span style={{ color: "var(--fg-3)" }}>delivery</span> · tanren/gate · not seeded</div>
             <div><span style={{ color: "var(--fg-3)" }}>tests</span> · vitest · 1 file (gap 2)</div>
           </div> },
           { ch: "design dna · needs your input", state: "gap", body: <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--status-warn)" }}>↑ awaiting answer · gap 1 in chat</div> },
           { ch: "risks · 3 flagged", state: "warn", body: <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-2)", lineHeight: 1.55 }}>
             <div><span style={{ color: "var(--status-warn)", marginRight: 6 }}>!</span>14 direct-push contributors</div>
             <div><span style={{ color: "var(--status-warn)", marginRight: 6 }}>!</span>no codeowners file</div>
-            <div><span style={{ color: "var(--steel-08)", marginRight: 6 }}>i</span>no mergify config detected</div>
+            <div><span style={{ color: "var(--steel-08)", marginRight: 6 }}>i</span>no .tanren/ci.yml · native gate not seeded</div>
           </div> },
         ].map((c, i) => (
           <div key={i} className={"col-card" + (c.state === "gap" || c.state === "warn" ? " warn" : "")} style={{ padding: "10px 12px", gap: 6 }}>
@@ -201,11 +202,10 @@ const ExistConfig = () => (
     />
     <div className="cols-2-narrow" style={{ gridTemplateColumns: "260px 1fr" }}>
       <div className="col-card" style={{ padding: 0, overflow: "hidden", minHeight: 0 }}>
-        <div className="h" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}><span>files · <em style={{ color: "var(--ember-08)" }}>6</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+218 −0</span></div>
+        <div className="h" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}><span>files · <em style={{ color: "var(--ember-08)" }}>5</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+166 −0</span></div>
         {[
           { f: ".tanren/PROJECT.md", add: 64, sel: true, snapshot: true },
-          { f: ".github/workflows/tanren-ci.yml", add: 84 },
-          { f: ".mergify.yml", add: 42 },
+          { f: ".tanren/ci.yml", add: 48 },
           { f: "CODEOWNERS", add: 14 },
           { f: ".gitignore", add: 4, note: "mod" },
           { f: "PULL_REQUEST_TEMPLATE.md", add: 36, note: "mod" },
@@ -269,7 +269,8 @@ const ExistConfig = () => (
 - **web** · next.js 14 · turborepo · pnpm
 - **data** · postgres · prisma
 - **deploy** · vercel · main → prod
-- **ci** · github actions · 3 workflows
+- **ci (repo)** · github actions · 3 workflows · domain content, not delivery
+- **delivery** · tanren/gate via .tanren/ci.yml · native queue
 
 ## guardrails
 
@@ -358,7 +359,7 @@ const ExistDag = () => (
           { x: 280, y: 175, t: "e2e for runner ssh", tag: "#108" },
           { x: 280, y: 210, t: "add test coverage", tag: "gap·2", agent: true },
           { x: 280, y: 245, t: "codeowners scaffold", tag: "risk", agent: true },
-          { x: 280, y: 280, t: "mergify config", tag: "risk", agent: true },
+          { x: 280, y: 280, t: "native gate · .tanren/ci.yml", tag: "risk", agent: true },
           { x: 280, y: 315, t: "auditor flake on snapshot", tag: "#93" },
           { x: 280, y: 350, t: "fix workflow yaml lint", tag: "#88" },
           { x: 280, y: 385, t: "preserve auth.json across runs", tag: "#83" },
@@ -417,7 +418,49 @@ const ExistDag = () => (
 );
 
 // ===== E5 · Governance posture =====
-const ExistGov = () => (
+const ExistGov = () => {
+  const [posture, setPosture] = React.useState("strict");
+  const postures = [
+    {
+      id: "strict",
+      name: "strict — you describe, we forge",
+      body: "External commits block the merge until an operator explicitly decides how to proceed. Tanren tracks the change; it does not silently merge around it.",
+      best: "for teams committing to the spec discipline",
+      policy: [
+        ["external commit on a Tanren PR", "block merge · operator action required"],
+        ["human-opened PR without a spec", "hold merge · offer to create a spec"],
+        ["force-push to a Tanren PR", "block merge · escalate"],
+        ["direct push to main (admin bypass)", "notify operators · investigate"],
+      ],
+    },
+    {
+      id: "open",
+      name: "open — humans + tanren both push",
+      body: "Tanren coexists with external commits. Human changes remain normal repository work and do not block a merge; Tanren continues its own specs and audits.",
+      best: "for established teams retrofitting tanren",
+      policy: [
+        ["external commit on a Tanren PR", "coexist · no merge block"],
+        ["human-opened PR without a spec", "observe · no spec required"],
+        ["force-push to a Tanren PR", "record · notify operators"],
+        ["direct push to main (admin bypass)", "record · no merge block"],
+      ],
+    },
+    {
+      id: "audit_only",
+      name: "audit-only — tanren just watches",
+      body: "External commits become observed handoffs. Tanren surfaces patterns, regressions, and drift, but it does not merge or modify the human change.",
+      best: "for a 4-week trial without code-modification risk",
+      policy: [
+        ["external commit on a Tanren PR", "observed handoff · Tanren does not merge"],
+        ["human-opened PR without a spec", "observe only · operator promotes findings"],
+        ["force-push to a Tanren PR", "record drift · notify operators"],
+        ["direct push to main (admin bypass)", "observe only · no Tanren merge"],
+      ],
+    },
+  ];
+  const selected = postures.find((item) => item.id === posture);
+
+  return (
   <>
     <StepHeading
       eyebrow="step 5 · governance posture"
@@ -428,34 +471,28 @@ const ExistGov = () => (
     <div className="cols-2-narrow">
       <div className="scroll-col">
         <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.22em", textTransform: "uppercase", fontWeight: 700 }}>▮ posture · pick one</div>
-        {[
-          { name: "strict — you describe, we forge", on: true, body: "Every change MUST go through a spec. External pushes get warned + auto-spec'd for tracking. Tanren never reviews human PRs.", best: "for teams committing to the spec discipline" },
-          { name: "open — humans + tanren both push", on: false, body: "Tanren coexists. Direct pushes are normal. Tanren tracks but doesn't grade them. Picks up issues + audits + manual operator specs.", best: "for established teams retrofitting tanren" },
-          { name: "audit-only — tanren just watches", on: false, body: "Tanren reads everything, opens no PRs. Surfaces patterns, regressions, drift in a dashboard. Operator promotes findings into specs by hand.", best: "for a 4-week trial without code-modification risk" },
-        ].map((p, i) => (
-          <div key={i} className={"col-card" + (p.on ? " live" : "")} style={{ padding: "12px 14px", gap: 6, cursor: "pointer" }}>
+        {postures.map((p) => {
+          const active = p.id === posture;
+          return (
+          <button key={p.id} type="button" className={"col-card" + (active ? " live" : "")} onClick={() => setPosture(p.id)} aria-pressed={active} style={{ padding: "12px 14px", gap: 6, cursor: "pointer", textAlign: "left", width: "100%" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ width: 14, height: 14, border: "1.5px solid " + (p.on ? "var(--ember-08)" : "var(--line-2)"), background: p.on ? "var(--ember-08)" : "transparent", borderRadius: 50, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {p.on && <div style={{ width: 5, height: 5, background: "var(--ink-12)", borderRadius: 50 }}></div>}
+              <div style={{ width: 14, height: 14, border: "1.5px solid " + (active ? "var(--ember-08)" : "var(--line-2)"), background: active ? "var(--ember-08)" : "transparent", borderRadius: 50, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {active && <div style={{ width: 5, height: 5, background: "var(--ink-12)", borderRadius: 50 }}></div>}
               </div>
               <div className="display-h" style={{ fontSize: 14 }}>{p.name}</div>
             </div>
             <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.45, paddingLeft: 22 }}>{p.body}</div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: p.on ? "var(--ember-08)" : "var(--fg-3)", paddingLeft: 22 }}>↑ best for: {p.best}</div>
-          </div>
-        ))}
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: active ? "var(--ember-08)" : "var(--fg-3)", paddingLeft: 22 }}>↑ best for: {p.best}</div>
+          </button>
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
         <div className="col-card" style={{ gap: 8 }}>
-          <div className="h"><span>external-push policy</span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>strict-posture defaults</span></div>
+          <div className="h"><span>external-push policy</span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)" }}>{selected.name.split(" — ")[0]} posture</span></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {[
-              ["on direct push to feature branch", "auto-spec for tracking · no block"],
-              ["on push to main (admin bypass)", "fail status check · notify slack"],
-              ["on force-push", "block · escalate"],
-              ["on human-opened pr without spec", "comment with 'spec this?' offer"],
-            ].map(([t, a], i) => (
+            {selected.policy.map(([t, a], i) => (
               <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr auto", padding: "7px 10px", background: "var(--bg-sunken)", border: "1px solid var(--line-1)", borderLeft: "2px solid var(--ember-08)", borderRadius: 2, gap: 8 }}>
                 <span style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-1)" }}>{t}</span>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--ember-08)" }}>{a}</span>
@@ -488,7 +525,8 @@ src/auth/** @cat-cave/security
       </div>
     </div>
   </>
-);
+  );
+};
 
 // ===== Wrapper =====
 window.ExistingProjectView = ({ step, setStep, onNav }) => {

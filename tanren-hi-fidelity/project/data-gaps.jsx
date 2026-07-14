@@ -5,7 +5,7 @@
 //   • INBOX          — configurable issue-source candidate inbox
 //   • CONFIG_PR      — the tanren-config audit-gate PR review
 // Grounded in PROJECT_BRIEF §2 (the loop), §3 (writers/answerers),
-// §4 (cost models), §9 (specs/runs schema), §2.2 (cron audits, deferred).
+// §4 (cost models), §9 (specs/runs schema), §2.2 (scheduled / cron audits).
 
 // =====================================================================
 // FORGE · canned chat answers (the ⌘K palette → chat morph)
@@ -41,6 +41,23 @@ const FORGE_ANSWERS = {
     text: "Describe the work in plain language — the persona it serves and what \"done\" looks like. I'll draft acceptance criteria as BDD behaviors, dependency-rank it against the live DAG, and show you the placement before I write anything.",
     chips: ["it's for the line-worker persona", "start from a github issue"],
     card: { lbl: "auto-navigate", title: "discover a spec", route: "discovery" },
+  },
+  // Org Overview answers mirror the command deck's portfolio mock.
+  org_budget_risk: {
+    q: "which project will hit budget first?",
+    text: "<b>tanren-fixture-easy</b> is the closest portfolio budget risk: <b>$12.84 of $50</b> spent this week (26%). Org month-to-date is <b>$84.20 of $275</b>, with a <b>$152</b> end-of-month forecast (55% of cap), so no cap is projected to be breached. <code>supply-chain-os</code> is at $0 of $200 and <code>cat-cave-www</code> is at $2.18 of $25.",
+    chips: ["show the cost drivers", "compare project burn rates", "forecast next month"],
+    card: { lbl: "auto-navigate", title: "history & costs", route: "costs" },
+  },
+  org_halted_runs: {
+    q: "any halted runs older than 2h?",
+    text: "<b>Yes — one.</b> <code>edi-mapping</code> has been halted for <b>4h 12m</b>, which is 2h 12m past your threshold. It belongs to <b>tanren-fixture-easy</b>; the portfolio shows no other halted runs.",
+    chips: ["why is edi-mapping halted?", "show its dependency chain", "what decision clears it?"],
+  },
+  org_loop_speed: {
+    q: "where is the loop slowest?",
+    text: "<b>cat-cave-www</b> is slowest among projects with observed throughput at <b>0.4 loops/day</b>, versus <b>5.2/day</b> for <code>tanren-fixture-easy</code>. <code>supply-chain-os</code> has no loop velocity yet because it is still in interview. Portfolio speed is <b>5.6 loops/day</b> on the rolling 7-day view.",
+    chips: ["inspect cat-cave-www activity", "compare the last 7 days", "what is slowing it down?"],
   },
   generic: {
     q: "tell me about this",
@@ -173,8 +190,9 @@ const specForNode = (node) => {
 };
 
 // =====================================================================
-// SCHEDULED AUDITS (PROJECT_BRIEF §2.2 — cron audits, deferred surface)
+// SCHEDULED AUDITS (PROJECT_BRIEF §2.2 — finished audits library mock)
 // Recurring read-only Answerer passes that fill idle subscription windows.
+// Consumed by view-audits.jsx (scheduled audits surface).
 // =====================================================================
 const AUDIT_JOBS = [
   {

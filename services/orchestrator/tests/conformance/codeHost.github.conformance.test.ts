@@ -187,7 +187,7 @@ class StatefulGitHubHttp implements GitHubHttpClient {
       return { status: 204, body: null };
     }
 
-    // pushRef force-update OR landAuthorizedRef swap: PATCH /git/refs/heads/:branch
+    // pushRef force-update OR landAuthorizedIntegration swap: PATCH /git/refs/heads/:branch
     const updateMatch = /^\/git\/refs\/heads\/(.+)$/u.exec(suffix);
     if (input.method === "PATCH" && updateMatch !== null) {
       // Fire the one-shot race injector FIRST: this is the read→write window the
@@ -270,23 +270,24 @@ function compareBody(repo: RepoState, baseSha: string, headSha: string): { statu
 const REPO = { owner: "owner", name: "repo" } as const;
 
 describe("GitHubCodeHost over a fake GitHub transport", () => {
-  it("landAuthorizedRef rejects a stale expectation at the READ-check (typed)", async () => {
+  it("landAuthorizedIntegration rejects a stale expectation at the READ-check (typed)", async () => {
     const http = new StatefulGitHubHttp();
     // main already moved past the expectation (it points at sha-main-1, not sha-main-0).
     http.seedRepo("owner", "repo", "main", "sha-main-1");
     const host = new GitHubCodeHost(http, async () => ({ token: TOKEN }));
     const err = await host
-      .landAuthorizedRef({
+      .landAuthorizedIntegration({
         repo: REPO,
         intoMain: "main",
         authorizedSha: "sha-authorized-1",
         expectedMainSha: "sha-main-0",
+        idempotencyKey: "intent-gh",
       })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LandCasRejectedError);
   });
 
-  it("landAuthorizedRef rejects a race that moves main AFTER the read-check but BEFORE the ff-only write", async () => {
+  it("landAuthorizedIntegration rejects a race that moves main AFTER the read-check but BEFORE the ff-only write", async () => {
     const http = new StatefulGitHubHttp();
     http.seedRepo("owner", "repo", "main", "sha-main-0");
     // The authorized commit was built on sha-main-0 (its ff base). It is a
@@ -302,11 +303,12 @@ describe("GitHubCodeHost over a fake GitHub transport", () => {
     const host = new GitHubCodeHost(http, async () => ({ token: TOKEN }));
 
     const err = await host
-      .landAuthorizedRef({
+      .landAuthorizedIntegration({
         repo: REPO,
         intoMain: "main",
         authorizedSha: "sha-authorized-1",
         expectedMainSha: "sha-main-0",
+        idempotencyKey: "intent-gh",
       })
       .catch((e: unknown) => e);
 
@@ -316,7 +318,7 @@ describe("GitHubCodeHost over a fake GitHub transport", () => {
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-rival-1");
   });
 
-  it("pushRef REFUSES to force-update the default branch on a non-fast-forward (main is landAuthorizedRef-only)", async () => {
+  it("pushRef REFUSES to force-update the default branch on a non-fast-forward (main is landAuthorizedIntegration-only)", async () => {
     const http = new StatefulGitHubHttp();
     http.seedRepo("owner", "repo", "main", "sha-main-0");
     // sha-evil-1 is built on a DIFFERENT base (sha-unrelated) — i.e. it is NOT a

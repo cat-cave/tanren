@@ -5,7 +5,9 @@
 
 import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { specForgePrompt } from "../src/components/project/SpecDrawer.js";
 import { createApp } from "../src/main.js";
+import type { SpecDetail } from "../src/components/project/specDetail.js";
 
 const ORG = {
   id: "org_acme",
@@ -348,6 +350,39 @@ describe("spec drawer fragment", () => {
 });
 
 describe("spec full page", () => {
+  it("keeps the Forge prefill below the BFF question limit for long descriptions", () => {
+    const spec = {
+      specId: "s_long",
+      projectId: "project_easy",
+      title: "long spec",
+      description: "x".repeat(5_000),
+      status: "queued",
+      statusLabel: "queued",
+      pill: "cold",
+      glyph: "○",
+      acceptance: [],
+      dependsOn: [],
+      blocks: [],
+      runs: [],
+      runsAvailable: true,
+      latestRun: null,
+      blockedReason: null,
+      spendUsd: "—",
+      economics: {
+        spendUsd: "—",
+        attempts: "—",
+        avgCostUsd: "—",
+        pricedAttempts: 0,
+        unpricedAttempts: 0,
+      },
+      primaryAction: null,
+    } satisfies SpecDetail;
+
+    const prompt = specForgePrompt(spec);
+    expect(prompt.length).toBeLessThanOrEqual(3_800);
+    expect(prompt).toContain(`Description: ${"x".repeat(1_197)}...`);
+  });
+
   it("renders the escalated full page with description, BDD, dependency chain, and run history", async () => {
     const app = await build();
     const html = await (await app.request("/projects/project_easy/specs/s_review")).text();
@@ -357,6 +392,15 @@ describe("spec full page", () => {
     expect(html).toContain("dependency chain");
     expect(html).toContain("run history");
     expect(html).toContain("r_review");
+    expect(html).toContain("data-spec-forge-card");
+    expect(html).toContain("ask forge · this spec");
+    expect(html).toContain('data-island-trigger="palette"');
+    expect(html).toContain("data-palette-prefill");
+    expect(html).toContain("For spec s_review &quot;supplier scorecard&quot; currently review-ready");
+    expect(html).toContain("Depends on: orders schema (s_live, live)");
+    expect(html).toContain("Blocks: edi mapping ui (s_blocked, blocked)");
+    expect(html).toContain("Run history: r_review: completed/ok, cost $12.00");
+    expect(html).toContain("Economics: spend $16.00, attempts 2, avg $8.00");
     // back-to-dag link.
     expect(html).toContain("/projects/project_easy?mode=dag");
   });

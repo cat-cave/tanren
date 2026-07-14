@@ -9,7 +9,7 @@
 ## In scope for Phase 2
 
 - [ ] **Top bar** renders the `tanren` brand, the org pill (current org with switcher), the project crumb when a project is selected, the ink/ash surface toggle, the ⌘K Forge palette trigger, a notifications bell, and the operator avatar.
-- [ ] **Sidenav** renders three groups: org (overview, history & costs), projects (project list + discover + halted runs), setup (routing & limits, notifications), onboarding (org setup, new project, existing project). Non-Phase-2 rows render as documented placeholders with a `phase 3+` label.
+- [ ] **Sidenav** renders three standing groups per `routes.ts`: **org** (overview, roadmap, personas, history & costs, DORA, merge queue, budget), **projects** (project list, discover, candidate inbox, halted runs), **system** (scheduled audits, routing & limits, tanren-config, notifications, integrations). One-time onboarding is mounted but not a standing nav row. Rows with `phase: "3+"` (currently only roadmap + personas) render as documented placeholders.
 - [ ] **GitHub OAuth sign-in** flow lands the operator into the shell; first sign-in creates the org row and the user as first admin per P2A-0003.
 - [ ] **Project switcher** in the org pill shows projects the operator is a member of and lets them switch context. Switching updates the project crumb and the active sidenav child route.
 - [ ] **Ink/ash toggle** flips `data-theme` via the design tokens from P2A-0016 with no hardcoded colors.
@@ -19,7 +19,7 @@
 
 ## Reductions from the hi-fi
 
-- The org-level `overview`, `roadmap`, and `personas` sidenav rows still render as placeholders (`phase: "3+"`). DORA is mounted.
+- The org-level `roadmap` and `personas` sidenav rows still render as placeholders (`phase: "3+"`). **Overview** is mounted (`phase: "2b"`, `mountOverviewScreen`) — residual org-wide Forge card gap only (`phase-3-hifi-gaps.md` §2.1). DORA, merge queue, budget, discovery, inbox, audits, config, and integrations are mounted.
 - Org pill switcher does not yet support creating or leaving orgs; that remains future multi-tenant administration work.
 - ⌘K palette: the thick Forge LLM-driven chat morph ships (the palette morphs into a real conversation thread via `/forge/threads/:id/ask`).
 

@@ -13,14 +13,14 @@
 - [ ] **Provider breakdown table**: rows are `(cli · model · auth)` triples with runs, tokens, dollar-or-equivalent, and share percent. Source-color dot prefixes each row. No unknown-source rows; every row's cost source is explicit.
 - [ ] **Burn projection panel**: 14-day daily sparkline, daily-spend average, current-rate this-month figure with cap, next-30d projection range.
 - [ ] **Headroom · subscription windows panel**: per-subscription headroom (e.g. "chatgpt · monthly cap unused: $X equiv left over"), opportunity (idle GPU) headroom, and a one-line callout naming the potential agent-throughput uplift if headroom were filled.
-- [ ] **Observed metrics panel**: simple text grid showing specs merged, average cost per merged spec, halt-rate, median lead time, deploy frequency. Each value pulls from run outcomes; the panel header notes "reported, not targeted · steady-state first" — DORA panel is Phase 3 (this panel is the v0 stub).
+- [ ] **Observed metrics panel**: simple text grid showing specs merged, average cost per merged spec, halt-rate, median lead time, deploy frequency. Each value pulls from run outcomes; the panel header notes "reported, not targeted · steady-state first". The dedicated **DORA** sidenav surface is mounted separately (`/dora`, `phase: "2b"`, `mountDoraScreen`) — this costs panel is a thin reported-only companion, not a stand-in for DORA.
 
 ## Reductions from the hi-fi
 
-- **Subscription-window utilization heatmap**: deferred to Phase 3 (30d × 5-windows utilization rollup).
-- **Full DORA panel**: Phase 3 (the v0 panel is a thin reported-only stub).
-- **"Ask forge to schedule overnight audits" CTA**: Phase 3 (depends on scheduled audits library).
-- **Filtering breakdown by source / provider / project**: Phase 3 (v0 ships totals across the org; per-project history is reachable from the project view).
+- **Subscription-window utilization heatmap**: still deferred relative to the hi-fi (30d × 5-windows utilization rollup) if not yet rendered on `/costs`.
+- **Full DORA panel on this costs page**: DORA lives on its own mounted `/dora` route; the costs-page observed-metrics grid remains a thin reported-only companion.
+- **"Ask forge to schedule overnight audits" CTA**: the scheduled-audits library is **mounted** (`/audits`, `mountAuditScreens`); any residual is CTA wiring on the costs page, not a missing audits surface.
+- **Filtering breakdown by source / provider / project**: v0 ships totals across the org; per-project history is reachable from the project view.
 
 ## Done when
 

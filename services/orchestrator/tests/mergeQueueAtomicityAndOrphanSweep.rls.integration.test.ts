@@ -267,6 +267,65 @@ describeDb("merge_queue 3-write atomicity + orphaned-PR sweep (real PG)", () => 
     expect(scheduled.rows[0]?.count).toBe("1");
   });
 
+  it("SWEEP under the DATAPLANE role (apex v95 regression): recovery routes writes through the system scope, not the SELECT-only runtime pool", async () => {
+    // apex v95 root cause: the coordinator subscriber runs in the worker, whose runtime
+    // pool connects as the NARROW `tanren_dataplane` role — SELECT-only on `events`. The
+    // OTHER sweep tests drive `discoverOrphanedPrs(ownerPool)` (superuser), which hid the
+    // bug: recovery ran `runWithOrgScope(dataplanePool, …)`, the merge_queue INSERT
+    // passed but the `events` append raised `permission denied for table events`, rolling
+    // back the WHOLE recovery — so no dequeued/orphaned PR ever recovered in production.
+    //
+    // This test drives the sweep on the ACTUAL runtime pool (`dataPlanePool`). The fix
+    // routes the per-orphan recovery through `runWithSystemScope` (the injected BYPASSRLS
+    // `tanren_system` pool), so it lands despite the handed-in dataplane pool. Under the
+    // pre-fix `runWithOrgScope(pool, …)` this asserts `recovered >= 1` would FAIL:
+    // recovery would throw permission-denied and `recovered` would be 0.
+    const spec = "spec_orphan_dataplane";
+    const run = "run_orphan_dataplane";
+    const prUrl = "https://github.com/cat-cave/repo/pull/2003";
+    await ownerPool.query(
+      `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
+       VALUES ($1, $2, $3, 'sweep', 'orphan sweep dataplane', 'in_flight')`,
+      [spec, PROJECT, ORG],
+    );
+    await ownerPool.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'ci', 'main', 'completed')`,
+      [run, spec, PROJECT, ORG],
+    );
+    await runWithOrgScope(ownerPool, ORG, async (client) => {
+      await new PgEventStore(client).append({
+        runId: run,
+        specId: spec,
+        projectId: PROJECT,
+        orgId: ORG,
+        eventType: "github.pr.created",
+        payload: {
+          repoUrl: "https://github.com/acme/x.git",
+          branch: "tanren/run_orphan_dataplane",
+          targetBranch: "main",
+          prUrl,
+          prNumber: 2003,
+        },
+      });
+    });
+
+    // Drive the sweep on the SELECT-only runtime pool — exactly what the worker hands it.
+    const result = await discoverOrphanedPrs(dataPlanePool);
+    expect(result.recovered).toBeGreaterThanOrEqual(1);
+
+    const queue = await ownerPool.query<{ status: string; pr_url: string; pr_number: string; org_id: string }>(
+      "SELECT status, pr_url, pr_number, org_id FROM merge_queue WHERE run_id = $1",
+      [run],
+    );
+    expect(queue.rows).toEqual([{ status: "queued", pr_url: prUrl, pr_number: "2003", org_id: ORG }]);
+    const scheduled = await ownerPool.query<{ count: string }>(
+      "SELECT count(*)::text AS count FROM events WHERE run_id = $1 AND event_type = 'merge.scheduled'",
+      [run],
+    );
+    expect(scheduled.rows[0]?.count).toBe("1");
+  });
+
   it("SWEEP: idempotent — a run that already has a queue row is left alone (no duplicate INSERT, no extra merge.scheduled)", async () => {
     const spec = "spec_orphan_idempotent";
     const run = "run_orphan_idempotent";

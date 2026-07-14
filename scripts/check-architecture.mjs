@@ -112,7 +112,8 @@ function checkLineMax(projectFiles) {
       // DDL + the RLS/role/grant tail, not a source module — exempt like meta/.
       file.startsWith("db/migrations/") ||
       file.startsWith("services/orchestrator/src/engine/answerers/schemas/generated/") ||
-      file.startsWith("contracts/json/")
+      file.startsWith("contracts/json/") ||
+      file.startsWith("docs/roadmap/mission-complete/")
     ) {
       continue;
     }

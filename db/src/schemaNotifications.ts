@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { type AnyPgColumn, check, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
-import { eventTypeNames } from "./eventTypes.js";
+import { eventTypes } from "./schemaEventTypes.js";
 import { organizations, users } from "./schemaCore.js";
 
 // P2A-0017 notifications matrix. Split from schema.ts to keep that file
@@ -84,7 +84,11 @@ export const notificationRoutes = pgTable(
     targetId: text("target_id")
       .notNull()
       .references(() => notificationTargets.id),
-    eventName: text("event_name").notNull(),
+    // SP-8: FK to the platform-global event_types catalog (migration 0040)
+    // REPLACES the former notification_routes_event_name_check CHECK constraint.
+    eventName: text("event_name")
+      .notNull()
+      .references(() => eventTypes.name),
     enabled: integer("enabled").notNull().default(1),
     minSeverity: text("min_severity").notNull().default("info"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -92,7 +96,6 @@ export const notificationRoutes = pgTable(
   },
   (table) => [
     enumCheck("notification_routes_min_severity_check", table.minSeverity, NOTIFICATION_SEVERITIES),
-    enumCheck("notification_routes_event_name_check", table.eventName, eventTypeNames),
     check("notification_routes_enabled_check", sql`${table.enabled} IN (0,1)`),
     uniqueIndex("notification_routes_target_event_unique").on(table.targetId, table.eventName),
     index("notification_routes_event_name").on(table.eventName),

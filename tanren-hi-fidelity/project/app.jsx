@@ -6,7 +6,7 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "showSubopt": true,
   "discoveryVariant": "feature",
   "auditGate": true,
-  "mergeIntegration": "mergify"
+  "mergeIntegration": "native"
 }/*EDITMODE-END*/;
 
 // Onboarding routes are designer-convenience shells (no sidebar). In a real
@@ -24,6 +24,7 @@ const App = () => {
   const [onbStep, setOnbStep] = React.useState(1);
   const [forgeOpen, setForgeOpen] = React.useState(false);
   const [forgeSeed, setForgeSeed] = React.useState(null);
+  const [forgeSession, setForgeSession] = React.useState(0);
 
   // Spec surface: a node click opens the minimal drawer; "open full page"
   // escalates to the SpecView route. Both read the same node.
@@ -66,10 +67,14 @@ const App = () => {
   const openSpec = (node) => { setSpecNode(node); setSpecDrawerOpen(true); };
 
   // Open Forge straight into a chat answer (from "ask forge" affordances).
-  const onAsk = (key) => { setForgeSeed(key); setForgeOpen(true); };
+  const onAsk = (key) => {
+    setForgeSeed(key);
+    setForgeSession(session => session + 1);
+    setForgeOpen(true);
+  };
 
-  const onForgeAction = (action, payload) => {
-    if (action === "nav") onNav(payload, undefined);
+  const onForgeAction = (action, route, payload) => {
+    if (action === "nav") onNav(route, payload);
   };
 
   const isOnboarding = ONBOARDING_ROUTES.includes(view);
@@ -132,7 +137,7 @@ const App = () => {
         {view === "settings" && <window.SettingsView onNav={onNav} auditGate={t.auditGate} />}
         {view === "costs" && <window.CostsView onNav={onNav} />}
         {view === "notifications" && <window.NotificationsView onNav={onNav} />}
-        {view === "overview" && <window.OverviewView onNav={onNav} />}
+        {view === "overview" && <window.OverviewView onNav={onNav} onAsk={onAsk} />}
         {view === "roadmap" && <window.RoadmapView onNav={onNav} />}
         {view === "personas" && <window.PersonasView onNav={onNav} />}
         {view === "dora" && <window.DoraView onNav={onNav} />}
@@ -150,6 +155,7 @@ const App = () => {
       )}
 
       <ForgePalette
+        key={forgeSession}
         open={forgeOpen}
         onClose={() => setForgeOpen(false)}
         onAction={onForgeAction}
@@ -212,7 +218,7 @@ const renderTweaks = (t, setTweak, view, setView, setOnbStep, setForgeOpen) => {
             label="merge integration"
             value={t.mergeIntegration}
             options={[
-              { label: "mergify queue (default)",   value: "mergify" },
+              { label: "native queue (default)",   value: "native" },
               { label: "direct github merge",      value: "direct" },
               { label: "external reviewer handoff", value: "external" },
               { label: "no merge integration",     value: "none" },

@@ -15,6 +15,7 @@ import type { RunnerHandle } from "../contracts/allocator.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import type { WorkspaceHandle, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { trackPublishedHeadCommands } from "../providers/jjPublishedHead.js";
 import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import { runWorkspaceSshCommand } from "../workspace/ssh.js";
@@ -89,10 +90,17 @@ export async function openLiveBaseShiftWorkspace(input: {
       path: live.workspacePath,
     });
     // Prepare the published head for an in-place rebase (SAME as the jj applier's gather()):
-    //  1. track the remote head bookmark as the LOCAL `<head>` bookmark `rebaseOnto` names;
+    //  1. FETCH + track + assert the remote head bookmark as the LOCAL `<head>` bookmark
+    //     `rebaseOnto` names — robust against the "head not in the initial clone" race and
+    //     FAIL-CLOSED on a genuinely-missing head (`trackPublishedHeadCommands`, which closes
+    //     the apex-v94 silent-no-op that left the rebase `-b <head>` target missing);
     //  2. empty the immutable set so rebasing the published head is allowed in this
     //     short-lived workspace.
-    // FAIL-CLOSED: a track/config failure throws (the resolve aborts — no `|| true`).
+    // FAIL-CLOSED: a fetch/track/assert/config failure throws (the resolve aborts — no `|| true`).
+    // AUTH: the fetch authenticates the private `origin` remote with the SAME credential the
+    // workspace was cloned with (`live.cloneCredential`) — else (public) a bare fetch. The token
+    // travels only through the command's stdin, never the logged command string.
+    const trackPrep = trackPublishedHeadCommands(ctx.headBranch, live.cloneCredential);
     await runWorkspaceSshCommand(deps.ssh, live.target, {
       label: "base-shift rebase: track the published head + allow rewriting it",
       cwd: live.workspacePath,
@@ -104,9 +112,10 @@ export async function openLiveBaseShiftWorkspace(input: {
       }),
       command: [
         "set -eu",
-        `jj bookmark track ${quoteSshShellArg(ctx.headBranch)} --remote origin`,
+        ...trackPrep.commands,
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
+      ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
     // §3.1 event-pollution side-fix: resolve the SHIFTED base's REAL commit sha (the
     // `integration.rebase` instrumentation must record an actual sha, not the

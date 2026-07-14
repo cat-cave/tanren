@@ -169,11 +169,6 @@ body { overflow-x: auto; }
   color: var(--ember-08); font-weight: 600;
 }
 .sidenav a .count.warn { color: var(--status-warn); }
-.sidenav a .soon {
-  margin-left: auto;
-  font-family: var(--font-mono); font-size: 8px; font-weight: 700;
-  color: var(--steel-08); letter-spacing: 0.18em;
-}
 
 /* ----- MAIN ----- */
 .main {
@@ -1193,20 +1188,7 @@ body { overflow-x: auto; }
 .toggle.on .knob { left: 15px; }
 .toggle.off .knob { left: 1px; background: var(--fg-3); }
 
-.phase-badge {
-  font-family: var(--font-mono); font-size: 8.5px; font-weight: 700;
-  letter-spacing: 0.16em; text-transform: uppercase;
-  padding: 1px 5px;
-  border: 1px solid currentColor;
-  border-radius: 1px;
-}
-.phase-badge.phase-v0 { color: var(--ember-08); }
-.phase-badge.phase-p3 { color: var(--steel-08); }
-.phase-badge.phase-p4 { color: var(--steel-08); }
-.phase-badge.phase-p5 { color: var(--steel-08); }
-
-/* Long-term vision: integrations carry a connection-state badge,
-   never a phase tag. */
+/* Integrations carry a connection-state badge (connected / auth needed / off). */
 .status-badge {
   font-family: var(--font-mono); font-size: 8.5px; font-weight: 700;
   letter-spacing: 0.16em; text-transform: uppercase;
@@ -1556,7 +1538,7 @@ body { overflow-x: auto; }
 .code-block .ln-key { color: var(--ember-07); }
 
 /* ============================================================
-   PILL · phase markers inline
+   SUBTLE META · inline secondary copy
    ============================================================ */
 .subtle-meta {
   font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-3); line-height: 1.5;

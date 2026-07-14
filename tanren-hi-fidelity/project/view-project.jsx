@@ -5,12 +5,8 @@
 
 // =====================================================================
 // DAG SNAPSHOT (svg)
-// Node click routing:
-//   live    → run detail (the in-flight agent run)
-//   review  → review handoff
-//   done    → run detail (the completed run, history view)
-//   blocked → ask forge "why blocked?" inline (no nav — would be spec page in v1)
-//   queued  → no-op (would be a quick "spec card" peek in v1)
+// Every node click opens the SpecDrawer (via onOpenSpec) — live, review,
+// done, blocked, and queued all surface the same finished spec detail.
 // =====================================================================
 
 // Attention-queue badges: maps a node text to its priority number (1, 2, 3).
@@ -24,8 +20,27 @@ const ATTENTION_BADGE_MILESTONES = {
   "M5": { n: 2, kind: "budget" },  // M5 cluster will need claude credits
 };
 
-const DagSnapshot = ({ onNodeClick }) => (
-  <svg viewBox="0 0 1100 460" preserveAspectRatio="xMidYMid meet">
+const DAG_CAMERA = {
+  fit: { x: -50, y: -25, width: 1200, height: 510 },
+  minZoom: 90,
+  maxZoom: 110,
+  step: 10,
+};
+
+const DagSnapshot = ({ onNodeClick, zoom }) => {
+  const viewBox = zoom === undefined
+    ? "0 0 1100 460"
+    : (() => {
+      const scale = 100 / zoom;
+      const width = DAG_CAMERA.fit.width * scale;
+      const height = DAG_CAMERA.fit.height * scale;
+      const x = DAG_CAMERA.fit.x + (DAG_CAMERA.fit.width - width) / 2;
+      const y = DAG_CAMERA.fit.y + (DAG_CAMERA.fit.height - height) / 2;
+      return `${x} ${y} ${width} ${height}`;
+  })();
+
+  return (
+    <svg viewBox={viewBox} preserveAspectRatio="xMidYMid meet">
     <defs>
       <marker id="bparr-cool" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
         <path d="M0,0 L6,3 L0,6" fill="var(--line-2)" />
@@ -127,19 +142,10 @@ const DagSnapshot = ({ onNodeClick }) => (
         />
       );
     })}
-  </svg>
-);
-
-// Smart node-click router — drives navigation based on node state.
-//   live/done → run detail (for done, future v1 would show the completed/merged run)
-//   review    → review handoff page
-//   blocked   → no-op (would open a "why blocked?" forge thread)
-//   queued    → no-op
-const routeForNode = (node) => {
-  if (node.s === "review") return "review";
-  if (node.s === "live" || node.s === "done") return "run";
-  return null;
+    </svg>
+  );
 };
+
 const VelocityCard = ({ compact }) => (
   <div className="velocity">
     <div className="head">
@@ -296,6 +302,10 @@ const ProjectViewChat = ({ onNav, onOpenSpec, mode, setMode, showSubopt }) => (
 // =====================================================================
 const ProjectViewDag = ({ onNav, onOpenSpec, setMode, showSubopt }) => {
   const [group, setGroup] = React.useState("milestone");
+  const [zoom, setZoom] = React.useState(100);
+  const zoomIn = () => setZoom(current => Math.min(DAG_CAMERA.maxZoom, current + DAG_CAMERA.step));
+  const zoomOut = () => setZoom(current => Math.max(DAG_CAMERA.minZoom, current - DAG_CAMERA.step));
+  const fitCanvas = () => setZoom(100);
   return (
     <>
       <PageHead
@@ -348,13 +358,14 @@ const ProjectViewDag = ({ onNav, onOpenSpec, setMode, showSubopt }) => {
                   <button key={g} className={"seg-btn" + (group === g ? " active" : "")} onClick={() => setGroup(g)}>{g}</button>
                 ))}
                 <span style={{ color: "var(--line-1)", margin: "0 4px" }}>·</span>
-                <button className="seg-btn">fit</button>
-                <button className="seg-btn">+</button>
-                <button className="seg-btn">−</button>
+                <button type="button" className="seg-btn" onClick={fitCanvas} aria-label="Fit DAG canvas to view" disabled={zoom === 100}>fit</button>
+                <span aria-live="polite" aria-label="DAG canvas zoom" style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--fg-3)", minWidth: 30, textAlign: "center" }}>{zoom}%</span>
+                <button type="button" className="seg-btn" onClick={zoomIn} aria-label="Zoom in DAG canvas" disabled={zoom === DAG_CAMERA.maxZoom}>+</button>
+                <button type="button" className="seg-btn" onClick={zoomOut} aria-label="Zoom out DAG canvas" disabled={zoom === DAG_CAMERA.minZoom}>−</button>
               </div>
             </div>
             <div className="dag-canvas">
-              <DagSnapshot onNodeClick={(n) => onOpenSpec?.(n)} />
+              <DagSnapshot zoom={zoom} onNodeClick={(n) => onOpenSpec?.(n)} />
             </div>
 
             {/* Legend — bottom-left, anchored. Reads as a graphical key, not chrome. */}
@@ -403,6 +414,11 @@ const ProjectViewDag = ({ onNav, onOpenSpec, setMode, showSubopt }) => {
                   <span style={{ fontFamily: "var(--font-jp)", fontSize: 18, color: "var(--ember-08)" }}>鍛</span>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>forge · collapsed</span>
                   <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-warn)" }}>{PROJECT_FORGE.attention.length} need you</span>
+                  {showSubopt && PROJECT_FORGE.subopt.length > 0 && (
+                    <span className="pill warn" style={{ fontSize: 8 }}>
+                      <span className="d"></span>quality · {PROJECT_FORGE.subopt.length}
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-1)", lineHeight: 1.4 }}>
                   {PROJECT_FORGE.state.headline}

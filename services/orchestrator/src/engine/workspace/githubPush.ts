@@ -1,4 +1,5 @@
 import type { RunnerHandle } from "../contracts/allocator.js";
+import type { ActorIdentity } from "../contracts/codeHostTypes.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import { githubHttpsRemote, parseGitHubRepository } from "../providers/github.js";
 import { quoteSshShellArg } from "../ssh/command.js";
@@ -48,6 +49,15 @@ export interface PrepareCleanPrBranchInput {
   // provenance back to the run whose writer produced it (the per-subtask event trail
   // lives in `writer.subtask.completed`; the commit message carries the pointer).
   runId: string;
+  // MERGE-SAFETY (self-identity): the run's RESOLVED GitHub pushing identity (login +
+  // canonical `<id>+<login>@users.noreply.github.com`), the SAME identity the writer
+  // commits carry (`configureWorkspaceGitIdentity`). The composed PR-head commit is
+  // authored + committed as THIS identity so GitHub attributes it to the bot login the
+  // external-change gate recognizes as Tanren's own (never `<unknown>`, which blocks
+  // auto-merge under strict/lenient). Absent ONLY on the genuinely UNAUTHENTICATED
+  // public-repo clone (no identity resolved) — that path never pushes as Tanren, so the
+  // non-attributable `Tanren Composer` fallback is moot there.
+  pushIdentity?: ActorIdentity;
 }
 
 /**
@@ -238,9 +248,13 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
       `provenance=$(git log --reverse --format='- %s' ${writerRange})`,
       `composed_msg=$(printf %s ${quoteSshShellArg(composedMessage)}; printf '\\n%s\\n' "$provenance")`,
       // Explicit author + committer identity: `git commit-tree` fails hard if
-      // user.name/user.email aren't resolvable. "Tanren Composer" is honest — this is
-      // Tanren's synthesis of the writer's drafts, not a writer-authored commit.
-      `composed=$(${COMPOSER_GIT_IDENT_ENV} git commit-tree "$clean_tree" -p ${cloneHead} -m "$composed_msg")`,
+      // user.name/user.email aren't resolvable. MERGE-SAFETY (self-identity): the composed
+      // commit — the PR HEAD — is authored + committed as the run's RESOLVED pushing
+      // identity (same login the writer commits carry) so GitHub attributes it to the bot
+      // login the external-change gate recognizes as Tanren's own. Only the genuinely
+      // unauthenticated clone (no identity) falls back to the non-attributable
+      // `Tanren Composer` placeholder — that path never pushes as Tanren.
+      `composed=$(${composerGitIdentEnv(input.pushIdentity)} git commit-tree "$clean_tree" -p ${cloneHead} -m "$composed_msg")`,
       // Stage the composed tip into the push ref. HEAD is untouched (writer tip stays
       // reachable for review-rework re-entry against bootstrapSha).
       `git update-ref ${prCleanRef} "$composed"`,
@@ -256,10 +270,30 @@ export async function prepareCleanPrBranch(input: PrepareCleanPrBranchInput): Pr
 // object). Needs user.name/user.email resolvable or commit-tree fails with
 // `fatal: empty ident name`. Fixed dates keep the composed object deterministic across
 // re-preps of the same tree (helpful for tests + gate re-anchors).
-const COMPOSER_GIT_IDENT_ENV =
-  "GIT_AUTHOR_NAME='Tanren Composer' GIT_AUTHOR_EMAIL='composer@tanren.invalid' " +
-  "GIT_COMMITTER_NAME='Tanren Composer' GIT_COMMITTER_EMAIL='composer@tanren.invalid' " +
-  "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z'";
+//
+// MERGE-SAFETY (self-identity): when the run resolved a real pushing identity, the
+// composed PR-head commit is authored + committed as THAT login + its canonical noreply
+// email — exactly the identity the writer commits carry (`configureWorkspaceGitIdentity`)
+// — so GitHub attributes the PR head to the bot login the external-change gate treats as
+// Tanren's own. Absent identity ⇒ the non-attributable `Tanren Composer` fallback (the
+// unauthenticated public-repo clone, which never pushes as Tanren, so attribution is moot).
+export function composerGitIdentEnv(identity: ActorIdentity | undefined): string {
+  const fixedDates = "GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' GIT_COMMITTER_DATE='2026-01-01T00:00:00Z'";
+  if (identity === undefined) {
+    return (
+      "GIT_AUTHOR_NAME='Tanren Composer' GIT_AUTHOR_EMAIL='composer@tanren.invalid' " +
+      "GIT_COMMITTER_NAME='Tanren Composer' GIT_COMMITTER_EMAIL='composer@tanren.invalid' " +
+      fixedDates
+    );
+  }
+  const name = quoteSshShellArg(identity.login);
+  const email = quoteSshShellArg(identity.noreplyEmail);
+  return (
+    `GIT_AUTHOR_NAME=${name} GIT_AUTHOR_EMAIL=${email} ` +
+    `GIT_COMMITTER_NAME=${name} GIT_COMMITTER_EMAIL=${email} ` +
+    fixedDates
+  );
+}
 
 // The composed-commit message header. The runId anchors provenance back to the run
 // whose writer produced this change; the shell prelude appends the per-subtask

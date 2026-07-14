@@ -19,6 +19,7 @@ import { createLogger, startDagWalkerSubscriber } from "../dag/subscriber.js";
 import { startMergeCoordinatorSubscriber } from "../merge/subscriber.js";
 import { startPostMergeSubscriber } from "../postMerge/subscriber.js";
 import { buildDeployOnMergeWatcher, buildDemoOnDeployWatcher } from "../postMerge/deployOnMerge.js";
+import { buildFlyImageBuilderFromEnv } from "../provisioners/flyImageBuilderConfig.js";
 import { startIntake } from "../forge/intake/bootIntake.js";
 import { buildCiInsightsLoop } from "./buildCiInsightsLoop.js";
 import { buildNotificationDispatcher } from "../notifications/build.js";
@@ -169,10 +170,19 @@ export async function startAutonomyLoops(deps: AutonomyLoopsDeps): Promise<Auton
   // project with a deploy integration gets its merged commit built + released onto
   // its Vercel/Fly app + its runtime env attached. A project with no deploy target
   // is a clean no-op; a configured deploy that fails is LOUD (logged, isolated).
+  // The merge-reflecting Fly image builder is constructed from env here (once, at boot)
+  // so every Fly deploy builds the merged commit into registry.fly.io/<app>:<sha>.
+  // Undefined when not opted in (TANREN_FLY_IMAGE_BUILDER unset) — a Fly deploy then
+  // fails loud at trigger time unless the static-image escape hatch is on.
+  const flyImageBuilder = buildFlyImageBuilderFromEnv({
+    secrets: deps.secrets,
+    ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+  });
   const deployWatcher = buildDeployOnMergeWatcher({
     pool: deps.pool,
     secrets: deps.secrets,
     runStateWriter: deps.runStateWriter,
+    ...(flyImageBuilder !== undefined && { flyImageBuilder }),
   });
   // Demos-as-evidence: on the SAME wake, AFTER the deploy is verified, exercise the
   // spec's behaviors against the live deploy surface + record per-behavior evidence.

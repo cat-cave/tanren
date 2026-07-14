@@ -2,27 +2,23 @@
 
 **Surface**: a one-page project-create form for greenfield projects, with no Forge interview.
 
-**Owning spec**: P2B-0009 — **stretch** (see [`ROADMAP.md`](../../../ROADMAP.md)). Ships only if Phase 2B is otherwise on schedule; otherwise greenfield migrates entirely to Phase 3.
+**Owning spec**: P2B-0009 (see [`ROADMAP.md`](../../../ROADMAP.md)). The greenfield onboarding track is **mounted** (`mountGreenfieldOnboarding` → `/onboarding/new`); it is not a Phase 3 placeholder.
 
-**Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-new.jsx` — the full hi-fi shows a 3-step multi-round Forge interview that derives a 71-spec DAG; this v0 surface ships only the title/repo/behaviors form. Low-fi import at `docs/design/operator-flows/onboarding-new-project-thin.svg`.
+**Hi-fi reference**: `tanren-hi-fidelity/project/view-onboard-new.jsx` — multi-round vision interview → derived spec DAG → arrival. Low-fi import at `docs/design/operator-flows/onboarding-new-project-thin.svg` (historical thin-form sketch; the live path is the full greenfield track, not a single-step stub).
 
-## In scope for Phase 2 (stretch)
+## In scope (shipped path)
 
-- [ ] **Single-step form**: project name, one-sentence description, target GitHub repository (new empty repo created via P2A-0013 + the GitHub App OR selected from an existing empty repo in the org), behaviors list as free-text rows (each producing a `behaviors` row in P2A-0018 with a default persona), initial milestone seed (a single "M1" row).
-- [ ] **Validation**: project name unique within the org; repo must be reachable via the GitHub App; behaviors require at least one entry.
-- [ ] **Explicit "thin" framing**: the page header carries a `phase 3 · full Forge interview` badge that communicates the long-term vision — the v0 thin surface is the operator-experience floor, not the design ceiling.
-- [ ] **Confirmation**: submitting routes the operator to the project view with an empty run list, no specs, the seeded behaviors visible.
+- [ ] **Greenfield onboarding track** under `/onboarding/new`: multi-round vision interview → derived spec DAG → arrival (not a permanent sidenav row; reached from onboarding entry points).
+- [ ] **Validation**: project name unique within the org; repo must be reachable via the GitHub App; behaviors / derived specs satisfy schema constraints.
+- [ ] **Confirmation**: successful completion routes the operator into the project view with the derived DAG / seeded work visible.
 
 ## Reductions from the hi-fi
 
-- **Forge vision interview**: deferred to Phase 3 (depends on thick Forge LLM backend).
-- **Derived spec DAG**: deferred to Phase 3 (depends on full DAG canvas + DAG-from-interview derivation).
-- **Sources / scheduled audits / arrival surfaces**: Phase 4+ scheduled audits library + Phase 3 issue ingestion.
-- **Design DNA picker**: Phase 3 (depends on a wider design-system selection mechanism).
-- **Rulesets locked card**: Phase 3 governance posture.
+- **Depth of the vision interview / derived DAG cards** may still lag the hi-fi's multi-round interview polish — residual product depth, not an unmounted surface.
+- **Sources / scheduled audits / arrival surfaces**: scheduled audits library is **mounted** (`/audits`); candidate inbox issue ingestion is **mounted** (`/inbox`). Residual is wire-up depth, not "Phase 3 placeholders."
+- **Design DNA picker**: may still lag a wider design-system selection mechanism in the hi-fi.
+- **Rulesets locked card**: residual governance-posture copy depth (posture itself is implemented in engine).
 
 ## Done when
 
-If shipped: an operator can create a greenfield project from a single form, with behaviors and a milestone persisted, and run a spec against it within ten minutes of org setup.
-
-If not shipped: the sidenav "new project" row renders a `phase 3` placeholder and greenfield onboarding moves entirely to Phase 3 along with the Forge interview surface.
+An operator can complete greenfield onboarding from `/onboarding/new`, land in the project view with derived work visible, and run a spec without hitting a `phase 3+` placeholder for the greenfield track itself.

@@ -8,7 +8,7 @@
 
 ## In scope for Phase 2
 
-- [ ] **Project list / org overview placeholder**: the sidenav `overview` row is a placeholder; the org's projects are visible via the topbar project switcher. Phase 3 elevates this to a richer overview.
+- [ ] **Project list**: the sidenav `projects` row lists org projects; the org **Overview** command deck (`/overview`, `phase: "2b"`, mounted) also surfaces a projects grid + budget MTD + activity. Projects remain reachable via the topbar project switcher.
 - [ ] **Project detail tabs**: settings (routing & limits — see `routing-and-limits.md`), governance (read-only display of detected `.github/workflows/` and `CODEOWNERS` from the linked repo; `.mergify.yml` is no longer read — Mergify was removed in Phase 2 P2e-2), notifications (per-project overrides on org defaults), behaviors/milestones (CRUD against P2A-0018).
 - [ ] **Spec creation surface**: title, description, acceptance criteria (free-text plus a structured behaviors picker), milestone assignment (from existing milestones on the project), priority pill, repository target (locked to the project's repo), optional spec dependencies (from existing specs). Form validates against P2A-0018 schemas.
 - [ ] **Spec list per project**: filterable by status (open / in flight / review / merged / halted), milestone, behavior. Each row links to its current or most-recent run.
@@ -16,9 +16,9 @@
 
 ## Reductions from the hi-fi
 
-- **Forge-mediated spec discovery (hi-fi 02)**: deferred to Phase 3 (thick Forge + DAG canvas).
-- **Insight provenance attachment to specs**: deferred to Phase 3.
-- **DAG-placement reasoning ("slot in after current p1 work" / "jump the p1 backlog" / "interrupt now" cards)**: deferred to Phase 3 (depends on cross-spec priority/cost analysis).
+- **Forge-mediated spec discovery**: the `/discovery` surface is **mounted** (`mountDiscoveryScreens`, `phase: "2b"`) — insight → classification → proposed specs → accept. Residual depth (provenance richness, placement-card polish) may still lag the hi-fi; do not treat the whole surface as a Phase 3 placeholder.
+- **Insight provenance attachment to specs**: partial — discovery + inbox accept paths record provenance; full cross-surface attachment depth may still lag the hi-fi.
+- **DAG-placement reasoning ("slot in after current p1 work" / "jump the p1 backlog" / "interrupt now" cards)**: placement exists on the discovery path; the full cross-spec priority/cost analysis cards may still lag the hi-fi.
 
 ## Done when
 

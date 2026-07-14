@@ -42,6 +42,9 @@ describe("round-3 priorEvents discipline (H-R3.1 + H-R3.2 + H-R3.3)", () => {
     "run.completed",
     "run.failed",
     "run.cancelled",
+    // run.resumed is a terminal-deduped run event (events_run_terminal_unique);
+    // it must be refused in the priorEvents bundle like any other terminal run event.
+    "run.resumed",
   ];
 
   it.each(TERMINAL_LEAK_TYPES)("(H-R3.1) terminalPairSchema rejects priorEvents.eventType=%s", (eventType) => {

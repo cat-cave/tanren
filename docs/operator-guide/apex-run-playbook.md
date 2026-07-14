@@ -98,8 +98,10 @@ orchestrator+worker images. A re-pull/re-build there is **not** a finding; it's
 the GC contract.
 
 `just up-dev` (recipe `runner-key gen-mtls-certs` → `up-dev`) generates
-`/tmp/tanren_runner_key` and mounts it as the `tanren_runner_identity_key` compose
-secret — the runner identity key is a **mounted secret file**
+`$TANREN_RUNTIME_DIR/tanren_runner_key` (default `~/.config/tanren/runtime` — a
+PERSISTENT dir, **not** `/tmp`, so a systemd-tmpfiles sweep can't delete the key
+from under a multi-hour run) and mounts it as the `tanren_runner_identity_key`
+compose secret — the runner identity key is a **mounted secret file**
 (`/run/secrets/tanren_runner_identity_key`), never a plaintext env value; only the
 PUBLIC `TANREN_RUNNER_AUTHORIZED_KEY` line is passed via env.
 

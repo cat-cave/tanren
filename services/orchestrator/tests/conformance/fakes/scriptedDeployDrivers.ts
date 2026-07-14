@@ -22,6 +22,9 @@ import type {
   MobileSubmissionStatus,
 } from "../../../src/engine/deploy/mobileReleaseDeployAdapter.js";
 
+const SCRIPTED_ARTIFACT_DIGEST = `sha256:${"a".repeat(64)}`;
+const SCRIPTED_PROVIDER_CHECKSUM = `sha512:${"b".repeat(128)}`;
+
 export interface ScriptedPulumiRunner extends PulumiStackRunner {
   bearersSeen: string[];
   /** Script the update-result sequence the runner reports on successive `updateStatus` polls. */
@@ -55,6 +58,28 @@ export function scriptedPulumiRunner(endpoint = "https://acme-web.example.dev"):
       bearersSeen.push(input.token);
       counter += 1;
       return { updateId: `update_${counter}`, endpointUrl: endpoint };
+    },
+    async resolveArtifactIdentity(input) {
+      bearersSeen.push(input.token);
+      return { artifactDigest: SCRIPTED_ARTIFACT_DIGEST, providerChecksum: null };
+    },
+    async previewUp(input) {
+      bearersSeen.push(input.token);
+      counter += 1;
+      return { previewId: `preview_${counter}`, updateId: `update_${counter}`, endpointUrl: endpoint };
+    },
+    async promote(input): Promise<PulumiUpdateResult> {
+      bearersSeen.push(input.token);
+      counter += 1;
+      return { updateId: `promote_${counter}`, endpointUrl: endpoint };
+    },
+    async rollback(input): Promise<PulumiUpdateResult> {
+      bearersSeen.push(input.token);
+      counter += 1;
+      return { updateId: `rollback_${counter}`, endpointUrl: endpoint };
+    },
+    async teardownStack(input): Promise<void> {
+      bearersSeen.push(input.token);
     },
     async updateStatus(input): Promise<PulumiUpdateStatus> {
       bearersSeen.push(input.token);
@@ -114,6 +139,13 @@ export function scriptedPackageRegistry(): ScriptedPackageRegistry {
       const resolvable = script[Math.min(served, script.length - 1)] as boolean;
       return { resolvable, coordinate: resolvable ? packageCoordinate(input.packageName, input.version) : "" };
     },
+    async resolveArtifactIdentity(input) {
+      bearersSeen.push(input.token);
+      return {
+        artifactDigest: SCRIPTED_ARTIFACT_DIGEST,
+        providerChecksum: SCRIPTED_PROVIDER_CHECKSUM,
+      };
+    },
   };
 }
 
@@ -157,6 +189,10 @@ export function scriptedMobileDistribution(): ScriptedMobileDistribution {
         rejected: state === "rejected" || state === "failed",
         buildRef: input.buildRef,
       };
+    },
+    async resolveArtifactIdentity(input) {
+      bearersSeen.push(input.token);
+      return { artifactDigest: SCRIPTED_ARTIFACT_DIGEST, providerChecksum: null };
     },
   };
 }

@@ -31,7 +31,10 @@ export function plannerAuthorityBundle(host: InMemoryCodeHost): MergeAuthorityBu
   return {
     codeHost: host,
     orgId: "org_fixture",
-    finalizerFor: () => ({ finalizeLanded: async () => ({ auditId: "audit_1" }) }),
+    landStoreFor: () => ({
+      persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+      recordLandReceipt: async () => ({ auditId: "audit_1" }),
+    }),
     gateConfigHash: "gc",
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },

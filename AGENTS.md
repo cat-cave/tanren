@@ -29,8 +29,12 @@ The compose smoke for infrastructure changes is:
 ```sh
 docker compose -f compose.dev.yml build orchestrator worker allocator dashboard runner
 # The PRIVATE key is a mounted compose secret file (tanren_runner_identity_key reads
-# /tmp/tanren_runner_key); only the PUBLIC authorized_keys line is passed via env.
-TANREN_RUNNER_AUTHORIZED_KEY="$(cat /tmp/tanren_runner_key.pub)" docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
+# $TANREN_RUNTIME_DIR/tanren_runner_key, default ~/.config/tanren/runtime — persistent,
+# not /tmp); only the PUBLIC authorized_keys line is passed via env. Raw `docker compose`
+# needs TANREN_RUNTIME_DIR in the environment (the justfile exports it; `.env` seeds it).
+TANREN_RUNTIME_DIR="${TANREN_RUNTIME_DIR:-$HOME/.config/tanren/runtime}" \
+TANREN_RUNNER_AUTHORIZED_KEY="$(cat "${TANREN_RUNTIME_DIR:-$HOME/.config/tanren/runtime}/tanren_runner_key.pub")" \
+docker compose -f compose.dev.yml up -d postgres vault orchestrator worker allocator dashboard runner ntfy
 ```
 
 Then verify CLI `doctor` and `status`, plus runner SSH (the synthetic `hello` workflow was purged from the runtime; `just smoke-connectivity` is the fake-free connectivity check). The dev and prod profiles split is described in `docs/operator-guide/deploy.md` (P2A-0004).

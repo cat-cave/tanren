@@ -9,6 +9,13 @@ the built product now has, has **drifted** from built reality, or carries a
 claude.ai/design): this doc is taken into that tool to revise the hi-fi bundle and
 produce its next version.
 
+> **Last verified against `main`:** 2026-07-10 — checked
+> `services/dashboard/src/app/routes.ts` + `screens.ts`. Overview is
+> `phase: "2b"` and mounted; only `/roadmap` and `/personas` remain
+> `phase: "3+"` / unmounted. Budget, merge-queue, and integrations are mounted.
+> Source of truth for residual Overview gaps: `docs/design/phase-3-hifi-gaps.md`
+> R.2 + §2.1 (org-wide Forge card still partial).
+
 > **Not to be confused with the native design subsystem.** This catalog is about
 > revising the human reference for Tanren's dashboard. The way Tanren designs the
 > apps it _builds_ — the native, in-DAG design pipeline (`DesignContract` → design
@@ -51,19 +58,23 @@ as Set 1 (§2).
 ## How to read an entry
 
 Each entry names: **hi-fi source** (screen/file, or "none — absent"), **built code
-path** (if any), **gap type** (`missing` / `drifted` / `dropped`), and a one-line
-**what the new hi-fi should do**.
+path** (if any), **gap type** (`missing` / `drifted` / `build_deferred_vision`), and a
+one-line **what the new hi-fi should do**.
 
 ---
 
 # §1 — Surfaces built since the hi-fi froze, ABSENT from it
 
 The meatiest section. These are whole feature families the product built _after_
-the hi-fi's last pass. None of them is mounted in the hi-fi **or** in the dashboard
-yet (verified: `services/dashboard/src/app/screens.ts` mounts none of templating /
-integrations / merge-queue) — so they are pure "the design vision must catch up to
-the engine" work, not build-debt. For each: what the hi-fi lacks + the built
-surface it should reflect.
+the hi-fi's last pass. **None of them appears in the hi-fi.** On the dashboard
+side (verified against `services/dashboard/src/app/screens.ts` + `routes.ts`):
+
+- **templating** — still no dedicated dashboard screen (engine/F2 path only)
+- **budget**, **merge-queue**, and **integrations** — **mounted** (`phase: "2b"`)
+
+So §1.2–§1.4 are pure "the design vision must catch up to the built product"
+work (hi-fi lagging code), not unbuilt surfaces. §1.1 remains "engine shipped;
+dashboard + hi-fi both still lack a fragment-library surface."
 
 ### 1.1 Tanren-native templating — fragment library + per-fragment authoring runs
 
@@ -112,11 +123,13 @@ surface it should reflect.
   display — `engine/dag/budgetGate.ts` (resolves project-over-org ceiling, sums
   cumulative `cost_records.cost_usd` over a `monthly | total` period, **pauses the
   tick** when the ceiling is reached) + `engine/workflow/budgetPreflight.ts`, read
-  via `routes/projects/budget.ts`. The run-rhythm doctrine
+  via `routes/projects/budget.ts`. Dashboard: `mountBudgetScreen` overrides
+  `/budget` (`phase: "2b"`). The run-rhythm doctrine
   (teardown + fix-on-main + fresh run; a budget halt is a _finding_, not a thing to
   hand-patch) lives in `docs/operator-guide/apex.md` and
   `docs/roadmap/budget-model.md`.
-- **Gap type**: `missing` (the cap exists; the gate semantics + halt state do not).
+- **Gap type**: `missing` (the cap exists in hi-fi; the gate semantics + halt state
+  do not).
 - **What the new hi-fi should do**: surface the budget as an **enforced ceiling**
   with a distinct **"halted on budget"** state (which specs stacked behind it, the
   "raise budget unblocks N specs" affordance the `data-gaps.jsx` `blocking_m5`
@@ -138,10 +151,11 @@ surface it should reflect.
   is the unified merge-coordination model; the **never-discard
   `BaseShiftCoordinator`** (`engine/dag/baseShiftCoordinator*.ts`,
   `baseShiftLive*.ts`) jj-rebases dependent work in place instead of
-  superseding+regenerating it. Doctrine:
+  superseding+regenerating it. Dashboard: `mountMergeQueueScreen` overrides
+  `/merge-queue` (`phase: "2b"`). Doctrine:
   `docs/architecture/tanren-owns-the-engine.md` + `docs/architecture/autonomy-engine.md`.
-- **Gap type**: `missing` (the review _gate_ exists; the queue/authority/base-shift
-  machinery does not).
+- **Gap type**: `missing` (the review _gate_ exists in hi-fi; the
+  queue/authority/base-shift machinery does not).
 - **What the new hi-fi should do**: add a **merge-queue** surface (the queue of
   integration nodes the `MergeAuthority` is deciding, in order), make the merge
   decision read as **one authoritative fail-closed gate** (replacing the impression
@@ -165,7 +179,8 @@ surface it should reflect.
   Sentry (`engine/providers/sentryProvisioner.ts`), Deploy (Vercel/Fly —
   `engine/providers/{vercel,fly}DeployProvisioner.ts`, `provisioners/deployTransport.ts`),
   Slack (`engine/integrations/slack/slackProvisioner.ts`), and the Hetzner
-  allocator family (`engine/allocators/hetznerAllocator`).
+  allocator family (`engine/allocators/hetznerAllocator`). Dashboard:
+  `mountIntegrationsScreen` overrides `/integrations` (`phase: "2b"`).
 - **Gap type**: `missing`.
 - **What the new hi-fi should do**: model onboarding as **link-provider-once
   (org) → enable-capability-per-project**, where enabling a capability the org
@@ -247,40 +262,38 @@ change** — excluded here. §1.10 is the already-applied running-log — exclud
 
 # §3 — Hi-fi-only vision with NO code counterpart (do NOT treat as build debt)
 
-These exist only in the hi-fi and are **intentionally deferred** in the build
+These exist only in the hi-fi and are **intentionally build-deferred**
 (`phase: "3+"` in `services/dashboard/src/app/routes.ts`, absent from
 `SCREEN_MOUNTS`). They are flagged here so the design tool **keeps** them as vision
 rather than reading them as "the hi-fi is ahead, go build it" — and equally does
 not delete them. (These are the inverse of §1–§2: hi-fi-ahead, not hi-fi-behind.)
 
-### 3.1 Overview — org command deck
+> **Overview is NOT in this list.** `/overview` is `phase: "2b"` and mounted via
+> `mountOverviewScreen` (see `phase-3-hifi-gaps.md` R.2). The residual gap is the
+> org-wide Forge card only (`phase-3-hifi-gaps.md` §2.1) — that is Set-2 build work,
+> not hi-fi-only vision.
 
-- **Hi-fi source**: `view-org.jsx` `OverviewView` (projects grid, budget MTD,
-  forge-org card, activity feed). **Code**: `/overview` is `phase: "3+"`,
-  placeholder only. **Type**: `dropped` (hi-fi-only / deferred).
-- **What the new hi-fi should do**: **keep** as the org command deck; mark it a
-  vision surface ahead of code, not build debt.
-
-### 3.2 Roadmap — cross-project Gantt
+### 3.1 Roadmap — cross-project Gantt
 
 - **Hi-fi source**: `view-org.jsx` `RoadmapView` (cross-project timeline +
   upcoming-30d). **Code**: `/roadmap` is `phase: "3+"`, placeholder only.
-  **Type**: `dropped` (hi-fi-only / deferred).
+  **Type**: `build_deferred_vision` (hi-fi-only / keep in mock).
 - **What the new hi-fi should do**: **keep** as a vision surface.
 
-### 3.3 Personas — cross-project people-models
+### 3.2 Personas — cross-project people-models
 
 - **Hi-fi source**: `view-org.jsx` `PersonasView` (cross-project persona models).
   **Code**: `/personas` is `phase: "3+"`, placeholder only (the persona _entity_
-  exists in the engine, but no org-level surface). **Type**: `dropped`
-  (hi-fi-only / deferred).
+  exists in the engine, but no org-level surface). **Type**: `build_deferred_vision`
+  (hi-fi-only / keep in mock).
 - **What the new hi-fi should do**: **keep** as a vision surface.
 
 > Note on Notifications (`view-org.jsx` `NotificationsView`) and the spec full-page
-> depth (`view-spec.jsx`): these are **partial in code** (Set-2 build work in
-> `phase-3-hifi-gaps.md` §2.6 / §2.7 — delivery-history + quiet-hours, run-history +
-> economics panels), NOT hi-fi-only. They need **no hi-fi change**; the hi-fi
-> already specifies them. Listed here only to disambiguate from the dropped trio.
+> depth (`view-spec.jsx`): these are **partial in code** (see
+> `phase-3-hifi-gaps.md` R.4 / R.5 / §2.2 / §2.3 — residual personal quiet-hours +
+> spec-scoped Forge chips), NOT hi-fi-only. They need **no hi-fi change**; the hi-fi
+> already specifies them. Listed here only to disambiguate from the
+> build-deferred-vision pair (Roadmap, Personas).
 
 ---
 
@@ -330,11 +343,12 @@ spirit; the deltas are in the configuration breadth around them).
 | --- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
 | §1  | Built-since-froze, absent from hi-fi (`missing`)                         | 4 (templating, budget/run-rhythm, merge-queue/authority/base-shift, integration two-plane) |
 | §2  | Hi-fi drifted from build (`drifted`, folds `phase-3-hifi-gaps.md` Set 1) | 6 (secret-store, allocators, BYOK/managed, IdP, GitHub App install, governance posture)    |
-| §3  | Hi-fi-only / dropped — keep as vision, not build debt                    | 3 (Overview, Roadmap, Personas)                                                            |
+| §3  | Hi-fi-only / `build_deferred_vision` — keep as vision, not build debt    | 2 (Roadmap, Personas) — Overview is mounted (`phase: "2b"`)                                |
 | §4  | `data-gaps.jsx` surfaces vs shipped routes (`drifted`/verify)            | 3 (cron audits, config-PR gate, candidate inbox)                                           |
 
-**16 actionable entries.** §1 is the meatiest (whole new feature families); §2 is
-the fold-forward of the existing audit's Set 1; §3 prevents the design tool from
-mistaking deferred vision for build debt; §4 reconciles the chat4 gap-closing mocks
-with the now-shipped routes. Re-verify every entry against code on the revision pass
-(`hifi-revision-process.md`: audit from code, not from docs).
+**15 actionable entries** (Overview removed from the old deferred trio). §1 is the
+meatiest (whole new feature families for the hi-fi to absorb); §2 is the
+fold-forward of the existing audit's Set 1; §3 prevents the design tool from
+mistaking build-deferred vision for build debt; §4 reconciles the chat4
+gap-closing mocks with the now-shipped routes. Re-verify every entry against code
+on the revision pass (`hifi-revision-process.md`: audit from code, not from docs).

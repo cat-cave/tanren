@@ -68,3 +68,8 @@ export * from "./releaseFinalizer.js";
 // JobQueue/EventStore/SecretStore pattern. The conformance suite lives under
 // tests/conformance/repositories.*.
 export * from "./repositories.js";
+export * from "./cas.js";
+export * from "./behaviorRevision.js";
+export * from "./gateProof.js";
+export * from "./runtimeVerification.js";
+export * from "./authoringKernel.js";

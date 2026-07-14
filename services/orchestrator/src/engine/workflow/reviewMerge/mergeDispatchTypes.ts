@@ -18,7 +18,7 @@ import type { AuditPosture } from "../../contracts/auditPosture.js";
 import type { GateOutcome } from "../gate/index.js";
 import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
-import type { LandFinalizer } from "../../merge/mergeAuthorityImpl.js";
+import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
 import type { GateReworkRouter } from "../../contracts/conflictResolution.js";
 
@@ -42,12 +42,13 @@ export interface MergeAuthorityBundle {
   /** The owning org, so the durable finalize is org-scoped (RLS). */
   orgId: string;
   /**
-   * Build the writer-backed `LandFinalizer` for this land (§5). Built at the call
-   * site (which owns the real pg.Pool); the dispatcher supplies the run-stage
-   * `LandFinalizeContext` (task id + audit envelope it computes). The finalize is the
-   * §5 transactional record (`merge.completed` + spec `merged` in ONE org-scoped tx).
+   * Build the writer-backed {@link AuthorityLandStore} for this land (§5) — the durable
+   * half of `MergeAuthorityV2`'s 4-step protocol (persist decision + effect intent →
+   * record receipt + `merge.completed` + spec `merged`). Built at the call site (which
+   * owns the real pg.Pool); the dispatcher supplies the run-stage `LandFinalizeContext`
+   * (task id + audit envelope it computes).
    */
-  finalizerFor: (context: LandFinalizeContext) => LandFinalizer;
+  landStoreFor: (context: LandFinalizeContext) => AuthorityLandStore;
   /** The gate-config + policy identity stamped onto the integration node's proof key. */
   gateConfigHash: string;
   policyVersion: string;

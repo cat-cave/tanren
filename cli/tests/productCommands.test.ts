@@ -95,6 +95,34 @@ describe("P2A-0013 product CLI commands", () => {
     expect(sent.json).toEqual({ config: { version: 1 } });
   });
 
+  it("orgs config-set rejects non-object and invalid JSON (CX-015)", async () => {
+    const { orgs } = await withStub({ id: "org_acme" });
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", "[]"])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", "null"])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", "not-json"])).rejects.toThrow(
+      /not valid JSON/u,
+    );
+    await expect(orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", '"string"'])).rejects.toThrow(
+      /must be a JSON object/u,
+    );
+    // Redaction: sentinel secret in truncated JSON must not appear in the error.
+    const secret = "tnt_sentinel_SECRET_never_leak_9f3a";
+    const error = await orgs.orgsConfigSet(["--org-id", "org_acme", "--config-json", `{"token":"${secret}"`]).then(
+      () => {
+        throw new Error("expected orgsConfigSet to reject");
+      },
+      (e: unknown) => e,
+    );
+    expect((error as Error).message).toMatch(/not valid JSON/u);
+    expect((error as Error).message).not.toContain(secret);
+    // Fail-closed: nothing reached the stub.
+    expect(() => server.lastRequest()).toThrow(/no requests/u);
+  });
+
   it("projects create POSTs to the org-scoped projects route", async () => {
     const body = { projectId: "project_1" };
     const { projects } = await withStub(body);

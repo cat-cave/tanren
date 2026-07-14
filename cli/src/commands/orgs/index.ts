@@ -1,5 +1,6 @@
 // `tanren orgs ...` commands. Mirror the /orgs HTTP surface.
 
+import { parseJsonObject } from "../../json.js";
 import { request, jsonRequest } from "../../httpClient.js";
 import { jsonOutput, optional, parseArgs, required } from "../args.js";
 
@@ -20,11 +21,7 @@ export async function orgsGet(argv: string[]): Promise<void> {
 export async function orgsConfigSet(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
   const orgId = required(args, "org-id");
-  const configJson = required(args, "config-json");
-  const result = await jsonRequest(
-    `/orgs/${encodeURIComponent(orgId)}`,
-    { config: JSON.parse(configJson) as Record<string, unknown> },
-    { method: "PATCH" },
-  );
+  const config = parseJsonObject(required(args, "config-json"), "config-json");
+  const result = await jsonRequest(`/orgs/${encodeURIComponent(orgId)}`, { config }, { method: "PATCH" });
   jsonOutput(args, result);
 }
