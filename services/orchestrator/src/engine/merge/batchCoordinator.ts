@@ -250,18 +250,18 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
-      const { culprit, checks } = bisect;
+      const { culprit, innocentPrefix, checks } = bisect;
       await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
 
       if (!isGateFail) {
-        // SPEC-vs-SPEC CONFLICT culprit: DRIVE it through the per-run resolver (never-discard) then
-        // RETURN. The old bare `conflict` dequeue here had NO re-drive owner (`recoverDequeuedCandidates`
-        // revives only `blocked`, no resolver runs for a dequeued spec) so the culprit sat
-        // `dequeued=conflict` forever, blocking every dependent (apex v95/v96).
+        // Land the passing prefix first so the culprit's resolver sees the newly-current base.
+        if (innocentPrefix.length > 0) {
+          const prefixResult = await this.mergeBatch(projectId, innocentPrefix, queueDepth);
+          if (prefixResult.mergedSpecId !== innocentPrefix.at(-1)?.specId) return prefixResult;
+        }
         const result = await driveConflictCulprit(this.deps, projectId, culprit, queueDepth);
         return this.settleConflictDriveResult(result, projectId, current.batch, queueDepth);
       }
-
       // A GATE-fail culprit: route to WRITER REWORK (v35) + retire the OLD entry `superseded`, then re-form + continue.
       await settleBisectCulprit(this.deps, projectId, culprit, isGateFail, verdict.message, failMessage);
       excludedSpecIds.add(culprit.specId);

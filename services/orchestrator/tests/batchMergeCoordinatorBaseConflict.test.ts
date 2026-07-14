@@ -194,6 +194,30 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     expect(dequeueSpy).not.toHaveBeenCalledWith(expect.anything(), "conflict");
   });
 
+  it("lands an innocent passing prefix before resolving the following conflict culprit against the updated base", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.conflictWhenContains("spec_b");
+    let baseStatusSeenByB: string | undefined;
+
+    h.runner.driveMerge = async ({ runId }) => {
+      h.runner.drives.push({ runId });
+      if (runId === "run_spec_b") {
+        baseStatusSeenByB = h.queue.statusOf("run_spec_a");
+      }
+      return { kind: "merged" };
+    };
+
+    const result = await h.coordinator.coordinate(PROJECT);
+
+    expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }, { runId: "run_spec_b" }]);
+    expect(baseStatusSeenByB).toBe("merged");
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
+    expect(result.mergedSpecId).toBe("spec_b");
+  });
+
   it("a genuinely-irreconcilable spec-vs-spec conflict ESCALATES to needs_attention (never a silent forever-dequeue)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
