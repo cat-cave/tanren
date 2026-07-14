@@ -225,10 +225,8 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       // BASE-CONFLICT SHORT-CIRCUIT: drive a dirty-vs-base PR through the per-run resolver.
       if (verdict.result === "conflict" && verdict.conflictsWithBase) {
         const result = await driveBaseConflict(this.deps, projectId, current.batch, verdict, queueDepth);
-        return this.settleConflictDriveResult(result, projectId, current.batch, queueDepth);
+        return this.settleConflictDriveResult(result, projectId, queueDepth);
       }
-
-      await this.infraHolds.reset(projectId);
 
       // The bisect culprit's failure sub-kind (routed once): `fail` → WRITER REWORK (v35 fix,
       // `settleBisectCulprit`); `conflict` → DRIVEN through the per-run resolver (`driveConflictCulprit`).
@@ -238,6 +236,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       const bisect = await this.bisectBatch(projectId, current.batch);
       if (bisect === "pending") {
+        await this.infraHolds.reset(projectId);
         // A sub-batch's CI was still running — HOLD (no entry blamed). Bug B: back off with a `retryAfterMs` so the subscriber re-drives once, not on every unrelated NOTIFY.
         return { projectId, holdReason: "all_blocked", retryAfterMs: PENDING_RECHECK_MS, queueDepth };
       }
@@ -256,13 +255,15 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       if (!isGateFail) {
         // Land the passing prefix first so the culprit's resolver sees the newly-current base.
         if (innocentPrefix.length > 0) {
+          await this.infraHolds.reset(projectId);
           const prefixResult = await this.mergeBatch(projectId, innocentPrefix, queueDepth);
           if (prefixResult.mergedSpecId !== innocentPrefix.at(-1)?.specId) return prefixResult;
         }
         const result = await driveConflictCulprit(this.deps, projectId, culprit, queueDepth);
-        return this.settleConflictDriveResult(result, projectId, current.batch, queueDepth);
+        return this.settleConflictDriveResult(result, projectId, queueDepth);
       }
       // A GATE-fail culprit: route to WRITER REWORK (v35) + retire the OLD entry `superseded`, then re-form + continue.
+      await this.infraHolds.reset(projectId);
       await settleBisectCulprit(this.deps, projectId, culprit, isGateFail, verdict.message, failMessage);
       excludedSpecIds.add(culprit.specId);
 
@@ -280,20 +281,19 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
   /**
    * Map a conflict-culprit drive result (`driveBaseConflict` / `driveConflictCulprit`) into the
-   * pass's return: an infra hold routes through the runaway guard, else the real
-   * merge/dequeue/hold ends the infra streak. Shared so both conflict paths stay identical.
+   * pass's return: an infra hold attributes only the driven culprit through the runaway guard;
+   * otherwise the real merge/dequeue/hold ends the streak. Shared by both conflict paths.
    */
   private async settleConflictDriveResult(
     result: CoordinateResult | BatchDriveInfraHold,
     projectId: string,
-    batch: ReadonlyArray<MergeQueueEntry>,
     queueDepth: number,
   ): Promise<CoordinateResult> {
     if (!("projectId" in result)) {
       if (result.kind === "infra_terminal") {
         return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth, result.terminalKind);
       }
-      return this.infraHold(projectId, batch, result.message, queueDepth);
+      return this.infraHold(projectId, [result.entry], result.message, queueDepth);
     }
     await this.infraHolds.reset(projectId);
     return result;
@@ -436,7 +436,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       const outcome = await this.driveOne(projectId, entry);
       if (outcome.kind === "infra_hold") {
-        return this.infraHold(projectId, batch, outcome.message, queueDepth);
+        return this.infraHold(projectId, [outcome.entry], outcome.message, queueDepth);
       }
       if (outcome.kind === "infra_terminal") {
         return this.terminalInfraBlock(projectId, [outcome.entry], outcome.message, queueDepth, outcome.terminalKind);

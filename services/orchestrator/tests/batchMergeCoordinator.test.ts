@@ -246,9 +246,10 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
 
-    // The innocents merge on the next pass (the conflict drive returns after driving the culprit).
-    await h.coordinator.coordinate(PROJECT);
+    // The passing prefix lands before the culprit; only the untouched suffix waits for the next pass.
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.statusOf("run_spec_c")).toBe("queued");
+    await h.coordinator.coordinate(PROJECT);
     expect(h.queue.statusOf("run_spec_c")).toBe("merged");
   });
 

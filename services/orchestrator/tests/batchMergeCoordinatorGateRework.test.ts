@@ -124,10 +124,10 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     // Never double-handled: a conflict is NOT a gate-rework.
     expect(h.gateRework.routed).toEqual([]);
 
-    // The innocents merge on the NEXT pass — the conflict drive returns after the culprit (like
-    // the base-conflict short-circuit); the following coordinate re-forms the remaining batch.
-    await h.coordinator.coordinate(PROJECT);
+    // The passing prefix lands before the culprit; the untouched suffix waits for the next pass.
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.statusOf("run_spec_c")).toBe("queued");
+    await h.coordinator.coordinate(PROJECT);
     expect(h.queue.statusOf("run_spec_c")).toBe("merged");
   });
 

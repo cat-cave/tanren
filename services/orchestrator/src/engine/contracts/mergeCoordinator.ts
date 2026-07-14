@@ -50,7 +50,8 @@ export type MergeDriveOutcome =
   // ambiguous/credential infra halt, or a terminal `failed`/`needs_attention` verdict), not a
   // count on this recoverable hold.
   | { kind: "re_gate_pending"; message: string }
-  // The merge failed terminally — the entry is removed (NOT re-queued).
+  // The merge failed terminally. Ordinary merge settlement removes the entry; a conflict
+  // re-drive must first assign writer-rework or needs_attention ownership.
   | { kind: "failed"; message: string }
   // The LOUD TERMINAL ESCALATION (autonomy-engine.md §2c — the non-bricking conflict
   // escalation). The intent-preserving conflict resolver (wired in a later PR) judged
@@ -60,7 +61,7 @@ export type MergeDriveOutcome =
   // moving (it blocks ONLY its dependents, never the whole graph), is dequeued with
   // reason `needs_attention`, and is NEVER re-queued. Distinct from the RECOVERABLE
   // `conflict` (which routes back through the re-execution path) and the infra
-  // `failed` (a terminal merge-stage failure, not a deliberate ask-for-help). There is
+  // `failed` (a merge-stage failure that the conflict re-drive may route to rework). There is
   // NO producer of this outcome yet — the drive resolver still returns the recoverable
   // `conflict`; this vocabulary lets the later resolver simply RETURN this kind.
   | { kind: "needs_attention"; message: string };
