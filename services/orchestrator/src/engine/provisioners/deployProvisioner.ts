@@ -26,7 +26,10 @@ import type {
   ProvisionedArtifact,
 } from "../contracts/integrationProvisioner.js";
 import type { DeployHttpTransport } from "./deployTransport.js";
+import { deployAppName } from "./deployAppName.js";
 import type { FlyImageBuilder } from "./flyImageBuilder.js";
+
+export { DEPLOY_APP_NAME_MAX_LEN, deployAppName } from "./deployAppName.js";
 
 /** Dependencies every deploy provisioner runs over (injectable for unit tests). */
 export interface DeployProvisionerDeps {
@@ -130,6 +133,12 @@ export interface DeploymentStatus {
   url: string;
 }
 
+/** Provider-reported, unbranded artifact identity; the DeployAdapter validates it. */
+export interface DeployArtifactIdentity {
+  artifactDigest: string;
+  providerChecksum: string | null;
+}
+
 /**
  * The provider-specific HTTP primitives. The base class drives find-or-create,
  * bind, discover, artifact assembly, and runtime env attachment on top of these;
@@ -166,6 +175,24 @@ export interface DeployProviderApi {
    * deployment whose status cannot be read is a hard error, never an assumed-ready.
    */
   getDeployment(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeploymentStatus>;
+  /** Read the immutable artifact identity attached to an existing deployment. */
+  resolveArtifactIdentity(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployArtifactIdentity>;
+  /** Move production traffic to the selected preview/staged deployment. */
+  promoteToProduction(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<DeployResult>;
+  /** Move production traffic back to a previously verified deployment. */
+  rollbackToDeployment(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    targetDeploymentId: string,
+  ): Promise<DeployResult>;
+  /** Remove a preview deployment. Idempotent when the deployment is already absent. */
+  teardownDeployment(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void>;
   /**
    * DESTROY a deploy app on the provider (task #78 — derive atomic rollback). The
    * COMPENSATION primitive every deploy provider MUST expose: the greenfield derive
@@ -179,124 +206,6 @@ export interface DeployProviderApi {
    * compensate a partially-failed derive.
    */
   destroyApp(grant: OrgGrant, token: string, app: DeployApp): Promise<void>;
-}
-
-/**
- * The HARD CAP on a deploy-app name (lowest common denominator across the
- * supported deploy providers). Fly's create-app validates names ≤ 30 chars
- * (the flyctl rule); Vercel allows up to 100. We pin BOTH to 30 so the slug
- * stays under Fly's cap and we keep one rule to reason about (no per-provider
- * branch where one is loose and one is tight). The hostname-safe shape
- * (lowercase + hyphens + digits) is the SAME across both providers.
- */
-export const DEPLOY_APP_NAME_MAX_LEN = 30;
-
-/** Length of the deterministic short hash appended on truncation. */
-const DEPLOY_APP_NAME_HASH_LEN = 6;
-
-/**
- * The MANDATORY org-slug PREFIX rule (task #27): every Tanren-created deploy
- * app is named `<orgSlug>-<projectName>` — Fly app names live in a GLOBAL
- * namespace across all Fly customers, so a bare `linkly` collides on common
- * words and halts onboarding loud (HTTP 422 "Name has already been taken").
- * Prefixing with the org's hostname-safe slug (`organizations.login`, supplied
- * on the `ProjectContext.orgSlug` field) makes collisions within the org
- * structurally impossible — two different orgs may still share a project
- * name, but BOTH can succeed because each lands under its own org prefix.
- *
- * This is NOT a fallback / opt-in / try-then-retry pattern. A 422 from the
- * provider after this prefix is a REAL conflict (two derive runs racing
- * within the same org under the same projectName, itself a different bug);
- * the provisioner fails LOUD instead of suffix-retrying — see
- * `flyDeployProvisioner.createApp` / `vercelDeployProvisioner.createApp`.
- *
- * TRUNCATION (when `<orgSlug>-<projectName>` exceeds `DEPLOY_APP_NAME_MAX_LEN`):
- * the ORG-SLUG IS LOAD-BEARING (it's how we namespace), so it stays intact
- * and the PROJECT-NAME component is truncated. A deterministic 6-char hash
- * of the ORIGINAL (pre-truncation) full name is appended so two different
- * long names that truncate to the same prefix don't collide. The cap on the
- * org slug itself is `DEPLOY_APP_NAME_MAX_LEN - "-x-<hash>".length` — an
- * org-slug too long to fit even a 1-char project name + the hash makes
- * onboarding fail LOUD here (an operator-facing org-rename is the fix; we
- * never silently drop the prefix).
- */
-function sanitizeNameSegment(raw: string): string {
-  return raw
-    .toLowerCase()
-    .replaceAll(/[^a-z0-9-]+/gu, "-")
-    .replaceAll(/^-+|-+$/gu, "");
-}
-
-/**
- * 6-char deterministic suffix derived from the full pre-truncation name.
- * Uses `cyrb53`-style hashing inline (no crypto import for what is a pure
- * collision-disambiguator — not a security primitive). Lowercase base-36.
- */
-function shortHash(input: string): string {
-  let hash = 0x811c_9dc5;
-  for (const codePoint of input) {
-    hash = Math.imul(hash ^ (codePoint.codePointAt(0) ?? 0), 0x0100_0193);
-  }
-  // 32-bit unsigned → base-36, padded + sliced to a fixed length so the suffix
-  // is always exactly DEPLOY_APP_NAME_HASH_LEN chars.
-  const unsigned = Math.trunc(hash) + 2 ** 32 * Number(Math.trunc(hash) < 0);
-  return unsigned.toString(36).padStart(DEPLOY_APP_NAME_HASH_LEN, "0").slice(0, DEPLOY_APP_NAME_HASH_LEN);
-}
-
-/**
- * Produce the deploy-app name for a `ProjectContext`. Always prefixed with the
- * Tanren org slug (the global-namespace collision fix; see the
- * {@link sanitizeNameSegment} header comment for the doctrine). The result is
- * hostname-safe (lowercase + digits + hyphens) and ≤ `DEPLOY_APP_NAME_MAX_LEN`
- * — Fly's cap. Truncates the PROJECT-NAME component (never the org prefix)
- * and appends a deterministic 6-char hash when the concatenation exceeds the
- * cap, so two different long project names still resolve to two different
- * app names. FAILS LOUD on an empty org slug (a wiring bug — the provisioning
- * engine resolves it before constructing the context) or an org slug too long
- * to fit even a 1-char project segment.
- */
-export function deployAppName(projectCtx: ProjectContext): string {
-  const orgSlug = sanitizeNameSegment(projectCtx.orgSlug);
-  if (orgSlug === "") {
-    throw new Error(
-      "deployAppName: ProjectContext.orgSlug is required + must contain hostname-safe " +
-        "characters — the deploy-app namespacing rule (task #27) cannot apply without it. " +
-        "The provisioning engine resolves the org slug via OrganizationsStore.getLogin before " +
-        "constructing the context; this throw means a caller is bypassing that wiring.",
-    );
-  }
-  const baseProjectName = projectCtx.name ?? projectCtx.projectId;
-  const projectSlug = sanitizeNameSegment(baseProjectName);
-  // An unrecoverable project-name segment defaults to the projectId — same
-  // shape as the pre-task-27 fallback, just behind the mandatory org prefix.
-  const safeProjectSlug = projectSlug === "" ? sanitizeNameSegment(`tanren-${projectCtx.projectId}`) : projectSlug;
-  const naive = `${orgSlug}-${safeProjectSlug}`;
-  if (naive.length <= DEPLOY_APP_NAME_MAX_LEN) {
-    return naive;
-  }
-  // Need to truncate: reserve room for the org prefix + "-" + truncated project
-  // segment + "-" + the 6-char hash. The hash is computed on the ORIGINAL pre-
-  // truncation `naive` name so two different long names don't collide.
-  // `1 +` accounts for the "-" separator before the hash; `orgSlug.length + 1`
-  // accounts for the "<orgSlug>-" prefix.
-  const reservedForHashSuffix = 1 + DEPLOY_APP_NAME_HASH_LEN;
-  const reservedForOrgPrefix = orgSlug.length + 1;
-  const projectBudget = DEPLOY_APP_NAME_MAX_LEN - reservedForOrgPrefix - reservedForHashSuffix;
-  if (projectBudget < 1) {
-    throw new Error(
-      `deployAppName: org slug '${orgSlug}' is too long (${String(orgSlug.length)} chars) — the namespaced app ` +
-        `name '<orgSlug>-<projectName>-<6charHash>' must fit in ${String(DEPLOY_APP_NAME_MAX_LEN)} chars total ` +
-        `(Fly's app-name cap). Rename the org to a shorter login.`,
-    );
-  }
-  // Trim trailing hyphens from the truncated project segment so the joined
-  // form never produces `--<hash>` (a double-hyphen seam).
-  const truncated = safeProjectSlug.slice(0, projectBudget).replaceAll(/-+$/gu, "");
-  // If trimming wiped the segment entirely (the budget cut into a hyphen
-  // run), fall back to a single-char placeholder so the joined form is still
-  // valid (`<orgSlug>-x-<hash>`).
-  const projectPart = truncated === "" ? "x" : truncated;
-  return `${orgSlug}-${projectPart}-${shortHash(naive)}`;
 }
 
 /**
@@ -420,6 +329,30 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     return this.api.getDeployment(grant, token, app, deploymentId);
   }
 
+  /** Resolve an existing deployment's provider-reported artifact identity. */
+  async resolveArtifactIdentity(grant: OrgGrant, appId: string, deploymentId: string): Promise<DeployArtifactIdentity> {
+    const { token, app } = await this.appAccess(grant, appId, "resolve artifact identity for");
+    return this.api.resolveArtifactIdentity(grant, token, app, deploymentId);
+  }
+
+  /** Promote the selected deployment to the app's production traffic surface. */
+  async promoteToProduction(grant: OrgGrant, appId: string, deploymentId: string): Promise<DeployResult> {
+    const { token, app } = await this.appAccess(grant, appId, "promote a deployment on");
+    return this.api.promoteToProduction(grant, token, app, deploymentId);
+  }
+
+  /** Restore a previously verified deployment to the production traffic surface. */
+  async rollbackToDeployment(grant: OrgGrant, appId: string, targetDeploymentId: string): Promise<DeployResult> {
+    const { token, app } = await this.appAccess(grant, appId, "roll back a deployment on");
+    return this.api.rollbackToDeployment(grant, token, app, targetDeploymentId);
+  }
+
+  /** Tear down a preview deployment; providers make an already-gone target a success. */
+  async teardownDeployment(grant: OrgGrant, appId: string, deploymentId: string): Promise<void> {
+    const { token, app } = await this.appAccess(grant, appId, "tear down a deployment on");
+    await this.api.teardownDeployment(grant, token, app, deploymentId);
+  }
+
   async discover(grant: OrgGrant): Promise<ExistingResource[]> {
     const token = await this.resolveToken(grant);
     const apps = await this.api.listApps(grant, token);
@@ -464,6 +397,22 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
       );
     }
     return secret.value;
+  }
+
+  /** Resolve the token and stable app exactly as the deploy path does. */
+  private async appAccess(
+    grant: OrgGrant,
+    appId: string,
+    operation: string,
+  ): Promise<{ token: string; app: DeployApp }> {
+    const token = await this.resolveToken(grant);
+    const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
+    if (app === undefined) {
+      throw new Error(
+        `${this.api.providerKind}: cannot ${operation} unknown app '${appId}' (not found under the org grant)`,
+      );
+    }
+    return { token, app };
   }
 
   /**

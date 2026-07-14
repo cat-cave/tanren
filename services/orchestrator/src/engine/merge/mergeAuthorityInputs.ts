@@ -17,15 +17,14 @@ import { type PullRequestMergeability } from "../contracts/codeHostTypes.js";
 import { type AuditPosture } from "../contracts/auditPosture.js";
 import { type Finding } from "../contracts/findings.js";
 import { isNonNegativeFinite, nonNegativeFinite } from "../contracts/money.js";
-import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type {
   AuthorizeLandInput,
   BudgetScope,
   DemoVerification,
   GateVerdict,
   HitlSignoff,
+  LandSubject,
   MergeabilityState,
-  PrepareIntegrationResult,
   ReviewMergeVerdict,
 } from "../contracts/mergeAuthority.js";
 
@@ -159,8 +158,8 @@ export function conflictResolutionFrom(resolved: boolean): "resolved" | "unresol
  * blocking value), so it BLOCKS — the gathering never invents a passing value.
  */
 export interface MergeAuthoritySignals {
-  node: IntegrationNode;
-  prepared: PrepareIntegrationResult;
+  /** The land subject (a resolved integration node) the frozen decision input owns. */
+  subject: LandSubject;
   gateOutcome: GateOutcome | undefined;
   findings: ReadonlyArray<Finding>;
   auditPosture: AuditPosture;
@@ -173,15 +172,16 @@ export interface MergeAuthoritySignals {
 }
 
 /**
- * PURE: assemble the {@link AuthorizeLandInput} from the gathered live signals,
+ * PURE: assemble the frozen {@link AuthorizeLandInput} from the gathered live signals,
  * mapping every uncertain/absent input to its fail-closed enum. This is the single
  * audited boundary between the live merge path and the guaranteed truth table — the
- * decision itself stays in `MergeAuthorityImpl.authorizeLand`, this only translates.
+ * decision itself stays in `MergeAuthorityV2Impl.authorizeLand`, this only translates.
+ * The concrete land binding rides in the separate `LandBindingEnvelope` (built by the
+ * gate), never in this frozen input.
  */
 export function buildAuthorizeLandInput(signals: MergeAuthoritySignals): AuthorizeLandInput {
   return {
-    node: signals.node,
-    prepared: signals.prepared,
+    subject: signals.subject,
     gateVerdict: gateVerdictFrom(signals.gateOutcome),
     findings: signals.findings,
     auditPosture: signals.auditPosture,

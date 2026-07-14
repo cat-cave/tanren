@@ -18,14 +18,17 @@ import { decideFromFindings, type AuditPosture } from "../src/engine/contracts/a
 import { evaluatePostureGate } from "../src/engine/forge/audits/postureGate.js";
 import type { Finding } from "../src/engine/contracts/findings.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
-import type { LandFinalizer } from "../src/engine/merge/mergeAuthorityImpl.js";
+import type { AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 
 const REPO = { owner: "o", name: "r" };
 // Strict = block on anything down to P3; velocity = only P0/P1 block, route the rest.
 const STRICT: AuditPosture = { blockReviewAt: "P3", p2p3Handling: "fix-if-idle" };
 const VELOCITY: AuditPosture = { blockReviewAt: "P1", p2p3Handling: "route-to-dag" };
 
-const FINALIZER: LandFinalizer = { finalizeLanded: async () => ({ auditId: "a1" }) };
+const STORE: AuthorityLandStore = {
+  persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+  recordLandReceipt: async () => ({ auditId: "a1" }),
+};
 
 const P0: Finding = { id: "p0", severity: "P0", title: "data loss", body: "b" };
 const P1: Finding = { id: "p1", severity: "P1", title: "blocking defect", body: "b" };
@@ -44,7 +47,7 @@ function landInput(host: InMemoryCodeHost, findings: ReadonlyArray<Finding>, pos
     gateConfigHash: "gc",
     policyVersion: "pv",
     gatedHeadSha: "sha-feat",
-    finalizer: FINALIZER,
+    store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
       findings,

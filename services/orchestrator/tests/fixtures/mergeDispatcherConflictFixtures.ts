@@ -14,7 +14,7 @@ import type {
 } from "../../src/engine/workflow/reviewMerge/index.js";
 import type { ReviewMergeRunContext } from "../../src/engine/workflow/reviewMerge/context.js";
 import type { PullRequestMergeability } from "../../src/engine/contracts/codeHostTypes.js";
-import type { LandFinalizer } from "../../src/engine/merge/mergeAuthorityImpl.js";
+import type { AuthorityLandStore } from "../../src/engine/merge/mergeAuthorityV2Impl.js";
 import type { AuditPosture } from "../../src/engine/contracts/auditPosture.js";
 import type { RunStateWriter } from "../../src/engine/contracts/runStateWriter.js";
 
@@ -97,11 +97,12 @@ export function noopFinalizeWriter(): RunStateWriter {
   } as unknown as RunStateWriter;
 }
 
-/** The §5 finalizer: records land (or throws for the merge_state_unknown case). */
-export function fakeFinalizer(opts: { fail?: boolean; landed: string[] }): LandFinalizer {
+/** The §5 land store: records land (or throws for the merge_state_unknown case). */
+export function fakeLandStore(opts: { fail?: boolean; landed: string[] }): AuthorityLandStore {
   return {
-    finalizeLanded: async (input) => {
-      if (opts.fail) throw new Error("durable finalize failed");
+    persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+    recordLandReceipt: async (input) => {
+      if (opts.fail) throw new Error("durable receipt failed");
       opts.landed.push(input.mainSha);
       return { auditId: "audit_1" };
     },
@@ -123,7 +124,7 @@ export function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthori
   return {
     codeHost: host,
     orgId: "org_1",
-    finalizerFor: () => fakeFinalizer({ fail: o.fail ?? false, landed: o.landed }),
+    landStoreFor: () => fakeLandStore({ fail: o.fail ?? false, landed: o.landed }),
     gateConfigHash: "gc",
     policyVersion: "pv",
     gateOutcome,

@@ -71,19 +71,28 @@ export interface CommitAuthors {
   logins: ReadonlyArray<string>;
 }
 
-/** Input to landing an AUTHORIZED ref into `main` — a plain push, not a merge API. */
-export interface LandAuthorizedRefInput {
+/**
+ * Input to landing an AUTHORIZED integration into `main` — the idempotent CAS land
+ * (SP-4, reconciliation rule 3, step 2). A plain fast-forward push of the authorized
+ * commit, NOT the host's "merge PR" API. `idempotencyKey` is the effect-intent id the
+ * authority persisted (step 1): a re-invocation with the SAME key that already landed
+ * `authorizedSha` returns the same result rather than double-landing (the git host +
+ * Postgres cannot share a txn, so the land is made idempotent on the effect intent).
+ */
+export interface LandAuthorizedIntegrationInput {
   repo: CodeHostRepoRef;
   /** The default branch to advance (e.g. `main`). */
   intoMain: string;
-  /** The authorized, conflict-free commit sha to land (exported by WorkspaceVcsCore). */
+  /** The authorized, conflict-free integration head sha to land (the envelope head). */
   authorizedSha: string;
   /**
    * The sha `intoMain` is EXPECTED to currently point at — a compare-and-swap guard
    * so the land is REJECTED if main advanced underneath (never a blind force-push).
-   * The MergeAuthority's transactional land reconciles on a mismatch.
+   * The MergeAuthorityV2 transactional land reconciles on a mismatch.
    */
   expectedMainSha: string;
+  /** The authority's effect-intent id — the land is idempotent on it. */
+  idempotencyKey: string;
 }
 
 /** The result of a land: the new `main` sha after the authorized ref advanced it. */
@@ -177,12 +186,16 @@ export interface CodeHost {
   readBranchChecks(input: { repo: CodeHostRepoRef; branch: string }): Promise<GitHubPullRequestChecks>;
 
   /**
-   * LAND an authorized ref into `main`: a compare-and-swap PUSH of the authorized
-   * commit onto `intoMain` (advance the default branch ref from `expectedMainSha`
-   * to `authorizedSha`). This is NOT the host's "merge PR" API — Tanren already
-   * made the merge decision (`MergeAuthority.authorizeLand`); the host merely lands
-   * what was authorized. REJECTS (does not blind-overwrite) if `intoMain` no longer
-   * points at `expectedMainSha`, so the transactional land can reconcile.
+   * LAND an authorized integration into `main`: the idempotent compare-and-swap PUSH
+   * of the authorized commit onto `intoMain` (advance the default branch ref from
+   * `expectedMainSha` to `authorizedSha`) — the SOLE host-land capability (SP-4,
+   * reconciliation rule 3, step 2). NOT the host's "merge PR" API: Tanren already made
+   * the merge decision (`MergeAuthorityV2.authorizeLand`); the host merely lands what
+   * was authorized. IDEMPOTENT on `idempotencyKey` — a re-invocation after the ref
+   * already advanced to `authorizedSha` is a successful no-op (returns the landed sha),
+   * so the 4-step land protocol can safely retry step 2. REJECTS (does not
+   * blind-overwrite) if `intoMain` points at neither `expectedMainSha` nor
+   * `authorizedSha`, so the transactional land can reconcile. `mq` imports exactly this.
    */
-  landAuthorizedRef(input: LandAuthorizedRefInput): Promise<LandResult>;
+  landAuthorizedIntegration(input: LandAuthorizedIntegrationInput): Promise<LandResult>;
 }

@@ -22,18 +22,27 @@
 // unconfigured behavior, NOT a stub.
 
 import type {
+  ApplyPreviewInput,
+  ArtifactIdentity,
+  BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  PreviewRelease,
+  PromoteInput,
   ProvisionOrBindInput,
+  ReleaseTransition,
+  RollbackInput,
   UrlReachabilityProbe,
   VerifyPollPolicy,
 } from "../contracts/deployAdapter.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { Digest } from "../contracts/cas.js";
+import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
 import { pollUntilTerminal } from "./pollUntilTerminal.js";
 
@@ -94,6 +103,50 @@ export interface PulumiStackRunner {
     token: string;
     source: DeploySource;
   }): Promise<PulumiUpdateResult>;
+  /** Read the exact artifact identity produced by an existing stack update. */
+  resolveArtifactIdentity(input: {
+    backend: string;
+    project: string;
+    stack: string;
+    token: string;
+    updateId: string;
+  }): Promise<{ artifactDigest: string; providerChecksum: string | null }>;
+  /** Create/update an isolated preview stack for the exact built artifact. */
+  previewUp(input: {
+    backend: string;
+    project: string;
+    stack: string;
+    token: string;
+    source: DeploySource;
+    artifactDigest: Digest;
+  }): Promise<{ previewId: string; updateId: string; endpointUrl: string }>;
+  /** Promote the verified preview deployment onto the production stack. */
+  promote(input: {
+    backend: string;
+    project: string;
+    stack: string;
+    token: string;
+    deploymentId: string;
+    artifactDigest: Digest;
+    previousReleaseInstanceId: string | null;
+  }): Promise<PulumiUpdateResult>;
+  /** Restore a previously verified release onto the production stack. */
+  rollback(input: {
+    backend: string;
+    project: string;
+    stack: string;
+    token: string;
+    targetReleaseInstanceId: string;
+    targetArtifactDigest: Digest;
+  }): Promise<PulumiUpdateResult>;
+  /** Tear down an isolated preview stack. Idempotent when it is already absent. */
+  teardownStack(input: {
+    backend: string;
+    project: string;
+    stack: string;
+    token: string;
+    previewId: string;
+  }): Promise<void>;
   /**
    * Read the current status of update `updateId` on the stack (the verify poll): the
    * Pulumi update result collapsed into succeeded/failed + the endpoint output.
@@ -209,6 +262,100 @@ export class PulumiDeployAdapter implements DeployAdapter {
     // The `up` returns the update id + endpoint; the deploymentId is the update id
     // (the handle verify/status poll against). State is "in-progress" at trigger time.
     return { deploymentId: result.updateId, url: result.endpointUrl, state: "in-progress" };
+  }
+
+  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(grant, ref, source);
+    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+  }
+
+  async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
+    const backend = this.backend(grant);
+    const project = this.project(grant);
+    const token = await this.token(grant);
+    const raw = await this.deps.runner.resolveArtifactIdentity({
+      backend,
+      project,
+      stack: ref.appId,
+      token,
+      updateId: deploymentId,
+    });
+    return {
+      artifactDigest: parseDigest(raw.artifactDigest),
+      providerChecksum: raw.providerChecksum === null ? null : parseProviderChecksum(raw.providerChecksum),
+    };
+  }
+
+  async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
+    const backend = this.backend(grant);
+    const project = this.project(grant);
+    const token = await this.token(grant);
+    const result = await this.deps.runner.previewUp({
+      backend,
+      project,
+      stack: ref.appId,
+      token,
+      source: input.source,
+      artifactDigest: input.artifactDigest,
+    });
+    return {
+      deploymentId: result.previewId,
+      url: result.endpointUrl,
+      environment: "preview",
+      artifactDigest: input.artifactDigest,
+      state: "preview",
+    };
+  }
+
+  async promote(grant: OrgGrant, ref: DeployRef, input: PromoteInput): Promise<ReleaseTransition> {
+    const backend = this.backend(grant);
+    const project = this.project(grant);
+    const token = await this.token(grant);
+    const result = await this.deps.runner.promote({
+      backend,
+      project,
+      stack: ref.appId,
+      token,
+      deploymentId: input.deploymentId,
+      artifactDigest: input.artifactDigest,
+      previousReleaseInstanceId: input.previousReleaseInstanceId,
+    });
+    return {
+      deploymentId: result.updateId,
+      url: result.endpointUrl,
+      environment: "production",
+      artifactDigest: input.artifactDigest,
+      state: "live",
+    };
+  }
+
+  async rollback(grant: OrgGrant, ref: DeployRef, input: RollbackInput): Promise<ReleaseTransition> {
+    const backend = this.backend(grant);
+    const project = this.project(grant);
+    const token = await this.token(grant);
+    const result = await this.deps.runner.rollback({
+      backend,
+      project,
+      stack: ref.appId,
+      token,
+      targetReleaseInstanceId: input.targetReleaseInstanceId,
+      targetArtifactDigest: input.targetArtifactDigest,
+    });
+    return {
+      deploymentId: result.updateId,
+      url: result.endpointUrl,
+      environment: "production",
+      artifactDigest: input.targetArtifactDigest,
+      state: "rolled_back",
+    };
+  }
+
+  async teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void> {
+    const backend = this.backend(grant);
+    const project = this.project(grant);
+    const token = await this.token(grant);
+    await this.deps.runner.teardownStack({ backend, project, stack: ref.appId, token, previewId });
   }
 
   async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {

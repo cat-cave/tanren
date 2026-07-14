@@ -20,12 +20,16 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import {
-  CONF_NODE,
+  CONF_ENVELOPE,
   confAllClearInput,
   describeMergeAuthorityConformance,
 } from "./conformance/mergeAuthorityConformance.js";
-import { type LandFinalizer, MergeAuthorityImpl } from "../src/engine/merge/mergeAuthorityImpl.js";
-import { buildLandFinalizer, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
+import {
+  MergeAuthorityV2Impl,
+  SubjectEqualityRevalidator,
+  type AuthorityLandStore,
+} from "../src/engine/merge/mergeAuthorityV2Impl.js";
+import { buildAuthorityLandStore, type LandFinalizeContext } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "../src/engine/merge/landSignals.js";
 import { authorizeAndLand } from "../src/engine/merge/mergeAuthorityGate.js";
@@ -39,10 +43,10 @@ const ADMIN_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@local
 const REPO = { owner: "owner", name: "repo" };
 const ORG_ID = "org_ma";
 const PROJECT_ID = "proj_ma";
-// The conformance node lands spec_a / run_a — seed those exact ids so the finalize's
+// The conformance envelope lands spec_a / run_a — seed those exact ids so the receipt's
 // `merge.completed` (FK task) + spec `merged` flip hit real rows.
-const SPEC_ID = CONF_NODE.members[0]!.specId;
-const RUN_ID = CONF_NODE.members[0]!.runId;
+const SPEC_ID = CONF_ENVELOPE.members[0]!.specId;
+const RUN_ID = CONF_ENVELOPE.members[0]!.runId;
 const TASK_ID = "task_ma_merge";
 
 function dbName(): string {
@@ -105,27 +109,28 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     await seedTenant(ownerPool);
   });
 
-  /** Build the writer-backed authority: in-memory host (CAS) + the REAL DB finalizer. */
-  function buildAuthority(failFinalize: boolean): MergeAuthorityImpl {
+  /** Build the writer-backed authority: in-memory host (CAS) + the REAL DB land store. */
+  function buildAuthority(failFinalize: boolean): MergeAuthorityV2Impl {
     const host = new InMemoryCodeHost();
-    host.seed(REPO, CONF_NODE.baseBranch, CONF_NODE.baseSha);
-    // Audit D-R3.2: buildLandFinalizer now requires the writer; the Direct writer over the
+    host.seed(REPO, CONF_ENVELOPE.target.intoMain, CONF_ENVELOPE.expectedMainSha);
+    // Audit D-R3.2: buildAuthorityLandStore requires the writer; the Direct writer over the
     // same owner pool runs the byte-identical `applyFinalizeLand` org-scoped transaction.
-    const real = buildLandFinalizer(ownerPool, landContext(), new DirectRunStateWriter(ownerPool));
-    // The failing variant wraps the real finalizer in a throw-after-land — a faithful
+    const real = buildAuthorityLandStore(ownerPool, landContext(), new DirectRunStateWriter(ownerPool));
+    // The failing variant wraps the real store in a throw-after-land receipt — a faithful
     // "the durable write failed AFTER the external land fired" (the reconcile case).
-    const finalizer: LandFinalizer = failFinalize
+    const store: AuthorityLandStore = failFinalize
       ? {
-          finalizeLanded: async () => {
-            throw new Error("durable finalize failed");
+          persistAuthorizedDecision: real.persistAuthorizedDecision.bind(real),
+          recordLandReceipt: async () => {
+            throw new Error("durable receipt failed");
           },
         }
       : real;
-    return new MergeAuthorityImpl(host, finalizer);
+    return new MergeAuthorityV2Impl(host, new SubjectEqualityRevalidator(), store);
   }
 
   // Drive the FROZEN truth table against the writer-backed impl.
-  describeMergeAuthorityConformance("MergeAuthorityImpl + writer-backed LandFinalizer (real DB)", {
+  describeMergeAuthorityConformance("MergeAuthorityV2Impl + writer-backed land store (real DB)", {
     make: () => buildAuthority(false),
     makeWithFailingFinalize: () => buildAuthority(true),
   });
@@ -134,16 +139,9 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
 
   it("REGRESSION LOCK (P0-a): a live land with mergeability:'unknown' is BLOCKED (was: merged)", async () => {
     const authority = buildAuthority(false);
-    const prepared = await authority.prepareIntegration({
-      node: CONF_NODE,
-      repo: REPO,
-      intoMain: CONF_NODE.baseBranch,
-      baseSha: CONF_NODE.baseSha,
-    });
-    const input = { ...confAllClearInput(prepared), mergeability: "unknown" as const };
-    const auth = await authority.authorizeLand(input);
+    const input = { ...confAllClearInput(), mergeability: "unknown" as const };
+    const auth = await authority.authorizeLand(input, CONF_ENVELOPE);
     expect(auth.decision).toBe("blocked");
-    expect(auth.target).toBeUndefined();
     // The spec was NEVER advanced to `merged` (no land happened).
     const status = await specStatus();
     expect(status).not.toBe("merged");
@@ -151,13 +149,7 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
 
   it("REGRESSION LOCK (P0-b): a durable-write failure AFTER the external land reconciles to merge_state_unknown (was: silent inconsistency)", async () => {
     const authority = buildAuthority(true);
-    const prepared = await authority.prepareIntegration({
-      node: CONF_NODE,
-      repo: REPO,
-      intoMain: CONF_NODE.baseBranch,
-      baseSha: CONF_NODE.baseSha,
-    });
-    const auth = await authority.authorizeLand(confAllClearInput(prepared));
+    const auth = await authority.authorizeLand(confAllClearInput(), CONF_ENVELOPE);
     const outcome = await authority.land(auth);
     // NEVER a plain failure / silent inconsistency — the explicit reconcile state.
     expect(outcome.kind).toBe("merge_state_unknown");
@@ -167,29 +159,16 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
 
   it("REGRESSION LOCK (P0-c): a changes_requested review at merge time routes to needs_attention (was: absorbed)", async () => {
     const authority = buildAuthority(false);
-    const prepared = await authority.prepareIntegration({
-      node: CONF_NODE,
-      repo: REPO,
-      intoMain: CONF_NODE.baseBranch,
-      baseSha: CONF_NODE.baseSha,
-    });
-    const input = { ...confAllClearInput(prepared), reviewVerdict: "changes_requested" as const };
-    const auth = await authority.authorizeLand(input);
+    const input = { ...confAllClearInput(), reviewVerdict: "changes_requested" as const };
+    const auth = await authority.authorizeLand(input, CONF_ENVELOPE);
     expect(auth.decision).toBe("needs_attention");
-    expect(auth.target).toBeUndefined();
     const status = await specStatus();
     expect(status).not.toBe("merged");
   });
 
   it("a fully-clear land lands transactionally + flips the spec to merged + records merge.completed", async () => {
     const authority = buildAuthority(false);
-    const prepared = await authority.prepareIntegration({
-      node: CONF_NODE,
-      repo: REPO,
-      intoMain: CONF_NODE.baseBranch,
-      baseSha: CONF_NODE.baseSha,
-    });
-    const auth = await authority.authorizeLand(confAllClearInput(prepared));
+    const auth = await authority.authorizeLand(confAllClearInput(), CONF_ENVELOPE);
     const outcome = await authority.land(auth);
     expect(outcome.kind).toBe("landed");
     // The durable record landed in ONE transaction: spec merged + the merge.completed event.
@@ -251,7 +230,10 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
       gateConfigHash: "gc",
       policyVersion: "pv",
       gatedHeadSha: signals.gatedHeadSha,
-      finalizer: { finalizeLanded: async () => ({ auditId: "a" }) },
+      store: {
+        persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+        recordLandReceipt: async () => ({ auditId: "a" }),
+      },
       signals: {
         gateOutcome: signals.gateOutcome,
         findings: [],
