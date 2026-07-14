@@ -25,12 +25,12 @@ contributor) needs to drive the remaining work is here or linked from here.
 
 ## 2. The artifacts in this folder
 
-| File | What it is |
-|---|---|
-| `README.md` (this) | The master handover: objective, DAG, principles, build flow |
-| `integrated-build-dag.html` | The visual blueprint — spine + 142 nodes + seams + waves. Open in a browser |
-| `build-workflow.mjs` | **The authoritative frozen spec + the build workflow-as-code.** Contains the `RECON`, `CLEAN`, `TYPES`, `PINS` consts (the reconciliation that makes the contracts compose — obey them exactly), the `SPINE`/`CONSUMER`/`MIG` node data, and the runnable Tanren `Workflow` (design → sol audit → build → PR). This is how the spine was built and how the consumers get built |
-| `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, apex-proof, deps, validation) from the six `sol` audits. The authoritative node detail |
+| File                                                                    | What it is                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `README.md` (this)                                                      | The master handover: objective, DAG, principles, build flow                                                                                                                                                                                                                                                                                                                    |
+| `integrated-build-dag.html`                                             | The visual blueprint — spine + 142 nodes + seams + waves. Open in a browser                                                                                                                                                                                                                                                                                                    |
+| `build-workflow.mjs`                                                    | **The authoritative frozen spec + the build workflow-as-code.** Contains the `RECON`, `CLEAN`, `TYPES`, `PINS` consts (the reconciliation that makes the contracts compose — obey them exactly), the `SPINE`/`CONSUMER`/`MIG` node data, and the runnable Tanren `Workflow` (design → sol audit → build → PR). This is how the spine was built and how the consumers get built |
+| `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, apex-proof, deps, validation) from the six `sol` audits. The authoritative node detail                                                                                                                                                                                                                                          |
 
 ## 3. The spine (built) — 8 shared contracts
 
@@ -40,16 +40,16 @@ six independently-brilliant pitches did **not** compose (two merge authorities,
 colliding migrations, duplicate proof stores) — the `sol` integration audit caught it
 and produced the reconciliation now frozen in `build-workflow.mjs`.
 
-| # | Contract | Lives at | Migration |
-|---|---|---|---|
-| SP-1 | Behaviors/personas as immutable revisions | `engine/contracts/behaviorRevision.ts` | `0034` |
-| SP-2 | Generalized F2 authoring kernel | `engine/contracts/authoringKernel.ts` | (code) |
-| SP-3 | CAS proof/artifact substrate (sole `Digest`/`domainHash`/`CasByteStore`) | `engine/contracts/cas.ts` | `0035` |
-| SP-4 | The Authority pattern — `MergeAuthorityV2` (sole land decision; V1 deleted) | `engine/contracts/mergeAuthority.ts`, `engine/merge/mergeAuthorityV2Impl.ts` | `0039` |
-| SP-5 | Runtime-verification harness (DSL/driver/observer/render/verdict) | `engine/contracts/runtimeVerification*.ts` | `0037` |
-| SP-6 | Extended DeployAdapter (digest/preview/canary/promote/rollback) | `engine/contracts/deployAdapter.ts` | `0036` |
-| SP-7 | Native gate evidence + `GateProofBundle` (a profile over SP-3) | `engine/contracts/gateProof.ts` | `0038` |
-| SP-8 | Event vocabulary (`event_types` catalog + FK; codegen seed) | `db/src/schemaEventTypes.ts` | `0040` |
+| #    | Contract                                                                    | Lives at                                                                     | Migration |
+| ---- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------- |
+| SP-1 | Behaviors/personas as immutable revisions                                   | `engine/contracts/behaviorRevision.ts`                                       | `0034`    |
+| SP-2 | Generalized F2 authoring kernel                                             | `engine/contracts/authoringKernel.ts`                                        | (code)    |
+| SP-3 | CAS proof/artifact substrate (sole `Digest`/`domainHash`/`CasByteStore`)    | `engine/contracts/cas.ts`                                                    | `0035`    |
+| SP-4 | The Authority pattern — `MergeAuthorityV2` (sole land decision; V1 deleted) | `engine/contracts/mergeAuthority.ts`, `engine/merge/mergeAuthorityV2Impl.ts` | `0039`    |
+| SP-5 | Runtime-verification harness (DSL/driver/observer/render/verdict)           | `engine/contracts/runtimeVerification*.ts`                                   | `0037`    |
+| SP-6 | Extended DeployAdapter (digest/preview/canary/promote/rollback)             | `engine/contracts/deployAdapter.ts`                                          | `0036`    |
+| SP-7 | Native gate evidence + `GateProofBundle` (a profile over SP-3)              | `engine/contracts/gateProof.ts`                                              | `0038`    |
+| SP-8 | Event vocabulary (`event_types` catalog + FK; codegen seed)                 | `db/src/schemaEventTypes.ts`                                                 | `0040`    |
 
 The migration band is `0034–0040`, single-owner-per-slot, foundation tables never FK
 forward. (The spec's original `0033` base shifted +1 because `origin/main` took `0033`
@@ -62,18 +62,21 @@ closes v96's failures; `full` = comparator-beating remainder), and key spine dep
 below. Every node = one PR-sized spec.
 
 ### merge-queue (16) — builds the never-blockable speculative queue + bisection
+
 `mq-1..5,11` (MVP: v96-clog fix, MergeAuthorityV2 multi-member eval, safe-subset
 solver, member isolation, atomic land-group, jj materializer) · `mq-6..10,12..16`
 (full: granular proof reuse, flake quarantine, EAGER beam search, semantic partitions,
 respec router, deploy/rollback, QueuePolicyV1, dashboard, V2 cutover).
 
 ### runtime-verification (26) — behavior→executable tests, "proven not just reachable"
-Most of the *spine* was built here (rv-1/2/3/5/6/9/10/11/14/15/21). Remaining consumer
+
+Most of the _spine_ was built here (rv-1/2/3/5/6/9/10/11/14/15/21). Remaining consumer
 MVP: `rv-4,7,8,12,13,16,17,18,19,20,22,23,24,25,26` (coverage edges, fixture leases,
 side-effect observers, A3 causal-correlation, A4 visual, behavior-aware bisection,
 flake governance, proof-backed demo, post-merge re-proof, dashboards, apex vertical).
 
 ### integrations (22) — provision + bind + cross-validate integrations in the DAG
+
 `in-1..22` (all MVP): lifecycle model + RLS, typed contracts, requirement compiler,
 capability DAG nodes, reconciliation saga, ApplicationIntegrationProvisioner, Slack
 product binding (fix the wrong-plane bug), BindingMaterializer → `project_app_env`,
@@ -81,6 +84,7 @@ transactional delivery outbox, A3 live trigger/observe, Control Center UI, apex
 attestation. **This is what makes the fixture's "Slack at 100 clicks" buildable.**
 
 ### back-half (35) — trustworthy self-healing that verifies the fix live
+
 MVP closed loop `bh-1..14`: IssueLoop aggregate, provenance, webhook hardening,
 `SymptomContractV1`, `SymptomProbeAdapter`, `ResolutionDagWalker`, baseline
 reproduction, production symptom verification, `ResolutionAuthority` (sibling, never
@@ -88,11 +92,13 @@ lands), source-sync outbox, P0 repair routing, Self-Healing UI. `bh-15..35` full
 (rich probes, preview/canary, counterfactual, more sources, signed certificates).
 
 ### design-system (9 phase-nodes) — real, fragment-style, framework-adaptive
+
 `ds-0..5` MVP (DesignContractV2, executable token core + base/plain, web adapter
 shadcn, F2D missing-fragment authoring, A4 visual gate, Studio/API/theme-reuse);
 `ds-6..8` full (queue/demo compounding, Bevy/mobile adapters, cross-org themes).
 
-### governance (34) — control plane that *parameterizes* MergeAuthority
+### governance (34) — control plane that _parameterizes_ MergeAuthority
+
 `gv-1..15` MVP: safety repairs (auditPosture guard, strict simulated-review, real
 hashes, transitive retarget, truthful budget, notification RLS), immutable policy
 revisions + compiler, tiers, bindings + effective-policy receipt, governance F2
@@ -102,6 +108,7 @@ authoritative, budget envelopes, CODEOWNERS, host projection, PromotionAuthority
 DORA-by-revision).
 
 ### Cross-feature seams (why it's one product)
+
 One fragment kernel (5 families) · A4-render ≡ demo-engine · one trace ID from Forge
 sentence → deployed demo · behaviors→tests for free · one Authority pattern with three
 heads (Merge/Resolution/Promotion) · one extended DeployAdapter for five consumers ·
@@ -161,6 +168,7 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
 ## 7. The objective, restated: back to apex fixtures
 
 The whole point is to return to apex with an engine that closes what v96 could not:
+
 - **v96's persistence bug was a deploy-infra gap** (fixed: single-instance reap, #930)
   — the back-half loop fired but couldn't autonomously fix an infra bug.
 - **The fair test** the engine must now pass: a clean apex run with a **product-level**
