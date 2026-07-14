@@ -10,6 +10,8 @@
         "rebased_clean",
         "rebased_resolved",
         "replanned",
+        "writer_rework",
+        "parked",
         "held"
       ],
       "type": "string"

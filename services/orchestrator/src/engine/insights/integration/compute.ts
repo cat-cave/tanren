@@ -58,7 +58,14 @@ export interface DeriveIntegrationOptions {
   windowDays: number;
 }
 
-const DECISIONS: readonly RebaseDecision[] = ["rebased_clean", "rebased_resolved", "replanned", "held"];
+const DECISIONS: readonly RebaseDecision[] = [
+  "rebased_clean",
+  "rebased_resolved",
+  "replanned",
+  "writer_rework",
+  "parked",
+  "held",
+];
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null;

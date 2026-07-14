@@ -367,9 +367,9 @@ export const IntegrationRebasePayload = z
     // failed on the new base. It does NOT gate the decision (a clean-rebase gate-failure
     // is a real replan).
     rebaseConflicted: z.boolean(),
-    // What the base shift cost — the `rebase_vs_rebuild` signal (NO re-plan unless the
-    // old work genuinely no longer fits the new base). `held` is a fail-closed hold.
-    decision: z.enum(["rebased_clean", "rebased_resolved", "replanned", "held"]),
+    // What the base shift cost — the `rebase_vs_rebuild` signal. `writer_rework` /
+    // `parked` are distinct from planner `replanned`; `held` is a fail-closed hold.
+    decision: z.enum(["rebased_clean", "rebased_resolved", "replanned", "writer_rework", "parked", "held"]),
   })
   .strict();
 export type IntegrationRebasePayload = z.infer<typeof IntegrationRebasePayload>;

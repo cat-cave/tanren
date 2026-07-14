@@ -432,7 +432,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
           resolved: false,
           recovery: {
             kind: "owned",
-            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running" } },
+            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running", runId: "run_live" } },
           },
         };
       },

@@ -20,7 +20,7 @@
 // commit (`rebaseOnto` never throws), so even an irreconcilable shift keeps the work alive.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { ConflictRecoveryDisposition } from "../contracts/conflictResolution.js";
+import type { ConflictRecoveryDisposition, GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
@@ -34,6 +34,7 @@ import {
   type ReGateResult,
   type ReGateVerdict,
 } from "./baseShiftPorts.js";
+import { baseShiftDecisionFromRecovery } from "../merge/recoveryOwnership.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("base-shift");
@@ -298,9 +299,10 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // A CLEAN rebase whose re-gate FAILED a GATE TIER: the tree is byte-clean (no conflict), the
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
-    await this.routeGateFailToRework(input, result.gateError);
-    await this.emit(input, false, "replanned");
-    return { decision: "replanned", headSha: input.rebase.headSha };
+    const rework = await this.routeGateFailToRework(input, result.gateError);
+    const decision: RebaseDecision = rework.kind === "parked" ? "parked" : "writer_rework";
+    await this.emit(input, false, decision);
+    return { decision, headSha: input.rebase.headSha };
   }
 
   /**
@@ -345,8 +347,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       if (resolution.recovery === undefined || resolution.recovery.kind === "unowned") {
         await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
       }
-      await this.emit(input, true, "replanned");
-      return { decision: "replanned", headSha: input.rebase.headSha };
+      const decision = baseShiftDecisionFromRecovery(resolution.recovery);
+      await this.emit(input, true, decision);
+      return { decision, headSha: input.rebase.headSha };
     }
 
     // Resolved IN the commit — re-gate the resolved tree. A fit ⇒ keep the run (NO re-plan); a
@@ -362,9 +365,10 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
     // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). The
     // rework router is REQUIRED — every construction site wires it (no silent fallback).
-    await this.routeGateFailToRework(input, result.gateError);
-    await this.emit(input, true, "replanned");
-    return { decision: "replanned", headSha: input.rebase.headSha };
+    const rework = await this.routeGateFailToRework(input, result.gateError);
+    const decision: RebaseDecision = rework.kind === "parked" ? "parked" : "writer_rework";
+    await this.emit(input, true, decision);
+    return { decision, headSha: input.rebase.headSha };
   }
 
   /**
@@ -405,8 +409,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   private async routeGateFailToRework(
     input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
     gateError: string | undefined,
-  ): Promise<void> {
-    await this.deps.gateRework.routeGateFailToRework({
+  ): Promise<GateReworkRouteResult> {
+    return this.deps.gateRework.routeGateFailToRework({
       projectId: input.projectId,
       specId: input.dependent.specId,
       runId: input.dependent.runId,

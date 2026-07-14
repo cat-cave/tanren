@@ -164,7 +164,7 @@ function noopReplan(): ReplanRouter {
   return {
     routeBackToPlanner: async (input) => ({
       kind: "owned",
-      receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running" } },
+      receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
     }),
   };
 }

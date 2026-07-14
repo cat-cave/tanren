@@ -42,6 +42,11 @@ import type { ReplanRouter, ReplanRouteResult } from "../../../contracts/conflic
 import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
+import {
+  findLiveNonterminalRunForSpec,
+  isRecoveryTerminalSpecStatus,
+  loadSpecStatusForRecovery,
+} from "../../../merge/recoveryOwnership.js";
 
 const log = createLogger("replan-router");
 
@@ -233,6 +238,20 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     //     re-open must COMMIT before the run-create's separate-connection claim reads it —
     //     the same ordering the recovery `replan_with_steering` action documents). When no
     //     enqueuer is wired, fail closed by parking rather than fabricating a live run.
+    // Fail closed before reopen/enqueue: a merged/cancelled base-side target cannot own recovery.
+    const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.specId);
+    if (existingStatus !== undefined && isRecoveryTerminalSpecStatus(existingStatus)) {
+      const message = await this.escalateEnqueueFailure(
+        input,
+        `spec is terminal (${existingStatus}) and cannot own a recovery re-plan`,
+      );
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
+        message,
+      };
+    }
+
     const status = this.deps.replanStatus ?? "open";
     const enqueue = await this.enqueueReplan(input, status);
     if (enqueue.outcome === "no-enqueuer") {
@@ -245,13 +264,19 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     }
     if (enqueue.outcome === "failed") {
       // NEVER-STRAND (the v35 silent-fallback bug): the enqueue genuinely FAILED and NO run
-      // is being driven for the spec. The old code swallowed this and STILL emitted
-      // `merge.conflict.replan_routed` (counting against the bounded cap) with NO
-      // `recovery.replan_queued` and no live run — the exact `replanned`-strand the live
-      // run hit (the spec sat `in_flight`/`open` forever). A routed replan that cannot RUN
-      // is not a recoverable re-plan; it is a genuine failure a human must see. Escalate
-      // LOUDLY (frees the slot, blocks only dependents) instead of recording a bare routing.
+      // is being driven for the spec. Escalate LOUDLY instead of recording a bare routing.
       const message = await this.escalateEnqueueFailure(input, enqueue.error);
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
+        message,
+      };
+    }
+    if (enqueue.outcome === "no-live-run") {
+      const message = await this.escalateEnqueueFailure(
+        input,
+        "SpecNotRunnableError without an independently verified live nonterminal run",
+      );
       return {
         kind: "parked",
         receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
@@ -314,7 +339,7 @@ export class SpecStatusReplanRouter implements ReplanRouter {
         run:
           enqueue.outcome === "enqueued"
             ? { kind: "enqueued", replanRunId: enqueue.replanRunId, plannerTaskId: enqueue.plannerTaskId }
-            : { kind: "already_running" },
+            : { kind: "already_running", runId: enqueue.runId },
       },
     };
   }
@@ -335,7 +360,8 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     status: string,
   ): Promise<
     | { outcome: "enqueued"; replanRunId: string; plannerTaskId: string }
-    | { outcome: "already-running" }
+    | { outcome: "already-running"; runId: string }
+    | { outcome: "no-live-run" }
     | { outcome: "failed"; error: unknown }
     | { outcome: "no-enqueuer" }
   > {
@@ -350,19 +376,24 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       });
       return { outcome: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId };
     } catch (error) {
-      // BENIGN RACE ONLY: the re-opened spec was already claimed by a concurrent tick (the
-      // run-create's `open`-status claim found it taken). The spec IS being re-driven on
-      // that run, so this is not a strand — log + treat as a confirmed re-drive.
+      // SpecNotRunnableError is NEVER ownership by itself — independently prove a live run.
       if (error instanceof SpecNotRunnableError) {
-        log.warn(
-          "re-plan enqueue found the re-opened spec already claimed by a concurrent tick — the spec is being re-driven on that run; skipping the duplicate enqueue",
-          { specId: input.specId },
+        const live = await findLiveNonterminalRunForSpec(this.deps.pool, input.specId);
+        if (live !== undefined) {
+          log.warn(
+            "re-plan enqueue found the re-opened spec already claimed; verified a live nonterminal run owns it",
+            { specId: input.specId, runId: live.runId, status: live.status },
+            error,
+          );
+          return { outcome: "already-running", runId: live.runId };
+        }
+        log.error(
+          "re-plan enqueue raised SpecNotRunnableError but no live nonterminal run exists — fail closed",
+          { specId: input.specId, reportedStatus: error.status },
           error,
         );
-        return { outcome: "already-running" };
+        return { outcome: "no-live-run" };
       }
-      // GENUINE FAILURE: the enqueue could not create a run AND no concurrent tick owns it.
-      // Surface it so the caller escalates — NEVER swallow it into a silent strand.
       log.error(
         "re-plan enqueue FAILED to create a run for the routed spec — escalating (never a silent replan_routed strand)",
         { specId: input.specId },

@@ -36,11 +36,24 @@ const PROJECT = "project_replan";
 /** Records the spec-status UPDATEs the router drives through its in-process pool path. */
 class RecordingPool {
   readonly statusWrites: Array<{ specId: string; status: string }> = [];
+  /** Spec status returned by SELECT status FROM specs (default open — re-openable). */
+  specStatusById = new Map<string, string>();
+  /** Live nonterminal runs returned by the ownership proof query. */
+  liveRunsBySpec = new Map<string, { run_id: string; status: string }>();
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
     if (text.startsWith("UPDATE specs SET status")) {
       this.statusWrites.push({ specId: String(params?.[0]), status: String(params?.[1]) });
       return { rows: [] };
+    }
+    if (text.includes("SELECT status FROM specs")) {
+      const specId = String(params?.[0]);
+      const status = this.specStatusById.get(specId) ?? "open";
+      return { rows: [{ status }] };
+    }
+    if (text.includes("FROM runs") && text.includes("status IN")) {
+      const live = this.liveRunsBySpec.get(String(params?.[0]));
+      return { rows: live === undefined ? [] : [live] };
     }
     throw new Error(`unexpected pool query in replan-routing test: ${text}`);
   }
@@ -311,6 +324,8 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
   // and emits NO `recovery.replan_queued` (no NEW run id to name — never a fabricated id).
   it("BENIGN race: an already-claimed spec records the routing, emits no fake replan_queued, does NOT escalate", async () => {
     const pool = new RecordingPool();
+    // Independent live-run proof required — SpecNotRunnableError alone is never ownership.
+    pool.liveRunsBySpec.set("spec_b", { run_id: "run_concurrent_b", status: "running" });
     const eventStore = new RecordingEventStore();
     const enqueuer = new AlreadyClaimedEnqueuer();
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
@@ -323,7 +338,11 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
 
     expect(recovery).toEqual({
       kind: "owned",
-      receipt: { kind: "planner_replan", specId: "spec_b", run: { kind: "already_running" } },
+      receipt: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "already_running", runId: "run_concurrent_b" },
+      },
     });
 
     expect(enqueuer.calls).toBe(1);
@@ -334,5 +353,58 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     // It does NOT escalate (the spec is re-driving on the concurrent run, not stuck).
     expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
     expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+  });
+
+  it("FAIL-CLOSED: SpecNotRunnableError without a live nonterminal run parks (never fabricates already_running)", async () => {
+    const pool = new RecordingPool();
+    // No liveRunsBySpec entry — claim race without a proven live run.
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new AlreadyClaimedEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "re-plan ON TOP OF spec_a (sha-new)",
+      otherSpecId: "spec_a",
+    });
+
+    expect(recovery.kind).toBe("parked");
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(true);
+    expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
+  });
+
+  it("FAIL-CLOSED: a merged base-side replan target cannot own recovery", async () => {
+    const pool = new RecordingPool();
+    pool.specStatusById.set("spec_merged_other", "merged");
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new RecordingEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_merged_other",
+      newContext: "re-plan the OTHER (already merged) side",
+      otherSpecId: "spec_merging",
+    });
+
+    expect(recovery.kind).toBe("parked");
+    expect(enqueuer.calls).toHaveLength(0);
+    expect(String((recovery as { message: string }).message)).toMatch(/terminal \(merged\)/u);
+  });
+
+  it("FAIL-CLOSED: a cancelled spec cannot own recovery", async () => {
+    const pool = new RecordingPool();
+    pool.specStatusById.set("spec_cancelled", "cancelled");
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new RecordingEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_cancelled",
+      newContext: "re-plan a cancelled target",
+    });
+
+    expect(recovery.kind).toBe("parked");
+    expect(enqueuer.calls).toHaveLength(0);
+    expect(String((recovery as { message: string }).message)).toMatch(/terminal \(cancelled\)/u);
   });
 });

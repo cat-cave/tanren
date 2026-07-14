@@ -43,6 +43,11 @@ import {
 import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { createLogger } from "../observability/logger.js";
+import {
+  findLiveNonterminalRunForSpec,
+  isRecoveryTerminalSpecStatus,
+  loadSpecStatusForRecovery,
+} from "./recoveryOwnership.js";
 
 const log = createLogger("batch-gate-rework");
 
@@ -122,6 +127,20 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       };
     }
 
+    const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.culprit.specId);
+    if (existingStatus !== undefined && isRecoveryTerminalSpecStatus(existingStatus)) {
+      const message = await this.escalateEnqueueFailure(
+        orgId,
+        input,
+        new Error(`spec is terminal (${existingStatus}) and cannot own writer rework`),
+      );
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
+        message,
+      };
+    }
+
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     try {
       // The never-discard re-author: re-open the spec to `open` + append the gate error as
@@ -145,24 +164,41 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         },
       };
     } catch (error) {
-      // BENIGN RACE: a concurrent tick already claimed the re-opened spec — a run IS being
-      // driven, so this is not a strand. Record the routing observably (no new run id) + treat
-      // as re-worked.
+      // SpecNotRunnableError is NEVER ownership alone — independently prove a live run.
       if (error instanceof SpecNotRunnableError) {
-        log.warn(
-          "gate-fail rework found the spec already claimed by a concurrent tick — it is being re-driven; skipping the duplicate enqueue",
-          { specId: input.culprit.specId },
+        const live = await findLiveNonterminalRunForSpec(this.deps.pool, input.culprit.specId);
+        if (live !== undefined) {
+          log.warn(
+            "gate-fail rework found the spec already claimed; verified a live nonterminal run owns it",
+            { specId: input.culprit.specId, runId: live.runId, status: live.status },
+            error,
+          );
+          await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, live.runId);
+          return {
+            kind: "owned",
+            receipt: {
+              kind: "writer_rework",
+              specId: input.culprit.specId,
+              run: { kind: "already_running", runId: live.runId },
+            },
+          };
+        }
+        log.error(
+          "gate-fail rework SpecNotRunnableError without a live nonterminal run — fail closed",
+          { specId: input.culprit.specId, reportedStatus: error.status },
           error,
         );
-        await this.recordReworked(orgId, input, priorSignatures.length, steeringNote);
+        const message = await this.escalateEnqueueFailure(
+          orgId,
+          input,
+          new Error("SpecNotRunnableError without an independently verified live nonterminal run"),
+        );
         return {
-          kind: "owned",
-          receipt: { kind: "writer_rework", specId: input.culprit.specId, run: { kind: "already_running" } },
+          kind: "parked",
+          receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
+          message,
         };
       }
-      // GENUINE FAILURE: the rework run could not be created AND no concurrent tick owns it.
-      // A routed rework that cannot RUN is not a recoverable re-author; it is a genuine
-      // failure a human must see — escalate LOUD (never swallow into a silent strand).
       log.error(
         "gate-fail rework FAILED to enqueue a run for the culprit spec — escalating (never a silent strand)",
         { specId: input.culprit.specId },

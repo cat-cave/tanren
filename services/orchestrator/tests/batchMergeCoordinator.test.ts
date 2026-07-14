@@ -483,7 +483,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     h.runner.script("run_spec_b", {
       kind: "conflict",
       message: "resolver routed a bounded replan",
-      recovery: { kind: "planner_replan", specId: "spec_b", run: { kind: "already_running" } },
+      recovery: { kind: "planner_replan", specId: "spec_b", run: { kind: "already_running", runId: "run_live" } },
     });
 
     await h.coordinator.coordinate(PROJECT);

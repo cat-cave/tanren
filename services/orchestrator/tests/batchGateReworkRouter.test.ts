@@ -37,8 +37,14 @@ interface Appended {
   payload: Record<string, unknown>;
 }
 
-/** A recording pool that captures only the spec-status park UPDATE (the router's only DB write here). */
-function makeStatusPool(statusWrites: { specId: string; status: string }[]): pg.Pool {
+/** Scriptable pool for status park + ownership proof SELECTs. */
+function makeStatusPool(
+  statusWrites: { specId: string; status: string }[],
+  opts: {
+    specStatusById?: Map<string, string>;
+    liveRunsBySpec?: Map<string, { run_id: string; status: string }>;
+  } = {},
+): pg.Pool {
   // eslint-disable-next-line @typescript-eslint/require-await
   const query = async (text: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = String(text);
@@ -46,6 +52,14 @@ function makeStatusPool(statusWrites: { specId: string; status: string }[]): pg.
       const m = /status\s*=\s*'([a-z_]+)'/u.exec(sql);
       statusWrites.push({ specId: String(params?.[0]), status: m?.[1] ?? "?" });
       return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("SELECT status FROM specs")) {
+      const status = opts.specStatusById?.get(String(params?.[0])) ?? "open";
+      return { rows: [{ status }], rowCount: 1 };
+    }
+    if (sql.includes("FROM runs") && sql.includes("status IN")) {
+      const live = opts.liveRunsBySpec?.get(String(params?.[0]));
+      return { rows: live === undefined ? [] : [live], rowCount: live === undefined ? 0 : 1 };
     }
     // BEGIN/COMMIT/SET LOCAL no-ops.
     return { rows: [], rowCount: 0 };
@@ -63,9 +77,14 @@ function makeRouter(opts: {
   priorReworks: string[];
   appended: Appended[];
   statusWrites: { specId: string; status: string }[];
+  liveRunsBySpec?: Map<string, { run_id: string; status: string }>;
+  specStatusById?: Map<string, string>;
 }): PgBatchGateReworkRouter {
   return new PgBatchGateReworkRouter({
-    pool: makeStatusPool(opts.statusWrites),
+    pool: makeStatusPool(opts.statusWrites, {
+      ...(opts.liveRunsBySpec !== undefined && { liveRunsBySpec: opts.liveRunsBySpec }),
+      ...(opts.specStatusById !== undefined && { specStatusById: opts.specStatusById }),
+    }),
     // Audit D-R3.2: runStateWriter is REQUIRED on the type. The test's `appendEvent`
     // injection still wins (the production routing path is exercised in the conformance
     // suite), so the in-memory writer here only satisfies the type — it is never invoked.
@@ -123,10 +142,39 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 
-  it("returns an already-running receipt for the benign concurrent-claim race", async () => {
+  it("returns an already-running receipt only when a live nonterminal run is independently proven", async () => {
     const enqueuer: ReplanEnqueuer = {
       enqueue(input) {
         return Promise.reject(new SpecNotRunnableError(input.specId, "in_flight"));
+      },
+    };
+    const appended: Appended[] = [];
+    const statusWrites: { specId: string; status: string }[] = [];
+    const liveRunsBySpec = new Map([["spec_claimed", { run_id: "run_claimed_live", status: "running" }]]);
+    const router = makeRouter({ enqueuer, priorReworks: [], appended, statusWrites, liveRunsBySpec });
+
+    const recovery = await router.routeGateFailToRework({
+      projectId: PROJECT,
+      culprit: culprit("spec_claimed"),
+      gateError: "gate failed",
+    });
+
+    expect(recovery).toEqual({
+      kind: "owned",
+      receipt: {
+        kind: "writer_rework",
+        specId: "spec_claimed",
+        run: { kind: "already_running", runId: "run_claimed_live" },
+      },
+    });
+    expect(appended.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
+    expect(statusWrites).toEqual([]);
+  });
+
+  it("FAIL-CLOSED: SpecNotRunnableError without a live run parks (never fabricates already_running)", async () => {
+    const enqueuer: ReplanEnqueuer = {
+      enqueue(input) {
+        return Promise.reject(new SpecNotRunnableError(input.specId, "merged"));
       },
     };
     const appended: Appended[] = [];
@@ -139,12 +187,32 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: "gate failed",
     });
 
-    expect(recovery).toEqual({
-      kind: "owned",
-      receipt: { kind: "writer_rework", specId: "spec_claimed", run: { kind: "already_running" } },
+    expect(recovery.kind).toBe("parked");
+    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
+  });
+
+  it("FAIL-CLOSED: a terminal merged culprit cannot own writer rework", async () => {
+    const enqueuer: ReplanEnqueuer = {
+      enqueue: () => Promise.resolve({ replanRunId: "x", plannerTaskId: "y" }),
+    };
+    const appended: Appended[] = [];
+    const statusWrites: { specId: string; status: string }[] = [];
+    const router = makeRouter({
+      enqueuer,
+      priorReworks: [],
+      appended,
+      statusWrites,
+      specStatusById: new Map([["spec_merged", "merged"]]),
     });
-    expect(appended.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
-    expect(statusWrites).toEqual([]);
+
+    const recovery = await router.routeGateFailToRework({
+      projectId: PROJECT,
+      culprit: culprit("spec_merged"),
+      gateError: "gate failed",
+    });
+
+    expect(recovery.kind).toBe("parked");
+    expect(String((recovery as { message: string }).message)).toMatch(/terminal \(merged\)/u);
   });
 
   it("ESCALATES to needs_attention (no further rework) at a FIXED POINT — the SAME gate error recurs", async () => {

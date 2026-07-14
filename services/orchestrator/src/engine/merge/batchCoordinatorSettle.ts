@@ -33,6 +33,7 @@ import {
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
 import { createLogger } from "../observability/logger.js";
+import { isDurableOwnedReceipt } from "./recoveryOwnership.js";
 
 const log = createLogger("batch-coordinator");
 
@@ -211,6 +212,37 @@ export async function settleDriveOutcome(
     return "dequeued";
   }
 
+  if (outcome.kind === "conflict") {
+    if (!isDurableOwnedReceipt(outcome.recovery, entry.specId)) {
+      const message =
+        `merge conflict recovery receipt is not durable for queue entry ${entry.specId}: ` + `${outcome.message}`;
+      await deps.escalator.escalate({ projectId, entry, message });
+      await markDequeuedAfterEvent({
+        queue: deps.queue,
+        events: deps.events,
+        projectId,
+        entry,
+        reason: "needs_attention",
+        message,
+        tx: deps.tx,
+      });
+      await deps.recoverableDriveHolds?.reset(entry.queueId);
+      return "dequeued";
+    }
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: "conflict",
+      message: outcome.message,
+      tx: deps.tx,
+    });
+    return "dequeued";
+  }
+
+  // Remaining non-merged kinds without a dedicated arm (e.g. blocked without a ceiling) fail closed.
   const reason = outcome.kind;
   await deps.recoverableDriveHolds?.reset(entry.queueId);
   await markDequeuedAfterEvent({
@@ -317,8 +349,8 @@ export async function driveConflictCulprit(
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
 
-/** Assign an owner to every failed fresh merge drive before the stale entry retires. */
-async function settleFailedDrive(
+/** Assign an owner to every failed fresh merge drive before the stale entry retires. Shared with EventEmittingMergeCoordinator. */
+export async function settleFailedDrive(
   deps: BatchSettleDeps,
   projectId: string,
   culprit: MergeQueueEntry,

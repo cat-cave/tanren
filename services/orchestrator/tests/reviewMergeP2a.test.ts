@@ -104,7 +104,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
           resolved: false,
           recovery: {
             kind: "owned",
-            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running" } },
+            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running", runId: "run_live" } },
           },
         };
       },
@@ -180,7 +180,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
           reworked.push(input);
           return {
             kind: "owned",
-            receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+            receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
           };
         },
       },

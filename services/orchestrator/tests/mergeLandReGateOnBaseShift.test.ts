@@ -124,7 +124,7 @@ describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED the
         reworked.push(input);
         return {
           kind: "owned",
-          receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+          receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
         };
       },
     };

@@ -336,4 +336,114 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       "spec_b",
     ]);
   });
+
+  it("rejects a wrong-spec owned receipt (forged cross-spec ownership)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "resolver minted ownership for the other side",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_other_merged",
+            run: { kind: "enqueued", replanRunId: "run_other", plannerTaskId: "task_other" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations.map((e) => e.specId)).toEqual(["spec_b"]);
+  });
+
+  it("rejects an owned receipt with empty durable identifiers", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "forged empty enqueued ids",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "enqueued", replanRunId: "", plannerTaskId: "  " },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+  });
+
+  it("rejects already_running without a runId (structural forge)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "forged bare already_running",
+        conflictRecovery: {
+          kind: "owned",
+          // Cast: the forge pretends an old-shape receipt slipped past typing.
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "already_running", runId: "" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+  });
+
+  it("keeps conflict-bisect suffix eligible after prefix lands and culprit is driven", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    seed(h, "spec_d");
+    h.checker.conflictWhenContains("spec_c");
+    h.runner.script(
+      "run_spec_c",
+      mapConflictDriveOutcome({
+        message: "culprit replanned",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_c",
+            run: { kind: "enqueued", replanRunId: "run_replan_c", plannerTaskId: "task_c" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.statusOf("run_spec_b")).toBe("merged");
+    expect(h.queue.dequeueReasonOf("run_spec_c")).toBe("conflict");
+    // Suffix D was never driven this pass but remains live/queued for the next coordinate.
+    expect(h.queue.statusOf("run_spec_d")).toBe("queued");
+    const formation = formBatch(await h.queue.loadSnapshot(PROJECT), 8);
+    expect(formation.batch.map((e) => e.specId)).toEqual(["spec_d"]);
+  });
 });

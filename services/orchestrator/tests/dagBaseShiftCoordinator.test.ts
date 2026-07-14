@@ -151,6 +151,14 @@ function recordingGateRework(): RecordingGateRework {
     calls,
     async routeGateFailToRework(input) {
       calls.push({ specId: input.specId, runId: input.runId, gateError: input.gateError });
+      return {
+        kind: "owned",
+        receipt: {
+          kind: "writer_rework",
+          specId: input.specId,
+          run: { kind: "enqueued", replanRunId: "run_rework", plannerTaskId: "task_rework" },
+        },
+      };
     },
   };
 }
@@ -368,9 +376,9 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
-    // The categorical decision is still emitted (the rebase WAS clean — rebaseConflicted:false).
+    // Truthful decision: writer_rework (not laundered as planner replanned).
     const event = h.events.rawEvents[0];
-    expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
+    expect(event).toMatchObject({ decision: "writer_rework", rebaseConflicted: false, sameRunId: true });
     expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
   });
 
@@ -388,7 +396,7 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
     const event = h.events.rawEvents[0];
-    expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
+    expect(event).toMatchObject({ decision: "writer_rework", rebaseConflicted: false, sameRunId: true });
     expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
   });
 
@@ -413,7 +421,7 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
         reason: "re-gate gate-tier fail — routed to rework",
         recovery: {
           kind: "owned",
-          receipt: { kind: "writer_rework", specId: "spec_b", run: { kind: "already_running" } },
+          receipt: { kind: "writer_rework", specId: "spec_b", run: { kind: "already_running", runId: "run_live" } },
         },
       },
     });
@@ -422,7 +430,7 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     // The coordinator's gate-rework seam stays untouched.
     expect(h.gateRework.calls).toEqual([]);
     expect(h.events.events).toEqual([
-      { runId: DEP_RUN, decision: "replanned", rebaseConflicted: true, sameRunId: true },
+      { runId: DEP_RUN, decision: "writer_rework", rebaseConflicted: true, sameRunId: true },
     ]);
   });
 

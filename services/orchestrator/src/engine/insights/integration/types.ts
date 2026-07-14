@@ -16,8 +16,15 @@
 
 import { z } from "zod";
 
-/** The four recorded base-shift outcomes — the `integration.rebase` `decision`. */
-export const RebaseDecisionValues = ["rebased_clean", "rebased_resolved", "replanned", "held"] as const;
+/** Recorded base-shift outcomes — the `integration.rebase` `decision` (incl. writer/park). */
+export const RebaseDecisionValues = [
+  "rebased_clean",
+  "rebased_resolved",
+  "replanned",
+  "writer_rework",
+  "parked",
+  "held",
+] as const;
 export const RebaseDecision = z.enum(RebaseDecisionValues);
 export type RebaseDecision = z.infer<typeof RebaseDecision>;
 

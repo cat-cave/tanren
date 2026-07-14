@@ -95,7 +95,7 @@ function recordingReplan(): ReplanRouter & {
       calls.push(input);
       return {
         kind: "owned",
-        receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running" } },
+        receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
       };
     },
   };
@@ -109,7 +109,7 @@ function recordingGateRework(): GateReworkRouter & { calls: Array<{ specId: stri
       calls.push(input);
       return {
         kind: "owned",
-        receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+        receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
       };
     },
   };

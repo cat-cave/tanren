@@ -220,10 +220,14 @@ export interface ResolvedTreeReGate {
 
 // ---- The replan router (intent stays alive) -------------------------------
 
-/** Durable evidence that a recovery run exists, rather than a comment-level routing claim. */
+/**
+ * Durable evidence that a recovery run exists, rather than a comment-level routing claim.
+ * `already_running` MUST name the independently verified live nonterminal run id — a bare
+ * SpecNotRunnableError is never ownership.
+ */
 export type RecoveryRunReceipt =
   | { kind: "enqueued"; replanRunId: string; plannerTaskId: string }
-  | { kind: "already_running" };
+  | { kind: "already_running"; runId: string };
 
 /** The planner owns the unresolved conflict through a confirmed live re-plan run. */
 export interface PlannerRecoveryReceipt {

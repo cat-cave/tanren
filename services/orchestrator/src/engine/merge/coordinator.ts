@@ -22,6 +22,9 @@ import { isMissingRequiredCredentialError, missingRequiredCredentialMessage } fr
 import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { alertRetryAfterMs } from "./retrySchedule.js";
 import { createLogger } from "../observability/logger.js";
+import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
+import { settleFailedDrive } from "./batchCoordinatorSettle.js";
+import { isDurableOwnedReceipt } from "./recoveryOwnership.js";
 
 const log = createLogger("merge-coordinator");
 
@@ -97,6 +100,11 @@ export interface MergeCoordinatorDeps {
    * process-local Map. Absent → an in-memory store (the in-process fakes / unit tests).
    */
   holdCeilingStore?: HoldCeilingStore;
+  /**
+   * Writer-rework router for failed fresh validation — same policy as BatchMergeCoordinator.
+   * Absent ⇒ failed drives park at needs_attention (fail closed, never invent ownership).
+   */
+  gateRework?: BatchGateReworkRouter;
 }
 
 /**
@@ -242,30 +250,10 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
   }
 
   /**
-   * Drive the claimed entry's merge through the existing per-run merge path and
-   * settle the queue row from the outcome. A `merged` outcome marks the entry
-   * merged (the next pass picks the next DAG head); a `blocked` outcome releases
-   * the claim with bounded backoff; a conflict dequeues only with a typed recovery
-   * receipt, while an ownerless failure parks loudly at needs_attention.
-   *
-   * GitHub-5xx resilience (GAP #2d): a THROWN drive used to become a `blocked` dequeue —
-   * but a `done` run NEVER re-readies, so a transient 504 mid-drive would STRAND a clean
-   * PR. A thrown error is now classified three ways:
-   *   - AMBIGUOUS merge (`MergeAmbiguousError`) → a LOUD `merge.queue.infra_blocked`
-   *     halt that does NOT auto-re-drive (re-PUTting could double-merge); the entry is
-   *     removed (operator decides) rather than silently held forever.
-   *   - RETRIABLE transient/infra (`isRetriableInfraError` — a 5xx/network blip OR the
-   *     typed `MergeTransientError` the persistent merge-PUT throws once it confirms the
-   *     PR is still open+unmerged) → RELEASE the claim (entry stays queued) + HOLD with
-   *     `holdReason: "infra_error"` + `retryAfterMs` so the subscriber re-drives once the
-   *     gateway recovers — guarded by SUSTAINED-NON-RECOVERY (a PROGRESS signal, not a
-   *     count): once the SAME infra failure signature persists with no progress across the
-   *     backoff-spaced re-drives it emits a LOUD `merge.queue.infra_blocked` alert, keeps
-   *     the entry queued, and re-drives with longer backoff so it cannot hot-loop or
-   *     permanently strand. A SHIFTING failure keeps recovering quietly (no alert).
-   *   - a typed PERMANENT infra error → the recoverable `blocked` hold path.
-   * A GENUINE returned block holds with bounded backoff; conflict/failed retirement
-   * requires recovery ownership or a loud needs_attention park.
+   * Drive + settle one claimed entry. Merged advances; blocked/re_gate_pending hold;
+   * conflict requires a durable owned receipt for THIS entry; failed routes writer rework
+   * (or parks). Thrown drives: ambiguous → infra halt; retriable → hold + re-drive with
+   * sustained-non-recovery alert; permanent → blocked hold path.
    */
   private async driveAndSettle(
     projectId: string,
@@ -386,7 +374,27 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     }
 
     if (outcome.kind === "failed") {
-      const message = `merge drive failed without a writer-rework router: ${outcome.message}`;
+      await settleFailedDrive(
+        {
+          queue: this.deps.queue,
+          events: this.deps.events,
+          escalator: this.deps.escalator,
+          ...(this.deps.gateRework !== undefined && { gateRework: this.deps.gateRework }),
+          ...(this.deps.tx !== undefined && { tx: this.deps.tx }),
+          recoverableDriveHolds: this.recoverableDriveHolds,
+        },
+        projectId,
+        entry,
+        outcome.message,
+      );
+      return { dequeuedSpecId: entry.specId };
+    }
+
+    // Remaining kind is `conflict` — retires only with a durable owned receipt for THIS entry.
+    const recovery = outcome.recovery;
+    if (!isDurableOwnedReceipt(recovery, entry.specId)) {
+      const message =
+        `merge conflict recovery receipt is not durable for queue entry ${entry.specId}: ` + `${outcome.message}`;
       await this.deps.escalator.escalate({ projectId, entry, message });
       await markDequeuedAfterEvent({
         queue: this.deps.queue,
@@ -397,18 +405,16 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         message,
         tx: this.deps.tx,
       });
+      await this.recoverableDriveHolds.reset(entry.queueId);
       return { dequeuedSpecId: entry.specId };
     }
-
-    // The remaining `conflict` carries a typed receipt proving its recovery owner.
     await this.recoverableDriveHolds.reset(entry.queueId);
-    const reason = outcome.kind;
     await markDequeuedAfterEvent({
       queue: this.deps.queue,
       events: this.deps.events,
       projectId,
       entry,
-      reason,
+      reason: "conflict",
       message: outcome.message,
       tx: this.deps.tx,
     });

@@ -333,12 +333,7 @@ export class LiveBaseShiftReGate implements BaseShiftReGate {
 export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter {
   constructor(private readonly deps: LiveBaseShiftDeps) {}
 
-  async routeGateFailToRework(input: {
-    projectId: string;
-    specId: string;
-    runId: string;
-    gateError: string;
-  }): Promise<void> {
+  async routeGateFailToRework(input: { projectId: string; specId: string; runId: string; gateError: string }) {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.runId);
     const router = new SpecStatusGateReworkRouter({
       pool: this.deps.scopedPool,
@@ -353,7 +348,7 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
       enqueuer: buildReplanEnqueuer(this.deps.scopedPool, this.deps.runStateWriter),
       priorReworks: buildPriorGateReworkReader(this.deps.scopedPool),
     });
-    await router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });
+    return router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });
   }
 }
 

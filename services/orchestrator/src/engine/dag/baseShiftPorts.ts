@@ -6,11 +6,15 @@
 // keep importing from `./baseShiftCoordinator.js` unchanged.
 
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { AncestorStack } from "./ancestorStack.js";
 
-/** The instrumentation an `integration.rebase` event records (`rebase_vs_rebuild`, §3). */
-export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "held";
+/**
+ * The instrumentation an `integration.rebase` event records (`rebase_vs_rebuild`, §3).
+ * `writer_rework` / `parked` are first-class — never laundered as `replanned`.
+ */
+export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "writer_rework" | "parked" | "held";
 
 /**
  * A fail-closed HOLD: the rebase/resolver/gate could not settle. The work SURVIVES (the run
@@ -58,7 +62,7 @@ export interface BaseShiftGateReworkRouter {
     runId: string;
     /** The re-gate's failing tier/step/output — the steering the writer re-authors against. */
     gateError: string;
-  }): Promise<void>;
+  }): Promise<GateReworkRouteResult>;
 }
 
 /**
