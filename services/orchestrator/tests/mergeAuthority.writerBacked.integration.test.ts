@@ -104,6 +104,12 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     await ownerPool.query("DELETE FROM tasks WHERE run_id = $1", [RUN_ID]);
     await ownerPool.query("DELETE FROM runs WHERE org_id = $1", [ORG_ID]);
     await ownerPool.query("DELETE FROM specs WHERE org_id = $1", [ORG_ID]);
+    // The V2 land writes authority_decisions → effect_intents → land_receipts (all
+    // project_id-FK'd, ON DELETE no action per convention); delete them in FK order
+    // before the project so the project delete does not hit the authority FK.
+    await ownerPool.query("DELETE FROM authority_land_receipts WHERE org_id = $1", [ORG_ID]);
+    await ownerPool.query("DELETE FROM authority_effect_intents WHERE org_id = $1", [ORG_ID]);
+    await ownerPool.query("DELETE FROM authority_decisions WHERE org_id = $1", [ORG_ID]);
     await ownerPool.query("DELETE FROM projects WHERE org_id = $1", [ORG_ID]);
     await ownerPool.query("DELETE FROM organizations WHERE id = $1", [ORG_ID]);
     await seedTenant(ownerPool);
