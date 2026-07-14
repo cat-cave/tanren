@@ -1,0 +1,519 @@
+## (1) IDEAL DESIGN + how it fits the engine + the owned-stack advantages it exploits
+
+Build a `DesignSystemEngine`: an executable compiler, package registry, curation DAG, and render-proof system—not a larger design prompt.
+
+Today Tanren has strong intent lineage but no executable design system:
+
+- `DesignContractV1` is strict and durable, but each dimension is prose: `intent`, `guidance`, and references. It cannot carry typed tokens, modes, component source, render entrypoints, or artifacts ([designContract.ts:75](/home/trevor/projects/tanren/services/orchestrator/src/engine/design/designContract.ts:75), [designContract.ts:115](/home/trevor/projects/tanren/services/orchestrator/src/engine/design/designContract.ts:115)).
+- The design phase explicitly authors “the CONTRACT only,” not UI or assets ([designPhase.ts:20](/home/trevor/projects/tanren/services/orchestrator/src/engine/design/designPhase.ts:20)).
+- Writers receive that contract as rendered prose ([designWriterContext.ts:167](/home/trevor/projects/tanren/services/orchestrator/src/engine/design/designWriterContext.ts:167)).
+- The oracle explicitly cannot start a server or inspect rendered pixels ([designOraclePrompt.ts:194](/home/trevor/projects/tanren/services/orchestrator/src/engine/workflow/designOracle/designOraclePrompt.ts:194)); the roadmap calls live rendering an unbuilt `WS-D4a` capability ([native-design-subsystem.md:342](/home/trevor/projects/tanren/docs/roadmap/native-design-subsystem.md:342)).
+
+The ideal system has three deliberately separate layers:
+
+1. **Intent:** `DesignContractV2`, migrated losslessly from V1, continues to capture identity, principles, constraints, personas, behaviors, desired surfaces, platform capabilities, accessibility posture, and acceptance intent. It never embeds generated source.
+
+2. **Reusable source:** an immutable, org-owned `DesignSystemReleaseV1` contains canonical DTCG tokens, resolver contexts, component contracts, assets, fragment selections, licenses, and provenance.
+
+3. **Framework projection:** a content-addressed `FrameworkDesignArtifactV1` contains real source, assets, catalog entrypoints, fixtures, exports, and validation evidence for one target profile.
+
+### The fragment compiler
+
+Mirror the existing template engine’s strongest doctrine: one composer, mandatory base fragment, typed phases, open-world selection, F2 authoring for gaps, and no silent fallback. That doctrine already exists for templates ([fragment README:3](/home/trevor/projects/tanren/services/orchestrator/src/engine/templates/fragments/README.md:3), [fragment README:43](/home/trevor/projects/tanren/services/orchestrator/src/engine/templates/fragments/README.md:43), [fragment README:120](/home/trevor/projects/tanren/services/orchestrator/src/engine/templates/fragments/README.md:120)).
+
+Every design composition begins with an immutable `base/plain` fragment containing:
+
+- Valid DTCG primitive, semantic, and component token groups.
+- Light, dark, high-contrast, reduced-motion, and density contexts.
+- Intentionally plain typography, spacing, color, motion, and icon defaults.
+- Headless component contracts for core interaction roles.
+- Minimal fixtures proving that the base renders before curation.
+- A target bootstrap supplied by the selected framework adapter.
+
+Curation never destroys the plain state. It composes polished overlays, preserving a machine-readable `plain → polished` diff.
+
+Proposed ordered fragment phases:
+
+1. `base`
+2. `primitive-tokens`
+3. `semantic-tokens`
+4. `component-tokens`
+5. `theme-modes`
+6. `typography-icons-assets`
+7. `component-primitives`
+8. `components`
+9. `patterns-and-templates`
+10. `motion-and-interaction`
+11. `platform-binding`
+12. `catalog-and-scenarios`
+13. `exporters`
+14. `postprocessors`
+
+Each `DesignFragmentV1` has:
+
+- `kind`, `label`, semantic version, digest, provenance.
+- Compatibility predicates and target capabilities.
+- `requires`, `provides`, `dependsOn`, conflicts, and replacement rules.
+- Token/component/file outputs.
+- Persona and behavior references.
+- A required conformance suite.
+- License, dependency, and asset provenance.
+- A deterministic apply plan over a typed `DesignVfs`.
+
+The VFS supports constrained operations such as `addTokenSet`, `addMode`, `addAlias`, `addComponent`, `addScenario`, `addAsset`, `addExporter`, and `addCatalogRoute`. File collisions, unresolved capabilities, undeclared dependencies, token cycles, or incompatible adapters fail loudly.
+
+### F2D: author missing design fragments from scratch
+
+`selectDesignFragmentConfig` remains open-string, exactly like template selection. If `bevy.tactical-hud`, `swiftui.spatial-navigation`, or an unknown future framework capability is absent, Tanren creates a per-fragment authoring DAG rather than substituting “closest available.”
+
+The authoring loop is:
+
+1. A read-only Answerer produces a strict `DesignFragmentPlanV1`.
+2. A Writer/Codex agent receives the plan, DesignContract, working fragments, framework adapter contract, and rejection history, then writes real source/assets in an isolated jj workspace.
+3. Deterministic validators check schema, token resolution, dependencies, buildability, exports, and component contracts.
+4. Checker and auditor inspect correctness and security.
+5. A4 renders the isolated fragment and the complete composed library.
+6. The design oracle evaluates actual pixels, accessibility trees, interaction traces, and behavior coverage.
+7. Rejections re-drive the Writer.
+8. Only a fully conformant package is atomically persisted.
+9. All newly authored fragments are composed together again before the release can publish; a failed full-library composition retracts the batch.
+
+This generalizes the existing F2 loop, which already validates isolated and full-library composition and persists atomically ([fragmentAuthoringRun.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/engine/templates/fragments/fragmentAuthoringRun.ts:1), [fragmentAuthoringRun.ts:310](/home/trevor/projects/tanren/services/orchestrator/src/engine/templates/fragments/fragmentAuthoringRun.ts:310)). Production template F2 also wires real runtime resolvers rather than trusting manifest syntax ([fragmentAuthoring.ts:17](/home/trevor/projects/tanren/services/orchestrator/src/routes/onboarding/fragmentAuthoring.ts:17), [fragmentAuthoring.ts:204](/home/trevor/projects/tanren/services/orchestrator/src/routes/onboarding/fragmentAuthoring.ts:204)). Design F2 must make real rendering equally non-optional.
+
+Complex component source must remain Writer-owned. Answerers may select, plan, critique, and return verdict JSON, but must not mutate workspaces; that preserves Tanren’s structural Writer/Answerer split ([PROJECT_BRIEF.md:185](/home/trevor/projects/tanren/PROJECT_BRIEF.md:185)).
+
+### Framework adapters behind one contract
+
+Define a `DesignTargetAdapter` contract:
+
+- `detectTarget(workspace)`
+- `bootstrapPlainSystem()`
+- `materialize(fragmentGraph, designVfs)`
+- `buildCatalog()`
+- `validateStatic()`
+- `renderScenarioMatrix()`
+- `export(format)`
+- `enumerateProofRequirements()`
+
+Initial adapters:
+
+- **Web React:** shadcn-style open source, Radix/Base primitives, Tailwind/CSS variables, registry output, Storybook-compatible stories.
+- **Generic web:** CSS custom properties, Web Components, framework-local components.
+- **Bevy:** RON/JSON token resources, fonts, texture atlases, materials, UI scenes, input/focus contracts, game-state fixtures, WebGPU/native render harness.
+- **Mobile:** SwiftUI, Jetpack Compose, Flutter, and React Native components plus platform resource formats.
+- **Document/media:** presentation, PDF, HTML, image, motion, and video profiles where the DesignContract calls for them.
+
+Every adapter ships the same adversarial conformance suite. Unsupported capabilities are typed gaps that invoke F2D; they are never silently omitted.
+
+### The real artifact
+
+`FrameworkDesignArtifactV1` is a signed, Merkle-addressed bundle containing:
+
+- `manifest.json`
+- DTCG `.tokens.json` files and `.resolver.json`
+- Component contracts, source, variants, states, slots, and events
+- Framework-native assets
+- Catalog source and static build
+- Persona/behavior-linked scenarios
+- Export outputs
+- SBOM, license inventory, dependency locks, and font/asset provenance
+- Plain and polished release digests
+- Fragment lineage and authoring-run IDs
+- Build, token, accessibility, interaction, render, and oracle proofs
+- Commit, gate, merge, deploy, and demo linkage
+
+### A4 visual verification
+
+Implement the requested A4 as the repository’s missing live-render capability:
+
+- Start the real catalog/application in a runner container through SSH.
+- Render a risk-selected matrix of component state × theme × viewport × locale × input mode × persona × behavior.
+- Capture pixels, accessibility trees, DOM/scene graphs, console output, network failures, animation traces, and interaction recordings.
+- Run deterministic checks first: build, schema, DTCG resolution, contrast, focus order, keyboard/touch behavior, reduced motion, overflow, missing glyphs/assets, target-size rules, and export round-trips.
+- Then let the multimodal design oracle judge visual hierarchy, contract fidelity, consistency, and behavior suitability.
+- Require negative controls in adapter conformance: intentionally broken contrast, focus, token alias, layout, and screenshot changes must cause the oracle/gate to fail.
+- Convert all failures into the existing normalized finding currency so the ordinary Writer loop repairs them.
+
+The oracle supplies evidence and findings. It does not become a second merge authority.
+
+### Owned-stack advantage
+
+Point tools stop at one boundary. Tanren can maintain one causal chain:
+
+`Forge sentence → persona/behavior → DesignContract → fragment selection/F2 authoring → source files → rendered scenario → native gate → speculative integration → MergeAuthority → live deployment → per-behavior demo`
+
+That enables:
+
+- Parallel design-direction tournaments in jj workspaces, with evidence-based selection.
+- Proof reuse keyed by fragment, target, environment, scenario, and artifact digests.
+- Affected-only rendering for ordinary changes, full critical matrices at `pre_merge`.
+- Batch visual testing and culprit bisection in the eager merge queue.
+- Automatic org-wide impact DAGs when a shared theme release changes.
+- Deployed demonstrations that prove the selected design actually serves the original behaviors.
+- Production feedback becoming new specs or design-system releases rather than disconnected analytics.
+
+## (2) COMPARATOR PARITY MATRIX
+
+“Exceeds” below describes the ideal implementation, not the current repository state.
+
+| Comparator capability | How Tanren matches it | How Tanren exceeds it |
+|---|---|---|
+| DTCG platform-neutral JSON, `$value`, `$type`, descriptions, extensions, and deprecation ([Format 2025.10](https://www.designtokens.org/tr/2025.10/format/)) | Uses DTCG files as canonical token source and preserves unknown namespaced extensions. | Binds every token to release provenance, consumers, rendered evidence, behaviors, and safe deprecation/upgrade specs. |
+| DTCG scalar and composite types plus wide-gamut color spaces ([Color module](https://www.designtokens.org/tr/2025.10/color/)) | Implements every normative type and color conversion, not a color/string subset. | Validates gamut, contrast, target conversion loss, font availability, and actual rendered appearance per platform. |
+| Nested groups, `$root`, inherited type, `$extends`, local override | Provides a conformant parser/resolver and explicit primitive/semantic/component tier metadata. | Makes tier violations and direct primitive consumption queryable; computes affected components and projects from the alias graph. |
+| Curly aliases, JSON Pointer references, chained references, cycle/type/missing-target errors | Supports both reference forms and fail-loud resolution. | A broken alias blocks fragment publication, native CI, merge, and theme rollout; the dashboard shows the exact downstream blast radius. |
+| Resolver sets, modifiers, defaults, resolution order, light/dark and Cartesian contexts ([Resolver module](https://www.designtokens.org/tr/2025.10/resolver/)) | Implements contextual token resolution and multi-axis modes. | Risk-selects the mode matrix for normal runs, exhaustively gates critical components, renders every selected context, and records context-specific proofs. |
+| Tokens Studio no-code/JSON editing, broad token types, aliases, composites, and math ([token types](https://docs.tokens.studio/manage-tokens/token-types/), [token math](https://docs.tokens.studio/manage-tokens/token-values/math)) | Dashboard token editor, source view, typed aliases, formulas, previews, and validation. | Every edit creates an immutable candidate release and runs code/build/render impact analysis; formulas are checked after target conversion, not only resolved abstractly. |
+| Enabled, disabled, and source-only token sets with ordered override ([token sets](https://docs.tokens.studio/manage-tokens/token-sets/)) | Design resolver supports source, overlay, and target-specific sets with explicit precedence. | The compiler proves no hidden override, records why each final value won, and links it to consumers and screenshots. |
+| Multi-dimensional themes and brand × mode permutations ([themes](https://docs.tokens.studio/manage-themes/themes-overview)) | First-class theme axes, channels, defaults, and permutations. | Theme combinations are behavioral test dimensions, speculative merge inputs, deployed demo variants, and org-wide reusable releases. |
+| Figma Variables/Styles import and export, theme modes, connected updates ([Figma export](https://docs.tokens.studio/figma/export/)) | Figma bridge maps DTCG tokens, modes, components, and stable external IDs to Variables/Styles. | Round-trips are validated against the canonical release; drift becomes a proposed release/spec, never an untracked overwrite. |
+| Git/cloud/URL storage, push/pull, diffs, commits, branches, PR initiation ([remote storage](https://docs.tokens.studio/token-storage/remote/), [push/pull](https://docs.tokens.studio/token-storage/remote-push-pull-changes)) | Immutable releases, diffs, jj history, share/import, and code exports. | The design change enters Tanren’s native DAG and merge queue directly; no external PR or CI control plane is required. |
+| Style Dictionary and SD transforms to platform code such as CSS variables ([official transform guide](https://docs.tokens.studio/transform-tokens/style-dictionary)) | Export adapters produce CSS, Tailwind, TypeScript, native mobile resources, Bevy data, and custom outputs. | Each exporter has a conformance suite and compile/render/round-trip proof. Tailwind is treated as an adapter output, not falsely claimed as a native Tokens Studio one-click feature. |
+| Token inspect, broken-reference diagnosis, remap, ramps, documentation | Token graph explorer, resolved-value inspector, bulk migration, documentation, and color tooling. | Inspection spans token → component → behavior → spec → commit → live demo, with automatic migration specs for every affected consumer. |
+| shadcn open-code ownership and AI-readable source ([introduction](https://ui.shadcn.com/docs)) | Emits source directly into the consumer workspace; teams own and modify it. | Generated components remain linked to their originating fragment/release, and Tanren can safely propose, validate, merge, deploy, and demo updates later. |
+| Accessible, composable primitives and broad component/block catalog ([components](https://ui.shadcn.com/docs/components)) | Web adapter emits accessible composable primitives, components, patterns, examples, and page blocks. | Missing components are authored from scratch for the project’s behaviors; the catalog is not a fixed menu. |
+| Universal registry schema, files, dependencies, themes, hooks, namespaces, private authentication ([registry](https://ui.shadcn.com/docs/registry), [registry schema](https://ui.shadcn.com/docs/registry/registry-item-json)) | Imports and exports shadcn registry items and resolves dependencies topologically. | Registry items are one projection of a framework-neutral fragment; the same intent can emit shadcn, Bevy, SwiftUI, Compose, or a newly authored target. |
+| CSS-variable themes, semantic foreground/background pairs, dark mode, presets ([theming](https://ui.shadcn.com/docs/theming)) | Produces semantic CSS variables, dark/system modes, typography, radius, icon, chart, and navigation presets. | Presets are derived from the DesignContract and validated across the complete component/behavior matrix rather than applied cosmetically. |
+| CLI create/add/diff/migrate/eject, MCP/AI use, RTL and monorepo support ([CLI](https://ui.shadcn.com/docs/cli), [RTL](https://ui.shadcn.com/docs/rtl), [MCP](https://ui.shadcn.com/docs/mcp)) | Export CLI supports install, diff, validate, migrate, eject, registry serving, MCP reads, RTL, and monorepo paths. | Tanren authors missing capabilities, resolves update conflicts in jj, gates the result, and lands it through MergeAuthority. |
+| Storybook isolated stories, states, args, controls, actions, globals, viewports and measurement ([stories](https://storybook.js.org/docs/writing-stories), [args](https://storybook.js.org/docs/writing-stories/args)) | Every emitted component has typed scenarios, interactive controls, state fixtures, theme/locale globals, viewports, and inspection tools. | Scenarios are generated from personas and Given/When/Then behaviors and are mandatory coverage, not optional developer-authored examples. |
+| Decorators, providers, loaders, REST/GraphQL/module mocks | Adapter-local fixture contracts provide deterministic application context and mocks. | Tanren can also run the scenario against the real speculative stack and deployed application, detecting fixture-only success. |
+| Autodocs, MDX, inferred metadata, source and reusable blocks ([Autodocs](https://storybook.js.org/docs/writing-docs/autodocs)) | Generates API docs, usage, token links, accessibility contracts, source, and authored guidance. | Documentation is checked against actual component signatures, token consumers, design intent, and live evidence on every release. |
+| Render smoke tests, play-function interactions, Vitest/browser execution and portable stories ([testing](https://storybook.js.org/docs/writing-tests)) | Emits component render and interaction tests reusable by unit, browser, and end-to-end runners. | The same behavior scenario runs in isolation, speculative integration, pre-merge, deployed preview, and post-merge demo with one trace ID. |
+| Accessibility, DOM snapshots, coverage, visual baselines and diffs | Runs axe-like deterministic checks, semantic snapshots, interaction coverage, screenshots, and perceptual diffs. | A4 adds persona/behavior relevance, negative-control conformance, automatic Writer re-drive, queue bisection, and live-deployment confirmation. |
+| Multiple framework renderers and addon APIs ([framework support](https://storybook.js.org/docs/configure/integration/frameworks), [addons](https://storybook.js.org/docs/addons)) | Adapter contract and extension APIs support the major web renderers. | The catalog is substrate-neutral: mobile devices, Bevy scenes, packages, and future F2-authored renderers participate in the same proof protocol. |
+| Static publishing, URLs, embeds, Figma integration, composition and versioned catalogs ([sharing](https://storybook.js.org/docs/sharing)) | Publishes static catalogs, version URLs, embeds, composed org catalogs, and Figma links. | Catalog publication is tied to the exact gate, merge, deployment, and demo digests; stale or unproven catalogs are visibly quarantined. |
+| Claude Design chat + canvas creates designs, interactive prototypes, decks and visual work ([Anthropic announcement](https://www.anthropic.com/news/claude-design-anthropic-labs)) | Provides conversational generation, live canvas/catalog, alternative directions, and working prototypes. | Output is a typed, versioned, compilable design-system release that must survive native CI, MergeAuthority, deployment, and demo. |
+| Claude Design extracts org systems from code, design files, decks and brand assets; supports several systems ([setup guide](https://support.claude.com/en/articles/14604397-set-up-your-design-system-in-claude-design)) | Brownfield importer mines tokens, components, styles, screenshots, assets, and patterns into candidate fragments. | Extraction produces explicit confidence, gaps, licenses, conformance failures, and F2 authoring work; it cannot silently inherit source mess. |
+| Screenshots, documents, codebase, web capture and other visual references | Accepts all as Forge evidence and inspiration, with source provenance. | References become traceable constraints and test fixtures rather than transient prompt context. |
+| Chat iteration, alternatives, inline comments, drag/resize/align, custom controls and saved revisions ([Claude guide](https://support.claude.com/en/articles/14604416-get-started-with-claude-design)) | Supports broad chat changes, targeted annotations, structured token/component editing, variants, and immutable revision branches. | Every edit is compiled and verified; comments become normalized findings/specs instead of ephemeral canvas mutations. |
+| Interactive prototypes, presentations, landing pages, marketing material, voice/video/shaders/3D | Target profiles cover software UI, documents, motion, media, game UI, and 3D-capable artifacts. | Platform-specific adapters validate actual code/assets and exercise them on the intended substrate rather than presenting only a canvas preview. |
+| Org sharing, view/comment/edit, multiple design systems, defaults and enterprise administration ([admin guide](https://support.claude.com/en/articles/14604406-claude-design-admin-guide-for-team-and-enterprise-plans)) | Org galleries, roles, release channels, defaults, grants, comments, and approval policies. | Full audit logs, usage, impact, gate, merge, deployment and demo history are mandatory—the cited Claude guide explicitly notes audit/usage tracking is currently absent. |
+| ZIP, HTML, PDF, PPTX, Canva/tool handoff, Claude Code sync and MCP | Supports those exports plus DTCG, CSS, Tailwind, shadcn registry, Storybook, native mobile and Bevy bundles. | Handoff is unnecessary for Tanren-owned repositories: the same engine writes, gates, merges, deploys, and demos production. Exports remain fully portable. |
+| Open Design local-first/BYOK, multiple agent CLIs, skills, `DESIGN.md`, real HTML/media files and self-hosting ([Open Design](https://opendesigner.io/)) | Provider-neutral Answerer/Writer adapters, reusable design fragments, real workspaces, local/managed deployment, media artifacts, and editable manifests. | Provider choice is orthogonal to correctness: every provider must pass the same conformance, native gate and live proof chain. |
+| Open Design direction picker, critique theater, manual tweaks, plugin/skill catalogs and Claude ZIP import | Candidate tournaments, critique agents, import adapters, annotations, reusable fragments, and editable source. | Candidate selection is evidence-based and replayable; winning and rejected candidates retain costs, proofs, and causal rationale. |
+| Better-T-Stack visual builder, interactive CLI, flags, presets, randomization/share ([builder](https://www.better-t-stack.dev/new), [quickstart](https://www.better-t-stack.dev/docs)) | Framework target selection is available through Forge, API, dashboard, and CLI with previewable plans. | The menu is open-world: an unknown valid target becomes an F2 authoring DAG rather than “unsupported.” |
+| Broad frontend/native/backend/runtime/database/ORM/API/auth/deploy/addon menu | Matches supported stack profiles and keeps design-target selection aligned with the actual application stack. | Design fragments can depend on any stack capability, and Tanren authors missing framework bindings or components. |
+| Compatibility engine rejects invalid combinations | Adapter capability contracts and dependency solving reject incompatible framework/design/export combinations before mutation. | Compatibility is also proven by real build, render, interaction, speculative integration, deploy, and demo. |
+| Conditionally generated monorepos, shared UI, examples and later addon installation | Emits only selected design packages/catalogs/assets and can install or upgrade them later. | Org theme upgrades create affected-project DAGs, migrate consumers, and verify each project rather than updating a generator config only. |
+| JSON create/add, schema introspection, dry-run, in-memory preview, typed API, MCP agent tools ([agent workflows](https://www.better-t-stack.dev/docs/cli/agent-workflows)) | Provides strict schemas, plan/preview, virtual composition, dry-run, HTTP/CLI/MCP interfaces, and reproducible manifests. | Plans include cost, impact, candidate variants, expected render matrix, merge dependencies, deployment, and demo proof requirements. |
+| No comparator: per-fragment invention of unknown targets | — | F2D authors the missing target/component/exporter, proves it in isolation and full composition, and promotes it into the org library. |
+| No comparator: causal contract-to-live lineage | — | Every live pixel can be traced to tokens, fragments, behaviors, personas, commit, gate, merge, deployment, and demo evidence. |
+| No comparator: speculative/eager design-aware merge queue | — | Theme/component changes are rendered in jj integration nodes, proofs are reused by digest, and failed batches are bisected before MergeAuthority lands anything. |
+| No comparator: autonomous reusable-theme rollout | — | Publishing an org release computes every bound project’s impact, generates migration specs, merges them safely, deploys them, and proves the live results. |
+
+## (3) DATA MODEL (tables/migrations, entities, org-scoping)
+
+The existing `design_contracts` table is project-bound and private to one org ([0010_design_contracts.sql:1](/home/trevor/projects/tanren/db/migrations/0010_design_contracts.sql:1), [0010_design_contracts.sql:20](/home/trevor/projects/tanren/db/migrations/0010_design_contracts.sql:20)). Preserve it as the intent history; do not overload its JSONB with generated files.
+
+Use the next available serialized migration numbers—currently beginning after `0032`—in four reviewable migrations:
+
+- `0033_design_system_core.sql`
+- `0034_design_fragments_artifacts.sql`
+- `0035_design_validation_exports.sql`
+- `0036_design_sharing_projection.sql`
+
+| Entity/table | Important fields and invariants |
+|---|---|
+| `design_systems` | `design_system_id`, `org_id`, unique `(org_id, slug)`, name, description, lifecycle, default channel. Stable family identity; never stores mutable “current tokens.” |
+| `design_system_releases` | `release_id`, `org_id`, `design_system_id`, semantic version, parent release, state `draft/validated/published/deprecated/quarantined`, contract ID/version/digest, manifest schema, canonical artifact ID, compatibility summary, created/published actor and timestamps. Immutable after publication. |
+| `design_release_channels` | `(org_id, design_system_id, channel)` → release; channels such as `experimental`, `candidate`, `stable`. Promotion is audited and CAS-protected. |
+| `design_curations` | Project/contract/target input, plain-base release, status, policy, budget, run ID, selected candidate, failure. |
+| `design_curation_candidates` | Candidate release/artifact, jj change ID, model/cost accounting, deterministic scores, oracle findings, human disposition. |
+| `design_fragment_releases` | Org, kind, label, version, status, target predicates, contract JSON, apply-plan artifact, conformance suite, provenance, license, digest. Separate from existing `fragments`: share the authoring kernel, but do not force multi-file component bundles into template `body_ts`. |
+| `design_fragment_dependencies` | Org-scoped typed edges between fragment releases/capabilities with required/optional/conflict/replaces semantics. |
+| `design_artifacts` | Org-scoped content-addressed metadata: digest, media type, manifest version, object-store key, byte size, encryption/key reference, retention, quarantine. |
+| `design_artifact_files` | Artifact/path/kind/media type/digest/size/executable bit. Unique normalized path; no traversal or case-collision ambiguity. |
+| `project_design_bindings` | Org/project, design system, pin mode `release/channel`, pinned release, override fragment set, target profile, last validated artifact, rollout policy. |
+| `design_token_index` | Release, canonical token path, tier, type, source expression, resolved value hash per context, deprecation and replacement; used for search and impact, not as canonical source. |
+| `design_component_index` | Release, component key, target, source paths, variants, states, slots, events, accessibility contract, token dependencies, persona/behavior refs. |
+| `design_validation_runs` | Release/artifact/commit/environment, validation policy, matrix digest, status, started/completed timestamps, proof-reuse origin. |
+| `design_validation_evidence` | Run, scenario, persona, behavior, theme/context, viewport/device, artifact kind, digest/object key, deterministic measurements, verdict and finding refs. |
+| `design_exports` | Release, target format/version/options digest, output artifact, round-trip proof, status. |
+| `design_system_grants` | Destination org, source publication ID, allowed release/channel, granted capabilities, expiry/revocation, import policy. |
+| `design_share_links` | Owner org, release, hashed opaque capability token, permission, expiry, redemption limit, revocation. Never store the bearer plaintext. |
+| `design_imports` | Destination-owned copy/fork, upstream publication and release digest, license/attribution, sync policy, last-seen upstream. |
+| `published_design_system_releases` | Sanitized system-owned projection containing only explicitly published metadata, previews and public artifact references. It is not the tenant table with relaxed RLS. |
+
+Artifact bytes belong behind an `ArtifactStore` contract with filesystem and object-store conformance suites. Postgres stores manifests, lineage, indexes, policies, and digests; it should not become a multi-gigabyte screenshot/video store.
+
+### Tenancy
+
+Every tenant table has `org_id`, `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, and identical `USING`/`WITH CHECK` predicates. All cross-table foreign keys include `org_id`; an ID from another tenant must be impossible to reference even if application checks regress.
+
+That extends the existing `SET LOCAL app.current_org_id` posture ([orgScope.ts:1](/home/trevor/projects/tanren/db/src/orgScope.ts:1)) and the current fragment RLS pattern ([0018_fragments_doctrine_collapse.sql:21](/home/trevor/projects/tanren/db/migrations/0018_fragments_doctrine_collapse.sql:21)).
+
+Cross-org sharing must not add `OR visibility = 'public'` to tenant policies. Redeeming a share uses a narrowly audited system-scope transaction to create a destination-org grant or immutable import. Public browsing reads only the sanitized projection. Artifact URLs are short-lived and scoped to the redeemed release.
+
+All lifecycle events still append exclusively through `eventStore.ts`, whose contract already requires org ownership ([eventStore.ts:82](/home/trevor/projects/tanren/services/orchestrator/src/engine/eventStore.ts:82)).
+
+## (4) ENGINE INTEGRATION (which DAG stage / gate / merge-queue / post-merge hook)
+
+| Stage | Integration |
+|---|---|
+| Forge interview | Extend the design Answerer output with desired surfaces, target capabilities, accessibility posture and export requirements—still intent, not source. Persist `DesignContractV2`. |
+| DAG derivation | Refactor today’s synchronous design derivation into persisted DagWalker nodes. Current production placement is synchronous Forge derivation ([deriveEntityGraph.ts:106](/home/trevor/projects/tanren/services/orchestrator/src/engine/forge/interview/deriveEntityGraph.ts:106)); the ideal adds explicit `design-plan`, `design-compose`, and `design-validate` nodes before design-consuming specs. |
+| Target discovery | Inspect template selection and workspace configuration; resolve one or more `DesignTargetProfile`s through adapters. Ambiguity becomes a Forge question or typed finding. |
+| Plain base | Compose `base/plain`, resolve all token contexts, materialize a deliberately plain target package, and capture its catalog/render proof. Failure here is a compiler/platform fault. |
+| Fragment selection | Resolve bundled + org + explicitly granted libraries. Missing capabilities become independent F2D nodes; dependency-ready gaps can run concurrently under DagWalker’s persisted readiness rules ([dagWalker.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/engine/contracts/dagWalker.ts:1)). |
+| Curation | Create several jj candidate changes where budget permits: conservative, expressive, accessibility-maximal, and domain-derived variants. Preserve each candidate and cost. |
+| Candidate validation | Run schema/build/export checks, checker, auditor, A4 matrix, and design oracle. Select by policy and evidence; human choice can be required for high-brand-risk projects. |
+| Release | Publish an immutable candidate release and target artifact only after full-library conformance. Bind design-consuming specs to the exact digest. |
+| Spec writer loop | Materialize the artifact into the Writer’s jj workspace and inject structured component/token indexes alongside the DesignContract. Writers consume real source and contracts rather than merely a prose block. |
+| Per-iteration oracle | Determine affected components/scenarios from the diff and token dependency graph. Render them after checker/auditor; findings re-drive the same Writer loop. |
+| Native gate | Extend `CiConfigV1` evidence with `design-artifact`, `design-render-matrix`, `accessibility-report`, and `export-roundtrip`. `pre_audit` validates affected surfaces; mandatory `pre_merge` runs the critical/full matrix. The schema already makes the native config and evidence contract authoritative ([ci/schema.ts:3](/home/trevor/projects/tanren/services/orchestrator/src/engine/ci/schema.ts:3), [ci/schema.ts:192](/home/trevor/projects/tanren/services/orchestrator/src/engine/ci/schema.ts:192)). These run over SSH in Tanren runners—never GitHub Actions. |
+| Speculative queue | Include release, fragment, adapter, environment and scenario digests in the proof key. Render integration nodes against queued predecessors; reuse unchanged proofs and rerun affected combinations. |
+| Eager batch | Add cross-spec visual/interaction checks for shared tokens and components. If the batch fails, prefix-bisect using the existing batch coordinator model, then route the culprit to rework. |
+| jj conflict handling | Token/component conflicts remain first-class jj conflicts. Semantic resolvers can propose alias/variant merges, but the resulting source must be rebuilt and re-rendered. `WorkspaceVcsCore` already establishes jj-only local assembly and recorded conflicts ([workspaceVcsCore.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/engine/contracts/workspaceVcsCore.ts:1)). |
+| MergeAuthority | Add design proof status, unresolved P0/P1 findings, artifact digest and release posture to authorization input. `MergeAuthority` remains the sole decision-maker and continues to fail closed on uncertainty ([mergeAuthority.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/engine/contracts/mergeAuthority.ts:1), [mergeAuthority.ts:227](/home/trevor/projects/tanren/services/orchestrator/src/engine/contracts/mergeAuthority.ts:227)). |
+| Post-merge deploy | Publish the catalog and deploy the merged app/release. Current deploy-on-merge already binds deployment to the merged commit and records verified/failed outcomes ([deployOnMerge.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/engine/postMerge/deployOnMerge.ts:1)). |
+| Post-merge demo | Upgrade the web demo arm from route reachability to scripted browser behavior plus visual proof. Current `DemoEngine` already records evidence per behavior and dispatches by deployed surface kind ([demoEngine.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/engine/demo/demoEngine.ts:1), [demoEngine.ts:118](/home/trevor/projects/tanren/services/orchestrator/src/engine/demo/demoEngine.ts:118)). Add browser, device/emulator, and game-scene drivers behind that contract. |
+| Shared-theme rollout | Publishing a new stable org release computes affected project bindings. Each upgrade becomes an ordinary spec/DAG/queue/merge/deploy/demo flow; no background process directly rewrites repositories. |
+
+A behavior added after curation invalidates the release’s coverage proof and schedules re-elaboration. This closes the current gap where the oracle can report stale coverage but has no executable design-system regeneration path.
+
+## (5) HTTP SURFACE (endpoints)
+
+Follow the existing Hono pattern of explicit `/:orgId/...` routes, actor checks, strict Zod parsing, and defense-in-depth org predicates ([personas routes:24](/home/trevor/projects/tanren/services/orchestrator/src/routes/personas/index.ts:24)).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET/POST /orgs/:orgId/design-systems` | List or create stable design-system families. |
+| `GET/PATCH /orgs/:orgId/design-systems/:systemId` | Read or modify family metadata/governance; never mutate published release content. |
+| `GET/POST /orgs/:orgId/design-systems/:systemId/releases` | List releases or create a draft from a parent/import. |
+| `POST .../releases/:releaseId/validate` | Start deterministic and A4 validation. |
+| `POST .../releases/:releaseId/publish` | CAS-protected immutable publication. |
+| `POST .../releases/:releaseId/deprecate` | Deprecate with replacement and migration policy. |
+| `PUT .../channels/:channel` | Promote a validated release to a channel using expected-current-release CAS. |
+| `POST /orgs/:orgId/projects/:projectId/design-curations` | Start plain→polished curation from the project’s contract and targets. |
+| `GET /orgs/:orgId/design-curations/:curationId` | Status, candidates, fragments, costs, findings and selected artifact. |
+| `GET /orgs/:orgId/design-curations/:curationId/events` | SSE stream using the existing LISTEN/NOTIFY model; current SSE already re-queries deltas under org scope ([runs/sse.ts:1](/home/trevor/projects/tanren/services/orchestrator/src/routes/runs/sse.ts:1)). |
+| `GET/POST /orgs/:orgId/design-fragments` | Search or create draft fragment metadata. |
+| `POST /orgs/:orgId/design-fragments/author` | Explicitly start F2D for a missing `FragmentSpec`. |
+| `POST .../design-fragments/:fragmentId/validate` | Run isolated and full-library conformance. |
+| `POST .../design-fragments/:fragmentId/quarantine` | Prevent new compositions while preserving provenance. |
+| `GET /orgs/:orgId/design-artifacts/:artifactId/manifest` | Canonical manifest and lineage. |
+| `GET /orgs/:orgId/design-artifacts/:artifactId/files/*` | Authorized file retrieval with safe normalized paths. |
+| `GET /orgs/:orgId/design-artifacts/:artifactId/catalog` | Catalog launch descriptor or signed static URL. |
+| `GET /orgs/:orgId/design-artifacts/:artifactId/render-matrix` | Scenario coverage and visual evidence. |
+| `POST /orgs/:orgId/design-systems/:systemId/resolve` | Resolve tokens for explicit theme/modifier context; useful to plugins and conformance tools. |
+| `POST .../releases/:releaseId/exports` | Generate one or more export jobs. |
+| `GET .../exports/:exportId` | Export status, proof and signed bundle URL. |
+| `GET/PUT /orgs/:orgId/projects/:projectId/design-system-binding` | Inspect or update project pin/channel/override policy. |
+| `POST .../design-system-binding/preview-upgrade` | Dry-run impact, migration DAG, visual diff, cost and compatibility. |
+| `POST .../design-system-binding/upgrade` | Create upgrade specs; does not mutate the default branch directly. |
+| `POST /orgs/:orgId/design-systems/:systemId/shares` | Create expiring view/import/fork capabilities. |
+| `DELETE .../shares/:shareId` | Revoke a share. |
+| `POST /orgs/:orgId/design-imports` | Redeem/import an explicit shared or public release. |
+| `POST .../render-evidence/:evidenceId/comments` | Convert visual annotations into durable structured feedback/findings. |
+| `POST /internal/design-render-runs/:runId/evidence` | Control-plane authenticated evidence callback from de-privileged runners. |
+| `POST /internal/design-render-runs/:runId/finalize` | Atomic finalization after all expected matrix cells report. |
+
+All job-starting mutations accept idempotency keys and return `202`. Release changes use ETags/expected digests. Artifact downloads are scoped, expiring, and content-disposition safe. Public metadata never exposes private token/component source without an explicit grant.
+
+## (6) UI/DASHBOARD SURFACE (what the operator sees + any exportable/validateable artifact)
+
+Today dashboard visibility is essentially the captured identity and dimension labels, not a catalog ([CapturePanel.tsx:93](/home/trevor/projects/tanren/services/dashboard/src/components/onboarding/new/CapturePanel.tsx:93)). The ideal adds:
+
+### Org Design Systems
+
+- Reusable systems, brands, channels and published releases.
+- Compatibility badges by framework/target.
+- Usage across projects and upgrade availability.
+- Share, import, fork, deprecate and revoke actions.
+- Publication governance and audit history.
+
+### Design System Studio
+
+Not a freeform canvas as source of truth; it is an executable artifact inspector/editor:
+
+- Primitive → semantic → component token graph.
+- Theme/modifier switcher with resolved-value provenance.
+- Formula, alias, cycle and deprecation inspector.
+- Component catalog with props, slots, variants, states and interaction controls.
+- Responsive viewport, locale, RTL, contrast, motion and input-mode controls.
+- Source, asset, dependency, license and SBOM panels.
+- Plain versus polished visual and token diffs.
+- Structured token/component editing that creates a new draft release.
+- Comments that become findings or specs.
+
+### Curation Run
+
+- DAG visualization from plain base through selected fragments and F2 gaps.
+- Parallel candidates with cost, deterministic scores, oracle findings and screenshots.
+- Why a fragment was selected, reused, authored or rejected.
+- Live Writer/checker/auditor/oracle trajectory.
+- Fixed-point and conformance failures.
+- Explicit selected candidate and rationale.
+
+### Visual Evidence Lab
+
+- Matrix heat map: component/behavior × theme × viewport/device × locale × state.
+- Baseline, candidate and perceptual diff.
+- Accessibility tree, focus path, keyboard/touch trace and console/network failures.
+- Behavior/persona coverage.
+- Negative-control result proving the adapter catches regressions.
+- “Open deployed proof” linking the same scenario after merge.
+
+### Project Design Surface
+
+- Pinned design release/channel and override fragments.
+- Current drift from the org release.
+- Proposed upgrade impact by token, component, spec and screen.
+- Speculative queue status and proof reuse.
+- Gate, merge, deploy and demo linkage.
+
+### Export/share surface
+
+A release exports as `tanren-design-system-v1.tar.zst` containing:
+
+- Canonical manifest and signatures.
+- DTCG tokens/resolver.
+- Component contracts and source.
+- Assets/fonts with licenses.
+- Static visual catalog.
+- Scenario fixtures and tests.
+- Requested platform outputs.
+- SBOM and provenance.
+- Validation/evidence manifest.
+
+Supported projections include:
+
+- DTCG JSON/resolver.
+- CSS custom properties.
+- Tailwind theme.
+- TypeScript packages.
+- shadcn registry.
+- Storybook-compatible CSF and static catalog.
+- Tokens Studio-compatible JSON.
+- Figma Variables/Styles bridge.
+- Swift/SwiftUI resources and components.
+- Android XML/Compose.
+- Flutter/Dart.
+- React Native.
+- Bevy RON/assets/scenes.
+- Standalone HTML, PDF, PPTX and media outputs where applicable.
+
+A companion CLI provides `tanren design pull`, `diff`, `resolve`, `validate`, `render`, `export`, and `verify-bundle`. Validation works offline with the included manifest and conformance fixtures; remote proof verification additionally checks signed evidence and event lineage.
+
+## (7) APEX-PROVABILITY (which events/artifacts prove it fired live)
+
+Every new event is schema-registered, sensitivity-audited, org-scoped, and appended through `EventStore`.
+
+| Proposed event | Required proof |
+|---|---|
+| `designSystem.curation.started` | Contract version/digest, target profiles, plain-base release, expected behaviors/personas. |
+| `designSystem.base.composed` | Plain artifact digest, catalog build digest, token-resolution report, plain screenshots. |
+| `designSystem.fragment.missing` | Exact unsatisfied capability and dependency path. |
+| `designFragment.authoring.started/attempt/succeeded/failed` | Fragment spec, Writer jj change, rejection signature, validator/oracle outcomes, final digest. Mirrors existing observable template F2 events ([fragmentAuthoring.ts:153](/home/trevor/projects/tanren/services/orchestrator/src/routes/onboarding/fragmentAuthoring.ts:153)). |
+| `designSystem.candidate.composed` | Candidate artifact, fragment graph, cost buckets, plain→candidate diff. |
+| `designSystem.artifact.validated` | Static/build/export checks and expected A4 matrix digest. |
+| `designRender.scenario.recorded` | Artifact/commit, scenario, persona, behavior, context, device, screenshot/tree/trace digests, measurements and result. |
+| `designOracle.verdict` | Contract/release/artifact digests plus evidence IDs; expand today’s summary-only event shape ([designOracleLoopStage.ts:97](/home/trevor/projects/tanren/services/orchestrator/src/engine/workflow/designOracleLoopStage.ts:97)). |
+| `designSystem.release.published` | Immutable manifest, signature, validation run and actor/policy. |
+| `designSystem.proof.reused` | Previous proof, exact cache key and unchanged-input justification. |
+| `designSystem.regression.bisected` | Failing matrix cell, queue batch, tested prefixes and culprit change. |
+| `designSystem.binding.updated` | Old/new release, pin policy, generated upgrade spec IDs. |
+| Existing `gate.verdict` | Commit-bound native CI verdict carrying the required design evidence digests. |
+| Existing `merge.batch.*` and `merge.completed` | Speculative/eager outcome and the sole authorized landed commit. |
+| Existing `deploy.triggered/verified` | Merged commit, deployment and reachable live surface. |
+| Existing `demo.evidence.recorded` and `demo.completed` | Per-behavior live interaction, screenshots/video/trace and result. The current engine already records one evidence event per behavior ([demoEngine.ts:130](/home/trevor/projects/tanren/services/orchestrator/src/engine/demo/demoEngine.ts:130)). |
+
+### Mandatory apex trial
+
+The acceptance trial should intentionally exercise the whole moat:
+
+1. Forge a product targeting a supported framework plus one deliberately absent but valid design capability.
+2. Show the plain base catalog and digest.
+3. Observe `designSystem.fragment.missing`.
+4. Have F2D author the missing fragment; prove at least one rejected attempt and successful repair.
+5. Produce several polished candidates and select one from actual A4 evidence.
+6. Run a negative control that breaks contrast or focus; prove `gate.failed`, Writer repair, then `gate.verdict=pass`.
+7. Queue two dependent visual specs so speculative proof reuse and eager integration execute; introduce one visual regression and prove batch bisection identifies it.
+8. Prove only MergeAuthority lands the chosen commit.
+9. Prove deploy verification, then replay each Given/When/Then behavior on the live surface with screenshots/traces.
+10. Bind a second project in the same org to the published theme and prove reuse without F2.
+11. Publish an updated theme, show its cross-project impact DAG, and prove both projects migrate through ordinary specs rather than direct mutation.
+12. Export the bundle, validate it offline, import/fork it into another authorized org, and verify RLS prevents access before grant redemption.
+
+The final apex page should display one unbroken trace ID from Forge behavior through the live demo artifact.
+
+## (8) EFFORT + PHASING (MVP vs full, rough size, deps on sibling buckets)
+
+This is a product line, not a feature patch.
+
+| Phase | Scope | Rough effort |
+|---|---|---:|
+| 0. Contracts and roadmap ownership | Design artifact schemas, adapter contracts, event vocabulary, RLS design, proof keys, spec path ownership and conformance strategy. | 3–5 engineer-months |
+| 1. Executable token core | Full DTCG format/resolver, plain base, typed DesignVfs, CAS artifact store, token index and offline validator. | 6–9 engineer-months |
+| 2. Web adapter MVP | shadcn/Radix/Tailwind output, components, Storybook-compatible catalog, CSS/DTCG/shadcn exports, Writer integration. | 7–10 engineer-months |
+| 3. F2D | Missing-fragment selector, Writer authoring workspaces, checker/auditor loop, atomic persistence/retraction, full-library conformance. | 7–11 engineer-months |
+| 4. A4 and gate | Runner render harness, screenshots/a11y/interaction traces, oracle evidence, negative controls, `.tanren/ci.yml`, proof reuse. | 10–16 engineer-months |
+| 5. Dashboard/API/org reuse | Studio, catalog, evidence lab, channels, bindings, upgrades, within-org sharing and exports. | 8–12 engineer-months |
+| 6. Queue/deploy/demo compounding | Design-aware speculative keys, eager matrix/bisection, richer live browser demo, catalog deployment and trace UI. | 8–13 engineer-months |
+| 7. Full framework reach | Bevy, SwiftUI, Compose, Flutter, React Native, generic web, document/media adapters and conformance farms. | 25–50 engineer-months |
+| 8. Ecosystem and cross-org | Figma bridge, public projection, grants/import/forks, external registry adapters, production feedback and automated rollout. | 12–20 engineer-months |
+
+### MVP
+
+A credible MVP is phases 0–5 with:
+
+- DTCG tokens and resolver contexts.
+- Plain→polished curation.
+- One production-grade React/shadcn target.
+- F2D for missing web components.
+- Real visual catalog.
+- Chromium A4 verification.
+- Native-gate evidence and MergeAuthority integration.
+- Org-private reusable releases.
+- DTCG/CSS/Tailwind/shadcn/Storybook exports.
+
+Estimate: **20–30 engineer-months**, roughly **4–6 months with 6–8 engineers**, **20–35 PRs**, and **35–55k production/test lines**.
+
+### Full ideal
+
+Including production-grade game/mobile/media adapters, device farms, Figma round-trip, cross-org publication, queue bisection and autonomous fleet rollout: **80–140 engineer-months**, **9–15 months with an 8–12 person team**, **80–150 PRs**, and roughly **120–220k lines plus golden artifacts**. Long-tail adapter maintenance remains ongoing.
+
+### Sibling dependencies
+
+- `WS-D4a`/A4 live rendering, including browser, emulator/device and game-render substrates.
+- Tenant-aware `ArtifactStore` and retention policy.
+- Generic Writer-owned F2 authoring kernel.
+- Multimodal oracle provider contract.
+- Native gate evidence-schema expansion.
+- DagWalker node and dependency extensions.
+- Merge proof-key and affected-surface calculation.
+- Rich browser/device DemoEngine arms.
+- Org RBAC, grants and public-projection security.
+- Figma plugin/API bridge.
+- Dashboard route/nav changes, serialized because those are shared ownership files.
+- Framework-specific conformance suites and golden projects.
+
+All migrations and shared event/route contracts must be serialized per the repository’s worktree rules. Every new source/config/doc file stays below 500 lines.
+
+## (9) RISKS/UNKNOWNS
+
+| Risk/unknown | Treatment |
+|---|---|
+| DTCG 2025.10 is a Community Group report, not a W3C Standard | Pin the supported schema in manifests, preserve extensions, provide explicit migration tooling, and test newer versions behind adapters. |
+| Primitive/semantic/component tiers are a design convention, not a mandatory generic DTCG schema | Encode tier as a Tanren namespaced extension and validate it without misrepresenting the upstream standard. |
+| “Tokens Studio → Tailwind” is not a native one-click contract | Implement Tailwind through a tested export adapter; retain DTCG as canonical source. |
+| Visual quality is partly subjective | Separate deterministic failures from oracle judgment, retain evidence/rationale, allow policy-controlled human selection, and never let aesthetic preference masquerade as correctness. |
+| Oracle nondeterminism or false confidence | Pin prompts/models/policies in evidence, use repeat sampling for high-risk verdicts, require negative controls, and make deterministic checks authoritative where possible. |
+| Browser/font/GPU screenshot instability | Hermetic environments, bundled fonts, fixed clocks/data/animation, deterministic GPU policy, tolerances, semantic snapshots and repeat confirmation. |
+| Theme × state × locale × viewport explosion | Exhaustive critical matrices plus pairwise/risk-based selection elsewhere; affected-only runs during iteration and full critical coverage at `pre_merge`. |
+| Framework semantic mismatch | Strong adapter contracts and real conformance projects; never claim a token/component has identical meaning merely because it serialized. |
+| Bevy/mobile verification cost | Dedicated renderer/device pools, deterministic fixture scenes, proof caching and tiered validation budgets. |
+| Figma API/plugin limitations and type mismatch | Treat Figma as an adapter, preserve stable external IDs, surface lossy conversions, and require round-trip reports rather than promising perfect equivalence. |
+| Open-code component divergence | Record local provenance, support three-way semantic upgrades, preserve local edits, and rerun complete proofs after any update. |
+| Generated-code security | Isolated no-secret Writer workspaces, dependency allowlists/policy, SBOM/license scans, no evaluator execution inside the orchestrator, signed artifacts and egress controls. |
+| Malicious imported fragment/assets | Quarantine, content scanning, license review, capability restrictions, sandboxed render, and no automatic publication from an external import. |
+| Cross-org sharing weakens tenancy | Separate public projection and explicit grants/imports; never relax tenant RLS. Test cross-tenant IDs, object keys, cache keys, screenshots and SSE. |
+| Screenshots or fixtures contain PII | Redaction policies, synthetic fixtures, sensitivity classification, encrypted artifacts, scoped retention and access auditing. |
+| Shared-theme rollout has a large blast radius | Immutable releases, pin/channel policy, impact preview, canaries, project-specific specs, queue ordering and automatic rollback releases—never mass direct writes. |
+| A design gate could become a shadow merge authority | It emits proof/findings only. MergeAuthority consumes those inputs and remains the sole merge decision. |
+| Cost and latency undermine the order-of-magnitude claim | Make proof reuse, affected-surface selection, speculative parallelism and org-level reuse measurable product SLOs; without them this becomes merely a more expensive Storybook pipeline. |
+| Existing design roadmap/status text is partly stale | Use current schemas/migrations as authority. For example, migration `0028` removed the earlier `mode` field ([0028_design_contracts_drop_mode.sql:1](/home/trevor/projects/tanren/db/migrations/0028_design_contracts_drop_mode.sql:1)). |
+| No A4 implementation exists today | Treat A4/WS-D4a as a hard dependency and explicit workstream. Do not market static oracle inspection as visual validation. |
+| Comparator surfaces are moving quickly | Version the parity inventory and conformance fixtures. Claude Design is currently beta and Open Design’s breadth is product/README behavior rather than a stable interoperability standard. |
+
+The cost is substantial, but the ambition is justified: the differentiator is not better token generation. It is turning design intent into a reusable executable dependency that Tanren can invent, compile, test, merge, deploy, observe, and continuously prove across an organization.

@@ -1,0 +1,423 @@
+<title>Tanren — Integrated Build DAG</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ground:#0f1517; --panel:#151d20; --panel-2:#1b2429; --line:#26333a; --line-2:#324249;
+    --ink:#e7edec; --ink-soft:#aebbba; --ink-mute:#7d8d8c;
+    --accent:#3fb8a6; --accent-soft:#2b7a6f; --accent-glow:rgba(63,184,166,.14);
+    --good:#4fb083; --warn:#e0a552; --crit:#d9756b;
+    --mq:#5b8db8; --rv:#46a98c; --in:#8f80cc; --bh:#c58a54; --ds:#c67799; --gv:#7480ba;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --maxw:1140px; --r:10px;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ground:#f3f6f5; --panel:#ffffff; --panel-2:#eef2f1; --line:#dbe3e1; --line-2:#c6d1ce;
+      --ink:#16211f; --ink-soft:#3f4f4c; --ink-mute:#6d7d7a;
+      --accent:#1f8e7f; --accent-soft:#7fc9bd; --accent-glow:rgba(31,142,127,.10);
+      --good:#2f8a5f; --warn:#b6832f; --crit:#bb4f45;
+      --mq:#3f6f96; --rv:#2f8a70; --in:#6d5eb0; --bh:#a56b34; --ds:#a9567a; --gv:#535f9c;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0f1517; --panel:#151d20; --panel-2:#1b2429; --line:#26333a; --line-2:#324249;
+    --ink:#e7edec; --ink-soft:#aebbba; --ink-mute:#7d8d8c; --accent:#3fb8a6; --accent-soft:#2b7a6f;
+    --good:#4fb083; --warn:#e0a552; --crit:#d9756b;
+    --mq:#5b8db8; --rv:#46a98c; --in:#8f80cc; --bh:#c58a54; --ds:#c67799; --gv:#7480ba;
+  }
+  :root[data-theme="light"]{
+    --ground:#f3f6f5; --panel:#ffffff; --panel-2:#eef2f1; --line:#dbe3e1; --line-2:#c6d1ce;
+    --ink:#16211f; --ink-soft:#3f4f4c; --ink-mute:#6d7d7a; --accent:#1f8e7f; --accent-soft:#7fc9bd;
+    --good:#2f8a5f; --warn:#b6832f; --crit:#bb4f45;
+    --mq:#3f6f96; --rv:#2f8a70; --in:#6d5eb0; --bh:#a56b34; --ds:#a9567a; --gv:#535f9c;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px;}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent;}
+  a:hover{border-bottom-color:var(--accent);}
+  h1,h2,h3{text-wrap:balance;line-height:1.18;margin:0;}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;}
+  .mono{font-family:var(--mono);}
+  .tnum{font-variant-numeric:tabular-nums;}
+
+  /* header */
+  header{border-bottom:1px solid var(--line);background:
+    radial-gradient(120% 90% at 82% -10%, var(--accent-glow), transparent 60%);}
+  .hero{padding:54px 0 30px;}
+  .kicker{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px;}
+  .tag{font-family:var(--mono);font-size:11px;letter-spacing:.08em;padding:4px 9px;border:1px solid var(--line-2);
+    border-radius:999px;color:var(--ink-soft);text-transform:uppercase;}
+  h1{font-size:clamp(30px,5vw,50px);font-weight:800;letter-spacing:-.02em;}
+  h1 .b{color:var(--accent);}
+  .lede{margin-top:16px;max-width:66ch;color:var(--ink-soft);font-size:17.5px;}
+  .metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:30px 0 6px;}
+  .metric{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 15px;}
+  .metric .n{font-family:var(--mono);font-size:26px;font-weight:700;letter-spacing:-.01em;}
+  .metric .l{font-size:12px;color:var(--ink-mute);margin-top:3px;line-height:1.3;}
+  @media(max-width:760px){.metrics{grid-template-columns:repeat(2,1fr)}}
+
+  section{padding:44px 0;border-bottom:1px solid var(--line);}
+  .sec-h{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:8px;}
+  h2{font-size:clamp(22px,3vw,30px);font-weight:750;letter-spacing:-.015em;}
+  .sec-sub{color:var(--ink-soft);max-width:70ch;margin:10px 0 26px;}
+
+  .callout{background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:16px 18px;margin:22px 0;color:var(--ink-soft);}
+  .callout b{color:var(--ink);}
+
+  /* spine */
+  .spine{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;}
+  @media(max-width:760px){.spine{grid-template-columns:1fr}}
+  .contract{background:var(--panel);border:1px solid var(--line-2);border-radius:var(--r);padding:16px 17px;position:relative;overflow:hidden;}
+  .contract::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent);}
+  .contract .id{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600;letter-spacing:.04em;}
+  .contract h3{font-size:17px;margin:5px 0 8px;font-weight:700;}
+  .contract p{margin:0;font-size:13.5px;color:var(--ink-soft);line-height:1.5;}
+  .contract .who{margin-top:11px;display:flex;flex-wrap:wrap;gap:6px;}
+  .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;padding:2.5px 7px;border-radius:5px;
+    border:1px solid var(--line-2);color:var(--ink-mute);white-space:nowrap;}
+  .pill.build{color:var(--accent);border-color:var(--accent-soft);}
+
+  /* bucket */
+  .bkt-head{display:flex;align-items:center;gap:12px;margin:34px 0 6px;padding-top:6px;}
+  .dot{width:12px;height:12px;border-radius:3px;flex:none;}
+  .bkt-head h3{font-size:20px;font-weight:750;letter-spacing:-.01em;}
+  .bkt-head .cnt{font-family:var(--mono);font-size:12px;color:var(--ink-mute);margin-left:auto;white-space:nowrap;}
+  .bkt-note{color:var(--ink-soft);font-size:14px;margin:2px 0 14px;max-width:74ch;}
+  .bkt-note .k{font-family:var(--mono);font-size:12.5px;color:var(--ink);}
+
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--panel);}
+  table{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;}
+  th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-mute);
+    font-weight:600;position:sticky;top:0;background:var(--panel-2);}
+  tr:last-child td{border-bottom:none;}
+  td.id{font-family:var(--mono);color:var(--accent);font-weight:600;white-space:nowrap;}
+  td.dep{font-family:var(--mono);font-size:11.5px;color:var(--ink-mute);}
+  .ph{font-family:var(--mono);font-size:10px;letter-spacing:.04em;padding:2px 6px;border-radius:4px;white-space:nowrap;}
+  .ph.mvp{color:var(--good);border:1px solid color-mix(in srgb,var(--good) 40%,transparent);}
+  .ph.full{color:var(--ink-mute);border:1px solid var(--line-2);}
+
+  /* seams */
+  .seams{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  @media(max-width:760px){.seams{grid-template-columns:1fr}}
+  .seam{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:15px 16px;}
+  .seam h4{font-size:14.5px;margin:0 0 6px;font-weight:700;display:flex;gap:8px;align-items:center;}
+  .seam h4 .m{font-family:var(--mono);font-size:10px;color:var(--accent);border:1px solid var(--accent-soft);
+    padding:1px 5px;border-radius:4px;letter-spacing:.04em;}
+  .seam p{margin:0;font-size:13px;color:var(--ink-soft);line-height:1.5;}
+  .seam code{font-family:var(--mono);font-size:12px;color:var(--ink);background:var(--panel-2);padding:1px 4px;border-radius:4px;}
+
+  /* waves */
+  .wave{display:grid;grid-template-columns:120px 1fr;gap:0;border:1px solid var(--line);border-radius:var(--r);
+    overflow:hidden;background:var(--panel);}
+  .wave + .wave{margin-top:12px;}
+  .wave .w-l{background:var(--panel-2);padding:15px 14px;border-right:1px solid var(--line);}
+  .wave .w-l .wn{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:700;}
+  .wave .w-l .wt{font-size:12.5px;color:var(--ink-soft);margin-top:4px;line-height:1.35;}
+  .wave .w-r{padding:14px 15px;}
+  .wave .w-r p{margin:0 0 8px;font-size:13.5px;color:var(--ink-soft);}
+  .wave .w-r p:last-child{margin-bottom:0;}
+  .lane{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;}
+  .lchip{font-family:var(--mono);font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--line-2);
+    color:var(--ink-soft);white-space:nowrap;}
+  .barrier{font-family:var(--mono);font-size:11px;color:var(--warn);border:1px dashed color-mix(in srgb,var(--warn) 50%,transparent);
+    padding:3px 8px;border-radius:6px;}
+
+  ul.clean{margin:14px 0;padding-left:0;list-style:none;}
+  ul.clean li{position:relative;padding-left:22px;margin:9px 0;color:var(--ink-soft);}
+  ul.clean li::before{content:"→";position:absolute;left:0;color:var(--accent);font-family:var(--mono);}
+  ul.clean li b{color:var(--ink);}
+  code.inl{font-family:var(--mono);font-size:.9em;background:var(--panel-2);padding:1px 5px;border-radius:4px;color:var(--ink);}
+
+  footer{padding:34px 0 60px;color:var(--ink-mute);font-size:13px;}
+  .fnote{font-family:var(--mono);font-size:12px;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px;}
+  @media (prefers-reduced-motion:no-preference){
+    .contract,.metric{transition:border-color .18s ease;}
+    .contract:hover{border-color:var(--accent-soft);}
+  }
+</style>
+
+<header><div class="wrap hero">
+  <div class="kicker">
+    <span class="tag">Tanren</span><span class="tag">Integrated build plan</span>
+    <span class="tag">v97 &amp; beyond</span><span class="tag mono">6 sol audits → 1 DAG</span>
+  </div>
+  <h1>Six maximal pitches, <span class="b">one integrated engine.</span></h1>
+  <p class="lede">Six unlimited-ambition sol audits returned 142 build nodes. Read as separate products they are "years of work." Read as one graph they collapse into a small set of <b>shared contracts</b> — a spine — with the features fanning off it in parallel. This is that graph: the spine, the 142 nodes, the cross-feature seams that make Tanren more than the sum of its parts, and the workflow that executes it as a node-graph, not a calendar.</p>
+  <div class="metrics">
+    <div class="metric"><div class="n tnum">142</div><div class="l">build nodes across 6 buckets</div></div>
+    <div class="metric"><div class="n tnum">8</div><div class="l">shared spine contracts</div></div>
+    <div class="metric"><div class="n tnum">~72</div><div class="l">MVP-tier nodes (v97 target)</div></div>
+    <div class="metric"><div class="n tnum">5</div><div class="l">parallel build waves</div></div>
+    <div class="metric"><div class="n tnum">3</div><div class="l">serialization barriers</div></div>
+  </div>
+</div></header>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">The reframe</span></div>
+  <h2>Time estimates are a proxy for node count. We measure the graph.</h2>
+  <p class="sec-sub">Every pitch quoted "engineer-months." That vocabulary assumes a fixed workforce. Tanren's own 95+ runs happened in ~2 months because the work is a graph of nodes executed in parallel by agents. So we discard duration and keep the two numbers that actually govern velocity:</p>
+  <div class="spine" style="grid-template-columns:1fr 1fr;">
+    <div class="contract" style="--accent:var(--accent);"><div class="id">METRIC · WIDTH</div><h3>Parallel width</h3><p>How many nodes can run at once. After the spine is frozen, ~110 feature nodes have no cross-bucket edge to each other — they are one fan-out. Width is bounded by build capacity (subagents + shelled-out codex/grok/glm), not by sequence.</p></div>
+    <div class="contract"><div class="id">METRIC · DEPTH</div><h3>Critical-path depth</h3><p>The longest chain of hard dependencies. It runs <span class="mono">spine contracts → spine implementations → consumer MVP → apex proof</span> — roughly 5 gated waves. Depth, not total node count, is the real floor on wall-clock.</p></div>
+  </div>
+  <div class="callout"><b>The whole strategy in one line:</b> freeze the 8 shared contracts first (small, co-designed, serial-ish), then the 142 nodes become a wide, shallow fan-out that a workflow drives at maximum parallelism — turning "years" into a bounded-depth graph.</div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">The spine · critical path</span></div>
+  <h2>Eight contracts every bucket builds-or-consumes.</h2>
+  <p class="sec-sub">These are not features — they are the shared interfaces. Each is co-authored by the buckets that need it, frozen once, then depended on. Get these right and the two biggest buckets (runtime + merge-queue) parallelize cleanly; get them wrong and you build competing authorities and duplicate proof stores. <b>This is the single highest-leverage work in the plan.</b></p>
+  <div class="spine">
+    <div class="contract"><div class="id">SP·1</div><h3>Behaviors / personas as immutable revisions</h3><p>First-class persona + Given/When/Then behavior objects that never mutate in place; specs bind to an exact revision. The semantic anchor everything keys history on.</p><div class="who"><span class="pill build">builds rv-1 · rv-21</span><span class="pill">gv-7 policy-instance</span><span class="pill">consumed by all 6</span></div></div>
+    <div class="contract"><div class="id">SP·2</div><h3>Generalized F2 authoring kernel</h3><p>Extract the template fragment kernel into a Writer-owned <span class="mono">plan→write→validate→compose</span> loop. <b>Same kernel, parallel fragment families</b> (verification, design, integration, governance) — separate schemas + storage.</p><div class="who"><span class="pill build">extract from templates</span><span class="pill">rv-3 ds-3 in-7 bh-19 gv-10</span></div></div>
+    <div class="contract"><div class="id">SP·3</div><h3>CAS proof / artifact substrate</h3><p>Content-addressed <span class="mono">ArtifactStore</span> + Merkle proof-unit graph + signed proof roots. One evidence store the gate, queue, oracle, and demo all read and reuse by digest.</p><div class="who"><span class="pill build">builds rv-9 · mq-6 · ds-1</span><span class="pill">consumed by all 6</span></div></div>
+    <div class="contract"><div class="id">SP·4</div><h3>The Authority pattern (MergeAuthority-V2)</h3><p>A fail-closed, multi-member, typed-disposition authority over the exact integration node. Governance <em>parameterizes</em> its inputs; back-half + governance add sibling <span class="mono">Resolution</span>/<span class="mono">Promotion</span> authorities on the same pattern.</p><div class="who"><span class="pill build">co-built mq-1/2 · rv-14/15</span><span class="pill">gv-3/9/12/17 inputs</span><span class="pill">bh-11 · gv-29 siblings</span></div></div>
+    <div class="contract"><div class="id">SP·5</div><h3>Runtime-verification harness</h3><p>Assertion DSL, Playwright/driver adapters, side-effect observers, render/screenshot capture, per-behavior verdict store — behind conformance contracts, no "pretend-succeeded" impls. The substrate for A1/A3/A4.</p><div class="who"><span class="pill build">builds rv-2/5/6/9/10/11</span><span class="pill">ds-4 adds A4</span><span class="pill">reused by bh · in · gv</span></div></div>
+    <div class="contract"><div class="id">SP·6</div><h3>Extended DeployAdapter</h3><p>Deploy-exact-digest + preview + canary + promote + rollback + teardown + attestation. Currently deferred in the codebase; four buckets block on it.</p><div class="who"><span class="pill build">needed by rv-5 bh-9 in-17 ds-6 gv-21/29</span></div></div>
+    <div class="contract"><div class="id">SP·7</div><h3>Native gate evidence + GateProofBundle</h3><p>Extend <span class="mono">CiConfigV1</span> (`.tanren/ci.yml`) with new evidence kinds (behavior, design-render, integration, a11y) and a signed bundle — over SSH, never GitHub Actions.</p><div class="who"><span class="pill build">rv-14 · ds-4 · in-15 · gv-3</span></div></div>
+    <div class="contract"><div class="id">SP·8</div><h3>Event registry &amp; migration/nav protocol</h3><p>Every event through the sole append-only <span class="mono">EventStore</span> + Zod registry codegen; migrations 0033–0040 and dashboard nav (`screens.ts`) are serialized shared-file work.</p><div class="who"><span class="pill">cross-cutting</span><span class="pill" style="color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent)">serialization barrier</span></div></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">The consumers · 142 nodes</span></div>
+  <h2>Six buckets, hung off the spine.</h2>
+  <p class="sec-sub">Each bucket contributes one or two spine primitives and consumes the rest. Tables list every node with its phase and its key dependencies — <span class="ph mvp">MVP</span> is the v97 target (closes v96's failures + proves usefulness), <span class="ph full">full</span> is the comparator-beating remainder. Full per-node data-model / validation / HTTP / UI detail lives in each bucket's pitch file.</p>
+
+  <!-- MERGE QUEUE -->
+  <div class="bkt-head"><span class="dot" style="background:var(--mq)"></span><h3 style="color:var(--mq)">Merge queue</h3><span class="cnt">16 nodes · builds SP·4 + SP·3 · fixes the v96 clog</span></div>
+  <p class="bkt-note"><span class="k">Thesis:</span> structurally un-blockable. An authority-level policy block on one member triggers <b>member bisection</b> (land the safe subset, route the bad member to a respec agent) — never a whole-batch hold. Beats Mergify + GitHub merge queue by owning CI, jj, eager execution, and the writer agents.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Node</th><th>What</th><th>Phase</th><th>Key deps</th></tr>
+    <tr><td class="id">mq-1</td><td>v96 regression lock + typed authority reasons (policy ≠ infra)</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·4</td></tr>
+    <tr><td class="id">mq-2</td><td>MergeAuthority-V2 — multi-member eval, 7 typed dispositions</td><td><span class="ph mvp">MVP</span></td><td class="dep">mq-1 · SP·1/3</td></tr>
+    <tr><td class="id">mq-3</td><td>Generalized safe-subset solver (ddmin / QuickXPlain)</td><td><span class="ph mvp">MVP</span></td><td class="dep">mq-2 · SP·3</td></tr>
+    <tr><td class="id">mq-4</td><td>Member isolation + partition-scoped leases (no project-wide lock)</td><td><span class="ph mvp">MVP</span></td><td class="dep">mq-2 · SP·1</td></tr>
+    <tr><td class="id">mq-5</td><td>Atomic land-group reconciliation (one CAS, all members)</td><td><span class="ph mvp">MVP</span></td><td class="dep">mq-2/3 · SP·3/4</td></tr>
+    <tr><td class="id">mq-11</td><td>IntegrationNodeMaterializer behind jj WorkspaceVcsCore</td><td><span class="ph mvp">MVP</span></td><td class="dep">mq-5 · SP·3/4</td></tr>
+    <tr><td class="id">mq-6</td><td>Granular Merkle proof graph — per-unit reuse</td><td><span class="ph full">full</span></td><td class="dep">mq-2 · SP·3/5</td></tr>
+    <tr><td class="id">mq-7</td><td>Flake classification + exact quarantine + epochs</td><td><span class="ph full">full</span></td><td class="dep">mq-3/6 · SP·5</td></tr>
+    <tr><td class="id">mq-8</td><td>EAGER speculative beam search (build before ready)</td><td><span class="ph full">full</span></td><td class="dep">mq-4/6 · SP·4</td></tr>
+    <tr><td class="id">mq-9</td><td>IntegrationGraphScheduler + semantic partitions + dynamic batches</td><td><span class="ph full">full</span></td><td class="dep">mq-3/4/6</td></tr>
+    <tr><td class="id">mq-10</td><td>Autonomous repair + re-spec router (RespecPacketV1)</td><td><span class="ph full">full</span></td><td class="dep">mq-2/3 · SP·1/2</td></tr>
+    <tr><td class="id">mq-12</td><td>Fragment/F2 evidence-contract extension</td><td><span class="ph full">full</span></td><td class="dep">mq-6/7 · SP·2/5</td></tr>
+    <tr><td class="id">mq-13</td><td>Deploy/verify/demo/rollback loop extension</td><td><span class="ph full">full</span></td><td class="dep">mq-5/10 · SP·5/6</td></tr>
+    <tr><td class="id">mq-14</td><td>QueuePolicyV1 + full comparator ops (freeze/pause/windows/commands)</td><td><span class="ph full">full</span></td><td class="dep">mq-2/4/9 · SP·4</td></tr>
+    <tr><td class="id">mq-15</td><td>Dashboard merge-train viz + exportable signed artifacts</td><td><span class="ph full">full</span></td><td class="dep">mq-2/3/6/7/10/13</td></tr>
+    <tr><td class="id">mq-16</td><td>Merge-Queue-V2 backfill / one-way authority cutover</td><td><span class="ph full">full</span></td><td class="dep">mq-2/5 · SP·8</td></tr>
+  </table></div>
+
+  <!-- RUNTIME -->
+  <div class="bkt-head"><span class="dot" style="background:var(--rv)"></span><h3 style="color:var(--rv)">Runtime verification</h3><span class="cnt">26 nodes · builds SP·1 + SP·3 + SP·5 + SP·7</span></div>
+  <p class="bkt-note"><span class="k">Thesis:</span> from "deployed &amp; reachable" to "<b>proven to do what the user asked</b>." Behaviors compile to executable tests, run against the real deploy, and feed the gate + merge bisection. The linchpin bucket — it builds most of the spine.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Node</th><th>What</th><th>Phase</th><th>Key deps</th></tr>
+    <tr><td class="id">rv-1</td><td>Immutable behavior revisions + spec binding <b>(builds SP·1)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">—</td></tr>
+    <tr><td class="id">rv-2</td><td>Executable-plan compiler + typed assertion DSL</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-1</td></tr>
+    <tr><td class="id">rv-3</td><td>Verification-fragment registry + F2 authoring <b>(extends SP·2)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-2 · SP·2</td></tr>
+    <tr><td class="id">rv-4</td><td>Behavior coverage edges + affected selection</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-1/2</td></tr>
+    <tr><td class="id">rv-5</td><td>Preview deployment adapter (Fly lifecycle) <b>(SP·6)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-1 · SP·3</td></tr>
+    <tr><td class="id">rv-6</td><td>Driver adapters — Playwright + API/CLI/package/mobile</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-2/5</td></tr>
+    <tr><td class="id">rv-7</td><td>Fixture lease adapter (isolated tenant/channel/data)</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-5/8</td></tr>
+    <tr><td class="id">rv-8</td><td>Side-effect observer adapter (Slack; cursor/watermark)</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-7/12</td></tr>
+    <tr><td class="id">rv-9</td><td>Render-capture + content-addressed artifact store <b>(builds SP·3)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-6</td></tr>
+    <tr><td class="id">rv-10</td><td>Per-behavior verdict store (runs/attempts/verdicts)</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-6/9</td></tr>
+    <tr><td class="id">rv-11</td><td>A1 executable-acceptance orchestrator</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-5/6/7/10</td></tr>
+    <tr><td class="id">rv-12</td><td>A3 causal-correlation protocol + cardinality assertions</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-8/11</td></tr>
+    <tr><td class="id">rv-13</td><td>A4 DesignContractV2 + rendered visual verification</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-9/11 · ds-4</td></tr>
+    <tr><td class="id">rv-14</td><td>Effective native gate + GateProofBundleV2 <b>(SP·7)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-10/11/13 · SP·4</td></tr>
+    <tr><td class="id">rv-15</td><td>MergeAuthority-V2 runtime outcome + proof-reuse V2 <b>(SP·4)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-14</td></tr>
+    <tr><td class="id">rv-16</td><td>Behavior-aware merge-queue bisection</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-11/14/15 · mq</td></tr>
+    <tr><td class="id">rv-17</td><td>Flake classification + quarantine governance</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-10/16</td></tr>
+    <tr><td class="id">rv-18</td><td>Proof-backed demo engine (A2) — no more `/` probe</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-10/19</td></tr>
+    <tr><td class="id">rv-19</td><td>Post-merge production re-proof + rollback hook</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-5/11/15</td></tr>
+    <tr><td class="id">rv-20</td><td><code>ci_test_results</code> compatibility projection</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-10</td></tr>
+    <tr><td class="id">rv-21</td><td>Forge interview + DesignContract synthesis <b>(SP·1)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-1/13</td></tr>
+    <tr><td class="id">rv-22</td><td>HTTP surface + read-compat guard</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-1/2/10/13/14</td></tr>
+    <tr><td class="id">rv-23</td><td>Dashboard surfaces (Behavior Proof Matrix + 6 more)</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-22 · SP·8</td></tr>
+    <tr><td class="id">rv-24</td><td>Exportable proof bundles + <code>tanren proof verify</code> CLI</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-14/15/9</td></tr>
+    <tr><td class="id">rv-25</td><td>Event-schema registration</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·8</td></tr>
+    <tr><td class="id">rv-26</td><td>Apex workflow — 16 positive + 10 negative proofs</td><td><span class="ph mvp">MVP</span></td><td class="dep">rv-1…19/24/25</td></tr>
+  </table></div>
+
+  <!-- INTEGRATIONS -->
+  <div class="bkt-head"><span class="dot" style="background:var(--in)"></span><h3 style="color:var(--in)">Autonomous integrations</h3><span class="cnt">22 nodes · consumes SP·1/2/3/4/5 · fixes the v96 hard-stall</span></div>
+  <p class="bkt-note"><span class="k">Thesis:</span> provision + bind + <b>cross-validate</b> an integration from a declared behavior, inside the DAG. Fixes the wrong-plane Slack bug and delivers the "Slack at 100 clicks" the v96 fixture could never build autonomously. MVP is complete only when the real 100-click Slack effect is independently observed.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Node</th><th>What</th><th>Phase</th><th>Key deps</th></tr>
+    <tr><td class="id">in-1</td><td>Integration lifecycle data model + RLS migration</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·1</td></tr>
+    <tr><td class="id">in-2</td><td>Typed lifecycle contracts (IntegrationRequirementV1 …)</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·1</td></tr>
+    <tr><td class="id">in-3</td><td>Typed integration event vocabulary</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-1 · SP·8</td></tr>
+    <tr><td class="id">in-4</td><td>IntegrationStateWriter (control-plane) + data-plane de-priv</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-1/3</td></tr>
+    <tr><td class="id">in-5</td><td>Requirement compiler from G/W/T + DesignContract</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-2/1 · SP·1</td></tr>
+    <tr><td class="id">in-6</td><td>Project deriving→active lifecycle + DagWalker gating</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-5/1/9/10</td></tr>
+    <tr><td class="id">in-7</td><td>Integration fragment phase + F2 authoring <b>(SP·2)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">in-2 · SP·2</td></tr>
+    <tr><td class="id">in-8</td><td><code>.tanren/integrations.yml</code> contract + JSON schema</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-7/2</td></tr>
+    <tr><td class="id">in-9</td><td>capability_prepare DAG node + provider work queue</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-1/10</td></tr>
+    <tr><td class="id">in-10</td><td>Capability nodes/edges + awaiting_grant grant-wake</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-9/1/4</td></tr>
+    <tr><td class="id">in-11</td><td>Durable reconciliation saga + progress retry + state_unknown</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-10/1/4 · SP·3</td></tr>
+    <tr><td class="id">in-12</td><td>ApplicationIntegrationProvisioner kit + vertical conformance</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-2/7 · SP·2</td></tr>
+    <tr><td class="id">in-13</td><td>Slack product binding — relay + direct (fix wrong-plane bug)</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-12/14/19</td></tr>
+    <tr><td class="id">in-14</td><td>BindingMaterializer → project_app_env + scoped Vault</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-13/1 · SP·3</td></tr>
+    <tr><td class="id">in-15</td><td>Immutable binding contract + appEnvHash proof + gate tests</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-14/9 · SP·3/5</td></tr>
+    <tr><td class="id">in-16</td><td>Transactional delivery outbox on authorized land</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-1 · SP·4</td></tr>
+    <tr><td class="id">in-17</td><td>Durable resumable post-merge delivery DAG (bind→deploy) <b>(SP·6)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">in-16/14/19 · bh</td></tr>
+    <tr><td class="id">in-18</td><td>Non-clogging merge-queue park/dequeue disposition</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-15/9 · mq</td></tr>
+    <tr><td class="id">in-19</td><td>A3 live trigger/observe + effect probe + negative controls</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-17/13 · SP·5</td></tr>
+    <tr><td class="id">in-20</td><td>Full HTTP surface + generated API schemas</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-1…4/10/15/17/19</td></tr>
+    <tr><td class="id">in-21</td><td>Integration Control Center UI + exports + CLI</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-20/8/19</td></tr>
+    <tr><td class="id">in-22</td><td>APEX artifact readers + evidence attestation</td><td><span class="ph mvp">MVP</span></td><td class="dep">in-19/17/15/3</td></tr>
+  </table></div>
+
+  <!-- BACK HALF -->
+  <div class="bkt-head"><span class="dot" style="background:var(--bh)"></span><h3 style="color:var(--bh)">Back-half integrity</h3><span class="cnt">35 nodes · builds ResolutionAuthority + ResolutionDagWalker · reuses SP·5</span></div>
+  <p class="bkt-note"><span class="k">Thesis:</span> trustworthy self-healing that <b>verifies the fix against the live product before trusting it</b> — catching v96's cosmetic-fix-passes-CI failure. MVP = a complete closed loop (bh-1…bh-14): reported issue → triage → fix → merge → redeploy → re-verified symptom → close, reopening on failure.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Node</th><th>What</th><th>Phase</th><th>Key deps</th></tr>
+    <tr><td class="id">bh-1</td><td>IssueLoop aggregate + immutable source findings</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·1/3</td></tr>
+    <tr><td class="id">bh-2</td><td>Provenance correction + triage-as-real-task</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1</td></tr>
+    <tr><td class="id">bh-3</td><td>Webhook intake hardening (idempotent, claim-leased)</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1 · SP·3</td></tr>
+    <tr><td class="id">bh-4</td><td>SymptomContractV1 immutable store + authoring</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1 · SP·1/2/3</td></tr>
+    <tr><td class="id">bh-5</td><td>SymptomProbeAdapter + evidence substrate <b>(reuses SP·5)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-4 · SP·5/3</td></tr>
+    <tr><td class="id">bh-6</td><td>ResolutionDagWalker (durable orchestration)</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1/4/8/12/14 · SP·4</td></tr>
+    <tr><td class="id">bh-7</td><td>IssueSourceAdapter (GitHub + manual)</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1/3 · SP·4</td></tr>
+    <tr><td class="id">bh-8</td><td>Baseline reproduction stage</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-4/5/6</td></tr>
+    <tr><td class="id">bh-9</td><td>Extended DeployAdapter + release_instances <b>(SP·6)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1 · SP·4</td></tr>
+    <tr><td class="id">bh-10</td><td>Production symptom verification stage</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-4/5/8/9/6</td></tr>
+    <tr><td class="id">bh-11</td><td>ResolutionAuthority (fail-closed, never lands) <b>(SP·4 sibling)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-10 · SP·4</td></tr>
+    <tr><td class="id">bh-12</td><td>Source-sync outbox + readback</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-7/11/6</td></tr>
+    <tr><td class="id">bh-13</td><td>P0 repair routing (failure → new successor spec)</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-11/1 · SP·4/5</td></tr>
+    <tr><td class="id">bh-14</td><td>Minimal proof bundle + Self-Healing UI</td><td><span class="ph mvp">MVP</span></td><td class="dep">bh-1…13 · SP·3</td></tr>
+    <tr><td class="id">bh-15…35</td><td>Full GWT loading · rich probe modalities · preview/canary verify · counterfactual replay · F2 verification fragments · Sentry/Linear/Jira/SARIF/dependency sources · soak grades · batch symptom bisect · entity health barriers · progressive rollout · cross-repo loops · failure-aware model routing · signed certificates · proof CLI · fleet analytics · live burn-in</td><td><span class="ph full">full</span></td><td class="dep">bh-1…14 + SP·5/6</td></tr>
+  </table></div>
+
+  <!-- DESIGN -->
+  <div class="bkt-head"><span class="dot" style="background:var(--ds)"></span><h3 style="color:var(--ds)">Design system</h3><span class="cnt">9 phase-nodes · shares SP·2 kernel · builds A4 into SP·5</span></div>
+  <p class="bkt-note"><span class="k">Thesis:</span> a <b>real</b>, fragment-style, framework-adaptive design system — not LLM prose. A <code>base/plain</code> tokens fragment is curated into polished, framework-appropriate output (shadcn / Bevy assets / mobile) via the <b>same F2 kernel</b> as templates (separate storage). Validateable, visual, exportable, org-shareable as themes. Richest cross-feature story of all six.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Node</th><th>What</th><th>Phase</th><th>Key deps</th></tr>
+    <tr><td class="id">ds-0</td><td>Design contracts &amp; schema foundation (DesignContractV2 …)</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·1..8 ifaces</td></tr>
+    <tr><td class="id">ds-1</td><td>Executable token core (DTCG compiler, DesignVfs, <code>base/plain</code>) <b>(SP·3)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">ds-0 · SP·3/1</td></tr>
+    <tr><td class="id">ds-2</td><td>Web adapter MVP (shadcn/Radix/Tailwind) + Writer injection</td><td><span class="ph mvp">MVP</span></td><td class="dep">ds-0/1 · SP·2</td></tr>
+    <tr><td class="id">ds-3</td><td>F2D — author missing design fragments <b>(shares SP·2 kernel)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">ds-0/1/2 · SP·2/3/5</td></tr>
+    <tr><td class="id">ds-4</td><td>A4 visual verification + native gate <b>(builds A4 into SP·5)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">ds-0…3 · SP·5/3/4/1</td></tr>
+    <tr><td class="id">ds-5</td><td>Dashboard / API / within-org theme reuse + exports</td><td><span class="ph mvp">MVP</span></td><td class="dep">ds-0…4 · SP·1/3</td></tr>
+    <tr><td class="id">ds-6</td><td>Queue/deploy/demo compounding (design proof keys, A4≡demo)</td><td><span class="ph full">full</span></td><td class="dep">ds-4/5 · SP·5/4/3</td></tr>
+    <tr><td class="id">ds-7</td><td>Full framework reach (generic-web · Bevy · SwiftUI · Compose · Flutter · RN · doc/media)</td><td><span class="ph full">full</span></td><td class="dep">ds-2/4 · SP·5/2</td></tr>
+    <tr><td class="id">ds-8</td><td>Ecosystem &amp; cross-org (Figma bridge · public projection · grants/import/forks)</td><td><span class="ph full">full</span></td><td class="dep">ds-5/6 · SP·4/3</td></tr>
+  </table></div>
+
+  <!-- GOVERNANCE -->
+  <div class="bkt-head"><span class="dot" style="background:var(--gv)"></span><h3 style="color:var(--gv)">Governance &amp; coverage</h3><span class="cnt">34 nodes · parameterizes SP·4 · builds PromotionAuthority</span></div>
+  <p class="bkt-note"><span class="k">Thesis:</span> a control plane that <em>parameterizes</em> MergeAuthority (never a competing authority) and adds the sibling PromotionAuthority. Phase 0 (gv-1…6) are pure safety repairs; Phase 1 (gv-7…15) is the MVP control plane: immutable policy revisions, four tier presets, simulated reviewer, private-repo enforcement.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Node</th><th>What</th><th>Phase</th><th>Key deps</th></tr>
+    <tr><td class="id">gv-1…6</td><td><b>Safety repairs:</b> auditPosture write-guard · strict simulated-review publication · real policy/gate hashes · transitive stack retarget · truthful budget-held event · notification RLS + route toggle + Slack contract</td><td><span class="ph mvp">MVP</span></td><td class="dep">SP·3/4 · WS-VcsCore</td></tr>
+    <tr><td class="id">gv-7</td><td>Immutable policy revisions + deterministic compiler <b>(SP·1 policy-instance)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-3 · SP·1/3</td></tr>
+    <tr><td class="id">gv-8</td><td>Governance tiers + four presets (incl. private/regulated)</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7</td></tr>
+    <tr><td class="id">gv-9</td><td>Policy bindings + effective-policy snapshots (receipt)</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7/8 · SP·3</td></tr>
+    <tr><td class="id">gv-10</td><td>Governance fragment kernel + F2 authoring <b>(shares SP·2)</b></td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7 · SP·2/1</td></tr>
+    <tr><td class="id">gv-11</td><td>Private-repo visibility as enforced predicate</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7/9</td></tr>
+    <tr><td class="id">gv-12</td><td>Core review rules + dedicated reviewer identity</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-2/9 · SP·4</td></tr>
+    <tr><td class="id">gv-13</td><td>Policy simulator / validate / explain + contradiction witnesses</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7/9 · SP·5</td></tr>
+    <tr><td class="id">gv-14</td><td>Governance admin HTTP API + import facade</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7/8/9/13</td></tr>
+    <tr><td class="id">gv-15</td><td>Governance Studio UI</td><td><span class="ph mvp">MVP</span></td><td class="dep">gv-7…14 · SP·8</td></tr>
+    <tr><td class="id">gv-16…34</td><td>Full: audit-lineage finding→spec · integration_nodes authoritative + depth-6 · budget envelopes/reservations · CODEOWNERS + semantic ownership · host-protection projection · protected deploy envs · break-glass · freezes · review quorums/SoD · security selectors · queue-controls-as-policy · notification outbox + 9-channel probes · <b>PromotionAuthority</b> · coverage ledger + apex + negative controls · signed artifacts + CLI · DORA-by-revision · rollout/drift reconciliation</td><td><span class="ph full">full</span></td><td class="dep">gv-1…15 + SP·4/5/6</td></tr>
+  </table></div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">Cross-feature seams · more than the sum</span></div>
+  <h2>Where the six become one product.</h2>
+  <p class="sec-sub">These are the edges that a bag-of-tools can never have. Each is an explicit merge point the pitches independently arrived at — the reason tight self-integration beats Mergify + open-design + better-t-stack + GitHub CI as separate purchases.</p>
+  <div class="seams">
+    <div class="seam"><h4><span class="m">SEAM 1</span>One fragment kernel</h4><p>Template, verification, design, integration, and governance fragments all run on <b>one</b> extracted Writer-owned F2 kernel (<code>ds-3 · rv-3 · in-7 · bh-19 · gv-10</code>) — plan→write→validate→compose, mandatory base, no silent fallback. Bodies/schemas stay separate. Build the kernel once; five families inherit it.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 2</span>A4 render ≡ demo engine</h4><p>The design oracle's pre-merge visual verification (<code>ds-4</code>) and the post-merge demo (<code>rv-18 · ds-6</code>) are the <b>same live-render substrate</b> — the repo's missing WS-D4a — replaying the same scenarios pre- and post-deploy. Build the render harness once; the gate and the demo both consume it.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 3</span>One trace ID, end to end</h4><p><code>Forge sentence → persona/behavior → DesignContract → fragment → source → rendered scenario → gate → integration node → MergeAuthority → deploy → per-behavior demo → post-deploy re-proof</code> all carry one causal ID. Personas/behaviors are the toggles in the design preview, the axes of the tests, and the assertions in the demo — one object, many consumers.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 4</span>Behaviors → tests, for free</h4><p>Because behaviors are first-class platform objects, the executable-test compiler (<code>rv-2</code>) isn't a bolt-on — it falls out of the data model, and feeds the merge-queue bisection (<code>rv-16 · mq-3</code>) and the back-half symptom check (<code>bh-5</code>) with no second test stack.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 5</span>One Authority pattern, three heads</h4><p>MergeAuthority-V2 (land), ResolutionAuthority (declare fixed), PromotionAuthority (deploy) are <b>the same fail-closed pattern</b> over the same proof substrate (<code>mq-2 · bh-11 · gv-29</code>). Governance parameterizes their inputs; none competes to land code.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 6</span>One extended DeployAdapter</h4><p>Preview/canary/promote/rollback/digest-attestation (<b>SP·6</b>) is needed by runtime preview, back-half production re-proof, integration delivery, design demo, and governance promotion. One contract, five consumers — today it's five separate "deferred" stubs.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 7</span>Audit finding ↔ new spec</h4><p>Governance's finding→spec materialization (<code>gv-16</code>) is the formal, atomic version of the back-half audit→spec loop (<code>bh-2</code>). Governance owns the disposition ledger + dependency-correct edges; back-half owns the writer/gate/deploy execution the routed spec flows through. Same loop, split cleanly.</p></div>
+    <div class="seam"><h4><span class="m">SEAM 8</span>One proof substrate, all exports</h4><p>Every bucket emits into the CAS/Merkle proof store (<b>SP·3</b>) and exports signed, offline-verifiable bundles (<code>rv-24 · mq-15 · bh-33 · gv-32 · in-21 · ds-5</code>). A customer can independently verify a behavior proof, a merge decision, a resolution certificate, or a design system — one substrate, one <code>tanren … verify</code> CLI family.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">Build waves · maximum parallelism</span></div>
+  <h2>Depth-5 graph, executed as waves.</h2>
+  <p class="sec-sub">The DAG has ~5 gated levels. Within each wave, nodes run concurrently across worktrees. The three <span class="barrier">serialization barriers</span> — migrations 0033–0040, the event registry, and <code>screens.ts</code>/nav — are the only forced single-file bottlenecks; everything else fans out.</p>
+
+  <div class="wave"><div class="w-l"><div class="wn">WAVE 0</div><div class="wt">Freeze the spine contracts</div></div><div class="w-r">
+    <p>Co-design the 8 shared contracts as interfaces + conformance suites — <b>no implementations yet</b>. This is the critical, mostly-serial root: runtime + merge-queue co-author SP·3/4/5/7; the F2 kernel (SP·2) is extracted; the event/migration protocol (SP·8) is fixed. Small surface, highest leverage.</p>
+    <div class="lane"><span class="lchip">SP·1 behavior-revisions</span><span class="lchip">SP·2 F2 kernel</span><span class="lchip">SP·3 CAS/proof</span><span class="lchip">SP·4 Authority</span><span class="lchip">SP·5 harness ifaces</span><span class="lchip">SP·6 DeployAdapter</span><span class="lchip">SP·7 gate evidence</span><span class="lchip">SP·8 event/migration</span></div>
+  </div></div>
+
+  <div class="wave"><div class="w-l"><div class="wn">WAVE 1</div><div class="wt">Spine implementations + safety repairs</div></div><div class="w-r">
+    <p>Implement the spine and land the zero-risk repairs in parallel. Runtime builds the harness core (rv-1/2/5/6/9/10); merge-queue builds Authority-V2 (mq-1/2/3/4/5/11); design builds the token core (ds-0/1); governance lands safety repairs (gv-1…6). These share contracts, not code — heavy fan-out.</p>
+    <div class="lane"><span class="lchip" style="border-color:var(--rv)">rv-1/2/5/6/9/10</span><span class="lchip" style="border-color:var(--mq)">mq-1/2/3/4/5/11</span><span class="lchip" style="border-color:var(--ds)">ds-0/1</span><span class="lchip" style="border-color:var(--gv)">gv-1…6</span><span class="lchip" style="border-color:var(--bh)">bh-1/3</span></div>
+  </div></div>
+
+  <div class="wave"><div class="w-l"><div class="wn">WAVE 2</div><div class="wt">Consumer MVP — the wide fan-out</div></div><div class="w-r">
+    <p>The bulk of the ~72 MVP nodes, mostly independent across buckets. Runtime completes A1/A3/A4 + gate (rv-11…22); merge-queue solver/isolation done; integrations builds the full lifecycle (in-1…22); back-half builds the closed loop (bh-4…14); design builds web adapter + F2D + A4 (ds-2/3/4/5); governance builds the control plane (gv-7…15). This is where subagents + shelled-out codex/grok/glm scale width.</p>
+    <div class="lane"><span class="lchip" style="border-color:var(--rv)">rv-11…24</span><span class="lchip" style="border-color:var(--in)">in-1…22</span><span class="lchip" style="border-color:var(--bh)">bh-4…14</span><span class="lchip" style="border-color:var(--ds)">ds-2/3/4/5</span><span class="lchip" style="border-color:var(--gv)">gv-7…15</span></div>
+  </div></div>
+
+  <div class="wave"><div class="w-l"><div class="wn">WAVE 3</div><div class="wt">Apex proof — v97 vertical</div></div><div class="w-r">
+    <p>Wire the MVP nodes into one whole-architecture apex: the 100-click → 100-Slack-message + rendered-confirmation positive run, plus the negative controls (assertion sensitivity, queue bisection, cosmetic-fix blocked, cross-tenant denied, proof-replay rejected). This is <code>rv-26</code> + <code>in-22</code> + the back-half burn-in, and it is what proves v97 both closes v96's failures <em>and</em> is genuinely useful.</p>
+    <div class="lane"><span class="lchip">rv-26 apex</span><span class="lchip">in-22 attestation</span><span class="lchip">bh symptom-verify</span><span class="lchip">negative controls</span></div>
+  </div></div>
+
+  <div class="wave"><div class="w-l"><div class="wn">WAVE 4</div><div class="wt">Full-tier + comparator breadth</div></div><div class="w-r">
+    <p>The ~70 <span class="ph full">full</span> nodes — comparator parity and beyond: EAGER speculation, full queue ops, framework adapters (Bevy/mobile), cross-org themes, PromotionAuthority, DORA-by-revision, additional issue sources. Continuously parallel, gated only by their own bucket's MVP. Ships incrementally after v97.</p>
+    <div class="lane"><span class="lchip">mq-6…16</span><span class="lchip">ds-6/7/8</span><span class="lchip">bh-15…35</span><span class="lchip">gv-16…34</span><span class="lchip">rv full</span></div>
+  </div></div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">The workflow · execution</span></div>
+  <h2>The DAG is the workflow.</h2>
+  <p class="sec-sub">This graph maps directly onto a Tanren <code>Workflow</code>: phases = waves, and each wave is a <code>parallel()</code>/<code>pipeline()</code> fan-out over its nodes. Every node is one worktree-isolated spec; capacity is elastic because we shell out to codex/grok/glm as extra build+audit agents — we are not workforce-bound.</p>
+  <ul class="clean">
+    <li><b>Node = spec = worktree.</b> Each of the 142 nodes becomes one PR-sized spec built by a subagent (or a shelled-out codex/grok/glm agent) in an isolated worktree, gated on green <code>just ci</code> + apex-relevant conformance before merge — the exact discipline in <code>docs/playbooks/parallel-orchestration.md</code>.</li>
+    <li><b>Wave 0 is a judge-panel, not a fan-out.</b> The 8 spine contracts are co-designed by independent agents proposing + adversarially reviewing each interface, because a wrong contract poisons every consumer. Freeze them behind conformance suites before any Wave-1 implementation starts.</li>
+    <li><b>Barriers are explicit stages.</b> The three serialization points (migrations 0033–0040, event registry, <code>screens.ts</code>) are single-owner pipeline stages every touching node routes through — never concurrent edits. Everything else runs at <code>min(16, cores-2)</code> width per workflow, chained across waves.</li>
+    <li><b>Adversarial verification per node.</b> Each built node is verified by a second agent (a different model — grok/glm/codex) against its pitch's validation column + a negative control, before it counts as done. Quality scales with capacity, not sequence.</li>
+    <li><b>Self-hosting endgame.</b> Once Wave 2 lands, Tanren builds Wave 4 <em>on itself</em>: each full-tier node becomes a spec Tanren drives through its own (now never-blockable, behavior-verified) pipeline — the plan's own proof of usefulness.</li>
+  </ul>
+</div></section>
+
+<section><div class="wrap">
+  <div class="sec-h"><span class="eyebrow">Every feature · provable + HTTP + UI</span></div>
+  <h2>Nothing lands unless it's provable, callable, and visible.</h2>
+  <p class="sec-sub">A hard rule from every pitch: a node is done only when it (1) fires named events a live apex run asserts, (2) exposes an HTTP surface, and (3) surfaces in the dashboard. This table is the acceptance contract per bucket.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Bucket</th><th>Apex proof (sample events)</th><th>HTTP surface</th><th>UI surface</th></tr>
+    <tr><td class="id" style="color:var(--mq)">merge-queue</td><td><code>merge.member.isolated</code> · <code>merge.subset.search.resolved</code> · <code>merge.land_group.completed</code></td><td>/merge-queue · /policy · /simulations · /entries/:id/commands</td><td>Live integration-train · safe-subset · flake center · remediation lineage</td></tr>
+    <tr><td class="id" style="color:var(--rv)">runtime</td><td><code>behavior.contract.compiled</code> · <code>behavior.effect.observed</code> · <code>behavior.verdict.recorded</code></td><td>/behaviors/:id/verification-plan · /behavior-verification-runs · /gate-proof-bundles</td><td>Behavior Proof Matrix · assertion timeline · causality viewer · visual lab</td></tr>
+    <tr><td class="id" style="color:var(--in)">integrations</td><td><code>integration.requirement.derived</code> · <code>effect.observed</code> · <code>delivery.completed</code></td><td>/integration-requirements · /capability-nodes · /integration-validations · /stream</td><td>Integration Control Center · consent inbox · A3 evidence panel</td></tr>
+    <tr><td class="id" style="color:var(--bh)">back-half</td><td><code>symptom.verification.passed</code> · <code>resolution.authorized</code> · <code>issue_loop.verified</code></td><td>/issue-loops · /symptom-contracts · /verifications · /proof/archive</td><td>Self-Healing surface · Fleet funnel · truth badges · repair lineage</td></tr>
+    <tr><td class="id" style="color:var(--ds)">design</td><td><code>designSystem.base.composed</code> · <code>designRender.scenario.recorded</code> · <code>release.published</code></td><td>/design-systems · /resolve · /design-fragments/author · /exports</td><td>Design System Studio · Curation Run · Visual Evidence Lab · export/theme share</td></tr>
+    <tr><td class="id" style="color:var(--gv)">governance</td><td><code>governance.policy.activated</code> · <code>review.forge_published</code> · <code>promotion.authority.decided</code></td><td>/policies · /governance/effective · /simulate · /promotions · /coverage</td><td>Governance Studio · Review Cockpit · Deployment Governance · coverage ledger</td></tr>
+  </table></div>
+  <div class="callout"><b>v97 recommendation:</b> Wave 0 → Wave 1 → the MVP subset that directly closes v96 — <span class="mono" style="color:var(--mq)">mq-1…5/11</span> (never-blockable queue) · <span class="mono" style="color:var(--rv)">rv-1…22</span> (behavior tests) · <span class="mono" style="color:var(--in)">in-1…22</span> (autonomous Slack) · <span class="mono" style="color:var(--bh)">bh-1…14</span> (post-deploy verify) · <span class="mono" style="color:var(--ds)">ds-0…5</span> (real design system) · <span class="mono" style="color:var(--gv)">gv-1…15</span> (governance control plane) — then the single <code>rv-26</code> apex vertical. That is the run that proves Tanren both fixed what v96 broke <em>and</em> is genuinely useful to something real.</div>
+</div></section>
+
+<footer><div class="wrap">
+  <p class="fnote">Source: 6 × gpt-5.6-sol ultra-reasoning audits → 142 extracted nodes → this synthesis. Full per-node data-model / validation / migration detail: <span style="color:var(--ink-soft)">pitch-{mergequeue,runtime,integrations,backhalf,design,governance}.final.md</span>. Effort is deliberately expressed as nodes + critical-path depth, not calendar time.</p>
+</div></footer>
+
+<script>
+  (function(){
+    var root=document.documentElement;
+    try{
+      var mo=new MutationObserver(function(){});
+    }catch(e){}
+  })();
+</script>
