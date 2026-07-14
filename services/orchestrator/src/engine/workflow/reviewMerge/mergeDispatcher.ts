@@ -13,12 +13,14 @@ import type { PullRequestMergeability, RepoRef } from "../../contracts/codeHostT
 import type { ReviewMergeRunContext } from "./context.js";
 import type { PostureDecision } from "./governancePosture.js";
 import {
+  type ConflictResolverResult,
   type DispatchedIntegration,
   type MergeForRunInput,
   type MergeForRunResult,
   type MergeOutcomeKind,
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
+import type { ConflictRecoveryDisposition } from "../../contracts/conflictResolution.js";
 import { landViaAuthority, rebaseBehindBranch, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
 import { markMergeTaskDoneWithEvent, markMergeTaskFailedWithEvent } from "./mergeTaskTerminal.js";
 
@@ -250,7 +252,7 @@ export class MergeDispatcher implements LandOps {
 
     // THE ONE BASE-SHIFT HANDLER (§7): the `behind` rebase routes through the unified
     // `BaseShiftCoordinator.rebaseOnto` hook (the SAME path change-percolation uses), not
-    // a second server-side update-branch. A `held` is a fail-closed recoverable conflict.
+    // a second server-side update-branch. A `held` is a fail-closed blocked hold.
     const updated = await rebaseBehindBranch(this.deps, mergeability);
     if (updated.outcome === "conflict") {
       // A real conflict — route to the intent-preserving resolver, do NOT merge.
@@ -269,7 +271,7 @@ export class MergeDispatcher implements LandOps {
 
     // The branch advanced onto base — its prior green is now stale, so the CI MUST be
     // re-verified before merging. Post-rebase re-gating is REQUIRED: an absent re-gate
-    // hook HARD-HOLDS (the recoverable conflict outcome), never laundering an unverified
+    // hook HARD-HOLDS (a blocked outcome), never laundering an unverified
     // rebase into a merge.
     const reGate = this.deps.input.reGateCi;
     if (reGate === undefined) {
@@ -327,35 +329,24 @@ export class MergeDispatcher implements LandOps {
   /**
    * A re-gate FAILED a GATE tier on a cleanly-rebased/advanced branch. Route the spec to WRITER
    * REWORK with the gate error as steering (the #594 never-discard re-author), then emit the
-   * RECOVERABLE `conflict` outcome so the entry leaves its slot WHILE the reworked spec re-runs
-   * and re-enters the queue — NOT a terminal `merge.failed` that stranded a fixable spec. Absent
-   * a rework router (an out-of-band/test caller) ⇒ the recoverable-conflict hold (never a silent
-   * merge, never a terminal failure).
+   * owner-receipted `conflict` outcome so the old entry leaves WHILE writer rework runs and
+   * re-enters the queue — NOT a terminal `merge.failed` that strands a fixable spec. Without
+   * a rework router the dispatcher returns `needs_attention`; it never fabricates an owner.
    */
   async handlePostRebaseGateFail(gateError: string | undefined): Promise<MergeForRunResult> {
-    const { input, context, eventStore } = this.deps;
+    const { input, context } = this.deps;
     const error = gateError ?? "post-rebase pre_merge gate failed (no gate detail reported)";
     if (input.reGateGateRework !== undefined) {
-      await input.reGateGateRework.routeGateFailToRework({ specId: context.specId, gateError: error });
-      // The spec is now being re-authored on the new base (re-opened + enqueued, OR — at a
-      // convergence fixed point — escalated). Emit the recoverable `conflict` so this stale entry
-      // leaves the merge slot; the reworked run re-enters the queue (a REAL in-flight recovery).
-      await eventStore.append({
-        ...this.base(),
-        eventType: "merge.conflict",
-        payload: {
-          ...this.prFields(),
-          integration: this.mergeLabel(),
-          baseBranch: context.baseBranch,
-          message: `post-rebase gate failed — routed to writer rework: ${error}`,
-        },
+      const recovery = await input.reGateGateRework.routeGateFailToRework({
+        specId: context.specId,
+        gateError: error,
       });
-      await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
-      return this.result("conflict", { message: `post-rebase gate failed — routed to writer rework: ${error}` });
+      return this.emitConflict(`post-rebase gate failed — routed to writer rework: ${error}`, undefined, recovery);
     }
-    // No rework router wired (out-of-band/test caller): hold recoverably so the recovery surface
-    // can re-drive (never a silent merge, never the old terminal failure).
-    return this.emitConflict(`post-rebase gate failed: ${error}`);
+    return this.emitConflict(`post-rebase gate failed: ${error}`, undefined, {
+      kind: "unowned",
+      message: "no writer-rework router is configured",
+    });
   }
 
   /**
@@ -404,7 +395,7 @@ export class MergeDispatcher implements LandOps {
       // `merge.completed` + spec flip transactionally.
       return this.driveLand();
     }
-    return this.emitConflict(message, mergeability.headBranch || undefined);
+    return this.emitConflict(message, mergeability.headBranch || undefined, resolution.recovery);
   }
 
   /**
@@ -415,7 +406,7 @@ export class MergeDispatcher implements LandOps {
    * conflict is always routed to a real resolver that preserves both intents +
    * re-gates, never silently dropped.
    */
-  private async runConflictResolver(message: string): Promise<{ resolved: boolean }> {
+  private async runConflictResolver(message: string): Promise<ConflictResolverResult> {
     const { input, context, pr } = this.deps;
     return input.resolveConflict({
       runId: context.runId,
@@ -426,8 +417,12 @@ export class MergeDispatcher implements LandOps {
     });
   }
 
-  /** Emit the recoverable conflict outcome (the resolver-scaffolding hook). */
-  async emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult> {
+  /** Emit a conflict, but expose `conflict` only when a durable recovery owner exists. */
+  async emitConflict(
+    message: string,
+    headBranch?: string,
+    recovery?: ConflictRecoveryDisposition,
+  ): Promise<MergeForRunResult> {
     const { eventStore, context } = this.deps;
     await eventStore.append({
       ...this.base(),
@@ -440,10 +435,9 @@ export class MergeDispatcher implements LandOps {
         message,
       },
     });
-    // A conflict is recoverable, not a hard failure: leave the task running so
-    // the recovery surface can pick it up.
-    await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
-    return this.result("conflict", { message });
+    const outcome = recovery === undefined ? "blocked" : recovery.kind === "owned" ? "conflict" : "needs_attention";
+    await this.finalize(outcome, { taskOutcome: "pending", taskStatus: "running" });
+    return this.result(outcome, { message, ...(recovery !== undefined && { conflictRecovery: recovery }) });
   }
 
   async finalize(
@@ -484,7 +478,10 @@ export class MergeDispatcher implements LandOps {
     );
   }
 
-  result(outcome: MergeOutcomeKind, extra: { mergeSha?: string; message?: string } = {}): MergeForRunResult {
+  result(
+    outcome: MergeOutcomeKind,
+    extra: { mergeSha?: string; message?: string; conflictRecovery?: ConflictRecoveryDisposition } = {},
+  ): MergeForRunResult {
     const { context, taskId, integration, pr } = this.deps;
     return {
       runId: context.runId,
@@ -495,6 +492,7 @@ export class MergeDispatcher implements LandOps {
       prNumber: pr.pullNumber,
       mergeSha: extra.mergeSha,
       message: extra.message,
+      ...(extra.conflictRecovery !== undefined && { conflictRecovery: extra.conflictRecovery }),
     };
   }
 }

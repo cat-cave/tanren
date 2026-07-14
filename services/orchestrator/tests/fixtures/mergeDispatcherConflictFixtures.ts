@@ -8,6 +8,7 @@
 import { MergeDispatcher, type DispatcherDeps } from "../../src/engine/workflow/reviewMerge/mergeDispatcher.js";
 import type { InMemoryCodeHost } from "../conformance/fakes/inMemoryCodeHost.js";
 import type {
+  ConflictResolverResult,
   MergeAuthorityBundle,
   MergeForRunInput,
   MergeProbe,
@@ -167,14 +168,26 @@ export function reGate(status: ReGateStatus): () => Promise<{ status: ReGateStat
  * test can assert the resolver fires EXACTLY ONCE, never the 90× retry loop.
  */
 export function countingResolver(resolved: boolean): {
-  hook: () => Promise<{ resolved: boolean }>;
+  hook: () => Promise<ConflictResolverResult>;
   calls: () => number;
 } {
   let calls = 0;
   return {
     hook: async () => {
       calls += 1;
-      return { resolved };
+      return resolved
+        ? { resolved: true }
+        : {
+            resolved: false,
+            recovery: {
+              kind: "owned",
+              receipt: {
+                kind: "planner_replan",
+                specId: "spec_1",
+                run: { kind: "enqueued", replanRunId: "run_replan_1", plannerTaskId: "task_replan_1" },
+              },
+            },
+          };
     },
     calls: () => calls,
   };
@@ -192,7 +205,7 @@ export function buildDispatcher(args: {
   bundle: MergeAuthorityBundle;
   integration?: "direct_merge" | "native_queue";
   reGateStatus?: ReGateStatus;
-  resolveConflict?: () => Promise<{ resolved: boolean }>;
+  resolveConflict?: () => Promise<ConflictResolverResult>;
 }): MergeDispatcher {
   const input = {
     pool: fakePool,

@@ -50,6 +50,7 @@ import { markMergeTaskDoneWithEvent, MergeDispatcher } from "./mergeDispatcher.j
 import {
   type ConflictContext,
   type ConflictResolverHook,
+  type ConflictResolverResult,
   type DispatchedIntegration,
   type MergeAuthorityBundle,
   type MergeForRunInput,
@@ -66,6 +67,7 @@ import {
 export {
   type ConflictContext,
   type ConflictResolverHook,
+  type ConflictResolverResult,
   type DispatchedIntegration,
   type MergeAuthorityBundle,
   type MergeForRunInput,

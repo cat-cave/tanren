@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { formBatch } from "../src/engine/contracts/batchMergeCoordinator.js";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { mapConflictDriveOutcome } from "../src/engine/merge/coordinatorBuild.js";
 import { RefResetTransientError } from "../src/engine/providers/githubRefReset.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
 import {
@@ -208,7 +209,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       {
         specId: "spec_b",
         message:
-          "resolved conflict failed fresh pre_merge: fresh pre_merge build failed; no writer-rework router is configured",
+          "merge drive failed fresh validation: fresh pre_merge build failed; no writer-rework router is configured",
       },
     ]);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
@@ -237,5 +238,102 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     expect(h.queue.statusOf("run_spec_c")).toBe("queued");
     const formation = formBatch(await h.queue.loadSnapshot(PROJECT), 8);
     expect(formation.batch.map((entry) => entry.specId)).toEqual(["spec_a", "spec_c"]);
+  });
+
+  it("fails closed when a production merge conflict has no durable recovery owner", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({ message: "resolver returned conflict without routing a replan" }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(h.events.events.filter((event) => event.type === "merge.dequeued").map((event) => event.specId)).toEqual([
+      "spec_b",
+    ]);
+  });
+
+  it("permits conflict retirement only with the resolver's durable planner receipt", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "resolver routed a real replan",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("conflict");
+    expect(h.escalator.escalations).toEqual([]);
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+  });
+
+  it("routes a failed passing-batch prefix member to writer rework before dequeue", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge failed on the advanced base" });
+    const routeSpy = vi.spyOn(h.gateRework, "routeGateFailToRework");
+    const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }, { runId: "run_spec_b" }]);
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("superseded");
+    expect(h.queue.statusOf("run_spec_c")).toBe("queued");
+    expect(h.gateRework.routed.map((route) => route.specId)).toEqual(["spec_b"]);
+    expect(routeSpy.mock.invocationCallOrder[0]).toBeLessThan(dequeueSpy.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it("parks a failed passing-batch prefix member when the writer router is absent", async () => {
+    const h = makeHarness(false);
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge failed without a router" });
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.statusOf("run_spec_a")).toBe("merged");
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.queue.statusOf("run_spec_c")).toBe("queued");
+    expect(h.escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
+  });
+
+  it("parks a bisected gate-fail culprit when the writer router assembly is absent", async () => {
+    const h = makeHarness(false);
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    seed(h, "spec_c");
+    h.checker.failWhenContains("spec_b");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
+    expect(h.events.events.filter((event) => event.type === "merge.dequeued").map((event) => event.specId)).toEqual([
+      "spec_b",
+    ]);
   });
 });

@@ -340,7 +340,7 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(types).toContain("merge.completed");
   });
 
-  it("§7 ONE HANDLER: a `held` outcome from the unified baseShiftRebase is a fail-closed recoverable conflict (no merge)", async () => {
+  it("§7 ONE HANDLER: a held base shift is a fail-closed blocked outcome (no merge)", async () => {
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({
@@ -363,8 +363,8 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       reGateCi: async () => ({ status: "passed" }),
     });
 
-    // Fail-closed: a held rebase is a recoverable conflict, NEVER a land.
-    expect(result.outcome).toBe("conflict");
+    // Fail-closed: a held rebase stays queued as a recoverable block, NEVER a land.
+    expect(result.outcome).toBe("blocked");
     expect(landed).toEqual([]);
     expect(events.events.map((e) => e.eventType)).toContain("merge.conflict");
   });
@@ -428,7 +428,13 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
       baseShiftRebase: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
       resolveConflict: async () => {
         conflictResolverCalls += 1;
-        return { resolved: false };
+        return {
+          resolved: false,
+          recovery: {
+            kind: "owned",
+            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running" } },
+          },
+        };
       },
     });
 

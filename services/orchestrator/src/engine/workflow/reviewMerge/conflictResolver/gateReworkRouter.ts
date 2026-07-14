@@ -28,7 +28,7 @@
 // `needs_attention` (`persistent_failure`), never a silent strand, never a count.
 
 import type pg from "pg";
-import type { GateReworkRouter } from "../../../contracts/conflictResolution.js";
+import type { GateReworkRouter, GateReworkRouteResult } from "../../../contracts/conflictResolution.js";
 import type { AppendEventInput, EventStore } from "../../../eventStore.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { buildGateReworkSteering } from "../../../merge/batchGateReworkRouter.js";
@@ -57,8 +57,8 @@ export interface SpecStatusGateReworkRouterDeps {
   prNumber: number;
   /**
    * Enqueues the writer-rework run (re-open + steering + run-create) — the never-discard
-   * re-author on the new base. Production wires `buildReplanEnqueuer`; when absent the router
-   * only flips status (degenerate/test path), never silently merging.
+   * re-author on the new base. Without it, the router parks needs_attention rather than
+   * reporting writer ownership for a run that does not exist.
    */
   enqueuer?: ReplanEnqueuer;
   /** Reads the spec's prior gate-rework error signatures (the convergence-detector input). */
@@ -74,7 +74,7 @@ export interface SpecStatusGateReworkRouterDeps {
 export class SpecStatusGateReworkRouter implements GateReworkRouter {
   constructor(private readonly deps: SpecStatusGateReworkRouterDeps) {}
 
-  async routeGateFailToRework(input: { specId: string; gateError: string }): Promise<void> {
+  async routeGateFailToRework(input: { specId: string; gateError: string }): Promise<GateReworkRouteResult> {
     const orgId = this.deps.orgId;
     const priorSignatures = this.deps.priorReworks ? await this.deps.priorReworks({ specId: input.specId, orgId }) : [];
     const currentSignature = gateErrorSignature(input.gateError);
@@ -83,16 +83,22 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     // (re-authoring produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
-      await this.escalate(input, priorSignatures.length);
-      return;
+      const message = await this.escalate(input, priorSignatures.length);
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
+        message,
+      };
     }
 
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     if (this.deps.enqueuer === undefined) {
-      // Degenerate/test path (no enqueuer wired): production ALWAYS wires it. Flip the
-      // status so the spec is re-drivable; never silently merge.
-      await this.setSpecStatus(input.specId, "open");
-      return;
+      const message = await this.escalateEnqueueFailure(input, "no writer-rework enqueuer is configured");
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
+        message,
+      };
     }
     try {
       const run = await this.deps.enqueuer.enqueue({
@@ -103,6 +109,14 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         reopenStatus: "open",
       });
       await this.recordReworked(input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
+      return {
+        kind: "owned",
+        receipt: {
+          kind: "writer_rework",
+          specId: input.specId,
+          run: { kind: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId },
+        },
+      };
     } catch (error) {
       // BENIGN RACE: a concurrent tick already claimed the re-opened spec — a run IS being
       // driven, so this is not a strand. Record the routing observably (no new run id).
@@ -113,7 +127,10 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
           error,
         );
         await this.recordReworked(input, priorSignatures.length, steeringNote);
-        return;
+        return {
+          kind: "owned",
+          receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+        };
       }
       // GENUINE FAILURE: the rework run could not be created AND no concurrent tick owns it.
       // A routed rework that cannot RUN is a genuine failure a human must see — escalate LOUD.
@@ -122,7 +139,12 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         { specId: input.specId },
         error,
       );
-      await this.escalateEnqueueFailure(input, error);
+      const message = await this.escalateEnqueueFailure(input, error);
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
+        message,
+      };
     }
   }
 
@@ -177,7 +199,11 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
    * Task #48 Site J: the aux `merge.regate.gate_rework_routed` event is emitted
    * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
    * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. */
-  private async escalate(input: { specId: string; gateError: string }, priorReworks: number): Promise<void> {
+  private async escalate(input: { specId: string; gateError: string }, priorReworks: number): Promise<string> {
+    const message =
+      `the autonomous self-heal reached a FIXED POINT re-working this spec for a base-shift ` +
+      `re-gate GATE failure: the SAME gate error recurs after re-authoring (no change to it), so a ` +
+      `human must intervene. Latest gate error: ${input.gateError}`;
     await this.deps.eventStore.append({
       runId: this.deps.runId,
       specId: input.specId,
@@ -206,19 +232,20 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         reason: "persistent_failure",
         terminalRuns: [{ runId: this.deps.runId, status: "halted" }],
         attempts: priorReworks,
-        message:
-          `the autonomous self-heal reached a FIXED POINT re-working this spec for a base-shift ` +
-          `re-gate GATE failure: the SAME gate error recurs after re-authoring (no change to it), so a ` +
-          `human must intervene. Latest gate error: ${input.gateError}`,
+        message,
       },
     });
+    return message;
   }
 
   /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
    *
    * Task #48 Site J (variant): same aux-then-atomic-pair shape as `escalate`. */
-  private async escalateEnqueueFailure(input: { specId: string; gateError: string }, error: unknown): Promise<void> {
+  private async escalateEnqueueFailure(input: { specId: string; gateError: string }, error: unknown): Promise<string> {
     const detail = error instanceof Error ? error.message : String(error);
+    const message =
+      `the autonomous self-heal routed this spec back to the writer to fix a base-shift re-gate GATE ` +
+      `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`;
     await this.deps.eventStore.append({
       runId: this.deps.runId,
       specId: input.specId,
@@ -247,18 +274,10 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         reason: "persistent_failure",
         terminalRuns: [{ runId: this.deps.runId, status: "halted" }],
         attempts: 0,
-        message:
-          `the autonomous self-heal routed this spec back to the writer to fix a base-shift re-gate GATE ` +
-          `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`,
+        message,
       },
     });
-  }
-
-  /** Set the spec status through the (REQUIRED) writer. Used by the degenerate/test
-   * branch in `routeGateFailToRework` that needs only a bare status flip (no paired
-   * event), not the atomic seam. */
-  private async setSpecStatus(specId: string, status: string): Promise<void> {
-    await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId, status });
+    return message;
   }
 
   /** Task #48 Site J: ATOMIC spec park to `needs_attention` + the matching

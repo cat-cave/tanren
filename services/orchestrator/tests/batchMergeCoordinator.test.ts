@@ -87,17 +87,17 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     // check could not see). It must PARK at needs_attention, never re-execute.
     seed(h, "spec_a");
     seed(h, "spec_b");
-    h.runner.script("run_spec_b", { kind: "needs_attention", message: "irreconcilable with spec_z" });
+    h.runner.script("run_spec_b", {
+      kind: "needs_attention",
+      message: "irreconcilable with spec_z",
+      parking: "required",
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
-    // spec_a (driven first, DAG order) merged; spec_b is ESCALATED + dequeued
-    // `needs_attention` — the batch STOPS (no dependent merges past the parked spec).
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    // The spec was parked at needs_attention via the shared escalator (the loud event).
     expect(h.escalator.escalations).toEqual([{ specId: "spec_b", message: "irreconcilable with spec_z" }]);
-    // Dequeued with the TERMINAL needs_attention reason — NOT the recoverable conflict.
     const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("needs_attention");
   });
@@ -482,10 +482,12 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
-    // The per-run resolver routed a bounded replan → the recoverable `conflict` drive outcome.
-    // Retiring the entry is correct BECAUSE the resolver actually ran (re-opened the spec +
-    // enqueued a fresh run) — unlike the old bare dequeue that had NO re-drive owner.
-    h.runner.script("run_spec_b", { kind: "conflict", message: "resolver routed a bounded replan" });
+    // The resolver owns the work, so retiring this stale entry is safe.
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "resolver routed a bounded replan",
+      recovery: { kind: "planner_replan", specId: "spec_b", run: { kind: "already_running" } },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 

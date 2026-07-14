@@ -393,9 +393,6 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
   });
 
   it("a CONFLICTED rebase whose RESOLVED tree fails a GATE TIER ⇒ WRITER REWORK (clean tree, not irreconcilable)", async () => {
-    // The resolver FIT the conflict (a clean resolved tree), but the coordinator's re-gate of
-    // that resolved tree fails a GATE TIER — the tree is byte-clean, the code just fails a
-    // gate on the new base. Route to WRITER REWORK, NOT replan.
     const gateError = "base-shift re-gate failed at tier tier-1: step 'lint' (exit 1)";
     const h = harness({
       conflictOnRebase: true,
@@ -409,17 +406,20 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
   });
 
   it("a CONFLICTED rebase whose resolver routed-to-rework (its own GATE re-gate failed) ⇒ NO double-route (no replan)", async () => {
-    // The LIVE resolver's INTERNAL re-gate failed a GATE TIER and it ALREADY routed the spec
-    // to writer rework (re-opened + enqueued a re-author run) — signalled via routedToRework.
-    // The coordinator MUST NOT also replan (that would double-route the spec).
     const h = harness({
       conflictOnRebase: true,
-      resolution: { resolved: false, routedToRework: true, reason: "re-gate gate-tier fail — routed to rework" },
+      resolution: {
+        resolved: false,
+        reason: "re-gate gate-tier fail — routed to rework",
+        recovery: {
+          kind: "owned",
+          receipt: { kind: "writer_rework", specId: "spec_b", run: { kind: "already_running" } },
+        },
+      },
     });
     await reexec(h);
     expect(h.persistence.replanned).toEqual([]);
-    // The coordinator does not re-route (the resolver owned it) — its own gate-rework seam is
-    // untouched on this path.
+    // The coordinator's gate-rework seam stays untouched.
     expect(h.gateRework.calls).toEqual([]);
     expect(h.events.events).toEqual([
       { runId: DEP_RUN, decision: "replanned", rebaseConflicted: true, sameRunId: true },

@@ -13,7 +13,6 @@ import { describe, expect, it } from "vitest";
 import type { AuditAnswer, CheckAnswer, PlanAnswer } from "../src/engine/answerers/schemas/index.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import type { GitHubHttpResponse } from "../src/engine/providers/github.js";
-import { noopConflictResolver } from "./fixtures/noopConflictResolver.js";
 import {
   accounting,
   alwaysChangesReview,
@@ -206,10 +205,19 @@ describe("runPlannerLoopWorkflow — merge-outcome mapping (direct_merge)", () =
         // surfaces the conflict (jj owns conflict). Inject a scripted hook so the no-DB unit
         // run never allocates a runner; it returns `conflict` to drive the resolver path.
         baseShiftRebase: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
-        // Isolate the merge-outcome mapping (conflict → halted) from the
-        // resolver's own behavior (covered by conflictResolver.test.ts): inject
-        // the test-fixture no-op resolver so the conflict stays unresolved.
-        resolveConflict: noopConflictResolver,
+        // Isolate the merge-outcome mapping (owned conflict → halted) from the
+        // resolver itself: model the durable planner run that owns the unresolved work.
+        resolveConflict: async () => ({
+          resolved: false,
+          recovery: {
+            kind: "owned",
+            receipt: {
+              kind: "planner_replan",
+              specId: "spec_1",
+              run: { kind: "enqueued", replanRunId: "run_replan_1", plannerTaskId: "task_replan_1" },
+            },
+          },
+        }),
       }) as Parameters<typeof runPlannerLoopScoped>[0],
     );
 

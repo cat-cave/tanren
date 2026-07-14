@@ -220,6 +220,48 @@ export interface ResolvedTreeReGate {
 
 // ---- The replan router (intent stays alive) -------------------------------
 
+/** Durable evidence that a recovery run exists, rather than a comment-level routing claim. */
+export type RecoveryRunReceipt =
+  | { kind: "enqueued"; replanRunId: string; plannerTaskId: string }
+  | { kind: "already_running" };
+
+/** The planner owns the unresolved conflict through a confirmed live re-plan run. */
+export interface PlannerRecoveryReceipt {
+  kind: "planner_replan";
+  specId: string;
+  run: RecoveryRunReceipt;
+}
+
+/** The writer owns a failed fresh gate through a confirmed live re-author run. */
+export interface WriterRecoveryReceipt {
+  kind: "writer_rework";
+  specId: string;
+  run: RecoveryRunReceipt;
+}
+
+/** Durable evidence that a router already parked the spec loudly at `needs_attention`. */
+export interface NeedsAttentionRecoveryReceipt {
+  kind: "needs_attention";
+  specId: string;
+  source: "planner_replan" | "writer_rework";
+}
+
+export type ConflictRecoveryReceipt = PlannerRecoveryReceipt | WriterRecoveryReceipt;
+
+export type ReplanRouteResult =
+  | { kind: "owned"; receipt: PlannerRecoveryReceipt }
+  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string };
+
+export type GateReworkRouteResult =
+  | { kind: "owned"; receipt: WriterRecoveryReceipt }
+  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string };
+
+/** What an unresolved conflict can prove to its caller after all routing I/O completed. */
+export type ConflictRecoveryDisposition =
+  | { kind: "owned"; receipt: ConflictRecoveryReceipt }
+  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
+  | { kind: "unowned"; message: string };
+
 /**
  * Routes ONE spec back to the planner with the OTHER spec's change as new
  * context, so the intent stays ALIVE rather than being silently dropped or
@@ -232,7 +274,7 @@ export interface ReplanRouter {
     newContext: string;
     /** The other spec whose change the re-planned spec must build on. */
     otherSpecId?: string;
-  }): Promise<void>;
+  }): Promise<ReplanRouteResult>;
 }
 
 // ---- The gate-rework router (a re-gate GATE-tier failure → writer rework) ----
@@ -258,7 +300,7 @@ export interface GateReworkRouter {
     specId: string;
     /** The re-gate's failing tier/step/output — the steering the writer re-authors against. */
     gateError: string;
-  }): Promise<void>;
+  }): Promise<GateReworkRouteResult>;
 }
 
 // ---- The pure decision core -----------------------------------------------

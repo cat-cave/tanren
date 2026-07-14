@@ -198,3 +198,4 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
 
 export { buildIntentPreservingConflictResolver } from "./resolver.js";
 export type { IntentPreservingResolverDeps } from "./resolver.js";
+export type { ConflictResolverResult } from "../mergeDispatchTypes.js";

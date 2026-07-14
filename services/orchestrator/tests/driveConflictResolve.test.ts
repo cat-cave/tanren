@@ -2,16 +2,15 @@
 // percolation/cap guards (engine/merge/driveConflictResolve.ts). The §2b resolver
 // CORE is tested in conflictResolver.test.ts; this proves the drive WRAPPER:
 //
-//   - a conflict the resolver RESOLVES → `{resolved:true}` + verdict `resolved`
+//   - a conflict the resolver RESOLVES → `{resolved:true}`
 //     (the dispatcher retries the merge → it lands; autonomous);
 //   - a conflict the resolver could not mechanically reconcile but whose intents
-//     are COMPATIBLE → a bounded autonomous RE-PLAN (verdict `replanned`,
-//     `{resolved:false}`), NOT an escalation — UNTIL the cap;
+//     are COMPATIBLE → an unresolved result with a durable planner-run receipt;
 //   - once the spec has been re-planned `MAX_CONFLICT_REPLANS` times and STILL
-//     conflicts → ESCALATE (verdict `escalate`); the resolver is NOT even invoked
+//     conflicts → an ownerless human-decision result; the resolver is NOT even invoked
 //     again (no runner provisioned) — the two intents are genuinely incompatible;
 //   - a live `percolation_pending` marker → the drive YIELDS (throws
-//     PercolationOwnsSpecError, verdict `yield`) rather than racing percolation,
+//     PercolationOwnsSpecError) rather than racing percolation,
 //     and provisions NO runner.
 //
 // Every seam is a fake under tests/ — no real LLM/runner/DB. The resolver itself is
@@ -28,7 +27,6 @@ import type { CommandResult, RunnerCommand } from "../src/engine/contracts/comma
 import {
   buildDriveConflictResolve,
   type DriveConflictResolveDeps,
-  type DriveConflictVerdict,
   PercolationOwnsSpecError,
 } from "../src/engine/merge/driveConflictResolve.js";
 import type { ConflictContext, ConflictResolverHook } from "../src/engine/workflow/reviewMerge/index.js";
@@ -136,7 +134,6 @@ class SpyAllocator extends FakeAllocator {
 function makeDeps(
   pool: pg.Pool,
   allocator: SpyAllocator,
-  verdict: DriveConflictVerdict,
   buildResolver?: DriveConflictResolveDeps["buildResolver"],
   ssh: DriveConflictResolveDeps["ssh"] = new FakeCommandSubstrate(),
   eventStore: FakeEventStore = new FakeEventStore(),
@@ -152,14 +149,20 @@ function makeDeps(
     eventStore,
     identitySecretRef: "secret/runner/identity",
     timeoutMs: 1000,
-    verdict,
     ...(buildResolver !== undefined && { buildResolver }),
   };
 }
 
 /** A scripted resolver hook (the injected test seam) returning a fixed outcome. */
 function scriptedResolver(resolved: boolean): DriveConflictResolveDeps["buildResolver"] {
-  return () => (async () => ({ resolved })) satisfies ConflictResolverHook;
+  return () =>
+    (async () =>
+      resolved
+        ? { resolved: true }
+        : {
+            resolved: false,
+            recovery: { kind: "unowned", message: "scripted resolver assigned no owner" },
+          }) satisfies ConflictResolverHook;
 }
 
 /** Records the re-plan run enqueue (the never-discard re-author) — returns a fixed run id. */
@@ -194,8 +197,11 @@ function replanRoutingResolver(
         enqueuer,
         priorReplans: { signatures: async () => [] },
       });
-      await router.routeBackToPlanner({ specId: FACTS.specId, newContext: "re-plan on the new base" });
-      return { resolved: false };
+      const recovery = await router.routeBackToPlanner({
+        specId: FACTS.specId,
+        newContext: "re-plan on the new base",
+      });
+      return { resolved: false, recovery };
     }) satisfies ConflictResolverHook;
 }
 
@@ -209,16 +215,14 @@ class RecordingSubstrate extends FakeCommandSubstrate {
 }
 
 describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap guards", () => {
-  it("RESOLVED: the resolver reconciles → {resolved:true} + verdict 'resolved' (the merge retries + lands)", async () => {
+  it("RESOLVED: the resolver reconciles and the merge retries + lands", async () => {
     const pool = fakePool({});
     const allocator = new SpyAllocator();
-    const verdict: DriveConflictVerdict = {};
-    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, verdict, scriptedResolver(true)));
+    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, scriptedResolver(true)));
 
     const result = await hook(CONTEXT);
 
     expect(result).toEqual({ resolved: true });
-    expect(verdict.disposition).toBe("resolved");
     // A runner WAS provisioned (the real resolution path) and released.
     expect(allocator.allocateCalls).toBe(1);
     expect(allocator.releaseCalls).toBe(1);
@@ -227,10 +231,9 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   it("allocates the short-lived live-jj resolver with a unique synthetic handle, not the original run id", async () => {
     const pool = fakePool({});
     const allocator = new SpyAllocator();
-    const verdict: DriveConflictVerdict = {};
     let workspacePath = "";
     const hook = buildDriveConflictResolve(
-      makeDeps(pool, allocator, verdict, (_target, workspace) => {
+      makeDeps(pool, allocator, (_target, workspace) => {
         workspacePath = workspace;
         return (async () => ({ resolved: true })) satisfies ConflictResolverHook;
       }),
@@ -252,17 +255,17 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     expect(workspacePath).toBe(`/workspace/runs/${handle}/repo`);
   });
 
-  it("RE-PLANNED (under the cap): an unresolved-but-compatible conflict → {resolved:false} + verdict 'replanned' (recoverable, NOT escalation)", async () => {
+  it("does not fabricate a replan receipt for an unresolved ownerless result", async () => {
     const pool = fakePool({});
     const allocator = new SpyAllocator();
-    const verdict: DriveConflictVerdict = {};
-    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, verdict, scriptedResolver(false)));
+    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, scriptedResolver(false)));
 
     const result = await hook(CONTEXT);
 
-    expect(result).toEqual({ resolved: false });
-    expect(verdict.disposition).toBe("replanned");
-    // The resolver ran (the bounded autonomous re-plan): a runner was provisioned.
+    expect(result).toEqual({
+      resolved: false,
+      recovery: { kind: "unowned", message: "scripted resolver assigned no owner" },
+    });
     expect(allocator.allocateCalls).toBe(1);
     expect(allocator.releaseCalls).toBe(1);
   });
@@ -275,17 +278,21 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
   it("RE-PLANNED enqueues a re-plan run + emits recovery.replan_queued (never a bare replan_routed strand)", async () => {
     const pool = fakePool({});
     const allocator = new SpyAllocator();
-    const verdict: DriveConflictVerdict = {};
     const eventStore = new FakeEventStore();
     const enqueuer = new RecordingEnqueuer("run_replan_drive7");
     const hook = buildDriveConflictResolve(
-      makeDeps(pool, allocator, verdict, replanRoutingResolver(eventStore, enqueuer), undefined, eventStore),
+      makeDeps(pool, allocator, replanRoutingResolver(eventStore, enqueuer), undefined, eventStore),
     );
 
     const result = await hook(CONTEXT);
 
-    expect(result).toEqual({ resolved: false });
-    expect(verdict.disposition).toBe("replanned");
+    expect(result).toMatchObject({
+      resolved: false,
+      recovery: {
+        kind: "owned",
+        receipt: { kind: "planner_replan", run: { kind: "enqueued", replanRunId: "run_replan_drive7" } },
+      },
+    });
     // THE FIX: a fresh re-plan run was ENQUEUED (the never-discard re-author), not relied-upon.
     expect(enqueuer.calls).toBe(1);
     // It is OBSERVABLE: `recovery.replan_queued` carries the replanRunId the walker/worker drives.
@@ -296,7 +303,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(true);
   });
 
-  it("ESCALATE (FIXED POINT): re-planning against the SAME conflict again → verdict 'escalate', NO runner provisioned (genuinely incompatible)", async () => {
+  it("FIXED POINT: returns an ownerless human decision and provisions no runner", async () => {
     // The spec was re-planned against THIS exact conflict REPEATEDLY (the drive keys the signature
     // off the conflict message) — the identical conflict recurring beyond a single transient repeat
     // is a proven cycle ⇒ re-planning would re-conflict identically (a fixed point).
@@ -304,37 +311,35 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
       priorReplanSignatures: [conflictSignatureOf(CONTEXT.message), conflictSignatureOf(CONTEXT.message)],
     });
     const allocator = new SpyAllocator();
-    const verdict: DriveConflictVerdict = {};
     // The resolver should NOT be invoked at the cap — inject one that fails the test if called.
     const hook = buildDriveConflictResolve(
-      makeDeps(pool, allocator, verdict, () => () => {
+      makeDeps(pool, allocator, () => () => {
         throw new Error("resolver must NOT run once the re-plan cap is exhausted");
       }),
     );
 
     const result = await hook(CONTEXT);
 
-    expect(result).toEqual({ resolved: false });
-    expect(verdict.disposition).toBe("escalate");
-    // The escalation message reads as a DECISION (a product clash at a fixed point), not an error.
-    expect(verdict.message).toMatch(/FIXED POINT/u);
-    expect(verdict.message).toMatch(/product\s+decision is needed/u);
+    expect(result.resolved).toBe(false);
+    if (result.resolved) throw new Error("expected unresolved fixed point");
+    expect(result.recovery.kind).toBe("unowned");
+    if (result.recovery.kind !== "unowned") throw new Error("expected ownerless fixed point");
+    expect(result.recovery.message).toMatch(/FIXED POINT/u);
+    expect(result.recovery.message).toMatch(/product\s+decision is needed/u);
     // NO runner provisioned — escalation short-circuits before allocation.
     expect(allocator.allocateCalls).toBe(0);
   });
 
-  it("YIELD: a live percolation marker → throws PercolationOwnsSpecError + verdict 'yield', NO runner provisioned (mutual exclusion)", async () => {
+  it("YIELD: a live percolation marker throws without provisioning a runner", async () => {
     const pool = fakePool({ percolationPending: { ancestorSpecId: "spec_anc", toSha: "abc" } });
     const allocator = new SpyAllocator();
-    const verdict: DriveConflictVerdict = {};
     const hook = buildDriveConflictResolve(
-      makeDeps(pool, allocator, verdict, () => () => {
+      makeDeps(pool, allocator, () => () => {
         throw new Error("resolver must NOT run while percolation owns the spec");
       }),
     );
 
     await expect(hook(CONTEXT)).rejects.toBeInstanceOf(PercolationOwnsSpecError);
-    expect(verdict.disposition).toBe("yield");
     // The drive yields BEFORE provisioning — percolation owns the re-exec + conflict route.
     expect(allocator.allocateCalls).toBe(0);
   });
@@ -351,7 +356,7 @@ describe("buildDriveConflictResolve — the workspace mechanism is the live jj w
     // No buildResolver seam → the real workspace mechanism runs. The fake substrate
     // returns exit 0 for everything, so the jj rebase probe reads "clean" → an empty
     // conflict → {resolved:false} (a real "nothing to resolve" state, NOT a swallow).
-    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, {}, undefined, ssh));
+    const hook = buildDriveConflictResolve(makeDeps(pool, allocator, undefined, ssh));
 
     // The downstream resolver reads provenance over the fake pool (unscripted SQL) and
     // may reject AFTER the clone — we assert the clone the workspace mechanism issued,

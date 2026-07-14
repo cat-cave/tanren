@@ -131,19 +131,18 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     expect(h.queue.statusOf("run_spec_c")).toBe("merged");
   });
 
-  it("with NO gateRework router wired, a gate-fail culprit falls back to the recoverable conflict dequeue (degenerate assembly)", async () => {
-    // The no-router fallback (a degenerate assembly) keeps the prior behavior — a gate-fail
-    // dequeues recoverably rather than throwing. Production ALWAYS wires the router.
+  it("with NO gateRework router wired, a gate-fail culprit parks loudly instead of faking ownership", async () => {
     const queue = new InMemoryMergeQueueModel();
     const checker = new InMemoryBatchChecker();
     checker.failWhenContains("spec_b");
+    const escalator = new RecordingSpecEscalator();
     const coordinator = new BatchMergeCoordinator({
       queue,
       runner: new ScriptedMergeRunner(),
       checker,
       events: new RecordingMergeQueueEventEmitter(),
       batchEvents: new RecordingBatchMergeEventEmitter(),
-      escalator: new RecordingSpecEscalator(),
+      escalator,
       // gateRework intentionally OMITTED.
       resolveMaxBatchSize: () => Promise.resolve(5),
       sleep: () => Promise.resolve(),
@@ -154,7 +153,8 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     await coordinator.coordinate(PROJECT);
 
     expect(queue.statusOf("run_spec_b")).toBe("dequeued");
-    expect(queue.dequeueReasonOf("run_spec_b")).toBe("conflict");
+    expect(queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
     expect(queue.statusOf("run_spec_a")).toBe("merged");
   });
 });

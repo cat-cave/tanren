@@ -100,7 +100,13 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       baseShiftRebase: async () => ({ outcome: "conflict", message: "merge conflict" }),
       resolveConflict: async () => {
         hookCalls += 1;
-        return { resolved: false };
+        return {
+          resolved: false,
+          recovery: {
+            kind: "owned",
+            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running" } },
+          },
+        };
       },
     });
 
@@ -139,7 +145,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       // baseShiftRebase intentionally OMITTED.
     });
 
-    expect(result.outcome).toBe("conflict");
+    expect(result.outcome).toBe("blocked");
     expect(landed).toEqual([]);
     expect(events.events.map((e) => e.eventType)).not.toContain("merge.completed");
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
@@ -172,6 +178,10 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       reGateGateRework: {
         routeGateFailToRework: async (input) => {
           reworked.push(input);
+          return {
+            kind: "owned",
+            receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+          };
         },
       },
     });
@@ -189,7 +199,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
-  it("re-gated CI FAILS with NO rework router wired → recoverable conflict (never a terminal merge.failed)", async () => {
+  it("re-gated CI FAILS with NO rework router wired → loud needs_attention", async () => {
     // An out-of-band / test caller with no rework router: still RECOVERABLE (the recovery
     // surface re-drives), NEVER the old terminal merge.failed — never a silent merge either.
     const pool = new ReviewMergePool("direct_merge");
@@ -213,7 +223,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       // reGateGateRework intentionally OMITTED.
     });
 
-    expect(result.outcome).toBe("conflict");
+    expect(result.outcome).toBe("needs_attention");
     expect(landed).toEqual([]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.rebased");
@@ -261,7 +271,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");
   });
 
-  it("branch REBASED but NO reGateCi hook → HARD-HOLD (merge.conflict), NEVER land on unverified CI", async () => {
+  it("branch REBASED but NO reGateCi hook → recoverable blocked hold, NEVER land on unverified CI", async () => {
     // The branch was behind and the unified rebase advanced it, but the required post-rebase
     // CI re-gate hook is absent. The default of a required verification is a HOLD, not "land
     // anyway": the dispatcher emits the recoverable conflict outcome and NEVER lands.
@@ -285,7 +295,7 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       // reGateCi intentionally OMITTED.
     });
 
-    expect(result.outcome).toBe("conflict");
+    expect(result.outcome).toBe("blocked");
     expect(landed).toEqual([]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.behind");

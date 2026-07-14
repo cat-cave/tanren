@@ -246,7 +246,11 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       // still merge (the escalation FREES the slot — it never bricks the DAG).
       h.seed({ runId: "run_x", specId: "spec_x", dependsOn: [], priority: "P0" });
       h.seed({ runId: "run_y", specId: "spec_y", dependsOn: [], priority: "P1" });
-      h.scriptDrive("run_x", { kind: "needs_attention", message: "irreconcilable with spec_z" });
+      h.scriptDrive("run_x", {
+        kind: "needs_attention",
+        message: "irreconcilable with spec_z",
+        parking: "required",
+      });
 
       // Pass 1: the P0 head is driven, judged irreconcilable, ESCALATED + dequeued
       // `needs_attention` — NOT routed through the recoverable conflict path.
@@ -342,7 +346,11 @@ export function describeMergeCoordinatorConformance(label: string, suite: MergeC
       h.seed({ runId: "run_ind", specId: "spec_ind", dependsOn: [], priority: "P2" });
       // The second sibling's intents GENUINELY conflict with the first (the resolver
       // exhausted its bounded re-plan budget) → the drive returns `needs_attention`.
-      h.scriptDrive("run_s2", { kind: "needs_attention", message: "intents genuinely conflict with spec_s1" });
+      h.scriptDrive("run_s2", {
+        kind: "needs_attention",
+        message: "intents genuinely conflict with spec_s1",
+        parking: "required",
+      });
 
       // Pass 1: the P0 sibling merges.
       await h.coordinator.coordinate(h.projectId);

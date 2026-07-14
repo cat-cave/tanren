@@ -93,10 +93,17 @@ describe("conflict resolver — empty-gather short-circuit (§7.2)", () => {
       applier: fakeApplier([], log),
       answerer: new AnswererBackedConflictInvoker({ adapter: countingAdapter(calls), timeoutMs: 1000 }),
       reGate: { reGate: async () => ({ passed: true }) },
-      replan: { routeBackToPlanner: async () => {} },
+      replan: {
+        routeBackToPlanner: async (input) => ({
+          kind: "owned",
+          receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running" } },
+        }),
+      },
     });
     const result = await resolver(CONTEXT);
     expect(result.resolved).toBe(false);
+    if (result.resolved) throw new Error("expected unresolved result");
+    expect(result.recovery.kind).toBe("unowned");
     // No model call; gathered then short-circuited — no apply/publish.
     expect(calls.count).toBe(0);
     expect(log).toEqual(["gather"]);

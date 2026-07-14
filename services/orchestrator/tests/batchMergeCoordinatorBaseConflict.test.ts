@@ -89,7 +89,11 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
     // The per-run resolver judged the rebase a genuine product clash → needs_attention.
-    h.runner.script("run_spec_b", { kind: "needs_attention", message: "base resolve hit a genuine product clash" });
+    h.runner.script("run_spec_b", {
+      kind: "needs_attention",
+      message: "base resolve hit a genuine product clash",
+      parking: "required",
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
@@ -109,7 +113,15 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
     // The drive returns the recoverable `conflict` (the resolver re-readies the run for re-execution).
-    h.runner.script("run_spec_b", { kind: "conflict", message: "rebase deferred; re-ready pending" });
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "rebase deferred; re-ready pending",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b1", plannerTaskId: "task_replan_b1" },
+      },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
@@ -229,6 +241,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     h.runner.script("run_spec_b", {
       kind: "needs_attention",
       message: "resolver fixed point: genuine product clash",
+      parking: "required",
     });
 
     await h.coordinator.coordinate(PROJECT);
@@ -253,7 +266,15 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     // The resolver routed a BOUNDED replan (a fresh run re-authors the work on the new base) →
     // the recoverable `conflict` drive outcome. Retiring the stale entry is now correct BECAUSE
     // the resolver actually ran — unlike the old bare dequeue that had no re-drive owner.
-    h.runner.script("run_spec_b", { kind: "conflict", message: "resolver routed a bounded replan" });
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "resolver routed a bounded replan",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b2", plannerTaskId: "task_replan_b2" },
+      },
+    });
 
     const result = await h.coordinator.coordinate(PROJECT);
 

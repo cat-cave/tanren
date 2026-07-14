@@ -141,7 +141,17 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
   it("a genuine terminal `conflict` still DEQUEUES (it hands off to autonomous re-plan) — only the not-yet-terminal gate is recoverable", async () => {
     const { queue, runner, coordinator } = harness();
     seed(queue, "run_c", "spec_c");
-    runner.script("run_c", [{ kind: "conflict", message: "merge conflict" }]);
+    runner.script("run_c", [
+      {
+        kind: "conflict",
+        message: "merge conflict",
+        recovery: {
+          kind: "planner_replan",
+          specId: "spec_c",
+          run: { kind: "enqueued", replanRunId: "run_replan_c", plannerTaskId: "task_replan_c" },
+        },
+      },
+    ]);
 
     const result = await coordinator.coordinate(PROJECT);
 

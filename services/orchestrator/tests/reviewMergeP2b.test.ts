@@ -66,6 +66,9 @@ describe("P2b merge-stage conflict resolution", () => {
   it("the noop test fixture resolves nothing (tests-only; not a production default)", async () => {
     expect(
       await noopConflictResolver({ runId: "r", prUrl: "u", prNumber: 1, baseBranch: "main", message: "x" }),
-    ).toEqual({ resolved: false });
+    ).toEqual({
+      resolved: false,
+      recovery: { kind: "unowned", message: "test resolver did not assign a recovery owner" },
+    });
   });
 });

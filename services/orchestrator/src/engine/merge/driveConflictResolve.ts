@@ -3,23 +3,18 @@
 // waiting for. It replaces the old blind-re-exec stub: instead of re-enqueuing a
 // fresh run that re-hits the same conflict, the drive pass now PROVISIONS a
 // short-lived runner + workspace and runs the SAME intent-preserving resolver the
-// in-loop `direct_merge` path runs (`buildDefaultConflictResolver`), then CLASSIFIES
-// the outcome into one of these autonomous dispositions (captured into a mutable
-// `DriveConflictVerdict` the drive reads after `mergeForRun` returns, since the merge
-// dispatcher only sees the hook's `{resolved:boolean}`):
+// in-loop `direct_merge` path runs (`buildDefaultConflictResolver`), then returns the
+// resolver's typed durable-owner receipt to the merge dispatcher:
 //
 //   RESOLVED   — reconciled both intents + re-gated clean → `{resolved:true}`; the
 //                dispatcher retries the merge and it lands (autonomous).
 //   RE-PLANNED — no mechanical resolution but the intents are COMPATIBLE → the
 //                resolver routed ONE spec back to the planner WITH the other's change
-//                as context (the real `ReplanRouter`, intent-carrying NOT blind
-//                re-exec) → `{resolved:false}` → recoverable `merge.conflict`; the
-//                re-planned spec re-runs. Bounded by `MAX_CONFLICT_REPLANS`.
-//   ESCALATED  — the intents are GENUINELY INCOMPATIBLE: the bounded re-plan budget is
-//                exhausted (re-planned `MAX_CONFLICT_REPLANS` times and STILL collides).
-//                Re-planning again would re-conflict forever, so this is a PRODUCT
-//                DECISION a human must make → the `needs_attention` MergeDriveOutcome
-//                (PR1's escalator parks the spec + emits `dag.spec.needs_attention`).
+//                as context and returns the durable planner-run receipt; only that
+//                receipt permits the stale queue candidate to retire as `conflict`.
+//   ESCALATED  — the intents are GENUINELY INCOMPATIBLE or recovery cannot be started.
+//                The router parks the spec and returns its needs_attention receipt;
+//                an ownerless result stays loud and can never masquerade as re-planned.
 //   YIELD      — a live `percolation_pending` marker means change-percolation already
 //                OWNS this spec (it re-executes + routes the same conflict). The drive
 //                YIELDS (a recoverable hold, re-driven later) rather than racing it.
@@ -58,7 +53,7 @@ import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictRe
 import { atReplanFixedPoint, conflictSignatureOf } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { driveResolveOverJj } from "./driveConflictResolveJj.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
-import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
+import type { ConflictResolverHook, ConflictResolverResult } from "../workflow/reviewMerge/index.js";
 
 // The drive-path conflict resolver no longer counts re-plans (apex v35 — intelligent
 // non-convergence detection). It escalates ONLY at a FIXED POINT (the SAME conflict
@@ -68,22 +63,6 @@ import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
 
 /** The terminal runner image a runless drive-path resolver allocates against. */
 const DEFAULT_RESOLVER_RUNNER_IMAGE_FALLBACK = CANONICAL_RUNNER_IMAGE;
-
-/**
- * The drive's read of the resolver's autonomous disposition (see the file header for
- * each case), captured by the hook for the drive to map onto a `MergeDriveOutcome`
- * AFTER `mergeForRun` returns (the dispatcher only forwards `{resolved:boolean}`):
- * resolved → merge retries+lands; replanned → recoverable conflict; escalate →
- * needs_attention; yield → percolation owns the spec, hold + re-drive (no escalation).
- */
-export type DriveConflictDisposition = "resolved" | "replanned" | "escalate" | "yield";
-
-/** A mutable single-shot capture cell threaded into the hook + read by the drive. */
-export interface DriveConflictVerdict {
-  disposition?: DriveConflictDisposition;
-  /** The decision message surfaced on escalation (a product-decision ask, not an error). */
-  message?: string;
-}
 
 /** Thrown when change-percolation owns the spec — the drive yields (recoverable hold). */
 export class PercolationOwnsSpecError extends Error {
@@ -125,8 +104,6 @@ export interface DriveConflictResolveDeps {
   eventStore: EventStore;
   /** The runner identity key ref (same value the worker boot seeds). */
   identitySecretRef: string;
-  /** The capture cell the drive reads after `mergeForRun` returns. */
-  verdict: DriveConflictVerdict;
   /**
    * Test seam: build the conflict resolver hook over the provisioned jj workspace.
    * Production OMITS it → the REAL intent-preserving resolver (`buildResolverForDrive`)
@@ -167,10 +144,8 @@ interface DriveRunContext {
 /**
  * Build the drive-path conflict resolver hook. The merge dispatcher invokes it on a
  * detected conflict; it PROVISIONS a short-lived runner, clones the head + base,
- * runs the real intent-preserving resolver, and CLASSIFIES the outcome into the
- * `verdict` cell (resolved / replanned / escalate / yield) the drive maps onto the
- * `MergeDriveOutcome`. A missing allocator/ssh would have been a LOUD throw at the
- * call site (buildDriveMerge) — this hook always has them.
+ * runs the real intent-preserving resolver, and returns its typed recovery disposition.
+ * A missing allocator/ssh would have been a LOUD throw at the call site.
  */
 export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): ConflictResolverHook {
   return async (conflictContext) => {
@@ -179,7 +154,6 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     // drive YIELDS rather than racing percolation's own re-exec + conflict route.
     // The thrown error is caught by the drive and mapped to a recoverable hold.
     if (await percolationOwnsRun(deps.scopedPool, deps.facts)) {
-      deps.verdict.disposition = "yield";
       throw new PercolationOwnsSpecError(deps.facts.runId);
     }
 
@@ -191,12 +165,11 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     const currentSignature = conflictSignatureOf(conflictContext.message || conflictContext.baseBranch);
     const priorSignatures = await priorConflictSignatures(deps.pool, deps.facts);
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
-      deps.verdict.disposition = "escalate";
-      deps.verdict.message =
+      const message =
         `the resolver reached a FIXED POINT on spec ${deps.facts.specId}: it is re-planning against the SAME ` +
         `conflicting change it already could not absorb (re-planning would re-conflict identically) — a product ` +
         `decision is needed (which behavior wins, or whether the architecture must change).`;
-      return { resolved: false };
+      return { resolved: false, recovery: { kind: "unowned", message } };
     }
 
     const ctx = await loadDriveRunContext(deps);
@@ -206,13 +179,7 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     // no `git merge --abort` / `|| true` fail-open). The `buildResolver` TEST SEAM
     // (production omits it) scripts the WHOLE resolver over the SAME jj workspace, so the
     // classify/cap/yield wrapper is asserted without a live model/runner.
-    const result = await driveResolveViaJj(deps, ctx, conflictContext);
-
-    // RESOLVED → the merge retries + lands (autonomous). UNRESOLVED → the resolver
-    // already routed ONE spec back to the planner (the real intent-carrying re-plan)
-    // under the cap, so this is a bounded autonomous RE-PLAN — recoverable, NOT escalation.
-    deps.verdict.disposition = result.resolved ? "resolved" : "replanned";
-    return result;
+    return driveResolveViaJj(deps, ctx, conflictContext);
   };
 }
 
@@ -227,7 +194,7 @@ async function driveResolveViaJj(
   deps: DriveConflictResolveDeps,
   ctx: DriveRunContext,
   conflictContext: Parameters<ConflictResolverHook>[0],
-): Promise<{ resolved: boolean }> {
+): Promise<ConflictResolverResult> {
   return driveResolveOverJj(
     {
       facts: {

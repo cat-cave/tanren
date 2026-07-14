@@ -8,9 +8,8 @@
 //   - `blocked` → bounded recoverable hold: release the claim so the same candidate
 //     re-drives with backoff, then alert and continue on a slower retry at the ceiling.
 //   - `conflict` → dequeue only after the per-run resolver has routed a re-plan owner.
-//   - `failed` → ordinary merge callers retain their native failure settlement, while
-//     `driveConflictCulprit` intercepts it and assigns writer-rework or needs_attention
-//     ownership before retiring the stale entry.
+//   - `failed` → assign writer-rework or needs_attention ownership before retiring
+//     the stale entry, including ordinary merge and prefix-settlement paths.
 //
 // `merged` is handled inline by the caller (it advances rather than settling out), so
 // this maps only the NON-merged outcomes.
@@ -74,9 +73,8 @@ export interface BatchSettleDeps {
  * A spec-vs-spec CONFLICT culprit is NO LONGER settled here — the caller now DRIVES it through
  * the per-run resolver ({@link driveConflictCulprit}) so the work survives + is rebased/resolved
  * in place, then classifies the drive outcome. `settleBisectCulprit` is therefore invoked ONLY
- * for a GATE-FAIL culprit. (The `conflict`-dequeue fallback below survives solely for a
- * degenerate no-router assembly where a gate-fail cannot reach the writer; production always
- * wires the router.)
+ * for a GATE-FAIL culprit. A missing writer router parks loudly instead of fabricating a
+ * recoverable-conflict owner.
  */
 export async function settleBisectCulprit(
   deps: BatchSettleDeps,
@@ -89,28 +87,27 @@ export async function settleBisectCulprit(
   if (isGateFail && deps.gateRework !== undefined) {
     // The WRITER rework path: re-author the culprit to fix the integration-only gate
     // failure, then retire the OLD entry (the re-authored run re-queues a fresh one).
-    await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    const disposition = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
     await markDequeuedAfterEvent({
       queue: deps.queue,
       events: deps.events,
       projectId,
       entry: culprit,
-      reason: "superseded",
-      message: `routed to writer rework after a failed integrated-tree gate: ${failMessage}`,
+      reason: disposition === "reworked" ? "superseded" : "needs_attention",
+      message: `integrated-tree gate writer-rework disposition ${disposition}: ${failMessage}`,
       tx: deps.tx,
     });
     return;
   }
-  // Degenerate no-router fallback ONLY: a gate-fail culprit that cannot reach the writer
-  // (production always wires the router). A spec-vs-spec conflict never reaches here — the
-  // caller drives it through the resolver (`driveConflictCulprit`) instead of dequeuing.
+  const message = `failed integrated-tree gate has no writer-rework owner: ${failMessage}`;
+  await deps.escalator.escalate({ projectId, entry: culprit, message });
   await markDequeuedAfterEvent({
     queue: deps.queue,
     events: deps.events,
     projectId,
     entry: culprit,
-    reason: "conflict",
-    message: `bisected as the offending PR in a failed batch check: ${failMessage}`,
+    reason: "needs_attention",
+    message,
     tx: deps.tx,
   });
 }
@@ -156,9 +153,9 @@ export async function holdOnRetriableDriveThrow(
 
 /**
  * Settle a NON-merged real-merge outcome for one batch entry. A `needs_attention`
- * outcome parks the spec (frees its slot) + dequeues `needs_attention`; any other
- * outcome follows the same bounded recoverable-hold / terminal conflict-dequeue policy as
- * `EventEmittingMergeCoordinator.driveAndSettle`.
+ * outcome parks the spec (frees its slot) + dequeues `needs_attention`; blocked work
+ * stays queued, conflicts require an owner receipt, and failed validation routes to
+ * writer rework or a loud park before dequeue.
  */
 export async function settleDriveOutcome(
   deps: BatchSettleDeps,
@@ -171,7 +168,9 @@ export async function settleDriveOutcome(
     // slot — the rest of the DAG keeps moving), then dequeue `needs_attention` (NEVER
     // re-queued). The escalator emits `dag.spec.needs_attention`; the dequeue emits
     // `merge.dequeued`. NOT the recoverable conflict path (it would re-conflict forever).
-    await deps.escalator.escalate({ projectId, entry, message: outcome.message });
+    if (outcome.parking === "required") {
+      await deps.escalator.escalate({ projectId, entry, message: outcome.message });
+    }
     await markDequeuedAfterEvent({
       queue: deps.queue,
       events: deps.events,
@@ -202,6 +201,11 @@ export async function settleDriveOutcome(
     if (ceiling !== undefined) {
       return holdOrHaltRecoverableDrive({ ceiling, queue: deps.queue, events: deps.events, projectId, entry, outcome });
     }
+  }
+
+  if (outcome.kind === "failed") {
+    await settleFailedDrive(deps, projectId, entry, outcome.message);
+    return "dequeued";
   }
 
   const reason = outcome.kind;
@@ -302,13 +306,7 @@ export async function driveConflictCulprit(
     await deps.queue.markMerged(culprit.queueId);
     return { projectId, queueDepth, mergedSpecId: culprit.specId };
   }
-  if (outcome.kind === "failed") {
-    await settleFailedConflictDrive(deps, projectId, culprit, outcome.message);
-    return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
-  }
-
-  // A non-merged drive outcome: settle via the SAME policy the merge step uses
-  // (recoverable hold / needs_attention park). A failed fresh gate was intercepted above.
+  // A non-merged drive outcome: settle via the SAME owner-aware policy the merge step uses.
   const settled = await settleDriveOutcome(deps, projectId, culprit, outcome);
   if (settled !== "dequeued") {
     return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
@@ -316,14 +314,14 @@ export async function driveConflictCulprit(
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
 
-/** Assign an owner to a failed post-resolution gate before the stale entry retires. */
-async function settleFailedConflictDrive(
+/** Assign an owner to every failed fresh merge drive before the stale entry retires. */
+async function settleFailedDrive(
   deps: BatchSettleDeps,
   projectId: string,
   culprit: MergeQueueEntry,
   failure: string,
 ): Promise<void> {
-  const gateError = `resolved conflict failed fresh pre_merge: ${failure}`;
+  const gateError = `merge drive failed fresh validation: ${failure}`;
   let reason: "superseded" | "needs_attention";
   let message: string;
   if (deps.gateRework === undefined) {

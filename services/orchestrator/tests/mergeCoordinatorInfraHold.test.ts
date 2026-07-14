@@ -251,7 +251,15 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
   it("keeps a conflict claim active when merge.dequeued append fails before settlement", async () => {
     const { queue, runner, events, coordinator } = harness();
     queue.seed({ runId: "run_split", specId: "spec_split", dependsOn: [], priority: "tbd" });
-    runner.returnFor("run_split", { kind: "conflict", message: "resolver routed replan" });
+    runner.returnFor("run_split", {
+      kind: "conflict",
+      message: "resolver routed replan",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_split",
+        run: { kind: "enqueued", replanRunId: "run_replan_split", plannerTaskId: "task_replan_split" },
+      },
+    });
     vi.spyOn(events, "emitDequeued").mockRejectedValueOnce(new Error("event store unavailable"));
 
     await expect(coordinator.coordinate(PROJECT)).rejects.toThrow("event store unavailable");

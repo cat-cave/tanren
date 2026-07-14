@@ -120,7 +120,13 @@ describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED the
   it("a FAILING re-gate on the advanced head routes to WRITER REWORK — never lands a stale verdict", async () => {
     const reworked: Array<{ specId: string; gateError: string }> = [];
     const reGateGateRework: MergeForRunInput["reGateGateRework"] = {
-      routeGateFailToRework: async (input) => void reworked.push(input),
+      routeGateFailToRework: async (input) => {
+        reworked.push(input);
+        return {
+          kind: "owned",
+          receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+        };
+      },
     };
     const scenario = buildScenario({
       reGate: async () => ({ status: "failed", gateError: "test tier failed on the shifted base" }),

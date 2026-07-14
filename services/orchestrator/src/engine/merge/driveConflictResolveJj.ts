@@ -7,7 +7,7 @@
 
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
-import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
+import type { ConflictResolverHook, ConflictResolverResult } from "../workflow/reviewMerge/index.js";
 import {
   buildJjConflictApplier,
   type JjConflictApplierFacts,
@@ -62,7 +62,7 @@ export interface DriveJjResolveDeps {
 export async function driveResolveOverJj(
   deps: DriveJjResolveDeps,
   conflictContext: Parameters<ConflictResolverHook>[0],
-): Promise<{ resolved: boolean }> {
+): Promise<ConflictResolverResult> {
   const { facts } = deps;
   const live = await buildLiveJjWorkspace({
     facts: {

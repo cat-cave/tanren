@@ -144,10 +144,19 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const enqueuer = new RecordingEnqueuer("run_replan_xyz");
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
-    await router.routeBackToPlanner({
+    const recovery = await router.routeBackToPlanner({
       specId: "spec_b",
       newContext: "re-plan ON TOP OF spec_a (sha-new): the rebase conflict could not be resolved",
       otherSpecId: "spec_a",
+    });
+
+    expect(recovery).toEqual({
+      kind: "owned",
+      receipt: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_xyz", plannerTaskId: "task_run_replan_xyz" },
+      },
     });
 
     // THE FIX (1): a fresh re-plan run was ENQUEUED — the routed replan re-authors the
@@ -207,7 +216,16 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
       ]),
     });
 
-    await router.routeBackToPlanner({ specId: "spec_b", newContext: sameContext, otherSpecId: "spec_a" });
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: sameContext,
+      otherSpecId: "spec_a",
+    });
+
+    expect(recovery).toMatchObject({
+      kind: "parked",
+      receipt: { kind: "needs_attention", specId: "spec_b", source: "planner_replan" },
+    });
 
     // It did NOT enqueue yet another doomed re-plan (no hot-loop).
     expect(enqueuer.calls).toHaveLength(0);
@@ -249,10 +267,15 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const enqueuer = new FailingEnqueuer(new Error("run-create connection refused"));
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
-    await router.routeBackToPlanner({
+    const recovery = await router.routeBackToPlanner({
       specId: "spec_b",
       newContext: "re-plan ON TOP OF spec_a (sha-new)",
       otherSpecId: "spec_a",
+    });
+
+    expect(recovery).toMatchObject({
+      kind: "parked",
+      receipt: { kind: "needs_attention", specId: "spec_b", source: "planner_replan" },
     });
 
     // The enqueue WAS attempted (the never-discard re-author was tried).
@@ -280,10 +303,15 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const enqueuer = new AlreadyClaimedEnqueuer();
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
-    await router.routeBackToPlanner({
+    const recovery = await router.routeBackToPlanner({
       specId: "spec_b",
       newContext: "re-plan ON TOP OF spec_a (sha-new)",
       otherSpecId: "spec_a",
+    });
+
+    expect(recovery).toEqual({
+      kind: "owned",
+      receipt: { kind: "planner_replan", specId: "spec_b", run: { kind: "already_running" } },
     });
 
     expect(enqueuer.calls).toBe(1);

@@ -245,8 +245,8 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    * Drive the claimed entry's merge through the existing per-run merge path and
    * settle the queue row from the outcome. A `merged` outcome marks the entry
    * merged (the next pass picks the next DAG head); a `blocked` outcome releases
-   * the claim with bounded backoff; a conflict/failed outcome DEQUEUES it (it leaves
-   * the ready set so independent items proceed) and emits merge.dequeued.
+   * the claim with bounded backoff; a conflict dequeues only with a typed recovery
+   * receipt, while an ownerless failure parks loudly at needs_attention.
    *
    * GitHub-5xx resilience (GAP #2d): a THROWN drive used to become a `blocked` dequeue —
    * but a `done` run NEVER re-readies, so a transient 504 mid-drive would STRAND a clean
@@ -264,8 +264,8 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
    *     the entry queued, and re-drives with longer backoff so it cannot hot-loop or
    *     permanently strand. A SHIFTING failure keeps recovering quietly (no alert).
    *   - a typed PERMANENT infra error → the recoverable `blocked` hold path.
-   * A GENUINE returned block holds with bounded backoff; a returned conflict/failed
-   * still dequeues.
+   * A GENUINE returned block holds with bounded backoff; conflict/failed retirement
+   * requires recovery ownership or a loud needs_attention park.
    */
   private async driveAndSettle(
     projectId: string,
@@ -339,7 +339,9 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       // the ready set, NEVER re-queued). NOT routed through the recoverable `conflict`
       // path — re-executing it would just re-conflict forever. The escalator emits the
       // loud `dag.spec.needs_attention`; the dequeue emits `merge.dequeued`.
-      await this.deps.escalator.escalate({ projectId, entry, message: outcome.message });
+      if (outcome.parking === "required") {
+        await this.deps.escalator.escalate({ projectId, entry, message: outcome.message });
+      }
       await markDequeuedAfterEvent({
         queue: this.deps.queue,
         events: this.deps.events,
@@ -383,8 +385,22 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       return { holdReason: "merge_retry", retryAfterMs: held.retryAfterMs };
     }
 
-    // A returned `conflict` usually means the resolver already routed an
-    // autonomous re-plan; a terminal merge-stage failure also leaves the queue.
+    if (outcome.kind === "failed") {
+      const message = `merge drive failed without a writer-rework router: ${outcome.message}`;
+      await this.deps.escalator.escalate({ projectId, entry, message });
+      await markDequeuedAfterEvent({
+        queue: this.deps.queue,
+        events: this.deps.events,
+        projectId,
+        entry,
+        reason: "needs_attention",
+        message,
+        tx: this.deps.tx,
+      });
+      return { dequeuedSpecId: entry.specId };
+    }
+
+    // The remaining `conflict` carries a typed receipt proving its recovery owner.
     await this.recoverableDriveHolds.reset(entry.queueId);
     const reason = outcome.kind;
     await markDequeuedAfterEvent({

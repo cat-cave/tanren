@@ -45,6 +45,7 @@ export {
   type DispatchedIntegration,
   type MergeProbe,
   type ConflictResolverHook,
+  type ConflictResolverResult,
   type ConflictContext,
   type NativeQueueEnqueuer,
   type NativeQueueOnClientEnqueuer,

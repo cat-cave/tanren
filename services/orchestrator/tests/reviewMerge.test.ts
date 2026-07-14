@@ -213,8 +213,6 @@ describe("merge dispatch stage", () => {
 
     expect(result.outcome).toBe("merged");
     expect(result.mergeSha).toBe(AUTHORITY_HEAD_SHA);
-    // The authorized commit advanced `main` via the CAS, once (the LandFinalizer's write;
-    // the land oracle is the advanced ref + the `merged` outcome + the finished task).
     expect(landed).toEqual([AUTHORITY_HEAD_SHA]);
     expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_HEAD_SHA);
     const types = events.events.map((e) => e.eventType);
@@ -242,7 +240,6 @@ describe("merge dispatch stage", () => {
     });
 
     expect(result.outcome).toBe("handed_off");
-    // the hand-off path never lands: main untouched, nothing authorized.
     expect(landed).toEqual([]);
     expect(await host.fetchRef({ repo: AUTHORITY_REPO, remoteBranch: "main" })).toBe(AUTHORITY_MAIN_SHA);
     expect(events.events.find((e) => e.eventType === "merge.queued")?.payload).toMatchObject({
@@ -272,7 +269,13 @@ describe("merge dispatch stage", () => {
       resolveConflict: async (ctx) => {
         hookCalls += 1;
         expect(ctx.baseBranch).toBe("main");
-        return { resolved: false };
+        return {
+          resolved: false,
+          recovery: {
+            kind: "owned",
+            receipt: { kind: "planner_replan", specId: "spec_1", run: { kind: "already_running" } },
+          },
+        };
       },
     });
 
@@ -286,8 +289,6 @@ describe("merge dispatch stage", () => {
 });
 
 describe("external-change detection", () => {
-  // MERGE-SAFETY (self-identity): identity = default bot login + the login resolved from
-  // the active credential (apex PAT user `tanren-bot-user`). No bogus `app/<appId>` entry.
   const identity = tanrenIdentity(["tanren[bot]", "tanren-bot-user"]);
 
   it("flags a non-Tanren login as an external change", () => {
@@ -343,7 +344,6 @@ describe("posture decision", () => {
   it("lenient mirrors strict for external coexistence (the gate-advisory relaxation is in-loop only)", () => {
     const decision = decidePosture("lenient", external);
     expect(decision.kind).toBe("block");
-    // The reason reflects the actual posture, not a hardcoded 'strict'.
     expect(decision.reason).toContain("lenient posture");
     expect(decidePosture("lenient", internal).kind).toBe("proceed");
   });

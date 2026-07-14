@@ -1,17 +1,5 @@
-// Orchestration tests for the intent-preserving conflict resolver
-// (engine/workflow/reviewMerge/conflictResolver/resolver.ts). Every seam is a
-// fake under tests/ — NO real LLM/runner/DB. They prove the §2b behavior:
-//
-//   - a two-spec conflict → the resolver is invoked with BOTH specs' intent +
-//     the DAG edge → the resolution is applied → the re-gate runs → it PUBLISHES
-//     and returns { resolved: true } (the dispatcher then proceeds to merge);
-//   - the IRRECONCILABLE path routes ONE spec back to the planner with the
-//     other's change as context (NOT dropped, NOT merged) and returns
-//     { resolved: false };
-//   - a resolution whose RE-GATE FAILS does NOT publish/merge — it routes the
-//     merging spec back to the planner (intent stays alive) and emits the
-//     irreconcilable event with fromFailedReGate=true;
-//   - every step emits its inspectable event.
+// Intent-preserving resolver tests: both intents + DAG provenance, verified publish,
+// typed replan/rework ownership, fail-closed re-gates, and inspectable events.
 
 import { describe, expect, it } from "vitest";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -105,6 +93,10 @@ function recordingReplan(): ReplanRouter & {
     calls,
     routeBackToPlanner: async (input) => {
       calls.push(input);
+      return {
+        kind: "owned",
+        receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running" } },
+      };
     },
   };
 }
@@ -115,6 +107,10 @@ function recordingGateRework(): GateReworkRouter & { calls: Array<{ specId: stri
     calls,
     routeGateFailToRework: async (input) => {
       calls.push(input);
+      return {
+        kind: "owned",
+        receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running" } },
+      };
     },
   };
 }
@@ -293,7 +289,7 @@ describe("intentPreservingConflictResolver", () => {
     // THE FIX: the resolution applied to a byte-CLEAN tree (no merge conflict), but the re-gate fails
     // a deterministic GATE TIER on the new base — the WRITER's to fix. Route to WRITER REWORK carrying
     // the gate error, NOT an IRRECONCILABLE CONFLICT (no `merge.conflict.irreconcilable`) and NOT a
-    // replan; it carries `routedToRework` so a base-shift caller does not double-route.
+    // replan; it carries a typed writer receipt so a base-shift caller does not double-route.
     const events = new FakeEventStore();
     const log: string[] = [];
     const applier = fakeApplier(conflictedFiles, log);
@@ -321,8 +317,8 @@ describe("intentPreservingConflictResolver", () => {
       gateRework,
     });
     const result = await resolver(CONTEXT);
-    expect(result.resolved).toBe(false);
-    expect(result.routedToRework).toBe(true);
+    if (result.resolved) throw new Error("expected unresolved result");
+    expect(result.recovery).toMatchObject({ kind: "owned", receipt: { kind: "writer_rework" } });
     // Applied, NEVER published (no merge on an unverified tree); aborted.
     expect(log).toEqual(["gather", "apply", "abort"]);
     expect(log).not.toContain("publish");
@@ -366,8 +362,8 @@ describe("intentPreservingConflictResolver", () => {
       gateRework,
     });
     const result = await resolver(CONTEXT);
-    expect(result.resolved).toBe(false);
-    expect(result.routedToRework).toBeUndefined();
+    if (result.resolved) throw new Error("expected unresolved result");
+    expect(result.recovery).toMatchObject({ kind: "owned", receipt: { kind: "planner_replan" } });
     // The gate-rework router is NOT engaged; the replan / irreconcilable path runs as before.
     expect(gateRework.calls).toHaveLength(0);
     expect(replan.calls).toEqual([expect.objectContaining({ specId: "spec_merging" })]);

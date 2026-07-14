@@ -118,7 +118,16 @@ function fakeReGate(verdict: ReGateVerdict): ResolvedTreeReGate {
 }
 function recordingReplan(): ReplanRouter & { calls: Array<{ specId: string }> } {
   const calls: Array<{ specId: string }> = [];
-  return { calls, routeBackToPlanner: async (input) => void calls.push(input) };
+  return {
+    calls,
+    routeBackToPlanner: async (input) => {
+      calls.push(input);
+      return {
+        kind: "owned",
+        receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running" } },
+      };
+    },
+  };
 }
 
 describe("conflict resolver — product-vision prompt rendering", () => {

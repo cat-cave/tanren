@@ -20,6 +20,7 @@
 // commit (`rebaseOnto` never throws), so even an irreconcilable shift keeps the work alive.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { ConflictRecoveryDisposition } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
@@ -91,13 +92,12 @@ export interface BaseShiftReGate {
 
 /**
  * The intent-preserving resolution of a recorded rebase conflict, or `irreconcilable`.
- * `routedToRework` (only on `resolved: false`) means the re-gate failed a GATE TIER on a
- * cleanly-resolved tree and the resolver ALREADY routed the spec to WRITER REWORK — the
- * coordinator MUST NOT then replan (the spec is already being re-driven).
+ * An owned/parked recovery disposition proves the resolver already assigned the work; an
+ * unowned/absent disposition leaves this coordinator responsible for the replan.
  */
 export type ConflictResolution =
   | { resolved: true; headSha: string }
-  | { resolved: false; reason: string; routedToRework?: boolean };
+  | { resolved: false; reason: string; recovery?: ConflictRecoveryDisposition };
 
 /**
  * Resolves a recorded rebase conflict (intent + vision preserving), writing the resolution INTO
@@ -340,12 +340,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // routedToRework: the resolver's INTERNAL re-gate failed a GATE TIER on the cleanly-
-      // resolved tree and it ALREADY routed the spec to WRITER REWORK — do NOT also replan
-      // (double-route). Otherwise IRRECONCILABLE (the Answerer judged the intents irreconcilable
-      // OR a checker/auditor re-gate rejected the resolved tree): replan, kept ALIVE on the
-      // SAME run — NEVER discard, NEVER merge.
-      if (!resolution.routedToRework) {
+      // A typed owner/park receipt prevents a second router from double-routing the work.
+      // Only an explicitly unowned (or legacy absent) result delegates replan ownership here.
+      if (resolution.recovery === undefined || resolution.recovery.kind === "unowned") {
         await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
       }
       await this.emit(input, true, "replanned");

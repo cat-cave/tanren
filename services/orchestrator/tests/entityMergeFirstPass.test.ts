@@ -161,7 +161,12 @@ function fakeReGate(verdict: ReGateVerdict): ResolvedTreeReGate {
 }
 
 function noopReplan(): ReplanRouter {
-  return { routeBackToPlanner: async () => {} };
+  return {
+    routeBackToPlanner: async (input) => ({
+      kind: "owned",
+      receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running" } },
+    }),
+  };
 }
 
 function firstPassHook(differ: EntityDiffer, sides: ConflictSides): EntityMergeFirstPassHook {

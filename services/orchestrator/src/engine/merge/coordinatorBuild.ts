@@ -30,14 +30,11 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import { buildReGateCiForQueuedRun } from "./driveCi.js";
-import {
-  buildDriveConflictResolve,
-  type DriveConflictVerdict,
-  PercolationOwnsSpecError,
-} from "./driveConflictResolve.js";
+import { buildDriveConflictResolve, PercolationOwnsSpecError } from "./driveConflictResolve.js";
 import { mergeForRun } from "../workflow/reviewMerge/index.js";
 import type {
   MergeForRunInput,
+  MergeForRunResult,
   NativeQueueEnqueuer,
   NativeQueueOnClientEnqueuer,
 } from "../workflow/reviewMerge/index.js";
@@ -89,6 +86,22 @@ export interface BuildMergeCoordinatorDeps {
    * `behind` rebase surfaces a controlled outcome without allocating a runner.
    */
   baseShiftRebaseOverride?: MergeForRunInput["baseShiftRebase"];
+}
+
+/** A queue conflict may retire only when the merge stage returns a durable owner receipt. */
+export function mapConflictDriveOutcome(
+  merge: Pick<MergeForRunResult, "message" | "conflictRecovery">,
+): MergeDriveOutcome {
+  const recovery = merge.conflictRecovery;
+  if (recovery?.kind === "owned") {
+    return { kind: "conflict", message: merge.message ?? "merge conflict", recovery: recovery.receipt };
+  }
+  const detail = recovery?.message ?? "merge conflict returned without a durable recovery owner";
+  return {
+    kind: "needs_attention",
+    message: `${merge.message ?? "merge conflict"}; ${detail}`,
+    parking: recovery?.kind === "parked" ? "complete" : "required",
+  };
 }
 
 interface RunFacts {
@@ -203,12 +216,6 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
     // Audit finding D3/H3 sweep: the writer is REQUIRED and itself IS an
     // EventStore, so the merge stage's event surface is just the writer.
     const eventStore = deps.runStateWriter;
-    // The §2c classify-then-escalate capture cell: the merge dispatcher only sees the
-    // conflict hook's `{resolved:boolean}`, so the drive-path resolver records its
-    // autonomous disposition (resolved / bounded-replan / escalate / percolation-yield)
-    // HERE for the outcome map below. The conflict resolver provisions a fresh runner +
-    // workspace + runs the REAL intent-preserving resolver (the blind-re-exec stub is gone).
-    const verdict: DriveConflictVerdict = {};
     // §5 cutover: the gate + review verdicts are RE-READ FRESH at land time by the
     // bundle builder (`buildBundleForMergeStage` → `resolveLandTimeSignals`), AFTER any
     // drive-pass resolver re-gates — so the DRIVE pass authorizes against the LATEST
@@ -238,9 +245,8 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
           // on the drive pass: the REAL intent-preserving conflict resolver. It
           // provisions a short-lived runner (the original run's is gone), clones
           // head+base, runs the same resolver the in-loop direct_merge path runs, and
-          // classifies the outcome into `verdict` (resolved → retry+land; bounded
-          // re-plan → recoverable conflict; genuine clash / budget exhausted →
-          // needs_attention; percolation owns it → a yield throw). LOUD if deps missing.
+          // returns a durable recovery receipt for any unresolved conflict. An ownerless
+          // result fails closed instead of relying on a comment-level replan assumption.
           resolveConflict: buildDriveConflictResolve({
             pool: deps.pool,
             scopedPool,
@@ -253,7 +259,6 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             runStateWriter: deps.runStateWriter,
             eventStore,
             identitySecretRef: deps.identitySecretRef,
-            verdict,
           }),
           // NATIVE re-gate (no-Actions): after an auto-rebase the prior verdict is
           // stale, so provision a FRESH runner, clone the PR head, install deps, and
@@ -315,19 +320,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
-        // CLASSIFY-THEN-ESCALATE: the merge stage emitted a recoverable `conflict`
-        // (the resolver returned `{resolved:false}`). The drive-path resolver's
-        // disposition decides what the queue does with it:
-        //   - `escalate` — the two intents are GENUINELY incompatible (the bounded
-        //     re-plan budget is exhausted): park the spec at `needs_attention` (PR1's
-        //     escalator), NEVER re-queued. A product decision, not an error.
-        //   - `replanned` (default) — a bounded autonomous re-plan is in flight (the
-        //     resolver routed a spec back to the planner WITH the other change): a
-        //     recoverable `conflict` — the re-planned spec re-runs + re-enters the queue.
-        if (verdict.disposition === "escalate") {
-          return { kind: "needs_attention", message: verdict.message ?? merge.message ?? "specs' intents conflict" };
-        }
-        return { kind: "conflict", message: merge.message ?? "merge conflict" };
+        return mapConflictDriveOutcome(merge);
       case "blocked":
         // §3.2: a TRANSIENT authority refusal / benign CAS hold the merge stage surfaced
         // as recoverable `blocked`. Map to the coordinator's recoverable `blocked` — a
@@ -345,7 +338,11 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // changes_requested at land time). PARK the spec via the escalator (frees its
         // slot) — NOT a recoverable hold (no re-drive resolves a human decision) and NOT a
         // terminal conflict dequeue.
-        return { kind: "needs_attention", message: merge.message ?? "merge needs human attention" };
+        return {
+          kind: "needs_attention",
+          message: merge.message ?? "merge needs human attention",
+          parking: merge.conflictRecovery?.kind === "parked" ? "complete" : "required",
+        };
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }

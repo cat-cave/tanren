@@ -16,8 +16,8 @@
 //      the merge through the up-to-date path. An unverified resolution NEVER merges.
 //   5. On `irreconcilable` (or a FAILED re-gate): route ONE spec back to the
 //      planner with the other's change as new context (intent stays ALIVE),
-//      abort the in-progress merge, and return `{ resolved: false }` so the
-//      dispatcher emits the recoverable merge.conflict outcome — NOT a merge.
+//      abort the in-progress merge, and return its durable ownership/parking
+//      receipt with `{ resolved: false }` — NOT a merge.
 //
 // Every step emits an inspectable event (merge.conflict.resolving / .resolved /
 // .irreconcilable) and the resolution diff is the set of rewritten files. The
@@ -28,6 +28,7 @@
 import type { EventStore } from "../../../eventStore.js";
 import {
   ConflictAnswerInvalidError,
+  type ConflictRecoveryDisposition,
   decideConflictResolution,
   isProductVisionEmpty,
   type ConflictAnswererInvoker,
@@ -41,7 +42,7 @@ import {
   type SpecIntent,
   type WorkspaceConflictApplier,
 } from "../../../contracts/conflictResolution.js";
-import type { ConflictContext, ConflictResolverHook } from "../mergeDispatchTypes.js";
+import type { ConflictContext, ConflictResolverHook, ConflictResolverResult } from "../mergeDispatchTypes.js";
 import { createLogger } from "../../../observability/logger.js";
 import type { EntityMergeOutcome } from "./entityMergeFirstPass.js";
 
@@ -98,9 +99,8 @@ export interface IntentPreservingResolverDeps {
    * failed (lint/test/build) on a cleanly-rebased-or-resolved tree — NOT because the
    * intents are irreconcilable. A clean rebase + a failed gate is the WRITER's to fix on
    * the new base; it must NOT be conflated with `merge.conflict.irreconcilable` / escalate.
-   * OPTIONAL: when absent (a degenerate / legacy wiring) a GATE-tier re-gate failure falls
-   * back to the existing replan/irreconcilable path (the pre-fix behavior, never a silent
-   * merge). Production always wires it. A checker/auditor re-gate rejection (a genuine
+   * OPTIONAL: when absent, a GATE-tier failure uses the planner path rather than claiming
+   * writer ownership. Production always wires it. A checker/auditor re-gate rejection (a genuine
    * resolved-tree-doesn't-fit verdict) stays on the replan path regardless.
    */
   gateRework?: GateReworkRouter;
@@ -118,34 +118,27 @@ export interface IntentPreservingResolverDeps {
  * hook is what the merge dispatcher's `resolveConflict` slot receives in place of
  * `noopConflictResolver`. It returns `{ resolved: true }` ONLY after a clean
  * re-gate of an applied resolution; every other path (no resolution, failed
- * re-gate, irreconcilable) returns `{ resolved: false }` and keeps the merging
- * spec's intent alive (the dispatcher then emits the recoverable conflict).
+ * re-gate, irreconcilable) returns `{ resolved: false }` with an explicit durable
+ * recovery disposition; the dispatcher never infers ownership from a boolean.
  */
 export function buildIntentPreservingConflictResolver(deps: IntentPreservingResolverDeps): ConflictResolverHook {
-  return async (context: ConflictContext): Promise<{ resolved: boolean; routedToRework?: boolean }> => {
+  return async (context: ConflictContext): Promise<ConflictResolverResult> => {
     const gathered = await deps.applier.gather();
-    // Empty-gather short-circuit (apex pre-run §7.2): a CLEAN rebase records no
-    // conflicted files — there is genuinely nothing to resolve. Don't invoke the
-    // model or the decide core (an empty `resolve` would fail the cross-field
-    // invariant); the merge dispatcher retries through the now-clean up-to-date path.
-    if (gathered.files.length === 0) {
-      return { resolved: false };
-    }
-    const conflictedPaths = gathered.files.map((f) => f.path);
-
     // §4 empty-gather short-circuit: the applier surfaced NO conflicted files. There
     // is nothing for the model to resolve, so invoking the conflict Answerer with an
     // empty `conflictedFiles` would burn a model call (and the bounded re-plan budget)
     // on a question with no right answer. Short-circuit BEFORE the model call: keep the
-    // merging spec's intent alive (`resolved:false` → the dispatcher emits the
-    // recoverable conflict + re-drives) and surface the empty gather loudly.
+    // merging spec's intent alive and surface the missing owner loudly.
     if (gathered.files.length === 0) {
-      log.error(
-        "gather() surfaced NO conflicted files; short-circuiting before the model call (no files to resolve), returning a recoverable conflict",
-        { specId: deps.mergingSpecIntent.specId },
-      );
-      return { resolved: false };
+      log.error("gather() surfaced NO conflicted files; refusing an ownerless recoverable-conflict dequeue", {
+        specId: deps.mergingSpecIntent.specId,
+      });
+      return {
+        resolved: false,
+        recovery: { kind: "unowned", message: "conflict resolver gathered no files and established no recovery owner" },
+      };
     }
+    const conflictedPaths = gathered.files.map((f) => f.path);
 
     // §3.2 DETERMINISTIC ENTITY-MERGE FIRST-PASS (before the agent + before provenance):
     // a `weave`-inspired library first-pass. If every conflicted file's two sides edit
@@ -315,8 +308,8 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
  * does-not-fit verdict. A GATE-tier failure with a rework router wired routes to WRITER REWORK
  * carrying the gate error (the SAME never-discard re-author the batch path uses), NEVER
  * `merge.conflict.irreconcilable` / escalate (the convergence detector owns escalation, no count),
- * and returns `routedToRework` so a caller with its own replan path (the base-shift coordinator)
- * does not double-route. Everything else (a checker/auditor rejection, or a degenerate wiring with
+ * and returns the router's durable ownership receipt so a caller with its own replan path does
+ * not double-route. Everything else (a checker/auditor rejection, or a degenerate wiring with
  * no rework router) stays on the replan / irreconcilable path — never merge an unverified tree.
  */
 async function handleFailedReGate(
@@ -324,12 +317,15 @@ async function handleFailedReGate(
   context: ConflictContext,
   provenance: ConflictProvenance,
   verdict: ReGateVerdict,
-): Promise<{ resolved: false; routedToRework?: boolean }> {
+): Promise<Extract<ConflictResolverResult, { resolved: false }>> {
   const reason = `re-gate failed (${verdict.failedStage ?? "unknown"}): ${verdict.reason}`;
   if (verdict.failedStage === "gate" && deps.gateRework !== undefined) {
     await deps.applier.abort();
-    await deps.gateRework.routeGateFailToRework({ specId: deps.mergingSpecIntent.specId, gateError: reason });
-    return { resolved: false, routedToRework: true };
+    const recovery = await deps.gateRework.routeGateFailToRework({
+      specId: deps.mergingSpecIntent.specId,
+      gateError: reason,
+    });
+    return { resolved: false, recovery };
   }
   const replan = {
     which: "merging" as const,
@@ -343,7 +339,7 @@ async function handleFailedReGate(
 /**
  * The irreconcilable / failed-re-gate tail: route the chosen spec back to the
  * planner (intent stays alive), abort the in-progress merge, emit the inspectable
- * event, and signal the dispatcher to emit the recoverable conflict (NOT a merge).
+ * event, and return the router's durable recovery disposition (NOT a merge).
  * `fromFailedReGate` distinguishes the Answerer's diagnosis from a re-gate failure.
  */
 async function routeIrreconcilable(
@@ -353,9 +349,12 @@ async function routeIrreconcilable(
   reason: string,
   replan: { which: "merging" | "base"; specId: string; newContext: string; otherSpecId?: string } | undefined,
   fromFailedReGate: boolean,
-): Promise<{ resolved: false }> {
-  if (replan !== undefined) {
-    await deps.replan.routeBackToPlanner({
+): Promise<Extract<ConflictResolverResult, { resolved: false }>> {
+  let recovery: ConflictRecoveryDisposition;
+  if (replan === undefined) {
+    recovery = { kind: "unowned", message: `resolver returned no replan target: ${reason}` };
+  } else {
+    recovery = await deps.replan.routeBackToPlanner({
       specId: replan.specId,
       newContext: replan.newContext,
       ...(replan.otherSpecId !== undefined && { otherSpecId: replan.otherSpecId }),
@@ -380,7 +379,7 @@ async function routeIrreconcilable(
       fromFailedReGate,
     },
   });
-  return { resolved: false };
+  return { resolved: false, recovery };
 }
 
 /** Build the new planning context for a spec routed back after a conflict. */

@@ -29,7 +29,10 @@ import {
   buildJjConflictApplier,
   type JjConflictApplierFacts,
 } from "../workflow/reviewMerge/conflictResolver/jjWorkspaceApplier.js";
-import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
+import {
+  buildDefaultConflictResolver,
+  type ConflictResolverResult,
+} from "../workflow/reviewMerge/conflictResolver/index.js";
 import { buildSemEntityMergeFirstPass } from "../workflow/reviewMerge/conflictResolver/semEntityMerge.js";
 import { buildLiveJjWorkspace, type LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
@@ -88,22 +91,14 @@ export async function resolveBaseShiftConflict(input: {
       throw error;
     });
     if (!resolved.resolved) {
-      // The resolver did not produce a merged head. Two distinct cases (NEVER conflated):
-      //   • routedToRework — the resolver's re-gate failed a GATE TIER on the cleanly-resolved
-      //     tree and it ALREADY routed the spec to WRITER REWORK (re-opened + a re-author run
-      //     enqueued, carrying the gate error). The coordinator MUST NOT also replan — the
-      //     spec is being re-driven. Propagate the flag.
-      //   • otherwise — the Answerer judged the intents irreconcilable, or a checker/auditor
-      //     re-gate rejected the resolved tree: the old work no longer fits. The coordinator
-      //     replans (kept ALIVE), never discards.
-      if (resolved.routedToRework === true) {
-        return {
-          resolved: false,
-          routedToRework: true,
-          reason: "the base-shift re-gate failed a gate tier — routed to writer rework",
-        };
-      }
-      return { resolved: false, reason: "the base-shift conflict could not be reconciled in place" };
+      return {
+        resolved: false,
+        recovery: resolved.recovery,
+        reason:
+          resolved.recovery.kind === "owned"
+            ? "the base-shift conflict recovery already has a durable owner"
+            : resolved.recovery.message,
+      };
     }
     // The resolver force-pushed the resolved head onto the dependent's branch — read it
     // back as the new head sha. A missing head is fail-closed (treated as irreconcilable
@@ -216,7 +211,7 @@ async function runResolverOverWorkspace(input: {
   reGateBaseSha: string;
   /** Present on the jj-local path: the already-assembled workspace the applier gathers over (no re-clone). */
   preOpenedWorkspace?: WorkspaceHandle;
-}): Promise<{ resolved: boolean; routedToRework?: boolean }> {
+}): Promise<ConflictResolverResult> {
   const { deps, ctx, live, applierFacts, reGateBaseSha } = input;
   const applier = buildJjConflictApplier({
     live,
@@ -283,7 +278,7 @@ async function runResolverOverWorkspace(input: {
     baseBranch: applierFacts.baseBranch,
     message: "base-shift rebase conflict",
   });
-  return { resolved: result.resolved, ...(result.routedToRework === true && { routedToRework: true }) };
+  return result;
 }
 
 /**

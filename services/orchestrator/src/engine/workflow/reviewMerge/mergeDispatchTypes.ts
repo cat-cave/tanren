@@ -20,7 +20,7 @@ import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
 import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
-import type { GateReworkRouter } from "../../contracts/conflictResolution.js";
+import type { ConflictRecoveryDisposition, GateReworkRouter } from "../../contracts/conflictResolution.js";
 
 /** The integration modes the merge stage actually dispatches to. */
 export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
@@ -107,6 +107,8 @@ export interface MergeForRunResult {
   prNumber: number;
   mergeSha?: string;
   message?: string;
+  /** Proof of the owner (or loud park) behind an unresolved conflict outcome. */
+  conflictRecovery?: ConflictRecoveryDisposition;
 }
 
 export interface MergeForRunInput {
@@ -160,8 +162,8 @@ export interface MergeForRunInput {
    * green is stale). Production wires this to `pollCiForRun` over the SAME
    * GitHub HTTP client; tests inject a scripted re-gate. Post-rebase re-gating is
    * REQUIRED: when the branch was actually rebased and this hook is omitted, the
-   * stage HARD-HOLDS (emits `merge.rebased` with `reGatedCi: false`, then the
-   * recoverable `merge.conflict` outcome) rather than merging on unverified CI —
+   * stage HARD-HOLDS (emits `merge.rebased` with `reGatedCi: false`, then a
+   * blocked outcome) rather than merging on unverified CI —
    * a missing required re-gate is a hold, never "merge anyway".
    */
   reGateCi?: ReGateCiHook;
@@ -173,8 +175,8 @@ export interface MergeForRunInput {
    * carrying the gate error as steering (the SAME never-discard re-author #594 wired into the
    * resolver / base-shift coordinator), then leave the entry RECOVERABLE so the reworked spec
    * re-enters the queue — NEVER a terminal `merge.failed`. Absent (an out-of-band caller / a
-   * test that does not exercise the failed re-gate) ⇒ the dispatcher falls back to the
-   * recoverable-conflict hold rather than a terminal failure (never a silent merge). Escalation
+   * test that does not exercise the failed re-gate) ⇒ the dispatcher returns
+   * needs_attention rather than inventing writer ownership. Escalation
    * on a genuine dead-end is owned by the convergence detector inside the router (no count).
    */
   reGateGateRework?: GateReworkRouter;
@@ -360,15 +362,7 @@ export interface ConflictContext {
   message: string;
 }
 
-export type ConflictResolverHook = (context: ConflictContext) => Promise<{
-  resolved: boolean;
-  /**
-   * Set when `resolved: false` because the re-gate failed a deterministic GATE TIER on a
-   * cleanly-rebased-or-resolved tree and the resolver ALREADY routed the spec to WRITER
-   * REWORK (re-opened + enqueued a re-author run, carrying the gate error as steering). A
-   * caller that also has a replan/recovery path (the base-shift coordinator) MUST NOT then
-   * replan — the spec is already being re-driven. Absent ⇒ a genuine unresolved conflict
-   * (the caller routes to replan / emits the recoverable conflict as before).
-   */
-  routedToRework?: boolean;
-}>;
+export type ConflictResolverResult = { resolved: true } | { resolved: false; recovery: ConflictRecoveryDisposition };
+
+/** A resolver may return unresolved only with an explicit owner/park/no-owner disposition. */
+export type ConflictResolverHook = (context: ConflictContext) => Promise<ConflictResolverResult>;

@@ -49,7 +49,7 @@ import { buildDefaultConflictResolver } from "./reviewMerge/conflictResolver/ind
 import { buildJjConflictApplier } from "./reviewMerge/conflictResolver/jjWorkspaceApplier.js";
 import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
-import type { ConflictResolverHook } from "./reviewMerge/index.js";
+import type { ConflictResolverHook, ConflictResolverResult } from "./reviewMerge/index.js";
 import { type EntityMapProduction, produceEntityChangeMap } from "../oracle/index.js";
 
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
@@ -262,7 +262,7 @@ async function resolveOverLiveJj(
   deps: ConflictResolverDeps,
   upstreamChange: { ancestorSpecId: string; changeSummary: string } | undefined,
   conflictContext: Parameters<ConflictResolverHook>[0],
-): Promise<{ resolved: boolean }> {
+): Promise<ConflictResolverResult> {
   const context = input.context;
   const live = await buildLiveJjWorkspace({
     facts: {

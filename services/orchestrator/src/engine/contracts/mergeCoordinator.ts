@@ -21,6 +21,7 @@
 // `engine/merge/coordinator.ts` + `engine/merge/coordinatorPg.ts`.
 
 import { priorityRank, type SpecPriority } from "../state/spec.js";
+import type { ConflictRecoveryReceipt } from "./conflictResolution.js";
 
 /**
  * The minimal query surface a caller-supplied, already-scoped transaction client must
@@ -35,10 +36,9 @@ export type SettleQueryClient = { query(sql: string, params?: ReadonlyArray<unkn
 export type MergeDriveOutcome =
   // The merge landed on `default_branch` (terminal-success for the entry).
   | { kind: "merged"; mergeSha?: string }
-  // A real conflict usually means the resolver already routed an autonomous
-  // re-plan, so the old candidate leaves the queue. A blocked posture/speculative
-  // state is recoverable and re-driven with bounded backoff.
-  | { kind: "conflict"; message: string }
+  // A conflict may retire the old candidate only with the resolver's durable
+  // planner/writer run receipt. A blocked state stays queued and re-drives.
+  | { kind: "conflict"; message: string; recovery: ConflictRecoveryReceipt }
   | { kind: "blocked"; message: string }
   // The post-auto-rebase NATIVE RE-GATE did not reach a TERMINAL verdict within its budget
   // (the gate is STILL RUNNING / an infra blip) — "not done yet", NOT non-convergence and
@@ -50,21 +50,19 @@ export type MergeDriveOutcome =
   // ambiguous/credential infra halt, or a terminal `failed`/`needs_attention` verdict), not a
   // count on this recoverable hold.
   | { kind: "re_gate_pending"; message: string }
-  // The merge failed terminally. Ordinary merge settlement removes the entry; a conflict
-  // re-drive must first assign writer-rework or needs_attention ownership.
+  // Fresh validation failed. Settlement must assign writer-rework or
+  // needs_attention ownership before retiring the stale candidate.
   | { kind: "failed"; message: string }
   // The LOUD TERMINAL ESCALATION (autonomy-engine.md §2c — the non-bricking conflict
-  // escalation). The intent-preserving conflict resolver (wired in a later PR) judged
-  // this spec GENUINELY irreconcilable against another in-flight spec: re-executing it
-  // blindly would just re-conflict forever. Instead the spec PARKS at the terminal
+  // escalation). Recovery could not establish a live planner/writer owner, or the
+  // resolver reached a genuine fixed point where re-executing the spec would just
+  // re-conflict forever. Instead the spec PARKS at the terminal
   // `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
   // moving (it blocks ONLY its dependents, never the whole graph), is dequeued with
   // reason `needs_attention`, and is NEVER re-queued. Distinct from the RECOVERABLE
-  // `conflict` (which routes back through the re-execution path) and the infra
-  // `failed` (a merge-stage failure that the conflict re-drive may route to rework). There is
-  // NO producer of this outcome yet — the drive resolver still returns the recoverable
-  // `conflict`; this vocabulary lets the later resolver simply RETURN this kind.
-  | { kind: "needs_attention"; message: string };
+  // `conflict` (which carries proof that re-execution owns the work) and `failed`
+  // (which settlement must first hand to writer rework or park loudly).
+  | { kind: "needs_attention"; message: string; parking: "required" | "complete" };
 
 /**
  * One ready-to-merge run in the native queue, as the coordinator orders it. DAG
@@ -75,8 +73,8 @@ export type MergeDriveOutcome =
  * any ancestor is unmerged, so a dependent never merges before its ancestors).
  */
 /**
- * Why a queue entry left the queue without merging. `conflict`/`blocked` are
- * recoverable (a re-ready run re-enqueues a fresh entry); `failed` is terminal;
+ * Why a queue entry left the queue without merging. `conflict` proves a recovery
+ * run owns the work; `blocked` exists for legacy/ceiling rows; `failed` is terminal;
  * `superseded` retires the entry of a run a fresh percolation re-execution replaced
  * (the prior run is no longer a live candidate — NOT a real conflict, so it is not
  * routed back through the re-execution path); `needs_attention` is the LOUD
@@ -171,8 +169,8 @@ export interface MergeSelection {
  *
  * LIVENESS: a non-eligible head (ancestor still queued) does NOT block eligible
  * later entries — we scan ALL eligible entries and pick the best, so an independent
- * item merges even when some chain is mid-flight. A failed/blocked merge dequeues
- * the entry (it leaves the queue), so it never deadlocks the head.
+ * item merges even when some chain is mid-flight. A blocked merge releases its
+ * claim; failures retire only after writer-rework or needs_attention owns the work.
  */
 export function selectNextMerge(snapshot: MergeQueueSnapshot): MergeSelection {
   if (snapshot.mergingInFlight) {
@@ -277,14 +275,14 @@ export interface MergeQueueModel {
 
   /**
    * Mark an entry as DEQUEUED (left the queue without merging) with the reason.
-   * `failed` is terminal; `superseded` retires the entry of a run replaced by a
+   * `failed` is retained for legacy terminal rows; `superseded` retires a run replaced by a
    * fresh percolation re-execution (the prior run + its PR are no longer a live
    * merge candidate — NOT a real conflict); `needs_attention` is the LOUD
    * TERMINAL escalation of a GENUINELY irreconcilable spec (parked at
    * `needs_attention`, never re-queued). `blocked` is used for legacy recovery rows
    * and explicit terminal ceilings; normal recoverable blocked drive outcomes use
-   * `releaseClaim` so the candidate stays active. `conflict` still dequeues because
-   * it usually hands off to autonomous re-plan/re-execution.
+   * `releaseClaim` so the candidate stays active. `conflict` dequeues only after
+   * a typed receipt proves autonomous re-plan/re-execution owns the work.
    */
   markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
 
@@ -360,7 +358,7 @@ export interface CoordinateResult {
   projectId: string;
   /** The entry merged this pass (its spec id), if any. */
   mergedSpecId?: string;
-  /** The entry dequeued this pass (failed/needs_attention/terminal ceiling), if any. */
+  /** The entry dequeued this pass after recovery handoff, parking, or a terminal ceiling. */
   dequeuedSpecId?: string;
   /**
    * Why the pass selected nothing, if it held:

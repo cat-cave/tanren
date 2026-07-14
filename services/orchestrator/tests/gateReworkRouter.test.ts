@@ -85,7 +85,16 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     const router = makeRouter({ enqueuer, priorReworks: [], events, statusWrites });
 
     const gateError = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
-    await router.routeGateFailToRework({ specId: SPEC, gateError });
+    const recovery = await router.routeGateFailToRework({ specId: SPEC, gateError });
+
+    expect(recovery).toEqual({
+      kind: "owned",
+      receipt: {
+        kind: "writer_rework",
+        specId: SPEC,
+        run: { kind: "enqueued", replanRunId: "run_rework_1", plannerTaskId: "task_1" },
+      },
+    });
 
     // A fresh rework run was enqueued, re-opening the spec to `open` and carrying the ACTUAL
     // gate error in the steering (no_silent_fallback — never rework blind).
@@ -146,7 +155,12 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
       statusWrites,
     });
 
-    await router.routeGateFailToRework({ specId: SPEC, gateError: recurring });
+    const recovery = await router.routeGateFailToRework({ specId: SPEC, gateError: recurring });
+
+    expect(recovery).toMatchObject({
+      kind: "parked",
+      receipt: { kind: "needs_attention", specId: SPEC, source: "writer_rework" },
+    });
 
     // No new rework run — escalated instead (the detector proved a dead-end fixed point).
     expect(enqueueCalls).toBe(0);
