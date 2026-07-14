@@ -28,6 +28,11 @@ const roadmapDocs = [
   "docs/architecture/autonomy-engine.md",
   "docs/operator-guide/apex-run-playbook.md",
   "docs/roadmap/timeout-eradication.md",
+  "docs/roadmap/mission-complete/nodes/backhalf.md",
+  "docs/roadmap/mission-complete/nodes/design.md",
+  "docs/roadmap/mission-complete/nodes/governance.md",
+  "docs/roadmap/mission-complete/nodes/integrations.md",
+  "docs/roadmap/mission-complete/nodes/runtime.md",
 ];
 // DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot + cspell.json word-list (both grow with the codebase).
 const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
