@@ -29,7 +29,7 @@ contributor) needs to drive the remaining work is here or linked from here.
 | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `README.md` (this)                                                      | The master handover: objective, DAG, principles, build flow                                                                                                                                                                                                                                                                                                                    |
 | `integrated-build-dag.html`                                             | The visual blueprint — spine + 142 nodes + seams + waves. Open in a browser                                                                                                                                                                                                                                                                                                    |
-| `build-workflow.mjs`                                                    | **The authoritative frozen spec + the build workflow-as-code.** Contains the `RECON`, `CLEAN`, `TYPES`, `PINS` consts (the reconciliation that makes the contracts compose — obey them exactly), the `SPINE`/`CONSUMER`/`MIG` node data, and the runnable Tanren `Workflow` (design → sol audit → build → PR). This is how the spine was built and how the consumers get built |
+| `build-workflow.mjs.txt`                                                | **The authoritative frozen spec + the build workflow-as-code.** Contains the `RECON`, `CLEAN`, `TYPES`, `PINS` consts (the reconciliation that makes the contracts compose — obey them exactly), the `SPINE`/`CONSUMER`/`MIG` node data, and the runnable Tanren `Workflow` (design → sol audit → build → PR). This is how the spine was built and how the consumers get built |
 | `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, apex-proof, deps, validation) from the six `sol` audits. The authoritative node detail                                                                                                                                                                                                                                          |
 
 ## 3. The spine (built) — 8 shared contracts
@@ -38,7 +38,7 @@ These are the load-bearing interfaces every consumer node builds against. Get th
 right and the 142 nodes fan out in parallel; the reason we froze them first is that
 six independently-brilliant pitches did **not** compose (two merge authorities,
 colliding migrations, duplicate proof stores) — the `sol` integration audit caught it
-and produced the reconciliation now frozen in `build-workflow.mjs`.
+and produced the reconciliation now frozen in `build-workflow.mjs.txt`.
 
 | #    | Contract                                                                    | Lives at                                                                     | Migration |
 | ---- | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------- |
@@ -159,7 +159,7 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
 - **Adversarial cross-model verify per node.** A second agent (different model)
   verifies each built node against its `nodes/*.md` validation column + a negative
   control before it counts as done.
-- **The runnable mechanism** is `build-workflow.mjs`: default phase freezes+builds the
+- **The runnable mechanism** is `build-workflow.mjs.txt`: default phase freezes+builds the
   spine (already done); relaunch it with `args: {phase: "consumers"}` to fan out the
   76 MVP consumer nodes off the now-merged spine (build → push PR → verify, sequential
   where shared-branch, gated). Waves: `0` spine (done) → `1` spine impl (done) → `2`
