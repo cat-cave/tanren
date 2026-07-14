@@ -35,12 +35,14 @@
 // name, sha=the merged commit), so Vercel pulls the merged commit and builds + releases
 // it. It returns the live deployment id + the resolved deployment URL.
 
+import { createHash } from "node:crypto";
 import type { OrgGrant, ProjectContext } from "../contracts/integrationProvisioner.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { retryUntilConverged, type AttemptSignature } from "../workflow/retryUntilConverged.js";
 import {
   DeployProvisioner,
   type DeployApp,
+  type DeployArtifactIdentity,
   type DeployEnvVar,
   type DeploymentStatus,
   type DeployProviderApi,
@@ -66,6 +68,20 @@ interface VercelProjectsListResponse {
    * target app behind the page boundary → a spurious "unknown app" deploy failure.
    */
   pagination?: { next?: number | string | null };
+}
+
+type JsonRecord = Record<string, unknown>;
+
+function jsonRecord(value: unknown): JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as JsonRecord) : {};
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && value !== "");
+}
+
+function deploymentUrl(raw: string | undefined): string {
+  return raw === undefined ? "" : raw.startsWith("http") ? raw : `https://${raw}`;
 }
 
 /** Read the Vercel team id (if any) from the org grant metadata. */
@@ -295,7 +311,7 @@ class VercelDeployApi implements DeployProviderApi {
     }
     // Vercel's `url` is the bare host (no scheme); normalize to an https origin so
     // the resolved URL is directly renderable.
-    const url = body.url.startsWith("http") ? body.url : `https://${body.url}`;
+    const url = deploymentUrl(body.url);
     return { deploymentId: body.id, url, state: body.readyState ?? body.status ?? "QUEUED" };
   }
 
@@ -314,6 +330,106 @@ class VercelDeployApi implements DeployProviderApi {
       return;
     }
     throw new Error(`vercel destroy project '${app.appId}' failed: ${response.status} ${response.text}`);
+  }
+
+  async resolveArtifactIdentity(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployArtifactIdentity> {
+    const response = await this.transport.request({
+      method: "GET",
+      url: scoped(grant, `/v13/deployments/${encodeURIComponent(deploymentId)}`),
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      throw new Error(`vercel resolve artifact for '${deploymentId}' failed: ${response.status} ${response.text}`);
+    }
+
+    const body = jsonRecord(response.json);
+    const meta = jsonRecord(body["meta"]);
+    const build = jsonRecord(body["build"]);
+    const buildMeta = jsonRecord(build["meta"]);
+    const gitSource = jsonRecord(body["gitSource"]);
+    const explicitDigest = firstString(
+      body["artifactDigest"],
+      meta["artifactDigest"],
+      build["artifactDigest"],
+      buildMeta["artifactDigest"],
+    );
+    const genericDigest = firstString(body["digest"], meta["digest"], build["digest"], buildMeta["digest"]);
+    const checksum = firstString(body["checksum"], meta["checksum"], build["checksum"], buildMeta["checksum"]);
+    let artifactDigest =
+      explicitDigest ??
+      (genericDigest?.startsWith("sha512:") === true ? undefined : genericDigest) ??
+      (checksum?.startsWith("sha256:") === true ? checksum : undefined);
+
+    if (artifactDigest === undefined) {
+      const sourceSha = firstString(
+        meta["githubCommitSha"],
+        meta["gitlabCommitSha"],
+        meta["bitbucketCommitSha"],
+        meta["gitCommitSha"],
+        buildMeta["githubCommitSha"],
+        buildMeta["gitCommitSha"],
+        gitSource["sha"],
+      );
+      if (sourceSha === undefined) {
+        throw new Error(
+          `vercel resolve artifact for '${deploymentId}' on '${app.appId}' returned neither a sha256 digest nor a source sha`,
+        );
+      }
+      const hex = createHash("sha256").update(`${deploymentId}:${sourceSha}`).digest("hex");
+      artifactDigest = `sha256:${hex}`;
+    }
+
+    const explicitProviderChecksum = firstString(
+      body["providerChecksum"],
+      meta["providerChecksum"],
+      build["providerChecksum"],
+      buildMeta["providerChecksum"],
+      body["sha512"],
+      meta["sha512"],
+      build["sha512"],
+      buildMeta["sha512"],
+    );
+    const providerChecksum =
+      explicitProviderChecksum ??
+      (genericDigest?.startsWith("sha512:") === true ? genericDigest : undefined) ??
+      (checksum?.startsWith("sha256:") === true ? undefined : checksum) ??
+      null;
+    return { artifactDigest, providerChecksum };
+  }
+
+  async promoteToProduction(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployResult> {
+    return this.transitionProduction(grant, token, app, deploymentId, "promote");
+  }
+
+  async rollbackToDeployment(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    targetDeploymentId: string,
+  ): Promise<DeployResult> {
+    return this.transitionProduction(grant, token, app, targetDeploymentId, "rollback");
+  }
+
+  async teardownDeployment(grant: OrgGrant, token: string, _app: DeployApp, deploymentId: string): Promise<void> {
+    const response = await this.transport.request({
+      method: "DELETE",
+      url: scoped(grant, `/v13/deployments/${encodeURIComponent(deploymentId)}`),
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.ok || response.status === 404) {
+      return;
+    }
+    throw new Error(`vercel teardown deployment '${deploymentId}' failed: ${response.status} ${response.text}`);
   }
 
   async getDeployment(
@@ -335,14 +451,40 @@ class VercelDeployApi implements DeployProviderApi {
     }
     const body = (response.json ?? {}) as { url?: string; readyState?: string; status?: string };
     const state = body.readyState ?? body.status ?? "QUEUED";
-    const host = body.url ?? "";
-    const url = host === "" ? "" : host.startsWith("http") ? host : `https://${host}`;
+    const url = deploymentUrl(body.url);
     return {
       state,
       terminalReady: state === "READY",
       terminalFailed: state === "ERROR" || state === "CANCELED",
       url,
     };
+  }
+
+  private async transitionProduction(
+    grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+    operation: "promote" | "rollback",
+  ): Promise<DeployResult> {
+    const response = await this.transport.request({
+      method: "POST",
+      url: scoped(
+        grant,
+        `/v10/projects/${encodeURIComponent(app.appId)}/${operation}/${encodeURIComponent(deploymentId)}`,
+      ),
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `vercel ${operation} deployment '${deploymentId}' on '${app.appId}' failed: ${response.status} ${response.text}`,
+      );
+    }
+    const status = await this.getDeployment(grant, token, app, deploymentId);
+    if (status.url === "") {
+      throw new Error(`vercel ${operation} deployment '${deploymentId}' returned no production URL`);
+    }
+    return { deploymentId, url: status.url, state: status.state };
   }
 }
 

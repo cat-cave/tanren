@@ -21,14 +21,22 @@
 // the operator declares it. This is the correct unconfigured behavior, NOT a stub.
 
 import type {
+  ApplyPreviewInput,
+  ArtifactIdentity,
+  BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  PreviewRelease,
+  PromoteInput,
   ProvisionOrBindInput,
+  ReleaseTransition,
+  RollbackInput,
   VerifyPollPolicy,
 } from "../contracts/deployAdapter.js";
+import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -88,6 +96,14 @@ export interface MobileDistributionClient {
     token: string;
     buildRef: string;
   }): Promise<MobileSubmissionStatus>;
+  /** Read the distribution channel's canonical sha256 + optional native sha512 for a build. */
+  resolveArtifactIdentity(input: {
+    platform: string;
+    track: string;
+    bundleId: string;
+    token: string;
+    buildRef: string;
+  }): Promise<{ artifactDigest: string; providerChecksum: string | null }>;
 }
 
 /** Wiring the `mobile_release` adapter runs over: the distribution client + secrets + the poll. */
@@ -186,6 +202,61 @@ export class MobileReleaseDeployAdapter implements DeployAdapter {
     // The "url" of a mobile deploy is its channel-side build reference (the app_channel
     // surface's reach handle); the deploymentId is that same build ref (the verify key).
     return { deploymentId: result.buildRef, url: result.buildRef, state: "processing" };
+  }
+
+  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(grant, ref, source);
+    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+  }
+
+  async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
+    const platform = this.platform(grant);
+    const track = this.track(grant);
+    const token = await this.token(grant);
+    const identity = await this.deps.distribution.resolveArtifactIdentity({
+      platform,
+      track,
+      bundleId: ref.appId,
+      token,
+      buildRef: deploymentId,
+    });
+    return {
+      artifactDigest: parseDigest(identity.artifactDigest),
+      providerChecksum: identity.providerChecksum === null ? null : parseProviderChecksum(identity.providerChecksum),
+    };
+  }
+
+  async applyPreview(_grant: OrgGrant, _ref: DeployRef, _input: ApplyPreviewInput): Promise<PreviewRelease> {
+    // A mobile distribution channel has no environment or traffic surface to preview.
+    throw new DeployAdapterOperationError(
+      MOBILE_RELEASE_ADAPTER_KIND,
+      "applyPreview is not a capability of the mobile_release adapter class — a mobile release has no preview/promote/rollback/teardown surface",
+    );
+  }
+
+  async promote(_grant: OrgGrant, _ref: DeployRef, _input: PromoteInput): Promise<ReleaseTransition> {
+    // A mobile distribution channel has no environment or traffic surface to promote.
+    throw new DeployAdapterOperationError(
+      MOBILE_RELEASE_ADAPTER_KIND,
+      "promote is not a capability of the mobile_release adapter class — a mobile release has no preview/promote/rollback/teardown surface",
+    );
+  }
+
+  async rollback(_grant: OrgGrant, _ref: DeployRef, _input: RollbackInput): Promise<ReleaseTransition> {
+    // A mobile distribution channel has no environment or traffic surface to roll back.
+    throw new DeployAdapterOperationError(
+      MOBILE_RELEASE_ADAPTER_KIND,
+      "rollback is not a capability of the mobile_release adapter class — a mobile release has no preview/promote/rollback/teardown surface",
+    );
+  }
+
+  async teardownPreview(_grant: OrgGrant, _ref: DeployRef, _previewId: string): Promise<void> {
+    // A mobile distribution channel has no environment or traffic surface to tear down.
+    throw new DeployAdapterOperationError(
+      MOBILE_RELEASE_ADAPTER_KIND,
+      "teardownPreview is not a capability of the mobile_release adapter class — a mobile release has no preview/promote/rollback/teardown surface",
+    );
   }
 
   async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {

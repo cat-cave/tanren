@@ -15,6 +15,9 @@ import type {
 
 export type DeployFlavor = "vercel" | "fly";
 
+const SCRIPTED_ARTIFACT_DIGEST = `sha256:${"c".repeat(64)}`;
+const SCRIPTED_PROVIDER_CHECKSUM = `sha512:${"d".repeat(128)}`;
+
 interface StoredApp {
   id: string;
   name: string;
@@ -25,17 +28,9 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
   appNames(): string[];
   /** Every bearer token the transport observed (to assert it is never leaked). */
   bearersSeen: string[];
-  /**
-   * The env vars the emulated provider received via a set-env request, by appId →
-   * { KEY: value }. This is the ONLY place a test can observe the runtime VALUES —
-   * proving they reached the deploy transport and nowhere else.
-   */
+  /** Runtime env values received by the provider, grouped by app id. */
   envByApp(): Record<string, Record<string, string>>;
-  /**
-   * Every deploy TRIGGER the emulated provider received (the load-bearing "a deploy
-   * actually happened" signal): the target app id + the deploy request body, so a
-   * test can assert the deployment endpoint was hit + the merged git ref reached it.
-   */
+  /** Every deploy trigger received by the provider. */
   deploysTriggered(): { appId: string; body: Record<string, unknown> }[];
   /**
    * Script the status sequence the emulated provider reports for a deployment id on
@@ -46,18 +41,9 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
   scriptDeploymentStates(deploymentId: string, states: string[]): void;
   /** How many `getDeployment` status polls the transport served for a deployment id. */
   statusPolls(deploymentId: string): number;
-  /**
-   * The ORDERED kind of each mutating request the transport served (`set_env` |
-   * `deploy_trigger` | `create`), so a test can assert ORDERING — e.g. that the runtime
-   * env was attached (`set_env`) BEFORE the deploy was triggered (`deploy_trigger`).
-   */
+  /** Ordered mutating requests, used to assert env-before-deploy behavior. */
   requestLog(): Array<"set_env" | "deploy_trigger" | "create">;
-  /**
-   * Every Fly GraphQL allocate-IP request the transport served (the target URL + the
-   * request body), so a test can prove `createApp` allocated a shared IPv4 with the right
-   * `allocateIpAddress` mutation + `type: "shared_v4"` variables. Fly-only — the Vercel
-   * arm never hits the GraphQL endpoint.
-   */
+  /** Every Fly GraphQL allocate-IP request served by the transport. */
   allocateIpRequests(): { url: string; body: Record<string, unknown> }[];
   /**
    * Script the response the emulated Fly GraphQL endpoint returns for an allocate-IP
@@ -67,20 +53,11 @@ export interface ScriptedDeployTransport extends DeployHttpTransport {
    * failure. Applies to ALL subsequent allocate calls on this transport.
    */
   scriptAllocateIpResponse(resp: { status: number; json: unknown; text?: string }): void;
-  /**
-   * Pre-populate the machines the emulated provider reports for an app (the "prior
-   * releases" a single-instance app accumulates via `POST /machines`). A subsequent
-   * successful `triggerDeploy` appends its newly-created machine, then reaps every other
-   * one — so a test can assert the reap DELETEs the priors and keeps the new machine.
-   */
+  /** Pre-populate prior Machines for an app. */
   seedMachines(appName: string, ids: string[]): void;
   /** The machine ids the emulated provider currently reports for an app. */
   machineIdsFor(appName: string): string[];
-  /**
-   * Every machine DELETE the transport served (the reap): the target app + machine id +
-   * whether `?force=true` was sent, so a test can assert the reap deleted every prior
-   * machine (force) and NONE for the kept (newly-created) id.
-   */
+  /** Every Machine delete served by the transport. */
   machinesDeleted(): { appName: string; machineId: string; force: boolean }[];
   /**
    * Script the response the emulated `GET /v1/apps/{app}/machines` (machines LIST) call
@@ -127,6 +104,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
   // last entry repeats once exhausted). `pollsByDeployment` counts polls served.
   const stateScripts = new Map<string, string[]>();
   const pollsByDeployment = new Map<string, number>();
+  const deletedDeployments = new Set<string>();
   // Ordered kinds of the mutating requests served, so a test can assert env-before-trigger.
   const reqLog: Array<"set_env" | "deploy_trigger" | "create"> = [];
   // Fly GraphQL allocate-IP requests the transport served (url + body), so a test can
@@ -208,6 +186,15 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
         // app set, and return 204; an unknown id returns 404.
         const path = req.url.split("?")[0] ?? "";
         if (flavor === "vercel") {
+          const deploymentMatch = /\/v13\/deployments\/([^/]+)$/u.exec(path);
+          if (deploymentMatch !== null) {
+            const deploymentId = decodeURIComponent(deploymentMatch[1] ?? "");
+            if (deletedDeployments.has(deploymentId)) {
+              return { status: 404, ok: false, json: undefined, text: "not found" };
+            }
+            deletedDeployments.add(deploymentId);
+            return { status: 204, ok: true, json: undefined, text: "" };
+          }
           const match = /\/v9\/projects\/([^/]+)$/u.exec(path);
           if (match === null) {
             return { status: 405, ok: false, json: undefined, text: "method not allowed" };
@@ -263,8 +250,20 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
           const script = stateScripts.get(status.deploymentId) ?? [flavor === "vercel" ? "READY" : "started"];
           const state = script[Math.min(served, script.length - 1)] as string;
           return flavor === "vercel"
-            ? okResponse({ readyState: state, url: `${status.appOrDeploymentRef}.vercel.app` })
-            : okResponse({ state });
+            ? okResponse({
+                readyState: state,
+                url: `${status.appOrDeploymentRef}.vercel.app`,
+                meta: { gitCommitSha: "deadbeef" },
+                artifactDigest: SCRIPTED_ARTIFACT_DIGEST,
+                providerChecksum: SCRIPTED_PROVIDER_CHECKSUM,
+              })
+            : okResponse({
+                state,
+                config: {
+                  image: `registry.fly.io/${status.appOrDeploymentRef}:scripted@${SCRIPTED_ARTIFACT_DIGEST}`,
+                },
+                image_ref: { digest: SCRIPTED_ARTIFACT_DIGEST },
+              });
         }
         // Machines LIST (the reap's discover step): Fly `GET /v1/apps/{name}/machines` — no
         // trailing id, so `parseStatusRead` returned undefined. The live API returns a TOP-LEVEL
@@ -287,6 +286,12 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
           }
         }
         return okResponse(listBody());
+      }
+      if (flavor === "vercel" && req.method === "POST") {
+        const path = req.url.split("?")[0] ?? "";
+        if (/\/v10\/projects\/[^/]+\/(?:promote|rollback)\/[^/]+$/u.test(path)) {
+          return okResponse({ state: "READY" }, 202);
+        }
       }
       // Deploy TRIGGER requests: Vercel `/v13/deployments`, Fly
       // `/v1/apps/{name}/machines`. The provider builds + releases the merged ref;
@@ -395,12 +400,6 @@ function parseSetEnv(
   return { appId, vars };
 }
 
-/**
- * Recognize a deploy-TRIGGER request and extract the target appId + the request
- * body. Vercel POSTs `/v13/deployments` carrying `project` (the app id) + a
- * `gitSource`; Fly POSTs `/v1/apps/{name}/machines` (the app in the path). Returns
- * undefined for any other POST (so the create-app branch still runs).
- */
 /**
  * Recognize a deployment-STATUS read (the verify poll) and extract the deployment id
  * + an app-or-deployment ref used to shape the URL field. Vercel GETs

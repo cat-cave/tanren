@@ -16,7 +16,7 @@ import {
   mergeabilityFrom,
   reviewVerdictFrom,
 } from "../src/engine/merge/mergeAuthorityInputs.js";
-import type { LandFinalizer } from "../src/engine/merge/mergeAuthorityImpl.js";
+import type { AuthorityLandStore } from "../src/engine/merge/mergeAuthorityV2Impl.js";
 import type { GateOutcome } from "../src/engine/workflow/gate/index.js";
 import type { AuditPosture } from "../src/engine/contracts/auditPosture.js";
 
@@ -58,7 +58,10 @@ describe("mergeAuthorityInputs — every uncertain signal maps to its blocking e
   });
 });
 
-const FINALIZER: LandFinalizer = { finalizeLanded: async () => ({ auditId: "a1" }) };
+const STORE: AuthorityLandStore = {
+  persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+  recordLandReceipt: async () => ({ auditId: "a1" }),
+};
 
 function gateInput(host: InMemoryCodeHost) {
   return {
@@ -72,7 +75,7 @@ function gateInput(host: InMemoryCodeHost) {
     policyVersion: "pv",
     // The gate verdict was for the EXACT commit being landed (the `feat` head, sha-feat).
     gatedHeadSha: "sha-feat",
-    finalizer: FINALIZER,
+    store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
       findings: [],
@@ -105,7 +108,7 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     const racingHost = {
       ...new InMemoryCodeHost(),
       fetchRef: async (input: { remoteBranch: string }) => (input.remoteBranch === "main" ? "sha-main" : "sha-feat"),
-      landAuthorizedRef: async () => {
+      landAuthorizedIntegration: async () => {
         // The TYPED rejection the GitHub impl throws — the gate classifies it by
         // `instanceof LandCasRejectedError` (§3.2), not a brittle message regex.
         throw new LandCasRejectedError("main", "sha-main", "sha-main-moved");
@@ -122,7 +125,7 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     const failingHost = {
       ...new InMemoryCodeHost(),
       fetchRef: async (input: { remoteBranch: string }) => (input.remoteBranch === "main" ? "sha-main" : "sha-feat"),
-      landAuthorizedRef: async () => {
+      landAuthorizedIntegration: async () => {
         throw new Error("transient gateway failure in the deploy cascade (showcase env)");
       },
     } as unknown as InMemoryCodeHost;

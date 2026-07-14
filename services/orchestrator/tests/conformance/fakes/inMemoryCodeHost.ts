@@ -12,7 +12,7 @@ import type {
   CreateHostRepoInput,
   CreatedHostRepo,
   HostCommit,
-  LandAuthorizedRefInput,
+  LandAuthorizedIntegrationInput,
   LandResult,
   RefAncestry,
 } from "../../../src/engine/contracts/codeHost.js";
@@ -171,9 +171,14 @@ export class InMemoryCodeHost implements CodeHost {
     return `content of ${input.path} @ ${input.ref}`;
   }
 
-  async landAuthorizedRef(input: LandAuthorizedRefInput): Promise<LandResult> {
+  async landAuthorizedIntegration(input: LandAuthorizedIntegrationInput): Promise<LandResult> {
     const st = this.require(input.repo);
     const current = st.branches.get(input.intoMain);
+    // IDEMPOTENT (SP-4, step 2): main already at the authorized head ⇒ a prior attempt of
+    // this effect intent landed; a successful no-op, exercising the retryable step 2.
+    if (current === input.authorizedSha) {
+      return { mainSha: input.authorizedSha };
+    }
     // Compare-and-swap: REJECT if main moved underneath (never blind-overwrite). Throws
     // the SAME typed {@link LandCasRejectedError} the GitHub impl does, so the merge
     // authority's TYPED CAS classification (`instanceof`, §3.2) is exercised here too.

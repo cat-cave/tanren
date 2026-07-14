@@ -68,6 +68,7 @@ import type { OrgGrant, ProjectContext } from "../contracts/integrationProvision
 import {
   DeployProvisioner,
   type DeployApp,
+  type DeployArtifactIdentity,
   type DeployEnvVar,
   type DeploymentStatus,
   type DeployProviderApi,
@@ -76,8 +77,16 @@ import {
   type DeploySource,
 } from "./deployProvisioner.js";
 import type { FlyImageBuilder } from "./flyImageBuilder.js";
+import { flyMachineConfig } from "./flyMachineConfig.js";
+import {
+  FLY_API_BASE,
+  resolveFlyArtifactIdentity,
+  teardownFlyDeployment,
+  transitionFlyDeployment,
+} from "./flyReleaseLifecycle.js";
 
-const FLY_API_BASE = "https://api.machines.dev";
+export { flyMachineConfig } from "./flyMachineConfig.js";
+
 // The Fly GraphQL API — the ONLY surface that allocates app IP addresses (the Machines
 // REST API does not). Used right after app creation to give the app a shared IPv4 so
 // `https://<app>.fly.dev` routes.
@@ -91,43 +100,6 @@ interface FlyApp {
 
 interface FlyAppsListResponse {
   apps?: FlyApp[];
-}
-
-/**
- * The Fly Machines release config for a static-image deploy: the image, the shared
- * guest size, the TCP service that maps edge ports 80/443 → `internal_port` 3000
- * (matching `fly.toml`'s internal_port so `<app>.fly.dev` routes to the app), and an
- * HTTP health check on `/`. Extracted as a pure helper so the release body is assertable
- * directly in the test (and a later build-from-source PR can swap the image source without
- * touching the port mapping).
- */
-export function flyMachineConfig(image: string): Record<string, unknown> {
-  return {
-    image,
-    guest: { cpu_kind: "shared", cpus: 1, memory_mb: 256 },
-    services: [
-      {
-        protocol: "tcp",
-        internal_port: 3000,
-        ports: [
-          { port: 80, handlers: ["http"], force_https: true },
-          { port: 443, handlers: ["tls", "http"] },
-        ],
-      },
-    ],
-    checks: {
-      httpget: {
-        type: "http",
-        port: 3000,
-        method: "get",
-        path: "/",
-        interval: "15s",
-        // eslint-disable-next-line no-inline-comments — the inline arch-allow bless is required: the arch scanner's `timeout:` pattern is single-line (no multi-line lookahead), so the annotation must ride the same raw line.
-        timeout: "10s", // arch-allow: timeout-class — Fly Machines HTTP health-check per-probe bound (API config field sent to Fly, not a JS timer / wall-clock deadline on a running command)
-        grace_period: "10s",
-      },
-    },
-  };
 }
 
 /**
@@ -417,6 +389,49 @@ class FlyDeployApi implements DeployProviderApi {
     } catch {
       // Reap is best-effort: a listing/transport failure must not fail the deploy.
     }
+  }
+
+  async resolveArtifactIdentity(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployArtifactIdentity> {
+    return resolveFlyArtifactIdentity({ transport: this.transport, token, appName: app.name, deploymentId });
+  }
+
+  async promoteToProduction(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployResult> {
+    return transitionFlyDeployment({
+      transport: this.transport,
+      token,
+      appName: app.name,
+      deploymentId,
+      operation: "promote",
+    });
+  }
+
+  async rollbackToDeployment(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    targetDeploymentId: string,
+  ): Promise<DeployResult> {
+    return transitionFlyDeployment({
+      transport: this.transport,
+      token,
+      appName: app.name,
+      deploymentId: targetDeploymentId,
+      operation: "rollback",
+    });
+  }
+
+  async teardownDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void> {
+    await teardownFlyDeployment({ transport: this.transport, token, appName: app.name, deploymentId });
   }
 
   async destroyApp(_grant: OrgGrant, token: string, app: DeployApp): Promise<void> {

@@ -4,7 +4,7 @@
 // flow through the SAME `MergeDispatcher.directMerge`) hands off to the guaranteed
 // core: it builds the integration node from the run's PR, resolves the concrete
 // land target (PR head + current main) through the `CodeHost`, gathers the
-// fail-closed signals, and runs `prepareIntegration → authorizeLand → land`. ONE
+// fail-closed signals, builds the binding envelope, and runs `authorizeLand → land`. ONE
 // authority, never two gate authorities (§8 guardrail) — both modes route here.
 //
 // The OUTPUT is a typed disposition the dispatcher records with its existing event
@@ -13,17 +13,20 @@
 // landAuthorizedRef` (the ff-only CAS push of the authorized commit), NOT the host's
 // "merge PR" API: Tanren made the decision; the host lands what was authorized.
 
+import { createHash } from "node:crypto";
 import { memberKey as computeMemberKey } from "../contracts/integrationNodes.js";
-import { MergeAuthorityImpl, type LandFinalizer } from "./mergeAuthorityImpl.js";
+import { MergeAuthorityV2Impl, SubjectEqualityRevalidator, type AuthorityLandStore } from "./mergeAuthorityV2Impl.js";
 import { buildAuthorizeLandInput, type MergeAuthoritySignals } from "./mergeAuthorityInputs.js";
 import { LandCasRejectedError } from "../providers/githubCodeHost.js";
+import { parseDigest } from "../contracts/cas.js";
 import type { CodeHost, CodeHostRepoRef } from "../contracts/codeHost.js";
 import type { Finding } from "../contracts/findings.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
 import type { GateOutcome } from "../workflow/gate/index.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { PullRequestMergeability } from "../contracts/codeHostTypes.js";
-import type { IntegrationNode } from "../contracts/integrationNodes.js";
+import type { Digest } from "../contracts/cas.js";
+import type { LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthority.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { MergeAuthorityBundle } from "../workflow/reviewMerge/mergeDispatchTypes.js";
@@ -69,8 +72,8 @@ export interface MergeAuthorityGateInput {
   gatedHeadSha: string | undefined;
   /** The fail-closed signals to authorize against. */
   signals: LiveMergeSignals;
-  /** The writer-backed durable finalize bound to this run's merge-stage context. */
-  finalizer: LandFinalizer;
+  /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
+  store: AuthorityLandStore;
 }
 
 /**
@@ -128,7 +131,7 @@ export async function runAuthorityLand(input: {
     hitlSignoff: bundle.hitlSignoff,
     conflictsResolved: mergeability.state !== "dirty",
   };
-  const finalizer = bundle.finalizerFor({
+  const store = bundle.landStoreFor({
     orgId: bundle.orgId,
     runId: context.runId,
     specId: context.specId,
@@ -150,7 +153,7 @@ export async function runAuthorityLand(input: {
     policyVersion: bundle.policyVersion,
     gatedHeadSha: bundle.gatedHeadSha,
     signals,
-    finalizer,
+    store,
   });
 }
 
@@ -163,44 +166,59 @@ async function requireBranchSha(codeHost: CodeHost, repo: CodeHostRepoRef, branc
   return sha;
 }
 
+/** A stable `sha256:<hex>` {@link Digest} over the canonical JSON of `body`. */
+function contentDigest(body: unknown): Digest {
+  return parseDigest(`sha256:${createHash("sha256").update(JSON.stringify(body)).digest("hex")}`);
+}
+
 /**
- * Build the single-member integration node for a direct PR land. The node's `headSha`
- * is the PR branch head (the materialized landable commit); `baseSha` is the current
- * default-branch head (the CAS base). The member key hashes `baseSha + [headSha]` so
- * the same content yields the same proof identity (§3).
+ * Build the V2 land binding envelope for a direct single-member PR land. `headSha` is
+ * the PR branch head (the materialized landable commit); `expectedMainSha` is the
+ * current default-branch head (the CAS base). `memberSetHash` is the frozen
+ * integrationNodes bare-hex member key over `baseSha + [headSha]`. `artifactDigest` +
+ * `proofRoot` are genuine content digests of the binding (an SP-3/SP-7 producer replaces
+ * them with the sealed bundle digests when the runtime/mergequeue consumers wire them).
  */
-function buildNode(input: MergeAuthorityGateInput, baseSha: string, headSha: string): IntegrationNode {
+function buildEnvelope(
+  input: MergeAuthorityGateInput,
+  subject: LandSubject,
+  baseSha: string,
+  headSha: string,
+): LandBindingEnvelope {
+  const memberSetHash = computeMemberKey(baseSha, [headSha]);
   return {
-    nodeId: `land-${input.runId}`,
-    baseBranch: input.intoMain,
-    baseSha,
-    ref: input.headBranch,
-    purpose: "merge_batch",
-    members: [{ specId: input.specId, runId: input.runId, branch: input.headBranch, headSha }],
-    memberKey: computeMemberKey(baseSha, [headSha]),
-    gateConfigHash: input.gateConfigHash,
-    policyVersion: input.policyVersion,
-    affectedFingerprint: "",
+    subject,
+    members: [{ specId: input.specId, runId: input.runId, branch: input.headBranch, headSha, disposition: "admit" }],
     headSha,
-    treeHash: headSha,
-    status: "ready",
+    expectedMainSha: baseSha,
+    artifactDigest: contentDigest({ repo: input.repo, intoMain: input.intoMain, headSha }),
+    proofRoot: contentDigest({
+      memberSetHash,
+      gateConfigHash: input.gateConfigHash,
+      policyVersion: input.policyVersion,
+      headSha,
+    }),
+    memberSetHash,
+    policyVersion: input.policyVersion,
+    target: { repo: input.repo, intoMain: input.intoMain },
   };
 }
 
 /**
- * Run the FULL guaranteed land for one PR through `MergeAuthority`:
- *   prepareIntegration (resolve the concrete commit + CAS target)
- *     → authorizeLand (the fail-closed truth table)
- *     → land (host CAS push → durable finalize, with the merge_state_unknown reconcile).
- * Returns the dispatcher's disposition. The CodeHost's `landAuthorizedRef` rejection
- * (main raced ahead) is surfaced as `cas_rejected` (a benign retryable race), kept
- * distinct from `merge_state_unknown` (the land succeeded but the record failed).
+ * Run the FULL guaranteed land for one PR through `MergeAuthorityV2`:
+ *   authorizeLand (re-validate the binding + the fail-closed truth table)
+ *     → land (persist decision + intent → host CAS land → record receipt, with the
+ *       merge_state_unknown reconcile).
+ * Returns the dispatcher's disposition. The CodeHost's `landAuthorizedIntegration`
+ * rejection (main raced ahead) is surfaced as `cas_rejected` (a benign retryable race),
+ * kept distinct from `merge_state_unknown` (the land succeeded but the record failed).
  */
 export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<MergeAuthorityDisposition> {
   const { codeHost, repo } = input;
   const baseSha = await requireBranchSha(codeHost, repo, input.intoMain);
   const headSha = await requireBranchSha(codeHost, repo, input.headBranch);
-  const node = buildNode(input, baseSha, headSha);
+  const subject: LandSubject = { kind: "integration_node", id: `land-${input.runId}` };
+  const envelope = buildEnvelope(input, subject, baseSha, headSha);
 
   // COMMIT-BINDING (the gate↔land TOCTOU guard, §5): the gate verdict must be FOR
   // EXACTLY the commit being landed. A passing gate is honored ONLY when its
@@ -221,15 +239,13 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
     };
   }
 
-  const authority = new MergeAuthorityImpl(codeHost, input.finalizer);
-  const prepared = await authority.prepareIntegration({ node, repo, intoMain: input.intoMain, baseSha });
+  const authority = new MergeAuthorityV2Impl(codeHost, new SubjectEqualityRevalidator(), input.store);
 
   const authorizeInput = buildAuthorizeLandInput({
-    node,
-    prepared,
+    subject,
     ...input.signals,
   } satisfies MergeAuthoritySignals);
-  const auth = await authority.authorizeLand(authorizeInput);
+  const auth = await authority.authorizeLand(authorizeInput, envelope);
 
   if (auth.decision === "blocked") {
     return { kind: "blocked", reasons: auth.reasons.map((r) => `${r.input}: ${r.detail}`) };
