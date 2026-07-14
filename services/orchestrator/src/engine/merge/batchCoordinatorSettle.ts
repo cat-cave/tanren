@@ -87,14 +87,17 @@ export async function settleBisectCulprit(
   if (isGateFail && deps.gateRework !== undefined) {
     // The WRITER rework path: re-author the culprit to fix the integration-only gate
     // failure, then retire the OLD entry (the re-authored run re-queues a fresh one).
-    const disposition = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
     await markDequeuedAfterEvent({
       queue: deps.queue,
       events: deps.events,
       projectId,
       entry: culprit,
-      reason: disposition === "reworked" ? "superseded" : "needs_attention",
-      message: `integrated-tree gate writer-rework disposition ${disposition}: ${failMessage}`,
+      reason: recovery.kind === "owned" ? "superseded" : "needs_attention",
+      message:
+        recovery.kind === "owned"
+          ? `integrated-tree gate failure handed to writer rework: ${failMessage}`
+          : recovery.message,
       tx: deps.tx,
     });
     return;
@@ -329,9 +332,9 @@ async function settleFailedDrive(
     message = `${gateError}; no writer-rework router is configured`;
     await deps.escalator.escalate({ projectId, entry: culprit, message });
   } else {
-    const disposition = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
-    reason = disposition === "reworked" ? "superseded" : "needs_attention";
-    message = `${gateError}; writer-rework disposition: ${disposition}`;
+    const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    reason = recovery.kind === "owned" ? "superseded" : "needs_attention";
+    message = recovery.kind === "owned" ? `${gateError}; handed to writer rework` : recovery.message;
   }
   await markDequeuedAfterEvent({
     queue: deps.queue,

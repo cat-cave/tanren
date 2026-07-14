@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { PgBatchGateReworkRouter } from "../src/engine/merge/batchGateReworkRouter.js";
+import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
 import {
   gateErrorSignature,
   type ReplanEnqueuer,
@@ -100,7 +101,14 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError,
     });
 
-    expect(disposition).toBe("reworked");
+    expect(disposition).toEqual({
+      kind: "owned",
+      receipt: {
+        kind: "writer_rework",
+        specId: "spec_x",
+        run: { kind: "enqueued", replanRunId: "run_rework_1", plannerTaskId: "task_1" },
+      },
+    });
     // A fresh rework run was enqueued, re-opening the spec to `open` and carrying the ACTUAL
     // gate error in the steering (no_silent_fallback — never rework blind).
     expect(enqueued).toHaveLength(1);
@@ -113,6 +121,30 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(appended.some((e) => e.eventType === "recovery.replan_queued")).toBe(true);
     // It did NOT park the spec at needs_attention.
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+  });
+
+  it("returns an already-running receipt for the benign concurrent-claim race", async () => {
+    const enqueuer: ReplanEnqueuer = {
+      enqueue(input) {
+        return Promise.reject(new SpecNotRunnableError(input.specId, "in_flight"));
+      },
+    };
+    const appended: Appended[] = [];
+    const statusWrites: { specId: string; status: string }[] = [];
+    const router = makeRouter({ enqueuer, priorReworks: [], appended, statusWrites });
+
+    const recovery = await router.routeGateFailToRework({
+      projectId: PROJECT,
+      culprit: culprit("spec_claimed"),
+      gateError: "gate failed",
+    });
+
+    expect(recovery).toEqual({
+      kind: "owned",
+      receipt: { kind: "writer_rework", specId: "spec_claimed", run: { kind: "already_running" } },
+    });
+    expect(appended.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
+    expect(statusWrites).toEqual([]);
   });
 
   it("ESCALATES to needs_attention (no further rework) at a FIXED POINT — the SAME gate error recurs", async () => {
@@ -143,7 +175,10 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: stuckError,
     });
 
-    expect(disposition).toBe("escalated");
+    expect(disposition).toMatchObject({
+      kind: "parked",
+      receipt: { kind: "needs_attention", specId: "spec_stuck", source: "writer_rework" },
+    });
     // No further rework run was enqueued (fixed point — never a hot-loop).
     expect(enqueueCalls).toBe(0);
     // The spec was parked at needs_attention (loud, frees the slot).
@@ -177,7 +212,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: "err-f (a brand new, different failure)",
     });
 
-    expect(disposition).toBe("reworked");
+    expect(disposition.kind).toBe("owned");
     expect(enqueueCalls).toBe(1);
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
@@ -198,7 +233,10 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: "gate failed",
     });
 
-    expect(disposition).toBe("escalated");
+    expect(disposition).toMatchObject({
+      kind: "parked",
+      receipt: { kind: "needs_attention", specId: "spec_y", source: "writer_rework" },
+    });
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
     const park = appended.find((e) => e.eventType === "dag.spec.needs_attention");
     expect(park?.payload.reason).toBe("persistent_failure");

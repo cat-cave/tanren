@@ -12,6 +12,7 @@ import type {
   BatchFormation,
   BatchGateReworkRouter,
 } from "../../../src/engine/contracts/batchMergeCoordinator.js";
+import type { GateReworkRouteResult } from "../../../src/engine/contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "../../../src/engine/merge/batchCoordinator.js";
 
@@ -201,8 +202,8 @@ export class RecordingBatchMergeEventEmitter implements BatchMergeEventEmitter {
  * suite can assert a GATE-fail culprit is RE-WORKED (carrying the gate error) rather than
  * stranded — distinct from a conflict-replan. Stands in for `PgBatchGateReworkRouter`'s
  * re-open + steering + run-enqueue + bounded escalation, without a DB. By default every
- * route returns `reworked`; `escalateFor(specId)` makes a spec's route ESCALATE (the
- * bounded-budget-exhausted path) so the K-rework escalation is testable.
+ * route returns an owned writer-run receipt; `escalateFor(specId)` returns a parked
+ * receipt so dequeue-label behavior is testable.
  */
 export class RecordingBatchGateReworkRouter implements BatchGateReworkRouter {
   readonly routed: { specId: string; runId: string; gateError: string }[] = [];
@@ -218,8 +219,26 @@ export class RecordingBatchGateReworkRouter implements BatchGateReworkRouter {
     projectId: string;
     culprit: MergeQueueEntry;
     gateError: string;
-  }): Promise<"reworked" | "escalated"> {
+  }): Promise<GateReworkRouteResult> {
     this.routed.push({ specId: input.culprit.specId, runId: input.culprit.runId, gateError: input.gateError });
-    return this.escalateSpecs.has(input.culprit.specId) ? "escalated" : "reworked";
+    if (this.escalateSpecs.has(input.culprit.specId)) {
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
+        message: `recording router parked ${input.culprit.specId}`,
+      };
+    }
+    return {
+      kind: "owned",
+      receipt: {
+        kind: "writer_rework",
+        specId: input.culprit.specId,
+        run: {
+          kind: "enqueued",
+          replanRunId: `run_rework_${input.culprit.specId}`,
+          plannerTaskId: `task_rework_${input.culprit.specId}`,
+        },
+      },
+    };
   }
 }

@@ -277,19 +277,16 @@ async function landViaAuthorityAttempt(
       // recoverable hold, never a terminal dequeue.
       return rebaseOnCasAndRetry(deps, ops, landBundle, mergeability, disposition.reason, casHistory);
     case "merge_state_unknown": {
-      // The host advanced `main` but the durable record FAILED — NEVER a silent
-      // inconsistency: hold loudly for reconciliation.
+      // The durable effect intent + active queue row own reconciliation: hold queued
+      // and re-drive so idempotent land step 2 no-ops and step 3 retries the receipt.
+      const message = `merge_state_unknown (reconcile ${disposition.reconcileToken}): ${disposition.reason}`;
       await deps.eventStore.append({
         ...ops.base(),
         eventType: "merge.failed",
-        payload: {
-          ...ops.prFields(),
-          integration: ops.mergeLabel(),
-          message: `merge_state_unknown (reconcile ${disposition.reconcileToken}): ${disposition.reason}`,
-        },
+        payload: { ...ops.prFields(), integration: ops.mergeLabel(), message },
       });
-      await ops.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
-      return ops.result("conflict", { message: disposition.reason });
+      await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
+      return ops.result("blocked", { message });
     }
     default: {
       const exhaustive: never = disposition;

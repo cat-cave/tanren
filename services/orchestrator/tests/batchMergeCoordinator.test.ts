@@ -293,31 +293,28 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.checker.checked.length).toBe(2);
   });
 
-  it("v54 #56: a SUSTAINED-identical retriable infra hold ESCALATES the batch to writer rework + dequeues superseded", async () => {
+  it("v54 #56: sustained infra escalation derives each dequeue reason from its typed rework receipt", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.throwInfraAlways(new RefResetTransientError("HTTP 504 (persistent gateway outage)"));
 
-    // First cross-pass hold: recoverable (one hold is not yet proof of non-recovery).
     const firstHold = await h.coordinator.coordinate(PROJECT);
     expect(firstHold.holdReason).toBe("infra_error");
     expect(firstHold.retryAfterMs).toBeGreaterThan(0);
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked" && e.terminal === true)).toBe(false);
     expect(h.gateRework.routed).toHaveLength(0);
+    h.gateRework.escalateFor("spec_b");
 
-    // The re-drive hits the IDENTICAL failure with no progress → ESCALATE: every batch
-    // member routes to writer rework + the queue entry is dequeued `superseded`. The
-    // re-authored run re-queues a fresh entry; recovery remains autonomous through the
-    // writer path, not the queue's soft-loop.
+    // A owns a live writer run; B's router parks. Their dequeue labels must reflect that.
     const last = await h.coordinator.coordinate(PROJECT);
     expect(last.holdReason).toBe("all_blocked");
     expect(h.queue.statusOf("run_spec_a")).toBe("dequeued");
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
+    expect(h.queue.dequeueReasonOf("run_spec_a")).toBe("superseded");
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     const terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
-    // The writer rework primitive received one routing call per member, each carrying the
-    // batch's bootstrap/infra failure as steering.
     expect(h.gateRework.routed).toHaveLength(2);
     expect(h.gateRework.routed[0]?.gateError).toContain("MERGE QUEUE WORKSPACE/INFRA FAILURE");
     expect(h.gateRework.routed[1]?.gateError).toContain("MERGE QUEUE WORKSPACE/INFRA FAILURE");

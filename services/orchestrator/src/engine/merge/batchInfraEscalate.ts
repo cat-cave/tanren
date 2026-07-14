@@ -8,9 +8,9 @@
 //
 // This module owns that escalation path: emit a TERMINAL `merge.batch.infra_blocked`
 // (audit lineage) with `disposition: "escalated_to_writer"`, then for each entry route
-// `routeGateFailToRework` (the existing DAG re-author primitive) + dequeue
-// `superseded` (the re-authored run re-queues a fresh entry). The infra-hold streak is
-// CLEARED so a recovered queue starts fresh.
+// `routeGateFailToRework` (the existing DAG re-author primitive), then dequeue
+// `superseded` only with a writer-run receipt; a router-owned park dequeues
+// `needs_attention`. The infra-hold streak is CLEARED so a recovered queue starts fresh.
 //
 // No `gateRework` wired (a degenerate assembly) → the caller falls back to
 // `terminalInfraBlock` (the prior loud-halt behavior).
@@ -44,8 +44,8 @@ export interface EscalateInfraHoldArgs {
 /**
  * Escalate a sustained-non-recovering batch infra hold by routing every member to the
  * writer rework (one `routeGateFailToRework` per culprit, carrying the bootstrap
- * failure as steering) + dequeue `superseded`. Mirrors `settleBisectCulprit`'s
- * gate-fail path — same primitive, applied to the workspace-bootstrap class of fail.
+ * failure as steering). The typed receipt determines whether the old entry was
+ * superseded by live rework or parked at needs_attention.
  */
 export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Promise<CoordinateResult> {
   const gateError = synthesizeGateErrorFromInfra(args.message, args.holds);
@@ -58,14 +58,21 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
     consecutiveHolds: args.holds,
   });
   for (const entry of args.batch) {
-    await args.gateRework.routeGateFailToRework({ projectId: args.projectId, culprit: entry, gateError });
+    const recovery = await args.gateRework.routeGateFailToRework({
+      projectId: args.projectId,
+      culprit: entry,
+      gateError,
+    });
     await markDequeuedAfterEvent({
       queue: args.queue,
       events: args.events,
       projectId: args.projectId,
       entry,
-      reason: "superseded",
-      message: `routed to writer rework on sustained merge-queue workspace/infra failure: ${args.message}`,
+      reason: recovery.kind === "owned" ? "superseded" : "needs_attention",
+      message:
+        recovery.kind === "owned"
+          ? `routed to writer rework on sustained merge-queue workspace/infra failure: ${args.message}`
+          : recovery.message,
       ...(args.tx === undefined ? {} : { tx: args.tx }),
     });
   }

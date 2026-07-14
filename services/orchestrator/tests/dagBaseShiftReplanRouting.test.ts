@@ -137,6 +137,18 @@ function buildRouter(deps: {
   });
 }
 
+describe("conflictSignatureOf", () => {
+  it("hashes a real NUL field boundary deterministically instead of concatenating ambiguous inputs", () => {
+    const aThenBc = conflictSignatureOf("bc", "a");
+    const abThenC = conflictSignatureOf("c", "ab");
+
+    expect(aThenBc).toBe("40bb547d936bbd31318ee37ac8799e7ecbb22eda2651f65e3214bffb8ce97bb4");
+    expect(abThenC).toBe("6c032e631d39a14d85aff7e319546af701e26c97b57ca95fbfe9c6ba855f67bf");
+    expect(aThenBc).not.toBe(abThenC);
+    expect(conflictSignatureOf("bc", "a")).toBe(aThenBc);
+  });
+});
+
 describe("base-shift / percolation replan routing (v35 — a routed replan ACTUALLY RUNS, never stalls)", () => {
   it("ENQUEUES a re-plan run, re-opens the spec to `open`, and emits recovery.replan_queued (not in_flight, not event-only)", async () => {
     const pool = new RecordingPool();

@@ -29,6 +29,7 @@
 import { getSystemPool, runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
+import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
@@ -95,7 +96,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     projectId: string;
     culprit: MergeQueueEntry;
     gateError: string;
-  }): Promise<"reworked" | "escalated"> {
+  }): Promise<GateReworkRouteResult> {
     const orgId = await this.resolveOrg(input.projectId);
     // A required-missing org is a LOUD hard failure (no_silent_fallback): without it the
     // spec cannot be re-worked OR escalated, so a gate-fail would silently strand — exactly
@@ -113,8 +114,12 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     // recurs (re-working produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
-      await this.escalate(orgId, input, priorSignatures.length);
-      return "escalated";
+      const message = await this.escalate(orgId, input, priorSignatures.length);
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
+        message,
+      };
     }
 
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
@@ -131,7 +136,14 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         reopenStatus: "open",
       });
       await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
-      return "reworked";
+      return {
+        kind: "owned",
+        receipt: {
+          kind: "writer_rework",
+          specId: input.culprit.specId,
+          run: { kind: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId },
+        },
+      };
     } catch (error) {
       // BENIGN RACE: a concurrent tick already claimed the re-opened spec — a run IS being
       // driven, so this is not a strand. Record the routing observably (no new run id) + treat
@@ -143,7 +155,10 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           error,
         );
         await this.recordReworked(orgId, input, priorSignatures.length, steeringNote);
-        return "reworked";
+        return {
+          kind: "owned",
+          receipt: { kind: "writer_rework", specId: input.culprit.specId, run: { kind: "already_running" } },
+        };
       }
       // GENUINE FAILURE: the rework run could not be created AND no concurrent tick owns it.
       // A routed rework that cannot RUN is not a recoverable re-author; it is a genuine
@@ -153,8 +168,12 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         { specId: input.culprit.specId },
         error,
       );
-      await this.escalateEnqueueFailure(orgId, input, error);
-      return "escalated";
+      const message = await this.escalateEnqueueFailure(orgId, input, error);
+      return {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
+        message,
+      };
     }
   }
 
@@ -218,7 +237,11 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
     priorReworks: number,
-  ): Promise<void> {
+  ): Promise<string> {
+    const message =
+      `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
+      `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
+      `intervene. Latest gate error: ${input.gateError}`;
     // Aux event first (observable lineage of the routing decision).
     await this.withScopedStore(orgId, (store) =>
       store.append({
@@ -251,12 +274,10 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         reason: "persistent_failure",
         terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
         attempts: priorReworks,
-        message:
-          `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
-          `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
-          `intervene. Latest gate error: ${input.gateError}`,
+        message,
       },
     });
+    return message;
   }
 
   /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
@@ -266,8 +287,12 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
     error: unknown,
-  ): Promise<void> {
+  ): Promise<string> {
     const detail = error instanceof Error ? error.message : String(error);
+    const message =
+      `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
+      `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. ` +
+      `Gate error: ${input.gateError}`;
     await this.withScopedStore(orgId, (store) =>
       store.append({
         runId: input.culprit.runId,
@@ -298,11 +323,10 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         reason: "persistent_failure",
         terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
         attempts: 0,
-        message:
-          `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
-          `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`,
+        message,
       },
     });
+    return message;
   }
 
   /** Task #48 Site I: ATOMIC spec park + `dag.spec.needs_attention` event in

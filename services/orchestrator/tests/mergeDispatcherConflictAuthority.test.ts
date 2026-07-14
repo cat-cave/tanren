@@ -140,22 +140,43 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     expect(landed).toEqual(["sha-feat"]);
   });
 
-  it("a post-land durable-write failure on the conflict-resolved path → merge_state_unknown (never silent)", async () => {
+  it("merge_state_unknown stays a reconciliation hold and the idempotent retry records the receipt", async () => {
     const host = new InMemoryCodeHost();
     host.seed(REPO, "main", "sha-main");
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     const probe = scriptedProbe("clean");
     const events = recordingEventStore();
     const landed: string[] = [];
-    const result = await dispatcher(probe, events, bundle(host, { fail: true, landed })).directMerge();
+    let receiptAttempts = 0;
+    const retryableBundle: MergeAuthorityBundle = {
+      ...bundle(host, { landed }),
+      landStoreFor: () => ({
+        persistAuthorizedDecision: async () => ({ effectIntentId: "intent-reconcile" }),
+        recordLandReceipt: async (input) => {
+          receiptAttempts += 1;
+          if (receiptAttempts === 1) throw new Error("durable receipt failed");
+          landed.push(input.mainSha);
+          return { auditId: "audit-reconciled" };
+        },
+      }),
+    };
+    const drive = dispatcher(probe, events, retryableBundle);
+    const first = await drive.directMerge();
 
-    // The host land fired (main advanced) but the durable record FAILED → the
-    // dispatcher holds it as a recoverable conflict carrying the reconcile reason,
-    // NEVER a silent merged/inconsistency. main DID advance (the external land fired).
-    expect(result.outcome).toBe("conflict");
-    expect(result.message).toMatch(/merge_state_unknown|durable receipt/u);
+    // The host advanced, but the receipt failed. This MUST stay a queued reconciliation
+    // hold, not masquerade as an ownerless conflict that the coordinator parks/dequeues.
+    expect(first.outcome).toBe("blocked");
+    expect(first.message).toMatch(/merge_state_unknown.*reconcile-land-run_1-sha-feat.*durable receipt/u);
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
     expect(events.events).not.toContain("merge.completed");
+
+    // Re-drive uses the same effect intent. The host land is idempotently already done;
+    // only the missing durable receipt is retried, and the workflow converges.
+    const second = await drive.directMerge();
+    expect(second.outcome).toBe("merged");
+    expect(receiptAttempts).toBe(2);
+    expect(landed).toEqual(["sha-feat"]);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
   });
 
   it("REGRESSION LOCK (fresh land-time gate): gate passed PRE-conflict but the FRESH land-time gate FAILS → BLOCKED", async () => {
