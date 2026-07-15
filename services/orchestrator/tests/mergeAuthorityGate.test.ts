@@ -75,6 +75,8 @@ function gateInput(host: InMemoryCodeHost) {
     policyVersion: "pv",
     // The gate verdict was for the EXACT commit being landed (the `feat` head, sha-feat).
     gatedHeadSha: "sha-feat",
+    // Human/auto path (no forge receipt) unless a TOCTOU test overrides.
+    reviewedHeadSha: undefined,
     store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
@@ -167,6 +169,33 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
     // gatedHeadSha === the landed head (sha-feat) — the binding is satisfied.
     const disposition = await authorizeAndLand(gateInput(host));
+    expect(disposition.kind).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+  });
+
+  it("TOCTOU LOCK (gv-2 former bug): review.approved with forge headSha A, head advanced to B → BLOCKED", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-B" });
+    const input = gateInput(host);
+    // Gate binds to the live head so only the review receipt is the mismatch.
+    input.gatedHeadSha = "sha-B";
+    // Former bug: land trusted review.approved existence and ignored the receipt head.
+    input.reviewedHeadSha = "sha-A";
+    const disposition = await authorizeAndLand(input);
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toMatch(/forge review receipt|reviewed 'sha-A'.*sha-B/u);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("TOCTOU LOCK (gv-2 positive): review forge receipt headSha equals landing head → lands", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const input = gateInput(host);
+    input.reviewedHeadSha = "sha-feat";
+    const disposition = await authorizeAndLand(input);
     expect(disposition.kind).toBe("merged");
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
   });

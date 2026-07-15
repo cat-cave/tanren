@@ -1,45 +1,77 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "additionalProperties": false,
-  "properties": {
-    "forgeReviewId": {
-      "minLength": 1,
-      "type": "string"
-    },
-    "forgeReviewState": {
-      "enum": [
-        "approved",
-        "changes_requested"
+  "anyOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "forgeReviewId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "forgeReviewState": {
+          "enum": [
+            "approved",
+            "changes_requested"
+          ],
+          "type": "string"
+        },
+        "forgeReviewUrl": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "headSha": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "prNumber": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "prUrl": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prUrl",
+        "prNumber",
+        "forgeReviewId",
+        "forgeReviewState",
+        "forgeReviewUrl",
+        "headSha"
       ],
-      "type": "string"
+      "type": "object"
     },
-    "forgeReviewUrl": {
-      "minLength": 1,
-      "type": "string"
-    },
-    "headSha": {
-      "minLength": 1,
-      "type": "string"
-    },
-    "message": {
-      "type": "string"
-    },
-    "prNumber": {
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer"
-    },
-    "prUrl": {
-      "type": "string"
-    },
-    "reviewer": {
-      "type": "string"
+    {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "prNumber": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+        },
+        "prUrl": {
+          "type": "string"
+        },
+        "reviewer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prUrl",
+        "prNumber"
+      ],
+      "type": "object"
     }
-  },
-  "required": [
-    "prUrl",
-    "prNumber"
   ],
-  "type": "object",
   "x-tanren-schema-id": "tanren.event.review.changes_requested"
 }

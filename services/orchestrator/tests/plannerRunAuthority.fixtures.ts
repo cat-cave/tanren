@@ -39,6 +39,7 @@ export function plannerAuthorityBundle(host: InMemoryCodeHost): MergeAuthorityBu
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },
     gatedHeadSha: PLANNER_AUTHORITY_HEAD_SHA,
+    reviewedHeadSha: undefined,
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",
