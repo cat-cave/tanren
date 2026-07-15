@@ -16,6 +16,7 @@ export const eventTypesSeed = [
   { name: "auditor.rejected", defaultSeverity: "info" },
   { name: "auditor.started", defaultSeverity: "info" },
   { name: "auditor.verdict", defaultSeverity: "info" },
+  { name: "behavior.coverage.selection_analyzed", defaultSeverity: "info" },
   { name: "benchmark.accept.failed", defaultSeverity: "warn" },
   { name: "benchmark.accept.passed", defaultSeverity: "ok" },
   { name: "checker.completed", defaultSeverity: "info" },

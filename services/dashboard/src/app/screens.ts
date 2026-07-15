@@ -119,6 +119,10 @@ SCREEN_MOUNTS.push(mountIntegrationsScreen);
 import { mountOverviewScreen } from "../routes/overview/index.js";
 SCREEN_MOUNTS.push(mountOverviewScreen);
 
+// rv-4 behavior coverage graph + fail-closed affected-selection probe.
+import { mountBehaviorCoverageScreen } from "../routes/behaviorCoverage/index.js";
+SCREEN_MOUNTS.push(mountBehaviorCoverageScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {

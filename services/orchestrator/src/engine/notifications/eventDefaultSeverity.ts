@@ -279,6 +279,7 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "fragment.authoring.attempt": "info",
   "fragment.authoring.succeeded": "ok",
   "fragment.authoring.failed": "fail",
+  "behavior.coverage.selection_analyzed": "info",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would
