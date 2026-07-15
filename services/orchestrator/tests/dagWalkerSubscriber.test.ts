@@ -105,6 +105,7 @@ class RecordingPercolation implements ChangePercolationCoordinator {
       absorbed: [],
       deferred: [],
       replanned: [],
+      parked: [],
       reexecuting: [],
       inFlight: [],
       held: [],

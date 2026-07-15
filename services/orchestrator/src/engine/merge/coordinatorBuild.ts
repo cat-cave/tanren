@@ -47,6 +47,7 @@ import type { DriveMergeForQueuedRun } from "./coordinator.js";
 import { PgMergeQueueModel } from "./coordinatorPg.js";
 import { buildBaseShiftCoordinator } from "../dag/percolationBuild.js";
 import { buildBaseShiftRebaseHook } from "../dag/baseShiftRebaseHook.js";
+import { driveOutcomeFromRecoverySettlement } from "./driveConflictVerdict.js";
 
 export interface BuildMergeCoordinatorDeps {
   pool: pg.Pool;
@@ -155,25 +156,28 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
   // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
   // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (the live jj seams;
   // the allocator/ssh/identity are the SAME the drive resolver uses) — never a second
-  // server-side update-branch. Built once per drive build.
-  const baseShiftCoordinator = buildBaseShiftCoordinator(
-    {
-      pool: deps.pool,
-      githubHttp: deps.githubHttp,
-      secrets: deps.secrets,
-      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      runStateWriter: deps.runStateWriter,
-      allocator: deps.allocator,
-      ssh: deps.ssh,
-      identitySecretRef: deps.identitySecretRef,
-    },
-    // P1 fix: the merge-queue `behind` rebase is SYNCHRONOUS (this drive re-gates + merges
-    // in the same pass) — suppress the `percolation_pending` marker so the run is NEVER
-    // picked up + mis-settled by the change-percolation poller.
-    { suppressInFlightMarker: true },
-  );
+  // server-side update-branch. A scripted test override is an alternate hook, so do not
+  // construct the production recovery-capable coordinator when that hook was supplied.
   const baseShiftRebase =
-    deps.baseShiftRebaseOverride ?? buildBaseShiftRebaseHook({ pool: deps.pool, coordinator: baseShiftCoordinator });
+    deps.baseShiftRebaseOverride ??
+    buildBaseShiftRebaseHook({
+      pool: deps.pool,
+      coordinator: buildBaseShiftCoordinator(
+        {
+          pool: deps.pool,
+          githubHttp: deps.githubHttp,
+          secrets: deps.secrets,
+          ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+          runStateWriter: deps.runStateWriter,
+          allocator: deps.allocator,
+          ssh: deps.ssh,
+          identitySecretRef: deps.identitySecretRef,
+        },
+        // The merge-queue `behind` rebase is synchronous: suppress its percolation
+        // marker so the poller cannot pick up and mis-settle the same run.
+        { suppressInFlightMarker: true },
+      ),
+    });
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
     // RLS scope for the merge drive's TENANT-TABLE READS. The coordinator subscriber
@@ -318,6 +322,12 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
+        if (merge.recoverySettlement !== undefined) {
+          return driveOutcomeFromRecoverySettlement(
+            merge.recoverySettlement,
+            merge.message ?? "base-shift recovery held the merge",
+          );
+        }
         // CLASSIFY-THEN-ESCALATE from the drive-path resolver / gate-rework disposition.
         // Owned receipt → conflict with recovery. Escalate / missing receipt → park
         // with the truthful parking token (never fabricate ownership).

@@ -16,6 +16,8 @@ let order = 0;
 function entry(specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): MergeQueueEntry {
   order += 1;
   return {
+    orgId: "org_test",
+    projectId: "p",
     queueId: `mq_${specId}`,
     runId: `run_${specId}`,
     specId,

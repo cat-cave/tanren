@@ -194,7 +194,7 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
       deps.verdict.message =
         deps.verdict.message ?? `conflict unresolved for ${deps.facts.specId} with no durable recovery disposition`;
     }
-    return { resolved: result.resolved, ...(result.routedToRework === true && { routedToRework: true }) };
+    return result;
   };
 }
 

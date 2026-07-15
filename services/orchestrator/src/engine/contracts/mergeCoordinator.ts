@@ -76,6 +76,9 @@ export type MergeDriveOutcome =
 export type DequeueReason = "conflict" | "blocked" | "failed" | "superseded" | "needs_attention";
 
 export interface MergeQueueEntry {
+  /** Exact tenant identity carried into recovery evidence/parking. */
+  orgId: string;
+  projectId: string;
   queueId: string;
   runId: string;
   specId: string;

@@ -287,7 +287,10 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 
     const result = await hook(CONTEXT);
 
-    expect(result).toEqual({ resolved: false });
+    expect(result).toMatchObject({
+      resolved: false,
+      recovery: { kind: "owned", receipt: { kind: "planner_replan", specId: FACTS.specId } },
+    });
     expect(verdict.disposition).toBe("replanned");
     // The resolver ran (the bounded autonomous re-plan): a runner was provisioned.
     expect(allocator.allocateCalls).toBe(1);
@@ -311,7 +314,13 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 
     const result = await hook(CONTEXT);
 
-    expect(result).toEqual({ resolved: false });
+    expect(result).toMatchObject({
+      resolved: false,
+      recovery: {
+        kind: "owned",
+        receipt: { kind: "planner_replan", run: { kind: "enqueued", replanRunId: "run_replan_drive7" } },
+      },
+    });
     expect(verdict.disposition).toBe("replanned");
     // THE FIX: a fresh re-plan run was ENQUEUED (the never-discard re-author), not relied-upon.
     expect(enqueuer.calls).toBe(1);

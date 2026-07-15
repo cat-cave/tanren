@@ -20,7 +20,11 @@ import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
 import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
-import type { ConflictRecoveryDisposition, GateReworkRouter } from "../../contracts/conflictResolution.js";
+import type {
+  ConflictRecoveryDisposition,
+  ConflictRecoverySettlement,
+  GateReworkRouter,
+} from "../../contracts/conflictResolution.js";
 
 /** The integration modes the merge stage actually dispatches to. */
 export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
@@ -107,6 +111,10 @@ export interface MergeForRunResult {
   prNumber: number;
   mergeSha?: string;
   message?: string;
+  /** Exact unresolved resolver route, when recovery was delegated. */
+  recovery?: ConflictRecoveryDisposition;
+  /** Exact base-shift settlement, including a paced parking failure. */
+  recoverySettlement?: ConflictRecoverySettlement;
 }
 
 export interface MergeForRunInput {
@@ -350,6 +358,8 @@ export type BaseShiftRebaseHook = (input: { runId: string; baseBranch: string; h
   // local workspace HEAD). Absent on the legacy server-side `updateBranch` fallback,
   // which has no head sha to report ⇒ the re-gate binds to the workspace HEAD as before.
   rebasedHeadSha?: string;
+  /** Typed recovery already settled by the unified base-shift coordinator. */
+  recovery?: ConflictRecoverySettlement;
 }>;
 
 export interface ConflictContext {
@@ -362,15 +372,6 @@ export interface ConflictContext {
 
 export type ConflictResolverHook = (context: ConflictContext) => Promise<{
   resolved: boolean;
-  /**
-   * Set when `resolved: false` because the re-gate failed a deterministic GATE TIER on a
-   * cleanly-rebased-or-resolved tree and the resolver ALREADY routed the spec to WRITER
-   * REWORK (re-opened + enqueued a re-author run, carrying the gate error as steering). A
-   * caller that also has a replan/recovery path (the base-shift coordinator) MUST NOT then
-   * replan — the spec is already being re-driven. Absent ⇒ a genuine unresolved conflict
-   * (the caller routes to replan / emits the recoverable conflict as before).
-   */
-  routedToRework?: boolean;
   /**
    * Typed replan/rework disposition from the router. Present when the resolver delegated
    * ownership/parking; the drive maps this onto a truthful MergeDriveOutcome (owned

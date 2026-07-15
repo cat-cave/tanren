@@ -49,6 +49,8 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
     if (recovery.kind === "owned") {
       const verified = await verifyRecoveryOwnership({
         evidence: args.recoveryEvidence,
+        expectedOrgId: entry.orgId,
+        expectedProjectId: entry.projectId,
         expectedSpecId: entry.specId,
         receipt: recovery.receipt,
         contextMessage: gateError,

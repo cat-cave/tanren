@@ -23,6 +23,7 @@ import {
   type PercolationKickOffOutcome,
   type SpeculativeDependent,
 } from "../contracts/changePercolation.js";
+import type { DurableConflictRecoverySettlement } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 
 /**
@@ -66,7 +67,11 @@ export interface PercolationReexecutor {
      * The re-exec run carries an EMPTY `ancestor_stack` (a real run against main).
      */
     nonSpeculative: boolean;
-  }): Promise<{ reexecRunId: string }>;
+  }): Promise<{
+    reexecRunId: string;
+    decision: "rebased_clean" | "rebased_resolved" | "replanned" | "held";
+    recovery?: DurableConflictRecoverySettlement;
+  }>;
 }
 
 export interface PercolatingKickOffDeps {
@@ -114,13 +119,41 @@ export class PercolatingKickOff implements PercolationKickOff {
     //        marker. Absorption is deferred to the settle of a later pass — NEVER merge
     //        unverified, NEVER absorb on a bare re-base. A spec-vs-spec assembly conflict
     //        surfaces during the base shift's LOCAL assembly (the coordinator HOLDS).
-    const { reexecRunId } = await this.deps.reexecutor.reexecute({
+    const execution = await this.deps.reexecutor.reexecute({
       projectId,
       dependent,
       decision,
       ancestorStack,
       nonSpeculative,
     });
-    return { result: "reexecuting", ancestorSpecId: decision.ancestorSpecId, reexecRunId };
+    if (execution.decision === "rebased_clean" || execution.decision === "rebased_resolved") {
+      return {
+        result: "reexecuting",
+        ancestorSpecId: decision.ancestorSpecId,
+        reexecRunId: execution.reexecRunId,
+      };
+    }
+    if (execution.recovery?.kind === "owned") {
+      const ownerRunId =
+        execution.recovery.receipt.run.kind === "enqueued"
+          ? execution.recovery.receipt.run.replanRunId
+          : execution.recovery.receipt.run.runId;
+      return { result: "replanned", ancestorSpecId: decision.ancestorSpecId, reexecRunId: ownerRunId };
+    }
+    if (execution.recovery?.kind === "parked") {
+      return { result: "parked", ancestorSpecId: decision.ancestorSpecId };
+    }
+    if (execution.recovery?.kind === "terminal_noop") {
+      return {
+        result: "terminal_noop",
+        ancestorSpecId: decision.ancestorSpecId,
+        terminalStatus: execution.recovery.status,
+      };
+    }
+    return {
+      result: "held",
+      ancestorSpecId: decision.ancestorSpecId,
+      reason: "base shift returned a non-durable recovery outcome",
+    };
   }
 }

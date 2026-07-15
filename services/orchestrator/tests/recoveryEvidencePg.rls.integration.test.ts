@@ -1,6 +1,7 @@
 // Real-Postgres/RLS proof for PgRecoveryEvidencePort — the production settlement
-// ownership readback. Pins: correct-org active owner + plan task; wrong-org
-// rejection; inactive/halted owner; non-plan task; structural mismatch. Gated on
+// ownership readback. Pins: correct-org active owner + plan task; wrong-org and
+// independently wrong-project rejection; inactive/halted owner; non-plan task;
+// structural mismatch. Gated on
 // TANREN_RLS_DB_TEST=1 like the recovery-park cohort.
 
 import type { Pool } from "pg";
@@ -13,6 +14,7 @@ import { createWriteEndpointHarness, enabled, ORG, PROJECT, seedRun, SPEC } from
 const describeDb = enabled ? describe : describe.skip;
 
 const OTHER_ORG = "org_p3_rw_other";
+const OTHER_PROJECT = "proj_p3_rw_other_same_org";
 const OTHER_SPEC = "spec_p3_rw_other";
 
 function enqueued(specId: string, runId: string, taskId: string): ConflictRecoveryReceipt {
@@ -36,6 +38,7 @@ async function seedExtraRun(
   opts: {
     runId: string;
     orgId?: string;
+    projectId?: string;
     specId?: string;
     status?: string;
     taskId?: string;
@@ -43,6 +46,7 @@ async function seedExtraRun(
   },
 ): Promise<void> {
   const orgId = opts.orgId ?? ORG;
+  const projectId = opts.projectId ?? (orgId === ORG ? PROJECT : `proj_${orgId}`);
   const specId = opts.specId ?? SPEC;
   const status = opts.status ?? "running";
   if (orgId !== ORG) {
@@ -51,22 +55,26 @@ async function seedExtraRun(
        VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb) ON CONFLICT (id) DO NOTHING`,
       [orgId],
     );
+  }
+  if (projectId !== PROJECT) {
     await owner.query(
       `INSERT INTO projects (project_id, name, repo_url, org_id)
        VALUES ($1, 'p', 'https://example.com/r.git', $2) ON CONFLICT (project_id) DO NOTHING`,
-      [`proj_${orgId}`, orgId],
+      [projectId, orgId],
     );
+  }
+  if (orgId !== ORG) {
     await owner.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
        VALUES ($1, $2, $3, 't', 'd', 'in_flight') ON CONFLICT (spec_id) DO NOTHING`,
-      [specId, `proj_${orgId}`, orgId],
+      [specId, projectId, orgId],
     );
   }
   await owner.query(
     `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
      VALUES ($1, $2, $3, $4, 'cli', 'main', $5)
      ON CONFLICT (run_id) DO UPDATE SET status = EXCLUDED.status, spec_id = EXCLUDED.spec_id`,
-    [opts.runId, specId, orgId === ORG ? PROJECT : `proj_${orgId}`, orgId, status],
+    [opts.runId, specId, projectId, orgId, status],
   );
   if (opts.taskId !== undefined) {
     await owner.query(
@@ -104,10 +112,19 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
 
     const port = new PgRecoveryEvidencePort(owner());
     const evidence = await port.verifyOwnedReceipt({
+      expectedOrgId: ORG,
+      expectedProjectId: PROJECT,
       expectedSpecId: SPEC,
       receipt: enqueued(SPEC, runId, taskId),
     });
-    expect(evidence).toMatchObject({ runId, specId: SPEC, runStatus: "running", plannerTaskId: taskId });
+    expect(evidence).toMatchObject({
+      orgId: ORG,
+      projectId: PROJECT,
+      runId,
+      specId: SPEC,
+      runStatus: "running",
+      plannerTaskId: taskId,
+    });
   });
 
   it("accepts already_running when the named run is active for the expected spec", async () => {
@@ -115,36 +132,68 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
     await seedRun(owner(), runId, "queued");
     const port = new PgRecoveryEvidencePort(owner());
     const evidence = await port.verifyOwnedReceipt({
+      expectedOrgId: ORG,
+      expectedProjectId: PROJECT,
       expectedSpecId: SPEC,
       receipt: alreadyRunning(SPEC, runId),
     });
     expect(evidence).toMatchObject({ runId, specId: SPEC, runStatus: "queued" });
   });
 
-  it("rejects wrong-spec and wrong-org runs (fail closed)", async () => {
+  it("rejects a cross-org/project run even when its spec id matches exactly", async () => {
     const runId = "run_evidence_wrong_org";
     await seedExtraRun(owner(), {
       runId,
       orgId: OTHER_ORG,
-      specId: OTHER_SPEC,
+      // Deliberately cross-link the independently-valid SPEC from ORG/PROJECT to
+      // a run owned by OTHER_ORG/its project. System scope can see it; only the
+      // explicit org+project+spec predicate rejects it.
+      specId: SPEC,
       status: "running",
       taskId: "task_evidence_wrong_org",
       taskKind: "plan",
     });
     const port = new PgRecoveryEvidencePort(owner());
-    // Receipt claims our SPEC but the run belongs to OTHER_SPEC.
     await expect(
       port.verifyOwnedReceipt({
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
         receipt: enqueued(SPEC, runId, "task_evidence_wrong_org"),
       }),
     ).resolves.toBeUndefined();
-    // Expected OTHER_SPEC matches the row, but settlement always passes the queue entry's
-    // exact spec — wrong expectedSpecId still fails closed.
+  });
+
+  it("rejects a same-org run with the exact spec but a different project", async () => {
+    const runId = "run_evidence_wrong_project";
+    await seedExtraRun(owner(), {
+      runId,
+      orgId: ORG,
+      projectId: OTHER_PROJECT,
+      specId: SPEC,
+      status: "running",
+    });
+    const port = new PgRecoveryEvidencePort(owner());
     await expect(
       port.verifyOwnedReceipt({
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
-        receipt: enqueued(OTHER_SPEC, runId, "task_evidence_wrong_org"),
+        receipt: alreadyRunning(SPEC, runId),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a structurally wrong spec receipt", async () => {
+    const runId = "run_evidence_wrong_spec";
+    await seedExtraRun(owner(), { runId, specId: SPEC, status: "running" });
+    const port = new PgRecoveryEvidencePort(owner());
+    await expect(
+      port.verifyOwnedReceipt({
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
+        expectedSpecId: SPEC,
+        receipt: alreadyRunning(OTHER_SPEC, runId),
       }),
     ).resolves.toBeUndefined();
   });
@@ -155,6 +204,8 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
     const port = new PgRecoveryEvidencePort(owner());
     await expect(
       port.verifyOwnedReceipt({
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
         receipt: alreadyRunning(SPEC, runId),
       }),
@@ -174,6 +225,8 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
     const port = new PgRecoveryEvidencePort(owner());
     await expect(
       port.verifyOwnedReceipt({
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
         receipt: enqueued(SPEC, runId, taskId),
       }),

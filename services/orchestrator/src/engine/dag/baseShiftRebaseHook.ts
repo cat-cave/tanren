@@ -7,9 +7,8 @@
 // `RebaseDecision` onto the dispatcher's `BaseShiftRebaseHook` outcome:
 //   - `rebased_clean` / `rebased_resolved` ⇒ `rebased` (the branch advanced onto base; the
 //     dispatcher re-gates then the authority governs the merge).
-//   - `replanned` ⇒ `held` — the coordinator ALREADY routed the work back to the planner
-//     (kept ALIVE with the shift as context); the merge holds (recoverable) rather than
-//     proceeding on work that no longer fits. NEVER a silent merge, NEVER a discard.
+//   - a durable recovery settlement ⇒ `held` with the exact ownership/parking/terminal
+//     reason. Parking is never described as a replan.
 //   - a `BaseShiftHeldError` (any infra/alloc/clone/gate/resolver fail) ⇒ `held` (loud,
 //     recoverable; the work survives, retried on the next drive).
 //
@@ -43,7 +42,7 @@ export function buildBaseShiftRebaseHook(deps: {
     }
     const { dependent, projectId } = loaded;
     try {
-      const { decision, headSha } = await deps.coordinator.rebaseOnto({
+      const { decision, headSha, recovery } = await deps.coordinator.rebaseOnto({
         projectId,
         dependent,
         // The merge-time base is the PR's plain base branch (`default_branch`, not a
@@ -59,16 +58,37 @@ export function buildBaseShiftRebaseHook(deps: {
         toSha: "",
       });
       // `rebased_clean` / `rebased_resolved` ⇒ the branch advanced onto base (the dispatcher
-      // re-gates then merges); `replanned` ⇒ the work was routed back (hold the merge).
+      // re-gates then merges); every durable recovery outcome holds with its exact truth.
       // COMMIT-BINDING (§5): surface the rebased head sha so the dispatcher's re-gate
       // anchors its verdict on the rebased PR head (never the stale workspace HEAD).
       if (decision === "rebased_clean" || decision === "rebased_resolved") {
         return { outcome: "rebased", ...(headSha !== "" && { rebasedHeadSha: headSha }) };
       }
-      return { outcome: "held", message: "base shift re-planned the work (routed back to the planner; merge held)" };
+      if (recovery?.kind === "owned") {
+        return {
+          outcome: "held",
+          message: "base shift routed the work to a live recovery owner; merge held",
+          recovery,
+        };
+      }
+      if (recovery?.kind === "parked") {
+        return {
+          outcome: "held",
+          message: "base shift atomically parked the work for operator attention; merge held",
+          recovery,
+        };
+      }
+      if (recovery?.kind === "terminal_noop") {
+        return { outcome: "held", message: "base shift found the work already terminal; merge held", recovery };
+      }
+      return { outcome: "held", message: "base shift held the work without a durable recovery owner" };
     } catch (error) {
       if (error instanceof BaseShiftHeldError) {
-        return { outcome: "held", message: error.message };
+        return {
+          outcome: "held",
+          message: error.message,
+          ...(error.recoverySettlement !== undefined && { recovery: error.recoverySettlement }),
+        };
       }
       throw error;
     }

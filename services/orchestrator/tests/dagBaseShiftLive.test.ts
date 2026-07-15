@@ -35,6 +35,7 @@ import {
 } from "../src/engine/dag/baseShiftCoordinator.js";
 import { buildBaseShiftCoordinator, MarkerSuppressedBaseShiftPersistence } from "../src/engine/dag/percolationBuild.js";
 import { buildBaseShiftRebaseHook } from "../src/engine/dag/baseShiftRebaseHook.js";
+import { ownedPlannerRecovery, settleRecoveryForTest } from "./fixtures/scriptedRecoverySettlement.js";
 
 const PROJECT = "project_live";
 const DEP_RUN = "run_dependent_keep_me";
@@ -131,9 +132,14 @@ class RecordingPersistence implements BaseShiftPersistence {
     // behind path must NOT reach here (it is wrapped by MarkerSuppressedBaseShiftPersistence).
     this.markedInFlight.push({ runId: input.runId, ancestorSpecId: input.pending.ancestorSpecId });
   }
-  async recordReplan(input: { runId: string; specId: string }): Promise<void> {
+  async recordReplan(input: { runId: string; specId: string }) {
     this.replanned.push({ runId: input.runId, specId: input.specId });
+    return ownedPlannerRecovery(input.specId);
   }
+  async settleRecovery(input: Parameters<BaseShiftPersistence["settleRecovery"]>[0]) {
+    return settleRecoveryForTest(input.recovery);
+  }
+  async clearInFlight(): Promise<void> {}
 }
 
 class RecordingEvents implements BaseShiftEventEmitter {
@@ -227,6 +233,7 @@ const runnerDeps = () => ({
   allocator: { allocate: vi.fn<() => Promise<never>>(), release: vi.fn<() => Promise<void>>() } as never,
   ssh: {} as never,
   identitySecretRef: "secret/runner/identity",
+  runStateWriter: { parkRecoveryAndDequeue: vi.fn<() => Promise<never>>() } as never,
 });
 
 describe("the LIVE base-shift seams — unconditional + loud-throw on absent deps", () => {
@@ -323,6 +330,42 @@ describe("buildBaseShiftRebaseHook — the merge `behind` path routes through th
     expect(events.decisions).toEqual([{ runId: DEP_RUN, decision: "replanned" }]);
     expect(persistence.replanned).toEqual([{ runId: DEP_RUN, specId: DEP_SPEC }]);
     expect(outcome.outcome).toBe("held");
+  });
+
+  it("a durably parked shift is reported as parked, never as replanned", async () => {
+    const parkedCoordinator = {
+      rebaseOnto: () =>
+        Promise.resolve({
+          decision: "held" as const,
+          headSha: "sha-rebased-conflicted",
+          recovery: { kind: "parked" as const, newlyParked: true },
+        }),
+    } as unknown as BaseShiftCoordinator;
+    const hook = buildBaseShiftRebaseHook({ pool: fakeRunsPool(), coordinator: parkedCoordinator });
+
+    await expect(hook({ runId: DEP_RUN, baseBranch: "main" })).resolves.toEqual({
+      outcome: "held",
+      message: "base shift atomically parked the work for operator attention; merge held",
+      recovery: { kind: "parked", newlyParked: true },
+    });
+  });
+
+  it("a failed atomic park preserves its paced retained settlement for the outer coordinator", async () => {
+    const parkingFailure = {
+      kind: "parking_failed" as const,
+      message: "atomic park retained the queue",
+      queueDisposition: "retained" as const,
+      retryAfterMs: 3_000,
+    };
+    const failedCoordinator = {
+      rebaseOnto: () => Promise.reject(new BaseShiftHeldError("recovery", parkingFailure.message, parkingFailure)),
+    } as unknown as BaseShiftCoordinator;
+    const hook = buildBaseShiftRebaseHook({ pool: fakeRunsPool(), coordinator: failedCoordinator });
+
+    await expect(hook({ runId: DEP_RUN, baseBranch: "main" })).resolves.toMatchObject({
+      outcome: "held",
+      recovery: parkingFailure,
+    });
   });
 
   it("a CLEAN rebase + passing re-gate ⇒ `rebased_clean` (NO replan, token reuse) ⇒ the hook `rebased`", async () => {

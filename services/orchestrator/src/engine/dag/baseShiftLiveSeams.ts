@@ -354,7 +354,7 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
       enqueuer: buildReplanEnqueuer(this.deps.scopedPool, this.deps.runStateWriter),
       priorReworks: buildPriorGateReworkReader(this.deps.scopedPool),
     });
-    // Propagate the typed disposition — coordinator settles/instrumentes truthfully
+    // Propagate the typed disposition — coordinator settles and instruments truthfully
     // (never discards parking_required as silent "replanned").
     return router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });
   }

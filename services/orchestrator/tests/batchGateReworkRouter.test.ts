@@ -20,6 +20,8 @@ const PROJECT = "project_test";
 
 function culprit(specId: string): MergeQueueEntry {
   return {
+    orgId: ORG,
+    projectId: PROJECT,
     queueId: `q_${specId}`,
     runId: `run_${specId}`,
     specId,

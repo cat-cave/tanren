@@ -39,11 +39,11 @@ class ConformanceReexecutor implements PercolationReexecutor {
     decision: PercolationDecision;
     ancestorStack: AncestorStack;
     nonSpeculative: boolean;
-  }): Promise<{ reexecRunId: string }> {
+  }): Promise<{ reexecRunId: string; decision: "rebased_clean" }> {
     if (input.dependent.specId === CONF_CONFLICT_DEPENDENT.specId) {
       throw new BaseShiftHeldError("rebase", "ancestors conflict during the local stack assembly");
     }
-    return { reexecRunId: `reexec_${input.dependent.specId}` };
+    return { reexecRunId: `reexec_${input.dependent.specId}`, decision: "rebased_clean" };
   }
 }
 

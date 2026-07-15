@@ -74,30 +74,3 @@ export async function markDequeuedAfterEvent(input: {
   }
   await settle(input.events, input.queue);
 }
-
-export async function markInfraBlockedAfterEvent(input: {
-  queue: MergeQueueModel;
-  events: MergeQueueEventEmitter;
-  projectId: string;
-  entry: MergeQueueEntry;
-  kind: "ceiling" | "ambiguous" | "missing_required_credential";
-  attempts: number;
-  message: string;
-  tx?: MergeSettleTransaction;
-}): Promise<void> {
-  const settle = async (events: MergeQueueEventEmitter, queue: MergeQueueModel): Promise<void> => {
-    await events.emitInfraBlocked({
-      projectId: input.projectId,
-      entry: input.entry,
-      kind: input.kind,
-      attempts: input.attempts,
-      message: input.message,
-    });
-    await queue.markDequeued(input.entry.queueId, "blocked");
-  };
-  if (input.tx !== undefined) {
-    await input.tx.run(input.projectId, (ctx) => settle(ctx.events, ctx.queue));
-    return;
-  }
-  await settle(input.events, input.queue);
-}

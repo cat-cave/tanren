@@ -33,6 +33,8 @@ const PROJECT = "project_v87";
 const ORG = "org_v87";
 
 const ENTRY: MergeQueueEntry = {
+  orgId: ORG,
+  projectId: PROJECT,
   queueId: "mq_v87",
   runId: "run_v87",
   specId: "spec_v87",

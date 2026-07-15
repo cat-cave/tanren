@@ -825,11 +825,12 @@ smoke-plane-split-p3:
 # Plane-split P3b (real PG): the DE-PRIVILEGE proof. Migrates a fresh DB (creates
 # the `tanren_dataplane` role + drops event/cost WRITE grants), then proves under
 # that role: direct INSERT INTO events / cost_records is REJECTED for the privilege
-# (42501), org-scoped event/cost READS are kept, queue recovery can read event
-# signals under RLS, and the control-plane `tanren_app` role can still insert the
-# same event (contrast). DATABASE_URL is the owner.
+# (42501), org-scoped event/cost READS are kept, and the control-plane
+# `tanren_app` role can still insert the same event (contrast). The serialized
+# recovery suites additionally prove exact atomic park and tenant-bound successor
+# evidence. DATABASE_URL is the owner.
 smoke-plane-split-p3b:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/mergeQueueDequeuedRecovery.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --maxWorkers=1 services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/recoveryParkAtomic.rls.integration.test.ts services/orchestrator/tests/recoveryEvidencePg.rls.integration.test.ts
 
 # Plane-split P3c (real PG): the run/spec/task LIFECYCLE de-privilege proof.
 # Migrates a fresh DB (0035 drops the data plane's runs/specs/tasks WRITE grants),

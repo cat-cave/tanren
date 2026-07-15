@@ -4,8 +4,10 @@
 import type {
   ConflictRecoveryDisposition,
   ConflictRecoveryReceipt,
+  ConflictRecoverySettlement,
   TerminalParkNoopStatus,
 } from "../contracts/conflictResolution.js";
+import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
 
 /** The drive's autonomous disposition after the conflict resolver / gate-rework. */
 export type DriveConflictDisposition = "resolved" | "replanned" | "escalate" | "yield";
@@ -51,4 +53,21 @@ export function applyRecoveryDispositionToVerdict(
     return;
   }
   verdict.parking = "required";
+}
+
+/** Map a base-shift settlement without attempting recovery a second time. */
+export function driveOutcomeFromRecoverySettlement(
+  settlement: ConflictRecoverySettlement,
+  message: string,
+): Exclude<MergeDriveOutcome, { kind: "merged" | "blocked" | "re_gate_pending" | "failed" }> {
+  if (settlement.kind === "owned") {
+    return { kind: "conflict", message, recovery: settlement.receipt };
+  }
+  if (settlement.kind === "parked") {
+    return { kind: "needs_attention", message, parking: "complete" };
+  }
+  if (settlement.kind === "terminal_noop") {
+    return { kind: "needs_attention", message, parking: "terminal_noop", terminalStatus: settlement.status };
+  }
+  return { kind: "needs_attention", message: settlement.message, parking: "parking_failed" };
 }

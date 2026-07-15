@@ -2,7 +2,7 @@
 // conformance + unit tests (TEST FIXTURE — tests/ only, never production). The
 // queue model holds entries in a Map and supports the full enqueue / loadSnapshot /
 // atomic claim / settle / crash-recovery surface; the runner returns scripted
-// outcomes + records each drive. Together they let the REAL EventEmittingMergeCoordinator
+// outcomes + records each drive. Together they let the production batch coordinator
 // run against a controllable queue with no DB or VCS.
 
 import { randomUUID } from "node:crypto";
@@ -32,8 +32,6 @@ interface QueueRow {
   status: "queued" | "merging" | "merged" | "dequeued";
   /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
   dequeueReason?: DequeueReason;
-  /** Test-only model of the latest same-candidate signal used by pg dequeued recovery. */
-  recoverySignal?: "legacy_native_dequeued" | "settled";
   /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
   claimedAt?: number;
 }
@@ -91,7 +89,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       orderKey: this.order,
       status: "dequeued",
       dequeueReason: input.reason,
-      recoverySignal: "legacy_native_dequeued",
     });
   }
 
@@ -165,6 +162,8 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       }
       if (row.status !== "queued") continue;
       entries.push({
+        orgId: "org_test",
+        projectId,
         queueId: row.queueId,
         runId: row.runId,
         specId: row.specId,
@@ -209,7 +208,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     if (row !== undefined) {
       row.status = "dequeued";
       row.dequeueReason = reason;
-      row.recoverySignal = "settled";
     }
   }
 
@@ -228,7 +226,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       if (row.runId === runId && (row.status === "queued" || row.status === "merging")) {
         row.status = "dequeued";
         row.dequeueReason = "superseded";
-        row.recoverySignal = "settled";
         return { queueId: row.queueId, runId, specId: row.specId, prUrl: row.prUrl, prNumber: row.prNumber };
       }
     }

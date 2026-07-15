@@ -37,6 +37,8 @@ async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<stri
 }
 
 interface QueueEntryRow {
+  org_id: string;
+  project_id: string;
   queue_id: string;
   run_id: string;
   spec_id: string;
@@ -123,7 +125,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
       // The QUEUED entries joined to each spec's DAG facts (depends_on + priority).
       // Ordered deterministically by enqueue time for a stable orderKey tiebreak.
       const entryRows = await client.query<QueueEntryRow>(
-        `SELECT mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
+        `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
                 s.depends_on, s.priority,
                 row_number() OVER (ORDER BY mq.enqueued_at, mq.queue_id) AS rn
            FROM merge_queue mq
@@ -132,6 +134,8 @@ export class PgMergeQueueModel implements MergeQueueModel {
         [projectId],
       );
       const entries: MergeQueueEntry[] = entryRows.rows.map((row) => ({
+        orgId: row.org_id,
+        projectId: row.project_id,
         queueId: row.queue_id,
         runId: row.run_id,
         specId: row.spec_id,

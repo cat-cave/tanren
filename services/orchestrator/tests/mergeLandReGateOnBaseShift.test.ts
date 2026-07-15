@@ -145,8 +145,25 @@ describe("§5 v42: a base-shift-advanced head (gated != current) is RE-GATED the
     expect(reworked).toHaveLength(1);
     expect(reworked[0]?.gateError).toMatch(/test tier failed/u);
     expect(result.outcome).toBe("conflict");
+    expect(result.recovery).toMatchObject({ kind: "owned", receipt: { kind: "writer_rework" } });
     expect(scenario.landed).toEqual([]);
     expect(await scenario.host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("preserves a non-owned rework disposition without claiming it was routed", async () => {
+    const recovery = { kind: "parking_required" as const, message: "writer fixed point" };
+    const scenario = buildScenario({
+      reGate: async () => ({ status: "failed", gateError: "test failed" }),
+      reGateGateRework: { routeGateFailToRework: async () => recovery },
+    });
+    await scenario.host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat2" });
+
+    const result = await scenario.dispatcher.directMerge();
+
+    expect(result).toMatchObject({ outcome: "conflict", recovery });
+    expect(result.message).toContain("parking_required: writer fixed point");
+    expect(result.message).not.toContain("routed to writer rework");
+    expect(scenario.landed).toEqual([]);
   });
 
   it("a NON-TERMINAL re-gate holds recoverably (re_gate_pending) — never lands a stale verdict", async () => {

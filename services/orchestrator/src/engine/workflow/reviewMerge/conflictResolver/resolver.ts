@@ -123,7 +123,7 @@ export interface IntentPreservingResolverDeps {
  * spec's intent alive (the dispatcher then emits the recoverable conflict).
  */
 export function buildIntentPreservingConflictResolver(deps: IntentPreservingResolverDeps): ConflictResolverHook {
-  return async (context: ConflictContext): Promise<{ resolved: boolean; routedToRework?: boolean }> => {
+  return async (context: ConflictContext) => {
     const gathered = await deps.applier.gather();
     // Empty-gather short-circuit (apex pre-run §7.2): a CLEAN rebase records no
     // conflicted files — there is genuinely nothing to resolve. Don't invoke the
@@ -316,9 +316,9 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
  * does-not-fit verdict. A GATE-tier failure with a rework router wired routes to WRITER REWORK
  * carrying the gate error (the SAME never-discard re-author the batch path uses), NEVER
  * `merge.conflict.irreconcilable` / escalate (the convergence detector owns escalation, no count),
- * and returns `routedToRework` so a caller with its own replan path (the base-shift coordinator)
- * does not double-route. Everything else (a checker/auditor rejection, or a degenerate wiring with
- * no rework router) stays on the replan / irreconcilable path — never merge an unverified tree.
+ * and returns the exact typed recovery disposition so every caller can consume it without
+ * double-routing. Everything else (a checker/auditor rejection, or a degenerate wiring with no
+ * rework router) stays on the replan / irreconcilable path — never merge an unverified tree.
  */
 async function handleFailedReGate(
   deps: IntentPreservingResolverDeps,
@@ -327,7 +327,6 @@ async function handleFailedReGate(
   verdict: ReGateVerdict,
 ): Promise<{
   resolved: false;
-  routedToRework?: boolean;
   recovery?: ConflictRecoveryDisposition;
 }> {
   const reason = `re-gate failed (${verdict.failedStage ?? "unknown"}): ${verdict.reason}`;
@@ -337,7 +336,7 @@ async function handleFailedReGate(
       specId: deps.mergingSpecIntent.specId,
       gateError: reason,
     });
-    return { resolved: false, routedToRework: true, recovery };
+    return { resolved: false, recovery };
   }
   const replan = {
     which: "merging" as const,

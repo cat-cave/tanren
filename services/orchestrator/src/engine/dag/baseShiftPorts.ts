@@ -6,7 +6,12 @@
 // keep importing from `./baseShiftCoordinator.js` unchanged.
 
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
+import type {
+  ConflictRecoveryDisposition,
+  ConflictRecoverySettlement,
+  GateReworkRouteResult,
+  ReplanRouteResult,
+} from "../contracts/conflictResolution.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { AncestorStack } from "./ancestorStack.js";
 
@@ -25,8 +30,9 @@ export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" 
  */
 export class BaseShiftHeldError extends Error {
   constructor(
-    readonly stage: "rebase" | "regate" | "resolve",
+    readonly stage: "rebase" | "regate" | "resolve" | "recovery",
     reason: string,
+    readonly recoverySettlement?: ConflictRecoverySettlement,
   ) {
     super(`base shift held at ${stage}: ${reason}`);
     this.name = "BaseShiftHeldError";
@@ -101,7 +107,16 @@ export interface BaseShiftPersistence {
     ancestorSpecId: string;
     ancestorSha: string;
     reason: string;
-  }): Promise<void>;
+  }): Promise<ReplanRouteResult>;
+  /** Settle a typed route through the sole atomic recovery authority. */
+  settleRecovery(input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    recovery: ConflictRecoveryDisposition;
+  }): Promise<ConflictRecoverySettlement>;
+  /** Clear the percolation marker only after durable ownership/park/terminal truth. */
+  clearInFlight(input: { projectId: string; runId: string }): Promise<void>;
 }
 
 /** Reads the affected `integration_nodes` for a base shift (S0 observe model). */

@@ -27,6 +27,7 @@ import {
 } from "../src/engine/dag/baseShiftCoordinator.js";
 import { baseShiftApplierFacts } from "../src/engine/dag/baseShiftLiveResolve.js";
 import type { BaseShiftRunContext } from "../src/engine/dag/baseShiftLiveContext.js";
+import { ownedPlannerRecovery, settleRecoveryForTest } from "./fixtures/scriptedRecoverySettlement.js";
 
 const DEFAULT_BRANCH = "main";
 const SHIFTED_BASE = "tanren/integ/spec_b";
@@ -144,7 +145,13 @@ const noNodes: BaseShiftNodeReader = {
 const noopPersistence: BaseShiftPersistence = {
   async repointBase() {},
   async markInFlight() {},
-  async recordReplan() {},
+  async recordReplan(input) {
+    return ownedPlannerRecovery(input.specId);
+  },
+  async settleRecovery(input) {
+    return settleRecoveryForTest(input.recovery);
+  },
+  async clearInFlight() {},
 };
 const noopEvents: BaseShiftEventEmitter = {
   async emitRebase() {},

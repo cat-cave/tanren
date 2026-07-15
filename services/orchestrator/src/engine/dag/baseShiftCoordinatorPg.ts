@@ -12,9 +12,14 @@
 
 import type pg from "pg";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type {
+  ConflictRecoveryDisposition,
+  ConflictRecoverySettlement,
+  ReplanRouteResult,
+} from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
-import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import type {
   BaseShiftEventEmitter,
   BaseShiftNodeReader,
@@ -29,6 +34,7 @@ import {
   recordReplanContext,
   repointRunAncestorStack,
 } from "./percolationWrites.js";
+import { PgRecoveryRouteSettler, type RecoveryRouteSettler } from "../merge/recoveryRouteSettlement.js";
 
 /**
  * The KEEP-RUN-ROW persistence (never-discard). Every write targets the dependent's
@@ -37,10 +43,15 @@ import {
  * context (intent stays ALIVE). It NEVER cancels or creates a run.
  */
 export class PgBaseShiftPersistence implements BaseShiftPersistence {
+  private readonly recovery: RecoveryRouteSettler;
+
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter: RunStateWriter,
-  ) {}
+    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter,
+    recovery?: RecoveryRouteSettler,
+  ) {
+    this.recovery = recovery ?? new PgRecoveryRouteSettler(pool, runStateWriter);
+  }
 
   async repointBase(input: { projectId: string; runId: string; ancestorStack: AncestorStack }): Promise<void> {
     await repointRunAncestorStack(this.pool, input, this.runStateWriter);
@@ -71,10 +82,22 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
     ancestorSpecId: string;
     ancestorSha: string;
     reason: string;
-  }): Promise<void> {
-    // Route the dependent back to the planner WITH the shift as context (kept ALIVE);
-    // then CLEAR the in-flight marker so the settle does not also try to resolve it.
-    await recordReplanContext(this.pool, input, this.runStateWriter);
+  }): Promise<ReplanRouteResult> {
+    // Route only. The coordinator consumes the typed result through settleRecovery;
+    // it clears the marker only after durable owner/park/terminal truth.
+    return recordReplanContext(this.pool, input, this.runStateWriter);
+  }
+
+  async settleRecovery(input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    recovery: ConflictRecoveryDisposition;
+  }): Promise<ConflictRecoverySettlement> {
+    return this.recovery.settle(input);
+  }
+
+  async clearInFlight(input: { projectId: string; runId: string }): Promise<void> {
     await clearPercolationPending(this.pool, { projectId: input.projectId, runId: input.runId }, this.runStateWriter);
   }
 }

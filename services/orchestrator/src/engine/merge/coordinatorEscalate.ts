@@ -1,5 +1,5 @@
 // NON-BRICKING conflict-escalation seam for the native merge queue
-// (autonomy-engine.md §2c). Settlement routes genuine irreconcilables HERE.
+// (autonomy-engine.md §2c). Settlement routes genuinely irreconcilable cases HERE.
 // SpecEscalator.escalate is the SOLE atomic park via RecoveryParkWriter —
 // park + ordered events + dequeue on one org-scoped transaction. Settlement
 // branches on the typed RecoveryParkOutcome and never invents a dequeue.
@@ -9,25 +9,7 @@ import type { RecoveryParkOutcome, RecoveryParkWriter, RunStateWriter } from "..
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
 
-/** Production Direct/Http writers implement RecoveryParkWriter. */
-export type BatchCoordinatorRunStateWriter = RunStateWriter & RecoveryParkWriter;
-
-/** Honest type guard — never a silent cast of an unrelated writer. */
-export function isRecoveryParkWriter(writer: RunStateWriter): writer is BatchCoordinatorRunStateWriter {
-  return (
-    "parkRecoveryAndDequeue" in writer &&
-    typeof (writer as { parkRecoveryAndDequeue?: unknown }).parkRecoveryAndDequeue === "function"
-  );
-}
-
-export function requireRecoveryParkWriter(writer: RunStateWriter): BatchCoordinatorRunStateWriter {
-  if (!isRecoveryParkWriter(writer)) {
-    throw new Error(
-      "buildBatchMergeCoordinator requires a RunStateWriter that implements RecoveryParkWriter.parkRecoveryAndDequeue",
-    );
-  }
-  return writer;
-}
+export { isRecoveryParkWriter, requireRecoveryParkWriter } from "./recoveryRouteSettlement.js";
 
 /**
  * Escalator outcome. When `alreadyDequeued` is true (RecoveryParkWriter), settlement

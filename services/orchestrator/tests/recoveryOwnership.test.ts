@@ -41,6 +41,8 @@ describe("verifyRecoveryOwnership", () => {
   it("fails closed without evidence port", async () => {
     const r = await verifyRecoveryOwnership({
       evidence: undefined,
+      expectedOrgId: "org_a",
+      expectedProjectId: "project_a",
       expectedSpecId: "spec_a",
       receipt: ownedEnqueued("spec_a"),
       contextMessage: "ctx",
@@ -50,6 +52,8 @@ describe("verifyRecoveryOwnership", () => {
   it("accepts structural receipt under accept-structural port", async () => {
     const r = await verifyRecoveryOwnership({
       evidence: new ScriptedRecoveryEvidencePort("accept-structural"),
+      expectedOrgId: "org_a",
+      expectedProjectId: "project_a",
       expectedSpecId: "spec_a",
       receipt: ownedEnqueued("spec_a"),
       contextMessage: "ctx",
@@ -59,6 +63,8 @@ describe("verifyRecoveryOwnership", () => {
   it("rejects under reject-all port", async () => {
     const r = await verifyRecoveryOwnership({
       evidence: new ScriptedRecoveryEvidencePort("reject-all"),
+      expectedOrgId: "org_a",
+      expectedProjectId: "project_a",
       expectedSpecId: "spec_a",
       receipt: ownedEnqueued("spec_a"),
       contextMessage: "ctx",

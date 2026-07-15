@@ -79,7 +79,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
   const queueModel = new PgMergeQueueModel(deps.pool);
   // ATOMICITY (audit RC-4 #3) + plane-split (apex v87): co-transact event+queue UPDATE
   // ONLY when the writer is Direct (local pool can INSERT events). HttpRunStateWriter
-  // omits `tx` → markDequeuedAfterEvent / markInfraBlockedAfterEvent use sequential
+  // omits `tx` → markDequeuedAfterEvent uses sequential
   // event-first through the writer-backed emitters (control plane owns the INSERT).
   const settleTx = canCoTransactMergeSettle(runStateWriter)
     ? new PgMergeSettleTransaction(deps.pool, queueModel)

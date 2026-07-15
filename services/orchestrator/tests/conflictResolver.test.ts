@@ -1,6 +1,3 @@
-// Intent-preserving conflict resolver unit tests (engine/workflow/reviewMerge/conflictResolver).
-// Seams are fakes under tests/ — no real LLM/runner/DB.
-
 import { describe, expect, it } from "vitest";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { buildIntentPreservingConflictResolver } from "../src/engine/workflow/reviewMerge/conflictResolver/resolver.js";
@@ -290,10 +287,8 @@ describe("intentPreservingConflictResolver", () => {
   });
 
   it("routes a GATE-TIER re-gate failure to WRITER REWORK (NOT merge.conflict.irreconcilable / replan)", async () => {
-    // THE FIX: the resolution applied to a byte-CLEAN tree (no merge conflict), but the re-gate fails
-    // a deterministic GATE TIER on the new base — the WRITER's to fix. Route to WRITER REWORK carrying
-    // the gate error, NOT an IRRECONCILABLE CONFLICT (no `merge.conflict.irreconcilable`) and NOT a
-    // replan; it carries `routedToRework` so a base-shift caller does not double-route.
+    // A deterministic gate failure on the resolved tree belongs to writer rework,
+    // carrying exact typed ownership so callers cannot double-route.
     const events = new FakeEventStore();
     const log: string[] = [];
     const applier = fakeApplier(conflictedFiles, log);
@@ -315,18 +310,18 @@ describe("intentPreservingConflictResolver", () => {
         },
         {},
       ),
-      // The resolved tree is clean but a GATE TIER fails on the new base.
       reGate: fakeReGate({ passed: false, failedStage: "gate", reason: "gate failed at tier tier-2: step 'test'" }),
       replan,
       gateRework,
     });
     const result = await resolver(CONTEXT);
     expect(result.resolved).toBe(false);
-    expect(result.routedToRework).toBe(true);
-    // Applied, NEVER published (no merge on an unverified tree); aborted.
+    expect(result.recovery).toMatchObject({
+      kind: "owned",
+      receipt: { kind: "writer_rework", specId: "spec_merging" },
+    });
     expect(log).toEqual(["gather", "apply", "abort"]);
     expect(log).not.toContain("publish");
-    // Routed to WRITER REWORK with the real gate error — NOT to replan, NOT irreconcilable.
     expect(gateRework.calls).toEqual([
       { specId: "spec_merging", gateError: "re-gate failed (gate): gate failed at tier tier-2: step 'test'" },
     ]);
@@ -337,9 +332,6 @@ describe("intentPreservingConflictResolver", () => {
   });
 
   it("a CHECKER re-gate rejection STILL routes to replan / irreconcilable (a genuine does-not-fit, not a gate-fail)", async () => {
-    // GUARDRAIL: a checker/auditor rejection of the resolved tree is a genuine "does not satisfy the
-    // spec" verdict — it STAYS on the replan / irreconcilable path even with a gate-rework router
-    // wired. Only a deterministic GATE-TIER failure reroutes.
     const events = new FakeEventStore();
     const log: string[] = [];
     const applier = fakeApplier(conflictedFiles, log);
@@ -367,8 +359,10 @@ describe("intentPreservingConflictResolver", () => {
     });
     const result = await resolver(CONTEXT);
     expect(result.resolved).toBe(false);
-    expect(result.routedToRework).toBeUndefined();
-    // The gate-rework router is NOT engaged; the replan / irreconcilable path runs as before.
+    expect(result.recovery).toMatchObject({
+      kind: "owned",
+      receipt: { kind: "planner_replan", specId: "spec_merging" },
+    });
     expect(gateRework.calls).toHaveLength(0);
     expect(replan.calls).toEqual([expect.objectContaining({ specId: "spec_merging" })]);
     const irreconcilable = events.events.find((e) => e.eventType === "merge.conflict.irreconcilable");

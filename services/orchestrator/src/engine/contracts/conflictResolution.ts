@@ -273,6 +273,26 @@ export type ConflictRecoveryDisposition =
   | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
   | { kind: "parking_failed"; message: string; observedStatus?: string };
 
+/**
+ * Settlement result after the sole atomic recovery authority has consumed a
+ * router disposition. `parking_required` can never escape this boundary: it is
+ * either durably `parked`, or becomes a paced `parking_failed` while the exact
+ * queue owner remains retained or unknown. Only these settled results may drive a
+ * base-shift/percolation terminal decision.
+ */
+export type ConflictRecoverySettlement =
+  | { kind: "owned"; receipt: ConflictRecoveryReceipt }
+  | { kind: "parked"; newlyParked: boolean }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | {
+      kind: "parking_failed";
+      message: string;
+      queueDisposition: "retained" | "unknown";
+      retryAfterMs: number;
+    };
+
+export type DurableConflictRecoverySettlement = Exclude<ConflictRecoverySettlement, { kind: "parking_failed" }>;
+
 // ---- The replan router (intent stays alive) -------------------------------
 
 /**

@@ -54,8 +54,12 @@ const noopEmitter: PercolationEventEmitter = {
 };
 
 const noopSettler: PercolationSettler = {
-  async absorb(): Promise<void> {},
-  async replan(): Promise<void> {},
+  async absorb() {
+    return { result: "absorbed" };
+  },
+  async replan() {
+    return { result: "replanned", reexecRunId: "run_replan" };
+  },
 };
 
 describe("percolation HELD re-drive is spaced by a per-spec backoff (apex-v35 Part B)", () => {

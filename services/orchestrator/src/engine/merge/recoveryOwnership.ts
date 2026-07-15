@@ -10,7 +10,7 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
-import type { ConflictRecoveryDisposition, ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
+import type { ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
 import { isPool, type QueryClient } from "../data/orgScopedDb.js";
 
 /**
@@ -36,24 +36,10 @@ export function isActiveOwnerRunStatus(status: string): boolean {
   return (ACTIVE_OWNER_RUN_STATUSES as readonly string[]).includes(status);
 }
 
-/**
- * Atomic recovery prepare input. Target status is always `open` (hardcoded in SQL).
- * `steeringNote` is optional so rollback can prepare without mutating description;
- * replan/rework HTTP and writer paths require a non-empty note at their Zod/enqueuer seams.
- */
-export interface PrepareSpecForRecoveryInput {
-  specId: string;
-  orgId: string;
-  /** When present and non-empty, appended as operator steering before reopen. */
-  steeringNote?: string;
-}
-
-export type PrepareSpecForRecoveryResult =
-  | { prepared: true; fromStatus: string }
-  | { prepared: false; reason: "missing" | "not_recoverable"; status?: string };
-
 /** Settlement-time proof that a named run currently owns recovery for an exact spec. */
 export interface RecoveryRunEvidence {
+  orgId: string;
+  projectId: string;
   runId: string;
   specId: string;
   runStatus: string;
@@ -67,6 +53,8 @@ export interface RecoveryRunEvidence {
  */
 export interface RecoveryEvidencePort {
   verifyOwnedReceipt(input: {
+    expectedOrgId: string;
+    expectedProjectId: string;
     expectedSpecId: string;
     receipt: ConflictRecoveryReceipt;
   }): Promise<RecoveryRunEvidence | undefined>;
@@ -111,24 +99,6 @@ export async function findActiveOwnerRunForSpec(
 }
 
 /**
- * Spec status under the tenant org GUC. Undefined ⇒ missing row ⇒ fail closed.
- * Prefer atomic prepareSpecForRecovery for mutations; this is a scoped read helper.
- */
-export async function loadSpecStatusForRecovery(
-  pool: QueryClient,
-  orgId: string,
-  specId: string,
-): Promise<string | undefined> {
-  const realPool = requirePool(pool, "loadSpecStatusForRecovery");
-  return runWithOrgScope(realPool, orgId, async (client) => {
-    const result = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1 LIMIT 1", [
-      specId,
-    ]);
-    return result.rows[0]?.status;
-  });
-}
-
-/**
  * Structural pre-check only (non-empty ids + matching specId). NEVER sufficient for
  * settlement — callers must still pass {@link RecoveryEvidencePort.verifyOwnedReceipt}.
  * Receipt ids name the NEW owner run/task, never the stale PR/head being replaced.
@@ -151,6 +121,8 @@ export function hasStructuralOwnedReceiptShape(receipt: ConflictRecoveryReceipt,
  */
 export async function verifyRecoveryOwnership(input: {
   evidence: RecoveryEvidencePort | undefined;
+  expectedOrgId: string;
+  expectedProjectId: string;
   expectedSpecId: string;
   receipt: ConflictRecoveryReceipt;
   contextMessage: string;
@@ -164,6 +136,8 @@ export async function verifyRecoveryOwnership(input: {
     };
   }
   const evidence = await input.evidence.verifyOwnedReceipt({
+    expectedOrgId: input.expectedOrgId,
+    expectedProjectId: input.expectedProjectId,
     expectedSpecId: input.expectedSpecId,
     receipt: input.receipt,
   });
@@ -176,47 +150,4 @@ export async function verifyRecoveryOwnership(input: {
     };
   }
   return { ok: true, evidence };
-}
-
-/**
- * Truthful recovery disposition labels for base-shift instrumentation.
- * Only durable owned planner/writer receipts become replanned/writer_rework —
- * parking_required is NOT "replanned" merely because routing was attempted.
- * parking_failed / terminal_noop / parking_required keep exact durable tokens
- * (never collapsed to a silent `held` — infra hold is {@link BaseShiftHeldError} only).
- */
-export type BaseShiftRecoveryDecision =
-  | "replanned"
-  | "writer_rework"
-  | "terminal_noop"
-  | "parking_failed"
-  | "parking_required";
-
-export function baseShiftDecisionFromRecovery(
-  recovery: ConflictRecoveryDisposition | undefined,
-): BaseShiftRecoveryDecision {
-  if (recovery === undefined || recovery.kind === "parking_required") return "parking_required";
-  if (recovery.kind === "terminal_noop") return "terminal_noop";
-  if (recovery.kind === "parking_failed") return "parking_failed";
-  return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
-}
-
-/** Map a gate-rework route result onto a public RebaseDecision recovery label. */
-export function baseShiftDecisionFromRouteResult(recovery: {
-  kind: "owned" | "terminal_noop" | "parking_required" | "parking_failed";
-}): BaseShiftRecoveryDecision {
-  if (recovery.kind === "owned") return "writer_rework";
-  if (recovery.kind === "terminal_noop") return "terminal_noop";
-  if (recovery.kind === "parking_failed") return "parking_failed";
-  return "parking_required";
-}
-
-/** Clear percolation_pending only for durable owned / concurrent-terminal. */
-export function shouldClearPercolationPending(kind: ConflictRecoveryDisposition["kind"]): boolean {
-  return kind === "owned" || kind === "terminal_noop";
-}
-
-/** Aux merge.conflict / irreconcilable+replanned only for durable owned recovery. */
-export function shouldEmitOwnedConflictAux(kind: ConflictRecoveryDisposition["kind"] | undefined): boolean {
-  return kind === "owned";
 }

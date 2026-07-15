@@ -1,7 +1,5 @@
-// Non-merged drive-outcome SETTLE mapping for BatchMergeCoordinator.
-// Owner-aware retirement: conflict/failed/gate-fail only leave the queue after
-// a durable replacement owner or RecoveryParkWriter parked. parking_failed with
-// retained never emits dequeue.
+// Non-merged drive settlement. A candidate retires only after durable replacement
+// ownership or atomic parking; retained parking failure never emits dequeue.
 
 import type { BatchCheckVerdict, BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type { GateReworkRouteResult, ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
@@ -47,10 +45,7 @@ export interface BatchSettleDeps {
   recoveryEvidence?: RecoveryEvidencePort;
 }
 
-/**
- * GATE-fail bisect culprit only. Spec-vs-spec CONFLICT culprits are driven via
- * {@link driveConflictCulprit}, never settled here.
- */
+/** Settle a gate-fail culprit; spec conflicts go through driveConflictCulprit. */
 export async function settleBisectCulprit(
   deps: BatchSettleDeps,
   projectId: string,
@@ -171,6 +166,8 @@ async function settleWriterOwnedOrPark(
   if (recovery.kind === "owned") {
     const verified = await verifyRecoveryOwnership({
       evidence: deps.recoveryEvidence,
+      expectedOrgId: entry.orgId,
+      expectedProjectId: entry.projectId,
       expectedSpecId: entry.specId,
       receipt: recovery.receipt,
       contextMessage: failMessage,
@@ -331,6 +328,8 @@ async function settleConflictOwned(
 ): Promise<"dequeued" | RecoverableDriveHoldResult> {
   const verified = await verifyRecoveryOwnership({
     evidence: deps.recoveryEvidence,
+    expectedOrgId: entry.orgId,
+    expectedProjectId: entry.projectId,
     expectedSpecId: entry.specId,
     receipt: recovery,
     contextMessage: message,
@@ -394,10 +393,7 @@ export async function driveBaseConflict(
   return driveConflictCulprit(deps, projectId, culprit, queueDepth);
 }
 
-/**
- * Drive an already-identified conflict culprit through runner.driveMerge + settle.
- * Shared by base-conflict short-circuit and spec-vs-spec bisect tail.
- */
+/** Drive and settle an identified conflict culprit. */
 export async function driveConflictCulprit(
   deps: BatchBaseConflictDeps,
   projectId: string,
