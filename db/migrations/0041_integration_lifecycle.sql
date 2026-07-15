@@ -353,6 +353,12 @@ CREATE TABLE "project_integration_grant_selections" (
 ALTER TABLE "project_integration_grant_selections" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
 ALTER TABLE "org_integrations" DISABLE ROW LEVEL SECURITY;--> statement-breakpoint
 DROP TABLE "org_integrations" CASCADE;--> statement-breakpoint
+-- Composite FK targets must exist before the first dependent FK. Postgres 42830
+-- rejects REFERENCES (a,b) when no unique/primary key covers those columns yet.
+CREATE UNIQUE INDEX "projects_org_project_unique" ON "projects" USING btree ("org_id","project_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "specs_org_spec_unique" ON "specs" USING btree ("org_id","spec_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "org_integration_connections_provider_id_unique" ON "org_integration_connections" USING btree ("org_id","provider_kind","id");--> statement-breakpoint
+CREATE UNIQUE INDEX "org_integration_grants_connection_id_unique" ON "org_integration_grants" USING btree ("org_id","connection_id","id");--> statement-breakpoint
 ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_requirement_fk" FOREIGN KEY ("org_id","requirement_id") REFERENCES "public"."integration_requirements"("org_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_behavior_revision_fk" FOREIGN KEY ("org_id","behavior_revision_id") REFERENCES "public"."behavior_revisions"("org_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -404,6 +410,9 @@ ALTER TABLE "project_integration_grant_selections" ADD CONSTRAINT "project_integ
 ALTER TABLE "project_integration_grant_selections" ADD CONSTRAINT "project_integration_grant_selections_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_integration_grant_selections" ADD CONSTRAINT "project_integration_grant_selections_connection_fk" FOREIGN KEY ("org_id","provider_kind","connection_id") REFERENCES "public"."org_integration_connections"("org_id","provider_kind","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_integration_grant_selections" ADD CONSTRAINT "project_integration_grant_selections_grant_fk" FOREIGN KEY ("org_id","connection_id","grant_id") REFERENCES "public"."org_integration_grants"("org_id","connection_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_binding_output_fk" FOREIGN KEY ("org_id","binding_id","key") REFERENCES "public"."integration_binding_env"("org_id","binding_id","key") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "behavior_integration_requirements_org_id" ON "behavior_integration_requirements" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "behavior_integration_requirements_org_behavior" ON "behavior_integration_requirements" USING btree ("org_id","behavior_revision_id");--> statement-breakpoint
 CREATE INDEX "capability_node_dependencies_org_id" ON "capability_node_dependencies" USING btree ("org_id");--> statement-breakpoint
@@ -418,11 +427,9 @@ CREATE UNIQUE INDEX "integration_requirements_active_source_unique" ON "integrat
 CREATE INDEX "integration_requirements_org_id" ON "integration_requirements" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "integration_requirements_org_project" ON "integration_requirements" USING btree ("org_id","project_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "org_integration_connections_account_unique" ON "org_integration_connections" USING btree ("org_id","provider_kind","upstream_account_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "org_integration_connections_provider_id_unique" ON "org_integration_connections" USING btree ("org_id","provider_kind","id");--> statement-breakpoint
 CREATE INDEX "org_integration_connections_org_id" ON "org_integration_connections" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "org_integration_connections_org_provider" ON "org_integration_connections" USING btree ("org_id","provider_kind");--> statement-breakpoint
 CREATE UNIQUE INDEX "org_integration_grants_generation_unique" ON "org_integration_grants" USING btree ("org_id","connection_id","plane","environment","generation");--> statement-breakpoint
-CREATE UNIQUE INDEX "org_integration_grants_connection_id_unique" ON "org_integration_grants" USING btree ("org_id","connection_id","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "org_integration_grants_active_unique" ON "org_integration_grants" USING btree ("org_id","connection_id","plane","environment") WHERE status = 'active';--> statement-breakpoint
 CREATE INDEX "org_integration_grants_org_id" ON "org_integration_grants" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "org_integration_grants_org_connection" ON "org_integration_grants" USING btree ("org_id","connection_id");--> statement-breakpoint
@@ -445,14 +452,9 @@ CREATE INDEX "integration_validation_proofs_org_id" ON "integration_validation_p
 CREATE INDEX "integration_validation_proofs_org_project" ON "integration_validation_proofs" USING btree ("org_id","project_id","created_at");--> statement-breakpoint
 CREATE INDEX "project_integration_grant_selections_org_id" ON "project_integration_grant_selections" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "project_integration_grant_selections_org_project" ON "project_integration_grant_selections" USING btree ("org_id","project_id");--> statement-breakpoint
-ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_binding_output_fk" FOREIGN KEY ("org_id","binding_id","key") REFERENCES "public"."integration_binding_env"("org_id","binding_id","key") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "project_app_env_project_environment_key_unique" ON "project_app_env" USING btree ("org_id","project_id","environment","key");--> statement-breakpoint
 CREATE INDEX "project_app_env_org_id" ON "project_app_env" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "project_app_env_org_project" ON "project_app_env" USING btree ("org_id","project_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "projects_org_project_unique" ON "projects" USING btree ("org_id","project_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "specs_org_spec_unique" ON "specs" USING btree ("org_id","spec_id");--> statement-breakpoint
 CREATE POLICY "rls_org_isolation" ON "project_app_env" AS PERMISSIVE FOR ALL TO public USING ("project_app_env"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("project_app_env"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
 CREATE POLICY "rls_org_isolation" ON "behavior_integration_requirements" AS PERMISSIVE FOR ALL TO public USING ("behavior_integration_requirements"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("behavior_integration_requirements"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
 CREATE POLICY "rls_org_isolation" ON "capability_node_dependencies" AS PERMISSIVE FOR ALL TO public USING ("capability_node_dependencies"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("capability_node_dependencies"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint

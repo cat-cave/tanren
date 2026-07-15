@@ -121,6 +121,36 @@ describe("IN-1 integration lifecycle schema contract", () => {
     expect(migration).toContain('CREATE UNIQUE INDEX "specs_org_spec_unique"');
   });
 
+  it("creates every composite FK target unique index before the first dependent FK", () => {
+    // Presence alone is insufficient — Postgres 42830 fires when the referenced
+    // unique key does not exist at ADD CONSTRAINT time. Pin creation-before-use.
+    const requiredBefore = [
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "projects_org_project_unique"',
+        firstFk: 'CONSTRAINT "capability_nodes_project_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "specs_org_spec_unique"',
+        firstFk: 'CONSTRAINT "spec_capability_dependencies_spec_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "org_integration_connections_provider_id_unique"',
+        firstFk: 'CONSTRAINT "project_integration_grant_selections_connection_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "org_integration_grants_connection_id_unique"',
+        firstFk: 'CONSTRAINT "project_integration_grant_selections_grant_fk" FOREIGN KEY',
+      },
+    ] as const;
+    for (const { uniqueIndex, firstFk } of requiredBefore) {
+      const indexAt = migration.indexOf(uniqueIndex);
+      const fkAt = migration.indexOf(firstFk);
+      expect(indexAt, `${uniqueIndex} missing`).toBeGreaterThanOrEqual(0);
+      expect(fkAt, `${firstFk} missing`).toBeGreaterThanOrEqual(0);
+      expect(indexAt).toBeLessThan(fkAt);
+    }
+  });
+
   it("pins digest, generation, account, and secret/binding invariants in SQL", () => {
     expect(migration).toContain("^sha256:[0-9a-f]{64}$");
     expect(migration).toContain('CONSTRAINT "project_app_env_value_xor_check"');
