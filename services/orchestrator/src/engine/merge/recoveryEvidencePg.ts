@@ -1,6 +1,7 @@
 // Production RecoveryEvidencePort: settlement-time readback over runs (+ tasks)
 // under system/BYPASSRLS scope (runWithSystemScope). Unscoped app-pool reads see
 // zero rows under RLS and would always fail readback — never raw-query the tenant pool.
+// Fail-closed: every branch returns RecoveryRunEvidence | undefined (no-evidence).
 
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -12,6 +13,12 @@ import {
   type RecoveryRunEvidence,
 } from "./recoveryOwnership.js";
 
+/** Explicit no-evidence result without a bare `return undefined` (unicorn + consistent-return). */
+function noEvidence(): RecoveryRunEvidence | undefined {
+  const empty: { value?: RecoveryRunEvidence } = {};
+  return empty.value;
+}
+
 export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
   constructor(private readonly pool: pg.Pool) {}
 
@@ -20,15 +27,15 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
     receipt: ConflictRecoveryReceipt;
   }): Promise<RecoveryRunEvidence | undefined> {
     if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) {
-      return;
+      return noEvidence();
     }
-    return runWithSystemScope(this.pool, async (client) => {
+    return runWithSystemScope(this.pool, async (client): Promise<RecoveryRunEvidence | undefined> => {
       if (input.receipt.run.kind === "already_running") {
         return this.verifyRun(client, input.receipt.run.runId, input.expectedSpecId);
       }
       const run = await this.verifyRun(client, input.receipt.run.replanRunId, input.expectedSpecId);
       if (run === undefined) {
-        return;
+        return noEvidence();
       }
       const taskOk = await this.taskBelongsToRun(
         client,
@@ -36,7 +43,7 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
         input.receipt.run.replanRunId,
       );
       if (!taskOk) {
-        return;
+        return noEvidence();
       }
       return { ...run, plannerTaskId: input.receipt.run.plannerTaskId };
     });
@@ -52,9 +59,10 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
       [runId],
     );
     const row = result.rows[0];
-    if (row !== undefined && row.spec_id === expectedSpecId && isActiveOwnerRunStatus(row.status)) {
-      return { runId: row.run_id, specId: row.spec_id, runStatus: row.status };
+    if (row === undefined || row.spec_id !== expectedSpecId || !isActiveOwnerRunStatus(row.status)) {
+      return noEvidence();
     }
+    return { runId: row.run_id, specId: row.spec_id, runStatus: row.status };
   }
 
   private async taskBelongsToRun(client: pg.PoolClient, plannerTaskId: string, runId: string): Promise<boolean> {

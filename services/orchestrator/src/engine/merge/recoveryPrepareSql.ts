@@ -25,7 +25,7 @@ export async function applyPrepareSpecForRecovery(
   if (row === undefined) {
     return { prepared: false, reason: "missing" };
   }
-  const fromStatus = String(row.status);
+  const fromStatus = row.status;
   if (!(RECOVERABLE_SOURCE_SPEC_STATUSES as readonly string[]).includes(fromStatus)) {
     return { prepared: false, reason: "not_recoverable", status: fromStatus };
   }

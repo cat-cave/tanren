@@ -89,9 +89,12 @@ export async function findActiveOwnerRunForSpec(
       [specId],
     );
     const row = result.rows[0];
+    // Explicit optional result: absent row ⇒ undefined (fail closed), never a fabricated owner.
+    let owner: { runId: string; status: string } | undefined;
     if (row !== undefined) {
-      return { runId: row.run_id, status: row.status };
+      owner = { runId: row.run_id, status: row.status };
     }
+    return owner;
   });
 }
 
