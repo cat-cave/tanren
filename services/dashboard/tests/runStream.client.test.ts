@@ -167,8 +167,12 @@ describe("cost parse atomic fail-closed", () => {
   it("mixed junk costUsd frame does not mutate totals or re-arm drain", () => {
     const { root } = rootWithFlag();
     const totals = emptyTotals();
-    const sched = makeScheduler();
-    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const scheduler = makeScheduler();
+    const drain = createCostDrainCloser({
+      idleMs: COST_DRAIN_IDLE_MS,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+    });
     applySnapshotFrame(
       root,
       totals,
@@ -189,7 +193,7 @@ describe("cost parse atomic fail-closed", () => {
     expect(totals.inputTokens).toBe(10);
     expect([...totals.seenIds]).toEqual(seen);
     expect(drain.generation()).toBe(gen0);
-    expect(sched.live()).toHaveLength(1);
+    expect(scheduler.live()).toHaveLength(1);
   });
 
   it("dedupes by stable id", () => {
@@ -223,8 +227,12 @@ describe("run stream terminal state machine", () => {
   it("live snapshot resets; reconnect applies only unseen costs and does not demote", () => {
     const { root, header, costPerToken } = rootWithFlag();
     const totals = emptyTotals();
-    const sched = makeScheduler();
-    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const scheduler = makeScheduler();
+    const drain = createCostDrainCloser({
+      idleMs: COST_DRAIN_IDLE_MS,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+    });
     let closed = false;
     const hooks = {
       noteCostActivity: () => drain.noteCostActivity(),
@@ -276,8 +284,12 @@ describe("run stream terminal state machine", () => {
   it("mixed valid+invalid costs frame leaves totals/seen/deadline unchanged", () => {
     const { root, header } = rootWithFlag();
     const totals = emptyTotals();
-    const sched = makeScheduler();
-    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const scheduler = makeScheduler();
+    const drain = createCostDrainCloser({
+      idleMs: COST_DRAIN_IDLE_MS,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+    });
     const hooks = {
       noteCostActivity: () => drain.noteCostActivity(),
       enterDrain: (c: () => void) => drain.enterDrain(c),
@@ -315,14 +327,18 @@ describe("run stream terminal state machine", () => {
     expect(totals.inputTokens).toBe(10);
     expect([...totals.seenIds]).toEqual(seenSnap);
     expect(drain.generation()).toBe(gen0);
-    expect(sched.live()).toHaveLength(1);
+    expect(scheduler.live()).toHaveLength(1);
   });
 
   it("event:costs deltas incorporate once; repeats do not re-arm", () => {
     const { root } = rootWithFlag();
     const totals = emptyTotals();
-    const sched = makeScheduler();
-    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const scheduler = makeScheduler();
+    const drain = createCostDrainCloser({
+      idleMs: COST_DRAIN_IDLE_MS,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+    });
     setRunStreamPhase(root, "draining");
     setStreamState(root, "final");
     drain.enterDrain(() => {});
@@ -344,8 +360,12 @@ describe("run stream terminal state machine", () => {
   });
 
   it("repeated errors do not extend the close deadline", () => {
-    const sched = makeScheduler();
-    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const scheduler = makeScheduler();
+    const drain = createCostDrainCloser({
+      idleMs: COST_DRAIN_IDLE_MS,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+    });
     let closed = false;
     drain.enterDrain(() => {
       closed = true;
@@ -357,25 +377,29 @@ describe("run stream terminal state machine", () => {
       closed = true;
     });
     expect(drain.generation()).toBe(gen0);
-    expect(sched.live()).toHaveLength(1);
+    expect(scheduler.live()).toHaveLength(1);
     expect(closed).toBe(false);
     expect(drain.isDraining()).toBe(true);
   });
 
   it("stale canceled timer cannot close after a newer real-cost arm", () => {
-    const sched = makeScheduler();
-    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const scheduler = makeScheduler();
+    const drain = createCostDrainCloser({
+      idleMs: COST_DRAIN_IDLE_MS,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
+    });
     let closeCount = 0;
     drain.enterDrain(() => {
       closeCount += 1;
     });
-    const firstId = sched.timers[0]!.id;
+    const firstId = scheduler.timers[0]!.id;
     drain.noteCostActivity();
-    const secondId = sched.live()[0]!.id;
-    sched.fire(firstId);
+    const secondId = scheduler.live()[0]!.id;
+    scheduler.fire(firstId);
     expect(closeCount).toBe(0);
     expect(drain.isClosed()).toBe(false);
-    sched.fire(secondId);
+    scheduler.fire(secondId);
     expect(closeCount).toBe(1);
     expect(drain.isClosed()).toBe(true);
   });

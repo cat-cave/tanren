@@ -136,14 +136,14 @@ afterEach(() => {
 describe("initRunStream wiring", () => {
   it("terminal drain + reconnect reconcile + atomic reject + closeCalls===1", () => {
     const { doc, flag, header, costPerToken } = makeDom();
-    const sched = makeScheduler();
+    const scheduler = makeScheduler();
 
     // Isolated document seam only — no vi.stubGlobal("document").
     initRunStream({
       document: doc,
       EventSourceCtor: FakeEventSource as unknown as typeof EventSource,
-      schedule: sched.schedule,
-      cancel: sched.cancel,
+      schedule: scheduler.schedule,
+      cancel: scheduler.cancel,
       idleMs: COST_DRAIN_IDLE_MS,
     });
 
@@ -160,8 +160,8 @@ describe("initRunStream wiring", () => {
     es.emit("status", { status: "completed", outcome: null });
     expect(flag.textContent).toBe("● final");
     expect(header.textContent).toBe("completed");
-    expect(sched.live()).toHaveLength(1);
-    const armAfterTerminal = sched.live()[0]!.id;
+    expect(scheduler.live()).toHaveLength(1);
+    const armAfterTerminal = scheduler.live()[0]!.id;
 
     // Identical reconnect: no demotion / double-count / re-arm.
     es.emit("snapshot", {
@@ -170,7 +170,7 @@ describe("initRunStream wiring", () => {
     });
     expect(header.textContent).toBe("completed");
     expect(costPerToken.textContent).toBe("$0.0010");
-    expect(sched.live().map((t) => t.id)).toEqual([armAfterTerminal]);
+    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterTerminal]);
 
     // Mixed valid+invalid reconnect: mark stale, no mutation, no re-arm.
     es.emit("snapshot", {
@@ -181,7 +181,7 @@ describe("initRunStream wiring", () => {
     expect(header.textContent).toBe("completed");
     // Final flag stays sticky; stale must not demote terminal UI.
     expect(flag.textContent).toBe("● final");
-    expect(sched.live().map((t) => t.id)).toEqual([armAfterTerminal]);
+    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterTerminal]);
 
     // Unseen late cost on valid reconnect → re-arm.
     es.emit("snapshot", {
@@ -190,32 +190,32 @@ describe("initRunStream wiring", () => {
     });
     expect(costPerToken.textContent).toBe("$0.0012");
     expect(header.textContent).toBe("completed");
-    expect(sched.timers.find((t) => t.id === armAfterTerminal)?.canceled).toBe(true);
-    const armAfterReconnectCost = sched.live()[0]!.id;
+    expect(scheduler.timers.find((t) => t.id === armAfterTerminal)?.canceled).toBe(true);
+    const armAfterReconnectCost = scheduler.live()[0]!.id;
 
     // event:costs delta once; repeat no re-arm.
     es.emit("costs", { costs: [cost(3, 1, "0.0001")] });
     expect(costPerToken.textContent).toBe("$0.0013");
-    const armAfterDelta = sched.live()[0]!.id;
+    const armAfterDelta = scheduler.live()[0]!.id;
     expect(armAfterDelta).not.toBe(armAfterReconnectCost);
     es.emit("costs", { costs: [cost(3, 1, "0.0001")] });
     expect(costPerToken.textContent).toBe("$0.0013");
-    expect(sched.live().map((t) => t.id)).toEqual([armAfterDelta]);
+    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterDelta]);
 
     // Malformed costs delta: stale, no mutation, no re-arm.
     es.emit("costs", { costs: [cost(4, 1, "not-a-number")] });
     expect(costPerToken.textContent).toBe("$0.0013");
-    expect(sched.live().map((t) => t.id)).toEqual([armAfterDelta]);
+    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterDelta]);
 
     es.emit("error", {});
     es.emit("error", {});
     expect(es.closeCalls).toBe(0);
-    expect(sched.live().map((t) => t.id)).toEqual([armAfterDelta]);
+    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterDelta]);
 
-    sched.fire(armAfterReconnectCost);
+    scheduler.fire(armAfterReconnectCost);
     expect(es.closeCalls).toBe(0);
 
-    sched.fire(armAfterDelta);
+    scheduler.fire(armAfterDelta);
     expect(es.closeCalls).toBe(1);
     expect(es.closed).toBe(true);
 
