@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "orgId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "orgId",
+    "projectId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.http.RunLocation"
+}

@@ -96,6 +96,7 @@ export interface SpecRow {
 }
 
 export class RunRoutesPool {
+  queries: Array<{ sql: string; params: unknown[] }> = [];
   runs: RunRow[] = [];
   tasks: TaskRow[] = [];
   events: EventRow[] = [];
@@ -230,6 +231,7 @@ export class RunRoutesPool {
   }
 
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
+    this.queries.push({ sql, params });
     const trimmed = sql.trim();
 
     // assertProjectAccess and friends
