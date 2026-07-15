@@ -1,0 +1,230 @@
+// view-onboard-existing-config.jsx — 01c · steps E3 (config-injection PR) +
+// E4 (spec DAG + issue ingest). Sibling of view-onboard-existing.jsx; loads
+// after it and before view-onboard-existing-gov.jsx.
+
+// ===== E3 · Config injection PR =====
+const ExistConfig = () => (
+  <>
+    <StepHeading
+      eyebrow="step 3 · config injection pr"
+      title="review what"
+      em="we'll add"
+      sub="tanren proposes the integration files based on what the agent read. nothing lands until you merge this pr. reject any file; tanren adapts."
+      right={<span className="pill ok"><span className="d"></span>one pr · then it's yours</span>}
+    />
+    <div className="cols-2-narrow" style={{ gridTemplateColumns: "260px 1fr" }}>
+      <div className="col-card" style={{ padding: 0, overflow: "hidden", minHeight: 0 }}>
+        <div className="h" style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)" }}><span>files · <em style={{ color: "var(--ember-08)" }}>5</em></span><span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+166 −0</span></div>
+        {[
+          { f: ".tanren/PROJECT.md", add: 64, sel: true, snapshot: true },
+          { f: ".tanren/ci.yml", add: 48 },
+          { f: "CODEOWNERS", add: 14 },
+          { f: ".gitignore", add: 4, note: "mod" },
+          { f: "PULL_REQUEST_TEMPLATE.md", add: 36, note: "mod" },
+        ].map((f, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "16px 1fr auto", gap: 8, alignItems: "center", padding: "8px 14px", background: f.sel ? "var(--accent-tint)" : "transparent", borderLeft: f.sel ? "2px solid var(--ember-08)" : "2px solid transparent", borderBottom: "1px solid var(--line-1)", cursor: "pointer" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--status-ok)", fontWeight: 700 }}>+</span>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: f.sel ? "var(--fg-1)" : "var(--fg-2)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {f.f}
+              {f.note && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--status-warn)", letterSpacing: "0.12em", marginLeft: 4 }}>· {f.note}</span>}
+              {f.snapshot && <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.12em", marginLeft: 4 }}>· snapshot</span>}
+            </div>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+{f.add}</span>
+          </div>
+        ))}
+        <div style={{ padding: "10px 14px", borderTop: "1px solid var(--line-1)", background: "var(--bg-sunken)", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-3)", marginTop: "auto" }}>
+          pr will target <b style={{ color: "var(--fg-1)" }}>main</b><br />
+          from branch <b style={{ color: "var(--ember-08)" }}>tanren/integrate</b>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
+        <div className="col-card" style={{ padding: 0, overflow: "hidden", flex: 1, minHeight: 0 }}>
+          <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--line-1)", background: "var(--bg-sunken)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-1)" }}>.tanren/PROJECT.md</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--status-ok)" }}>+64 lines</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.14em", textTransform: "uppercase", fontWeight: 700, padding: "2px 6px", border: "1px solid var(--ember-08)", borderRadius: 1 }}>one-time snapshot</span>
+            <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              <button className="btn ghost" style={{ fontSize: 11, color: "var(--ember-08)" }}>ask forge to revise ↗</button>
+              <button className="btn ghost" style={{ fontSize: 11, color: "var(--status-fail)" }}>× exclude this file</button>
+            </span>
+          </div>
+          <div style={{ padding: "8px 14px", background: "oklch(68% 0.22 40 / 0.05)", borderBottom: "1px solid var(--line-1)", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-2)", lineHeight: 1.5 }}>
+            <span style={{ color: "var(--ember-08)", marginRight: 6 }}>▸</span>
+            generated mirror of project config at onboarding · regenerated only on opt-in via the audit gate · <b style={{ color: "var(--fg-1)" }}>don't edit by hand</b>. live config is in the orchestrator dashboard.
+          </div>
+          <pre className="code-block" style={{ flex: 1, margin: 0, borderTop: "none", borderLeft: "none", borderRight: "none", borderBottom: "none" }}>
+{`# tanren-fixture-easy
+
+> Generated by tanren at onboarding · 2026-05-28 14:22 UTC
+> Source of truth: orchestrator dashboard · /projects/tanren-fixture-easy
+
+## identity
+
+- **org** · cat-cave
+- **repo** · github.com/cat-cave/tanren-fixture-easy
+- **purpose** · smoke fixture for the tanren agentic loop
+
+## personas
+
+- **developer · fixture operator** — runs the e2e fixture, no real users
+
+## behaviors (4 captured)
+
+- dev · run the e2e fixture
+- dev · view current theme setting
+- dev · toggle theme via api
+- dev · sync theme to profile
+
+## architecture
+
+- **web** · next.js 14 · turborepo · pnpm
+- **data** · postgres · prisma
+- **deploy** · vercel · main → prod
+- **ci (repo)** · github actions · 3 workflows · domain content, not delivery
+- **delivery** · tanren/gate via .tanren/ci.yml · native queue
+
+## guardrails
+
+- never push to: main, release/*
+- never force-push, never delete branches
+- runner: local-docker · 4gb · tanren-runner image
+
+## routing
+
+- writers default to org chain · see dashboard /settings/routing
+- retries: max 3 · on exceed → escalate
+
+## merge posture
+
+- strict — every change goes through a spec
+- on external push → warn (settle in step 5)
+- codeowner review required
+
+---
+
+edit the live config in the dashboard. this file regenerates only when the audit gate is enabled.`}
+          </pre>
+        </div>
+
+        <div className="col-card live" style={{ padding: 12, flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>↑ before you click</span>
+          <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-1)", lineHeight: 1.4, flex: 1 }}>
+            this opens pr <b style={{ color: "var(--ember-08)" }}>#48</b> on cat-cave/tanren-fixture-easy. tanren will NOT start runs until you merge it. comment, edit, or reject like any other pr.
+          </div>
+          <button className="btn primary notched">open the pr ↗</button>
+        </div>
+      </div>
+    </div>
+  </>
+);
+
+// ===== E4 · Spec DAG + issue ingest =====
+const ExistDag = () => (
+  <>
+    <StepHeading
+      eyebrow="step 4 · spec dag · agent gaps + github issues"
+      title="35 specs"
+      em="ready to forge"
+      sub="the agent's gap analysis became seed specs. your 47 open github issues became candidate specs. forge merged dupes and routed by labels."
+      right={<span className="pill ok"><span className="d"></span>seeded from issues + gaps</span>}
+    />
+    <div style={{ background: "var(--bg-sunken)", border: "1px solid var(--line-1)", borderRadius: 4, position: "relative", overflow: "hidden", backgroundImage: "radial-gradient(var(--line-1) 1px, transparent 1px)", backgroundSize: "22px 22px", flex: 1, minHeight: 0 }}>
+      <div style={{ position: "absolute", top: 12, left: 16, right: 16, display: "flex", alignItems: "center", gap: 10, zIndex: 4 }}>
+        <span className="pill hot" style={{ fontSize: 9 }}><span className="d"></span>35 specs · 12 from gaps · 23 from issues</span>
+        <span className="pill ok" style={{ fontSize: 9 }}><span className="d"></span>4 dupes dropped · 1 critical (#142 p0)</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9.5, color: "var(--fg-3)" }}>est cost $28–$52 · ~2 weeks</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+          <button className="seg-btn">≡ source</button>
+          <button className="seg-btn active">≡ priority</button>
+          <button className="seg-btn">fit</button>
+        </div>
+      </div>
+
+      <svg viewBox="0 0 1100 580" preserveAspectRatio="xMidYMid meet" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+        <defs>
+          <marker id="exarr-cool" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="var(--line-2)" /></marker>
+          <marker id="exarr-hot" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7" fill="var(--ember-08)" /></marker>
+        </defs>
+
+        {[
+          { x: 80,  label: "P0", spec: "critical · 1" },
+          { x: 280, label: "P1", spec: "high · 9" },
+          { x: 540, label: "P2", spec: "med · 16" },
+          { x: 820, label: "P3", spec: "low · 9" },
+        ].map((m) => (
+          <g key={m.label}>
+            <text x={m.x + 80} y={62} fill="var(--fg-3)" fontFamily="var(--font-mono)" fontSize="10" textAnchor="middle" letterSpacing="0.18em" fontWeight="700">{m.label}</text>
+            <text x={m.x + 80} y={78} fill="var(--fg-3)" fontFamily="var(--font-mono)" fontSize="9.5" textAnchor="middle">{m.spec}</text>
+          </g>
+        ))}
+
+        <g transform="translate(80, 110)">
+          <rect width="160" height="22" rx="2" fill="var(--accent-tint)" stroke="var(--ember-08)" strokeWidth="2" />
+          <text x={6} y={15} fill="var(--ember-08)" fontFamily="var(--font-mono)" fontSize="10">writer hangs on long writes</text>
+          <g transform="translate(120, 4)"><rect width="36" height="13" rx="1" fill="var(--ember-08)" /><text x={18} y={10} fill="var(--ink-12)" fontFamily="var(--font-mono)" fontSize="8.5" fontWeight="700" textAnchor="middle">#142</text></g>
+        </g>
+
+        {[
+          { x: 280, y: 105, t: "support claude as answerer", tag: "#138" },
+          { x: 280, y: 140, t: "rate-limit handling", tag: "#131" },
+          { x: 280, y: 175, t: "e2e for runner ssh", tag: "#108" },
+          { x: 280, y: 210, t: "add test coverage", tag: "gap·2", agent: true },
+          { x: 280, y: 245, t: "codeowners scaffold", tag: "risk", agent: true },
+          { x: 280, y: 280, t: "native gate · .tanren/ci.yml", tag: "risk", agent: true },
+          { x: 280, y: 315, t: "auditor flake on snapshot", tag: "#93" },
+          { x: 280, y: 350, t: "fix workflow yaml lint", tag: "#88" },
+          { x: 280, y: 385, t: "preserve auth.json across runs", tag: "#83" },
+          { x: 540, y: 110, t: "cost gauge accuracy", tag: "#127" },
+          { x: 540, y: 145, t: "improve doctor output", tag: "#119" },
+          { x: 540, y: 180, t: "ci tier · fast lane", tag: "#117" },
+          { x: 540, y: 215, t: "spec edit · forge prompt", tag: "#114" },
+          { x: 540, y: 250, t: "history page filters", tag: "#109" },
+          { x: 540, y: 285, t: "design dna · industrial", tag: "gap·1", agent: true },
+          { x: 540, y: 320, t: "vault path tracker", tag: "#102" },
+          { x: 540, y: 355, t: "ntfy retries", tag: "#99" },
+          { x: 820, y: 110, t: "weekly security audit", tag: "audit", agent: true },
+          { x: 820, y: 145, t: "dependency updates", tag: "audit", agent: true },
+          { x: 820, y: 180, t: "mutation test setup", tag: "audit", agent: true },
+          { x: 820, y: 215, t: "perf budget harness", tag: "#86" },
+          { x: 820, y: 250, t: "docs · refresh README", tag: "#82" },
+          { x: 820, y: 285, t: "remove dead code", tag: "audit", agent: true },
+        ].map((n, i) => (
+          <g key={i} transform={`translate(${n.x}, ${n.y})`}>
+            <rect width="160" height="22" rx="2" fill="var(--bg-canvas)" stroke={n.agent ? "var(--steel-08)" : "var(--line-2)"} strokeWidth="1" strokeDasharray={n.agent ? "3 2" : ""} />
+            <text x={6} y={15} fill={n.agent ? "var(--fg-2)" : "var(--fg-1)"} fontFamily="var(--font-mono)" fontSize="9.5">{n.t}</text>
+            <g transform="translate(120, 4)"><rect width="36" height="13" rx="1" fill={n.agent ? "var(--steel-08)" : "var(--bg-sunken)"} stroke="var(--line-1)" /><text x={18} y={10} fill={n.agent ? "var(--ink-12)" : "var(--fg-2)"} fontFamily="var(--font-mono)" fontSize="8" fontWeight="700" textAnchor="middle">{n.tag}</text></g>
+          </g>
+        ))}
+
+        {[["240,121", "280,121", true], ["240,121", "280,156"], ["240,121", "280,191"], ["440,156", "540,121"], ["440,261", "540,191"], ["440,296", "540,261"], ["700,261", "820,156"]].map((e, i) => (
+          <path key={i} d={`M${e[0]} L${e[1]}`} stroke={e[2] ? "var(--ember-08)" : "var(--line-2)"} strokeWidth={e[2] ? 1.5 : 1} fill="none" markerEnd={e[2] ? "url(#exarr-hot)" : "url(#exarr-cool)"} strokeDasharray={e[2] ? "4 3" : ""} />
+        ))}
+      </svg>
+
+      <div style={{ position: "absolute", left: 16, bottom: 16, width: 360, background: "var(--bg-canvas)", border: "1px solid var(--ember-08)", padding: 14, zIndex: 4, display: "flex", flexDirection: "column", gap: 8, clipPath: "polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px))" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700 }}>selected · from #142</span>
+          <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--fg-3)", cursor: "pointer" }}>× close</span>
+        </div>
+        <div style={{ fontFamily: "var(--font-display)", fontWeight: 700, fontSize: 17, letterSpacing: "-0.022em", color: "var(--fg-1)", textTransform: "lowercase", lineHeight: 1 }}>
+          writer hangs on <em style={{ fontStyle: "italic", color: "var(--ember-08)" }}>long writes</em>
+        </div>
+        <div style={{ fontFamily: "var(--font-ui)", fontSize: 12, color: "var(--fg-2)", lineHeight: 1.5 }}>
+          ingested from github issue <b style={{ color: "var(--ember-08)" }}>#142</b>. forge classified as P0 because labels included "bug" and "blocker".
+        </div>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 10.5, color: "var(--fg-2)", lineHeight: 1.6 }}>
+          <div>source · <b style={{ color: "var(--fg-1)" }}>github #142 · 2d ago</b></div>
+          <div>blocks · <b style={{ color: "var(--ember-08)" }}>3 downstream specs</b></div>
+          <div>est · <b style={{ color: "var(--fg-1)" }}>3.5h · $0.92</b></div>
+        </div>
+      </div>
+
+      <div style={{ position: "absolute", right: 16, bottom: 16, padding: "10px 14px", background: "var(--bg-canvas)", border: "1px solid var(--line-1)", fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--fg-2)", lineHeight: 1.6, borderRadius: 2, maxWidth: 220 }}>
+        <div style={{ color: "var(--ember-08)", letterSpacing: "0.18em", textTransform: "uppercase", fontWeight: 700, marginBottom: 2 }}>legend</div>
+        <div><svg width="14" height="6" style={{ marginRight: 4, verticalAlign: "middle" }}><rect width="14" height="6" fill="var(--bg-canvas)" stroke="var(--line-2)" /></svg>from github issue</div>
+        <div><svg width="14" height="6" style={{ marginRight: 4, verticalAlign: "middle" }}><rect width="14" height="6" fill="var(--bg-canvas)" stroke="var(--steel-08)" strokeDasharray="3 2" /></svg>from agent gap / audit</div>
+      </div>
+    </div>
+  </>
+);

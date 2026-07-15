@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { glob, readFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { exit } from "node:process";
 import { checkNoApexModeBranching } from "./check-architecture-apex-mode.mjs";
+import { checkLineMax, readProjectFiles } from "./check-architecture-line-cap.mjs";
 import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runStructureChecks } from "./check-architecture-structure.mjs";
 import { checkNoArbitraryTimeouts } from "./check-architecture-timeouts.mjs";
@@ -13,25 +13,11 @@ import {
   checkNoHostProcessSpawn,
 } from "./check-architecture-substrate.mjs";
 
-const patterns = [
-  "**/*.{ts,tsx,js,mjs,json,md,yml,yaml,sql,sh}",
-  ".github/**/*.{yml,yaml}",
-  "Dockerfile",
-  "**/Dockerfile",
-  "justfile",
-];
-const ignoredDirs = new Set(["node_modules", "dist", "coverage", ".git"]);
-// Long-running narrative docs (gain sections as the plan evolves) — the 500-line source cap doesn't fit.
-const roadmapDocs = [
-  "PROJECT_BRIEF.md",
-  "ROADMAP.md",
-  "docs/architecture/autonomy-engine.md",
-  "docs/operator-guide/apex-run-playbook.md",
-  "docs/roadmap/timeout-eradication.md",
-];
-// DATA, exempt from the 500-line source cap: the vendored LiteLLM model-price snapshot + cspell.json word-list (both grow with the codebase).
-const vendoredData = ["services/orchestrator/src/engine/costs/pricing/model_prices.json", "cspell.json"];
-const lineMaxExclusions = new Set([...roadmapDocs, ...vendoredData, "pnpm-lock.yaml", "justfile"]);
+// The canonical file-collection + line-cap authority lives in the focused
+// sibling `check-architecture-line-cap.mjs` (keeps this orchestrator under the
+// same 500-line cap it enforces). `css` is in those `patterns` so the design
+// surfaces are bounded; the `docs/roadmap/mission-complete/` blanket prefix
+// exemption is gone, replaced by named narrative-doc entries.
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 const p3bProof = /(direct INSERT INTO events|same event \(contrast\)|reported event is DENIED direct)/su;
 const p3cProof = /merge-LAND finalize \(events \+ specs\) by the data-plane role/su;
@@ -50,16 +36,6 @@ const requiredDocs = [
 const costBases = new Set(["ccusage", "provider_response", "credits", "unknown", "unattributed"]);
 const billingModes = new Set(["per_token", "subscription", "self_hosted", "unattributed"]);
 
-function normalizePath(path) {
-  return path.split("\\").join("/");
-}
-
-function isIgnored(path) {
-  return normalizePath(path)
-    .split("/")
-    .some((part) => ignoredDirs.has(part));
-}
-
 function lineFor(text, index) {
   return text.slice(0, index).split("\n").length;
 }
@@ -75,54 +51,10 @@ function diagnostic(rule, file, message, line = 1) {
   return { rule, file, line, message };
 }
 
-async function collectFiles(root) {
-  const files = new Set();
-  for (const pattern of patterns) {
-    for await (const entry of glob(pattern, { cwd: root })) {
-      const file = normalizePath(entry);
-      if (!isIgnored(file)) {
-        files.add(file);
-      }
-    }
-  }
-  return [...files].toSorted();
-}
-
-async function readProjectFiles(root) {
-  const files = await collectFiles(root);
-  const projectFiles = [];
-  for (const file of files) {
-    projectFiles.push({ file, text: await readFile(resolve(root, file), "utf8") });
-  }
-  return projectFiles;
-}
-
 function checkRequiredDocs(root) {
   return requiredDocs
     .filter((file) => !existsSync(resolve(root, file)))
     .map((file) => diagnostic("required-docs-present", file, "required architecture document is missing"));
-}
-
-function checkLineMax(projectFiles) {
-  const diagnostics = [];
-  for (const { file, text } of projectFiles) {
-    if (
-      lineMaxExclusions.has(file) ||
-      // The collapsed single baseline (db/migrations/0000_*.sql) is generated
-      // DDL + the RLS/role/grant tail, not a source module — exempt like meta/.
-      file.startsWith("db/migrations/") ||
-      file.startsWith("services/orchestrator/src/engine/answerers/schemas/generated/") ||
-      file.startsWith("contracts/json/") ||
-      file.startsWith("docs/roadmap/mission-complete/")
-    ) {
-      continue;
-    }
-    const lineCount = text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
-    if (lineCount > 500) {
-      diagnostics.push(diagnostic("file-line-max-500", file, `${lineCount} lines exceeds the 500-line cap`));
-    }
-  }
-  return diagnostics;
 }
 
 function checkSingleEventWriter(projectFiles) {

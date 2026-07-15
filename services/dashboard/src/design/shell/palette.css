@@ -1,0 +1,363 @@
+/* ----- FORGE PALETTE (⌘K) ----- */
+.forge-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: oklch(8% 0.008 60 / 0.55);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+.forge-backdrop[hidden] {
+  display: none;
+}
+.forge-modal {
+  width: 640px;
+  max-width: calc(100vw - 40px);
+  background: var(--bg-canvas);
+  border: 1px solid var(--ember-08);
+  box-shadow:
+    0 24px 64px oklch(0% 0 0 / 0.4),
+    0 0 0 1px oklch(68% 0.22 40 / 0.2);
+  clip-path: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+  animation: modal-rise 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes modal-rise {
+  from {
+    transform: translateY(16px) scale(0.98);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.forge-modal .input-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line-1);
+}
+.forge-modal .stamp {
+  font-family: var(--font-jp);
+  font-size: 22px;
+  color: var(--ember-08);
+  line-height: 1;
+}
+.forge-modal input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  color: var(--fg-1);
+  letter-spacing: -0.01em;
+}
+.forge-modal input::placeholder {
+  color: var(--fg-3);
+}
+.forge-modal .esc {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.forge-modal .results {
+  overflow-y: auto;
+  flex: 1;
+  padding: 8px 0;
+}
+.forge-modal .group {
+  padding: 8px 18px 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--fg-3);
+}
+.forge-modal .group[hidden] {
+  display: none;
+}
+.forge-modal .item {
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  gap: 10px;
+  padding: 9px 18px;
+  cursor: pointer;
+  align-items: center;
+}
+.forge-modal .item[hidden] {
+  display: none;
+}
+.forge-modal .item:hover,
+.forge-modal .item.active {
+  background: var(--accent-tint);
+}
+.forge-modal .item .glyph {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ember-08);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-1);
+  border-radius: 2px;
+}
+.forge-modal .item .glyph.kanji {
+  font-family: var(--font-jp);
+  font-size: 14px;
+}
+.forge-modal .item .t {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--fg-1);
+  font-weight: 500;
+}
+.forge-modal .item .d {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+  margin-top: 1px;
+}
+.forge-modal .item .k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.palette-empty {
+  padding: 20px 18px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.palette-empty[hidden] {
+  display: none;
+}
+.forge-modal .footer {
+  padding: 9px 18px;
+  border-top: 1px solid var(--line-1);
+  background: var(--bg-sunken);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.forge-modal .footer[hidden] {
+  display: none;
+}
+
+/* P3-0010 thick-Forge chat morph. The modal grows taller in chat mode; the
+   thread scrolls while the composer (input-row) and footer stay pinned. */
+.forge-modal.chat-mode {
+  max-height: 78vh;
+}
+.forge-modal .fc-back {
+  background: transparent;
+  border: 1px solid var(--line-1);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.forge-modal .fc-back:hover {
+  background: var(--accent-tint);
+  color: var(--fg-1);
+}
+.forge-chat {
+  overflow-y: auto;
+  flex: 1;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.forge-chat[hidden] {
+  display: none;
+}
+.fc-msg {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.fc-msg.user {
+  flex-direction: row-reverse;
+}
+.fc-msg .who {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-jp);
+  font-size: 13px;
+  color: var(--ember-08);
+  border: 1px solid var(--line-1);
+  border-radius: 2px;
+  background: var(--bg-sunken);
+}
+.fc-msg.user .who {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--fg-2);
+}
+.fc-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 80%;
+}
+.fc-msg.user .fc-col {
+  align-items: flex-end;
+}
+.fc-bubble {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-1);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line-1);
+  padding: 9px 12px;
+  border-radius: 3px;
+}
+.fc-msg.user .fc-bubble {
+  background: var(--accent-tint);
+  border-color: var(--ember-08);
+}
+.fc-bubble code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ember-08);
+  background: var(--bg-canvas);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.fc-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 12px;
+  cursor: pointer;
+  border: 1px solid var(--ember-08);
+  border-radius: 3px;
+  background: var(--bg-canvas);
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+}
+.fc-card .lbl {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ember-08);
+  margin-bottom: 2px;
+}
+.fc-card .t {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--fg-1);
+  font-weight: 500;
+}
+.fc-card .go {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--ember-08);
+}
+.fc-card:hover {
+  background: var(--accent-tint);
+}
+/* Inert (deferred write-action) cards: visible, but non-interactive. */
+.fc-card.inert {
+  cursor: default;
+  border-color: var(--line-1);
+  opacity: 0.7;
+}
+.fc-card.inert .lbl,
+.fc-card.inert .go {
+  color: var(--fg-3);
+}
+.fc-card.inert:hover {
+  background: var(--bg-canvas);
+}
+/* P3-0010 live proposal cards: the model proposed a write; a human decides. */
+.fc-card.proposal {
+  grid-template-columns: 1fr;
+  cursor: default;
+}
+.fc-card.proposal:hover {
+  background: var(--bg-canvas);
+}
+.fc-card.proposal .d {
+  grid-column: 1 / -1;
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  color: var(--fg-2);
+  margin-top: 2px;
+}
+.fc-card.proposal .fc-proposal-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.fc-card.proposal .fc-proposal-status {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-top: 6px;
+}
+.fc-card.proposal.decided {
+  opacity: 0.75;
+}
+.fc-card.proposal.decided .fc-proposal-actions {
+  display: none;
+}
+.fc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fc-chips .chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-2);
+  border: 1px solid var(--line-1);
+  border-radius: 2px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.fc-chips .chip:hover {
+  border-color: var(--ember-08);
+  color: var(--fg-1);
+  background: var(--accent-tint);
+}
+.fc-chips .chip .pre {
+  color: var(--ember-08);
+  margin-right: 3px;
+}
+.fc-msg.pending .fc-bubble {
+  color: var(--fg-3);
+}

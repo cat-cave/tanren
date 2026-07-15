@@ -1,0 +1,30 @@
+/* =======================================================================
+   Tanren dashboard shell chrome — recreated from the hi-fi prototype
+   (tanren-hi-fidelity/project/styles.css). Token-driven only; no hardcoded
+   colors. Pairs with tokens.css (data-theme="dark" == ink, default == ash).
+   ======================================================================= */
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  color: var(--fg-1);
+  background: var(--bg-canvas);
+  overflow-x: auto;
+  -webkit-font-smoothing: antialiased;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  grid-template-rows: 52px 1fr;
+  height: 100vh;
+  min-width: 1180px;
+}
+

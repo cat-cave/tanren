@@ -1,0 +1,8 @@
+
+[data-theme="dark"] body {
+  background: var(--ink-12);
+  color: var(--ash-00);
+}
+[data-theme="dark"] .sidenav {
+  background: oklch(8% 0.012 60);
+}
