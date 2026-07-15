@@ -102,6 +102,36 @@ describe("project governance routes", () => {
     expect(get.body.governancePosture).toBe("strict");
   });
 
+  // gv-1: the org-admin governance PUT is the SOLE supported path to mutate the
+  // governance-owned `auditPosture` DORA knob (the member PATCH is now reserved
+  // out). Prove an admin PUT changes it and the read-back reflects the new value.
+  it("an admin PUT changes auditPosture and the read-back reflects it (sole governance path)", async () => {
+    const { app } = buildHarness();
+    const before = await getJson(app, "/orgs/org_acme/projects/proj_1/governance");
+    expect(before.body.auditPosture).toEqual({
+      blockReviewAt: "P1",
+      p2p3Handling: "fix-if-idle",
+      autonomousRemediation: false,
+    });
+
+    const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+    });
+    expect(put.status).toBe(200);
+    expect(put.body.auditPosture).toEqual({
+      blockReviewAt: "P3",
+      p2p3Handling: "route-to-dag",
+      autonomousRemediation: true,
+    });
+
+    const get = await getJson(app, "/orgs/org_acme/projects/proj_1/governance");
+    expect(get.body.auditPosture).toEqual({
+      blockReviewAt: "P3",
+      p2p3Handling: "route-to-dag",
+      autonomousRemediation: true,
+    });
+  });
+
   it("updates only the named field, leaving the others untouched", async () => {
     const { app } = buildHarness();
     await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
