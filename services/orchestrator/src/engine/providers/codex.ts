@@ -7,7 +7,7 @@ import { materializeCodexAuthBundle } from "../credentials/codexMaterializer.js"
 import { buildActivityWatchdog, outputOnlyWatchdog, quoteSshShellArg } from "../ssh/index.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
-import { findTokenUsageBounded } from "./findTokenUsage.js";
+import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterCodex } from "./codexGit.js";
 import { buildCodexAnswererExecCommand, buildCodexExecCommand } from "./codexExecCommand.js";
 import { createLogger } from "../observability/logger.js";
@@ -326,7 +326,7 @@ function harnessOutputTail(stream: string | undefined): string {
 }
 
 export function parseCodexJsonlTelemetry(stdout: string): CodexEventTelemetry {
-  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
+  const lines = splitNonEmptyJsonlLines(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
@@ -428,17 +428,6 @@ function assertAnswererWorkspaceStep(result: CommandResult, step: string): void 
 
 function messageFromUnknown(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function parseJsonObject(line: string): Record<string, unknown> | undefined {
-  try {
-    const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 // Walks one parsed Codex JSONL event for its usage record. BOUNDED on depth +

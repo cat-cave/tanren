@@ -7,7 +7,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
-import { findTokenUsageBounded } from "./findTokenUsage.js";
+import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 // opencode CLI Writer adapter. opencode is a Writer-only provider in
@@ -170,7 +170,7 @@ export function resolveOpencodeModel(model: string | undefined, managed: boolean
 // limit" phrase (matched on the phrase, not the event type, so a minor CLI
 // wording change still surfaces it).
 export function parseOpencodeStreamTelemetry(stdout: string): OpencodeEventTelemetry {
-  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
+  const lines = splitNonEmptyJsonlLines(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
@@ -256,17 +256,6 @@ function numberField(record: Record<string, unknown>, keys: string[]): number | 
     }
   }
   return undefined;
-}
-
-function parseJsonObject(line: string): Record<string, unknown> | undefined {
-  try {
-    const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function failedResult(
