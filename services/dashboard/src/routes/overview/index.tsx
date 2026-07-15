@@ -11,33 +11,13 @@
 import type { Context, Hono } from "hono";
 import type { ProjectBudgetView } from "../../api/budget.js";
 import { BudgetClient } from "../../api/budgetClient.js";
-import { OrchestratorHttpClient } from "../../api/httpClient.js";
-import type { ProjectFeedItem, ProjectSummary } from "../../api/types.js";
+import { OrchestratorClient } from "../../api/orchestrator.js";
+import type { ProjectSummary } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { aggregateOrgMtd, type OrgMtdBudget } from "../../components/overview/format.js";
 import { OverviewBody, type OverviewActivityItem } from "../../components/overview/OverviewBody.js";
 
 const ACTIVITY_LIMIT = 20;
-
-/**
- * Failure-aware overview reads. Shell `listProjects` / product `listFeed`
- * collapse failure to `[]`; overview must distinguish empty vs unavailable.
- */
-class OverviewReadClient extends OrchestratorHttpClient {
-  async listProjectsMaybe(orgId: string): Promise<ProjectSummary[] | undefined> {
-    const json = await this.getJson<{ projects?: ProjectSummary[] }>(`/orgs/${encodeURIComponent(orgId)}/projects`);
-    if (json === undefined || !Array.isArray(json.projects)) return undefined;
-    return json.projects;
-  }
-
-  async listFeedMaybe(orgId: string, projectId: string): Promise<ProjectFeedItem[] | undefined> {
-    const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
-    );
-    if (json === undefined || !Array.isArray(json.items)) return undefined;
-    return json.items;
-  }
-}
 
 function budgetClientFor(c: Context, deps: ShellDeps): BudgetClient {
   return new BudgetClient({
@@ -46,15 +26,15 @@ function budgetClientFor(c: Context, deps: ShellDeps): BudgetClient {
   });
 }
 
-function readClientFor(c: Context, deps: ShellDeps): OverviewReadClient {
-  return new OverviewReadClient({
+function readClientFor(c: Context, deps: ShellDeps): OrchestratorClient {
+  return new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
 }
 
 async function loadActivity(
-  client: OverviewReadClient,
+  client: OrchestratorClient,
   orgId: string,
   projects: ProjectSummary[],
 ): Promise<{
@@ -151,7 +131,8 @@ export function mountOverviewScreen(app: Hono, deps: ShellDeps): void {
     if (org) {
       const budget = budgetClientFor(c, deps);
       const reads = readClientFor(c, deps);
-      // Failure-aware project list (shell listProjects collapses failure to []).
+      // Failure-aware project list — overview needs its own read so it can
+      // distinguish unavailable from empty independent of the shell context.
       const maybeProjects = await reads.listProjectsMaybe(org.id);
       if (maybeProjects === undefined) {
         projectsUnavailable = true;

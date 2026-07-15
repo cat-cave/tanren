@@ -37,8 +37,8 @@ describe("run stream client status", () => {
     expect(isFinalStreamState(root)).toBe(true);
 
     markStreamUnavailableUnlessFinal(root, "Disconnected");
-    expect(flag.textContent).toBe("● final");
-    expect(flag.title).toBe("");
+    expect(flag.textContent).toBe("● final · totals unverified");
+    expect(flag.title).toBe("Disconnected");
   });
 
   it("marks non-final stream state unavailable on EventSource errors", () => {

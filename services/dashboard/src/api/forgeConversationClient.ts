@@ -14,6 +14,13 @@
 
 import { OrchestratorRecoveryClient } from "./recoveryClient.js";
 import type { ForgeAnswer } from "./types.js";
+import {
+  decodeWith,
+  ForgeAskUpstreamSchema,
+  ForgeProposalConflictSchema,
+  ForgeProposalDecisionSchema,
+  ForgeThreadSchema,
+} from "./writeResponseSchemas.js";
 
 /**
  * (write-action approval): a write the Forge answerer proposed, awaiting
@@ -52,14 +59,16 @@ export interface ForgeAskResponse {
 }
 
 /** The outcome of an approve/reject decision (write-action approval). */
-export interface ForgeProposalDecisionResponse {
-  /** The proposal in its post-decision state, when the orchestrator returned it. */
-  proposal?: ForgeActionProposal;
-  // `already_decided` is the idempotent 409 (carries currentStatus); `denied`
-  // is an authz refusal; both keep a double-approve from re-executing.
-  outcome: "decided" | "already_decided" | "denied" | "not_found" | "failed";
-  currentStatus?: string;
-}
+export type ForgeProposalDecisionResponse =
+  | { outcome: "decided"; proposal: ForgeActionProposal }
+  | { outcome: "already_decided"; currentStatus: string }
+  | { outcome: "denied" }
+  | { outcome: "not_found" }
+  | { outcome: "failed" };
+
+type ForgeProposalDecisionWire =
+  | { proposal: ForgeActionProposal }
+  | { error: "forge_proposal_already_decided"; status: string };
 
 interface TurnPayload {
   render?: ForgeAnswer;
@@ -91,7 +100,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       {
         question,
       },
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(ForgeAskUpstreamSchema, value) },
     );
     const render = result.body?.forgeTurn?.render;
     if (!result.ok || render === undefined) {
@@ -117,17 +126,21 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     proposalId: string,
     decision: "approve" | "reject",
   ): Promise<ForgeProposalDecisionResponse> {
-    const result = await this.sendJson<{ proposal?: ForgeActionProposal; status?: string }>(
+    const result = await this.sendJson<ForgeProposalDecisionWire>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/proposals/${encodeURIComponent(proposalId)}/${decision}`,
       undefined,
-      { expectBody: true },
+      {
+        expectBody: true,
+        decode: (value) => decodeWith(ForgeProposalDecisionSchema, value),
+        decodeFailure: (status, value) => (status === 409 ? decodeWith(ForgeProposalConflictSchema, value) : undefined),
+      },
     );
-    if (result.ok) {
-      return { proposal: result.body?.proposal, outcome: "decided" };
+    if (result.ok && result.body !== undefined && "proposal" in result.body) {
+      return { proposal: result.body.proposal, outcome: "decided" };
     }
-    if (result.status === 409) {
-      return { outcome: "already_decided", currentStatus: result.body?.status };
+    if (result.status === 409 && result.body !== undefined && "status" in result.body) {
+      return { outcome: "already_decided", currentStatus: result.body.status };
     }
     if (result.status === 403) {
       return { outcome: "denied" };
@@ -146,11 +159,11 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
         : scope.projectId === undefined
           ? { scope: "org" }
           : { scope: "project", projectId: scope.projectId };
-    const thread = await this.sendJson<{ id?: string }>(
+    const thread = await this.sendJson<{ id: string }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
       body,
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(ForgeThreadSchema, value) },
     );
     return thread.ok ? thread.body?.id : undefined;
   }

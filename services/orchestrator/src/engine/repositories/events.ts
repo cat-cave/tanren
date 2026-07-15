@@ -91,14 +91,14 @@ export const EventStore = {
    */
   async selectNewForRunSince(
     client: QueryClient,
-    args: { runId: string; orgId: string; sinceId: number },
+    args: { runId: string; orgId: string; sinceId: string },
     _actor: ActorRef,
   ): Promise<RawEventRow[]> {
     const result = await client.query<RawEventRow>(
       `SELECT ${SELECT_EVENT_COLUMNS}
          FROM events
         WHERE run_id = $1 AND org_id = $3 AND id > $2
-        ORDER BY ts ASC, id ASC
+        ORDER BY id ASC
         LIMIT 200`,
       [args.runId, args.sinceId, args.orgId],
     );

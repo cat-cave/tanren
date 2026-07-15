@@ -59,6 +59,18 @@ export function ProjectDagBody(props: ProjectDagBodyProps) {
         }
       />
       <KpiStrip items={model.kpis} />
+      {(!model.runsAvailable || !model.insightsAvailable || !model.feedAvailable) && (
+        <div class="empty-note" role="alert" data-partial-unavailable>
+          {[
+            !model.runsAvailable && "run history",
+            !model.insightsAvailable && "workflow insights",
+            !model.feedAvailable && "activity feed",
+          ]
+            .filter(Boolean)
+            .join(", ")}{" "}
+          unavailable — values omitted rather than reported as zero or healthy.
+        </div>
+      )}
       <div class="page-body">
         <div class="split-dag">
           <DagCanvas dag={dag} projectId={props.projectId} />
@@ -105,6 +117,18 @@ export function ProjectDagUnavailableBody(props: { projectId: string; projectNam
         }
       />
       <KpiStrip items={props.model.kpis} />
+      {(!props.model.runsAvailable || !props.model.insightsAvailable || !props.model.feedAvailable) && (
+        <div class="empty-note" role="alert" data-partial-unavailable>
+          {[
+            !props.model.runsAvailable && "run history",
+            !props.model.insightsAvailable && "workflow insights",
+            !props.model.feedAvailable && "activity feed",
+          ]
+            .filter(Boolean)
+            .join(", ")}{" "}
+          unavailable — values omitted rather than reported as zero or healthy.
+        </div>
+      )}
       <div class="page-body">
         <section class="placeholder-card">
           <p>Project DAG unavailable — the orchestrator spec/run reads failed. This is not an empty graph.</p>

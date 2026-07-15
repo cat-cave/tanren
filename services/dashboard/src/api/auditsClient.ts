@@ -15,6 +15,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { AuditJob, AuditsSnapshot, CreateAuditJobInput } from "./auditsTypes.js";
+import { AuditJobResponseSchema, decodeWith } from "./writeResponseSchemas.js";
 
 export class AuditsClient extends OrchestratorHttpClient {
   private base(orgId: string): string {
@@ -28,20 +29,23 @@ export class AuditsClient extends OrchestratorHttpClient {
 
   /** Create an audit job (the composer / a recommended-gap one-click schedule). */
   async create(orgId: string, input: CreateAuditJobInput): Promise<{ ok: boolean; job?: AuditJob }> {
-    const r = await this.sendJson<{ job?: AuditJob }>("POST", this.base(orgId), input, { expectBody: true });
-    return { ok: r.ok, ...(r.body?.job === undefined ? {} : { job: r.body.job }) };
+    const r = await this.sendJson<{ job: AuditJob }>("POST", this.base(orgId), input, {
+      expectBody: true,
+      decode: (value) => decodeWith(AuditJobResponseSchema, value),
+    });
+    return { ok: r.ok, ...(!r.ok || r.body?.job === undefined ? {} : { job: r.body.job }) };
   }
 
   /** Enable / disable — the per-job toggle. */
   async setEnabled(orgId: string, jobId: string, enabled: boolean): Promise<{ ok: boolean; job?: AuditJob }> {
     const verb = enabled ? "enable" : "disable";
-    const r = await this.sendJson<{ job?: AuditJob }>(
+    const r = await this.sendJson<{ job: AuditJob }>(
       "POST",
       `${this.base(orgId)}/${encodeURIComponent(jobId)}/${verb}`,
       undefined,
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(AuditJobResponseSchema, value) },
     );
-    return { ok: r.ok, ...(r.body?.job === undefined ? {} : { job: r.body.job }) };
+    return { ok: r.ok, ...(!r.ok || r.body?.job === undefined ? {} : { job: r.body.job }) };
   }
 
   /** Run the read-only pass now → findings auto-route into the candidate inbox. */

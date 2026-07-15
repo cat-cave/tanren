@@ -12,6 +12,7 @@
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { RecoveryActionResult, RecoveryContext } from "./recoveryTypes.js";
 import type { RunLocation } from "./types.js";
+import { decodeWith, RecoveryActionResultSchema } from "./writeResponseSchemas.js";
 
 export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient {
   private recoveryBase(loc: RunLocation, runId: string): string {
@@ -27,15 +28,23 @@ export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient 
 
   /** revise_spec — record the intent + get the spec-edit href. */
   async recoveryRevise(loc: RunLocation, runId: string): Promise<RecoveryActionResult> {
-    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/revise`);
+    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/revise`, undefined, {
+      expectBody: true,
+      decode: (value) => decodeWith(RecoveryActionResultSchema, value),
+    });
     return r.body ?? { ok: r.ok };
   }
 
   /** replan_with_steering — re-invoke the planner with the operator's note. */
   async recoveryReplan(loc: RunLocation, runId: string, steeringNote: string): Promise<RecoveryActionResult> {
-    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/replan`, {
-      steeringNote,
-    });
+    const r = await this.sendJson<RecoveryActionResult>(
+      "POST",
+      `${this.recoveryBase(loc, runId)}/replan`,
+      {
+        steeringNote,
+      },
+      { expectBody: true, decode: (value) => decodeWith(RecoveryActionResultSchema, value) },
+    );
     return r.body ?? { ok: r.ok };
   }
 
@@ -45,13 +54,21 @@ export abstract class OrchestratorRecoveryClient extends OrchestratorHttpClient 
     runId: string,
     input: { commitSha: string; confirmed: boolean },
   ): Promise<RecoveryActionResult> {
-    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/rollback`, input);
+    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/rollback`, input, {
+      expectBody: true,
+      decode: (value) => decodeWith(RecoveryActionResultSchema, value),
+    });
     return r.body ?? { ok: r.ok };
   }
 
   /** open_inspection_thread — create a run-scoped Forge thread (read-only). */
   async recoveryInspectionThread(loc: RunLocation, runId: string): Promise<RecoveryActionResult> {
-    const r = await this.sendJson<RecoveryActionResult>("POST", `${this.recoveryBase(loc, runId)}/inspection-thread`);
+    const r = await this.sendJson<RecoveryActionResult>(
+      "POST",
+      `${this.recoveryBase(loc, runId)}/inspection-thread`,
+      undefined,
+      { expectBody: true, decode: (value) => decodeWith(RecoveryActionResultSchema, value) },
+    );
     return r.body ?? { ok: r.ok };
   }
 }

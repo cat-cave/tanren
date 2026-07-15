@@ -44,14 +44,14 @@ export const CostStore = {
    */
   async selectNewForRunSince(
     client: QueryClient,
-    args: { runId: string; orgId: string; sinceId: number },
+    args: { runId: string; orgId: string; sinceId: string },
     _actor: ActorRef,
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
     const result = await client.query<Record<string, unknown>>(
       `SELECT ${SELECT_COST_COLUMNS}
          FROM cost_records
         WHERE run_id = $1 AND org_id = $3 AND id > $2
-        ORDER BY recorded_at ASC, id ASC
+        ORDER BY id ASC
         LIMIT 200`,
       [args.runId, args.sinceId, args.orgId],
     );

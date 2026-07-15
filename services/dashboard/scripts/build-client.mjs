@@ -36,5 +36,6 @@ await build({
 // Stylesheets served as static assets next to the bundle.
 await cp(resolve(root, "src/design/tokens.css"), resolve(outDir, "tokens.css"));
 await cp(resolve(root, "src/design/shell.css"), resolve(outDir, "shell.css"));
+await cp(resolve(root, "src/design/palette-state.css"), resolve(outDir, "palette-state.css"));
 
 console.log("client islands bundled to dist/static/");

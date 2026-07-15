@@ -16,6 +16,8 @@
  * approving operator's authz.
  */
 
+import { decodeWith, ForgeAskBrowserSchema, ForgeProposalDecisionBrowserSchema } from "../api/writeResponseSchemas.js";
+
 interface ForgeAction {
   label: string;
   toolCall: { tool: string; args?: Record<string, unknown> };
@@ -154,12 +156,9 @@ const STATUS_LABEL: Record<string, string> = {
   failed: "⚠ failed",
 };
 
-function errorText(status: number, body: unknown, fallback: string): string {
-  if (typeof body === "object" && body !== null) {
-    const rec = body as Record<string, unknown>;
-    const message = rec["message"] ?? rec["error"];
-    if (typeof message === "string" && message !== "") return `${fallback} (${status}): ${message}`;
-  }
+function errorText(status: number, _body: unknown, fallback: string): string {
+  // Upstream error bodies can carry provider details or untrusted text. The
+  // browser gets the status only; operators can correlate server-side logs.
   return status > 0 ? `${fallback} (${status}).` : `${fallback}.`;
 }
 
@@ -260,7 +259,7 @@ export function forgeToolFailureMessage(status: number): string {
 // POSTs the decision to the dashboard proxy and resolves to the resulting
 // status string for the card. 409 (already decided) and 403 (denied) are
 // surfaced honestly so the operator sees the terminal state, never a re-run.
-async function decideProposal(
+export async function decideProposal(
   orgId: string,
   proposalId: string,
   decision: "approve" | "reject",
@@ -271,17 +270,18 @@ async function decideProposal(
       headers: csrfWriteHeaders(),
       body: JSON.stringify({ orgId, proposalId }),
     });
-    const body = (await response.json().catch(() => ({}))) as {
-      proposal?: { status?: string };
-      outcome?: string;
-      currentStatus?: string;
-      error?: string;
-      message?: string;
-    };
-    if (response.ok) return { status: body.proposal?.status ?? (decision === "approve" ? "executed" : "rejected") };
-    if (response.status === 409) return { status: body.currentStatus ?? "already decided" };
-    if (response.status === 403) return { status: "denied" };
-    return { status: "failed", message: errorText(response.status, body, "Proposal decision failed") };
+    const json: unknown = await response.json().catch(() => {});
+    const body = decodeWith(ForgeProposalDecisionBrowserSchema, json);
+    if (body === undefined) {
+      return { status: "failed", message: `Proposal decision failed: invalid response (${response.status}).` };
+    }
+    if (response.ok && body.outcome === "decided") return { status: body.proposal.status };
+    if (response.status === 409 && body.outcome === "already_decided") {
+      return { status: body.currentStatus };
+    }
+    if (response.status === 403 && body.outcome === "denied") return { status: "denied" };
+    if (response.status === 404 && body.outcome === "not_found") return { status: "not_found" };
+    return { status: "failed", message: errorText(response.status, json, "Proposal decision failed") };
   } catch {
     return { status: "failed", message: "Proposal decision failed: network unavailable." };
   }
@@ -343,8 +343,9 @@ export async function askForge(
     });
     const json = (await response.json().catch(() => {})) as unknown;
     if (!response.ok) return { error: errorText(response.status, json, "Forge ask failed") };
-    if (json === undefined) return { error: "Forge ask failed: empty response body." };
-    return json as ForgeAskResponse;
+    const decoded = decodeWith(ForgeAskBrowserSchema, json);
+    if (decoded === undefined) return { error: "Forge ask failed: invalid response body." };
+    return decoded;
   } catch {
     return { error: "Forge ask failed: network unavailable." };
   }

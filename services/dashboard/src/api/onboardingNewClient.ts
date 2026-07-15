@@ -10,6 +10,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { DeriveResult, InterviewCapture, InterviewRoundResult } from "./onboardingNewTypes.js";
+import { decodeWith, DeriveResultSchema, InterviewRoundSchema } from "./writeResponseSchemas.js";
 
 export class OnboardingNewClient extends OrchestratorHttpClient {
   /** Run one interview round; returns the next question + updated capture. */
@@ -21,22 +22,22 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/round`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(InterviewRoundSchema, value) },
     );
-    return { ok: r.ok, status: r.status, result: r.body };
+    return { ok: r.ok, status: r.status, result: r.ok ? r.body : undefined };
   }
 
   /** Derive the product graph (project + personas/behaviors/milestones/specs). */
   async derive(
     orgId: string,
-    input: { capture: InterviewCapture; repoUrl?: string },
+    input: { capture: InterviewCapture; owner: string },
   ): Promise<{ ok: boolean; status: number; result: DeriveResult | undefined }> {
     const r = await this.sendJson<DeriveResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/derive`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(DeriveResultSchema, value) },
     );
-    return { ok: r.ok, status: r.status, result: r.body };
+    return { ok: r.ok, status: r.status, result: r.ok ? r.body : undefined };
   }
 }

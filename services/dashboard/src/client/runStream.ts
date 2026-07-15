@@ -8,7 +8,7 @@
  * deltas the SSE frames carry. Frame contract (`SseEventName`):
  *   - `snapshot` { run, tasks, recentEvents, costs }  (initial, full)
  *   - `status`   { runId, status, outcome }
- *   - `task`     <TaskTimelineEntry>                   (single changed task)
+ *   - `task`     { tasks, taskWatermark }              (full task projection)
  *   - `events`   { events: [...] }                     (new event rows)
  *   - `costs`    { costs: [...] }                       (new cost records)
  *   - `heartbeat`{ ts }
@@ -21,27 +21,11 @@
  * contract-typed).
  */
 
+import { RunStreamProtocol, type CostRecordFrame, type TaskFrame } from "./runStreamProtocol.js";
+
 interface BillingAgg {
   tokens: number;
   usd: number;
-}
-
-interface CostRecordFrame {
-  billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
-  model: string;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  totalTokens: number;
-  costUsd: string | null;
-}
-
-interface TaskFrame {
-  taskId: string;
-  status: string;
-  outcome: string | null;
-  startedAt: string | null;
-  endedAt: string | null;
 }
 
 interface CostTotalsState {
@@ -85,6 +69,10 @@ function emptyTotals(): CostTotalsState {
     totalTokens: 0,
     bySource: new Map(),
   };
+}
+
+function cloneTotals(totals: CostTotalsState): CostTotalsState {
+  return { ...totals, bySource: new Map(totals.bySource) };
 }
 
 function applyCost(totals: CostTotalsState, cost: CostRecordFrame): void {
@@ -144,7 +132,7 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
   setText(root, "header-status", status);
   if (isTerminalRunStatus(status)) {
     const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
-    if (flag !== null) flag.textContent = "● final";
+    if (flag !== null) flag.textContent = "● final · verifying totals";
   }
 }
 
@@ -152,13 +140,24 @@ function isTerminalRunStatus(status: string): boolean {
   return ["completed", "failed", "halted", "cancelled", "done"].includes(status);
 }
 
+function parseMessageData(event: Event): unknown {
+  return JSON.parse((event as MessageEvent<string>).data);
+}
+
 export function isFinalStreamState(root: HTMLElement): boolean {
   const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
-  return flag?.textContent === "● final";
+  return flag?.textContent?.startsWith("● final") === true;
 }
 
 export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: string): void {
-  if (isFinalStreamState(root)) return;
+  if (isFinalStreamState(root)) {
+    const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+    if (flag !== null) {
+      flag.textContent = "● final · totals unverified";
+      flag.title = reason;
+    }
+    return;
+  }
   setStreamState(root, "unavailable", reason);
 }
 
@@ -166,6 +165,7 @@ export function setStreamState(root: HTMLElement, state: "live" | "stale" | "una
   const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
   if (flag === null) return;
   if (state === "live") {
+    if (isFinalStreamState(root)) return;
     flag.textContent = "↻ live";
     flag.removeAttribute("title");
     return;
@@ -174,11 +174,9 @@ export function setStreamState(root: HTMLElement, state: "live" | "stale" | "una
   if (reason !== undefined) flag.title = reason;
 }
 
-function applyTask(root: HTMLElement, task: TaskFrame): void {
-  const row = root.querySelector<HTMLElement>(`[data-rd-moment="${task.taskId}"]`);
-  if (row === null) return;
-  const dot = row.querySelector<HTMLElement>(".dot");
-  const ph = row.querySelector<HTMLElement>(".ph");
+type StreamTask = TaskFrame["tasks"][number];
+
+function streamTaskState(task: StreamTask): "done" | "live" | "queued" | "failed" {
   let state: "done" | "live" | "queued" | "failed" = "done";
   if (task.status === "running" || task.status === "claimed") state = "live";
   else if (task.status === "queued") state = "queued";
@@ -190,16 +188,86 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
     task.outcome === "timed_out"
   )
     state = "failed";
-  if (dot !== null) {
+  return state;
+}
+
+function taskDuration(task: StreamTask): string {
+  if (task.startedAt === null) return "";
+  const start = Date.parse(task.startedAt);
+  const end = task.endedAt === null ? Date.now() : Date.parse(task.endedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return "";
+  const seconds = Math.round((end - start) / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+/** Replace the complete accepted task projection, including newly-created rows. */
+export function applyTasks(root: HTMLElement, tasks: StreamTask[]): void {
+  const body = root.querySelector<HTMLElement>('[data-rd="trajectory"] .rd-panel-body');
+  if (body === null) return;
+  const spine = body.querySelector<HTMLElement>('[data-rd="spine"]');
+  body.replaceChildren();
+  if (spine !== null) body.append(spine);
+  const sorted = [...tasks].sort((left, right) => {
+    if (left.startedAt === null) return right.startedAt === null ? 0 : 1;
+    if (right.startedAt === null) return -1;
+    return Date.parse(left.startedAt) - Date.parse(right.startedAt);
+  });
+  let writeIndex = 0;
+  let completed = 0;
+  let livePosition = -1;
+  for (const [index, task] of sorted.entries()) {
+    const state = streamTaskState(task);
+    if (state === "done" || state === "failed") completed += 1;
+    if (state === "live" && livePosition < 0) livePosition = index + 1;
+    if (task.kind === "write") writeIndex += 1;
+    const phase = task.kind === "write" ? `write subtask ${writeIndex}` : task.kind;
+    const row = document.createElement("div");
+    row.className = `traj-row${state === "queued" ? " queued" : ""}`;
+    row.dataset["rdMoment"] = task.taskId;
+    row.dataset["rdIndex"] = String(index);
+    // Every watermark field is represented on the accepted DOM projection;
+    // reconnects cannot silently preserve stale task metadata.
+    row.dataset["taskProjection"] = JSON.stringify(task);
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    const dot = document.createElement("span");
     dot.className = `dot ${state}`;
     dot.textContent = state === "done" ? "✓" : state === "live" ? "↻" : state === "failed" ? "×" : "";
+    const cell = document.createElement("div");
+    cell.className = "body-cell";
+    const phaseNode = document.createElement("div");
+    phaseNode.className = `ph ${state}`;
+    const duration = taskDuration(task);
+    phaseNode.textContent = `${phase}${duration === "" ? "" : ` · ${duration}`} · attempt ${task.attempt + 1}`;
+    const title = document.createElement("div");
+    title.className = "t";
+    title.textContent = task.title === "" ? phase : task.title;
+    const detail = document.createElement("div");
+    detail.className = "io";
+    detail.textContent = `${task.cli}${task.model === null ? "" : ` · ${task.model}`}${task.outcome === null ? "" : ` · ${task.outcome}`}`;
+    cell.append(phaseNode, title, detail);
+    if (task.failureKind !== null) {
+      const failure = document.createElement("div");
+      failure.className = "io";
+      failure.style.color = "var(--status-fail)";
+      failure.textContent = task.failureKind;
+      cell.append(failure);
+    }
+    row.append(dot, cell);
+    body.append(row);
   }
-  if (ph !== null) {
-    const text = ph.textContent ?? "";
-    ph.className = `ph ${state}`;
-    ph.textContent = text;
+  if (sorted.length === 0) {
+    const empty = document.createElement("div");
+    empty.dataset["rdTasksEmpty"] = "true";
+    empty.style.cssText = "padding:14px;font-size:12px;color:var(--fg-3)";
+    empty.textContent = "no tasks yet · the planner has not run";
+    body.append(empty);
   }
-  row.classList.toggle("queued", state === "queued");
+  if (spine !== null) {
+    const donePct = sorted.length === 0 ? 0 : (completed / sorted.length) * 100;
+    const livePct = livePosition < 0 || sorted.length === 0 ? donePct : (livePosition / sorted.length) * 100;
+    spine.style.background = `linear-gradient(to bottom, var(--status-ok) 0%, var(--status-ok) ${donePct}%, var(--ember-08) ${donePct}%, var(--ember-08) ${livePct}%, var(--line-2) ${livePct}%)`;
+  }
 }
 
 export function initRunStream(): void {
@@ -208,68 +276,119 @@ export function initRunStream(): void {
   const url = root.dataset["streamUrl"];
   if (url === undefined || url === "") return;
   if (typeof EventSource === "undefined") return;
+  const runId = root.dataset["runId"];
+  const projectId = root.dataset["projectId"];
+  const initialStatus = root.dataset["runStatus"];
+  if (runId === undefined || projectId === undefined || initialStatus === undefined) {
+    setStreamState(root, "unavailable", "The rendered run identity is incomplete.");
+    return;
+  }
 
-  const totals = emptyTotals();
+  let totals = emptyTotals();
+  const protocol = new RunStreamProtocol(runId, projectId, initialStatus, root.dataset["runOutcome"] || null);
   const source = new EventSource(url, { withCredentials: true });
 
+  const invalid = (reason: string): void => {
+    if (protocol.isTerminal) markStreamUnavailableUnlessFinal(root, reason);
+    else setStreamState(root, "stale", reason);
+  };
+
   source.addEventListener("snapshot", (event) => {
+    if (protocol.isClosed) return;
     try {
-      const data: {
-        costs?: CostRecordFrame[];
-        run?: { status: string; outcome: string | null };
-      } = JSON.parse(event.data);
+      const decoded = protocol.snapshot(parseMessageData(event));
+      if (!decoded.ok) return invalid(decoded.reason);
+      const data = decoded.value;
       setStreamState(root, "live");
-      totals.perTokenUsd = 0;
-      totals.inputTokens = 0;
-      totals.outputTokens = 0;
-      totals.cachedInputTokens = 0;
-      totals.totalTokens = 0;
-      totals.bySource.clear();
-      for (const cost of data.costs ?? []) applyCost(totals, cost);
+      const next = emptyTotals();
+      for (const cost of data.costs) applyCost(next, cost);
+      totals = next;
       renderCostBar(root, totals);
-      if (data.run !== undefined) {
-        applyStatus(root, data.run.status, data.run.outcome);
-      }
+      applyTasks(root, data.tasks);
+      applyStatus(root, data.run.status, data.run.outcome);
     } catch {
-      setStreamState(root, "stale", "Malformed snapshot frame from the live stream.");
+      invalid("Malformed snapshot frame from the live stream.");
     }
   });
 
   source.addEventListener("costs", (event) => {
+    if (protocol.isClosed) return;
     try {
-      const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
+      const decoded = protocol.costs(parseMessageData(event));
+      if (!decoded.ok) return invalid(decoded.reason);
       setStreamState(root, "live");
-      for (const cost of data.costs ?? []) applyCost(totals, cost);
+      const next = cloneTotals(totals);
+      for (const cost of decoded.value.costs) applyCost(next, cost);
+      totals = next;
       renderCostBar(root, totals);
     } catch {
-      setStreamState(root, "stale", "Malformed costs frame from the live stream.");
+      invalid("Malformed costs frame from the live stream.");
     }
   });
 
   source.addEventListener("status", (event) => {
+    if (protocol.isClosed) return;
     try {
-      const data: {
-        status: string;
-        outcome: string | null;
-      } = JSON.parse(event.data);
+      const decoded = protocol.status(parseMessageData(event));
+      if (!decoded.ok) return invalid(decoded.reason);
       setStreamState(root, "live");
-      applyStatus(root, data.status, data.outcome);
+      applyStatus(root, decoded.value.status, decoded.value.outcome);
     } catch {
-      setStreamState(root, "stale", "Malformed status frame from the live stream.");
+      invalid("Malformed status frame from the live stream.");
     }
   });
 
   source.addEventListener("task", (event) => {
+    if (protocol.isClosed) return;
     try {
-      const frame: TaskFrame = JSON.parse(event.data);
+      const decoded = protocol.task(parseMessageData(event));
+      if (!decoded.ok) return invalid(decoded.reason);
       setStreamState(root, "live");
-      applyTask(root, frame);
+      applyTasks(root, decoded.value.tasks);
     } catch {
-      setStreamState(root, "stale", "Malformed task frame from the live stream.");
+      invalid("Malformed task frame from the live stream.");
+    }
+  });
+
+  source.addEventListener("events", (event) => {
+    if (protocol.isClosed) return;
+    try {
+      const decoded = protocol.events(parseMessageData(event));
+      if (!decoded.ok) return invalid(decoded.reason);
+      setStreamState(root, "live");
+    } catch {
+      invalid("Malformed events frame from the live stream.");
+    }
+  });
+
+  source.addEventListener("heartbeat", (event) => {
+    if (protocol.isClosed) return;
+    try {
+      const decoded = protocol.heartbeat(parseMessageData(event));
+      if (!decoded.ok) invalid(decoded.reason);
+    } catch {
+      invalid("Malformed heartbeat frame from the live stream.");
+    }
+  });
+
+  source.addEventListener("drained", (event) => {
+    if (protocol.isClosed) return;
+    try {
+      const decoded = protocol.drained(parseMessageData(event));
+      if (!decoded.ok) return invalid(decoded.reason);
+      const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+      if (flag !== null) {
+        flag.textContent = "● final · totals verified";
+        flag.removeAttribute("title");
+      }
+      source.close();
+    } catch {
+      invalid("Malformed drained receipt from the live stream.");
     }
   });
 
   source.addEventListener("error", () => {
+    if (protocol.isClosed) return;
     markStreamUnavailableUnlessFinal(
       root,
       "The browser lost the run event stream; EventSource will keep reconnecting.",

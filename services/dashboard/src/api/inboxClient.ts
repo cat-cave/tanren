@@ -14,6 +14,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { Candidate, InboxSnapshot } from "./inboxTypes.js";
+import { decodeWith, InboxCandidateResponseSchema } from "./writeResponseSchemas.js";
 
 export class InboxClient extends OrchestratorHttpClient {
   private base(orgId: string): string {
@@ -45,6 +46,7 @@ export class InboxClient extends OrchestratorHttpClient {
       "POST",
       `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/accept`,
       input,
+      { expectBody: true, decode: (value) => decodeWith(InboxCandidateResponseSchema, value) },
     );
     return {
       ok: r.ok,
@@ -61,6 +63,8 @@ export class InboxClient extends OrchestratorHttpClient {
     const r = await this.sendJson<{ candidate?: Candidate }>(
       "POST",
       `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`,
+      undefined,
+      { expectBody: true, decode: (value) => decodeWith(InboxCandidateResponseSchema, value) },
     );
     return {
       ok: r.ok,

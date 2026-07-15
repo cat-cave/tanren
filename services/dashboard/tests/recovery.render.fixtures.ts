@@ -191,7 +191,15 @@ export function stubPool(): pg.Pool {
 export let recoveryCalls: Array<{ url: string; method: string; body: string | undefined }> = [];
 
 export function mockOrchestrator(
-  opts: { recoverable?: boolean; lastGoodCommit?: string | null; runActionOk?: boolean } = {},
+  opts: {
+    recoverable?: boolean;
+    lastGoodCommit?: string | null;
+    runActionOk?: boolean;
+    orgsStatus?: number;
+    projectsStatus?: number;
+    runsStatus?: number;
+    specsStatus?: number;
+  } = {},
 ): void {
   const recoverable = opts.recoverable ?? true;
   const lastGoodCommit = opts.lastGoodCommit === undefined ? "9f3a2b4" : opts.lastGoodCommit;
@@ -202,12 +210,19 @@ export function mockOrchestrator(
     const method = init?.method ?? "GET";
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
-    if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+    if (url.endsWith("/orgs"))
+      return opts.orgsStatus === undefined
+        ? new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 })
+        : new Response(JSON.stringify({ error: "orgs_unavailable" }), { status: opts.orgsStatus });
     // The halted-run index itself legitimately lists projects and their runs;
     // run-detail/recovery routing below uses the location endpoint instead.
     if (url.endsWith(`/orgs/${ORG.id}/projects`))
-      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      return opts.projectsStatus === undefined
+        ? new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 })
+        : new Response(JSON.stringify({ error: "projects_unavailable" }), { status: opts.projectsStatus });
     if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
+      if (opts.runsStatus !== undefined)
+        return new Response(JSON.stringify({ error: "runs_unavailable" }), { status: opts.runsStatus });
       const run = recoverable ? RUN_DETAIL.run : { ...RUN_DETAIL.run, status: "running", outcome: null };
       return new Response(
         JSON.stringify({
@@ -224,7 +239,9 @@ export function mockOrchestrator(
       return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
     }
     if (url.endsWith(`/projects/${PROJECT.projectId}/specs`))
-      return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
+      return opts.specsStatus === undefined
+        ? new Response(JSON.stringify({ specs: SPECS }), { status: 200 })
+        : new Response(JSON.stringify({ error: "specs_unavailable" }), { status: opts.specsStatus });
     // recovery action POST proxies
     if (url.includes("/recovery/") && method === "POST") {
       recoveryCalls.push({

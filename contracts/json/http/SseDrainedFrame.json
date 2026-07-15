@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "costCursor": {
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "eventCursor": {
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "outcome": {
+      "anyOf": [
+        {
+          "enum": [
+            "ok",
+            "halted",
+            "escape_hatch_hit",
+            "retry_budget_exhausted",
+            "convergence_stalled",
+            "window_exhausted",
+            "window_paused",
+            "awaiting_review",
+            "cancelled",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "queued",
+        "running",
+        "paused",
+        "halted",
+        "completed",
+        "failed",
+        "cancelled"
+      ],
+      "type": "string"
+    },
+    "taskWatermark": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "runId",
+    "projectId",
+    "status",
+    "outcome",
+    "eventCursor",
+    "costCursor",
+    "taskWatermark"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.http.SseDrainedFrame"
+}

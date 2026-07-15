@@ -22,6 +22,10 @@ export interface CostsBodyProps {
   range: string;
   /** Org login for the eyebrow scope line. */
   orgLogin: string;
+  /** True when at least one project's run list failed (spend may be under-counted). */
+  costsUnavailable: boolean;
+  /** True when a cost page walk was incomplete (figures are partial). */
+  costsPartial: boolean;
 }
 
 const RANGES: { id: string; label: string }[] = [
@@ -34,6 +38,7 @@ const RANGES: { id: string; label: string }[] = [
 export function CostsBody(props: CostsBodyProps) {
   const { summary, burn, metrics, range, heatmap } = props;
   const empty = summary.totalRecords === 0;
+  const unavailable = props.costsUnavailable || props.costsPartial;
   return (
     <>
       <style data-screen="costs" dangerouslySetInnerHTML={{ __html: COSTS_SCREEN_CSS }} />
@@ -55,7 +60,15 @@ export function CostsBody(props: CostsBodyProps) {
       </div>
       <div class="page-body">
         <div class="costs-screen">
-          {empty ? (
+          {unavailable ? (
+            <section class="panel">
+              <div class="empty" role="alert" data-costs-unavailable>
+                {props.costsUnavailable
+                  ? "Cost picture is incomplete — at least one project's run list failed, so spend may be under-counted. This is not zero spend."
+                  : "Cost picture is partial — a cost page walk did not complete, so the figures below under-count. This is not the full total."}
+              </div>
+            </section>
+          ) : empty ? (
             <section class="panel">
               <div class="empty">
                 No cost records yet. Once a run forges with a wired credential, every call lands a cost record here —

@@ -24,7 +24,12 @@
         }
       ]
     },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
     "runId": {
+      "minLength": 1,
       "type": "string"
     },
     "status": {
@@ -42,6 +47,7 @@
   },
   "required": [
     "runId",
+    "projectId",
     "status",
     "outcome"
   ],

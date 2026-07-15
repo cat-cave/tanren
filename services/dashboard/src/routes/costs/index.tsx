@@ -38,18 +38,26 @@ async function gatherCosts(
   client: OrchestratorClient,
   orgId: string,
   projects: { projectId: string }[],
-): Promise<{ records: CostRecord[]; runs: RunListItem[] }> {
+): Promise<{ records: CostRecord[]; runs: RunListItem[]; runsUnavailable: boolean; costsPartial: boolean }> {
   const records: CostRecord[] = [];
   const runs: RunListItem[] = [];
+  let runsUnavailable = false;
+  let costsPartial = false;
   for (const project of projects) {
-    const projectRuns = await client.listRuns(orgId, project.projectId);
-    runs.push(...projectRuns);
-    for (const run of projectRuns) {
-      const runCosts = await client.listRunCosts(orgId, project.projectId, run.runId);
+    const projectRunsMaybe = await client.listRunsMaybe(orgId, project.projectId);
+    if (projectRunsMaybe === undefined) {
+      // A dead run list means this project's spend is unknown, not zero.
+      runsUnavailable = true;
+      continue;
+    }
+    runs.push(...projectRunsMaybe);
+    for (const run of projectRunsMaybe) {
+      const { records: runCosts, complete } = await client.listRunCosts(orgId, project.projectId, run.runId);
       records.push(...runCosts);
+      if (!complete) costsPartial = true;
     }
   }
-  return { records, runs };
+  return { records, runs, runsUnavailable, costsPartial };
 }
 
 /** Apply the date-range cutoff to records (by recordedAt) + runs (by startedAt). */
@@ -80,6 +88,8 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     // The heatmap spans its own fixed 30-day window, so it reads the full
     // gathered record set — never the range-filtered slice the pills control.
     let allRecords: CostRecord[] = [];
+    let costsUnavailable = false;
+    let costsPartial = false;
     if (ctx.org !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -89,6 +99,8 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
       allRecords = gathered.records;
       records = withinRange(gathered.records, range, now);
       runs = withinRange(gathered.runs, range, now);
+      costsUnavailable = gathered.runsUnavailable;
+      costsPartial = gathered.costsPartial;
     }
 
     const summary = summarizeCosts(records);
@@ -103,6 +115,8 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
       heatmap,
       range,
       orgLogin: ctx.org?.login ?? "",
+      costsUnavailable,
+      costsPartial,
     });
   });
 
@@ -152,12 +166,15 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     const project = ctx.projects.find((p) => p.projectId === requestedProject) ?? ctx.projects[0];
 
     let runs: RunListItem[] = [];
+    let runsAvailable = true;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      runs = await client.listRuns(ctx.org.id, project.projectId, { status });
+      const runsMaybe = await client.listRunsMaybe(ctx.org.id, project.projectId, { status });
+      runs = runsMaybe ?? [];
+      runsAvailable = runsMaybe !== undefined;
     }
 
     return renderShell(
@@ -166,6 +183,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
       { title: "tanren · run history" },
       <HistoryBody
         runs={runs}
+        runsAvailable={runsAvailable}
         status={status}
         orgId={ctx.org?.id ?? ""}
         orgLogin={ctx.org?.login ?? ""}

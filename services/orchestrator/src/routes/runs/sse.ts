@@ -1,29 +1,10 @@
-// SSE handler — emits status/task/event/cost frames as the run
-// progresses.
-//
-// LISTEN/NOTIFY (replaces the old fixed 1s tick): every run-state write — event
-// append, task transition, status/finalize — emits a NOTIFY on the `tanren_run`
-// channel with the run id as the payload (see db/src/notify.ts + eventStore.ts).
-// This driver LISTENs on that channel, FILTERS by its own run id, and re-polls
-// its deltas on wake — so the stream is event-driven and the loop interval is no
-// longer the primary latency driver. The `intervalMs` is now a long (default
-// 20s) SAFETY-NET backstop, NOT a fallback-masking-misconfig: it only bounds
-// latency if a NOTIFY is ever missed (e.g. the shared LISTEN connection dropped
-// mid-reconnect); the terminal-end / heartbeat logic is unchanged.
-//
-// The NOTIFY payload is ONLY the run id — never tenant data — so each wake still
-// re-queries every delta under this stream's own org scope (`runWithOrgScope`,
-// `SET LOCAL app.current_org_id`); the notification cannot leak cross-tenant
-// content.
-//
-// Frame format follows the SSE spec: `event: <name>\ndata: <json>\n\n`. The
-// initial frame is `snapshot` carrying a partial RunDetail (run + tasks +
-// recentEvents + costs). Subsequent frames are deltas. Heartbeats fire
-// every 15s wall-clock when nothing else has been sent. The stream ends
-// when the run reaches a terminal status AND one final post-terminal poll
-// has flushed any remaining events/costs/tasks.
+// Run SSE driver. LISTEN/NOTIFY wakes the run-scoped delta poll; `intervalMs`
+// remains only a missed-notification backstop. Every frame is schema-validated
+// and identity-bound. A terminal run emits a cursor/task-bound `drained` receipt
+// only after a quiet poll proves all post-terminal deltas were delivered.
 
 import { RUN_ACTIVITY_CHANNEL, runWithOrgScope, type PgNotifyListener } from "@tanren/db";
+import { createHash } from "node:crypto";
 import type pg from "pg";
 import type { Context } from "hono";
 import { stream as honoStream } from "hono/streaming";
@@ -31,6 +12,13 @@ import type { ActorContext } from "../../auth/schemas.js";
 import type { QueryClient } from "../../engine/data/orgScopedDb.js";
 import {
   RECENT_EVENT_CAP,
+  SseCostsFrame,
+  SseDrainedFrame,
+  SseEventsFrame,
+  SseHeartbeatFrame,
+  SseSnapshotFrame,
+  SseStatusFrame,
+  SseTaskFrame,
   type RunCostRecord,
   type RunEventRow,
   type RunSummary,
@@ -72,12 +60,8 @@ interface SseStreamArgs {
 }
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
-// Terminal statuses end the stream once a final post-terminal poll flushes
-// remaining deltas. Matches the canonical run terminals (a successful run ends
-// at `completed`).
+// Canonical run terminals; a successful run ends at `completed`.
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled", "halted"]);
-
-const TERMINAL_GRACE_POLLS = 1;
 
 // LISTEN/NOTIFY: once a run is terminal, the grace flush poll(s) run on this
 // short delay (capped by `intervalMs`) instead of the long backstop, so the
@@ -97,12 +81,13 @@ export async function handleSseStream(c: Context, args: SseStreamArgs): Promise<
 // real HTTP response. The driver collects frames via a writer callback; the
 // route handler hands it a streaming writer, tests hand it an array push.
 export class SseDriver {
-  private lastEventId = 0;
-  private lastCostId = 0;
+  private lastEventId = "0";
+  private lastCostId = "0";
   private lastTaskFingerprint = new Map<string, string>();
+  private lastTaskWatermark = taskWatermark([]);
   private lastStatusFingerprint = "";
   private lastEmitAt: number;
-  private terminalPollsRemaining: number | undefined;
+  private terminalQuietArmed = false;
   // LISTEN/NOTIFY wake gate: a NOTIFY for this run resolves the parked waiter so
   // the loop re-polls immediately instead of waiting out the backstop interval.
   private wakeWaiter: (() => void) | undefined;
@@ -146,24 +131,44 @@ export class SseDriver {
         return { run, tasks, recentEvents, costs };
       },
     );
-    if (snapshot === undefined) {
-      await this.emit("status", { runId: this.args.runId, status: "failed", outcome: null });
+    if (snapshot === undefined || snapshot.run.projectId !== this.args.projectId) {
+      await this.emit("status", {
+        runId: this.args.runId,
+        projectId: this.args.projectId,
+        status: "failed",
+        outcome: null,
+      });
       return;
     }
     const { run, tasks, recentEvents, costs } = snapshot;
-    await this.emit("snapshot", { run, tasks, recentEvents, costs });
-
-    this.lastStatusFingerprint = `${run.status}:${run.outcome ?? ""}`;
     for (const task of tasks) {
       this.lastTaskFingerprint.set(task.taskId, fingerprintTask(task));
     }
-    const lastEvent = recentEvents.at(-1);
-    this.lastEventId = lastEvent === undefined ? 0 : Number(lastEvent.id);
-    const lastCost = costs.at(-1);
-    this.lastCostId = lastCost === undefined ? 0 : Number(lastCost.id);
+    this.lastTaskWatermark = taskWatermark(tasks);
+    this.lastEventId = maxCursor(
+      "0",
+      recentEvents.map((event) => event.id),
+    );
+    this.lastCostId = maxCursor(
+      "0",
+      costs.map((cost) => cost.id),
+    );
+    await this.emit("snapshot", {
+      runId: this.args.runId,
+      projectId: this.args.projectId,
+      run,
+      tasks,
+      recentEvents,
+      costs,
+      eventCursor: this.lastEventId,
+      costCursor: this.lastCostId,
+      taskWatermark: this.lastTaskWatermark,
+    });
+
+    this.lastStatusFingerprint = `${run.status}:${run.outcome ?? ""}`;
 
     if (TERMINAL_STATUSES.has(run.status)) {
-      this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
+      this.terminalQuietArmed = true;
     }
 
     // LISTEN/NOTIFY: subscribe AFTER the snapshot so any activity between the
@@ -208,7 +213,7 @@ export class SseDriver {
     // backstop) rather than parking on the wake. This keeps the stream's end
     // crisp instead of dangling for a full backstop interval, preserving the
     // pre-NOTIFY terminal-end latency.
-    if (this.terminalPollsRemaining !== undefined) {
+    if (this.terminalQuietArmed) {
       await this.sleep(Math.min(this.args.intervalMs, TERMINAL_FLUSH_DELAY_MS));
       return;
     }
@@ -250,8 +255,14 @@ export class SseDriver {
     if (polled === undefined) return true;
     const { run, tasks, newEvents, newCosts } = polled;
     const fp = `${run.status}:${run.outcome ?? ""}`;
-    if (fp !== this.lastStatusFingerprint) {
-      await this.emit("status", { runId: run.runId, status: run.status, outcome: run.outcome });
+    const statusChanged = fp !== this.lastStatusFingerprint;
+    if (statusChanged) {
+      await this.emit("status", {
+        runId: run.runId,
+        projectId: this.args.projectId,
+        status: run.status,
+        outcome: run.outcome,
+      });
       this.lastStatusFingerprint = fp;
     }
     const changed: TaskTimelineEntry[] = [];
@@ -262,30 +273,72 @@ export class SseDriver {
         this.lastTaskFingerprint.set(task.taskId, fpTask);
       }
     }
-    for (const task of changed) {
-      await this.emit("task", task);
+    const nextTaskWatermark = taskWatermark(tasks);
+    // A full-projection watermark change also catches removal of a task. A
+    // per-row fingerprint loop alone can only notice rows that still exist.
+    const taskProjectionChanged = changed.length > 0 || nextTaskWatermark !== this.lastTaskWatermark;
+    if (taskProjectionChanged) {
+      await this.emit("task", {
+        runId: run.runId,
+        projectId: this.args.projectId,
+        tasks,
+        taskWatermark: nextTaskWatermark,
+      });
     }
-    const lastNewEvent = newEvents.at(-1);
-    if (lastNewEvent !== undefined) {
-      await this.emit("events", { events: newEvents });
-      this.lastEventId = Number(lastNewEvent.id);
+    this.lastTaskWatermark = nextTaskWatermark;
+    if (newEvents.length > 0) {
+      this.lastEventId = maxCursor(
+        this.lastEventId,
+        newEvents.map((event) => event.id),
+      );
+      await this.emit("events", {
+        runId: run.runId,
+        projectId: this.args.projectId,
+        events: newEvents,
+        eventCursor: this.lastEventId,
+      });
     }
-    const lastNewCost = newCosts.at(-1);
-    if (lastNewCost !== undefined) {
-      await this.emit("costs", { costs: newCosts });
-      this.lastCostId = Number(lastNewCost.id);
+    if (newCosts.length > 0) {
+      this.lastCostId = maxCursor(
+        this.lastCostId,
+        newCosts.map((cost) => cost.id),
+      );
+      await this.emit("costs", {
+        runId: run.runId,
+        projectId: this.args.projectId,
+        costs: newCosts,
+        costCursor: this.lastCostId,
+      });
     }
     if (this.nowMs() - this.lastEmitAt >= HEARTBEAT_INTERVAL_MS) {
-      await this.emit("heartbeat", { ts: this.args.now?.() ?? new Date() });
+      await this.emit("heartbeat", {
+        runId: run.runId,
+        projectId: this.args.projectId,
+        ts: this.args.now?.() ?? new Date(),
+      });
     }
     if (TERMINAL_STATUSES.has(run.status)) {
-      if (this.terminalPollsRemaining === undefined) {
-        this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
-      } else if (this.terminalPollsRemaining <= 0) {
+      const deliveredActivity = statusChanged || taskProjectionChanged || newEvents.length > 0 || newCosts.length > 0;
+      if (deliveredActivity) {
+        // A later quiet terminal poll is the proof that no post-terminal delta
+        // remained behind the receipt.
+        this.terminalQuietArmed = true;
+      } else if (this.terminalQuietArmed) {
+        await this.emit("drained", {
+          runId: run.runId,
+          projectId: this.args.projectId,
+          status: run.status,
+          outcome: run.outcome,
+          eventCursor: this.lastEventId,
+          costCursor: this.lastCostId,
+          taskWatermark: this.lastTaskWatermark,
+        });
         return true;
       } else {
-        this.terminalPollsRemaining -= 1;
+        this.terminalQuietArmed = true;
       }
+    } else {
+      this.terminalQuietArmed = false;
     }
     return false;
   }
@@ -351,7 +404,8 @@ export class SseDriver {
   }
 
   private async emit(name: SseEventName, data: unknown): Promise<void> {
-    const frame = `event: ${name}\ndata: ${JSON.stringify(data, jsonDateReplacer)}\n\n`;
+    const validated = SSE_FRAME_SCHEMAS[name].parse(data);
+    const frame = `event: ${name}\ndata: ${JSON.stringify(validated, jsonDateReplacer)}\n\n`;
     await this.write(frame);
     this.lastEmitAt = this.nowMs();
   }
@@ -364,11 +418,68 @@ export class SseDriver {
   }
 }
 
+const SSE_FRAME_SCHEMAS = {
+  snapshot: SseSnapshotFrame,
+  status: SseStatusFrame,
+  task: SseTaskFrame,
+  events: SseEventsFrame,
+  costs: SseCostsFrame,
+  heartbeat: SseHeartbeatFrame,
+  drained: SseDrainedFrame,
+} as const;
+
+function canonicalCursor(value: number | string): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error("unsafe SSE cursor id");
+    return String(value);
+  }
+  if (!/^(0|[1-9][0-9]*)$/u.test(value)) throw new Error("invalid SSE cursor id");
+  return BigInt(value).toString();
+}
+
+function maxCursor(current: string, ids: ReadonlyArray<number | string>): string {
+  let max = BigInt(current);
+  for (const id of ids) {
+    const candidate = BigInt(canonicalCursor(id));
+    if (candidate > max) max = candidate;
+  }
+  return max.toString();
+}
+
+function taskWatermark(tasks: ReadonlyArray<TaskTimelineEntry>): string {
+  const canonical = [...tasks]
+    .sort((left, right) => left.taskId.localeCompare(right.taskId))
+    .map((task) => ({
+      taskId: task.taskId,
+      runId: task.runId,
+      kind: task.kind,
+      parentTaskId: task.parentTaskId,
+      title: task.title,
+      status: task.status,
+      outcome: task.outcome,
+      failureKind: task.failureKind,
+      attempt: task.attempt,
+      cli: task.cli,
+      model: task.model,
+      startedAt: task.startedAt?.toISOString() ?? null,
+      endedAt: task.endedAt?.toISOString() ?? null,
+    }));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
+}
+
 function fingerprintTask(task: TaskTimelineEntry): string {
   return [
+    task.taskId,
+    task.runId,
+    task.kind,
+    task.parentTaskId ?? "",
+    task.title,
     task.status,
     task.outcome ?? "",
     task.failureKind ?? "",
+    String(task.attempt),
+    task.cli,
+    task.model ?? "",
     task.startedAt?.toISOString() ?? "",
     task.endedAt?.toISOString() ?? "",
   ].join("|");

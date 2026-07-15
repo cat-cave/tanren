@@ -116,12 +116,12 @@ async function renderSpecListWithError(
     );
   }
   const client = readClient(c, deps);
-  const [specs, runs] = await Promise.all([
-    client.listSpecs(ctx.org.id, projectId),
-    client.listRuns(ctx.org.id, projectId),
+  const [specsMaybe, runsMaybe] = await Promise.all([
+    client.listSpecsMaybe(ctx.org.id, projectId),
+    client.listRunsMaybe(ctx.org.id, projectId),
   ]);
   const runBySpec: Record<string, string | undefined> = {};
-  for (const run of runs) {
+  for (const run of runsMaybe ?? []) {
     if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
   }
   return renderShell(
@@ -130,7 +130,9 @@ async function renderSpecListWithError(
     { title: `tanren · ${ctx.project.name} specs` },
     <SpecListBody
       project={ctx.project}
-      specs={specs}
+      specs={specsMaybe ?? []}
+      specsAvailable={specsMaybe !== undefined}
+      runsAvailable={runsMaybe !== undefined}
       runBySpec={runBySpec}
       error={error}
       errorSpecId={specId}

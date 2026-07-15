@@ -116,11 +116,12 @@ async function loadSpecDetail(
   specId: string,
 ): Promise<SpecDetail | undefined> {
   const client = clientFor(c, deps);
-  const [allSpecs, specRunsMaybe, allRunsMaybe] = await Promise.all([
-    client.listSpecs(orgId, projectId),
+  const [allSpecsMaybe, specRunsMaybe, allRunsMaybe] = await Promise.all([
+    client.listSpecsMaybe(orgId, projectId),
     client.listRunsMaybe(orgId, projectId, { specId }),
     client.listRunsMaybe(orgId, projectId),
   ]);
+  const allSpecs = allSpecsMaybe ?? [];
   const spec = allSpecs.find((s) => s.specId === specId);
   if (spec === undefined) return undefined;
 

@@ -274,7 +274,8 @@ describe("brownfield · DAG seed (step 4)", () => {
       }),
     });
     const html = await res.text();
-    expect(html).toContain("seed_dag_unavailable");
+    expect(html).toContain("could not seed the spec dag — try again");
+    expect(html).not.toContain("seed_dag_unavailable");
     expect(html).toContain("seed the dag ↗");
     expect(html).not.toContain("Seeded <b>");
   });

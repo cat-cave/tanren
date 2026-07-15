@@ -9,7 +9,15 @@
 // inspectable from this screen including the rejection loop" — is exercised.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { build, mockOrchestrator, mockOrchestratorWithProject, RUN_ID } from "./runDetail.render.fixtures.js";
+import {
+  build,
+  mockOrchestrator,
+  mockOrchestratorWithProject,
+  ORG,
+  PROJECT,
+  RUN_DETAIL,
+  RUN_ID,
+} from "./runDetail.render.fixtures.js";
 
 beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
@@ -101,6 +109,30 @@ describe("P2B-0004 run-detail screen", () => {
     expect(html).toContain("view raw ↗");
     expect(html).toContain('data-island="run-stream"');
     expect(html).toContain(`/runs/${RUN_ID}/stream`);
+  });
+
+  it("server-renders a terminal run as final before the first stream frame", async () => {
+    mockOrchestrator();
+    const upstream = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith(`/orgs/${ORG.id}/projects/${PROJECT.projectId}/runs/${RUN_ID}`)) {
+        return new Response(
+          JSON.stringify({
+            ...RUN_DETAIL,
+            run: { ...RUN_DETAIL.run, status: "completed", outcome: "ok", endedAt: new Date().toISOString() },
+          }),
+          { status: 200 },
+        );
+      }
+      return upstream(input, init);
+    });
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}`)).text();
+    expect(html).toContain('data-run-status="completed"');
+    expect(html).toContain('data-run-outcome="ok"');
+    expect(html).toContain("● final · verifying totals");
+    expect(html).not.toContain('<span class="live" data-rd="live-flag">↻ live</span>');
   });
 
   it("delegates /runs/halted to P2B-0008's halted-run list (not the run-detail page)", async () => {

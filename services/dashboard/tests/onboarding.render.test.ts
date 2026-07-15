@@ -492,6 +492,7 @@ describe("existing-project full track (P3-0016)", () => {
       body: "repoUrl=" + encodeURIComponent("https://github.com/cat-cave/missing") + "&name=missing",
     });
     const html = await res.text();
-    expect(html).toContain("cannot see repo");
+    expect(html).toContain("link failed (is the repo reachable by the GitHub App?)");
+    expect(html).not.toContain("cannot see repo");
   });
 });

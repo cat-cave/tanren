@@ -1,0 +1,9 @@
+/* Live Forge proposal outcome states, isolated from the historical shell sheet. */
+
+.fc-card.proposal.failed {
+  border-color: var(--status-fail);
+}
+
+.fc-card.proposal.failed .fc-proposal-status {
+  color: var(--status-fail);
+}

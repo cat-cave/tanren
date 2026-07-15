@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askForge,
   csrfWriteHeaders,
+  decideProposal,
   forgeToolFailureMessage,
   injectFormCsrfFields,
   routeForAction,
@@ -158,6 +159,42 @@ describe("askForge (palette error surface)", () => {
         }),
     );
     const result = await askForge("org_a", "what is blocked?", {});
-    expect("error" in result ? result.error : "").toContain("Forge ask failed (502): forge_ask_failed");
+    expect("error" in result ? result.error : "").toBe("Forge ask failed (502).");
+    expect("error" in result ? result.error : "").not.toContain("forge_ask_failed");
+  });
+
+  it("rejects a 200 response whose body is not the Forge answer contract", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({}), { status: 200 }));
+    const result = await askForge("org_a", "what is blocked?", {});
+    expect(result).toEqual({ error: "Forge ask failed: invalid response body." });
+  });
+});
+
+describe("decideProposal (palette BFF boundary)", () => {
+  it("rejects malformed or empty successful bodies instead of fabricating an outcome", async () => {
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({}), { status: 200 }));
+    await expect(decideProposal("org_a", "p1", "approve")).resolves.toEqual({
+      status: "failed",
+      message: "Proposal decision failed: invalid response (200).",
+    });
+
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 200 }));
+    await expect(decideProposal("org_a", "p1", "reject")).resolves.toEqual({
+      status: "failed",
+      message: "Proposal decision failed: invalid response (200).",
+    });
+  });
+
+  it("accepts only the documented 409 payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ outcome: "already_decided", currentStatus: "executed" }), { status: 409 }),
+    );
+    await expect(decideProposal("org_a", "p1", "approve")).resolves.toEqual({ status: "executed" });
+
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ currentStatus: "executed" }), { status: 409 }));
+    const malformed = await decideProposal("org_a", "p1", "approve");
+    expect(malformed.status).toBe("failed");
   });
 });

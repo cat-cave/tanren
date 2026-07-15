@@ -25,6 +25,10 @@ export interface ShellContext {
   projects: ProjectSummary[];
   /** Selected project, if the current route is project-scoped. */
   project: ProjectSummary | undefined;
+  /** True when the org read failed (not a legitimate empty/unauth result). */
+  orgsUnavailable: boolean;
+  /** True when the project list read failed (not a legitimate empty result). */
+  projectsUnavailable: boolean;
   /** Active sidenav row id (highlight). */
   activeNavId: string | undefined;
   /** Palette groups sourced from the Forge tool surface. */
@@ -68,6 +72,7 @@ export function ShellLayout(props: ShellLayoutProps) {
         ) : null}
         <link rel="stylesheet" href="/static/tokens.css" />
         <link rel="stylesheet" href="/static/shell.css" />
+        <link rel="stylesheet" href="/static/palette-state.css" />
       </head>
       <body data-csrf-token={ctx.csrfToken ?? ""}>
         <div class="app">

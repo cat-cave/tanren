@@ -56,6 +56,14 @@ export function ProjectViewBody(props: ProjectViewBodyProps) {
         }
       />
       <KpiStrip items={model.kpis} />
+      {(!model.runsAvailable || !model.insightsAvailable || !model.feedAvailable) && (
+        <div class="empty-note" role="alert" data-partial-unavailable>
+          {!model.runsAvailable && "Run history and run-derived KPIs are unavailable. "}
+          {!model.insightsAvailable && "Workflow insights are unavailable — the needs-you count may under-count. "}
+          {!model.feedAvailable && "Activity feed is unavailable. "}
+          Values are omitted rather than reported as zero or healthy.
+        </div>
+      )}
       <div class="page-body">
         <div class="split-chat">
           <ForgeNarrationCard {...props} />

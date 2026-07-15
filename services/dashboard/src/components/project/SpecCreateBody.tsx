@@ -19,8 +19,12 @@ import { PageHead } from "./shared.js";
 export interface SpecCreateBodyProps {
   project: ProjectSummary;
   milestones: MilestoneSummary[];
+  /** False when the milestone read failed (not a legitimate empty result). */
+  milestonesAvailable?: boolean;
   behaviors: BehaviorSummary[];
   specs: SpecSummary[];
+  /** False when the spec read failed (not a legitimate empty result). */
+  specsAvailable?: boolean;
   /** Set when a prior submit failed; rendered as an inline error banner. */
   error?: string;
   /** Echo back operator input on validation failure. */
@@ -98,7 +102,11 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
                   ))}
                 </select>
                 {props.milestones.length === 0 && (
-                  <div class="hint">no milestones yet · create one in project settings</div>
+                  <div class="hint" data-milestones-unavailable={props.milestonesAvailable === false}>
+                    {props.milestonesAvailable === false
+                      ? "milestone list unavailable — the read failed, not empty. retry later."
+                      : "no milestones yet · create one in project settings"}
+                  </div>
                 )}
               </div>
 
@@ -153,7 +161,11 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
               <div class="form-field">
                 <label>spec dependencies (optional)</label>
                 {props.specs.length === 0 ? (
-                  <div class="hint">no other specs to depend on yet</div>
+                  <div class="hint" data-specs-unavailable={props.specsAvailable === false}>
+                    {props.specsAvailable === false
+                      ? "spec list unavailable — the read failed, not empty."
+                      : "no other specs to depend on yet"}
+                  </div>
                 ) : (
                   <div class="checkbox-list">
                     {props.specs.map((spec) => (
@@ -188,6 +200,10 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
 export function SpecListBody(props: {
   project: ProjectSummary;
   specs: SpecSummary[];
+  /** False when the spec read failed (not a legitimate empty result). */
+  specsAvailable?: boolean;
+  /** False when the run read failed (not a legitimate empty result). */
+  runsAvailable?: boolean;
   runBySpec: Record<string, string | undefined>;
   /** Set when a prior run-trigger failed; shown inline on the row. */
   error?: string;
@@ -221,7 +237,11 @@ export function SpecListBody(props: {
             <span class="meta">click a row to open its most-recent run</span>
           </div>
           <div class="panel-body">
-            {props.specs.length === 0 ? (
+            {props.specsAvailable === false ? (
+              <div class="empty-note" role="alert" data-specs-unavailable>
+                Spec list unavailable — the orchestrator read failed. This is not an empty project; retry shortly.
+              </div>
+            ) : props.specs.length === 0 ? (
               <div class="empty-note">No specs yet. Create one to start forging.</div>
             ) : (
               props.specs.map((spec) => {
@@ -243,7 +263,13 @@ export function SpecListBody(props: {
                             {spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps
                           </div>
                         </div>
-                        <span class="d">{runId === undefined ? "no runs" : "run ↗"}</span>
+                        <span class="d">
+                          {props.runsAvailable === false
+                            ? "runs unavailable"
+                            : runId === undefined
+                              ? "no runs"
+                              : "run ↗"}
+                        </span>
                         <span class="arrow" style="color:var(--ember-08)">
                           ↗
                         </span>

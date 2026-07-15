@@ -4,16 +4,33 @@
  * (palette items + write-action invocation).
  *
  * Every request forwards the inbound dashboard request's `cookie` header so the
- * orchestrator can validate the `tanren_session` cookie. The client degrades
- * gracefully: a missing/invalid session yields `undefined`/empty collections
- * rather than throwing, which keeps the dev ergonomics working under
- * `TANREN_REQUIRE_AUTH=0` (orchestrator returns a local-dev actor).
+ * orchestrator can validate the `tanren_session` cookie. List reads return
+ * `undefined` (not `[]`) on transport/HTTP/decode failure so callers render an
+ * explicit unavailable state rather than laundering failure into empty/zero.
  */
 
 import type { DashboardSession } from "../auth/session.js";
 import type { DoraMetrics } from "./dora.js";
 import { OrchestratorNotificationsClient } from "./notificationsClient.js";
 import { findRunLocation as resolveRunLocation, type FindRunLocationResult } from "./runLocation.js";
+import {
+  decodeRead,
+  FeedListResponseSchema,
+  InsightListResponseSchema,
+  MilestoneListResponseSchema,
+  RunListResponseSchema,
+  SpecListResponseSchema,
+} from "./readResponseSchemas.js";
+import { fetchRunDetail, type RunDetailResult } from "./runDetailClient.js";
+import {
+  CreatedProjectSchema,
+  BrownfieldLinkResultSchema,
+  decodeWith,
+  ForgeNarrationSchema,
+  ForgeThreadSchema,
+  RunSummarySchema,
+  SpecSummarySchema,
+} from "./writeResponseSchemas.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -31,7 +48,6 @@ import type {
   ProjectDetail,
   ProjectFeedItem,
   ProjectSummary,
-  RunDetail,
   RunListItem,
   RunLocation,
   RunSummary,
@@ -40,6 +56,8 @@ import type {
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
 export type { FindRunLocationResult, RunLocation } from "./runLocation.js";
+
+export type { RunDetailResult } from "./runDetailClient.js";
 
 export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
@@ -70,28 +88,26 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return json.githubAppInstallUrl;
   }
 
-  /** Orgs the operator is a member of. Empty array when unauthenticated. */
-  async listOrgs(): Promise<OrgSummary[]> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs`, {
-      headers: this.headers(),
-    }).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return [];
-    }
-    const json = (await response.json()) as { orgs?: OrgSummary[] };
-    return json.orgs ?? [];
+  /**
+   * Orgs the operator is a member of. `undefined` on transport/HTTP/parse
+   * failure so callers can distinguish an unavailable read from a legitimate
+   * empty (unauthenticated) result instead of laundering failure into `[]`.
+   */
+  async listOrgsMaybe(): Promise<OrgSummary[] | undefined> {
+    const json = await this.getJson<{ orgs?: OrgSummary[] }>("/orgs");
+    if (json === undefined || !Array.isArray(json.orgs)) return undefined;
+    return json.orgs;
   }
 
-  /** Projects in an org the operator can access. Empty array on failure. */
-  async listProjects(orgId: string): Promise<ProjectSummary[]> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects`, {
-      headers: this.headers(),
-    }).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return [];
-    }
-    const json = (await response.json()) as { projects?: ProjectSummary[] };
-    return json.projects ?? [];
+  /**
+   * Projects in an org the operator can access. `undefined` on
+   * transport/HTTP/parse failure so project discovery never looks empty when
+   * the orchestrator is actually unreachable.
+   */
+  async listProjectsMaybe(orgId: string): Promise<ProjectSummary[] | undefined> {
+    const json = await this.getJson<{ projects?: ProjectSummary[] }>(`/orgs/${encodeURIComponent(orgId)}/projects`);
+    if (json === undefined || !Array.isArray(json.projects)) return undefined;
+    return json.projects;
   }
 
   /**
@@ -99,36 +115,47 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
    * until the cursor is exhausted so the costs dashboard sees the FULL set. Progress-
    * based: each page MUST yield a NEW cursor — a repeated cursor means the API stopped
    * advancing, so the walk STOPS on that (returning what it has) rather than looping
-   * forever. Empty on failure.
+   * forever. Reports `complete: false` when any page failed (transport/HTTP/parse) so
+   * callers never present a partial total as the full picture.
    */
-  async listRunCosts(orgId: string, projectId: string, runId: string): Promise<CostRecord[]> {
+  async listRunCosts(
+    orgId: string,
+    projectId: string,
+    runId: string,
+  ): Promise<{ records: CostRecord[]; complete: boolean }> {
     const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
       projectId,
     )}/runs/${encodeURIComponent(runId)}/costs`;
     const all: CostRecord[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
+    let complete = true;
     for (;;) {
       const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
       const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => {});
       if (response === undefined || !response.ok) {
+        // The gathered set is partial, not the full picture; surface that.
+        complete = false;
         break;
       }
-      const json = (await response.json()) as Partial<CursorPage<CostRecord>>;
+      const json = (await response.json().catch(() => {})) as Partial<CursorPage<CostRecord>> | undefined;
+      if (json === undefined) {
+        complete = false;
+        break;
+      }
       for (const item of json.items ?? []) {
         all.push(item);
       }
       const nextCursor = json.nextCursor ?? null;
-      // Stop on an exhausted OR non-advancing cursor (a repeated cursor would loop
-      // forever). The dashboard read is best-effort, so a non-advancing API stops the
-      // walk with what it has rather than throwing.
+      // Stop on an exhausted OR non-advancing cursor (a repeated cursor would
+      // loop forever). A non-advancing API stops the walk with what it has.
       if (nextCursor === null || seenCursors.has(nextCursor)) {
         break;
       }
       seenCursors.add(nextCursor);
       cursor = nextCursor;
     }
-    return all;
+    return { records: all, complete };
   }
 
   /**
@@ -143,18 +170,15 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return result.body;
   }
 
-  // Product reads/writes below use shared getJson/sendJson; degrade empty on failure.
+  // Product reads/writes below use shared getJson/sendJson. List reads return
+  // `undefined` on transport/HTTP/decode failure so callers render an explicit
+  // unavailable state rather than laundering failure into an empty/zero result.
 
-  /** Runs for attention queue + KPIs; empty array on failure. */
-  async listRuns(
-    orgId: string,
-    projectId: string,
-    query: { status?: string; specId?: string } = {},
-  ): Promise<RunListItem[]> {
-    return (await this.listRunsMaybe(orgId, projectId, query)) ?? [];
-  }
-
-  /** listRuns, but undefined on failure (unavailable, not fake empty/zeros). */
+  /**
+   * Runs for attention queue + KPIs. `undefined` on failure (unavailable,
+   * not fake empty/zeros) — callers MUST distinguish that from a legitimate
+   * empty 200 response.
+   */
   async listRunsMaybe(
     orgId: string,
     projectId: string,
@@ -164,34 +188,37 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     if (query.status !== undefined && query.status !== "") params.set("status", query.status);
     if (query.specId !== undefined && query.specId !== "") params.set("specId", query.specId);
     const qs = params.toString();
-    const json = await this.getJson<{ items?: RunListItem[] }>(
+    const json = await this.getJson<unknown>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
-    // Missing/non-array items is a broken contract, not empty success.
-    if (json === undefined || !Array.isArray(json.items)) return undefined;
-    return json.items;
+    return decodeRead(RunListResponseSchema, json)?.items;
   }
 
-  /** Project activity feed. */
-  async listFeed(orgId: string, projectId: string): Promise<ProjectFeedItem[]> {
-    const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
+  /**
+   * Project activity feed. `undefined` on transport/HTTP/decode failure so a
+   * dead feed is never reported as "no recent activity."
+   */
+  async listFeedMaybe(orgId: string, projectId: string): Promise<ProjectFeedItem[] | undefined> {
+    const json = await this.getJson<unknown>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
     );
-    return json?.items ?? [];
+    return decodeRead(FeedListResponseSchema, json)?.items;
   }
 
   /**
    * Workflow insights, filtered to the supported kinds (trio plus the
    * `stuck` + `review_stall` and the `ci_flaky` additions).
-   * Acknowledged rows drop out.
+   * Acknowledged rows drop out. `undefined` on transport/HTTP/decode failure
+   * so the needs-attention count never under-counts because of a dead read.
    */
-  async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
-    const json = await this.getJson<{ insights?: InsightSummary[] }>(
+  async listInsightsMaybe(orgId: string, projectId: string): Promise<InsightSummary[] | undefined> {
+    const json = await this.getJson<unknown>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`,
     );
-    const all = json?.insights ?? [];
+    const decoded = decodeRead(InsightListResponseSchema, json);
+    if (decoded === undefined) return undefined;
     const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall", "ci_flaky"]);
-    return all.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
+    return decoded.insights.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
   }
 
   /**
@@ -207,26 +234,26 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return json?.metrics;
   }
 
-  /** Project milestones for the velocity card + spec form. */
-  async listMilestones(orgId: string, projectId: string): Promise<MilestoneSummary[]> {
-    const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
+  /**
+   * Project milestones for the velocity card + spec form. `undefined` on
+   * failure (unavailable, not a fake empty milestone set).
+   */
+  async listMilestonesMaybe(orgId: string, projectId: string): Promise<MilestoneSummary[] | undefined> {
+    const json = await this.getJson<unknown>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
     );
-    return json?.milestones ?? [];
+    return decodeRead(MilestoneListResponseSchema, json)?.milestones;
   }
 
-  /** Project specs (spec list + dependency picker). */
-  async listSpecs(orgId: string, projectId: string): Promise<SpecSummary[]> {
-    return (await this.listSpecsMaybe(orgId, projectId)) ?? [];
-  }
-
-  /** listSpecs, but undefined on failure (unavailable, not a fake empty DAG). */
+  /**
+   * Project specs (spec list + dependency picker). `undefined` on failure
+   * (unavailable, not a fake empty DAG).
+   */
   async listSpecsMaybe(orgId: string, projectId: string): Promise<SpecSummary[] | undefined> {
-    const json = await this.getJson<{ specs?: SpecSummary[] }>(
+    const json = await this.getJson<unknown>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
     );
-    if (json === undefined || !Array.isArray(json.specs)) return undefined;
-    return json.specs;
+    return decodeRead(SpecListResponseSchema, json)?.specs;
   }
 
   /** Project personas — needed to enumerate behaviors. */
@@ -286,7 +313,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(SpecSummarySchema, value) },
     );
   }
 
@@ -310,7 +337,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
         trigger: input.trigger ?? "dashboard",
         ...(input.branch === undefined ? {} : { branch: input.branch }),
       },
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(RunSummarySchema, value) },
     );
   }
 
@@ -329,24 +356,24 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     projectId: string,
     budgetUsdPerWeek?: number,
   ): Promise<ForgeAnswer | undefined> {
-    const thread = await this.sendJson<{ id?: string }>(
+    const thread = await this.sendJson<{ id: string }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
       {
         scope: "project",
         projectId,
       },
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(ForgeThreadSchema, value) },
     );
     const threadId = thread.body?.id;
     if (!thread.ok || threadId === undefined) {
       return undefined;
     }
-    const turn = await this.sendJson<{ render?: ForgeAnswer }>(
+    const turn = await this.sendJson<{ render: ForgeAnswer }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(threadId)}/turns/generate-project-view`,
       budgetUsdPerWeek === undefined ? { projectId } : { projectId, budgetUsdPerWeek },
-      { expectBody: true },
+      { expectBody: true, decode: (value) => decodeWith(ForgeNarrationSchema, value) },
     );
     return turn.body?.render;
   }
@@ -395,11 +422,12 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   /** Create a project row (non-brownfield create path). */
   async createProject(orgId: string, body: Record<string, unknown>): Promise<CreatedProject | undefined> {
-    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body, {
+    const result = await this.sendJson<CreatedProject>("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body, {
       expectBody: true,
+      decode: (value) => decodeWith(CreatedProjectSchema, value),
     });
     if (!result.ok) return undefined;
-    return result.body as CreatedProject;
+    return result.body;
   }
 
   /**
@@ -411,16 +439,16 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     projectId: string,
     body: Record<string, unknown>,
   ): Promise<{ ok: boolean; status: number; result?: BrownfieldLinkResult; error?: string }> {
-    const result = await this.sendJson(
+    const result = await this.sendJson<BrownfieldLinkResult>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/link`,
       body,
+      { expectBody: true, decode: (value) => decodeWith(BrownfieldLinkResultSchema, value) },
     );
     if (!result.ok) {
-      const errBody = result.body as { error?: string; message?: string } | undefined;
-      return { ok: false, status: result.status, error: errBody?.message ?? errBody?.error };
+      return { ok: false, status: result.status };
     }
-    return { ok: true, status: result.status, result: result.body as BrownfieldLinkResult };
+    return { ok: true, status: result.status, result: result.body };
   }
 
   // ── run-detail / review / SSE ─────────────────────────────────
@@ -450,22 +478,16 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
    * Fetch the full run-detail snapshot. `rawView` opts into unredacted
    * payloads via `?raw=true` (the orchestrator emits the audit
    * trail); the dashboard only sets it for admins. `undefined` when the run
-   * is missing or access is denied.
+   * is missing. Transport, HTTP, JSON, and contract failures are unavailable;
+   * they are never laundered into a not-found result.
    */
-  async getRunDetail(
-    loc: RunLocation,
-    runId: string,
-    opts: { rawView?: boolean } = {},
-  ): Promise<RunDetail | undefined> {
-    const query = opts.rawView === true ? "?raw=true" : "";
-    const response = await this.fetchImpl(
-      `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
-      { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) },
-    ).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
-    return (await response.json()) as RunDetail;
+  async getRunDetail(loc: RunLocation, runId: string, opts: { rawView?: boolean } = {}): Promise<RunDetailResult> {
+    return fetchRunDetail(
+      { orchestratorUrl: this.orchestratorUrl, headers: this.headers(), fetchImpl: this.fetchImpl },
+      loc,
+      runId,
+      opts,
+    );
   }
 
   /** Build the SSE stream URL for the run's live feed (consumed by the client island). */

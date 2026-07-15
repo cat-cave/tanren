@@ -23,6 +23,8 @@ export interface HaltedRunBodyProps {
   lastGoodCommit: string | null;
   /** All project specs, for the downstream-impact list (dependsOn edges). */
   specs: Array<{ specId: string; title: string; dependsOn: string[] }>;
+  /** False when the spec read failed (the downstream-impact list may be partial). */
+  specsAvailable?: boolean;
   /** Base path for recovery action POSTs (e.g. `/runs/:runId/recover`). */
   actionBase: string;
   /** Back-to-project link. */
@@ -296,6 +298,11 @@ export function HaltedRunBody(props: HaltedRunBodyProps) {
     <>
       <style>{RECOVERY_CSS}</style>
       <PageHead detail={props.detail} ctx={ctx} runHref={props.runHref} />
+      {props.specsAvailable === false && (
+        <div class="empty-note" role="alert" data-recover-specs-unavailable style="margin:8px 16px">
+          Spec list unavailable — the downstream-impact strip below may be incomplete because the spec read failed.
+        </div>
+      )}
       <div class="page-body scrolls">
         <FailureContextStrip ctx={ctx} impact={impact} />
         <div class="recovery-split">

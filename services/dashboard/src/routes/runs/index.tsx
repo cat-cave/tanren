@@ -69,10 +69,17 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     const loc = resolved.location;
     const canViewRaw = await isOrgAdmin(client, loc);
     const rawView = parseRaw(c) && canViewRaw;
-    const detail = await client.getRunDetail(loc, runId, { rawView });
-    if (detail === undefined) {
-      return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "projects");
+    const detailResult = await client.getRunDetail(loc, runId, { rawView });
+    if (detailResult.kind !== "found") {
+      return renderRunLocationFailure(
+        c,
+        deps,
+        runId,
+        detailResult.kind === "not_found" ? detailResult : { kind: "unavailable", reason: "upstream" },
+        "projects",
+      );
     }
+    const detail = detailResult.detail;
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
       projectId: loc.projectId,
@@ -135,10 +142,17 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       return renderRunLocationFailure(c, deps, runId, resolved, "projects");
     }
     const loc = resolved.location;
-    const detail = await client.getRunDetail(loc, runId);
-    if (detail === undefined) {
-      return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "projects");
+    const detailResult = await client.getRunDetail(loc, runId);
+    if (detailResult.kind !== "found") {
+      return renderRunLocationFailure(
+        c,
+        deps,
+        runId,
+        detailResult.kind === "not_found" ? detailResult : { kind: "unavailable", reason: "upstream" },
+        "projects",
+      );
     }
+    const detail = detailResult.detail;
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
       projectId: loc.projectId,
@@ -181,7 +195,17 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       return renderRunLocationFailure(c, deps, runId, resolved, "projects");
     }
     const loc = resolved.location;
-    const detail = await client.getRunDetail(loc, runId);
+    const detailResult = await client.getRunDetail(loc, runId);
+    if (detailResult.kind !== "found") {
+      return renderRunLocationFailure(
+        c,
+        deps,
+        runId,
+        detailResult.kind === "not_found" ? detailResult : { kind: "unavailable", reason: "upstream" },
+        "projects",
+      );
+    }
+    const detail = detailResult.detail;
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
       projectId: loc.projectId,
@@ -190,11 +214,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · changes requested` },
-      <RequestChangesAck
-        runId={runId}
-        specTitle={detail?.spec.title ?? runId}
-        runHref={`/runs/${encodeURIComponent(runId)}`}
-      />,
+      <RequestChangesAck runId={runId} specTitle={detail.spec.title} runHref={`/runs/${encodeURIComponent(runId)}`} />,
     );
   });
 
@@ -241,8 +261,8 @@ function parseRaw(c: Context): boolean {
 
 /** The operator is an org admin when their first org's role is an admin role. */
 async function isOrgAdmin(client: OrchestratorClient, loc: RunLocation): Promise<boolean> {
-  const orgs = await client.listOrgs();
-  const org = orgs.find((o) => o.id === loc.orgId);
+  const orgs = await client.listOrgsMaybe();
+  const org = orgs?.find((o) => o.id === loc.orgId);
   return org !== undefined && actorCanViewRaw(org.role);
 }
 

@@ -113,6 +113,35 @@ describe("project view (chat-primary)", () => {
     expect(html).toContain("task write started");
   });
 
+  it("shows unavailable (not zeros) when the run-list read fails", async () => {
+    mockOrchestrator({ runsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy")).text();
+    expect(html).toContain("data-partial-unavailable");
+    expect(html).toContain("run state is unavailable");
+    // KPIs omit values rather than reporting zero
+    expect(html).toContain('class="kpi"><span class="k">in-flight runs</span><span class="v">—');
+  });
+
+  it("shows unavailable (not zero) for the needs-you KPI when insights fail", async () => {
+    mockOrchestrator({ insightsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy")).text();
+    expect(html).toContain("data-partial-unavailable");
+    expect(html).toContain("Workflow insights are unavailable");
+    // needs-you KPI must not report the run-only review count as the full count
+    expect(html).toContain('class="kpi"><span class="k">needs you</span><span class="v">—');
+  });
+
+  it("marks the activity feed unavailable (not 'no recent activity') when the feed read fails", async () => {
+    mockOrchestrator({ feedStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy")).text();
+    expect(html).toContain("data-partial-unavailable");
+    expect(html).toContain("Activity feed is unavailable");
+    expect(html).toContain("activity feed unavailable");
+  });
+
   it("invokes the carried Forge tool when a subopt action is submitted", async () => {
     const app = await build();
     const res = await app.request("/projects/project_easy/insights/act", {

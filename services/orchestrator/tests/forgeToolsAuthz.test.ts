@@ -159,7 +159,7 @@ describe("assertRunAccess", () => {
     p.projects.set("project_a", { org_id: "org_a" });
     p.runs.set("run_1", { project_id: "project_a", spec_id: "spec_1" });
     const result = await assertRunAccess(p.asPool(), "run_1", orgMember);
-    expect(result).toEqual({ projectId: "project_a", specId: "spec_1" });
+    expect(result).toEqual({ projectId: "project_a", specId: "spec_1", orgId: "org_a" });
   });
 
   it("throws a 'run not found' error naming the run id for a missing run", async () => {

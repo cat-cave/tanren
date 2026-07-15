@@ -56,11 +56,12 @@ export function handleRunReadSql(
   }
 
   // --- events (SSE delta: id > sinceId) ---
-  if (/FROM events WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY ts ASC, id ASC LIMIT 200/u.test(sql)) {
+  if (/FROM events WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY id ASC LIMIT 200/u.test(sql)) {
     const [runId, sinceId] = params as [string, number];
     const rows = events()
       .filter((e) => e.run_id === runId && e.id > sinceId)
-      .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
+      .sort((a, b) => a.id - b.id)
+      .slice(0, 200);
     return { rows, rowCount: rows.length };
   }
 
@@ -83,15 +84,12 @@ export function handleRunReadSql(
   }
 
   // --- cost_records (SSE delta: id > sinceId) ---
-  if (
-    /FROM cost_records WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY recorded_at ASC, id ASC LIMIT 200/u.test(
-      sql,
-    )
-  ) {
+  if (/FROM cost_records WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY id ASC LIMIT 200/u.test(sql)) {
     const [runId, sinceId] = params as [string, number];
     const rows = costRecords()
       .filter((c) => c.run_id === runId && c.id > sinceId)
-      .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
+      .sort((a, b) => a.id - b.id)
+      .slice(0, 200);
     return { rows, rowCount: rows.length };
   }
 

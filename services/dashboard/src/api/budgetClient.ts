@@ -13,6 +13,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { BudgetPutBody, OrgBudgetView, ProjectBudgetView } from "./budget.js";
+import { decodeWith, ProjectBudgetViewSchema } from "./writeResponseSchemas.js";
 
 export class BudgetClient extends OrchestratorHttpClient {
   /** Project budget observation; undefined on read failure. */
@@ -37,6 +38,7 @@ export class BudgetClient extends OrchestratorHttpClient {
       "PUT",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/budget`,
       body,
+      { expectBody: true, decode: (value) => decodeWith(ProjectBudgetViewSchema, value) },
     );
   }
 }

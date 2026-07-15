@@ -41,7 +41,7 @@ const RUNS = [
     projectId: "project_easy",
     branch: "tanren/run_a1",
     trigger: "operator",
-    status: "succeeded",
+    status: "completed",
     outcome: "ok",
     startedAt: "2026-05-28T10:00:00.000Z",
     endedAt: "2026-05-28T10:21:00.000Z",
@@ -157,7 +157,7 @@ function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
-function mockOrchestrator(): void {
+function mockOrchestrator(opts: { runsStatus?: number; costsStatus?: number } = {}): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/auth/me")) {
@@ -169,11 +169,15 @@ function mockOrchestrator(): void {
     // run costs: .../runs/:runId/costs (check before the run-list match)
     const costsMatch = /\/runs\/([^/?]+)\/costs/u.exec(url);
     if (costsMatch !== null) {
+      if (opts.costsStatus !== undefined)
+        return new Response(JSON.stringify({ error: "costs_unavailable" }), { status: opts.costsStatus });
       const items = COSTS[costsMatch[1] ?? ""] ?? [];
       return new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 });
     }
     // run list: .../runs  (optionally with ?status=)
     if (/\/runs(\?|$)/u.test(url)) {
+      if (opts.runsStatus !== undefined)
+        return new Response(JSON.stringify({ error: "runs_unavailable" }), { status: opts.runsStatus });
       const status = new URL(url, "http://x").searchParams.get("status");
       const items = status === null || status === "" ? RUNS : RUNS.filter((r) => r.status === status);
       return new Response(JSON.stringify({ items }), { status: 200 });
@@ -326,5 +330,33 @@ describe("history list (/history)", () => {
     const html = await (await app.request("/history?status=failed")).text();
     expect(html).toContain("refactor auth");
     expect(html).not.toContain("add health endpoint");
+  });
+});
+
+describe("costs + history unavailable truthfulness", () => {
+  it("renders the costs dashboard unavailable (not zero spend) when the run list fails", async () => {
+    mockOrchestrator({ runsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/costs")).text();
+    expect(html).toContain("data-costs-unavailable");
+    expect(html).toContain("spend may be under-counted");
+    expect(html).not.toContain("No cost records yet");
+  });
+
+  it("marks the costs dashboard partial when a cost page walk fails", async () => {
+    mockOrchestrator({ costsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/costs")).text();
+    expect(html).toContain("data-costs-unavailable");
+    expect(html).toContain("partial");
+  });
+
+  it("renders history unavailable (not 'no runs match') when the run list fails", async () => {
+    mockOrchestrator({ runsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/history")).text();
+    expect(html).toContain("data-runs-unavailable");
+    expect(html).toContain("Run history unavailable");
+    expect(html).not.toContain("No runs match");
   });
 });

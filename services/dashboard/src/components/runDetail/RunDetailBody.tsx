@@ -7,10 +7,6 @@
  *   - writer reasoning pane (right) — intent / BDD / tools / decisions
  *   - events list with redacted/raw access
  *   - PR/CI chips + failure diagnostics
- *
- * Every field is contract-typed from the RunDetail payload. The body
- * carries `data-*` hooks so the `runStream` client island can patch the cost
- * bar, spine, and events live off the SSE feed without a page reload.
  */
 
 import type { RunDetail, RunEventRow } from "../../api/types.js";
@@ -194,12 +190,13 @@ function Trajectory(props: { detail: RunDetail; selectedTaskId: string | null })
   const moments = buildTrajectory(props.detail.tasks);
   const { donePct, livePct } = spineProgress(moments);
   const spineStyle = `background: linear-gradient(to bottom, var(--status-ok) 0%, var(--status-ok) ${donePct}%, var(--ember-08) ${donePct}%, var(--ember-08) ${livePct}%, var(--line-2) ${livePct}%);`;
+  const terminal = ["completed", "failed", "cancelled", "halted"].includes(props.detail.run.status);
   return (
     <div class="rd-panel trajectory" data-rd="trajectory">
       <div class="rd-panel-head">
         <h3>trajectory</h3>
         <span class="live" data-rd="live-flag">
-          ↻ live
+          {terminal ? "● final · verifying totals" : "↻ live"}
         </span>
       </div>
       <div class="rd-panel-body">
@@ -451,7 +448,15 @@ export function RunDetailBody(props: RunDetailBodyProps) {
   return (
     <>
       <style>{RUN_DETAIL_CSS}</style>
-      <div class="rd-root" data-island="run-stream" data-stream-url={props.streamUrl}>
+      <div
+        class="rd-root"
+        data-island="run-stream"
+        data-stream-url={props.streamUrl}
+        data-run-id={detail.run.runId}
+        data-project-id={detail.run.projectId}
+        data-run-status={detail.run.status}
+        data-run-outcome={detail.run.outcome ?? ""}
+      >
         <div class="page-head">
           <div>
             <div class="eyebrow">▮ trajectory · scrub through everything</div>

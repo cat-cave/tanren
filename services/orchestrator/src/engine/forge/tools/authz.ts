@@ -41,13 +41,13 @@ export async function assertRunAccess(
   pool: QueryClient,
   runId: string,
   actor: ActorContext,
-): Promise<{ projectId: string; specId: string }> {
+): Promise<{ projectId: string; specId: string; orgId: string }> {
   const row = await ForgeToolsStore.getRunProjectAndSpec(pool, runId, systemActor);
   if (row === undefined) {
     throw new ToolAccessDeniedError(`run not found: ${runId}`);
   }
-  await assertProjectAccess(pool, row.projectId, actor);
-  return { projectId: row.projectId, specId: row.specId };
+  const project = await assertProjectAccess(pool, row.projectId, actor);
+  return { projectId: row.projectId, specId: row.specId, orgId: project.orgId };
 }
 
 export async function assertSpecAccess(

@@ -53,8 +53,9 @@ export interface LoadShellContextArgs {
 /**
  * Resolve the full shell context for a request: session-scoped org + project
  * lists from the orchestrator, the active project, and the templated palette.
- * Degrades to empty collections when unauthenticated so the chrome still
- * renders (dev / TANREN_REQUIRE_AUTH=0).
+ * Org/project reads distinguish unavailable (transport/HTTP/decode failure)
+ * from a legitimate empty/unauthenticated result so child screens never
+ * launder a dead read into "no orgs" / "no projects."
  */
 export async function loadShellContext(
   c: Context,
@@ -71,14 +72,20 @@ export async function loadShellContext(
   // include a hidden csrf field. Inbound BFF verification compares that value
   // before clientDepsFor mints outbound orchestrator CSRF.
   const session = await client.session();
-  const orgs = await client.listOrgs();
+  const orgsMaybe = await client.listOrgsMaybe();
+  const orgsUnavailable = orgsMaybe === undefined;
+  const orgs = orgsMaybe ?? [];
   const org: OrgSummary | undefined = orgs[0];
-  const projects: ProjectSummary[] = org ? await client.listProjects(org.id) : [];
+  const projectsMaybe = org ? await client.listProjectsMaybe(org.id) : undefined;
+  const projectsUnavailable = org !== undefined && projectsMaybe === undefined;
+  const projects: ProjectSummary[] = projectsMaybe ?? [];
   const project = args.projectId ? projects.find((p) => p.projectId === args.projectId) : undefined;
   return {
     org,
     projects,
     project,
+    orgsUnavailable,
+    projectsUnavailable,
     activeNavId: args.activeNavId,
     paletteGroups: buildPaletteGroups({ orgLogin: org?.login ?? "", projects }),
     surface: surfaceFromCookie(cookieHeader),
@@ -176,7 +183,16 @@ function ProjectListBody(props: { ctx: ShellContext }) {
         </div>
       </div>
       <div class="page-body">
-        {projects.length === 0 ? (
+        {props.ctx.orgsUnavailable || props.ctx.projectsUnavailable ? (
+          <section class="placeholder-card" role="alert" data-projects-unavailable>
+            <p>
+              {props.ctx.orgsUnavailable
+                ? "Org list unavailable — the orchestrator could not be reached."
+                : "Project list unavailable — the orchestrator read failed."}{" "}
+              This is not an empty org. Retry shortly.
+            </p>
+          </section>
+        ) : projects.length === 0 ? (
           <section class="placeholder-card">
             <p>No projects yet. Onboard one to start forging.</p>
             <p class="placeholder-note">

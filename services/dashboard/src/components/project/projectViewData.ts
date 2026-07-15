@@ -54,6 +54,9 @@ export interface ActivityRow {
 }
 
 export interface ProjectViewModel {
+  runsAvailable: boolean;
+  insightsAvailable: boolean;
+  feedAvailable: boolean;
   pulseHeadline: string;
   pulseSub: string;
   liveLabel: string;
@@ -69,9 +72,17 @@ export interface BuildProjectViewInput {
   projectId: string;
   projectName: string;
   runs: RunListItem[];
+  /** False when the run-list boundary failed or returned a malformed body. */
+  runsAvailable?: boolean;
   insights: InsightSummary[];
+  /** False when the insight read failed (not a legitimate empty result). */
+  insightsAvailable?: boolean;
   milestones: MilestoneSummary[];
+  /** False when the milestone read failed (not a legitimate empty result). */
+  milestonesAvailable?: boolean;
   feed: ProjectFeedItem[];
+  /** False when the feed read failed (not a legitimate empty result). */
+  feedAvailable?: boolean;
   narration: ForgeAnswer | undefined;
   weekSpendUsd: number;
   weekCapUsd?: number;
@@ -222,35 +233,64 @@ function humanizeEvent(eventType: string): string {
 }
 
 export function buildProjectViewModel(input: BuildProjectViewInput): ProjectViewModel {
+  const runsAvailable = input.runsAvailable !== false;
+  const insightsAvailable = input.insightsAvailable !== false;
+  const feedAvailable = input.feedAvailable !== false;
+  const milestonesAvailable = input.milestonesAvailable !== false;
   const inFlight = input.runs.filter((run) => OPEN_RUN_STATUSES.has(run.status)).length;
-  const needsYou = input.runs.filter((run) => run.needsReview).length + input.insights.length;
+  const reviewCount = input.runs.filter((run) => run.needsReview).length;
+  const needsYou = reviewCount + input.insights.length;
+  const needsYouKnown = runsAvailable && insightsAvailable;
   const blocked = input.runs.filter((run) => dagStatusForRun(run) === "blocked").length;
-  const velocity = buildVelocity(input);
+  const velocity = runsAvailable && milestonesAvailable ? buildVelocity(input) : null;
 
+  const unavailable = "—";
   const kpis: KpiItem[] = [
-    { k: "in-flight runs", v: String(inFlight), tone: inFlight > 0 ? "hot" : undefined },
-    { k: "needs you", v: String(needsYou), tone: needsYou > 0 ? "warn" : undefined },
+    {
+      k: "in-flight runs",
+      v: runsAvailable ? String(inFlight) : unavailable,
+      tone: runsAvailable && inFlight > 0 ? "hot" : undefined,
+    },
+    {
+      k: "needs you",
+      v: needsYouKnown ? String(needsYou) : unavailable,
+      tone: needsYouKnown && needsYou > 0 ? "warn" : undefined,
+    },
     {
       k: "week spend",
-      v:
-        input.weekCapUsd === undefined
+      v: runsAvailable
+        ? input.weekCapUsd === undefined
           ? formatUsd(input.weekSpendUsd)
-          : `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`,
+          : `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`
+        : unavailable,
     },
-    { k: "velocity", v: velocity?.trendLabel ?? "—" },
-    { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined },
+    { k: "velocity", v: velocity?.trendLabel ?? unavailable },
+    {
+      k: "blocked",
+      v: runsAvailable ? String(blocked) : unavailable,
+      tone: runsAvailable && blocked > 0 ? "warn" : undefined,
+    },
   ];
 
   const pulseHeadline =
-    input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpendUsd);
+    input.narration?.body ??
+    (runsAvailable
+      ? defaultPulse(input.projectName, inFlight, needsYouKnown ? needsYou : undefined, input.weekSpendUsd)
+      : `${input.projectName}: run state is unavailable; refusing to infer an idle or zero-spend state.`);
   const recentEvent = input.feed[0];
-  const pulseSub =
-    recentEvent === undefined ? "no recent activity" : `most recent · ${humanizeEvent(recentEvent.eventType)}`;
+  const pulseSub = feedAvailable
+    ? recentEvent === undefined
+      ? "no recent activity"
+      : `most recent · ${humanizeEvent(recentEvent.eventType)}`
+    : "activity feed unavailable";
 
   return {
+    runsAvailable,
+    insightsAvailable,
+    feedAvailable,
     pulseHeadline,
     pulseSub,
-    liveLabel: `forge live · ${input.feed.length} events`,
+    liveLabel: runsAvailable ? `forge live · ${input.feed.length} events` : "run state unavailable",
     kpis,
     attention: buildAttention(input),
     dagNodes: buildDagNodes(input),
@@ -263,10 +303,10 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
   };
 }
 
-function defaultPulse(name: string, inFlight: number, needsYou: number, spend: number): string {
+function defaultPulse(name: string, inFlight: number, needsYou: number | undefined, spend: number): string {
   const parts: string[] = [];
   if (inFlight > 0) parts.push(`${inFlight} run(s) in flight`);
-  if (needsYou > 0) parts.push(`${needsYou} item(s) need you`);
+  if (needsYou !== undefined && needsYou > 0) parts.push(`${needsYou} item(s) need you`);
   const lead = parts.length > 0 ? `${name}: ${parts.join(", ")}` : `${name} is idle`;
   return `${lead}; ${formatUsd(spend)} spent this week.`;
 }

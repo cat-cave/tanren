@@ -23,8 +23,8 @@ async function clientFor(c: Context, deps: ShellDeps): Promise<OrchestratorClien
 
 /** Resolve the operator's first org id (the onboarding scope). */
 async function firstOrgId(client: OrchestratorClient): Promise<string | undefined> {
-  const orgs = await client.listOrgs();
-  return orgs[0]?.id;
+  const orgs = await client.listOrgsMaybe();
+  return orgs?.[0]?.id;
 }
 
 function redirectTo(c: Context, path: string, notice?: string): Response {

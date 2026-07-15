@@ -110,7 +110,20 @@ describe("P2A-0014 SSE driver", () => {
     const snapshot = localFrames[0].data as { run: { runId: string }; tasks: unknown[] };
     expect(snapshot.run.runId).toBe("run_x");
     expect(Array.isArray(snapshot.tasks)).toBe(true);
-    // Driver should stop after grace polls.
+    expect(snapshot).toMatchObject({ runId: "run_x", projectId: "project_x", eventCursor: "0", costCursor: "0" });
+    expect(snapshot).toHaveProperty("taskWatermark");
+    const receipt = localFrames.at(-1);
+    expect(receipt?.event).toBe("drained");
+    expect(receipt?.data).toMatchObject({
+      runId: "run_x",
+      projectId: "project_x",
+      status: "completed",
+      outcome: "ok",
+      eventCursor: "0",
+      costCursor: "0",
+      taskWatermark: (snapshot as { taskWatermark: string }).taskWatermark,
+    });
+    // Driver should stop only after the typed quiet-poll receipt.
     expect(localFrames.some((f) => f.event === "heartbeat")).toBe(false);
     expect(driver).toBeDefined();
     expect(frames).toBeDefined();
@@ -148,7 +161,7 @@ describe("P2A-0014 SSE driver", () => {
     (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
     pool.runs[0].status = "completed";
     pool.runs[0].outcome = "ok";
-    await driver.tick();
+    expect(await driver.tick()).toBe(false);
     expect(captured.find((f) => f.event === "status")).toBeDefined();
     const status = captured.find((f) => f.event === "status")!.data as {
       status: string;
@@ -156,6 +169,72 @@ describe("P2A-0014 SSE driver", () => {
     };
     expect(status.status).toBe("completed");
     expect(status.outcome).toBe("ok");
+    expect(captured.some((frame) => frame.event === "drained")).toBe(false);
+    expect(await driver.tick()).toBe(true);
+    expect(captured.at(-1)?.event).toBe("drained");
+  });
+
+  it("preserves bigint cursor strings exactly in the snapshot and drained receipt", async () => {
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_big", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_big", project_id: "project_big" });
+    pool.seedRun({
+      run_id: "run_big",
+      spec_id: "spec_big",
+      project_id: "project_big",
+      status: "completed",
+      outcome: "ok",
+    });
+    pool.seedEvent({ id: 1, event_type: "run.completed", run_id: "run_big", project_id: "project_big" });
+    pool.seedCost({ id: 1, run_id: "run_big", task_id: "task_big", project_id: "project_big" });
+    const largeEvent = "900719925474099312345";
+    const largeCost = "900719925474099398765";
+    (pool.events[0] as unknown as { id: string }).id = largeEvent;
+    (pool.costs[0] as unknown as { id: string }).id = largeCost;
+    const frames: Array<{ event: string; data: unknown }> = [];
+    const driver = new SseDriver(
+      {
+        pool: pool.asPgPool(),
+        runId: "run_big",
+        projectId: "project_big",
+        orgId: "org_acme",
+        actor,
+        rawView: false,
+        intervalMs: 0,
+      },
+      (frame) => {
+        const parsed = parseFrame(frame);
+        if (parsed !== undefined) frames.push(parsed);
+      },
+    );
+    await driver.run();
+    expect(frames[0]?.data).toMatchObject({ eventCursor: largeEvent, costCursor: largeCost });
+    expect(frames.at(-1)?.data).toMatchObject({ eventCursor: largeEvent, costCursor: largeCost });
+  });
+
+  it("delivers post-terminal deltas before issuing the quiet-poll receipt", async () => {
+    const { pool, frames, driver } = setup();
+    (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
+    pool.runs[0].status = "completed";
+    pool.runs[0].outcome = "ok";
+    expect(await driver.tick()).toBe(false);
+
+    pool.seedEvent({
+      id: 41,
+      event_type: "run.completed",
+      run_id: "run_x",
+      project_id: "project_x",
+      payload: { outcome: "ok" },
+    });
+    pool.seedCost({ id: 52, run_id: "run_x", task_id: "task_plan", project_id: "project_x" });
+    expect(await driver.tick()).toBe(false);
+    expect(frames.some((frame) => frame.event === "events")).toBe(true);
+    expect(frames.some((frame) => frame.event === "costs")).toBe(true);
+    expect(frames.some((frame) => frame.event === "drained")).toBe(false);
+
+    expect(await driver.tick()).toBe(true);
+    expect(frames.at(-1)?.event).toBe("drained");
+    expect(frames.at(-1)?.data).toMatchObject({ eventCursor: "41", costCursor: "52" });
   });
 
   it("emits a heartbeat after the configured interval passes without other frames", async () => {
@@ -196,6 +275,7 @@ describe("P2A-0014 SSE driver", () => {
     pool.seedProject({ project_id: "project_n", org_id: "org_acme" });
     pool.seedSpec({ spec_id: "spec_n", project_id: "project_n" });
     pool.seedRun({ run_id: "run_n", spec_id: "spec_n", project_id: "project_n", status: "running" });
+    pool.seedTask({ task_id: "task_n", run_id: "run_n", kind: "write", attempt: 1 });
     const { listener, channel, fire } = fakeListener();
     const captured: Array<{ event: string; data: unknown }> = [];
     const driver = new SseDriver(
@@ -230,11 +310,20 @@ describe("P2A-0014 SSE driver", () => {
     // 60s backstop elapsing.
     pool.runs[0].status = "completed";
     pool.runs[0].outcome = "ok";
+    // `attempt` is watermark-covered. It must also trigger a task frame so the
+    // browser can advance to the watermark carried by the drain receipt.
+    pool.tasks[0].attempt = 2;
     fire("run_n");
 
     await done;
     const status = captured.find((f) => f.event === "status")?.data as { status: string } | undefined;
     expect(status?.status).toBe("completed");
+    const task = captured.find((frame) => frame.event === "task")?.data as
+      | { tasks: Array<{ attempt: number }>; taskWatermark: string }
+      | undefined;
+    const drained = captured.find((frame) => frame.event === "drained")?.data as { taskWatermark: string } | undefined;
+    expect(task?.tasks[0]?.attempt).toBe(2);
+    expect(drained?.taskWatermark).toBe(task?.taskWatermark);
   });
 
   it("ignores a NOTIFY for a DIFFERENT run (payload filter)", async () => {

@@ -22,7 +22,7 @@ import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
 import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
 import { resolveConfig } from "./projectConfig.js";
-import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
+import { SpecCreateBody, SpecListBody, type SpecCreateBodyProps } from "../../components/project/SpecCreateBody.js";
 import { mountSpecDetailRoutes, notFoundBody, resolveProjectMode } from "./specRoutes.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
@@ -51,9 +51,7 @@ function asArray(value: string | string[] | undefined): string[] {
 }
 
 export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
-  // -------------------------------------------------------------------------
   // Chat-primary project view (overrides the placeholder).
-  // -------------------------------------------------------------------------
   app.get("/projects/:projectId", async (c) => {
     const projectId = c.req.param("projectId");
     const ctx = await loadShellContext(c, deps, { activeNavId: "projects", projectId });
@@ -83,19 +81,27 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     // clientDepsFor). Pulse falls back to data-derived copy when undefined.
     const client = clientFor(c, deps);
     const mode = resolveProjectMode(c);
-    const [runs, insights, milestones, feed] = await Promise.all([
-      client.listRuns(orgId, projectId),
-      client.listInsights(orgId, projectId),
-      client.listMilestones(orgId, projectId),
-      client.listFeed(orgId, projectId),
+    const [runsMaybe, insightsMaybe, milestonesMaybe, feedMaybe] = await Promise.all([
+      client.listRunsMaybe(orgId, projectId),
+      client.listInsightsMaybe(orgId, projectId),
+      client.listMilestonesMaybe(orgId, projectId),
+      client.listFeedMaybe(orgId, projectId),
     ]);
+    const runs = runsMaybe ?? [];
+    const insights = insightsMaybe ?? [];
+    const milestones = milestonesMaybe ?? [];
+    const feed = feedMaybe ?? [];
     const model = buildProjectViewModel({
       projectId,
       projectName: ctx.project.name,
       runs,
+      runsAvailable: runsMaybe !== undefined,
       insights,
+      insightsAvailable: insightsMaybe !== undefined,
       milestones,
+      milestonesAvailable: milestonesMaybe !== undefined,
       feed,
+      feedAvailable: feedMaybe !== undefined,
       narration: undefined,
       weekSpendUsd: sumRunCosts(runs),
     });
@@ -144,19 +150,26 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · specs" }, notFoundBody(projectId));
     }
     const client = clientFor(c, deps);
-    const [specs, runs] = await Promise.all([
-      client.listSpecs(ctx.org.id, projectId),
-      client.listRuns(ctx.org.id, projectId),
+    const [specsMaybe, runsMaybe] = await Promise.all([
+      client.listSpecsMaybe(ctx.org.id, projectId),
+      client.listRunsMaybe(ctx.org.id, projectId),
     ]);
     const runBySpec: Record<string, string | undefined> = {};
-    for (const run of runs) {
+    for (const run of runsMaybe ?? []) {
       if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
     }
     return renderShell(
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} specs` },
-      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} csrfToken={ctx.csrfToken} />,
+      <SpecListBody
+        project={ctx.project}
+        specs={specsMaybe ?? []}
+        specsAvailable={specsMaybe !== undefined}
+        runsAvailable={runsMaybe !== undefined}
+        runBySpec={runBySpec}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 
@@ -169,23 +182,12 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     if (ctx.org === undefined || ctx.project === undefined) {
       return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
     }
-    const client = clientFor(c, deps);
-    const [milestones, behaviors, specs] = await Promise.all([
-      client.listMilestones(ctx.org.id, projectId),
-      client.listAllBehaviors(ctx.org.id, projectId),
-      client.listSpecs(ctx.org.id, projectId),
-    ]);
+    const reads = await specFormReads(clientFor(c, deps), ctx.org.id, projectId);
     return renderShell(
       c,
       ctx,
       { title: `tanren · new spec` },
-      <SpecCreateBody
-        project={ctx.project}
-        milestones={milestones}
-        behaviors={behaviors}
-        specs={specs}
-        csrfToken={ctx.csrfToken}
-      />,
+      <SpecCreateBody project={ctx.project} csrfToken={ctx.csrfToken} {...reads} />,
     );
   });
 
@@ -238,18 +240,14 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       );
     }
     // Milestone + behavior associations are carried as form fields; the
-    // create-spec route persists the spec, and the run-detail loader already
-    // reads spec↔milestone/behavior links from join tables. v0 leaves
-    // the association write to the planner; the operator's selections are
-    // forwarded but not yet bound here (documented punt — see PR body).
+    // create-spec route persists the spec and the run-detail loader reads
+    // spec↔milestone/behavior links from join tables. v0 forwards the
+    // operator's selections but leaves the association write to the planner.
     return c.redirect(`/projects/${projectId}/specs`);
   });
 
-  // -------------------------------------------------------------------------
-  // Suboptimal-callout action: proxy the carried Forge tool call to the forge route
-  // via the dashboard's existing /forge/tools proxy contract, then redirect
-  // back to the project view.
-  // -------------------------------------------------------------------------
+  // Suboptimal-callout action: proxy the carried Forge tool call to the forge
+  // route via the /forge/tools proxy contract, then redirect back.
   app.post("/projects/:projectId/insights/act", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
@@ -285,9 +283,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
  * inline call.
  */
 function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
-  // -------------------------------------------------------------------------
   // Routing & limits — active project shortcut + explicit project route.
-  // -------------------------------------------------------------------------
   app.get("/settings/routing", async (c) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "settings" });
     const project = ctx.projects[0];
@@ -351,10 +347,8 @@ function mountRoutingSettingsScreens(app: Hono, deps: ShellDeps): void {
     );
   });
 
-  // -------------------------------------------------------------------------
-  // Config mutations — add / remove / reorder a chain entry, save hatches.
-  // Each loads the merged config, applies the edit, PATCHes it back.
-  // -------------------------------------------------------------------------
+  // Config mutations — add / remove / reorder a chain entry. Each loads the
+  // merged config, applies the edit, PATCHes it back.
   app.post("/settings/routing/:projectId/add", async (c) => {
     const projectId = c.req.param("projectId");
     const form = await c.req.parseBody();
@@ -463,6 +457,26 @@ async function mutateConfig(
   await client.patchProjectConfig(orgId, projectId, working);
 }
 
+/** Spec-form reads (milestones, behaviors, dependency specs) with availability. */
+async function specFormReads(
+  client: OrchestratorClient,
+  orgId: string,
+  projectId: string,
+): Promise<Pick<SpecCreateBodyProps, "milestones" | "milestonesAvailable" | "behaviors" | "specs" | "specsAvailable">> {
+  const [milestonesMaybe, behaviors, specsMaybe] = await Promise.all([
+    client.listMilestonesMaybe(orgId, projectId),
+    client.listAllBehaviors(orgId, projectId),
+    client.listSpecsMaybe(orgId, projectId),
+  ]);
+  return {
+    milestones: milestonesMaybe ?? [],
+    milestonesAvailable: milestonesMaybe !== undefined,
+    behaviors,
+    specs: specsMaybe ?? [],
+    specsAvailable: specsMaybe !== undefined,
+  };
+}
+
 /** Re-render the spec form (shared by the create-spec validation/error path). */
 async function renderForm(
   c: Context,
@@ -475,24 +489,11 @@ async function renderForm(
   if (ctx.org === undefined || ctx.project === undefined) {
     return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
   }
-  const client = clientFor(c, deps);
-  const [milestones, behaviors, specs] = await Promise.all([
-    client.listMilestones(ctx.org.id, projectId),
-    client.listAllBehaviors(ctx.org.id, projectId),
-    client.listSpecs(ctx.org.id, projectId),
-  ]);
+  const reads = await specFormReads(clientFor(c, deps), ctx.org.id, projectId);
   return renderShell(
     c,
     ctx,
     { title: "tanren · new spec" },
-    <SpecCreateBody
-      project={ctx.project}
-      milestones={milestones}
-      behaviors={behaviors}
-      specs={specs}
-      error={error}
-      values={values}
-      csrfToken={ctx.csrfToken}
-    />,
+    <SpecCreateBody project={ctx.project} error={error} values={values} csrfToken={ctx.csrfToken} {...reads} />,
   );
 }

@@ -35,18 +35,30 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
   app.get("/runs/halted", async (c) => {
     const client = clientFor(c, deps);
-    const orgs = await client.listOrgs();
+    const orgsMaybe = await client.listOrgsMaybe();
     const halted: Array<{
       runId: string;
       specTitle: string;
       outcome: string | null;
       projectName: string;
     }> = [];
-    for (const org of orgs) {
-      const projects = await client.listProjects(org.id);
-      for (const project of projects) {
-        const runs = await client.listRuns(org.id, project.projectId);
-        for (const run of runs) {
+    // Project discovery or run-list failures are tracked explicitly so the list
+    // never says "Everything is moving" when the orchestrator is actually down.
+    let discoveryUnavailable = orgsMaybe === undefined;
+    let runReadFailed = false;
+    for (const org of orgsMaybe ?? []) {
+      const projectsMaybe = await client.listProjectsMaybe(org.id);
+      if (projectsMaybe === undefined) {
+        discoveryUnavailable = true;
+        continue;
+      }
+      for (const project of projectsMaybe) {
+        const runsMaybe = await client.listRunsMaybe(org.id, project.projectId);
+        if (runsMaybe === undefined) {
+          runReadFailed = true;
+          continue;
+        }
+        for (const run of runsMaybe) {
           if (isRecoverableRun(run)) {
             halted.push({
               runId: run.runId,
@@ -59,7 +71,12 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       }
     }
     const ctx = await loadShellContext(c, deps, { activeNavId: "failure" });
-    return renderShell(c, ctx, { title: "tanren · halted runs" }, <HaltedListBody runs={halted} />);
+    return renderShell(
+      c,
+      ctx,
+      { title: "tanren · halted runs" },
+      <HaltedListBody runs={halted} discoveryUnavailable={discoveryUnavailable} runReadFailed={runReadFailed} />,
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -73,15 +90,23 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       return renderRunLocationFailure(c, deps, runId, resolved, "failure");
     }
     const loc = resolved.location;
-    const detail = await client.getRunDetail(loc, runId);
-    if (detail === undefined) {
-      return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "failure");
+    const detailResult = await client.getRunDetail(loc, runId);
+    if (detailResult.kind !== "found") {
+      return renderRunLocationFailure(
+        c,
+        deps,
+        runId,
+        detailResult.kind === "not_found" ? detailResult : { kind: "unavailable", reason: "upstream" },
+        "failure",
+      );
     }
+    const detail = detailResult.detail;
     if (!isRecoverableRun(detail.run)) {
       return renderNotRecoverable(c, deps, runId);
     }
     const recovery = await client.getRecoveryContext(loc, runId);
-    const specs = await client.listSpecs(loc.orgId, loc.projectId);
+    const specsMaybe = await client.listSpecsMaybe(loc.orgId, loc.projectId);
+    const specsAvailable = specsMaybe !== undefined;
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "failure",
       projectId: loc.projectId,
@@ -94,7 +119,8 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       <HaltedRunBody
         detail={detail}
         lastGoodCommit={recovery?.lastGoodCommit ?? null}
-        specs={specs.map((s) => ({ specId: s.specId, title: s.title, dependsOn: s.dependsOn }))}
+        specs={(specsMaybe ?? []).map((s) => ({ specId: s.specId, title: s.title, dependsOn: s.dependsOn }))}
+        specsAvailable={specsAvailable}
         actionBase={`${base}/recover`}
         projectHref={`/projects/${encodeURIComponent(loc.projectId)}`}
         runHref={base}
@@ -222,7 +248,10 @@ function renderNotRecoverable(c: Context, deps: ShellDeps, runId: string) {
 
 function HaltedListBody(props: {
   runs: Array<{ runId: string; specTitle: string; outcome: string | null; projectName: string }>;
+  discoveryUnavailable: boolean;
+  runReadFailed: boolean;
 }) {
+  const anyUnavailable = props.discoveryUnavailable || props.runReadFailed;
   return (
     <>
       <style>{RECOVERY_CSS}</style>
@@ -232,11 +261,25 @@ function HaltedListBody(props: {
             ▮ halted runs · need a recovery
           </div>
           <div class="page-title">halted runs</div>
-          <div class="sub">{props.runs.length} run(s) waiting on an operator recovery</div>
+          <div class="sub">
+            {anyUnavailable
+              ? "halted-run scan incomplete — one or more reads failed"
+              : `${props.runs.length} run(s) waiting on an operator recovery`}
+          </div>
         </div>
       </div>
       <div class="page-body">
-        {props.runs.length === 0 ? (
+        {anyUnavailable ? (
+          <section class="placeholder-card" role="alert" data-halted-scan-unavailable>
+            <p>
+              {props.discoveryUnavailable &&
+                "Org or project discovery failed — the orchestrator could not be fully reached. "}
+              {props.runReadFailed &&
+                "At least one project's run list failed to load, so additional halted runs may be hidden. "}
+              This is not "everything is moving." Retry shortly to see the complete set.
+            </p>
+          </section>
+        ) : props.runs.length === 0 ? (
           <section class="placeholder-card">
             <p>No halted runs. Everything is moving.</p>
             <p class="placeholder-note">

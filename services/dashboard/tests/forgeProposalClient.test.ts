@@ -26,10 +26,28 @@ function clientReturning(status: number, body: unknown, captured: Captured[]): O
   return new OrchestratorClient({ orchestratorUrl: "http://orch", fetchImpl });
 }
 
+function proposal(status: "executed" | "rejected") {
+  return {
+    id: "p1",
+    orgId: "org_a",
+    threadId: "thread_1",
+    proposingTurnId: "turn_1",
+    toolName: "tanren.create_spec",
+    args: {},
+    rationale: "operator requested it",
+    status,
+    proposedAt: "2026-07-15T00:00:00.000Z",
+    decidedBy: "user_1",
+    decidedAt: "2026-07-15T00:01:00.000Z",
+    result: null,
+    error: null,
+  };
+}
+
 describe("decideForgeProposal (dashboard proposal client)", () => {
   it("approve → decided, hitting the orchestrator approve route", async () => {
     const captured: Captured[] = [];
-    const client = clientReturning(200, { proposal: { id: "p1", status: "executed" } }, captured);
+    const client = clientReturning(200, { proposal: proposal("executed") }, captured);
 
     const result = await client.decideForgeProposal("org_a", "p1", "approve");
 
@@ -41,7 +59,7 @@ describe("decideForgeProposal (dashboard proposal client)", () => {
 
   it("reject → decided, hitting the reject route", async () => {
     const captured: Captured[] = [];
-    const client = clientReturning(200, { proposal: { id: "p1", status: "rejected" } }, captured);
+    const client = clientReturning(200, { proposal: proposal("rejected") }, captured);
 
     const result = await client.decideForgeProposal("org_a", "p1", "reject");
 
@@ -56,6 +74,15 @@ describe("decideForgeProposal (dashboard proposal client)", () => {
 
     expect(result.outcome).toBe("already_decided");
     expect(result.currentStatus).toBe("executed");
+  });
+
+  it("rejects malformed successful and 409 bodies instead of fabricating decisions", async () => {
+    await expect(clientReturning(200, {}, []).decideForgeProposal("org_a", "p1", "approve")).resolves.toEqual({
+      outcome: "failed",
+    });
+    await expect(
+      clientReturning(409, { status: "executed" }, []).decideForgeProposal("org_a", "p1", "approve"),
+    ).resolves.toEqual({ outcome: "failed" });
   });
 
   it("403 → denied (authz refusal)", async () => {

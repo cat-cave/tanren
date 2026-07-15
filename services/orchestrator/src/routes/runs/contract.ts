@@ -254,12 +254,34 @@ export function parsePageSize(raw: string | undefined): number {
 // SSE frame contract
 // ---------------------------------------------------------------------------
 
-export const SseEventName = z.enum(["snapshot", "status", "task", "events", "costs", "heartbeat"]);
+export const SseEventName = z.enum(["snapshot", "status", "task", "events", "costs", "heartbeat", "drained"]);
 export type SseEventName = z.infer<typeof SseEventName>;
+
+export const SseCursor = z.string().regex(/^(0|[1-9][0-9]*)$/u);
+export type SseCursor = z.infer<typeof SseCursor>;
+
+const SseIdentity = {
+  runId: z.string().min(1),
+  projectId: z.string().min(1),
+} as const;
+
+export const SseSnapshotFrame = z
+  .object({
+    ...SseIdentity,
+    run: RunSummary,
+    tasks: z.array(TaskTimelineEntry),
+    recentEvents: z.array(RunEventRow).max(RECENT_EVENT_CAP),
+    costs: z.array(RunCostRecord),
+    eventCursor: SseCursor,
+    costCursor: SseCursor,
+    taskWatermark: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+export type SseSnapshotFrame = z.infer<typeof SseSnapshotFrame>;
 
 export const SseStatusFrame = z
   .object({
-    runId: z.string(),
+    ...SseIdentity,
     status: RunStatus,
     outcome: RunOutcome.nullable(),
   })
@@ -268,24 +290,54 @@ export type SseStatusFrame = z.infer<typeof SseStatusFrame>;
 
 export const SseEventsFrame = z
   .object({
-    events: z.array(RunEventRow),
+    ...SseIdentity,
+    events: z.array(RunEventRow).min(1).max(MAX_PAGE_SIZE),
+    eventCursor: SseCursor,
   })
   .strict();
 export type SseEventsFrame = z.infer<typeof SseEventsFrame>;
 
 export const SseCostsFrame = z
   .object({
-    costs: z.array(RunCostRecord),
+    ...SseIdentity,
+    costs: z.array(RunCostRecord).min(1).max(MAX_PAGE_SIZE),
+    costCursor: SseCursor,
   })
   .strict();
 export type SseCostsFrame = z.infer<typeof SseCostsFrame>;
 
 export const SseHeartbeatFrame = z
   .object({
+    ...SseIdentity,
     ts: z.coerce.date(),
   })
   .strict();
 export type SseHeartbeatFrame = z.infer<typeof SseHeartbeatFrame>;
+
+export const SseTaskFrame = z
+  .object({
+    ...SseIdentity,
+    // Full accepted projection, not a partial patch: this lets reconnecting
+    // browsers render newly-created tasks and bind the watermark to every task
+    // field before accepting a terminal drain receipt.
+    tasks: z.array(TaskTimelineEntry),
+    taskWatermark: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+export type SseTaskFrame = z.infer<typeof SseTaskFrame>;
+
+/** Receipt proving a quiet terminal poll matched the exact delivered cursors. */
+export const SseDrainedFrame = z
+  .object({
+    ...SseIdentity,
+    status: RunStatus,
+    outcome: RunOutcome.nullable(),
+    eventCursor: SseCursor,
+    costCursor: SseCursor,
+    taskWatermark: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+export type SseDrainedFrame = z.infer<typeof SseDrainedFrame>;
 
 // ---------------------------------------------------------------------------
 // Activity feed

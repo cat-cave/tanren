@@ -111,6 +111,7 @@ const FEED = [
     specId: "spec_a",
     projectId: "project_easy",
     eventType: "task.write.started",
+    payload: { kind: "task.write.started" },
     redactedPaths: [],
   },
 ];
@@ -164,7 +165,9 @@ export function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
-export function mockOrchestrator(): void {
+export function mockOrchestrator(
+  opts: { insightsStatus?: number; milestonesStatus?: number; feedStatus?: number; runsStatus?: number } = {},
+): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -212,23 +215,42 @@ export function mockOrchestrator(): void {
       });
     }
     if (url.includes("/runs")) {
+      if (opts.runsStatus !== undefined)
+        return new Response(JSON.stringify({ error: "runs_unavailable" }), { status: opts.runsStatus });
       return new Response(JSON.stringify({ items: RUNS }), { status: 200 });
     }
     if (url.includes("/insights")) {
-      return new Response(JSON.stringify({ insights: INSIGHTS }), { status: 200 });
+      return opts.insightsStatus === undefined
+        ? new Response(JSON.stringify({ insights: INSIGHTS }), { status: 200 })
+        : new Response(JSON.stringify({ error: "insights_unavailable" }), { status: opts.insightsStatus });
     }
     if (url.includes("/milestones")) {
-      return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+      return opts.milestonesStatus === undefined
+        ? new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 })
+        : new Response(JSON.stringify({ error: "milestones_unavailable" }), { status: opts.milestonesStatus });
     }
     if (url.includes("/feed")) {
-      return new Response(JSON.stringify({ items: FEED }), { status: 200 });
+      return opts.feedStatus === undefined
+        ? new Response(JSON.stringify({ items: FEED }), { status: 200 })
+        : new Response(JSON.stringify({ error: "feed_unavailable" }), { status: opts.feedStatus });
     }
     if (url.endsWith("/specs") && method === "GET") {
       return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
     }
     if (url.endsWith("/specs") && method === "POST") {
       specCreateCalls.push({ url, body });
-      return new Response(JSON.stringify({ specId: "spec_new", ...body }), { status: 201 });
+      return new Response(
+        JSON.stringify({
+          specId: "spec_new",
+          projectId: "project_easy",
+          title: body.title,
+          description: body.description,
+          acceptanceCriteria: body.acceptanceCriteria,
+          dependsOn: body.dependsOn ?? [],
+          status: "open",
+        }),
+        { status: 201 },
+      );
     }
     if (url.includes("/personas")) {
       return new Response(JSON.stringify({ personas: PERSONAS }), { status: 200 });

@@ -28,8 +28,17 @@ export interface OrchestratorClientDeps {
   fetchImpl?: typeof fetch;
 }
 
-export interface SendJsonOptions {
-  expectBody?: boolean;
+export interface SendJsonOptions<T> {
+  expectBody: true;
+  decode: (value: unknown) => T | undefined;
+  /** Optional decoder for a documented non-2xx payload such as an idempotent 409. */
+  decodeFailure?: (status: number, value: unknown) => T | undefined;
+}
+
+export interface SendJsonResult<T> {
+  ok: boolean;
+  status: number;
+  body: T | undefined;
 }
 
 export abstract class OrchestratorHttpClient {
@@ -63,12 +72,23 @@ export abstract class OrchestratorHttpClient {
     return (await response.json().catch(() => {})) as T | undefined;
   }
 
-  protected async sendJson<T = unknown>(
+  protected sendJson(
     method: "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
     body?: unknown,
-    options: SendJsonOptions = {},
-  ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
+  ): Promise<SendJsonResult<unknown>>;
+  protected sendJson<T>(
+    method: "POST" | "PATCH" | "PUT" | "DELETE",
+    path: string,
+    body: unknown,
+    options: SendJsonOptions<T>,
+  ): Promise<SendJsonResult<T>>;
+  protected async sendJson<T>(
+    method: "POST" | "PATCH" | "PUT" | "DELETE",
+    path: string,
+    body?: unknown,
+    options?: SendJsonOptions<T>,
+  ): Promise<SendJsonResult<T> | SendJsonResult<unknown>> {
     const writeHeaders: Record<string, string> = body === undefined ? {} : { "content-type": "application/json" };
     // Session-auth state-changing routes require x-csrf-token (orchestrator auth
     // middleware). Forward when the BFF resolved a session; local-dev actor mode
@@ -84,10 +104,19 @@ export abstract class OrchestratorHttpClient {
     if (response === undefined) {
       return { ok: false, status: 0, body: undefined };
     }
-    const json = (await response.json().catch(() => {})) as T | undefined;
-    if (response.ok && options.expectBody === true && json === undefined) {
-      return { ok: false, status: response.status, body: undefined };
+    const json: unknown = await response.json().catch(() => {});
+    if (response.ok && options !== undefined) {
+      const decoded = options.decode(json);
+      return decoded === undefined
+        ? { ok: false, status: response.status, body: undefined }
+        : { ok: true, status: response.status, body: decoded };
     }
-    return { ok: response.ok, status: response.status, body: json };
+    if (!response.ok && options?.decodeFailure !== undefined) {
+      return { ok: false, status: response.status, body: options.decodeFailure(response.status, json) };
+    }
+    // Untyped callers explicitly receive `unknown`; typed callers receive no
+    // body unless a success/failure decoder accepted it. There is no generic
+    // cast that can turn arbitrary upstream JSON into a product outcome.
+    return { ok: response.ok, status: response.status, body: options === undefined ? json : undefined };
   }
 }

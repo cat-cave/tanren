@@ -35,6 +35,7 @@ const CAPTURE_AFTER_ROUND = {
   interfaces: [],
   designContract: null,
   architecture: [],
+  lifecycle: null,
   rulesets: [],
 };
 
@@ -86,15 +87,35 @@ const SPECS = [
   },
 ];
 const MILESTONES = [
-  { id: "m1", label: "M1", name: "scaffold", status: "planned" },
-  { id: "m2", label: "M2", name: "handheld", status: "planned" },
+  {
+    id: "m1",
+    projectId: "project_derived",
+    label: "M1",
+    name: "scaffold",
+    description: null,
+    orderIndex: 1,
+    eta: null,
+    status: "planned",
+  },
+  {
+    id: "m2",
+    projectId: "project_derived",
+    label: "M2",
+    name: "handheld",
+    description: null,
+    orderIndex: 2,
+    eta: null,
+    status: "planned",
+  },
 ];
 
 function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
-function mockOrchestrator(): void {
+function mockOrchestrator(
+  options: { roundStatus?: number; milestoneStatus?: number; deriveBodies?: unknown[] } = {},
+): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -104,13 +125,21 @@ function mockOrchestrator(): void {
     if (/\/orgs\/[^/]+\/projects$/u.test(url))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (url.endsWith("/onboarding/interview/round") && method === "POST")
-      return new Response(JSON.stringify(ROUND_RESULT), { status: 200 });
-    if (url.endsWith("/onboarding/interview/derive") && method === "POST")
+      return options.roundStatus === undefined
+        ? new Response(JSON.stringify(ROUND_RESULT), { status: 200 })
+        : new Response(JSON.stringify({ say: "UPSTREAM INTERNAL TEXT", capture: CAPTURE_AFTER_ROUND }), {
+            status: options.roundStatus,
+          });
+    if (url.endsWith("/onboarding/interview/derive") && method === "POST") {
+      options.deriveBodies?.push(init?.body === undefined ? undefined : JSON.parse(String(init.body)));
       return new Response(JSON.stringify(DERIVE_RESULT), { status: 201 });
+    }
     if (url.endsWith("/specs") && method === "GET")
       return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
     if (url.endsWith("/milestones") && method === "GET")
-      return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+      return options.milestoneStatus === undefined
+        ? new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 })
+        : new Response(JSON.stringify({ error: "milestones_unavailable" }), { status: options.milestoneStatus });
     if (url.endsWith("/runs") && method === "GET") return new Response(JSON.stringify({ items: [] }), { status: 200 });
     if (url.endsWith("/personas") && method === "GET")
       return new Response(JSON.stringify({ personas: [] }), { status: 200 });
@@ -172,9 +201,58 @@ describe("greenfield · interview (step 1)", () => {
     expect(html).toContain("data-interview-suggestions");
     expect(html).toContain("tote has its own barcode");
   });
+
+  it("renders an opening-round failure without accepting the upstream error body as an answer", async () => {
+    mockOrchestrator({ roundStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/onboarding/new")).text();
+    expect(html).toContain("forge is unreachable — try again");
+    expect(html).not.toContain("UPSTREAM INTERNAL TEXT");
+  });
+
+  it("keeps the submitted answer and capture when a subsequent round fails", async () => {
+    mockOrchestrator({ roundStatus: 503 });
+    const app = await build();
+    const prior = { ...CAPTURE_AFTER_ROUND, identity: { slug: "kept-product", pitch: "kept", repoHint: "" } };
+    const res = await app.request("/onboarding/new?step=1", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        phase: "round",
+        round: "4",
+        answer: "my submitted answer stays",
+        capture: JSON.stringify(prior),
+      }),
+    });
+    const html = await res.text();
+    expect(html).toContain("forge is unreachable — your answer was kept; try again");
+    expect(html).toContain("my submitted answer stays");
+    expect(html).toContain("kept-product");
+    expect(html).not.toContain("UPSTREAM INTERNAL TEXT");
+  });
 });
 
 describe("greenfield · derive → spec dag (step 2)", () => {
+  it("sends the strict greenfield contract with owner bound to the active org login", async () => {
+    const deriveBodies: unknown[] = [];
+    mockOrchestrator({ deriveBodies });
+    const app = await build();
+    const capture = {
+      ...CAPTURE_AFTER_ROUND,
+      lifecycle: { stack: "node", bootstrap: "x", tier1: "x", tier2: "x", tier3: "x", build: "x", deploy: "x" },
+    };
+
+    const response = await app.request("/onboarding/new?step=2", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ phase: "advance", capture: JSON.stringify(capture) }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(deriveBodies).toEqual([{ capture, owner: "cat-cave" }]);
+    expect(JSON.stringify(deriveBodies)).not.toContain("repoUrl");
+  });
+
   it("derives the graph and renders the LIVE derived DAG via the P3-0013 canvas", async () => {
     const app = await build();
     const capture = JSON.stringify({
@@ -238,6 +316,14 @@ describe("greenfield · derive → spec dag (step 2)", () => {
     expect(html).toContain("data-derived-dag-unavailable");
     expect(html).toMatch(/this is not an empty project/iu);
     expect(html).not.toContain("no specs derived yet");
+  });
+
+  it("renders a milestone 503 as unavailable rather than an empty derived DAG", async () => {
+    mockOrchestrator({ milestoneStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/onboarding/new?step=2&projectId=project_derived")).text();
+    expect(html).toContain("data-derived-dag-unavailable");
+    expect(html).not.toContain("data-derived-dag-empty");
   });
 });
 

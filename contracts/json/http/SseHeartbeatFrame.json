@@ -2,12 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
     "ts": {
       "format": "date-time",
       "type": "string"
     }
   },
   "required": [
+    "runId",
+    "projectId",
     "ts"
   ],
   "type": "object",

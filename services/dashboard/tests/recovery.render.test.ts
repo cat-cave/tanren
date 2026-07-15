@@ -192,3 +192,33 @@ describe("P2B-0008 recovery action proxies", () => {
     expect(html).toContain("recovery not applied");
   });
 });
+
+describe("P2B-0008 halted-run list — unavailable truthfulness", () => {
+  it("never says 'Everything is moving' when org discovery fails", async () => {
+    mockOrchestrator({ orgsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/runs/halted")).text();
+    expect(html).toContain("data-halted-scan-unavailable");
+    expect(html).toContain("Org or project discovery failed");
+    expect(html).not.toContain("Everything is moving");
+  });
+
+  it("never says 'Everything is moving' when a run list fails", async () => {
+    mockOrchestrator({ runsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/runs/halted")).text();
+    expect(html).toContain("data-halted-scan-unavailable");
+    expect(html).toContain("run list failed to load");
+    expect(html).not.toContain("Everything is moving");
+  });
+});
+
+describe("P2B-0008 recovery surface — spec-picker unavailable", () => {
+  it("renders an explicit unavailable note when the spec read fails", async () => {
+    mockOrchestrator({ specsStatus: 503 });
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}/recover`)).text();
+    expect(html).toContain("data-recover-specs-unavailable");
+    expect(html).toContain("Spec list unavailable");
+  });
+});

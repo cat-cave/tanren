@@ -17,6 +17,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { DiscoverOutcome, LinkOutcome, OrgIntegrationsList, ProvisionOutcome } from "./integrations.js";
+import { decodeWith, IntegrationLinkOutcomeSchema, IntegrationProvisionOutcomeSchema } from "./writeResponseSchemas.js";
 
 export class IntegrationsClient extends OrchestratorHttpClient {
   /** Org grants (Plane A). Undefined on network/HTTP failure — empty list is a real empty. */
@@ -37,6 +38,7 @@ export class IntegrationsClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/integrations/${encodeURIComponent(providerKind)}`,
       input,
+      { expectBody: true, decode: (value) => decodeWith(IntegrationLinkOutcomeSchema, value) },
     );
     return { ok: r.ok, status: r.status, body: r.body };
   }
@@ -62,6 +64,7 @@ export class IntegrationsClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/integrations/provision`,
       input,
+      { expectBody: true, decode: (value) => decodeWith(IntegrationProvisionOutcomeSchema, value) },
     );
     return { ok: r.ok, status: r.status, body: r.body };
   }

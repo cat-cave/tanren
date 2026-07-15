@@ -1,8 +1,3 @@
-// rendered-HTML assertions for the DAG-primary project view, the
-// chat↔DAG toggle, the spec-drawer fragment, and the full-page spec view.
-// Mirrors the projects.render.test pattern: stub the pg pool + mock the
-// orchestrator product APIs via global fetch, then assert the rendered screens.
-
 import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { specForgePrompt } from "../src/components/project/SpecDrawer.js";
@@ -170,6 +165,7 @@ const FEED = [
     specId: "s_live",
     projectId: "project_easy",
     eventType: "task.write.started",
+    payload: { kind: "task.write.started" },
     redactedPaths: [],
   },
 ];
@@ -180,7 +176,7 @@ function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
-function mockOrchestrator(): void {
+function mockOrchestrator(options: { milestoneStatus?: number } = {}): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -198,7 +194,10 @@ function mockOrchestrator(): void {
       return new Response(JSON.stringify({ items }), { status: 200 });
     }
     if (url.includes("/insights")) return new Response(JSON.stringify({ insights: [] }), { status: 200 });
-    if (url.includes("/milestones")) return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+    if (url.includes("/milestones"))
+      return options.milestoneStatus === undefined
+        ? new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 })
+        : new Response(JSON.stringify({ error: "milestones_unavailable" }), { status: options.milestoneStatus });
     if (url.includes("/feed")) return new Response(JSON.stringify({ items: FEED }), { status: 200 });
     if (url.endsWith("/specs") && method === "GET")
       return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
@@ -227,7 +226,6 @@ afterEach(() => {
 async function build() {
   return createApp({ pool: stubPool(), skipMigrate: true });
 }
-
 describe("DAG-primary project view (?mode=dag)", () => {
   it("renders the DAG canvas island with nodes, edges, legend, and the group-by + zoom controls", async () => {
     const app = await build();
@@ -299,6 +297,14 @@ describe("DAG-primary project view (?mode=dag)", () => {
     expect(html).toContain("This is not an empty graph");
   });
 
+  it("renders a milestone read failure as unavailable rather than a milestone-free graph", async () => {
+    mockOrchestrator({ milestoneStatus: 503 });
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy?mode=dag")).text();
+    expect(html).toContain("data-project-dag-unavailable");
+    expect(html).not.toContain('data-island="dag-canvas"');
+  });
+
   it("defaults to chat-primary and honours the persisted mode cookie", async () => {
     const app = await build();
     const def = await (await app.request("/projects/project_easy")).text();
@@ -341,7 +347,6 @@ describe("spec drawer fragment", () => {
     expect(html).toContain("blocked");
     expect(html).toContain("upstream dep");
   });
-
   it("404s a fragment for an unknown spec", async () => {
     const app = await build();
     const res = await app.request("/projects/project_easy/specs/nope/drawer");

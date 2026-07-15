@@ -237,9 +237,16 @@ export function createRunRoutes(options: RunRoutesOptions) {
     }
     const runId = c.req.param("runId");
     const projectId = c.req.param("projectId");
+    // Bind the persisted run's own org/project before opening a streaming
+    // response. The shared run-access gate derives org from the project; this
+    // exact summary read additionally catches a corrupt cross-org run row.
+    const boundRun = await runWithOrgScope(options.pool, orgId, (client) => fetchRunSummary(client, runId, orgId));
+    if (boundRun === undefined || boundRun.projectId !== projectId) {
+      return c.json({ error: "run_not_found" }, 404);
+    }
     try {
       const access = await assertRunAccess(options.pool, runId, actor);
-      if (access.projectId !== projectId) {
+      if (access.projectId !== projectId || access.orgId !== orgId) {
         return c.json({ error: "run_not_found" }, 404);
       }
     } catch (error) {
@@ -319,7 +326,7 @@ function registerRunPaginationRoutes(app: Hono<ActorContextEnv>, options: RunRou
     const projectId = c.req.param("projectId");
     try {
       const access = await assertRunAccess(options.pool, runId, actor);
-      if (access.projectId !== projectId) {
+      if (access.projectId !== projectId || access.orgId !== orgId) {
         return c.json({ error: "run_not_found" }, 404);
       }
     } catch (error) {
@@ -361,7 +368,7 @@ function registerRunPaginationRoutes(app: Hono<ActorContextEnv>, options: RunRou
     const projectId = c.req.param("projectId");
     try {
       const access = await assertRunAccess(options.pool, runId, actor);
-      if (access.projectId !== projectId) {
+      if (access.projectId !== projectId || access.orgId !== orgId) {
         return c.json({ error: "run_not_found" }, 404);
       }
     } catch (error) {

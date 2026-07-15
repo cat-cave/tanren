@@ -26,7 +26,7 @@ Schemas live in `services/orchestrator/src/routes/runs/contract.ts`. Re-exports 
 - `RunListItem`, `ProjectFeedItem`
 - `CursorPage<T>`, `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`
 - `encodeCursor`, `decodeCursor`, `InvalidCursorError`, `parsePageSize`
-- SSE frame schemas: `SseEventName`, `SseStatusFrame`, `SseTaskFrame`, `SseEventsFrame`, `SseCostsFrame`, `SseHeartbeatFrame`
+- SSE frame schemas: `SseEventName`, `SseSnapshotFrame`, `SseStatusFrame`, `SseTaskFrame`, `SseEventsFrame`, `SseCostsFrame`, `SseHeartbeatFrame`, `SseDrainedFrame`
 
 ---
 
@@ -160,34 +160,49 @@ Each turn carries the same `render` (`ForgeAnswer` payload from P2A-0008) the Fo
 
 ## `GET /orgs/:orgId/projects/:projectId/runs/:runId/stream` (SSE)
 
-Server-Sent Events stream for live run updates. The stream is event-driven: it `LISTEN`s on the Postgres `tanren_run` channel and re-polls its deltas on a `NOTIFY` wake (`db/src/notify.ts`), with a long backstop interval only bounding latency if a `NOTIFY` is ever missed. The 1s hot poll is gone; the frame format is unchanged.
+Server-Sent Events stream for live run updates. The stream is event-driven: it `LISTEN`s on the Postgres `tanren_run` channel and re-polls its deltas on a `NOTIFY` wake (`db/src/notify.ts`), with a long backstop interval only bounding latency if a `NOTIFY` is ever missed. Every frame is runtime-decoded and carries `{ runId, projectId }`; cursor ids are canonical decimal strings so PostgreSQL `bigint` precision is never lost.
 
 **Frames**
 
 ```text
 event: snapshot
-data: { run, tasks, recentEvents, costs }   // initial frame: partial RunDetail
+data: { runId, projectId, run, tasks, recentEvents, costs, eventCursor, costCursor, taskWatermark }
 
 event: status
-data: { runId, status, outcome }
+data: { runId, projectId, status, outcome }
 
 event: task
-data: TaskTimelineEntry                      // one frame per changed task
+data: { runId, projectId, tasks: TaskTimelineEntry[], taskWatermark }
 
 event: events
-data: { events: RunEventRow[] }              // batch of new events (redacted)
+data: { runId, projectId, events: RunEventRow[], eventCursor }
 
 event: costs
-data: { costs: RunCostRecord[] }
+data: { runId, projectId, costs: RunCostRecord[], costCursor }
 
 event: heartbeat
-data: { ts: ISO-8601 }                       // every 15s when otherwise idle
+data: { runId, projectId, ts: ISO-8601 }     // every 15s when otherwise idle
+
+event: drained
+data: { runId, projectId, status, outcome, eventCursor, costCursor, taskWatermark }
 ```
 
 **Stream end conditions**
 
-- The connection closes when the run reaches a terminal status (`completed`, `failed`, `cancelled`, `halted`) AND one final post-terminal poll has flushed remaining deltas.
-- Clients should close the connection on the terminal `status` frame; a 60s client-initiated keepalive is recommended.
+- The HTTP route binds all three path coordinates before opening the stream:
+  the run's persisted organization and project must exactly equal `:orgId` and
+  `:projectId`, including for a `platform:admin`. A mismatch is the same
+  `404 { error: "run_not_found" }` boundary response as a missing run.
+- Event and cost delta reads are ordered by `id ASC` and capped at 200 rows per
+  frame. A frame cursor is the exact final row id, never an ahead-of-delivery
+  high-water mark. Reconnect snapshots may advance either cursor but never
+  regress it; their cursors equal the exact maximum id in the included rows.
+- A `task` frame is a complete replacement projection, not a patch. Its
+  watermark covers task id/run id, kind, parent, title, status, outcome,
+  failure, attempt, CLI, model, and both timestamps. Creation, mutation, and
+  removal therefore all advance the projection before a drain can be accepted.
+- After a terminal status, the server emits every remaining delta and waits for a quiet terminal poll. It then emits one `drained` receipt whose terminal tuple, cursors, and task watermark bind the complete delivered state before ending the response.
+- Clients keep terminal truth sticky, reconnect after transport errors, and call `EventSource.close()` exactly once only after a matching `drained` receipt. EOF or a terminal `status` alone is not proof of drain.
 
 **Redaction**: same as `/events`. `?raw=true` propagates.
 
@@ -237,6 +252,19 @@ Any change to a schema in `contract.ts` requires:
 2. A migration plan for any dashboard surface that consumed the old shape.
 
 Adding a new SSE frame name does **not** require an addendum — clients ignore unknown event types per the SSE spec. Renaming or removing an existing frame does.
+
+---
+
+## Addendum 2026-07-15 — cursor-bound SSE drain receipt
+
+**Rationale**: a transport close after a fixed grace poll cannot prove that the
+browser received every terminal event, cost, and task update. All frames now
+carry stream identity and strict runtime schemas. Decimal-string cursors retain
+PostgreSQL `bigint` precision; the task watermark binds the task projection. A
+quiet terminal poll emits `drained`, and the browser closes only when that
+receipt exactly matches the terminal tuple and state it accepted. Existing
+clients that ignore the additive fields and event continue reconnecting; the
+dashboard deploys with the server change and uses the stronger protocol.
 
 ---
 

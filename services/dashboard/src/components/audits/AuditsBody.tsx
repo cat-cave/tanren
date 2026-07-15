@@ -222,6 +222,8 @@ export interface AuditsBodyProps {
   snapshot: AuditsSnapshot;
   windowColumns: WindowFillColumn[];
   lowNames: string[];
+  /** True when the subscription-cost gather failed (heatmap may be incomplete). */
+  heatmapUnavailable?: boolean;
   error?: string;
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
@@ -262,6 +264,17 @@ export function AuditsBody(props: AuditsBodyProps) {
         {props.error !== undefined && (
           <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">
             {props.error}
+          </div>
+        )}
+        {props.heatmapUnavailable && (
+          <div
+            class="placeholder-card"
+            role="alert"
+            data-heatmap-unavailable
+            style="border-left:2px solid var(--ember-08)"
+          >
+            Subscription-window heatmap is incomplete — a cost/run read failed, so the idle-window fill below may
+            under-represent availability. This is not an empty heatmap.
           </div>
         )}
         <WhyAudits columns={props.windowColumns} lowNames={props.lowNames} />

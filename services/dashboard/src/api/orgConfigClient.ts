@@ -12,6 +12,7 @@
 
 import { OrchestratorForgeConversationClient } from "./forgeConversationClient.js";
 import type { OrgConfig, OrgDetail } from "./orgConfigTypes.js";
+import { decodeWith, PatchOrgConfigResponseSchema } from "./writeResponseSchemas.js";
 
 export interface PatchOrgConfigResult {
   ok: boolean;
@@ -33,6 +34,7 @@ export abstract class OrchestratorOrgConfigClient extends OrchestratorForgeConve
       "PATCH",
       `/orgs/${encodeURIComponent(orgId)}`,
       { config },
+      { expectBody: true, decode: (value) => decodeWith(PatchOrgConfigResponseSchema, value) },
     );
     return {
       ok: result.ok,

@@ -10,7 +10,13 @@ class ProbeClient extends OrchestratorHttpClient {
   }
 
   writeExpectingBody(path: string, body?: unknown) {
-    return this.sendJson("POST", path, body, { expectBody: true });
+    return this.sendJson<{ value: string }>("POST", path, body, {
+      expectBody: true,
+      decode: (value) =>
+        typeof value === "object" && value !== null && typeof (value as { value?: unknown }).value === "string"
+          ? { value: (value as { value: string }).value }
+          : undefined,
+    });
   }
 }
 
@@ -72,6 +78,15 @@ describe("OrchestratorHttpClient CSRF headers", () => {
     expect(result.body).toBeUndefined();
   });
 
+  it.each([{}, null])("fails a typed write when a 2xx JSON body has the wrong shape: %j", async (body) => {
+    const fetchImpl = vi.fn<FetchFn>(
+      async () => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const client = new ProbeClient({ orchestratorUrl: "http://orch", fetchImpl });
+    const result = await client.writeExpectingBody("/orgs/o1/thing");
+    expect(result).toEqual({ ok: false, status: 200, body: undefined });
+  });
+
   it("allows a no-body success when the caller does not require a body", async () => {
     const fetchImpl = vi.fn<FetchFn>(async () => new Response(null, { status: 204 }));
     const client = new ProbeClient({
@@ -102,5 +117,31 @@ describe("invokeForgeTool CSRF (no sendJson bypass)", () => {
     expect(String(url)).toContain("/orgs/org_a/forge/tools");
     expect((init as RequestInit).method).toBe("POST");
     expect(((init as RequestInit).headers as Record<string, string>)["x-csrf-token"]).toBe("csrf-secret");
+  });
+});
+
+describe("brownfield-link response boundary", () => {
+  it.each([{}, null])("rejects malformed successful JSON instead of casting it: %j", async (body) => {
+    const { OrchestratorClient } = await import("../src/api/orchestrator.js");
+    const client = new OrchestratorClient({
+      orchestratorUrl: "http://orch",
+      fetchImpl: (async () => new Response(JSON.stringify(body), { status: 200 })) as typeof fetch,
+    });
+    await expect(client.brownfieldLink("org_a", "project_a", { repoUrl: "https://github.com/a/b" })).resolves.toEqual({
+      ok: false,
+      status: 200,
+    });
+  });
+
+  it("rejects an empty successful body", async () => {
+    const { OrchestratorClient } = await import("../src/api/orchestrator.js");
+    const client = new OrchestratorClient({
+      orchestratorUrl: "http://orch",
+      fetchImpl: (async () => new Response(null, { status: 200 })) as typeof fetch,
+    });
+    await expect(client.brownfieldLink("org_a", "project_a", { repoUrl: "https://github.com/a/b" })).resolves.toEqual({
+      ok: false,
+      status: 200,
+    });
   });
 });

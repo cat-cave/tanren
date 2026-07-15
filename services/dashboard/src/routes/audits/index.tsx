@@ -50,19 +50,26 @@ async function gatherRecords(
   deps: ShellDeps,
   orgId: string,
   projects: { projectId: string }[],
-): Promise<CostRecord[]> {
+): Promise<{ records: CostRecord[]; unavailable: boolean }> {
   const client = new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
   const records: CostRecord[] = [];
+  let unavailable = false;
   for (const project of projects) {
-    const runs = await client.listRuns(orgId, project.projectId);
-    for (const run of runs) {
-      records.push(...(await client.listRunCosts(orgId, project.projectId, run.runId)));
+    const runsMaybe = await client.listRunsMaybe(orgId, project.projectId);
+    if (runsMaybe === undefined) {
+      unavailable = true;
+      continue;
+    }
+    for (const run of runsMaybe) {
+      const { records: runCosts, complete } = await client.listRunCosts(orgId, project.projectId, run.runId);
+      records.push(...runCosts);
+      if (!complete) unavailable = true;
     }
   }
-  return records;
+  return { records, unavailable };
 }
 
 function str(form: Record<string, unknown>, key: string): string {
@@ -89,7 +96,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
       );
     }
     const snapshot = (await readAuditsClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
-    const records = await gatherRecords(c, deps, ctx.org.id, ctx.projects);
+    const { records, unavailable: recordsUnavailable } = await gatherRecords(c, deps, ctx.org.id, ctx.projects);
     const matrix = buildHeatmap(records, { now: new Date() });
     const columns = windowFillColumns(matrix);
     return renderShell(
@@ -101,6 +108,7 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
         snapshot={snapshot}
         windowColumns={columns}
         lowNames={underfilledNames(columns)}
+        heatmapUnavailable={recordsUnavailable}
         csrfToken={ctx.csrfToken}
       />,
     );

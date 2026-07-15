@@ -33,7 +33,10 @@ import {
   SseStatusFrame,
   SseEventsFrame,
   SseCostsFrame,
+  SseDrainedFrame,
   SseHeartbeatFrame,
+  SseSnapshotFrame,
+  SseTaskFrame,
 } from "../../routes/runs/contract.js";
 
 // A single contract entry: the JSON file to emit (relative to contracts/json),
@@ -82,9 +85,12 @@ const httpEntries: ContractSchemaDescriptor[] = [
   entry("http", "TaskTimelineEntry", "tanren.http.TaskTimelineEntry", TaskTimelineEntry),
   entry("http", "ProjectFeedItem", "tanren.http.ProjectFeedItem", ProjectFeedItem),
   entry("http", "SseStatusFrame", "tanren.http.SseStatusFrame", SseStatusFrame),
+  entry("http", "SseSnapshotFrame", "tanren.http.SseSnapshotFrame", SseSnapshotFrame),
+  entry("http", "SseTaskFrame", "tanren.http.SseTaskFrame", SseTaskFrame),
   entry("http", "SseEventsFrame", "tanren.http.SseEventsFrame", SseEventsFrame),
   entry("http", "SseCostsFrame", "tanren.http.SseCostsFrame", SseCostsFrame),
   entry("http", "SseHeartbeatFrame", "tanren.http.SseHeartbeatFrame", SseHeartbeatFrame),
+  entry("http", "SseDrainedFrame", "tanren.http.SseDrainedFrame", SseDrainedFrame),
 ];
 
 // --- Workflow insights ------------------------------------------------------

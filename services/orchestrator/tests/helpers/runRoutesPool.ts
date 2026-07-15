@@ -358,7 +358,7 @@ export class RunRoutesPool {
       const orgId = String(params[2]);
       const rows = this.events
         .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId && e.id > lastId)
-        .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id)
+        .sort((a, b) => a.id - b.id)
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
@@ -427,7 +427,7 @@ export class RunRoutesPool {
       const orgId = String(params[2]);
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && c.id > lastId)
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
+        .sort((a, b) => a.id - b.id)
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
