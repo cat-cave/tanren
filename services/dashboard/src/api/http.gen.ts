@@ -191,6 +191,12 @@ export interface RunListItem {
   trigger: string;
 }
 
+/** Generated from `tanren.http.RunLocation` (contracts/json/http/RunLocation.json). */
+export interface RunLocation {
+  orgId: string;
+  projectId: string;
+}
+
 /** Generated from `tanren.http.RunSpecSummary` (contracts/json/http/RunSpecSummary.json). */
 export interface RunSpecSummary {
   behaviorIds: string[];

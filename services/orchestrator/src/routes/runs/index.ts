@@ -8,6 +8,7 @@
 //
 // Routes are mounted under `/orgs` (org+project path style) so the dashboard
 // can address every surface with the same prefix:
+//   /orgs/:orgId/runs/:runId/location                            — location
 //   /orgs/:orgId/projects/:projectId/runs                        — list
 //   /orgs/:orgId/projects/:projectId/runs/:runId                 — detail
 //   /orgs/:orgId/projects/:projectId/runs/:runId/events          — paginated
@@ -26,7 +27,7 @@ import { ForgeThreadStore, ForgeTurnStore } from "../../engine/forge/index.js";
 import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
-import { type RunDetail, type RunListItem, RECENT_EVENT_CAP } from "./contract.js";
+import { type RunDetail, type RunListItem, type RunLocation, RECENT_EVENT_CAP } from "./contract.js";
 import {
   fetchCostsPage,
   fetchEventsPage,
@@ -64,6 +65,44 @@ export function createRunRoutes(options: RunRoutesOptions) {
   // `.connect()` delegates through the org-scoping proxy to the real pool.
   const sseNotifyListener = options.sseNotifyListener ?? new PgNotifyListener(options.pool);
   const app = new Hono<ActorContextEnv>();
+
+  // -------------------------------------------------------------------------
+  // GET /orgs/:orgId/runs/:runId/location
+  // -------------------------------------------------------------------------
+  // The dashboard's run route intentionally omits a project segment. Resolve its
+  // location with one org-scoped run lookup rather than enumerating every
+  // accessible project and its runs. A missing run, cross-org run, a run in an
+  // inaccessible project, and a project whose org does not match the path org
+  // all use the same 404 shape. Org authorization runs before the run read;
+  // project authorization binds `assertProjectAccess` orgId to the path org
+  // (including platform:admin) before any location is returned.
+  app.get("/:orgId/runs/:runId/location", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const runId = c.req.param("runId");
+    const summary = await runWithOrgScope(options.pool, orgId, (client) => fetchRunSummary(client, runId, orgId));
+    if (summary === undefined) {
+      return c.json({ error: "run_not_found" }, 404);
+    }
+    try {
+      const projectAuth = await assertProjectAccess(options.pool, summary.projectId, actor);
+      // Path/run organization must equal the project's organization — independent
+      // FKs on runs.project_id and runs.org_id do not prevent inconsistency.
+      if (projectAuth.orgId !== orgId) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
+    } catch (error) {
+      if (error instanceof ToolAccessDeniedError) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
+      throw error;
+    }
+    const location: RunLocation = { orgId, projectId: summary.projectId };
+    return c.json(location);
+  });
 
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs

@@ -450,11 +450,12 @@ export interface CursorPage<T> {
 // RunDetail (`{ threadId, recentTurns }`) is inlined by the generated type, so
 // the previously hand-written `RunForgeBundle` alias is no longer needed.
 
-/** The org+project a run lives in, resolved from the run-list endpoints. */
-export interface RunLocation {
-  orgId: string;
-  projectId: string;
-}
+/**
+ * The org+project a run lives in, resolved via
+ * `GET /orgs/:orgId/runs/:runId/location` (never project/run-list fan-out).
+ * Fail-closed resolution returns `FindRunLocationResult` from `runLocation.ts`.
+ */
+export type { FindRunLocationResult, RunLocation } from "./runLocation.js";
 
 // failure-recovery contracts live in `recoveryTypes.ts` (re-exported
 // here so existing `from "./types.js"` imports keep working; line-cap split).
