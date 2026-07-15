@@ -83,11 +83,10 @@ export function createNotificationRoutes(options: NotificationRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const targets = await NotificationTargetStore.listForOrg(options.pool, orgId);
-    const routes = [];
-    for (const target of targets) {
-      routes.push(...(await NotificationRouteStore.listForTarget(options.pool, target.id)));
-    }
+    const [targets, routes] = await Promise.all([
+      NotificationTargetStore.listForOrg(options.pool, orgId),
+      NotificationRouteStore.listForOrg(options.pool, orgId),
+    ]);
     return c.json({
       targets: targets.map((target) => toTargetContract(target)),
       routes: routes.map((route) => toRouteContract(route)),
