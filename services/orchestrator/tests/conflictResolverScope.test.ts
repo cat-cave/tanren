@@ -96,7 +96,11 @@ describe("conflict resolver — empty-gather short-circuit (§7.2)", () => {
       replan: {
         routeBackToPlanner: async (input) => ({
           kind: "owned",
-          receipt: { kind: "planner_replan", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
+          receipt: {
+            kind: "planner_replan",
+            specId: input.specId,
+            run: { kind: "already_running", runId: "run_live" },
+          },
         }),
       },
     });

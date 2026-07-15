@@ -84,7 +84,7 @@ function mergeTaskWriter(pool: ReviewMergePool): {
       createSpec: () => Promise.reject(new Error("unexpected createSpec")),
       createQueuedRun: () => Promise.reject(new Error("unexpected createQueuedRun")),
       appendSpecSteering: () => Promise.reject(new Error("unexpected appendSpecSteering")),
-    prepareSpecForRecovery: () => Promise.reject(new Error("unexpected prepareSpecForRecovery")),
+      prepareSpecForRecovery: () => Promise.reject(new Error("unexpected prepareSpecForRecovery")),
     } as unknown as RunStateWriter,
   };
 }

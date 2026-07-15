@@ -180,7 +180,11 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
           reworked.push(input);
           return {
             kind: "owned",
-            receipt: { kind: "writer_rework", specId: input.specId, run: { kind: "already_running", runId: "run_live" } },
+            receipt: {
+              kind: "writer_rework",
+              specId: input.specId,
+              run: { kind: "already_running", runId: "run_live" },
+            },
           };
         },
       },
