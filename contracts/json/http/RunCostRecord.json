@@ -65,6 +65,17 @@
       "minLength": 1,
       "type": "string"
     },
+    "notionalCostUsd": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "outputTokens": {
       "maximum": 9007199254740991,
       "minimum": 0,
@@ -116,6 +127,7 @@
     "reasoningOutputTokens",
     "totalTokens",
     "costUsd",
+    "notionalCostUsd",
     "billingMode",
     "costBasis",
     "recordedAt"

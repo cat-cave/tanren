@@ -15,6 +15,7 @@ import {
   RunEventRow,
   RunListItem,
   RunCostRecord,
+  OrgCosts,
   decodeCursor,
   encodeCursor,
 } from "../src/routes/runs/contract.js";
@@ -213,6 +214,43 @@ describe("P2A-0014 run-detail API — run list", () => {
     app.route("/orgs", createRunRoutes({ pool: pool.asPgPool() }));
     const response = await app.request("/orgs/org_acme/projects/project_phase1/runs");
     expect(response.status).toBe(401);
+  });
+});
+
+describe("org costs read model", () => {
+  it("authorizes before reads and excludes foreign-org rows with org-bound correlated aggregates", async () => {
+    const { app, pool } = buildHarness();
+    seedRunFixture(pool);
+    pool.seedProject({ project_id: "project_other", org_id: "org_other" });
+    pool.seedSpec({ spec_id: "spec_other", project_id: "project_other", title: "Foreign spec" });
+    pool.seedRun({ run_id: "run_other", spec_id: "spec_other", project_id: "project_other" });
+    pool.seedCost({ id: 99, run_id: "run_other", task_id: "task_other", project_id: "project_other", cost_usd: "99" });
+
+    const response = await app.request("/orgs/org_acme/costs");
+    expect(response.status).toBe(200);
+    const readModel = OrgCosts.parse(await response.json());
+    expect(readModel.runs.map((run) => run.runId)).toEqual(["run_fixture"]);
+    expect(readModel.costs.map((cost) => cost.runId)).toEqual(["run_fixture", "run_fixture"]);
+    expect(readModel.costs[0]?.notionalCostUsd).toBe("0.005");
+    expect(JSON.stringify(readModel)).not.toContain("cost_source_raw");
+
+    const reads = pool.queries.filter(({ sql }) => /\bFROM\s+(runs|cost_records|events)\b/u.test(sql));
+    expect(reads).toHaveLength(2);
+    const runsSql = reads.find(({ sql }) => /FROM runs r/u.test(sql))?.sql ?? "";
+    const costsSql = reads.find(({ sql }) => /FROM cost_records\s+WHERE org_id/u.test(sql))?.sql ?? "";
+    expect(costsSql).toContain("notional_cost_usd");
+    expect(costsSql).not.toContain("cost_source_raw");
+    expect(runsSql).toContain("WHERE r.org_id = $1");
+    expect(runsSql).toContain("s.org_id = $1");
+    expect(runsSql).toContain("cr.run_id = r.run_id AND cr.org_id = $1");
+    expect(runsSql).toContain("e.run_id = r.run_id AND e.org_id = $1");
+  });
+
+  it("rejects a foreign org before issuing read-model queries", async () => {
+    const { app, pool } = buildHarness();
+    const response = await app.request("/orgs/org_other/costs");
+    expect(response.status).toBe(403);
+    expect(pool.queries.filter(({ sql }) => /\bFROM\s+(runs|cost_records|events)\b/u.test(sql))).toEqual([]);
   });
 });
 

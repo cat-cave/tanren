@@ -130,6 +130,20 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
   }
 
   /**
+   * Org-wide cost read model for the costs screen and CSV export. This is one
+   * request, replacing the old project → run → per-run-cost traversal.
+   */
+  async getOrgCosts(orgId: string): Promise<{ costs: CostRecord[]; runs: RunListItem[] }> {
+    const json = await this.getJson<{ costs?: CostRecord[]; runs?: RunListItem[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/costs`,
+    );
+    if (json === undefined || !Array.isArray(json.costs) || !Array.isArray(json.runs)) {
+      return { costs: [], runs: [] };
+    }
+    return { costs: json.costs, runs: json.runs };
+  }
+
+  /**
    * Invoke a Forge write tool (operator-button action) via
    * `POST /orgs/:orgId/forge/tools`. Returns the raw `{ tool, result }` body or
    * `undefined` on failure (the caller decides how to surface it).

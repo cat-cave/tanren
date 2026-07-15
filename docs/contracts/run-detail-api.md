@@ -137,8 +137,31 @@ Cursor-paginated cost records for a run.
 
 - Disjoint token buckets: `inputTokens`, `cachedInputTokens`, `cacheCreationTokens`, `outputTokens`, `reasoningOutputTokens`, `totalTokens`.
 - `costUsd`: a fixed-precision dollar string, or `null` when cost is unknown (best-effort).
+- `notionalCostUsd`: list-priced API-equivalent value, or `null` when no provider rate is known. It is not real spend and is never used by the budget gate.
 - `billingMode`: `per_token` | `subscription` | `self_hosted` | `unattributed`.
 - `costBasis`: `ccusage` | `provider_response` | `credits` | `unknown` | `unattributed` (`unknown` ⇒ `costUsd` is null).
+
+---
+
+## Addendum: `GET /orgs/:orgId/costs`
+
+The history & costs screen and `/costs/export.csv` use this single org-scoped
+read instead of walking projects, runs, and per-run cost pages.
+
+**Response**: `OrgCosts`
+
+```ts
+{
+  costs: RunCostRecord[], // all typed cost rows, oldest → newest
+  runs: RunListItem[],    // all org runs, newest → oldest
+}
+```
+
+The actor must have access to `orgId`; otherwise the endpoint returns
+`403 org_access_denied` before any read-model query runs. Every query is run in
+`runWithOrgScope`, has an explicit `org_id` predicate, and keeps that predicate
+inside the correlated cost and event aggregates. `cost_source_raw` remains
+database-only and is never part of this response.
 
 ---
 

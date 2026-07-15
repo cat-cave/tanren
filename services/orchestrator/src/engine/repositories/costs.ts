@@ -12,7 +12,7 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 const SELECT_COST_COLUMNS = `id, task_id, run_id, project_id, cli, provider, model,
             input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-            cost_usd, billing_mode, cost_basis, recorded_at`;
+            cost_usd, notional_cost_usd, billing_mode, cost_basis, recorded_at`;
 
 /** A keyset cursor over the (recorded_at, id) ordering the paginated read uses. */
 export interface CostCursor {

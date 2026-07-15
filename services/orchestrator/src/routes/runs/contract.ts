@@ -94,6 +94,9 @@ export const RunCostRecord = z
     reasoningOutputTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
     costUsd: z.string().min(1).nullable(),
+    // List-priced API equivalent. This is deliberately distinct from real
+    // spend (`costUsd`) and is required by the costs dashboard's math.
+    notionalCostUsd: z.string().min(1).nullable(),
     billingMode: z.enum(["per_token", "subscription", "self_hosted", "unattributed"]),
     costBasis: z.enum(["ccusage", "provider_response", "credits", "unknown", "unattributed"]),
     recordedAt: z.coerce.date(),
@@ -168,6 +171,23 @@ export const RunListItem = RunSummary.extend({
   needsReview: z.boolean(),
 }).strict();
 export type RunListItem = z.infer<typeof RunListItem>;
+
+// ---------------------------------------------------------------------------
+// Org costs read model
+// ---------------------------------------------------------------------------
+
+/**
+ * One org-scoped response for the history & costs screen and CSV export.
+ * Cost rows never expose `cost_source_raw`; only the typed, safe projection
+ * above crosses this boundary.
+ */
+export const OrgCosts = z
+  .object({
+    costs: z.array(RunCostRecord),
+    runs: z.array(RunListItem),
+  })
+  .strict();
+export type OrgCosts = z.infer<typeof OrgCosts>;
 
 // ---------------------------------------------------------------------------
 // Cursor pagination

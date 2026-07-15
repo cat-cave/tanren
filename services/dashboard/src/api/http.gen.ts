@@ -8,6 +8,57 @@
 // `check:dashboard-types-drift` gate fails if this file diverges from the
 // committed JSON Schema. See docs/architecture/future-refactor-and-scale.md §2.
 
+/** Generated from `tanren.http.OrgCosts` (contracts/json/http/OrgCosts.json). */
+export interface OrgCosts {
+  costs: Array<{
+    billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
+    cacheCreationTokens: number;
+    cachedInputTokens: number;
+    cli: string;
+    costBasis: "ccusage" | "provider_response" | "credits" | "unknown" | "unattributed";
+    costUsd: string | null;
+    id: number | string;
+    inputTokens: number;
+    model: string;
+    notionalCostUsd: string | null;
+    outputTokens: number;
+    projectId: string;
+    provider: string;
+    reasoningOutputTokens: number;
+    recordedAt: string;
+    runId: string;
+    taskId: string;
+    totalTokens: number;
+  }>;
+  runs: Array<{
+    branch: string;
+    costTotalUsd: string;
+    endedAt: string | null;
+    lastEventAt: string | null;
+    needsReview: boolean;
+    outcome:
+      | "ok"
+      | "halted"
+      | "escape_hatch_hit"
+      | "retry_budget_exhausted"
+      | "convergence_stalled"
+      | "window_exhausted"
+      | "window_paused"
+      | "awaiting_review"
+      | "cancelled"
+      | "failed"
+      | null;
+    prUrl: string | null;
+    projectId: string;
+    runId: string;
+    specId: string;
+    specTitle: string;
+    startedAt: string;
+    status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
+    trigger: string;
+  }>;
+}
+
 /** Generated from `tanren.http.ProjectFeedItem` (contracts/json/http/ProjectFeedItem.json). */
 export interface ProjectFeedItem {
   eventType: string;
@@ -32,6 +83,7 @@ export interface RunCostRecord {
   id: number | string;
   inputTokens: number;
   model: string;
+  notionalCostUsd: string | null;
   outputTokens: number;
   projectId: string;
   provider: string;
@@ -54,6 +106,7 @@ export interface RunDetail {
     id: number | string;
     inputTokens: number;
     model: string;
+    notionalCostUsd: string | null;
     outputTokens: number;
     projectId: string;
     provider: string;
@@ -237,6 +290,7 @@ export interface SseCostsFrame {
     id: number | string;
     inputTokens: number;
     model: string;
+    notionalCostUsd: string | null;
     outputTokens: number;
     projectId: string;
     provider: string;

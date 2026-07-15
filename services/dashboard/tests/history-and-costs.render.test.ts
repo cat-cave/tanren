@@ -166,6 +166,12 @@ function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
+    if (/\/orgs\/[^/]+\/costs$/u.test(url)) {
+      const costs = Object.values(COSTS)
+        .flat()
+        .map((cost) => ({ ...cost, notionalCostUsd: cost.costUsd ?? "1.00" }));
+      return new Response(JSON.stringify({ costs, runs: RUNS }), { status: 200 });
+    }
     // run costs: .../runs/:runId/costs (check before the run-list match)
     const costsMatch = /\/runs\/([^/?]+)\/costs/u.exec(url);
     if (costsMatch !== null) {
@@ -207,6 +213,20 @@ async function build() {
 const FORBIDDEN_PLACEHOLDER = ["legacy", "unknown"].join("_");
 
 describe("costs dashboard (/costs)", () => {
+  it("uses one org-scoped costs request without project/run fan-out", async () => {
+    const calls: string[] = [];
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(typeof input === "string" ? input : input.toString());
+      return original(input, init);
+    });
+    const app = await build();
+    await app.request("/costs?range=all");
+    expect(calls.filter((url) => /\/orgs\/[^/]+\/costs$/u.test(url))).toHaveLength(1);
+    expect(calls.some((url) => /\/projects\/[^/]+\/runs/u.test(url))).toBe(false);
+    expect(calls.some((url) => /\/runs\/[^/]+\/costs/u.test(url))).toBe(false);
+  });
+
   it("overrides the P2B-0001 placeholder with the real cost screen", async () => {
     const app = await build();
     const html = await (await app.request("/costs")).text();

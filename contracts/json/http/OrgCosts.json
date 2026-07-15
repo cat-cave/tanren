@@ -139,11 +139,136 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "runs": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "costTotalUsd": {
+            "type": "string"
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastEventAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "needsReview": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "halted",
+                  "escape_hatch_hit",
+                  "retry_budget_exhausted",
+                  "convergence_stalled",
+                  "window_exhausted",
+                  "window_paused",
+                  "awaiting_review",
+                  "cancelled",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "specId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "specTitle": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "paused",
+              "halted",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "specId",
+          "projectId",
+          "branch",
+          "trigger",
+          "status",
+          "outcome",
+          "startedAt",
+          "endedAt",
+          "prUrl",
+          "specTitle",
+          "costTotalUsd",
+          "lastEventAt",
+          "needsReview"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     }
   },
   "required": [
-    "costs"
+    "costs",
+    "runs"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.http.SseCostsFrame"
+  "x-tanren-schema-id": "tanren.http.OrgCosts"
 }

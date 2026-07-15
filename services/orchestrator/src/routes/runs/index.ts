@@ -29,6 +29,7 @@ import { actorCanAccessOrg } from "../orgs/access.js";
 import { type RunDetail, type RunListItem, RECENT_EVENT_CAP } from "./contract.js";
 import {
   fetchCostsPage,
+  fetchOrgCosts,
   fetchEventsPage,
   fetchFeedPage,
   fetchRunCostsForSnapshot,
@@ -91,6 +92,22 @@ export function createRunRoutes(options: RunRoutesOptions) {
       }),
     );
     return c.json({ items });
+  });
+
+  // -------------------------------------------------------------------------
+  // GET /orgs/:orgId/costs
+  // -------------------------------------------------------------------------
+  // The costs page and CSV export consume this org read model in one HTTP
+  // request; it replaces their former project → run → per-run-cost fan-out.
+  app.get("/:orgId/costs", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    // Authorize BEFORE opening the scoped transaction or issuing any query.
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    const readModel = await runWithOrgScope(options.pool, orgId, (client) => fetchOrgCosts(client, orgId));
+    return c.json(readModel);
   });
 
   // -------------------------------------------------------------------------

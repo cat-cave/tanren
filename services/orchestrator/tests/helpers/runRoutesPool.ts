@@ -83,6 +83,7 @@ export interface CostRow {
   reasoning_output_tokens: number;
   total_tokens: number;
   cost_usd: string | null;
+  notional_cost_usd: string | null;
   billing_mode: string;
   cost_basis: string;
   recorded_at: Date;
@@ -126,6 +127,7 @@ export class RunRoutesPool {
     render: unknown;
     created_at: Date;
   }> = [];
+  readonly queries: Array<{ sql: string; params: unknown[] }> = [];
 
   seedProject(input: { project_id: string; org_id: string | null }): void {
     this.projects.set(input.project_id, input);
@@ -210,6 +212,7 @@ export class RunRoutesPool {
       reasoning_output_tokens: input.reasoning_output_tokens ?? 0,
       total_tokens: input.total_tokens ?? 0,
       cost_usd: input.cost_usd ?? "0.001",
+      notional_cost_usd: input.notional_cost_usd ?? input.cost_usd ?? "0.001",
       billing_mode: input.billing_mode ?? "per_token",
       cost_basis: input.cost_basis ?? "provider_response",
       recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id),
@@ -217,7 +220,6 @@ export class RunRoutesPool {
     this.costs.push(row);
     return row;
   }
-
   seedSpec(input: Partial<SpecRow> & { spec_id: string; project_id: string }): SpecRow {
     const row: SpecRow = {
       spec_id: input.spec_id,
@@ -228,10 +230,9 @@ export class RunRoutesPool {
     this.specs.push(row);
     return row;
   }
-
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
     const trimmed = sql.trim();
-
+    this.queries.push({ sql: trimmed, params });
     // assertProjectAccess and friends
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
@@ -247,7 +248,34 @@ export class RunRoutesPool {
         ? { rows: [], rowCount: 0 }
         : { rows: [{ project_id: run.project_id, spec_id: run.spec_id }], rowCount: 1 };
     }
-
+    // Org costs read model: all tables and correlated aggregates keep an
+    // explicit org predicate even under the scoped transaction.
+    if (/FROM cost_records\s+WHERE org_id = \$1\s+ORDER BY recorded_at ASC/u.test(trimmed)) {
+      const rows = this.costs
+        .filter((cost) => cost.org_id === String(params[0]))
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
+      return { rows, rowCount: rows.length };
+    }
+    if (/FROM runs r\s+LEFT JOIN specs s/u.test(trimmed) && /WHERE r\.org_id = \$1/u.test(trimmed)) {
+      const orgId = String(params[0]);
+      const rows = this.runs
+        .filter((run) => run.org_id === orgId)
+        .map((run) => ({
+          ...run,
+          spec_title: this.specs.find((spec) => spec.spec_id === run.spec_id)?.title ?? null,
+          cost_total_usd: this.costs
+            .filter((cost) => cost.run_id === run.run_id && cost.org_id === orgId)
+            .reduce((sum, cost) => sum + Number(cost.cost_usd), 0)
+            .toString(),
+          last_event_at:
+            this.events
+              .filter((event) => event.run_id === run.run_id && event.org_id === orgId)
+              .map((event) => event.ts)
+              .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
+        }))
+        .sort((a, b) => b.started_at.getTime() - a.started_at.getTime() || a.run_id.localeCompare(b.run_id));
+      return { rows, rowCount: rows.length };
+    }
     // Run snapshot loaders. org_id is the second predicate (defense-in-depth).
     if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const run = this.runs.find((r) => r.run_id === String(params[0]) && r.org_id === String(params[1]));
@@ -275,7 +303,6 @@ export class RunRoutesPool {
         }));
       return { rows: filtered, rowCount: filtered.length };
     }
-
     // Tasks list (run_id = $1 AND org_id = $2)
     if (/FROM tasks\s+WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const rows = this.tasks
@@ -291,7 +318,6 @@ export class RunRoutesPool {
         });
       return { rows, rowCount: rows.length };
     }
-
     // Spec read
     if (trimmed.startsWith("SELECT spec_id, title, description FROM specs WHERE spec_id = $1")) {
       const spec = this.specs.find((s) => s.spec_id === String(params[0]));
@@ -307,7 +333,6 @@ export class RunRoutesPool {
         ? { rows: [], rowCount: 0 }
         : { rows: [{ milestone_id: milestoneId }], rowCount: 1 };
     }
-
     // Events: snapshot (run_id = $1 AND org_id = $3; params [runId, limit, orgId])
     if (
       /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1 AND org_id = \$3/u.test(
@@ -323,7 +348,6 @@ export class RunRoutesPool {
         .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
       return { rows, rowCount: rows.length };
     }
-
     // Events: paginated (run_id = $1 AND org_id = $2; params [runId, orgId, ...cursor, limit])
     if (
       /FROM events\s+WHERE run_id = \$1 AND org_id = \$2(\s+AND \(ts, id\) >|\s+ORDER)/u.test(trimmed) &&
@@ -349,7 +373,6 @@ export class RunRoutesPool {
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
-
     // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
     if (/FROM events\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
       const lastId = Number(params[1]);
@@ -360,7 +383,6 @@ export class RunRoutesPool {
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
-
     // Activity feed (project_id = $1 AND org_id = $2 AND run_id IS NOT NULL)
     if (/FROM events\s+WHERE project_id = \$1 AND org_id = \$2 AND run_id IS NOT NULL/u.test(trimmed)) {
       const orgId = String(params[1]);
@@ -383,7 +405,6 @@ export class RunRoutesPool {
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
-
     // Costs: snapshot (run_id = $1 AND org_id = $2)
     if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2\s+ORDER BY recorded_at ASC/u.test(trimmed)) {
       const orgId = String(params[1]);

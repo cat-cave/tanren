@@ -5,9 +5,8 @@
  *   GET /costs/export.csv — provider-breakdown CSV export
  *   GET /history          — prior-run history list (project-scoped per)
  *
- * The costs dashboard aggregates records across every run in every
- * project the operator can see: it lists runs (`/runs`) then walks each
- * run's `/costs` page. The run list is the same read API the history list uses.
+ * The costs dashboard and CSV export each consume one org-scoped cost read
+ * model (`GET /orgs/:orgId/costs`). The history list remains project-scoped.
  *
  * Mounted via ONE append to SCREEN_MOUNTS in app/screens.ts. Reuses
  * loadShellContext + renderShell; never touches the chrome.
@@ -31,25 +30,6 @@ function rangeDays(range: string): number | undefined {
   if (range === "30d") return 30;
   if (range === "90d") return 90;
   return undefined;
-}
-
-/** Fetch every cost record across every project's runs the operator can see. */
-async function gatherCosts(
-  client: OrchestratorClient,
-  orgId: string,
-  projects: { projectId: string }[],
-): Promise<{ records: CostRecord[]; runs: RunListItem[] }> {
-  const records: CostRecord[] = [];
-  const runs: RunListItem[] = [];
-  for (const project of projects) {
-    const projectRuns = await client.listRuns(orgId, project.projectId);
-    runs.push(...projectRuns);
-    for (const run of projectRuns) {
-      const runCosts = await client.listRunCosts(orgId, project.projectId, run.runId);
-      records.push(...runCosts);
-    }
-  }
-  return { records, runs };
 }
 
 /** Apply the date-range cutoff to records (by recordedAt) + runs (by startedAt). */
@@ -85,10 +65,10 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      const gathered = await gatherCosts(client, ctx.org.id, ctx.projects);
-      allRecords = gathered.records;
-      records = withinRange(gathered.records, range, now);
-      runs = withinRange(gathered.runs, range, now);
+      const readModel = await client.getOrgCosts(ctx.org.id);
+      allRecords = readModel.costs;
+      records = withinRange(readModel.costs, range, now);
+      runs = withinRange(readModel.runs, range, now);
     }
 
     const summary = summarizeCosts(records);
@@ -117,8 +97,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      const gathered = await gatherCosts(client, ctx.org.id, ctx.projects);
-      records = gathered.records;
+      records = (await client.getOrgCosts(ctx.org.id)).costs;
     }
     const summary = summarizeCosts(records);
     const header = "cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_usd,share";
