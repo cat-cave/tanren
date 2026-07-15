@@ -272,19 +272,21 @@ These were previously tracked as implementation-behind-hi-fi gaps. Current
   they are no longer permanent sidenav rows.
 - **Confidence: high.**
 
-### R.4 Spec full-page depth — run/economics depth verified
+### R.4 Spec full-page depth and contextual Forge entrypoint — shipped
 
 - **Hi-fi**: `view-spec.jsx` full page shows BDD acceptance, dependencies,
-  blocked reason, run history, economics, and contextual "ask Forge" controls for
+  blocked reason, run history, economics, and a contextual "ask Forge" control for
   the spec.
-- **Implementation**: `components/project/SpecDrawer.tsx` now documents and
-  renders the full-depth spec page. Tests pin BDD acceptance, dependency chain,
-  run history, spend/attempt/average economics, and unavailable/unpriced handling
+- **Implementation**: `components/project/SpecDrawer.tsx` renders the full-depth
+  spec page and its `SpecForgeCard`, which opens the palette with a selected-spec
+  context prefill. Render coverage pins BDD acceptance, dependency chain, run
+  history, spend/attempt/average economics, unavailable/unpriced handling, and
+  the spec-scoped Forge card, palette trigger, and context prefill
   (`services/dashboard/tests/projectDag.render.test.ts`).
-- **Remaining gap**: the spec-scoped Forge action card/chips from the hi-fi are
-  not present in the mounted spec page. Tracked in Set 2 below.
-- **Confidence: high for run-history/economics depth; high that spec-scoped Forge
-  remains missing.**
+- **Remaining gap**: the hi-fi's four contextual prompt chips are not present; the
+  mounted page has one generic spec-scoped Forge action. Tracked in Set 2 below.
+- **Confidence: high for full-page depth and the contextual Forge entrypoint; high
+  that prompt chips remain missing.**
 
 ### R.5 Notifications delivery history + org-target quiet posture — shipped
 
@@ -318,15 +320,14 @@ Real surfaces/flows the hi-fi specifies that the code does not yet (fully) build
 - **Size/priority: small / medium.**
 - **Confidence: high.**
 
-### 2.2 Spec-scoped Forge action card — missing
+### 2.2 Spec-scoped Forge prompt chips — missing
 
-- **Hi-fi**: `view-spec.jsx` shows a contextual "ask Forge · this spec" card and
-  prompt chips on the full spec page.
-- **Code state — PARTIAL**: `SpecPageBody` renders description, blocked state,
-  BDD, dependencies, run history, and economics, but not the spec-scoped Forge
-  card/chips.
-- **Gap**: add the spec-context Forge affordance to the full spec page and bind it
-  to the existing Forge entrypoint with the selected spec context.
+- **Hi-fi**: `view-spec.jsx` supplements its contextual "ask Forge · this spec"
+  card with four prompt chips.
+- **Code state — PARTIAL**: `SpecForgeCard` opens Forge with the selected spec
+  context, but exposes one generic action rather than prompt chips.
+- **Gap**: add the four spec-scoped prompt chips and bind each to the existing
+  selected-spec Forge entrypoint.
 - **Size/priority: small / low.**
 - **Confidence: high.**
 
