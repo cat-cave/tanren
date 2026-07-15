@@ -34,11 +34,11 @@ function harness() {
 }
 
 describe("notification matrix route query", () => {
-  it("loads all matrix routes with one org-scoped query and excludes foreign targets", async () => {
+  it("returns routes ordered by (event_name, target_id, id) with one org-scoped query, excluding foreign targets", async () => {
     const { app, pool } = harness();
     for (const [id, orgId] of [
-      ["notif_target_first", "org_acme"],
-      ["notif_target_second", "org_acme"],
+      ["notif_target_a", "org_acme"],
+      ["notif_target_b", "org_acme"],
       ["notif_target_foreign", "org_other"],
     ] as const) {
       pool.targets.set(id, {
@@ -55,9 +55,15 @@ describe("notification matrix route query", () => {
         updated_at: pool.now,
       });
     }
+    // Insertion order is deliberately SCRAMBLED relative to the production
+    // ORDER BY (event_name, target_id, id): the two run.failed rows go in
+    // reverse target order, then run.completed, then a foreign same-event
+    // row. Map insertion order can never satisfy the asserted sequence, so a
+    // missing/changed ORDER BY fails the test instead of passing by accident.
     for (const [id, targetId, eventName] of [
-      ["notif_route_first", "notif_target_first", "run.failed"],
-      ["notif_route_second", "notif_target_second", "run.completed"],
+      ["notif_route_failed_b", "notif_target_b", "run.failed"],
+      ["notif_route_completed_a", "notif_target_a", "run.completed"],
+      ["notif_route_failed_a", "notif_target_a", "run.failed"],
       ["notif_route_foreign", "notif_target_foreign", "run.failed"],
     ] as const) {
       pool.routes.set(id, {
@@ -71,21 +77,102 @@ describe("notification matrix route query", () => {
       });
     }
     const matrix = (await (await app.request("/orgs/org_acme/notifications/matrix")).json()) as {
-      targets: Array<{ id: string }>;
-      routes: Array<{ id: string; targetId: string }>;
+      routes: Array<{
+        id: string;
+        targetId: string;
+        eventName: string;
+        enabled: boolean;
+        minSeverity: string;
+      }>;
     };
-    expect(matrix.targets.map((target) => target.id)).toEqual(["notif_target_first", "notif_target_second"]);
-    expect(matrix.routes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "notif_route_first", targetId: "notif_target_first" }),
-        expect.objectContaining({ id: "notif_route_second", targetId: "notif_target_second" }),
-      ]),
-    );
-    expect(matrix.routes).toHaveLength(2);
+    // Exact objects + order: run.completed < run.failed alphabetically; within
+    // run.failed, notif_target_a < notif_target_b; the foreign same-event row
+    // is excluded by the JOIN on org_id.
+    expect(matrix.routes).toEqual([
+      {
+        id: "notif_route_completed_a",
+        targetId: "notif_target_a",
+        eventName: "run.completed",
+        enabled: true,
+        minSeverity: "info",
+      },
+      {
+        id: "notif_route_failed_a",
+        targetId: "notif_target_a",
+        eventName: "run.failed",
+        enabled: true,
+        minSeverity: "info",
+      },
+      {
+        id: "notif_route_failed_b",
+        targetId: "notif_target_b",
+        eventName: "run.failed",
+        enabled: true,
+        minSeverity: "info",
+      },
+    ]);
+    // The collapsed matrix read issues a SINGLE org-scoped routes query
+    // through the JOIN (no N+1 listForTarget fan-out).
     const routeQueries = pool.queries.filter(({ sql }) => sql.includes("FROM notification_routes"));
     expect(routeQueries).toHaveLength(1);
     expect(routeQueries[0]?.sql).toContain("JOIN notification_targets t ON r.target_id = t.id");
     expect(routeQueries[0]?.sql).toContain("WHERE t.org_id = $1");
+    expect(routeQueries[0]?.sql.trim().endsWith("ORDER BY r.event_name, r.target_id, r.id")).toBe(true);
     expect(routeQueries[0]?.params).toEqual(["org_acme"]);
+  });
+
+  it("fails loud when a list-for-org query omits the canonical route order", async () => {
+    const pool = new NotificationMemoryClient();
+    await expect(
+      pool.query(
+        `SELECT r.id
+           FROM notification_routes r
+           JOIN notification_targets t ON r.target_id = t.id
+          WHERE t.org_id = $1`,
+        ["org_acme"],
+      ),
+    ).rejects.toThrow(
+      "NotificationMemoryClient: listForOrg query must end with ORDER BY r.event_name, r.target_id, r.id",
+    );
+  });
+
+  it("rejects a foreign org with 403 before any route or target store query fires", async () => {
+    const { app, pool } = harness();
+    // Seed a real org_acme target + route so the test fails loudly if the
+    // access guard ever leaks past the actor check: the Promise.all below
+    // would then issue both a route-store and a target-store query against
+    // org_intruder and return [] [] (a false-403 "pass" on data the actor
+    // cannot read).
+    pool.targets.set("notif_target_acme", {
+      id: "notif_target_acme",
+      org_id: "org_acme",
+      scope: "org",
+      user_id: null,
+      channel_kind: "ntfy",
+      destination: "https://ntfy.sh/acme",
+      label: "acme",
+      enabled: 1,
+      weekend_mute: 0,
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+    pool.routes.set("notif_route_acme", {
+      id: "notif_route_acme",
+      target_id: "notif_target_acme",
+      event_name: "run.failed",
+      enabled: 1,
+      min_severity: "info",
+      created_at: pool.now,
+      updated_at: pool.now,
+    });
+    const queriesBefore = pool.queries.length;
+    const res = await app.request("/orgs/org_intruder/notifications/matrix");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "org_access_denied" });
+    // The 403 short-circuits the Promise.all: neither the route store nor
+    // the target store is queried for a foreign org.
+    expect(pool.queries.length).toBe(queriesBefore);
+    expect(pool.queries.filter(({ sql }) => sql.includes("FROM notification_routes"))).toHaveLength(0);
+    expect(pool.queries.filter(({ sql }) => sql.includes("FROM notification_targets"))).toHaveLength(0);
   });
 });

@@ -253,13 +253,17 @@ export const NotificationRouteStore = {
 
   // The matrix view needs every route visible to an org. Keep the org
   // predicate on notification_targets: notification_routes has no org column.
+  // ORDER BY spans the full row identity (event_name, target_id, id) so two
+  // routes that share an event name across distinct targets — the common
+  // matrix shape — get a deterministic position; a bare event_name sort
+  // leaves tied rows in implementation-defined order.
   async listForOrg(client: QueryClient, orgId: string): Promise<NotificationRouteRow[]> {
     const result = await client.query<RawRouteRow>(
       `SELECT ${qualifiedRouteColumns()}
          FROM notification_routes r
          JOIN notification_targets t ON r.target_id = t.id
         WHERE t.org_id = $1
-        ORDER BY r.event_name`,
+        ORDER BY r.event_name, r.target_id, r.id`,
       [orgId],
     );
     return result.rows.map((row) => decodeRouteRow(row));
