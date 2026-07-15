@@ -7,6 +7,8 @@ interface StubResult {
   rows: ReadonlyArray<Record<string, unknown>>;
 }
 
+const CANONICAL_LIST_FOR_ORG_ROUTE_ORDER = "ORDER BY r.event_name, r.target_id, r.id";
+
 export class NotificationMemoryClient {
   readonly queries: Array<{ sql: string; params: ReadonlyArray<unknown> }> = [];
   readonly targets: Map<string, Record<string, unknown>> = new Map();
@@ -63,6 +65,11 @@ export class NotificationMemoryClient {
       return { rowCount: rows.length, rows };
     }
     if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notification_routes r")) {
+      if (!trimmed.endsWith(CANONICAL_LIST_FOR_ORG_ROUTE_ORDER)) {
+        throw new Error(
+          `NotificationMemoryClient: listForOrg query must end with ${CANONICAL_LIST_FOR_ORG_ROUTE_ORDER}`,
+        );
+      }
       const orgId = String(params[0]);
       const rows: Array<Record<string, unknown>> = [];
       for (const route of this.routes.values()) {

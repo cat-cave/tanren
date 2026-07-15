@@ -117,7 +117,23 @@ describe("notification matrix route query", () => {
     expect(routeQueries).toHaveLength(1);
     expect(routeQueries[0]?.sql).toContain("JOIN notification_targets t ON r.target_id = t.id");
     expect(routeQueries[0]?.sql).toContain("WHERE t.org_id = $1");
+    expect(routeQueries[0]?.sql.trim().endsWith("ORDER BY r.event_name, r.target_id, r.id")).toBe(true);
     expect(routeQueries[0]?.params).toEqual(["org_acme"]);
+  });
+
+  it("fails loud when a list-for-org query omits the canonical route order", async () => {
+    const pool = new NotificationMemoryClient();
+    await expect(
+      pool.query(
+        `SELECT r.id
+           FROM notification_routes r
+           JOIN notification_targets t ON r.target_id = t.id
+          WHERE t.org_id = $1`,
+        ["org_acme"],
+      ),
+    ).rejects.toThrow(
+      "NotificationMemoryClient: listForOrg query must end with ORDER BY r.event_name, r.target_id, r.id",
+    );
   });
 
   it("rejects a foreign org with 403 before any route or target store query fires", async () => {
