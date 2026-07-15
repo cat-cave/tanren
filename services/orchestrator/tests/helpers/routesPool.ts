@@ -295,8 +295,10 @@ export class RoutesPool {
       });
       return { rows: [], rowCount: 1 };
     }
-    // ProjectStore.updateConfigIfCurrent: atomic JSONB compare-and-swap. The
-    // expected value is the exact snapshot returned by getConfigSnapshot.
+    // ProjectStore.updateConfigIfCurrent: atomic expected-snapshot CAS. RoutesPool
+    // approximates with JSON.stringify equality — it does NOT model Postgres JSONB
+    // key-order normalization (`IS NOT DISTINCT FROM ...::jsonb`). The real-PG
+    // proof lives in projectConfigCas.integration.test.ts.
     if (trimmed.startsWith("UPDATE projects SET config") && trimmed.includes("config IS NOT DISTINCT FROM")) {
       const project = this.projects.get(String(params[1]));
       if (project === undefined) return { rows: [], rowCount: 0 };

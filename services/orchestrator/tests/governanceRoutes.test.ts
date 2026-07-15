@@ -188,6 +188,7 @@ describe("project governance routes", () => {
     const memberApp = buildApp(pool, memberOnly);
     const adminApp = buildApp(pool, admin);
 
+    // Member reads first; admin wins the write; member CAS fails loud.
     const memberRequest = memberApp.request("/orgs/org_acme/projects/proj_1", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -221,6 +222,60 @@ describe("project governance routes", () => {
     });
     expect(pool.projects.get("proj_1")?.config).not.toMatchObject({
       credentials: { githubCredentialRef: "credential/member-stale" },
+    });
+  });
+
+  // Reverse interleaving: admin reads first, member credential PATCH wins, admin
+  // CAS fails loud so a stale admin posture write cannot erase the member field.
+  it("does not let a stale admin governance PUT clobber an interleaved member credential PATCH", async () => {
+    const pool = new InterleavingRoutesPool();
+    pool.seedOrg({ id: "org_acme" });
+    pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
+    const memberApp = buildApp(pool, memberOnly);
+    const adminApp = buildApp(pool, admin);
+
+    const adminRequest = adminApp.request("/orgs/org_acme/projects/proj_1/governance", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+      }),
+    });
+    await pool.memberSnapshotRead;
+
+    const memberPatch = await memberApp.request("/orgs/org_acme/projects/proj_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditPosture: {
+            blockReviewAt: "P1",
+            p2p3Handling: "fix-if-idle",
+            autonomousRemediation: false,
+          },
+          credentials: { githubCredentialRef: "credential/member-wins" },
+        },
+      }),
+    });
+    expect(memberPatch.status).toBe(200);
+
+    pool.allowMemberToContinue();
+    const adminResponse = await adminRequest;
+    expect(adminResponse.status).toBe(409);
+    await expect(adminResponse.json()).resolves.toMatchObject({
+      error: "project_config_conflict",
+    });
+    expect(pool.projects.get("proj_1")?.config).toMatchObject({
+      credentials: { githubCredentialRef: "credential/member-wins" },
+      auditPosture: {
+        blockReviewAt: "P1",
+        p2p3Handling: "fix-if-idle",
+        autonomousRemediation: false,
+      },
+    });
+    expect(pool.projects.get("proj_1")?.config).not.toMatchObject({
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
     });
   });
 
