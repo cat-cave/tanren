@@ -44,6 +44,9 @@ importers:
       lefthook:
         specifier: 2.1.9
         version: 2.1.9
+      oxc-parser:
+        specifier: 0.133.0
+        version: 0.133.0
       oxfmt:
         specifier: ^0.53.0
         version: 0.53.0
