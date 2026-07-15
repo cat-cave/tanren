@@ -25,6 +25,7 @@ import { migrateOrgConfig } from "../config/orgConfig.js";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import type { ProjectBudget } from "../config/shared.js";
 import type { BudgetGate, ProjectBudgetState } from "../contracts/dagWalker.js";
+import { isPool, type QueryClient } from "../data/orgScopedDb.js";
 
 /**
  * The result of resolving a project's effective budget. We DISTINGUISH the three
@@ -62,6 +63,16 @@ export function resolveEffectiveBudget(projectConfigRaw: unknown, orgConfigRaw: 
   } catch {
     return { kind: "unparseable" };
   }
+}
+
+/**
+ * Prefer an injected gate (tests); else build {@link PgBudgetGate} when `pool`
+ * is a real `pg.Pool`. Uses `isPool` so workflow callers need no cast.
+ */
+export function resolveBudgetGate(pool: QueryClient, injected?: BudgetGate): BudgetGate {
+  if (injected !== undefined) return injected;
+  if (isPool(pool)) return new PgBudgetGate(pool);
+  throw new Error("budget gate requires a real pg.Pool when not injected");
 }
 
 /** The pg-backed budget gate the production walker uses. */

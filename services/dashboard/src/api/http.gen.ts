@@ -30,9 +30,11 @@ export interface OrgCosts {
     taskId: string;
     totalTokens: number;
   }>;
+  nextCursor: string | null;
+  orgId: string;
   runs: Array<{
     branch: string;
-    costTotalUsd: string;
+    costTotalUsd: string | null;
     endedAt: string | null;
     lastEventAt: string | null;
     needsReview: boolean;
@@ -218,7 +220,7 @@ export interface RunEventRow {
 /** Generated from `tanren.http.RunListItem` (contracts/json/http/RunListItem.json). */
 export interface RunListItem {
   branch: string;
-  costTotalUsd: string;
+  costTotalUsd: string | null;
   endedAt: string | null;
   lastEventAt: string | null;
   needsReview: boolean;
@@ -242,6 +244,12 @@ export interface RunListItem {
   startedAt: string;
   status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
   trigger: string;
+}
+
+/** Generated from `tanren.http.RunLocation` (contracts/json/http/RunLocation.json). */
+export interface RunLocation {
+  orgId: string;
+  projectId: string;
 }
 
 /** Generated from `tanren.http.RunSpecSummary` (contracts/json/http/RunSpecSummary.json). */

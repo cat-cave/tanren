@@ -18,7 +18,6 @@ import {
   encodeCursor,
   parsePageSize,
   ProjectFeedItem,
-  OrgCosts,
   RunCostRecord,
   RunEventRow,
   RunListItem,
@@ -344,46 +343,6 @@ export async function fetchCostsPage(
   return CursorPage(RunCostRecord).parse({ items, nextCursor });
 }
 
-/**
- * Org-wide costs projection for the dashboard and CSV export. The route has
- * already authorized the actor before entering its `runWithOrgScope`; these
- * explicit predicates remain a defense-in-depth boundary for every table,
- * including both correlated aggregates.
- */
-export async function fetchOrgCosts(pool: QueryClient, orgId: string): Promise<OrgCosts> {
-  const [costResult, runResult] = await Promise.all([
-    pool.query<CostQueryRow>(
-      `SELECT id, task_id, run_id, project_id, cli, provider, model,
-              input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-              cost_usd, notional_cost_usd, billing_mode, cost_basis, recorded_at
-         FROM cost_records
-        WHERE org_id = $1
-        ORDER BY recorded_at ASC, id ASC`,
-      [orgId],
-    ),
-    pool.query<Record<string, unknown>>(
-      `SELECT r.run_id, r.spec_id, r.project_id, r.trigger, r.branch, r.status, r.outcome,
-              r.pr_url, r.started_at, r.ended_at,
-              s.title AS spec_title,
-              (SELECT COALESCE(SUM(cr.cost_usd::numeric), 0)::text
-                 FROM cost_records cr
-                WHERE cr.run_id = r.run_id AND cr.org_id = $1) AS cost_total_usd,
-              (SELECT MAX(e.ts)
-                 FROM events e
-                WHERE e.run_id = r.run_id AND e.org_id = $1) AS last_event_at
-         FROM runs r
-         LEFT JOIN specs s ON s.spec_id = r.spec_id AND s.project_id = r.project_id AND s.org_id = $1
-        WHERE r.org_id = $1
-        ORDER BY r.started_at DESC, r.run_id ASC`,
-      [orgId],
-    ),
-  ]);
-  return OrgCosts.parse({
-    costs: costResult.rows.map((row) => decodeCostRow(row)),
-    runs: runResult.rows.map((row) => decodeRunListItem(row as unknown as RawRunListProjectionRow)),
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Insights filter to a specific run + spec
 // ---------------------------------------------------------------------------
@@ -435,13 +394,20 @@ type RawRunListProjectionRow = RawRunRow & {
   last_event_at?: unknown;
 };
 
-function decodeRunListItem(row: RawRunListProjectionRow): RunListItem {
+export function decodeRunListItem(row: RawRunListProjectionRow): RunListItem {
   const summary = decodeRunSummary(row);
   const needsReview = summary.prUrl !== null && needsReviewFromOutcome(summary.outcome);
+  // Constrained LEFT JOIN can yield null when the run's spec_id does not bind
+  // to a same-project/same-org spec. Fail closed at the decoder — never invent
+  // a placeholder title that would ship a fabricated HTTP 200 row.
+  if (row.spec_title === null || row.spec_title === undefined) {
+    throw new TypeError("decodeRunListItem: missing spec_title from constrained run/spec join");
+  }
   return RunListItem.parse({
     ...summary,
-    specTitle: row.spec_title ?? "(spec missing)",
-    costTotalUsd: row.cost_total_usd ?? "0",
+    specTitle: scalarText(row.spec_title),
+    costTotalUsd:
+      row.cost_total_usd === null || row.cost_total_usd === undefined ? null : scalarText(row.cost_total_usd),
     lastEventAt: row.last_event_at ?? null,
     needsReview,
   });

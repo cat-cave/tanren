@@ -22,6 +22,7 @@ Schemas live in `services/orchestrator/src/routes/runs/contract.ts`. Re-exports 
 
 - `RunSummary`, `TaskTimelineEntry`, `RunEventRow`, `RunCostRecord`
 - `RunSpecSummary`, `RunForgeBundle`, `RunDetail`
+- `RunLocation` (org-scoped routing coordinates — see addendum 2026-07-15)
 - `RunListItem`, `ProjectFeedItem`
 - `CursorPage<T>`, `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`
 - `encodeCursor`, `decodeCursor`, `InvalidCursorError`, `parsePageSize`
@@ -145,23 +146,36 @@ Cursor-paginated cost records for a run.
 
 ## Addendum: `GET /orgs/:orgId/costs`
 
-The history & costs screen and `/costs/export.csv` use this single org-scoped
-read instead of walking projects, runs, and per-run cost pages.
+The history & costs screen and `/costs/export.csv` use this bounded org-scoped
+read instead of walking projects, runs, and per-run cost pages. The client walks
+the opaque keyset cursor to exhaustion and discards partial data on any failed,
+malformed, or non-advancing page.
 
 **Response**: `OrgCosts`
 
 ```ts
 {
-  costs: RunCostRecord[], // all typed cost rows, oldest → newest
-  runs: RunListItem[],    // all org runs, newest → oldest
+  orgId: string,             // exact authorized path org (client domain binding)
+  costs: RunCostRecord[],    // bounded page, oldest → newest
+  runs: RunListItem[],       // bounded page, newest → oldest
+  nextCursor: string | null, // opaque dual-stream keyset cursor
 }
 ```
 
 The actor must have access to `orgId`; otherwise the endpoint returns
 `403 org_access_denied` before any read-model query runs. Every query is run in
 `runWithOrgScope`, has an explicit `org_id` predicate, and keeps that predicate
-inside the correlated cost and event aggregates. `cost_source_raw` remains
+inside the correlated cost and event aggregates. Each store query fetches at
+most `pageSize + 1` rows (default 50, maximum 200), and the two query results in
+a page share a repeatable-read transaction snapshot. `cost_source_raw` remains
 database-only and is never part of this response.
+
+`RunListItem.costTotalUsd` is nullable. A run with no cost records has the known
+total `"0"`; a run with any `cost_usd IS NULL` record has `null`, because its
+complete real-dollar total is unknown. Mixed priced/unpriced rows never collapse
+to a misleading known subtotal. Cursor bigserial ids remain decimal strings
+through decode and PostgreSQL `::bigint` binding, including values above
+JavaScript's safe-integer range.
 
 ---
 
@@ -259,3 +273,80 @@ Any change to a schema in `contract.ts` requires:
 2. A migration plan for any dashboard surface that consumed the old shape.
 
 Adding a new SSE frame name does **not** require an addendum — clients ignore unknown event types per the SSE spec. Renaming or removing an existing frame does.
+
+---
+
+## Addendum 2026-07-15 — `GET /orgs/:orgId/runs/:runId/location`
+
+**Rationale**: the dashboard route is bare `/runs/:runId`. Enumerating every
+project and its run list is O(projects × runs). An org-scoped location lookup
+returns only the routing coordinates needed to address project-scoped detail
+and stream endpoints, with fail-closed client semantics.
+
+### Route
+
+`GET /orgs/:orgId/runs/:runId/location`
+
+### Authorization order
+
+1. Resolve actor (`401` when missing).
+2. `actorCanAccessOrg` on path `orgId` → `403 { error: "org_access_denied" }`.
+3. Org-scoped run summary read (`run_id = $1 AND org_id = $2`).
+4. `assertProjectAccess(projectId)` — including `platform:admin` — and **bind**
+   the returned `orgId` to the path/run organization. A project whose org does
+   not equal the path org is treated as not found.
+5. Only then return the location body.
+
+### Success
+
+**Status**: `200`
+
+**Body** (`RunLocation`, Zod `.strict()` in `contract.ts`):
+
+```ts
+{ orgId: string /* min 1 */, projectId: string /* min 1 */ }
+```
+
+- No extra fields. No run payload, status, or PR metadata.
+- `orgId` equals the path org (and the project's organization).
+
+### Errors (status + exact body)
+
+| Condition                                                                                     | Status | Body                               |
+| --------------------------------------------------------------------------------------------- | ------ | ---------------------------------- |
+| Unauthenticated                                                                               | `401`  | auth middleware shape              |
+| Actor cannot access path org                                                                  | `403`  | `{ "error": "org_access_denied" }` |
+| Run missing under path org; run in another org; project access denied; project org ≠ path org | `404`  | `{ "error": "run_not_found" }`     |
+
+Cross-org existence, project denial, and org/project mismatch are **indistinguishable**
+at 404 — do not disclose location.
+
+### Dashboard client semantics (`FindRunLocationResult`)
+
+The BFF still probes **each visible org** once (the dashboard URL has no org
+segment). There is **no** project list or run-list fan-out.
+
+| Result `kind` | Meaning                                                                                                                                                  | HTTP on dashboard HTML/stream |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `found`       | Exactly one definitive `200` with a strictly decoded `RunLocation` bound to the probed org; every other probe is the exact 404 body                      | proceed                       |
+| `not_found`   | Every probe returned status `404` with body **exactly** `{ "error": "run_not_found" }`                                                                   | `404`                         |
+| `auth`        | Orgs list or a probe returned `401`/`403` (and no unique match)                                                                                          | `401`/`403`                   |
+| `unavailable` | Network/abort, invalid JSON, unexpected 2xx, non-exact 404 body, 5xx, partial outage that blocks uniqueness, multi-match, or malformed/wrong-domain body | `502`                         |
+
+Strict success decode rejects unknown/extra keys, empty strings, and
+`orgId !==` probed org. Multi-match (two valid 200s) is `unavailable` /
+`ambiguous`, never first-match wins. Any uncertain probe prevents a
+`not_found` conclusion.
+
+### Schema export
+
+`RunLocation` is catalogued under `contracts/json/http/RunLocation.json` and
+codegen'd into the dashboard `http.gen.ts` surface (hand `RunLocation` type
+lives in `services/dashboard/src/api/runLocation.ts` as the fail-closed
+decode authority for the BFF).
+
+### Migration for consumers
+
+Replace any `findRunLocation → undefined means not found` call sites with
+explicit `FindRunLocationResult` discrimination. Do not reintroduce project
+or run-list scanning for routing.

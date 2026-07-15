@@ -7,7 +7,15 @@
       "type": "string"
     },
     "costTotalUsd": {
-      "type": "string"
+      "anyOf": [
+        {
+          "pattern": "^\\d+(?:\\.\\d+)?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "endedAt": {
       "anyOf": [

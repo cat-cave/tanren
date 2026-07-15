@@ -23,6 +23,7 @@ import { InsightPayload } from "../insights/types.js";
 import {
   RunDetail,
   RunListItem,
+  RunLocation,
   RunSummary,
   RunSpecSummary,
   RunCostRecord,
@@ -74,6 +75,7 @@ const answererEntries: ContractSchemaDescriptor[] = Object.values(answererSchema
 const httpEntries: ContractSchemaDescriptor[] = [
   entry("http", "RunDetail", "tanren.http.RunDetail", RunDetail),
   entry("http", "RunListItem", "tanren.http.RunListItem", RunListItem),
+  entry("http", "RunLocation", "tanren.http.RunLocation", RunLocation),
   entry("http", "RunSummary", "tanren.http.RunSummary", RunSummary),
   entry("http", "RunSpecSummary", "tanren.http.RunSpecSummary", RunSpecSummary),
   entry("http", "RunCostRecord", "tanren.http.RunCostRecord", RunCostRecord),

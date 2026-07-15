@@ -26,6 +26,7 @@
 
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { BillingMode, CostBasis, CostRecord } from "../../api/types.js";
+import { monetaryCoverage, type MonetaryCoverage } from "./coverage.js";
 
 /** The three pricing models, in display order, keyed by the real billingMode. */
 export const PRICING_MODELS: readonly BillingMode[] = ["per_token", "subscription", "self_hosted"];
@@ -63,11 +64,10 @@ export const PRICING_MODEL_META: Record<BillingMode, PricingModelMeta> = {
     colorVar: "var(--cost-opportunity)",
     hint: "flat-fee / local gpu · utilization, not a cap",
   },
-  // BUDGET-SAFETY C1: NOT a real pricing model — an UNRECOGNIZED credential ref
-  // (a misconfig) whose cost could not be priced. Recorded NULL-dollar but
-  // FLAGGED (the budget gate fails closed on it). Kept out of PRICING_MODELS (the
-  // operator's three real models) but present here so the provider breakdown can
-  // color-dot the misconfig distinctly.
+  // BUDGET-SAFETY C1: NOT a real pricing model — an attribution anomaly. The
+  // normal unrecognized-ref producer emits NULL dollars, while the HTTP contract
+  // can also carry an independently priced value with this billing mode. Both stay
+  // outside the operator's three model rollups and remain explicit provider rows.
   unattributed: {
     mode: "unattributed",
     label: "unattributed · unrecognized ref",
@@ -157,10 +157,23 @@ export interface ProviderRow {
   costUsd: number;
   /** NOTIONAL / API-equivalent value (ListCost / `notional_cost_usd`) for the row. */
   notionalUsd: number;
-  /** True when EVERY record in the row had a null `costUsd` (unpriced). */
+  /**
+   * True when EVERY record in the row carried a NON-null `costUsd` (priced). The
+   * view uses it for its "no $ basis" affordance; for granular known/partial/
+   * unknown state (e.g. the CSV export) read `realCoverage` instead.
+   */
   priced: boolean;
-  /** True when EVERY record in the row had a null `notionalCostUsd`. */
+  /** True when EVERY record in the row carried a NON-null `notionalCostUsd`. */
   notionalPriced: boolean;
+  /**
+   * Explicit REAL-spend coverage for this row's records — the ONLY source the
+   * CSV `cost_state`/`cost_usd` may use. `known` = all priced; `partial` = some
+   * priced (knownUsd is the honest known subtotal, even when 0); `unknown` = no
+   * priced record. State is NEVER inferred from `knownUsd > 0`.
+   */
+  realCoverage: MonetaryCoverage;
+  /** Explicit NOTIONAL coverage for this row — drives the CSV `notional_state`. */
+  notionalCoverage: MonetaryCoverage;
   share: number;
 }
 
@@ -173,6 +186,13 @@ export interface CostSummary {
    * real spend is $0. NOT money out the door; never called "spend".
    */
   totalNotionalUsd: number;
+  /** Coverage keeps empty, unknown, known zero, and partial totals distinct. */
+  realCoverage: MonetaryCoverage;
+  notionalCoverage: MonetaryCoverage;
+  /** Every priced REAL value is represented by the three pricing-model rollups. */
+  realModelCoverageComplete: boolean;
+  /** Every priced NOTIONAL value is represented by the three pricing-model rollups. */
+  notionalModelCoverageComplete: boolean;
   /** Which figure the headline leads with (real spend, or equivalent when real is $0). */
   headlineBasis: HeadlineBasis;
   totalTokens: number;
@@ -188,8 +208,16 @@ export interface CostSummary {
 
 /** Roll a flat list of cost records into the dashboard summary. */
 export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
-  const totalUsd = records.reduce((sum, r) => sum + dollars(r.costUsd), 0);
-  const totalNotionalUsd = records.reduce((sum, r) => sum + dollars(r.notionalCostUsd), 0);
+  const realCoverage = monetaryCoverage(records.map((record) => record.costUsd));
+  const notionalCoverage = monetaryCoverage(records.map((record) => record.notionalCostUsd));
+  const realModelCoverageComplete = records.every(
+    (record) => record.costUsd === null || PRICING_MODELS.includes(record.billingMode),
+  );
+  const notionalModelCoverageComplete = records.every(
+    (record) => record.notionalCostUsd === null || PRICING_MODELS.includes(record.billingMode),
+  );
+  const totalUsd = realCoverage.knownUsd ?? 0;
+  const totalNotionalUsd = notionalCoverage.knownUsd ?? 0;
   const totalTokens = records.reduce((sum, r) => sum + r.totalTokens, 0);
   const runIds = new Set(records.map((r) => r.runId));
 
@@ -215,6 +243,10 @@ export function summarizeCosts(records: readonly CostRecord[]): CostSummary {
   return {
     totalUsd,
     totalNotionalUsd,
+    realCoverage,
+    notionalCoverage,
+    realModelCoverageComplete,
+    notionalModelCoverageComplete,
     headlineBasis: pickHeadlineBasis(totalUsd, totalNotionalUsd),
     totalTokens,
     totalRecords: records.length,
@@ -240,13 +272,18 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
       tokens: number;
       usd: number;
       notionalUsd: number;
-      pricedCount: number;
-      notionalPricedCount: number;
-      count: number;
+      // Raw nullable values per axis so the row's coverage reuses the SAME
+      // monetaryCoverage() logic as the global summary — never re-deriving state
+      // from the known subtotal (which would misclassify a partial known-zero).
+      costValues: (string | null)[];
+      notionalValues: (string | null)[];
     }
   >();
   for (const r of records) {
-    const key = `${r.cli}|${r.model}|${r.provider}|${r.billingMode}|${r.costBasis}`;
+    // JSON's fixed-length string tuple encoding is injective here; unlike a
+    // delimiter join, literal `|` characters in provider-controlled fields
+    // cannot collapse two distinct source identities into one cost row.
+    const key = JSON.stringify([r.cli, r.model, r.provider, r.billingMode, r.costBasis]);
     let entry = byKey.get(key);
     if (entry === undefined) {
       entry = {
@@ -255,9 +292,8 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
         tokens: 0,
         usd: 0,
         notionalUsd: 0,
-        pricedCount: 0,
-        notionalPricedCount: 0,
-        count: 0,
+        costValues: [],
+        notionalValues: [],
       };
       byKey.set(key, entry);
     }
@@ -265,12 +301,13 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
     entry.tokens += r.totalTokens;
     entry.usd += dollars(r.costUsd);
     entry.notionalUsd += dollars(r.notionalCostUsd);
-    entry.count += 1;
-    if (r.costUsd !== null) entry.pricedCount += 1;
-    if (r.notionalCostUsd !== null) entry.notionalPricedCount += 1;
+    entry.costValues.push(r.costUsd);
+    entry.notionalValues.push(r.notionalCostUsd);
   }
-  const rows = [...byKey.values()].map(
-    (e): ProviderRow => ({
+  const rows = [...byKey.values()].map((e): ProviderRow => {
+    const realCoverage = monetaryCoverage(e.costValues);
+    const notionalCoverage = monetaryCoverage(e.notionalValues);
+    return {
       cli: e.sample.cli,
       model: e.sample.model,
       provider: e.sample.provider,
@@ -280,11 +317,13 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
       totalTokens: e.tokens,
       costUsd: e.usd,
       notionalUsd: e.notionalUsd,
-      priced: e.pricedCount === e.count && e.count > 0,
-      notionalPriced: e.notionalPricedCount === e.count && e.count > 0,
+      priced: realCoverage.kind === "known",
+      notionalPriced: notionalCoverage.kind === "known",
+      realCoverage,
+      notionalCoverage,
       share: totalUsd > 0 ? e.usd / totalUsd : 0,
-    }),
-  );
+    };
+  });
   rows.sort((a, b) => b.costUsd - a.costUsd || b.totalTokens - a.totalTokens);
   return rows;
 }
@@ -430,12 +469,15 @@ const MERGED_OUTCOMES = new Set(["ok"]);
  * on the completion outcomes; halt-rate on the escape-hatch family.
  * Cost-per-merged divides total priced spend by the merged-run count.
  */
-export function observeMetrics(runs: readonly { outcome: string | null }[], totalPricedUsd: number): ObservedMetrics {
+export function observeMetrics(
+  runs: readonly { outcome: string | null }[],
+  completePricedUsd: number | null,
+): ObservedMetrics {
   const specsMerged = runs.filter((r) => r.outcome !== null && MERGED_OUTCOMES.has(r.outcome)).length;
   const halted = runs.filter((r) => r.outcome !== null && RECOVERABLE_OUTCOMES.has(r.outcome)).length;
   return {
     specsMerged,
-    avgCostPerMergedUsd: specsMerged > 0 ? totalPricedUsd / specsMerged : null,
+    avgCostPerMergedUsd: specsMerged > 0 && completePricedUsd !== null ? completePricedUsd / specsMerged : null,
     haltRate: runs.length > 0 ? halted / runs.length : 0,
     totalRuns: runs.length,
   };

@@ -41,7 +41,7 @@ const RUNS = [
     projectId: "project_easy",
     branch: "tanren/run_a1",
     trigger: "operator",
-    status: "succeeded",
+    status: "completed",
     outcome: "ok",
     startedAt: "2026-05-28T10:00:00.000Z",
     endedAt: "2026-05-28T10:21:00.000Z",
@@ -70,7 +70,10 @@ const RUNS = [
 ];
 
 // Per-run cost records spanning all THREE pricing models + all real cost bases.
-const COSTS: Record<string, unknown[]> = {
+const COSTS: Record<
+  string,
+  Array<{ id: number; recordedAt: string; costUsd: string | null; [key: string]: unknown }>
+> = {
   run_a1: [
     {
       id: 1,
@@ -166,11 +169,12 @@ function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
-    if (/\/orgs\/[^/]+\/costs$/u.test(url)) {
+    if (/\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url)) {
       const costs = Object.values(COSTS)
         .flat()
-        .map((cost) => ({ ...cost, notionalCostUsd: cost.costUsd ?? "1.00" }));
-      return new Response(JSON.stringify({ costs, runs: RUNS }), { status: 200 });
+        .map((cost) => ({ ...cost, notionalCostUsd: cost.costUsd ?? "1.00" }))
+        .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) || left.id - right.id);
+      return new Response(JSON.stringify({ orgId: ORG.id, costs, runs: RUNS, nextCursor: null }), { status: 200 });
     }
     // run costs: .../runs/:runId/costs (check before the run-list match)
     const costsMatch = /\/runs\/([^/?]+)\/costs/u.exec(url);
@@ -222,7 +226,7 @@ describe("costs dashboard (/costs)", () => {
     });
     const app = await build();
     await app.request("/costs?range=all");
-    expect(calls.filter((url) => /\/orgs\/[^/]+\/costs$/u.test(url))).toHaveLength(1);
+    expect(calls.filter((url) => /\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url))).toHaveLength(1);
     expect(calls.some((url) => /\/projects\/[^/]+\/runs/u.test(url))).toBe(false);
     expect(calls.some((url) => /\/runs\/[^/]+\/costs/u.test(url))).toBe(false);
   });
@@ -316,7 +320,9 @@ describe("costs CSV export (/costs/export.csv)", () => {
     const res = await app.request("/costs/export.csv");
     expect(res.headers.get("content-type")).toContain("text/csv");
     const body = await res.text();
-    expect(body.split("\n")[0]).toBe("cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_usd,share");
+    expect(body.split("\n")[0]).toBe(
+      "cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_state,cost_usd,notional_state,notional_cost_usd,share",
+    );
     expect(body).toContain("provider_response");
     expect(body).toContain("ccusage");
     expect(body).toContain("unknown");

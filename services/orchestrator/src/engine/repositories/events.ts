@@ -28,7 +28,7 @@ const SELECT_EVENT_COLUMNS = "id, ts, run_id, task_id, spec_id, project_id, even
 /** A keyset cursor over the (ts, id) ordering both paginated reads share. */
 export interface EventCursor {
   ts: Date;
-  id: number;
+  id: string;
 }
 
 export const EventStore = {

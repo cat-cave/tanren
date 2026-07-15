@@ -1,4 +1,4 @@
-# `VcsProvider` → `CodeHost` / `VisibilityProjection` decomposition — design + PR plan
+# `VcsProvider` → `CodeHost` / `VisibilityProjection` decomposition — completed cutover record
 
 > Status: **IMPLEMENTED — landed across a 9-PR series.** This doc was the design that
 > gated the build; the build is now done. The 26-method `VcsProvider` interface and its
@@ -40,18 +40,23 @@ This net-delete cleanup the cutover deferred (§7) is now **DONE**: the 26-metho
 and the ~32 `: VcsProvider`-annotated importers were migrated onto the target seams. No
 `: VcsProvider` type annotation survives.
 
-This doc enumerates every `VcsProvider` method, classifies it onto the target seams (or
-marks it dead), buckets the importers, names the new methods the target seams must
-absorb, and proposes a safe, additive-then-migrate-then-delete PR sequence.
+This document preserves the design audit that classified every `VcsProvider` method,
+bucketed its importers, and recorded the additive-then-migrate-then-delete sequence.
+Sections 1–2 use the pre-cutover source locations and call sites; they are historical,
+not a description of a live `VcsProvider` surface.
 
-The whole `VcsProvider` interface lives at
-`services/orchestrator/src/engine/contracts/vcsProvider.ts:261-434` (the doc cites
-`engine/...` paths relative to `services/orchestrator/src/` from here on).
+The retired interface was at
+`services/orchestrator/src/engine/contracts/vcsProvider.ts:261-434`. Historical
+`engine/...` paths in this record are relative to `services/orchestrator/src/`.
 
-## 1. Per-method classification
+## 1. Historical per-method classification
 
-The interface declares **26 methods**. Classification:
+The retired interface declared **26 methods**. Its design-time classification was:
 **CodeHost = 9 · VisibilityProjection = 7 · DEAD = 5 · unhomed-flag = 5**.
+
+The table is retained as the audit snapshot. “Caller,” “raw use,” “new method,” and
+“migrate” refer to the state before the completed cutover; §§3–7 record the landed
+outcomes.
 
 | #   | Method (`vcsProvider.ts:line`)     | Target                                                               | Existing seam method?                                      | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --- | ---------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -82,22 +87,22 @@ The interface declares **26 methods**. Classification:
 | 25  | `readFileOnBranch` covered (#20)   | —                                                                    | —                                                          | —                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 26  | `deleteBranch` (`:433`)            | **DEAD**                                                             | —                                                          | **Zero callers.** The ephemeral `tanren/integ/<dep>` integration-branch cleanup is gone (no synthesized integ host ref — the jj `ancestor_stack` is the sole base model; `githubRefReset.ts:5` notes `buildIntegrationBranch` was already deleted). Delete the method.                                                                                                                                                                                                                                                                                                                                                                                          |
 
-### 1a. Summary counts
+### 1a. Historical summary counts
 
 - **CodeHost (5 clean maps):** `createRepository`→`createRepo`, `readPullRequestDiff`→`readDiff`, `readFileOnBranch`→`readFile`, `readBranchHeadSha`→`fetchRef`, plus `pushBranch` (flagged: SSH transport, §5c). Counting `pushBranch` as CodeHost-bound → **CHost: 6**; the 3 unhomed-with-CodeHost-recommendation (`readBranchChecks`, `listContributors`, and `readMergeability`'s base/head read) push the CodeHost-eligible set toward **~9** depending on the §5 forks.
 - **VisibilityProjection (clean maps):** `openDraftPullRequest`→`openOrUpdateChangeRequest`, `publishStatus`→`publishGate`, `submitReview`→`publishReview`, `retargetPullRequestBase`→`retargetChangeRequest` = **4 existing**, plus 2 new (`createIssue`→`openTrackingIssue?`, `markReadyForReview`→`markChangeRequestReady?`) + 1 flagged (`readReviewVerdict` as external-approval read) = up to **7**.
 - **DEAD (zero live callers, delete on sight):** `readPullRequestState`, `publishCheck`, `readPullRequestChecks`, `mergePullRequest`, `deleteBranch` = **5 hard-dead**; `updateBranch` is **dead-after-fold** (test-only fallback) → effectively **6**.
 - **unhomed-flag (genuine forks, §5):** `resolveToken`, `resolveActorIdentity`, `parseRepository`, `parsePullRequest` (the 4 non-forge primitives), plus the doctrine forks on `pushBranch` / `readBranchChecks` / `readReviewVerdict` / `listContributors` / `readMergeability`.
 
-The headline for the build: **5 methods are immediately deletable, 4 map cleanly onto
+The design-time headline was: **5 methods are immediately deletable, 4 map cleanly onto
 existing `CodeHost` methods, 4 map cleanly onto existing `VisibilityProjection` methods,
 2 need new best-effort `VisibilityProjection` methods, and ~5 are genuine doctrine forks
 to decide before deletion.**
 
-## 2. Importer buckets
+## 2. Historical importer buckets
 
-~32 files carry a `: VcsProvider` type annotation; a handful more reference it only in
-comments. Bucketed by what they actually need:
+Before the cutover, ~32 files carried a `: VcsProvider` type annotation; a handful more
+referenced it only in comments. They were bucketed by the seam they needed:
 
 ### 2a. Need only `CodeHost` (code reads + ref fetch + land + repo-create)
 
@@ -158,11 +163,10 @@ reference `VcsProvider` only in doc comments (they have their OWN grant-based
 type migration. The `sentryProvisioner`/`deployProvisioner` `resolveToken` is the
 _integration-grant_ resolver, NOT `VcsProvider.resolveToken` — do not conflate them.
 
-## 3. What's in place (as-built — migration complete)
+## 3. Landed architecture
 
-> The bullets below were the pre-migration baseline when this plan was written.
-> **All migration steps landed** across the 9-PR series. Status banner at the top of
-> this doc is authoritative; this section is kept as the as-built inventory.
+All migration steps landed across the 9-PR series. This is the authoritative live
+inventory; the source locations and plan in §§1–2 and §§4–6 are historical.
 
 - `CodeHost` (`codeHost.ts`) + `GitHubCodeHost` (`githubCodeHost.ts`) exist, conformance-
   validated (`tests/conformance/codeHost*.ts`). Live land uses `GitHubCodeHost` via
@@ -170,7 +174,7 @@ _integration-grant_ resolver, NOT `VcsProvider.resolveToken` — do not conflate
   `compareRefs` (ancestry; severs `mergeable_state`), `readCommitAuthors`,
   `readBranchChecks`.
 - `VisibilityProjection` + `GitHubVisibilityProjection` + `harden`/`SafeVisibilityProjection`
-  exist, conformance-validated. Best-effort methods added per §4:
+  exist, conformance-validated. The cutover added these best-effort methods:
   `openTrackingIssue?`, `markChangeRequestReady?`, plus external-approval reads.
 - `buildProjectHostSeams` (`hostFactory.ts`) builds `{ codeHost, visibility }` from the
   http client + a token supplier — **live call sites** include greenfield repo
@@ -184,14 +188,13 @@ _integration-grant_ resolver, NOT `VcsProvider.resolveToken` — do not conflate
   `parseGitHubPullRequest` (`githubRepoRef.ts` / `codeHostTypes.ts`), SSH workspace
   push stays a workspace helper (`pushWorkspaceBranchToGitHub` — §5c helper fork).
 
-So the seams + GitHub impls + conformance suites + importer migration + net-delete
-are **DONE**. The classification tables and PR sequence in §1–§6 below remain as the
-as-built design record (present-tense wording in those sections is historical).
+The seams, GitHub implementations, conformance suites, importer migration, and net-delete
+are **complete**.
 
-## 4. New methods the target seams must absorb
+## 4. Responsibilities absorbed by the target seams
 
-`CodeHost` needs **no new methods** for the clean maps (#6, #16, #20, #21 already have
-existing methods). Two genuinely-needed live responsibilities need a HOME:
+`CodeHost` required no new methods for the clean maps (#6, #16, #20, #21). The cutover
+added two best-effort `VisibilityProjection` responsibilities:
 
 1. **`VisibilityProjection.openTrackingIssue?(input): Promise<{ url; number }>`** — for
    `createIssue` (#11), the post-merge-failure tracking issue (`watcher.ts:263`). It is
@@ -200,102 +203,89 @@ existing methods). Two genuinely-needed live responsibilities need a HOME:
    projection on a host with no issue support.)
 
 2. **`VisibilityProjection.markChangeRequestReady?(input): Promise<void>`** — for
-   `markReadyForReview` (#12), IF it survives (§5d). Best-effort un-drafting of the PR
-   mirror.
+   `markReadyForReview` (#12). It remains a best-effort un-draft of the PR mirror.
 
-The genuine-fork reads (`readBranchChecks` #14, `readReviewVerdict` #15, `listContributors`
-#18, `readMergeability` #22) each need EITHER a new `CodeHost` read OR removal — resolved
-in §5, not pre-decided here.
+The former fork reads were resolved as follows: `readBranchChecks` (#14) became
+`CodeHost.readBranchChecks`; `readReviewVerdict` (#15) became the best-effort
+`VisibilityProjection.readExternalApproval?`; `listContributors` (#18) became
+`CodeHost.readCommitAuthors`; and `readMergeability` (#22) was replaced by
+`CodeHost.compareRefs` ancestry plus `fetchRef`.
 
-`pushBranch` (#7) is the one CodeHost gap that is not a clean map — see §5c.
+`pushBranch` (#7) was deliberately kept as the workspace-layer
+`pushWorkspaceBranchToGitHub` helper, rather than enlarging `CodeHost`.
 
-## 5. Genuine forks (flag with a recommendation; the codebase does not yet decide)
+## 5. Design forks and their landed outcomes
 
 ### 5a. `resolveToken` / `resolveActorIdentity` — where does credential resolution live?
 
-These are not forge ops; they are the credential plumbing every seam needs. Today they
-sit on `VcsProvider` and are passed as `() => resolveToken(creds)` closures.
-**Recommendation:** extract a standalone `resolveVcsToken(creds)` (the existing
-`resolveGithubToken` is already the body) + a `resolveActorIdentity(token)` helper into a
-small `credentials/` module, and have `buildProjectHostSeams` + the jj authed-push +
-provisioners consume THAT. The seams stay token-free (the `hostFactory.ts` doctrine).
-Do NOT bolt token resolution onto `CodeHost` (it would re-leak GitHub credential shape
-into the host seam).
+These are not forge ops; they were credential plumbing passed as
+`() => VcsProvider.resolveToken(creds)` closures. **Outcome:** the cutover extracted
+`resolveVcsToken(creds)` and `resolveVcsActorIdentity(token)` into the credentials path,
+which `buildProjectHostSeams`, the jj authed push, and provisioners consume. The seams
+remain token-free, avoiding GitHub credential shape in `CodeHost`.
 
 ### 5b. `parseRepository` / `parsePullRequest` — pure helpers, not seam methods.
 
-**Recommendation:** make them free functions (they already wrap `parseGitHubRepository` /
-`parseGitHubPullRequestUrl`). They carry no provider state. A GitLab backend parses its
-own URL shape, so they are arguably host-specific — but they are pure and tiny; keep them
-as exported helpers the host impl owns, callable without a seam instance.
+**Outcome:** they became the pure `parseGitHubRepository` and
+`parseGitHubPullRequest` helpers. They carry no provider state; keeping them outside a
+seam preserves the small, host-neutral contract while allowing each host to parse its
+own URL shape.
 
 ### 5c. `pushBranch` (#7) — SSH workspace push vs HTTPS ref push.
 
 `CodeHost.pushRef` pushes via the `git/refs` HTTP API; `pushBranch` pushes the runner
 workspace branch over SSH (`pushWorkspaceBranchToGitHub`, token-via-stdin). They are
-different transports. **Fork:** (a) add `CodeHost.pushWorkspaceRef(input)` (SSH-shaped) as
-a second push method, or (b) keep the SSH push as a workspace-layer helper (`githubPush.ts`)
-that `githubDraftPr.ts` calls directly with a resolved token, leaving `CodeHost` with only
-the HTTPS `pushRef`. **Recommendation: (b)** — the SSH push is a runner-workspace concern
-(it needs `ssh`/`target`/`workspacePath`), not a host-API concern; keeping it out of
-`CodeHost` keeps the host seam swappable and small. Flag for a maintainer call.
+different transports. **Outcome: (b)** — `githubDraftPr.ts` calls the workspace-layer
+`pushWorkspaceBranchToGitHub` helper with a resolved token. It remains outside
+`CodeHost` because it needs `ssh`/`target`/`workspacePath` and is a runner-workspace
+concern, not a host-API concern.
 
 ### 5d. `markReadyForReview` (#12) — keep as best-effort, or delete?
 
-Per §6, the draft/ready gate no longer gates merge. **Fork:** keep a best-effort
-`markChangeRequestReady?` (nicety: surfaces the PR as ready for human eyes) OR delete it
-(Tanren's review record is authoritative; the host draft state is cosmetic).
-**Recommendation:** keep it as an OPTIONAL best-effort projection method — it is a cheap
-human-facing courtesy and costs nothing on a host that omits it — but it must NOT gate.
+Per §6, the draft/ready state no longer gates merge. **Outcome:** it is retained as the
+optional, best-effort `markChangeRequestReady?` projection method: a human-facing
+courtesy that never gates Tanren's authoritative review record.
 
-### 5e. `readBranchChecks` (#14) — host CI read for the post-merge watcher.
+### 5e. `readBranchChecks` (#14) — settled host-CI read for the post-merge watcher.
 
 The post-merge watcher reads the _host's_ default-branch CI (which, for the built app's
 repo, may legitimately be GitHub Actions) to decide whether to file a tracking issue.
-**Fork:** (a) `CodeHost.readBranchChecks(repo, branch)` as a host read, or (b) re-point
-the watcher at Tanren's OWN post-merge gate run on the landed `main` (the native gate is
-authoritative). **Recommendation: (a)** for now — the post-merge watcher genuinely watches
-the _external_ repo's CI signal (a regression the built app's own CI catches), which is a
-host read, not Tanren's gate. Re-evaluate when post-merge is itself a native gate node.
+The design fork was (a) `CodeHost.readBranchChecks(repo, branch)` as a host read, or (b)
+re-point the watcher at Tanren's own post-merge gate run on landed `main`. **Landed
+outcome: (a)** — the post-merge watcher watches the _external_ repo's CI signal (a
+regression the built app's own CI catches), which is a host read, not Tanren's gate.
 
 ### 5f. `readReviewVerdict` (#15) — external approval read vs internal record.
 
-**Fork:** keep a best-effort `readExternalApproval?` (host reviews as "optional external
-approvals", §6) OR drop the read and rely solely on Tanren's internal review record.
-**Recommendation:** the live `reviewPolling.ts:199` control flow currently READS the host
-verdict — so dropping it changes behavior. Migrate in two steps: first move the read to a
-best-effort projection read (no behavior change), THEN (separately) make Tanren's internal
-review record the gate and downgrade the host read to advisory. Do not couple the two.
+The design fork was to retain a best-effort `readExternalApproval?` (host reviews as
+optional external approvals) or drop the read for Tanren's internal review record.
+**Landed outcome:** the read moved to the best-effort projection path without changing its
+control flow; it remains advisory rather than an authoritative gate.
 
 ### 5g. `listContributors` (#18) — governance gate read.
 
 The external-change governance gate reads the PR's author+committer logins
 (`mergeDispatch.ts:237`). This is a REAL gate, so it cannot be best-effort while it gates.
-**Fork:** (a) a `CodeHost.readCommitAuthors(repo, baseSha, headSha)` host read (sha-range,
-host-neutral), or (b) keep it forge-PR-shaped. **Recommendation: (a)** — derive
-contributors from the sha range via the host (the same `/compare`/commits read
-`CodeHost.readDiff` already does), making it host-neutral and authoritative.
+The design fork was a host-neutral `CodeHost.readCommitAuthors(repo, baseSha, headSha)`
+read or a forge-PR-shaped API. **Landed outcome: (a)** — contributors are derived from
+the sha range via the host, making the real gate host-neutral and authoritative.
 
 ### 5h. `readMergeability` (#22) + `updateBranch` (#23) — the `mergeable_state` coupling §6 names.
 
-This is THE GitHub-coupling §6 calls out to sever ("`mergeable_state`/`update-branch`
-decide freshness"). Post-cutover the AUTHORITY + jj decide freshness/conflict; the
-`baseShiftRebase` hook (always wired) replaces `update-branch`. But `mergeLandPaths.ts:107`
-STILL reads `readMergeability` to feed `runAuthorityLand` the `baseBranch`/`headBranch` +
-the `behind` rebase trigger. **Fork:** the migration must replace that read with a
-jj-local / `CodeHost.fetchRef`-derived base+head signal BEFORE `readMergeability` can die.
-**Recommendation:** treat this as its own PR (§6 PR-7) — it is the load-bearing coupling,
-not a mechanical swap. `updateBranch`'s removal is gated on confirming the
-`baseShiftRebase`-absent fallback (`mergeLandPaths.ts:49`) is test-only (it is: production
-always wires the unified hook).
+This was the GitHub coupling the design identified: `mergeable_state`/`update-branch`
+deciding freshness. **Landed outcome:** authority plus jj now decide freshness/conflict;
+`CodeHost.compareRefs` ancestry (with `fetchRef`) supplies the base/head signal, and the
+always-wired `baseShiftRebase` hook replaces `update-branch`. No host `mergeable_state`
+gate remains.
 
-## 6. Safe PR-by-PR decomposition
+## 6. Historical PR-by-PR delivery record
 
-Discipline: ADDITIVE → MIGRATE-by-area → DELETE-last. Each PR is independently green
-(`just ci` + `just smoke`) and up-to-date with `main`. No PR removes a method that still
-has a caller. Estimated **9 PRs**.
+The cutover followed ADDITIVE → MIGRATE-by-area → DELETE-last. Each of the **9 landed
+PRs** was independently green (`just ci` + `just smoke`) and up-to-date with `main`; no
+PR removed a method with a caller. The original PR titles and scopes below are retained as
+a delivery record, not as an outstanding execution plan.
 
-> **Serialization:** PR-1 (new contract methods) and PR-8/PR-9 (deletions) touch shared
+> **Historical serialization:** PR-1 (new contract methods) and PR-8/PR-9 (deletions) touched shared
 > contract files (`visibilityProjection.ts`, `codeHost.ts`, `contracts/index.ts`) and the
 > worker boot wiring (`boot.ts`, `mountFeatureRoutes.ts`) — serialize those against each
 > other and against any other contract-touching work. The area-migration PRs (3–6) edit
@@ -316,16 +306,13 @@ has a caller. Estimated **9 PRs**.
 
 Notes:
 
-- PR-7 is the genuine-risk PR (the freshness coupling). If §5h's fork is deferred, PR-8/PR-9
-  can still land everything EXCEPT removing `readMergeability` — but the interface cannot
-  fully die until #22 is rehomed, so PR-7 is on the critical path to PR-9.
-- The `speculativeStackRetarget.ts` / `resolveSpeculativeState` removal is a SEPARATE §7
-  cleanup (the stacked-PR retarget walk). It is NOT required for this decomposition
-  (the `retargetPullRequestBase` method maps to `retargetChangeRequest` regardless of when
-  the retarget WALK itself is deleted). Coordinate so PR-7 doesn't collide with that work.
-- After PR-9, `docs/architecture/tanren-owns-the-engine.md` §7's "most of the GitHub-PR-
-  shaped `VcsProvider` (→ an 8-method minimal `CodeHost`)" line is realized and should be
-  marked landed.
+- PR-7 was the genuine-risk delivery (the freshness coupling) and was on the critical path
+  to deleting the interface in PR-9.
+- The `speculativeStackRetarget.ts` / `resolveSpeculativeState` cleanup remained outside
+  this decomposition because `retargetPullRequestBase` already mapped to
+  `retargetChangeRequest`.
+- PR-9 realized `docs/architecture/tanren-owns-the-engine.md` §7's minimal `CodeHost`
+  seam; that document records the landed state.
 
 ## 7. Open decisions (resolved as-built)
 

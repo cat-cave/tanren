@@ -13,6 +13,8 @@
 import type { DashboardSession } from "../auth/session.js";
 import type { DoraMetrics } from "./dora.js";
 import { OrchestratorNotificationsClient } from "./notificationsClient.js";
+import { getOrgCosts as readOrgCosts, type GetOrgCostsResult } from "./orgCosts.js";
+import { findRunLocation as resolveRunLocation, type FindRunLocationResult } from "./runLocation.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -38,6 +40,8 @@ import type {
 } from "./types.js";
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
+export type { FindRunLocationResult, RunLocation } from "./runLocation.js";
+export type { GetOrgCostsResult } from "./orgCosts.js";
 
 export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
@@ -129,18 +133,12 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return all;
   }
 
-  /**
-   * Org-wide cost read model for the costs screen and CSV export. This is one
-   * request, replacing the old project → run → per-run-cost traversal.
-   */
-  async getOrgCosts(orgId: string): Promise<{ costs: CostRecord[]; runs: RunListItem[] }> {
-    const json = await this.getJson<{ costs?: CostRecord[]; runs?: RunListItem[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/costs`,
+  /** Bounded, strictly decoded org cost read; partial/faulted walks fail closed. */
+  async getOrgCosts(orgId: string): Promise<GetOrgCostsResult> {
+    return readOrgCosts(
+      { orchestratorUrl: this.orchestratorUrl, headers: this.headers(), fetchImpl: this.fetchImpl },
+      orgId,
     );
-    if (json === undefined || !Array.isArray(json.costs) || !Array.isArray(json.runs)) {
-      return { costs: [], runs: [] };
-    }
-    return { costs: json.costs, runs: json.runs };
   }
 
   /**
@@ -421,28 +419,25 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   // ── run-detail / review / SSE ─────────────────────────────────
   // The dashboard route is `/runs/:runId` (the spec permits deriving
-  // org/project from the run); the orchestrator API is org+project-scoped, so
-  // we resolve the run's location by scanning the operator's orgs + projects
-  // for a matching run, then fetch the snapshot.
+  // org/project from the run); ask the orchestrator's org-scoped location
+  // endpoint rather than listing every project and its runs.
   // -------------------------------------------------------------------------
 
   /**
-   * Resolve which org+project a run belongs to by scanning the operator's
-   * orgs and their projects. `undefined` when the run is not visible. The
-   * snapshot endpoint enforces the real authz boundary; this is just routing.
+   * Resolve which org+project a run belongs to. One org-scoped location probe
+   * per visible org — never a project/run-list fan-out. Fail-closed: only a
+   * definitive documented 404 body is not-found; network/auth/upstream/malformed
+   * /multi-match outcomes are explicit kinds (see `FindRunLocationResult`).
    */
-  async findRunLocation(runId: string): Promise<RunLocation | undefined> {
-    const orgs = await this.listOrgs();
-    for (const org of orgs) {
-      const projects = await this.listProjects(org.id);
-      for (const project of projects) {
-        const runs = await this.listRuns(org.id, project.projectId);
-        if (runs.some((run) => run.runId === runId)) {
-          return { orgId: org.id, projectId: project.projectId };
-        }
-      }
-    }
-    return undefined;
+  async findRunLocation(runId: string): Promise<FindRunLocationResult> {
+    return resolveRunLocation(
+      {
+        orchestratorUrl: this.orchestratorUrl,
+        headers: this.headers(),
+        fetchImpl: this.fetchImpl,
+      },
+      runId,
+    );
   }
 
   /**

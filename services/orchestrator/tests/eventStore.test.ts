@@ -72,6 +72,8 @@ describe("PgEventStore — RLS R2 org-scope routing (inert)", () => {
         return { rows: [], rowCount: 0 };
       },
       connect: async () => scopedClient,
+      // Pool surface for isPool (must not key on connect alone — PoolClient has it).
+      totalCount: 0,
     };
     return { pool: pool as unknown as pg.Pool, insertsOnPool, insertsOnClient };
   }

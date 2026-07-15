@@ -73,7 +73,7 @@ export interface BuildProjectViewInput {
   milestones: MilestoneSummary[];
   feed: ProjectFeedItem[];
   narration: ForgeAnswer | undefined;
-  weekSpendUsd: number;
+  weekSpend: RunCostSummary;
   weekCapUsd?: number;
   now?: Date;
 }
@@ -89,9 +89,37 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(2)}`;
 }
 
-/** Sum the run-list cost column (string-encoded numeric per). */
-export function sumRunCosts(runs: RunListItem[]): number {
-  return runs.reduce((acc, run) => acc + (Number(run.costTotalUsd) || 0), 0);
+export interface RunCostSummary {
+  knownUsd: number;
+  knownRuns: number;
+  unknownRuns: number;
+}
+
+/** Sum known run totals without laundering null/unknown runs into zero. */
+export function summarizeRunCosts(runs: RunListItem[]): RunCostSummary {
+  let knownUsd = 0;
+  let knownRuns = 0;
+  let unknownRuns = 0;
+  for (const run of runs) {
+    if (run.costTotalUsd === null) {
+      unknownRuns += 1;
+      continue;
+    }
+    const amount = Number(run.costTotalUsd);
+    if (!Number.isFinite(amount) || amount < 0) {
+      unknownRuns += 1;
+      continue;
+    }
+    knownUsd += amount;
+    knownRuns += 1;
+  }
+  return { knownUsd, knownRuns, unknownRuns };
+}
+
+function formatRunCosts(summary: RunCostSummary): string {
+  if (summary.knownRuns === 0 && summary.unknownRuns > 0) return "unknown";
+  const formatted = formatUsd(summary.knownUsd);
+  return summary.unknownRuns > 0 ? `${formatted} known` : formatted;
 }
 
 function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
@@ -234,15 +262,14 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
       k: "week spend",
       v:
         input.weekCapUsd === undefined
-          ? formatUsd(input.weekSpendUsd)
-          : `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`,
+          ? formatRunCosts(input.weekSpend)
+          : `${formatRunCosts(input.weekSpend)} / ${formatUsd(input.weekCapUsd)}`,
     },
     { k: "velocity", v: velocity?.trendLabel ?? "—" },
     { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined },
   ];
 
-  const pulseHeadline =
-    input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpendUsd);
+  const pulseHeadline = input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpend);
   const recentEvent = input.feed[0];
   const pulseSub =
     recentEvent === undefined ? "no recent activity" : `most recent · ${humanizeEvent(recentEvent.eventType)}`;
@@ -263,10 +290,16 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
   };
 }
 
-function defaultPulse(name: string, inFlight: number, needsYou: number, spend: number): string {
+function defaultPulse(name: string, inFlight: number, needsYou: number, spend: RunCostSummary): string {
   const parts: string[] = [];
   if (inFlight > 0) parts.push(`${inFlight} run(s) in flight`);
   if (needsYou > 0) parts.push(`${needsYou} item(s) need you`);
   const lead = parts.length > 0 ? `${name}: ${parts.join(", ")}` : `${name} is idle`;
-  return `${lead}; ${formatUsd(spend)} spent this week.`;
+  const spendLabel =
+    spend.knownRuns === 0 && spend.unknownRuns > 0
+      ? "spend is unknown"
+      : spend.unknownRuns > 0
+        ? `${formatUsd(spend.knownUsd)} known spend (${spend.unknownRuns} run(s) unknown)`
+        : `${formatUsd(spend.knownUsd)} spent`;
+  return `${lead}; ${spendLabel} this week.`;
 }

@@ -9,12 +9,19 @@
 // (e.g. insights cache lookups) do not crash the test.
 
 import type pg from "pg";
+import { queryOrgCostsReadModel } from "./runRoutesPoolOrgCosts.js";
 
 function taskKindOrder(kind: string): number {
   return ({ plan: 1, write: 2, check: 3, audit: 4, ci: 5 } as Record<string, number>)[kind] ?? 99;
 }
 
-interface QueryResult<R = unknown> {
+function completeRealCostTotal(costs: CostRow[]): string | null {
+  if (costs.length === 0) return "0";
+  if (costs.some((cost) => cost.cost_usd === null)) return null;
+  return costs.reduce((sum, cost) => sum + Number(cost.cost_usd), 0).toString();
+}
+
+export interface QueryResult<R = unknown> {
   rows: R[];
   rowCount: number;
 }
@@ -68,7 +75,7 @@ export interface EventRow {
 }
 
 export interface CostRow {
-  id: number;
+  id: number | string;
   task_id: string;
   run_id: string;
   project_id: string;
@@ -195,7 +202,12 @@ export class RunRoutesPool {
     return row;
   }
 
-  seedCost(input: Partial<CostRow> & { id: number; run_id: string; task_id: string; project_id: string }): CostRow {
+  seedCost(
+    input: Partial<CostRow> & { id: number | string; run_id: string; task_id: string; project_id: string },
+  ): CostRow {
+    if (typeof input.id === "number" && !Number.isSafeInteger(input.id)) {
+      throw new TypeError("unsafe numeric cost fixture id; use an exact decimal string");
+    }
     const row: CostRow = {
       id: input.id,
       task_id: input.task_id,
@@ -211,11 +223,14 @@ export class RunRoutesPool {
       output_tokens: input.output_tokens ?? 0,
       reasoning_output_tokens: input.reasoning_output_tokens ?? 0,
       total_tokens: input.total_tokens ?? 0,
-      cost_usd: input.cost_usd ?? "0.001",
-      notional_cost_usd: input.notional_cost_usd ?? input.cost_usd ?? "0.001",
+      cost_usd: Object.hasOwn(input, "cost_usd") ? (input.cost_usd ?? null) : "0.001",
+      notional_cost_usd: Object.hasOwn(input, "notional_cost_usd")
+        ? (input.notional_cost_usd ?? null)
+        : (input.cost_usd ?? "0.001"),
       billing_mode: input.billing_mode ?? "per_token",
       cost_basis: input.cost_basis ?? "provider_response",
-      recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id),
+      recorded_at:
+        input.recorded_at ?? new Date(2026, 4, 1, 0, 0, typeof input.id === "number" ? input.id : this.costs.length),
     };
     this.costs.push(row);
     return row;
@@ -248,34 +263,8 @@ export class RunRoutesPool {
         ? { rows: [], rowCount: 0 }
         : { rows: [{ project_id: run.project_id, spec_id: run.spec_id }], rowCount: 1 };
     }
-    // Org costs read model: all tables and correlated aggregates keep an
-    // explicit org predicate even under the scoped transaction.
-    if (/FROM cost_records\s+WHERE org_id = \$1\s+ORDER BY recorded_at ASC/u.test(trimmed)) {
-      const rows = this.costs
-        .filter((cost) => cost.org_id === String(params[0]))
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
-      return { rows, rowCount: rows.length };
-    }
-    if (/FROM runs r\s+LEFT JOIN specs s/u.test(trimmed) && /WHERE r\.org_id = \$1/u.test(trimmed)) {
-      const orgId = String(params[0]);
-      const rows = this.runs
-        .filter((run) => run.org_id === orgId)
-        .map((run) => ({
-          ...run,
-          spec_title: this.specs.find((spec) => spec.spec_id === run.spec_id)?.title ?? null,
-          cost_total_usd: this.costs
-            .filter((cost) => cost.run_id === run.run_id && cost.org_id === orgId)
-            .reduce((sum, cost) => sum + Number(cost.cost_usd), 0)
-            .toString(),
-          last_event_at:
-            this.events
-              .filter((event) => event.run_id === run.run_id && event.org_id === orgId)
-              .map((event) => event.ts)
-              .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
-        }))
-        .sort((a, b) => b.started_at.getTime() - a.started_at.getTime() || a.run_id.localeCompare(b.run_id));
-      return { rows, rowCount: rows.length };
-    }
+    const orgCosts = queryOrgCostsReadModel(trimmed, params, this);
+    if (orgCosts !== undefined) return orgCosts;
     // Run snapshot loaders. org_id is the second predicate (defense-in-depth).
     if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const run = this.runs.find((r) => r.run_id === String(params[0]) && r.org_id === String(params[1]));
@@ -291,10 +280,7 @@ export class RunRoutesPool {
         .map((r) => ({
           ...r,
           spec_title: this.specs.find((s) => s.spec_id === r.spec_id)?.title ?? null,
-          cost_total_usd: this.costs
-            .filter((c) => c.run_id === r.run_id)
-            .reduce((sum, c) => sum + Number(c.cost_usd), 0)
-            .toString(),
+          cost_total_usd: completeRealCostTotal(this.costs.filter((c) => c.run_id === r.run_id && c.org_id === orgId)),
           last_event_at:
             this.events
               .filter((e) => e.run_id === r.run_id)
@@ -410,7 +396,7 @@ export class RunRoutesPool {
       const orgId = String(params[1]);
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || compareBigintText(a.id, b.id));
       return { rows, rowCount: rows.length };
     }
 
@@ -422,31 +408,31 @@ export class RunRoutesPool {
       const orgId = String(params[1]);
       const limit = Number(params.at(-1));
       let cursorTs: Date | undefined;
-      let cursorId: number | undefined;
+      let cursorId: bigint | undefined;
       if (params.length === 5) {
         cursorTs = params[2] as Date;
-        cursorId = Number(params[3]);
+        cursorId = BigInt(String(params[3]));
       }
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
         .filter((c) => {
           if (cursorTs === undefined || cursorId === undefined) return true;
           if (c.recorded_at.getTime() > cursorTs.getTime()) return true;
-          if (c.recorded_at.getTime() === cursorTs.getTime()) return c.id > cursorId;
+          if (c.recorded_at.getTime() === cursorTs.getTime()) return BigInt(c.id) > cursorId;
           return false;
         })
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || compareBigintText(a.id, b.id))
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
 
     // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
     if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
-      const lastId = Number(params[1]);
+      const lastId = BigInt(String(params[1]));
       const orgId = String(params[2]);
       const rows = this.costs
-        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && c.id > lastId)
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
+        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && BigInt(c.id) > lastId)
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || compareBigintText(a.id, b.id))
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
@@ -496,4 +482,10 @@ export class RunRoutesPool {
   asPgPool(): pg.Pool {
     return this as unknown as pg.Pool;
   }
+}
+
+function compareBigintText(left: number | string, right: number | string): number {
+  const leftId = BigInt(left);
+  const rightId = BigInt(right);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
 }

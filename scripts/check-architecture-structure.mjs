@@ -1,8 +1,9 @@
 import { dirname, relative, resolve } from "node:path";
+import { parseSync } from "oxc-parser";
 
-// Structural architecture checks (Track B wave 3). These are heuristic,
-// AST-light scanners that mirror the style of check-architecture.mjs: regex +
-// brace matching, no parser. Each rule is a non-regressing RATCHET — the
+// Structural architecture checks (Track B wave 3). Most rules are heuristic,
+// AST-light regex/brace-matching scanners; cross-package deep imports are the
+// deliberate Oxc-AST exception. Each rule is a non-regressing RATCHET — the
 // thresholds are pinned at (or just above) the current repo maximum so existing
 // code passes today, and are meant to be tightened in later waves as the
 // flagged hotspots are refactored. See docs/contracts/architecture-checks.md.
@@ -31,6 +32,9 @@ const packageRoots = ["cli", "db", "services/allocator", "services/dashboard", "
 // were fixed by re-exporting stateEnumLists from the @tanren/db entry. Add an
 // entry here only with a matching note in the architecture-checks contract.
 const deepImportAllowlist = new Set();
+const dependencySourceNodeTypes = new Set(
+  "ImportDeclaration ExportNamedDeclaration ExportAllDeclaration ImportExpression TSImportType".split(" "),
+);
 
 function diagnostic(rule, file, message, line = 1) {
   return { rule, file, line, message };
@@ -296,32 +300,93 @@ export function checkNoMockOnlyTests(projectFiles) {
   }
   return diagnostics;
 }
-
 function packageOf(file) {
   return packageRoots.find((root) => file === root || file.startsWith(`${root}/`));
 }
-
-// Flag imports that reach into another workspace package's internals rather
-// than its public entry: bare `@tanren/<pkg>/src/...` specifiers, and relative
-// specifiers that resolve into a DIFFERENT package's tree.
+function stringLiteralSpecifier(node) {
+  return node?.type === "Literal" && typeof node.value === "string" ? node.value : undefined;
+}
+// Parse only literal dependency syntax. Comments/strings/templates and unresolved dynamic expressions are excluded; locally-shadowed, `require.resolve()`, and parenthesized `require` forms remain outside this lexical detector.
+function dependencySpecifiers(file, text) {
+  let sourceFile;
+  try {
+    sourceFile = parseSync(file, text, { range: true, sourceType: "unambiguous" });
+  } catch (error) {
+    return { parseError: { message: error instanceof Error ? error.message : String(error), line: 1 } };
+  }
+  const firstParseError = sourceFile.errors?.[0];
+  if (firstParseError !== undefined) {
+    return {
+      parseError: {
+        message: firstParseError.message ?? "unknown parse error",
+        line: lineFor(text, firstParseError.labels?.[0]?.start ?? 0),
+      },
+    };
+  }
+  const specifiers = [];
+  const add = (node) => {
+    const specifier = stringLiteralSpecifier(node);
+    if (specifier !== undefined) {
+      specifiers.push({ specifier, line: lineFor(text, node.start) });
+    }
+  };
+  const visit = (node) => {
+    if (node === null || typeof node !== "object") {
+      return;
+    }
+    if (dependencySourceNodeTypes.has(node.type)) {
+      add(node.source);
+    } else if (
+      node.type === "TSImportEqualsDeclaration" &&
+      node.moduleReference?.type === "TSExternalModuleReference"
+    ) {
+      add(node.moduleReference.expression);
+    } else if (
+      node.type === "CallExpression" &&
+      node.callee?.type === "Identifier" &&
+      node.callee.name === "require" &&
+      node.arguments.length === 1
+    ) {
+      add(node.arguments[0]);
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          visit(child);
+        }
+      } else {
+        visit(value);
+      }
+    }
+  };
+  visit(sourceFile.program);
+  return { specifiers };
+}
+// Flag imports that reach another workspace package's internals instead of its public entry.
 export function checkCrossPackageDeepImports(projectFiles) {
   const diagnostics = [];
-  const importPattern = /(?:from|import|require)\s*\(?\s*["']([^"']+)["']/gu;
   for (const { file, text } of projectFiles) {
     if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || file.includes("/dist/")) {
       continue;
     }
-    // The scripts/ checker carries its own unit tests, whose fixtures embed
-    // deep-import specifier strings as test data; skip the checker's tests so
-    // those fixtures aren't mistaken for real imports.
+    // Its unit-test fixtures embed deep-import strings as data, not imports.
     if (file === "scripts/check-architecture.test.ts") {
       continue;
     }
+    const { specifiers, parseError } = dependencySpecifiers(file, text);
+    if (parseError !== undefined) {
+      diagnostics.push(
+        diagnostic(
+          "cross-package-deep-import",
+          file,
+          `could not parse TS/TSX source; cross-package import analysis failed closed: ${parseError.message}`,
+          parseError.line,
+        ),
+      );
+      continue;
+    }
     const ownPackage = packageOf(file);
-    let match;
-    while ((match = importPattern.exec(text)) !== null) {
-      const specifier = match[1];
-      const line = lineFor(text, match.index);
+    for (const { specifier, line } of specifiers) {
       if (deepImportAllowlist.has(`${file} -> ${specifier}`)) {
         continue;
       }

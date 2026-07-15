@@ -29,7 +29,7 @@ import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } fro
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
-import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
+import { buildProjectViewModel, summarizeRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
 import { resolveConfig } from "./projectConfig.js";
 import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
@@ -107,7 +107,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       milestones,
       feed,
       narration: undefined,
-      weekSpendUsd: sumRunCosts(runs),
+      weekSpend: summarizeRunCosts(runs),
     });
     if (mode === "dag") {
       const dag = await getProjectDag(client, orgId, projectId);

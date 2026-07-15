@@ -112,6 +112,18 @@ export interface RunListProjectionFilter {
   specId: string | undefined;
 }
 
+/** Keyset for the org run projection's newest-first stable ordering. */
+export interface OrgRunCursor {
+  startedAt: Date;
+  runId: string;
+}
+
+const COMPLETE_REAL_COST_TOTAL = `CASE
+                WHEN COUNT(cr.id) = 0 THEN '0'
+                WHEN COUNT(cr.cost_usd) = COUNT(cr.id) THEN SUM(cr.cost_usd::numeric)::text
+                ELSE NULL
+              END`;
+
 export const RunStore = {
   async get(client: QueryClient, runId: string, _actor: ActorRef): Promise<RunRow | undefined> {
     const result = await client.query<RawRunRow>(`SELECT ${SELECT_RUN_COLUMNS} FROM runs WHERE run_id = $1`, [runId]);
@@ -177,13 +189,52 @@ export const RunStore = {
       `SELECT r.run_id, r.spec_id, r.project_id, r.trigger, r.branch, r.status, r.outcome,
               r.pr_url, r.started_at, r.ended_at,
               s.title AS spec_title,
-              (SELECT COALESCE(SUM(cost_usd::numeric), 0)::text
-                 FROM cost_records WHERE cost_records.run_id = r.run_id) AS cost_total_usd,
+              (SELECT ${COMPLETE_REAL_COST_TOTAL}
+                 FROM cost_records cr
+                WHERE cr.run_id = r.run_id AND cr.org_id = $2) AS cost_total_usd,
               (SELECT MAX(ts) FROM events WHERE events.run_id = r.run_id) AS last_event_at
          FROM runs r
          LEFT JOIN specs s ON s.spec_id = r.spec_id
         WHERE ${where}
         ORDER BY r.started_at DESC, r.run_id ASC`,
+      params,
+    );
+    return result.rows;
+  },
+
+  /**
+   * Bounded org-wide run page used by the costs read model. A run with no cost
+   * rows has a known zero total; any null real-dollar row makes the complete
+   * total unknown (null), including a mixed priced/unpriced run.
+   */
+  async selectCostListPageForOrg(
+    client: QueryClient,
+    args: { orgId: string; cursor: OrgRunCursor | undefined; limit: number },
+    _actor: ActorRef,
+  ): Promise<RawRunListRow[]> {
+    const params: unknown[] = [args.orgId];
+    let cursorClause = "";
+    if (args.cursor !== undefined) {
+      params.push(args.cursor.startedAt, args.cursor.runId);
+      cursorClause = ` AND (r.started_at < $${params.length - 1}::timestamptz
+        OR (r.started_at = $${params.length - 1}::timestamptz AND r.run_id > $${params.length}))`;
+    }
+    params.push(args.limit + 1);
+    const result = await client.query<RawRunListRow>(
+      `SELECT r.run_id, r.spec_id, r.project_id, r.trigger, r.branch, r.status, r.outcome,
+              r.pr_url, r.started_at, r.ended_at,
+              s.title AS spec_title,
+              (SELECT ${COMPLETE_REAL_COST_TOTAL}
+                 FROM cost_records cr
+                WHERE cr.run_id = r.run_id AND cr.org_id = $1) AS cost_total_usd,
+              (SELECT MAX(e.ts)
+                 FROM events e
+                WHERE e.run_id = r.run_id AND e.org_id = $1) AS last_event_at
+         FROM runs r
+         LEFT JOIN specs s ON s.spec_id = r.spec_id AND s.project_id = r.project_id AND s.org_id = $1
+        WHERE r.org_id = $1${cursorClause}
+        ORDER BY r.started_at DESC, r.run_id ASC
+        LIMIT $${params.length}`,
       params,
     );
     return result.rows;

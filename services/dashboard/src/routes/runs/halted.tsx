@@ -27,6 +27,7 @@ import { isRecoverableRun, type RecoveryActionResult, type RunLocation } from ".
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { HaltedRunBody } from "../../components/recovery/HaltedRunBody.js";
 import { RECOVERY_CSS } from "../../components/recovery/recovery.css.js";
+import { renderRunLocationFailure } from "./runLocationOutcome.js";
 
 export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
@@ -67,13 +68,14 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
   app.get("/runs/:runId/recover", async (c) => {
     const runId = c.req.param("runId");
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return renderNotFound(c, deps, runId);
+    const resolved = await client.findRunLocation(runId);
+    if (resolved.kind !== "found") {
+      return renderRunLocationFailure(c, deps, runId, resolved, "failure");
     }
+    const loc = resolved.location;
     const detail = await client.getRunDetail(loc, runId);
     if (detail === undefined) {
-      return renderNotFound(c, deps, runId);
+      return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "failure");
     }
     if (!isRecoverableRun(detail.run)) {
       return renderNotRecoverable(c, deps, runId);
@@ -144,10 +146,11 @@ async function handleAction(c: Context, deps: ShellDeps, action: string, call: A
   const runId = c.req.param("runId") ?? "";
   // Recovery POSTs are state-changing — carry session CSRF to the orchestrator.
   const client = await writeClient(c, deps);
-  const loc = await client.findRunLocation(runId);
-  if (loc === undefined) {
-    return renderNotFound(c, deps, runId);
+  const resolved = await client.findRunLocation(runId);
+  if (resolved.kind !== "found") {
+    return renderRunLocationFailure(c, deps, runId, resolved, "failure");
   }
+  const loc = resolved.location;
   const result = await call(client, loc, runId);
   const ctx = await loadShellContext(c, deps, { activeNavId: "failure", projectId: loc.projectId });
   if (!result.ok) {
@@ -204,12 +207,6 @@ function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
 
 async function writeClient(c: Context, deps: ShellDeps): Promise<OrchestratorClient> {
   return new OrchestratorClient(await clientDepsFor(c, deps));
-}
-
-function renderNotFound(c: Context, deps: ShellDeps, runId: string) {
-  return loadShellContext(c, deps, { activeNavId: "failure" }).then((ctx) =>
-    renderShell(c, ctx, { title: "tanren · run not found" }, <RecoverNotFoundBody runId={runId} kind="not_found" />),
-  );
 }
 
 function renderNotRecoverable(c: Context, deps: ShellDeps, runId: string) {

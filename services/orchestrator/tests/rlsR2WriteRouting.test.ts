@@ -6,9 +6,9 @@
 // Postgres — the cohort-1 eventStore routing test, extended to cohort-2's sites.
 //
 // This pins the inert fallback seam (`resolveWritableClient`): a query-only stub
-// (NOT a pool — no `connect`) is used verbatim, which is exactly why the
-// subtaskStages / costsRecorder tests that hand such a stub stay behavior-
-// identical after the conversion.
+// (NOT a pool — no `totalCount`/`connect` pool surface) is used verbatim, which
+// is exactly why the subtaskStages / costsRecorder tests that hand such a stub
+// stay behavior-identical after the conversion.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
@@ -44,6 +44,8 @@ function fakePool(match: (sql: string) => boolean): FakePool {
       return { rows: [], rowCount: 0 };
     },
     connect: async () => scopedClient,
+    // Pool surface for isPool (must not key on connect alone — PoolClient has it).
+    totalCount: 0,
   };
   return { pool: pool as unknown as pg.Pool, onPool, onClient };
 }

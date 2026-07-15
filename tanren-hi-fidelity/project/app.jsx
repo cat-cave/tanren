@@ -114,6 +114,7 @@ const App = () => {
         surface={t.surface}
         setSurface={(v) => setTweak("surface", v)}
         onForge={() => { setForgeSeed(null); setForgeOpen(true); }}
+        onNotifications={() => onNav("notifications")}
       />
       <SideNav active={view} onNav={onNav} />
       <main className="main">

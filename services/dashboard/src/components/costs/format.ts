@@ -9,6 +9,13 @@ export function usd(value: number): string {
   return `$${safe.toFixed(2)}`;
 }
 
+/** Nullable fixed-precision dollars: null is unknown, while "0" is $0.00. */
+export function nullableUsd(value: string | null): string {
+  if (value === null) return "unknown";
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 ? usd(amount) : "unknown";
+}
+
 /** A percent fraction [0,1] → "45%" (or "4.5%" under 10%). */
 export function pct(fraction: number): string {
   const p = Number.isFinite(fraction) ? fraction * 100 : 0;

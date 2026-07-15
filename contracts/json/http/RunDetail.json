@@ -42,7 +42,7 @@
           "costUsd": {
             "anyOf": [
               {
-                "minLength": 1,
+                "pattern": "^\\d+(?:\\.\\d+)?$",
                 "type": "string"
               },
               {
@@ -53,9 +53,12 @@
           "id": {
             "anyOf": [
               {
-                "type": "number"
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               },
               {
+                "pattern": "^\\d+$",
                 "type": "string"
               }
             ]
@@ -72,7 +75,7 @@
           "notionalCostUsd": {
             "anyOf": [
               {
-                "minLength": 1,
+                "pattern": "^\\d+(?:\\.\\d+)?$",
                 "type": "string"
               },
               {
@@ -180,9 +183,12 @@
           "id": {
             "anyOf": [
               {
-                "type": "number"
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               },
               {
+                "pattern": "^\\d+$",
                 "type": "string"
               }
             ]

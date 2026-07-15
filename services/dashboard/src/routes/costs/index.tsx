@@ -13,12 +13,13 @@
  */
 
 import type { Context, Hono } from "hono";
-import { OrchestratorClient } from "../../api/orchestrator.js";
+import { OrchestratorClient, type GetOrgCostsResult } from "../../api/orchestrator.js";
 import type { CostRecord, RunListItem } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import type { ShellContext } from "../../app/shell.js";
 import { observeMetrics, projectBurn, summarizeCosts } from "../../components/costs/aggregate.js";
 import { buildHeatmap } from "../../components/costs/heatmap.js";
+import type { MonetaryCoverage } from "../../components/costs/coverage.js";
 import { CostsBody } from "../../components/costs/CostsBody.js";
 import { HistoryBody } from "../../components/costs/HistoryBody.js";
 
@@ -60,20 +61,32 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     // The heatmap spans its own fixed 30-day window, so it reads the full
     // gathered record set — never the range-filtered slice the pills control.
     let allRecords: CostRecord[] = [];
-    if (ctx.org !== undefined) {
+    let availability: Parameters<typeof CostsBody>[0]["availability"] = {
+      kind: "unavailable",
+      message: "no active organization could be resolved",
+    };
+    if (ctx.org === undefined) {
+      c.status(503);
+    } else {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
       const readModel = await client.getOrgCosts(ctx.org.id);
-      allRecords = readModel.costs;
-      records = withinRange(readModel.costs, range, now);
-      runs = withinRange(readModel.runs, range, now);
+      if (readModel.kind === "ok") {
+        availability = { kind: "available" };
+        allRecords = readModel.data.costs;
+        records = withinRange(readModel.data.costs, range, now);
+        runs = withinRange(readModel.data.runs, range, now);
+      } else {
+        c.status(costsFailureStatus(readModel));
+        availability = { kind: "unavailable", message: costsFailureMessage(readModel) };
+      }
     }
 
     const summary = summarizeCosts(records);
     const burn = projectBurn(records, { now });
-    const metrics = observeMetrics(runs, summary.totalUsd);
+    const metrics = observeMetrics(runs, summary.realCoverage.kind === "known" ? summary.totalUsd : null);
     const heatmap = buildHeatmap(allRecords, { now });
 
     return renderCostsShell(c, ctx, {
@@ -81,6 +94,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
       burn,
       metrics,
       heatmap,
+      availability,
       range,
       orgLogin: ctx.org?.login ?? "",
     });
@@ -91,16 +105,25 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
   // -------------------------------------------------------------------------
   app.get("/costs/export.csv", async (c: Context) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "costs" });
-    let records: CostRecord[] = [];
-    if (ctx.org !== undefined) {
-      const client = new OrchestratorClient({
-        orchestratorUrl: deps.orchestratorUrl,
-        cookieHeader: c.req.header("cookie"),
-      });
-      records = (await client.getOrgCosts(ctx.org.id)).costs;
+    if (ctx.org === undefined) return c.json({ error: "costs_unavailable", reason: "no_active_org" }, 503);
+    const client = new OrchestratorClient({
+      orchestratorUrl: deps.orchestratorUrl,
+      cookieHeader: c.req.header("cookie"),
+    });
+    const readModel = await client.getOrgCosts(ctx.org.id);
+    if (readModel.kind !== "ok") {
+      return c.json(
+        {
+          error: readModel.kind === "auth" ? "costs_auth_failed" : "costs_unavailable",
+          reason: failureReason(readModel),
+        },
+        costsFailureStatus(readModel),
+      );
     }
+    const records = readModel.data.costs;
     const summary = summarizeCosts(records);
-    const header = "cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_usd,share";
+    const header =
+      "cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_state,cost_usd,notional_state,notional_cost_usd,share";
     const lines = summary.providers.map((row) =>
       [
         csv(row.cli),
@@ -111,8 +134,20 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
         row.costBasis,
         row.runs,
         row.totalTokens,
-        row.priced ? row.costUsd.toFixed(6) : "",
-        row.share.toFixed(4),
+        // State comes ONLY from the row's explicit coverage — never inferred
+        // from `knownUsd > 0` (a partial known-zero is still partial, not unknown).
+        coverageState(row.realCoverage),
+        // The known subtotal is emitted for known AND partial (even exactly 0);
+        // only an all-unknown row leaves the value blank.
+        coverageValue(row.realCoverage),
+        coverageState(row.notionalCoverage),
+        coverageValue(row.notionalCoverage),
+        // Honest share: only when the global real total is known AND positive
+        // AND this row is fully known. A zero denominator is undefined, so a
+        // fully-known $0 total blanks the share rather than emitting 100%.
+        summary.realCoverage.kind === "known" && row.realCoverage.kind === "known" && summary.totalUsd > 0
+          ? row.share.toFixed(4)
+          : "",
       ].join(","),
     );
     const body = [header, ...lines].join("\n");
@@ -157,8 +192,45 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
 }
 
 function csv(value: string): string {
-  if (/[",\n]/u.test(value)) return `"${value.replaceAll('"', '""')}"`;
-  return value;
+  const guarded = /^[=+\-@]/u.test(value) ? `'${value}` : value;
+  if (/[",\r\n]/u.test(guarded)) return `"${guarded.replaceAll('"', '""')}"`;
+  return guarded;
+}
+
+/**
+ * State label derived ONLY from explicit coverage — known (all priced),
+ * partial (some priced), or unknown/empty (none priced). A partial known-zero
+ * stays `partial`; it is never downgraded to `unknown` by a zero subtotal.
+ */
+function coverageState(coverage: MonetaryCoverage): "known" | "partial" | "unknown" {
+  if (coverage.kind === "known") return "known";
+  if (coverage.kind === "partial") return "partial";
+  return "unknown";
+}
+
+/**
+ * The known subtotal for known AND partial coverage (formatted to 6dp, including
+ * exactly `0.000000`); blank only when coverage carries no known figure (all
+ * unknown / empty) — so a spreadsheet never shows a fabricated zero spend.
+ */
+function coverageValue(coverage: MonetaryCoverage): string {
+  return coverage.knownUsd === null ? "" : coverage.knownUsd.toFixed(6);
+}
+
+function failureReason(result: Exclude<GetOrgCostsResult, { kind: "ok" }>): string {
+  return result.kind === "auth" ? "auth" : result.reason;
+}
+
+function costsFailureStatus(result: Exclude<GetOrgCostsResult, { kind: "ok" }>): 401 | 403 | 502 | 503 {
+  if (result.kind === "auth") return result.status;
+  return result.reason === "malformed" ? 502 : 503;
+}
+
+function costsFailureMessage(result: Exclude<GetOrgCostsResult, { kind: "ok" }>): string {
+  if (result.kind === "auth") return `authorization failed (${result.status})`;
+  if (result.reason === "malformed") return "the orchestrator returned an invalid response";
+  if (result.reason === "network") return "the orchestrator could not be reached";
+  return `the orchestrator read failed${result.status === undefined ? "" : ` (${result.status})`}`;
 }
 
 function renderCostsShell(

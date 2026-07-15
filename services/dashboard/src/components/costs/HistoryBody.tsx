@@ -7,7 +7,7 @@
 
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { RunListItem } from "../../api/types.js";
-import { duration, timestamp, usd } from "./format.js";
+import { duration, nullableUsd, timestamp } from "./format.js";
 import { COSTS_SCREEN_CSS } from "./styles.js";
 
 export interface HistoryBodyProps {
@@ -107,7 +107,7 @@ export function HistoryBody(props: HistoryBodyProps) {
                         <span>
                           <span class={`badge ${badge.cls}`}>{badge.label}</span>
                         </span>
-                        <span class="num">{usd(Number(run.costTotalUsd))}</span>
+                        <span class="num">{nullableUsd(run.costTotalUsd)}</span>
                         <span class="num">{duration(run.startedAt, run.endedAt)}</span>
                         <span class="num">{timestamp(run.startedAt)}</span>
                         <span class="num">{run.prUrl === null ? "—" : "open"}</span>

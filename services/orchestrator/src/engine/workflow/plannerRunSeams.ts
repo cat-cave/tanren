@@ -17,7 +17,6 @@ import type { GateReworkRouter } from "../contracts/conflictResolution.js";
 import { buildInLoopBaseShiftRebaseHook } from "../merge/inLoopBaseShift.js";
 import { SpecStatusGateReworkRouter } from "./reviewMerge/conflictResolver/gateReworkRouter.js";
 import { buildPriorGateReworkReader, buildReplanEnqueuer } from "./reviewMerge/conflictResolver/replanEnqueuerPg.js";
-import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { ActorRef } from "../state/actor.js";
 import { designResolverActor } from "../design/designWriterContext.js";
@@ -156,8 +155,8 @@ export function reGateGateReworkSeam(
       runId: context.runId,
       projectId: context.projectId,
       prNumber: deps.prNumber,
-      enqueuer: buildReplanEnqueuer(input.pool as pg.Pool, input.runStateWriter),
-      priorReworks: buildPriorGateReworkReader(input.pool as pg.Pool),
+      enqueuer: buildReplanEnqueuer(input.pool, input.runStateWriter),
+      priorReworks: buildPriorGateReworkReader(input.pool),
     }),
   };
 }
