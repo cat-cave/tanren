@@ -28,9 +28,34 @@ describe("cross-package deep import checker", () => {
   it("ignores deep-import lookalikes outside dependency syntax", () => {
     const lookalikes = {
       file: "services/orchestrator/src/main.ts",
-      text: '// import { x } from "@tanren/db/src/stateEnums.js";\nconst prose = "require(\\\"@tanren/db/src/stateEnums.js\\\")";\nconst template = `export { x } from "@tanren/db/src/stateEnums.js"`;\nconst malformed = from "@tanren/db/src/stateEnums.js";\n',
+      text: '// import { x } from "@tanren/db/src/stateEnums.js";\nconst prose = "require(\\\"@tanren/db/src/stateEnums.js\\\")";\nconst template = `export { x } from "@tanren/db/src/stateEnums.js"`;\n',
     };
     expect(checkCrossPackageDeepImports([lookalikes])).toEqual([]);
+  });
+
+  it("fails closed with a deterministic diagnostic when Oxc cannot parse TS/TSX", () => {
+    expect(
+      checkCrossPackageDeepImports([{ file: "services/orchestrator/src/broken.ts", text: "const incomplete = ;\n" }]),
+    ).toEqual([
+      {
+        rule: "cross-package-deep-import",
+        file: "services/orchestrator/src/broken.ts",
+        line: 1,
+        message: "could not parse TS/TSX source; cross-package import analysis failed closed: Unexpected token",
+      },
+    ]);
+  });
+
+  it("keeps require.resolve and parenthesized require forms outside its lexical scope", () => {
+    const deep = "@tanren/db/src/stateEnums.js";
+    expect(
+      checkCrossPackageDeepImports([
+        {
+          file: "services/orchestrator/src/main.ts",
+          text: `require.resolve("${deep}");\n(require)("${deep}");\n((require))("${deep}");\n`,
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("allows public-entry and intra-package imports", () => {
