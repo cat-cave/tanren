@@ -1,12 +1,12 @@
 # org-costs — bounded, fail-closed organization cost read model
 
-**Phase**: hardening / PR #943 repair  
+**Phase**: hardening / PR #943 repair\
 **Authorship**: This card was authored during the PR #943 repair/redrive; the
 implementation already existed in the PR #943 contribution/repair worktree. It
 is retrospective ownership documentation — recording what was built and how it
-is proven — not a predeclared scope contract.  
+is proven — not a previously declared scope contract.\
 **State at admission**: Cameron DeMille contribution at `6ce3e834`; bounded
-pagination, honest null totals, and fail-closed consumer semantics incomplete  
+pagination, honest null totals, and fail-closed consumer semantics incomplete\
 **Purpose**: replace dashboard project/run fan-out with one organization read
 model while preserving tenant boundaries, cost provenance, unknown monetary
 facts, and explicit product-visible failure states.
@@ -114,7 +114,7 @@ dashboard types are regenerated from the Zod catalog, never hand-maintained.
   the repeatable-read snapshot, the RunStore read, then `COMMIT`; after the
   run stream completes first the subsequent page is cost-only, the same
   five-statement shape with the CostStore read instead. The query manifest excludes duplicate, fan-out, or
-  alternate-authority reads; foreign-org and actorless requests issue zero
+  alternate-authority reads; foreign-org requests and requests without an actor issue zero
   reads. Null-vs-zero totals use `COUNT(cr.cost_usd) = COUNT(cr.id)`, never
   `COALESCE`. A mismatched run/spec binding (same spec id, wrong project, null
   `spec_title` from the constrained LEFT JOIN) fails closed at decode as HTTP
