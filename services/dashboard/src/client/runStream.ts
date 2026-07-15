@@ -63,6 +63,12 @@ function setText(root: HTMLElement, key: string, text: string): void {
   if (el !== null) el.textContent = text;
 }
 
+const eventData = (event: Event): string => {
+  const data = "data" in event ? (event as { data: unknown }).data : undefined;
+  if (typeof data !== "string") throw new Error("SSE event data must be a string");
+  return data;
+};
+
 export function applyStatus(root: HTMLElement, status: string, outcome: string | null): boolean {
   if (getRunStreamPhase(root) !== "live") return false;
   const chip = root.querySelector<HTMLElement>('[data-rd="run-status"]');
@@ -234,12 +240,6 @@ export function initRunStream(deps: RunStreamInitDeps = {}): void {
     noteCostActivity: () => drain.noteCostActivity(),
     enterDrain: (close) => drain.enterDrain(close),
     close: closeStream,
-  };
-
-  const eventData = (event: Event): string => {
-    const data = "data" in event ? (event as { data: unknown }).data : undefined;
-    if (typeof data !== "string") throw new Error("SSE event data must be a string");
-    return data;
   };
 
   source.addEventListener("snapshot", (event) => {
