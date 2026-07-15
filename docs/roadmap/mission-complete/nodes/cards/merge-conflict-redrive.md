@@ -1,9 +1,9 @@
 # merge-conflict-redrive — clean conflict recovery (PR #928 replacement)
 
-**Phase**: mergequeue Phase 0  
+**Phase**: mergequeue Phase 0
 **State at admission**: stale PR #928 (`fix/merge-conflict-dequeue-redrive`, 21
 commits / 112 paths) audited unsuitable wholesale; rebuild from
-`fix/atomic-recovery-park` (`f0f2c4a6`) as a separate stacked unit.  
+`fix/atomic-recovery-park` (`f0f2c4a6`) as a separate stacked unit.
 **Purpose**: for a bisected ordered batch where `B` is the isolated culprit,
 land the entire innocent prefix first, then drive `B` through the same
 per-run conflict-recovery path used for base conflicts. Retire `B` only on a
