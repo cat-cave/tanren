@@ -13,8 +13,8 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./fakes/inMemoryBatchChecker.js";
-import { ScriptedRecoveryEvidencePort } from "../fixtures/scriptedRecoveryEvidence.js";
 import {
   describeMergeCoordinatorConformance,
   type MergeCoordinatorConformanceHarness,
@@ -33,7 +33,7 @@ describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
       events,
       batchEvents: new RecordingBatchMergeEventEmitter(),
       escalator,
-      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+      recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
       // Conformance suite asserts one-at-a-time selection; batch size 1 preserves that.
       resolveMaxBatchSize: async () => 1,
     });

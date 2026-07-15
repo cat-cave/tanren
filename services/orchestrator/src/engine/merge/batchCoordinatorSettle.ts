@@ -5,13 +5,13 @@ import type { BatchCheckVerdict, BatchGateReworkRouter } from "../contracts/batc
 import type { GateReworkRouteResult, ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
 import type {
   CoordinateResult,
-  DequeueReason,
   MergeDriveOutcome,
   MergeQueueEntry,
   MergeQueueModel,
   MergeRunner,
 } from "../contracts/mergeCoordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
+import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
 import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
@@ -21,8 +21,8 @@ import {
   type RecoverableDriveHoldCeiling,
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
-import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
 import { settleFromParkOutcome } from "./parkSettle.js";
+import { settleOwnedRecoveryOrPark, type OwnedQueueSettle } from "./recoveryOwnedQueueSettlement.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-coordinator");
@@ -41,8 +41,8 @@ export interface BatchSettleDeps {
   gateRework?: BatchGateReworkRouter;
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
-  /** Settlement ownership readback. Absent ⇒ conflict parks fail-closed. */
-  recoveryEvidence?: RecoveryEvidencePort;
+  /** Atomic active-successor proof + dequeue event + exact queue retirement. */
+  recoverySettlement?: RecoveryOwnedSettlementWriter;
 }
 
 /** Settle a gate-fail culprit; spec conflicts go through driveConflictCulprit. */
@@ -80,7 +80,7 @@ export async function settleBisectCulprit(
       });
       return "retained";
     }
-    if (settled.reason === "needs_attention" && settled.alreadyDequeued) {
+    if (settled.alreadyDequeued === true) {
       return "dequeued";
     }
     await markDequeuedAfterEvent({
@@ -150,10 +150,6 @@ export async function holdOnRetriableDriveThrow(
   };
 }
 
-type WriterSettle =
-  | { action: "dequeue"; reason: DequeueReason; message: string; alreadyDequeued?: boolean }
-  | { action: "retain"; message: string; retryAfterMs: number };
-
 /** Owned writer receipt → superseded dequeue; else RecoveryParkWriter. */
 async function settleWriterOwnedOrPark(
   deps: BatchSettleDeps,
@@ -162,28 +158,18 @@ async function settleWriterOwnedOrPark(
   recovery: GateReworkRouteResult,
   ownedMessage: string,
   failMessage: string,
-): Promise<WriterSettle> {
+): Promise<OwnedQueueSettle> {
   if (recovery.kind === "owned") {
-    const verified = await verifyRecoveryOwnership({
-      evidence: deps.recoveryEvidence,
-      expectedOrgId: entry.orgId,
-      expectedProjectId: entry.projectId,
-      expectedSpecId: entry.specId,
+    return settleOwnedRecoveryOrPark({
+      recoverySettlement: deps.recoverySettlement,
+      escalator: deps.escalator,
+      projectId,
+      entry,
       receipt: recovery.receipt,
+      reason: "superseded",
+      ownedMessage,
       contextMessage: failMessage,
     });
-    if (verified.ok) {
-      return { action: "dequeue", reason: "superseded", message: ownedMessage };
-    }
-    const park = await deps.escalator.escalate({ projectId, entry, message: verified.message });
-    const settled = settleFromParkOutcome(park, verified.message);
-    if (settled.action === "retain") return settled;
-    return {
-      action: "dequeue",
-      reason: "needs_attention",
-      message: settled.message,
-      alreadyDequeued: settled.alreadyDequeued === true,
-    };
   }
   if (recovery.kind === "terminal_noop") {
     return {
@@ -279,16 +265,8 @@ async function settleNeedsAttention(
     return { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS };
   }
   if (outcome.parking === "complete") {
-    // Already parked outside RecoveryParkWriter — emit dequeue only.
-    await markDequeuedAfterEvent({
-      queue: deps.queue,
-      events: deps.events,
-      projectId,
-      entry,
-      reason: "needs_attention",
-      message: outcome.message,
-      tx: deps.tx,
-    });
+    // The atomic park authority already appended BOTH events and retired the
+    // exact tuple. This downstream acknowledgement must never settle it again.
     await deps.recoverableDriveHolds?.reset(entry.queueId);
     return "dequeued";
   }
@@ -326,50 +304,37 @@ async function settleConflictOwned(
   message: string,
   recovery: ConflictRecoveryReceipt,
 ): Promise<"dequeued" | RecoverableDriveHoldResult> {
-  const verified = await verifyRecoveryOwnership({
-    evidence: deps.recoveryEvidence,
-    expectedOrgId: entry.orgId,
-    expectedProjectId: entry.projectId,
-    expectedSpecId: entry.specId,
-    receipt: recovery,
-    contextMessage: message,
-  });
-  if (!verified.ok) {
-    const park = await deps.escalator.escalate({ projectId, entry, message: verified.message });
-    const settled = settleFromParkOutcome(park, verified.message);
-    if (settled.action === "retain") {
-      await deps.queue.releaseClaim(entry.queueId);
-      log.error("conflict ownership fail retained queue entry after parking_failed", {
-        projectId,
-        specId: entry.specId,
-        message: settled.message,
-      });
-      return { kind: "held", retryAfterMs: settled.retryAfterMs };
-    }
-    if (!settled.alreadyDequeued) {
-      await markDequeuedAfterEvent({
-        queue: deps.queue,
-        events: deps.events,
-        projectId,
-        entry,
-        reason: settled.reason,
-        message: settled.message,
-        tx: deps.tx,
-      });
-    }
-    await deps.recoverableDriveHolds?.reset(entry.queueId);
-    return "dequeued";
-  }
-  await deps.recoverableDriveHolds?.reset(entry.queueId);
-  await markDequeuedAfterEvent({
-    queue: deps.queue,
-    events: deps.events,
+  const settled = await settleOwnedRecoveryOrPark({
+    recoverySettlement: deps.recoverySettlement,
+    escalator: deps.escalator,
     projectId,
     entry,
+    receipt: recovery,
     reason: "conflict",
-    message,
-    tx: deps.tx,
+    ownedMessage: message,
+    contextMessage: message,
   });
+  if (settled.action === "retain") {
+    await deps.queue.releaseClaim(entry.queueId);
+    log.error("conflict ownership settle retained queue entry", {
+      projectId,
+      specId: entry.specId,
+      message: settled.message,
+    });
+    return { kind: "held", retryAfterMs: settled.retryAfterMs };
+  }
+  if (settled.alreadyDequeued !== true) {
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: settled.reason,
+      message: settled.message,
+      tx: deps.tx,
+    });
+  }
+  await deps.recoverableDriveHolds?.reset(entry.queueId);
   return "dequeued";
 }
 
@@ -464,7 +429,7 @@ export async function settleFailedDrive(
     await deps.queue.releaseClaim(culprit.queueId);
     return "retained";
   }
-  if (!(settled.reason === "needs_attention" && settled.alreadyDequeued)) {
+  if (settled.alreadyDequeued !== true) {
     await markDequeuedAfterEvent({
       queue: deps.queue,
       events: deps.events,

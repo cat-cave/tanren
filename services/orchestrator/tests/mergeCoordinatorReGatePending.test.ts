@@ -21,12 +21,12 @@ import { describe, expect, it } from "vitest";
 import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
 import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
-import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
   RecordingSpecEscalator,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 /** A runner that returns a SCRIPTED outcome per drive, in order (so a hold-then-merge sequences). */
 class ScriptedMergeRunner implements MergeRunner {
@@ -70,7 +70,7 @@ function harness(): {
     runner,
     checker: new InMemoryBatchChecker(),
     batchEvents: new RecordingBatchMergeEventEmitter(),
-    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     events,
     escalator: new RecordingSpecEscalator(),
   });

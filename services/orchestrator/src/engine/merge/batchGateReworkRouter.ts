@@ -146,7 +146,13 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       };
     } catch (error) {
       if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(this.deps.pool, orgId, input.culprit.specId);
+        const live = await findActiveOwnerRunForSpec(
+          this.deps.pool,
+          orgId,
+          input.projectId,
+          input.culprit.specId,
+          input.culprit.runId,
+        );
         if (live === undefined) {
           log.error(
             "gate-fail SpecNotRunnableError without active owner — fail closed",

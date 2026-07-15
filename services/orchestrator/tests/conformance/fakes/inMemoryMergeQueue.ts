@@ -118,6 +118,25 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     return undefined;
   }
 
+  /** Test helper: exact queue identity/status for the in-memory atomic settler. */
+  entryForQueueId(projectId: string, queueId: string): (MergeQueueEntry & { status: QueueRow["status"] }) | undefined {
+    const row = this.rows.get(queueId);
+    if (row === undefined) return undefined;
+    return {
+      orgId: "org_test",
+      projectId,
+      queueId: row.queueId,
+      runId: row.runId,
+      specId: row.specId,
+      prUrl: row.prUrl,
+      prNumber: row.prNumber,
+      dependsOn: row.dependsOn,
+      priority: row.priority,
+      orderKey: row.orderKey,
+      status: row.status,
+    };
+  }
+
   async enqueue(input: {
     projectId: string;
     runId: string;

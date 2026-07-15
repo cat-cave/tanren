@@ -49,6 +49,7 @@ class RecordingPool {
     }
     if (text.includes("FROM runs") && text.includes("status IN")) {
       if (this.activeOwner === undefined) return { rows: [] };
+      if (this.activeOwner.runId === String(params?.[3])) return { rows: [] };
       return { rows: [{ run_id: this.activeOwner.runId, status: this.activeOwner.status }] };
     }
     if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SET LOCAL")) {
@@ -347,5 +348,26 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(result.kind).toBe("parking_required");
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
     expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
+  });
+
+  it("does not treat the retiring run itself as the concurrent recovery owner", async () => {
+    const pool = new RecordingPool();
+    pool.activeOwner = { runId: "run_b", status: "running" };
+    const eventStore = new RecordingEventStore();
+    const router = buildRouter({
+      pool,
+      eventStore,
+      enqueuer: new AlreadyClaimedEnqueuer(),
+      priorReplans: noPriorReplans,
+    });
+
+    const result = await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "re-plan ON TOP OF spec_a (sha-new)",
+      otherSpecId: "spec_a",
+    });
+
+    expect(result.kind).toBe("parking_required");
+    expect(eventStore.events.some((event) => event.eventType === "merge.conflict.replan_routed")).toBe(false);
   });
 });

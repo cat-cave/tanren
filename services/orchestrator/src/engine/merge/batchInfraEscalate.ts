@@ -3,12 +3,13 @@
 
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
+import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.js";
 import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import type { BatchInfraHoldCeiling } from "./batchInfraHoldCeiling.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { settleFromParkOutcome } from "./parkSettle.js";
-import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
+import { settleOwnedRecoveryOrPark } from "./recoveryOwnedQueueSettlement.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-coordinator");
@@ -20,7 +21,7 @@ export interface EscalateInfraHoldArgs {
   batchEvents: BatchMergeEventEmitter;
   gateRework: BatchGateReworkRouter;
   escalator: SpecEscalator;
-  recoveryEvidence?: RecoveryEvidencePort;
+  recoverySettlement?: RecoveryOwnedSettlementWriter;
   ceiling: BatchInfraHoldCeiling;
   projectId: string;
   batch: ReadonlyArray<MergeQueueEntry>;
@@ -47,37 +48,21 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
       gateError,
     });
     if (recovery.kind === "owned") {
-      const verified = await verifyRecoveryOwnership({
-        evidence: args.recoveryEvidence,
-        expectedOrgId: entry.orgId,
-        expectedProjectId: entry.projectId,
-        expectedSpecId: entry.specId,
-        receipt: recovery.receipt,
-        contextMessage: gateError,
-      });
-      if (verified.ok) {
-        await markDequeuedAfterEvent({
-          queue: args.queue,
-          events: args.events,
-          projectId: args.projectId,
-          entry,
-          reason: "superseded",
-          message: `routed to writer rework on sustained merge-queue workspace/infra failure: ${args.message}`,
-          ...(args.tx === undefined ? {} : { tx: args.tx }),
-        });
-        continue;
-      }
-      const park = await args.escalator.escalate({
+      const settled = await settleOwnedRecoveryOrPark({
+        recoverySettlement: args.recoverySettlement,
+        escalator: args.escalator,
         projectId: args.projectId,
         entry,
-        message: verified.message,
+        receipt: recovery.receipt,
+        reason: "superseded",
+        ownedMessage: `routed to writer rework on sustained merge-queue workspace/infra failure: ${args.message}`,
+        contextMessage: gateError,
       });
-      const settled = settleFromParkOutcome(park, verified.message);
       if (settled.action === "retain") {
         await args.queue.releaseClaim(entry.queueId);
         continue;
       }
-      if (!settled.alreadyDequeued) {
+      if (settled.alreadyDequeued !== true) {
         await markDequeuedAfterEvent({
           queue: args.queue,
           events: args.events,

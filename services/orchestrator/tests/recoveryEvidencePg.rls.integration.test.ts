@@ -124,6 +124,7 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
       specId: SPEC,
       runStatus: "running",
       plannerTaskId: taskId,
+      plannerTaskKind: "plan",
     });
   });
 
@@ -229,6 +230,19 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
         expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
         receipt: enqueued(SPEC, runId, taskId),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a missing/wrong planner task id on an otherwise exact owner", async () => {
+    const runId = "run_evidence_wrong_task";
+    await seedRun(owner(), runId, "running");
+    await expect(
+      new PgRecoveryEvidencePort(owner()).verifyOwnedReceipt({
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
+        expectedSpecId: SPEC,
+        receipt: enqueued(SPEC, runId, "task_missing"),
       }),
     ).resolves.toBeUndefined();
   });

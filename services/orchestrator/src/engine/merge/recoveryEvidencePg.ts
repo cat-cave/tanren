@@ -13,6 +13,67 @@ import {
   type RecoveryRunEvidence,
 } from "./recoveryOwnership.js";
 
+type RecoveryEvidenceClient = Pick<pg.Pool, "query"> | Pick<pg.PoolClient, "query">;
+
+/**
+ * Exact receipt readback on a caller-owned transaction. `lockOwner` is used by
+ * the atomic dequeue authority so the successor cannot halt between proof and
+ * retirement. The standalone port leaves locking to that authority.
+ */
+export async function readOwnedReceiptEvidence(
+  client: RecoveryEvidenceClient,
+  input: {
+    expectedOrgId: string;
+    expectedProjectId: string;
+    expectedSpecId: string;
+    receipt: ConflictRecoveryReceipt;
+  },
+  lockOwner = false,
+): Promise<RecoveryRunEvidence | undefined> {
+  if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) return undefined;
+  const runId = input.receipt.run.kind === "enqueued" ? input.receipt.run.replanRunId : input.receipt.run.runId;
+  const runResult = await client.query<{
+    org_id: string;
+    project_id: string;
+    run_id: string;
+    spec_id: string;
+    status: string;
+  }>(
+    `SELECT org_id, project_id, run_id, spec_id, status
+       FROM runs
+      WHERE run_id = $1
+        AND org_id = $2
+        AND project_id = $3
+        AND spec_id = $4
+      LIMIT 1${lockOwner ? " FOR UPDATE" : ""}`,
+    [runId, input.expectedOrgId, input.expectedProjectId, input.expectedSpecId],
+  );
+  const row = runResult.rows[0];
+  if (row === undefined || !isActiveOwnerRunStatus(row.status)) return undefined;
+  const run: RecoveryRunEvidence = {
+    orgId: row.org_id,
+    projectId: row.project_id,
+    runId: row.run_id,
+    specId: row.spec_id,
+    runStatus: row.status,
+  };
+  if (input.receipt.run.kind === "already_running") return run;
+
+  const taskResult = await client.query<{ task_id: string; kind: string }>(
+    `SELECT task_id, kind
+       FROM tasks
+      WHERE task_id = $1
+        AND run_id = $2
+        AND org_id = $3
+        AND kind = 'plan'
+      LIMIT 1${lockOwner ? " FOR SHARE" : ""}`,
+    [input.receipt.run.plannerTaskId, input.receipt.run.replanRunId, input.expectedOrgId],
+  );
+  const task = taskResult.rows[0];
+  if (task === undefined) return undefined;
+  return { ...run, plannerTaskId: task.task_id, plannerTaskKind: task.kind };
+}
+
 export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
   constructor(private readonly pool: pg.Pool) {}
 
@@ -25,81 +86,6 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
     if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) {
       return undefined;
     }
-    return runWithSystemScope(this.pool, async (client): Promise<RecoveryRunEvidence | undefined> => {
-      if (input.receipt.run.kind === "already_running") {
-        return this.verifyRun(client, input.receipt.run.runId, input);
-      }
-      const run = await this.verifyRun(client, input.receipt.run.replanRunId, input);
-      if (run === undefined) {
-        return undefined;
-      }
-      const taskOk = await this.taskBelongsToRun(
-        client,
-        input.receipt.run.plannerTaskId,
-        input.receipt.run.replanRunId,
-        input.expectedOrgId,
-      );
-      if (!taskOk) {
-        return undefined;
-      }
-      return { ...run, plannerTaskId: input.receipt.run.plannerTaskId };
-    });
-  }
-
-  private async verifyRun(
-    client: pg.PoolClient,
-    runId: string,
-    expected: { expectedOrgId: string; expectedProjectId: string; expectedSpecId: string },
-  ): Promise<RecoveryRunEvidence | undefined> {
-    const result = await client.query<{
-      org_id: string;
-      project_id: string;
-      run_id: string;
-      spec_id: string;
-      status: string;
-    }>(
-      `SELECT org_id, project_id, run_id, spec_id, status
-         FROM runs
-        WHERE run_id = $1
-          AND org_id = $2
-          AND project_id = $3
-          AND spec_id = $4
-        LIMIT 1`,
-      [runId, expected.expectedOrgId, expected.expectedProjectId, expected.expectedSpecId],
-    );
-    const row = result.rows[0];
-    if (row === undefined || !isActiveOwnerRunStatus(row.status)) {
-      return undefined;
-    }
-    return {
-      orgId: row.org_id,
-      projectId: row.project_id,
-      runId: row.run_id,
-      specId: row.spec_id,
-      runStatus: row.status,
-    };
-  }
-
-  /**
-   * Enqueued proof binds task id + run id + canonical planner task kind (`plan`).
-   * A write/check/etc. task on the same run must NOT satisfy plannerTaskId.
-   */
-  private async taskBelongsToRun(
-    client: pg.PoolClient,
-    plannerTaskId: string,
-    runId: string,
-    expectedOrgId: string,
-  ): Promise<boolean> {
-    const result = await client.query<{ task_id: string }>(
-      `SELECT task_id
-         FROM tasks
-        WHERE task_id = $1
-          AND run_id = $2
-          AND org_id = $3
-          AND kind = 'plan'
-        LIMIT 1`,
-      [plannerTaskId, runId, expectedOrgId],
-    );
-    return result.rows[0] !== undefined;
+    return runWithSystemScope(this.pool, (client) => readOwnedReceiptEvidence(client, input));
   }
 }

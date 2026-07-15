@@ -15,7 +15,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
-import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 const PROJECT = "project_batch";
 
@@ -45,7 +45,7 @@ function makeHarness(maxBatchSize = 5): Harness {
     events,
     batchEvents,
     escalator,
-    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     // Run the bounded infra-error retries instantly (no real backoff in tests).

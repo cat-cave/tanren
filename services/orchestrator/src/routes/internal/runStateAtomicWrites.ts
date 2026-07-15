@@ -20,7 +20,10 @@ import {
 } from "../../engine/worker/runStateLifecycleSql.js";
 import { applyRecordDraftPrCreated } from "../../engine/merge/draftPrCreatedAtomic.js";
 import {
+  applyRecoveryOwnedSettleAtomic,
   applyRecoveryParkAtomic,
+  recoveryOwnedSettleInputSchema,
+  recoveryOwnedSettlementFailed,
   recoveryParkingFailed,
   recoveryParkInputSchema,
 } from "../../engine/worker/recoveryParkAtomic.js";
@@ -125,6 +128,25 @@ export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRoute
       return c.json(outcome, 200);
     } catch {
       return c.json(recoveryParkingFailed("write_failed"), 200);
+    }
+  });
+
+  // Successful recovery authority: exact active successor verification, the
+  // canonical dequeue event, and exact old-candidate retirement share one
+  // transaction. A transport retry reads the committed queue row and dedupes.
+  app.post("/internal/settle-owned-recovery-and-dequeue", async (c) => {
+    if (!authnPeer(c)) return c.json({ error: "untrusted_peer" }, 401);
+    const parsed = recoveryOwnedSettleInputSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_owned_recovery_settle", issues: parsed.error.issues }, 400);
+    }
+    try {
+      const outcome = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+        applyRecoveryOwnedSettleAtomic(client, parsed.data),
+      );
+      return c.json(outcome, 200);
+    } catch {
+      return c.json(recoveryOwnedSettlementFailed("write_failed"), 200);
     }
   });
 

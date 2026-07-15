@@ -5,6 +5,7 @@ import {
   isActiveOwnerRunStatus,
   isRecoverableSourceSpecStatus,
   verifyRecoveryOwnership,
+  type RecoveryRunEvidence,
 } from "../src/engine/merge/recoveryOwnership.js";
 import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
@@ -44,6 +45,7 @@ describe("verifyRecoveryOwnership", () => {
       expectedOrgId: "org_a",
       expectedProjectId: "project_a",
       expectedSpecId: "spec_a",
+      priorRunId: "run_old",
       receipt: ownedEnqueued("spec_a"),
       contextMessage: "ctx",
     });
@@ -55,6 +57,7 @@ describe("verifyRecoveryOwnership", () => {
       expectedOrgId: "org_a",
       expectedProjectId: "project_a",
       expectedSpecId: "spec_a",
+      priorRunId: "run_old",
       receipt: ownedEnqueued("spec_a"),
       contextMessage: "ctx",
     });
@@ -66,7 +69,95 @@ describe("verifyRecoveryOwnership", () => {
       expectedOrgId: "org_a",
       expectedProjectId: "project_a",
       expectedSpecId: "spec_a",
+      priorRunId: "run_old",
       receipt: ownedEnqueued("spec_a"),
+      contextMessage: "ctx",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it.each([
+    ["org", { orgId: "org_wrong" }],
+    ["project", { projectId: "project_wrong" }],
+    ["spec", { specId: "spec_wrong" }],
+    ["run", { runId: "run_wrong" }],
+    ["status", { runStatus: "halted" }],
+    ["planner task", { plannerTaskId: "task_wrong" }],
+    ["planner kind", { plannerTaskKind: "write" }],
+  ] as const)("rejects a port that returns mismatched %s evidence", async (_name, changed) => {
+    const receipt = ownedEnqueued("spec_a");
+    const exact: RecoveryRunEvidence = {
+      orgId: "org_a",
+      projectId: "project_a",
+      specId: "spec_a",
+      runId: "run_r",
+      runStatus: "running",
+      plannerTaskId: "task_r",
+      plannerTaskKind: "plan",
+    };
+    const r = await verifyRecoveryOwnership({
+      evidence: { verifyOwnedReceipt: () => Promise.resolve({ ...exact, ...changed }) },
+      expectedOrgId: "org_a",
+      expectedProjectId: "project_a",
+      expectedSpecId: "spec_a",
+      priorRunId: "run_old",
+      receipt,
+      contextMessage: "ctx",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects unexpected planner evidence on already_running", async () => {
+    const receipt: ConflictRecoveryReceipt = {
+      kind: "planner_replan",
+      specId: "spec_a",
+      run: { kind: "already_running", runId: "run_r" },
+    };
+    const r = await verifyRecoveryOwnership({
+      evidence: {
+        verifyOwnedReceipt: () =>
+          Promise.resolve({
+            orgId: "org_a",
+            projectId: "project_a",
+            specId: "spec_a",
+            runId: "run_r",
+            runStatus: "running",
+            plannerTaskId: "task_unexpected",
+            plannerTaskKind: "plan",
+          }),
+      },
+      expectedOrgId: "org_a",
+      expectedProjectId: "project_a",
+      expectedSpecId: "spec_a",
+      priorRunId: "run_old",
+      receipt,
+      contextMessage: "ctx",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects the retiring run itself as replacement ownership", async () => {
+    const receipt: ConflictRecoveryReceipt = {
+      kind: "planner_replan",
+      specId: "spec_a",
+      run: { kind: "already_running", runId: "run_old" },
+    };
+    const r = await verifyRecoveryOwnership({
+      evidence: {
+        verifyOwnedReceipt: () =>
+          Promise.resolve({
+            orgId: "org_a",
+            projectId: "project_a",
+            specId: "spec_a",
+            runId: "run_old",
+            runStatus: "running",
+          }),
+      },
+      expectedOrgId: "org_a",
+      expectedProjectId: "project_a",
+      expectedSpecId: "spec_a",
+      priorRunId: "run_old",
+      receipt,
       contextMessage: "ctx",
     });
     expect(r.ok).toBe(false);

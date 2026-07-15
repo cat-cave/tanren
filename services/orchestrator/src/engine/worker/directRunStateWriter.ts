@@ -30,6 +30,9 @@ import type {
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
+  RecoveryOwnedSettleInput,
+  RecoveryOwnedSettleOutcome,
+  RecoveryOwnedSettlementWriter,
   RecoveryParkInput,
   RecoveryParkOutcome,
   RecoveryParkWriter,
@@ -83,7 +86,14 @@ import {
 } from "./runStateLifecycleSql.js";
 import { applyFinalizeLand } from "../merge/mergeAuthorityLandFinalizer.js";
 import { applyRecordDraftPrCreated } from "../merge/draftPrCreatedAtomic.js";
-import { applyRecoveryParkAtomic, parseRecoveryParkInput, recoveryParkingFailed } from "./recoveryParkAtomic.js";
+import {
+  applyRecoveryOwnedSettleAtomic,
+  applyRecoveryParkAtomic,
+  parseRecoveryOwnedSettleInput,
+  parseRecoveryParkInput,
+  recoveryOwnedSettlementFailed,
+  recoveryParkingFailed,
+} from "./recoveryParkAtomic.js";
 
 /**
  * The in-process run-state writer. Constructed with the worker's pool (typically
@@ -92,7 +102,7 @@ import { applyRecoveryParkAtomic, parseRecoveryParkInput, recoveryParkingFailed 
  * finalize UPDATE + the matching event share one org-scoped transaction —
  * identical to the worker's prior `withRunFinalizeScope`.
  */
-export class DirectRunStateWriter implements RunStateWriter, RecoveryParkWriter {
+export class DirectRunStateWriter implements RunStateWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter {
   /**
    * apex v87: local pool can INSERT `events` — batch coordinator may co-transact
    * dequeue settle with merge_queue UPDATEs (see `canCoTransactMergeSettle`).
@@ -269,6 +279,16 @@ export class DirectRunStateWriter implements RunStateWriter, RecoveryParkWriter 
       // inherently uncertain. Never fabricate a dequeue receipt in either case —
       // the idempotent redrive resolves the durable queue anchor.
       return recoveryParkingFailed("write_failed");
+    }
+  }
+
+  async settleOwnedRecoveryAndDequeue(input: RecoveryOwnedSettleInput): Promise<RecoveryOwnedSettleOutcome> {
+    const parsed = parseRecoveryOwnedSettleInput(input);
+    if (parsed === undefined) return recoveryOwnedSettlementFailed("invalid_input");
+    try {
+      return await runWithOrgScope(this.pool, parsed.orgId, (client) => applyRecoveryOwnedSettleAtomic(client, parsed));
+    } catch {
+      return recoveryOwnedSettlementFailed("write_failed");
     }
   }
 

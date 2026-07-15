@@ -30,7 +30,7 @@ import {
   PgMergeSettleTransaction,
 } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
-import { PgRecoveryEvidencePort } from "./recoveryEvidencePg.js";
+import { requireRecoveryOwnedSettlementWriter } from "./recoveryOwnership.js";
 
 /**
  * apex v87: local both-or-neither settle (`PgMergeSettleTransaction`) opens
@@ -76,6 +76,7 @@ export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Pro
  */
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
   const runStateWriter = requireRecoveryParkWriter(deps.runStateWriter);
+  const recoverySettlement = requireRecoveryOwnedSettlementWriter(runStateWriter);
   const queueModel = new PgMergeQueueModel(deps.pool);
   // ATOMICITY (audit RC-4 #3) + plane-split (apex v87): co-transact event+queue UPDATE
   // ONLY when the writer is Direct (local pool can INSERT events). HttpRunStateWriter
@@ -84,9 +85,6 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
   const settleTx = canCoTransactMergeSettle(runStateWriter)
     ? new PgMergeSettleTransaction(deps.pool, queueModel)
     : undefined;
-  // Sole production RecoveryEvidencePort — settlement re-verifies owned receipts under
-  // system/BYPASSRLS. Absence would fail-closed park every conflict; wire it always.
-  const recoveryEvidence = new PgRecoveryEvidencePort(deps.pool);
   return new BatchMergeCoordinator({
     queue: queueModel,
     ...(settleTx !== undefined && { tx: settleTx }),
@@ -120,7 +118,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       pool: deps.pool,
       runStateWriter,
     }),
-    recoveryEvidence,
+    recoverySettlement,
     // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
     // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.

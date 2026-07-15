@@ -27,7 +27,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
-import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 const PROJECT = "project_batch_gate_rework";
 
@@ -55,7 +55,7 @@ function makeHarness(): Harness {
     events,
     batchEvents,
     escalator: new RecordingSpecEscalator(),
-    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
@@ -135,6 +135,21 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
   });
 
+  it("a fresh-drive failure settled by the atomic writer authority emits and retires exactly once", async () => {
+    const h = makeHarness();
+    seed(h, "spec_failed_drive");
+    h.runner.script("run_spec_failed_drive", { kind: "failed", message: "fresh merge validation failed" });
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.gateRework.routed.map((route) => route.specId)).toEqual(["spec_failed_drive"]);
+    expect(h.queue.statusOf("run_spec_failed_drive")).toBe("dequeued");
+    expect(h.queue.dequeueReasonOf("run_spec_failed_drive")).toBe("superseded");
+    expect(
+      h.events.events.filter((event) => event.type === "merge.dequeued" && event.specId === "spec_failed_drive"),
+    ).toHaveLength(1);
+  });
+
   it("with NO gateRework router wired, a gate-fail culprit parks via escalator (degenerate assembly)", async () => {
     // No-router fallback parks loudly (RecoveryPark / escalator) — never fabricates a
     // conflict owner. Production ALWAYS wires the router.
@@ -150,7 +165,7 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
       events,
       batchEvents: new RecordingBatchMergeEventEmitter(),
       escalator,
-      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+      recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
       resolveMaxBatchSize: () => Promise.resolve(5),
       sleep: () => Promise.resolve(),
     });

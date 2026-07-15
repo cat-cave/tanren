@@ -38,7 +38,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
-import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 const PROJECT = "project_batch";
 
@@ -68,7 +68,7 @@ function makeHarness(): Harness {
     events,
     batchEvents,
     escalator,
-    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),

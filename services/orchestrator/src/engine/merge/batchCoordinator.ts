@@ -24,7 +24,7 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
-import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
+import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.js";
 import {
   driveBaseConflict,
   driveConflictCulprit,
@@ -104,8 +104,8 @@ export interface BatchMergeCoordinatorDeps {
   /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
-  /** Settlement ownership readback. Absent ⇒ conflict parks fail-closed. */
-  recoveryEvidence?: RecoveryEvidencePort;
+  /** Atomic active-successor proof + canonical event + exact queue retirement. */
+  recoverySettlement?: RecoveryOwnedSettlementWriter;
   /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
   holdCeilingStore?: HoldCeilingStore;
   /** Per-project max batch size resolver. Default → `DEFAULT_MAX_BATCH_SIZE`; prod reads `projects.config.maxBatchSize`. */
@@ -353,7 +353,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       batchEvents,
       gateRework,
       escalator: this.deps.escalator,
-      ...(this.deps.recoveryEvidence === undefined ? {} : { recoveryEvidence: this.deps.recoveryEvidence }),
+      ...(this.deps.recoverySettlement === undefined ? {} : { recoverySettlement: this.deps.recoverySettlement }),
       ceiling,
       projectId,
       batch,

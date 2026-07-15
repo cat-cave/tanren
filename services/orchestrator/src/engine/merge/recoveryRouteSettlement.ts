@@ -8,6 +8,8 @@ import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { ConflictRecoveryDisposition, ConflictRecoverySettlement } from "../contracts/conflictResolution.js";
 import type { RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
+import { PgRecoveryEvidencePort } from "./recoveryEvidencePg.js";
+import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
 import { recoverableRetryDelayMs } from "./retrySchedule.js";
 
 export type RecoveryCapableRunStateWriter = RunStateWriter & RecoveryParkWriter;
@@ -52,10 +54,15 @@ const RETRY_AFTER_MS = recoverableRetryDelayMs(1);
  * any mutation, so a lookup race fails closed rather than granting a receipt.
  */
 export class PgRecoveryRouteSettler implements RecoveryRouteSettler {
+  private readonly evidence: RecoveryEvidencePort;
+
   constructor(
     private readonly pool: pg.Pool,
     private readonly writer: RecoveryCapableRunStateWriter,
-  ) {}
+    evidence?: RecoveryEvidencePort,
+  ) {
+    this.evidence = evidence ?? new PgRecoveryEvidencePort(pool);
+  }
 
   async settle(input: {
     projectId: string;
@@ -63,7 +70,7 @@ export class PgRecoveryRouteSettler implements RecoveryRouteSettler {
     specId: string;
     recovery: ConflictRecoveryDisposition;
   }): Promise<ConflictRecoverySettlement> {
-    if (input.recovery.kind === "owned" || input.recovery.kind === "terminal_noop") {
+    if (input.recovery.kind === "terminal_noop") {
       return input.recovery;
     }
     if (input.recovery.kind === "parking_failed") {
@@ -77,11 +84,31 @@ export class PgRecoveryRouteSettler implements RecoveryRouteSettler {
 
     const target = await this.loadActiveTarget(input);
     if (target === undefined) {
+      const recoveryMessage =
+        input.recovery.kind === "owned" ? `owned recovery receipt for ${input.specId}` : input.recovery.message;
       return {
         kind: "parking_failed",
         message:
-          `${input.recovery.message} (atomic park could not resolve an exact active ` +
+          `${recoveryMessage} (recovery settlement could not resolve an exact active ` +
           `queue owner for project=${input.projectId} run=${input.runId} spec=${input.specId})`,
+        queueDisposition: "unknown",
+        retryAfterMs: RETRY_AFTER_MS,
+      };
+    }
+    if (input.recovery.kind === "owned") {
+      const verified = await verifyRecoveryOwnership({
+        evidence: this.evidence,
+        expectedOrgId: target.orgId,
+        expectedProjectId: input.projectId,
+        expectedSpecId: input.specId,
+        priorRunId: input.runId,
+        receipt: input.recovery.receipt,
+        contextMessage: `DAG recovery for prior run ${input.runId}`,
+      });
+      if (verified.ok) return input.recovery;
+      return {
+        kind: "parking_failed",
+        message: verified.message,
         queueDisposition: "unknown",
         retryAfterMs: RETRY_AFTER_MS,
       };

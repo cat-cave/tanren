@@ -361,7 +361,13 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       // run-create's `open`-status claim found it taken). The spec IS being re-driven on
       // that run, so this is not a strand -- log + treat as a confirmed re-drive.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(this.deps.pool, this.deps.orgId, input.specId);
+        const live = await findActiveOwnerRunForSpec(
+          this.deps.pool,
+          this.deps.orgId,
+          this.deps.projectId,
+          input.specId,
+          this.deps.runId,
+        );
         if (live === undefined) {
           log.error(
             "re-plan SpecNotRunnableError without an active owner run -- fail closed",

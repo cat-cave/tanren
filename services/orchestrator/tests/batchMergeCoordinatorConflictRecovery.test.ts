@@ -9,8 +9,8 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
-import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "proj_conflict_recovery";
 
@@ -44,8 +44,10 @@ function harness(opts?: { rejectOwnership?: boolean }) {
   const events = new RecordingMergeQueueEventEmitter();
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const escalator = new RecordingSpecEscalator();
-  const recoveryEvidence = new ScriptedRecoveryEvidencePort(
-    opts?.rejectOwnership === true ? "reject-all" : "accept-structural",
+  const recoverySettlement = new InMemoryRecoveryOwnedSettlementWriter(
+    queue,
+    events,
+    opts?.rejectOwnership === true ? "reject" : "accept",
   );
   const coordinator = new BatchMergeCoordinator({
     queue,
@@ -54,7 +56,7 @@ function harness(opts?: { rejectOwnership?: boolean }) {
     events,
     batchEvents,
     escalator,
-    recoveryEvidence,
+    recoverySettlement,
   });
   return { coordinator, queue, runner, checker, events, batchEvents, escalator };
 }

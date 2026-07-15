@@ -23,6 +23,7 @@ import {
   type RecoveryRouteSettler,
 } from "../src/engine/merge/recoveryRouteSettlement.js";
 import { driveOutcomeFromRecoverySettlement } from "../src/engine/merge/driveConflictVerdict.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const ORG = "org_recovery";
 const PROJECT = "project_recovery";
@@ -85,6 +86,17 @@ function clearRecordingWriter(clears: string[]): RecoveryCapableRunStateWriter {
 
 function parkingRequired(message = "fixed point"): ConflictRecoveryDisposition {
   return { kind: "parking_required", message };
+}
+
+function ownedRecovery(runId = "run_new_owner"): ConflictRecoveryDisposition {
+  return {
+    kind: "owned",
+    receipt: {
+      kind: "planner_replan",
+      specId: SPEC,
+      run: { kind: "already_running", runId },
+    },
+  };
 }
 
 class RecoveryPersistence implements BaseShiftPersistence {
@@ -203,6 +215,28 @@ async function kickOff(coord: BaseShiftCoordinator) {
 }
 
 describe("typed recovery settlement — exact atomic authority", () => {
+  it("returns owned only after exact active ownership readback", async () => {
+    const recovery = ownedRecovery();
+    const accepted = new PgRecoveryRouteSettler(
+      poolAsPg(new RecoveryPool()),
+      writerReturning({ kind: "parked", newlyParked: true }, []),
+      new ScriptedRecoveryEvidencePort("accept-structural"),
+    );
+    await expect(accepted.settle({ projectId: PROJECT, runId: RUN, specId: SPEC, recovery })).resolves.toEqual(
+      recovery,
+    );
+
+    const rejected = new PgRecoveryRouteSettler(
+      poolAsPg(new RecoveryPool()),
+      writerReturning({ kind: "parked", newlyParked: true }, []),
+      new ScriptedRecoveryEvidencePort("reject-all"),
+    );
+    await expect(rejected.settle({ projectId: PROJECT, runId: RUN, specId: SPEC, recovery })).resolves.toMatchObject({
+      kind: "parking_failed",
+      queueDisposition: "unknown",
+    });
+  });
+
   it("parking_required parks the exact active tuple once", async () => {
     const pool = new RecoveryPool();
     const calls: Array<Record<string, unknown>> = [];
@@ -244,6 +278,20 @@ describe("typed recovery settlement — exact atomic authority", () => {
 });
 
 describe("base-shift/percolation consumers preserve settlement truth", () => {
+  it("rejected owned evidence retains the base-shift marker and emits no visible success", async () => {
+    const persistence = new RecoveryPersistence(
+      new PgRecoveryRouteSettler(
+        poolAsPg(new RecoveryPool()),
+        writerReturning({ kind: "parked", newlyParked: true }, []),
+        new ScriptedRecoveryEvidencePort("reject-all"),
+      ),
+    );
+    await expect(
+      kickOff(coordinator({ persistence, gateRecovery: ownedRecovery(), decisions: [] })),
+    ).rejects.toMatchObject({ stage: "recovery" });
+    expect(persistence.order).toEqual(["settle"]);
+  });
+
   it("a clean gate fixed point parks before clear and is not reported replanned/reexecuting", async () => {
     const calls: Array<Record<string, unknown>> = [];
     const order: string[] = [];

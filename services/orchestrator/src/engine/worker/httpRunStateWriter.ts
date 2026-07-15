@@ -30,6 +30,9 @@ import type {
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
+  RecoveryOwnedSettleInput,
+  RecoveryOwnedSettleOutcome,
+  RecoveryOwnedSettlementWriter,
   RecoveryParkInput,
   RecoveryParkOutcome,
   RecoveryParkWriter,
@@ -54,7 +57,14 @@ import type { EventName } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
 import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
-import { parseRecoveryParkInput, parseRecoveryParkOutcome, recoveryParkingFailed } from "./recoveryParkAtomic.js";
+import {
+  parseRecoveryOwnedSettleInput,
+  parseRecoveryOwnedSettleOutcome,
+  parseRecoveryParkInput,
+  parseRecoveryParkOutcome,
+  recoveryOwnedSettlementFailed,
+  recoveryParkingFailed,
+} from "./recoveryParkAtomic.js";
 
 /** Thrown when a control-plane write endpoint returns a non-2xx status. */
 export class RunStateWriteTransportError extends Error {
@@ -76,7 +86,7 @@ export class RunStateWriteTransportError extends Error {
  * deliberate exception is `parkRecoveryAndDequeue`: its port requires transport
  * uncertainty to become typed `parking_failed` + paced idempotent redrive.
  */
-export class HttpRunStateWriter implements RunStateWriter, RecoveryParkWriter {
+export class HttpRunStateWriter implements RunStateWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter {
   constructor(
     private readonly baseUrl: string,
     private readonly mtlsFetch: MtlsFetch,
@@ -271,6 +281,19 @@ export class HttpRunStateWriter implements RunStateWriter, RecoveryParkWriter {
       // have been lost after COMMIT. The queue row is the idempotency readback on
       // the paced retry, so transport uncertainty never becomes false success.
       return recoveryParkingFailed("transport_failed");
+    }
+  }
+
+  async settleOwnedRecoveryAndDequeue(input: RecoveryOwnedSettleInput): Promise<RecoveryOwnedSettleOutcome> {
+    const parsed = parseRecoveryOwnedSettleInput(input);
+    if (parsed === undefined) return recoveryOwnedSettlementFailed("invalid_input");
+    try {
+      const response = await this.post<unknown>("/internal/settle-owned-recovery-and-dequeue", parsed);
+      return parseRecoveryOwnedSettleOutcome(response) ?? recoveryOwnedSettlementFailed("transport_failed");
+    } catch {
+      // The request may have committed before its acknowledgement was lost. Only
+      // the idempotent queue-row readback on redrive may turn this into success.
+      return recoveryOwnedSettlementFailed("transport_failed");
     }
   }
 

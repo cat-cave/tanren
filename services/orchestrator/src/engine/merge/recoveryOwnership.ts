@@ -11,6 +11,7 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
+import type { RecoveryOwnedSettlementWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import { isPool, type QueryClient } from "../data/orgScopedDb.js";
 
 /**
@@ -44,6 +45,7 @@ export interface RecoveryRunEvidence {
   specId: string;
   runStatus: string;
   plannerTaskId?: string;
+  plannerTaskKind?: string;
 }
 
 /**
@@ -58,6 +60,19 @@ export interface RecoveryEvidencePort {
     expectedSpecId: string;
     receipt: ConflictRecoveryReceipt;
   }): Promise<RecoveryRunEvidence | undefined>;
+}
+
+export type RecoveryOwnedCapableRunStateWriter = RunStateWriter & RecoveryOwnedSettlementWriter;
+
+/** Production assembly guard for the atomic owned-recovery authority. */
+export function requireRecoveryOwnedSettlementWriter(writer: RunStateWriter): RecoveryOwnedCapableRunStateWriter {
+  if (
+    !("settleOwnedRecoveryAndDequeue" in writer) ||
+    typeof (writer as { settleOwnedRecoveryAndDequeue?: unknown }).settleOwnedRecoveryAndDequeue !== "function"
+  ) {
+    throw new Error("owned recovery settlement requires RunStateWriter & RecoveryOwnedSettlementWriter");
+  }
+  return writer as RecoveryOwnedCapableRunStateWriter;
 }
 
 /**
@@ -79,16 +94,22 @@ function requirePool(client: QueryClient, context: string): pg.Pool {
 export async function findActiveOwnerRunForSpec(
   pool: QueryClient,
   orgId: string,
+  projectId: string,
   specId: string,
+  priorRunId: string,
 ): Promise<{ runId: string; status: string } | undefined> {
   const realPool = requirePool(pool, "findActiveOwnerRunForSpec");
   return runWithOrgScope(realPool, orgId, async (client): Promise<{ runId: string; status: string } | undefined> => {
     const result = await client.query<{ run_id: string; status: string }>(
       `SELECT run_id, status FROM runs
-         WHERE spec_id = $1 AND status IN ('queued', 'running', 'paused')
+         WHERE org_id = $1
+           AND project_id = $2
+           AND spec_id = $3
+           AND run_id <> $4
+           AND status IN ('queued', 'running', 'paused')
          ORDER BY started_at DESC NULLS LAST, run_id ASC
          LIMIT 1`,
-      [specId],
+      [orgId, projectId, specId, priorRunId],
     );
     const row = result.rows[0];
     if (row === undefined) {
@@ -124,9 +145,13 @@ export async function verifyRecoveryOwnership(input: {
   expectedOrgId: string;
   expectedProjectId: string;
   expectedSpecId: string;
+  priorRunId: string;
   receipt: ConflictRecoveryReceipt;
   contextMessage: string;
 }): Promise<{ ok: true; evidence: RecoveryRunEvidence } | { ok: false; message: string }> {
+  if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) {
+    return ownershipFailure(input, "receipt is malformed or names a different spec");
+  }
   if (input.evidence === undefined) {
     return {
       ok: false,
@@ -142,12 +167,38 @@ export async function verifyRecoveryOwnership(input: {
     receipt: input.receipt,
   });
   if (evidence === undefined) {
-    return {
-      ok: false,
-      message:
-        `recovery ownership receipt failed settlement-time store readback for ${input.expectedSpecId} ` +
-        `(new owner run+spec+task must re-verify; stale PR/head is not evidence): ${input.contextMessage}`,
-    };
+    return ownershipFailure(input, "settlement-time store readback returned no active owner");
+  }
+
+  const expectedRunId = input.receipt.run.kind === "enqueued" ? input.receipt.run.replanRunId : input.receipt.run.runId;
+  const exactIdentity =
+    evidence.runId !== input.priorRunId &&
+    evidence.orgId === input.expectedOrgId &&
+    evidence.projectId === input.expectedProjectId &&
+    evidence.specId === input.expectedSpecId &&
+    evidence.runId === expectedRunId &&
+    isActiveOwnerRunStatus(evidence.runStatus);
+  const exactPlannerTask =
+    input.receipt.run.kind === "enqueued"
+      ? evidence.plannerTaskId === input.receipt.run.plannerTaskId && evidence.plannerTaskKind === "plan"
+      : evidence.plannerTaskId === undefined && evidence.plannerTaskKind === undefined;
+  if (!exactIdentity || !exactPlannerTask) {
+    return ownershipFailure(input, "store readback did not exactly match org/project/spec/run/planner-task/status");
   }
   return { ok: true, evidence };
+}
+
+function ownershipFailure(
+  input: {
+    expectedSpecId: string;
+    contextMessage: string;
+  },
+  reason: string,
+): { ok: false; message: string } {
+  return {
+    ok: false,
+    message:
+      `recovery ownership receipt failed verification for ${input.expectedSpecId}: ${reason} ` +
+      `(new owner run+spec+task must re-verify; stale PR/head is not evidence): ${input.contextMessage}`,
+  };
 }

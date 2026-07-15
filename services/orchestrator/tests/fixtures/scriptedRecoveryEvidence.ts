@@ -24,6 +24,7 @@ export class ScriptedRecoveryEvidencePort implements RecoveryEvidencePort {
         specId: input.expectedSpecId,
         runStatus: "queued",
         plannerTaskId: input.receipt.run.plannerTaskId,
+        plannerTaskKind: "plan",
       };
     }
     if (!isActiveOwnerRunStatus("running")) return undefined;

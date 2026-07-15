@@ -123,7 +123,13 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       // BENIGN RACE: a concurrent tick already claimed the re-opened spec — a run IS being
       // driven, so this is not a strand. Record the routing observably (no new run id).
       if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(this.deps.pool, this.deps.orgId, input.specId);
+        const live = await findActiveOwnerRunForSpec(
+          this.deps.pool,
+          this.deps.orgId,
+          this.deps.projectId,
+          input.specId,
+          this.deps.runId,
+        );
         if (live === undefined) {
           log.error(
             "re-gate gate-fail SpecNotRunnableError without active owner — fail closed",

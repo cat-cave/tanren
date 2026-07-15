@@ -30,34 +30,69 @@ dequeue or `replanned` ownership.
 ## Exclusive ownership
 
 - `docs/roadmap/mission-complete/nodes/cards/merge-conflict-redrive.md`
-- `services/orchestrator/src/engine/contracts/conflictResolution.ts`
-  (receipt / route-result types only)
-- `services/orchestrator/src/engine/contracts/mergeCoordinator.ts`
-  (drive outcomes + delete `recoverDequeuedCandidates`)
+- `justfile` (`db-rls-smoke` recovery proof cohort only)
 - `services/orchestrator/src/engine/contracts/batchMergeCoordinator.ts`
-  (`BatchGateReworkRouter` return types)
+- `services/orchestrator/src/engine/contracts/changePercolation.ts`
+- `services/orchestrator/src/engine/contracts/conflictResolution.ts`
+- `services/orchestrator/src/engine/contracts/mergeCoordinator.ts`
+- `services/orchestrator/src/engine/contracts/runStateAtomicSeam.ts`
+- `services/orchestrator/src/engine/contracts/runStateWriter.ts`
+- `services/orchestrator/src/engine/dag/baseShiftCoordinator.ts`
+- `services/orchestrator/src/engine/dag/baseShiftCoordinatorPg.ts`
+- `services/orchestrator/src/engine/dag/baseShiftLiveResolve.ts`
+- `services/orchestrator/src/engine/dag/baseShiftLiveSeams.ts`
+- `services/orchestrator/src/engine/dag/baseShiftPorts.ts`
+- `services/orchestrator/src/engine/dag/baseShiftRebaseHook.ts`
+- `services/orchestrator/src/engine/dag/baseShiftRecovery.ts`
+- `services/orchestrator/src/engine/dag/percolation.ts`
+- `services/orchestrator/src/engine/dag/percolationBuild.ts`
+- `services/orchestrator/src/engine/dag/percolationOperation.ts`
+- `services/orchestrator/src/engine/dag/percolationWrites.ts`
 - `services/orchestrator/src/engine/merge/batchCoordinator.ts`
-- `services/orchestrator/src/engine/merge/batchCoordinatorSettle.ts`
 - `services/orchestrator/src/engine/merge/batchCoordinatorBuild.ts`
-  (recovery-evidence / park wiring only)
+- `services/orchestrator/src/engine/merge/batchCoordinatorSettle.ts`
 - `services/orchestrator/src/engine/merge/batchGateReworkRouter.ts`
-- `services/orchestrator/src/engine/merge/recoveryOwnership.ts`
-- `services/orchestrator/src/engine/merge/recoveryEvidencePg.ts`
+- `services/orchestrator/src/engine/merge/batchInfraEscalate.ts`
 - `services/orchestrator/src/engine/merge/coordinator.ts`
-  (delete production-dead `EventEmittingMergeCoordinator`; keep pure settle helpers)
-- `services/orchestrator/src/engine/merge/coordinatorPg.ts`
-  (delete `recoverDequeuedCandidates` SQL/facade)
-- `services/orchestrator/src/engine/merge/coordinatorEscalate.ts`
 - `services/orchestrator/src/engine/merge/coordinatorBuild.ts`
-  (conflict outcome carries recovery receipt)
+- `services/orchestrator/src/engine/merge/coordinatorEscalate.ts`
+- `services/orchestrator/src/engine/merge/coordinatorEvents.ts`
+- `services/orchestrator/src/engine/merge/coordinatorPg.ts`
 - `services/orchestrator/src/engine/merge/driveConflictResolve.ts`
+- `services/orchestrator/src/engine/merge/driveConflictResolveJj.ts`
+- `services/orchestrator/src/engine/merge/driveConflictVerdict.ts`
+- `services/orchestrator/src/engine/merge/driveReGateRework.ts`
+- `services/orchestrator/src/engine/merge/infraNonRecovery.ts`
+- `services/orchestrator/src/engine/merge/missingRequiredCredential.ts` (deleted)
+- `services/orchestrator/src/engine/merge/parkSettle.ts`
+- `services/orchestrator/src/engine/merge/recoveryEvidencePg.ts`
+- `services/orchestrator/src/engine/merge/recoveryOwnedQueueSettlement.ts`
+- `services/orchestrator/src/engine/merge/recoveryOwnership.ts`
+- `services/orchestrator/src/engine/merge/recoveryRouteSettlement.ts`
+- `services/orchestrator/src/engine/worker/directRunStateWriter.ts`
+- `services/orchestrator/src/engine/worker/httpRunStateWriter.ts`
+- `services/orchestrator/src/engine/worker/recoveryParkAtomic.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/replanRouter.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/gateReworkRouter.ts`
+- `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/index.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/resolver.ts`
-  (typed replan/rework disposition wiring)
 - `services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatchTypes.ts`
-  (typed recovery fields only if required by drive outcome)
-- Related focused tests under `services/orchestrator/tests/**` for the above
+- `services/orchestrator/src/engine/workflow/reviewMerge/mergeDispatcher.ts`
+- `services/orchestrator/src/engine/workflow/reviewMerge/mergeLandPaths.ts`
+- `services/orchestrator/src/routes/internal/runStateAtomicWrites.ts`
+- Related focused tests only in these path families:
+  `services/orchestrator/tests/batchCoordinator*.test.ts`,
+  `batchGateReworkRouter.test.ts`, `batchMergeCoordinator*.test.ts`,
+  `conflictResolver.test.ts`, `coordinatorBuildDriveScope.test.ts`,
+  `dagBaseShift*.test.ts`, `dagPercolation*.test.ts`,
+  `dagRecoverySettlement.test.ts`, `dagWalker*.test.ts`,
+  `driveConflictResolve.test.ts`, `driveMergePercolationYield.test.ts`,
+  `gateReworkRouter.test.ts`, `markDequeuedAfterEventAtomicity.test.ts`,
+  `mergeClaimLease.test.ts`, `mergeCoordinator*.test.ts`,
+  `mergeLand*.test.ts`, `mergeQueueDequeuedRecovery*.test.ts` (deleted),
+  `mergeSelectNext.test.ts`, `parkSettle.test.ts`, `recovery*.test.ts`,
+  `reviewMergeP2a.test.ts`, `services/orchestrator/tests/conformance/**`, and
+  `services/orchestrator/tests/fixtures/scriptedRecovery*.ts`.
 
 ## Shared-resource leases, not owned paths
 
@@ -135,6 +170,6 @@ active run.
 ## Contributor / branch context
 
 - Branch: `fix/merge-conflict-redrive-clean-replacement`
-- Base: `f0f2c4a6` (`fix/atomic-recovery-park`)
+- Base: `e065315b` (`origin/main` after notification ordering #955)
 - Worktree: `.codex/worktrees/pr-928-clean-replacement`
 - Never cherry-pick or merge `fix/merge-conflict-dequeue-redrive`
