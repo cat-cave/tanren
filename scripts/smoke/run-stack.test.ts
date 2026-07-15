@@ -86,6 +86,42 @@ function waitForExit(child: ChildProcess, waitMs: number): Promise<number | null
   });
 }
 
+/** Deterministic operator AbortSignal: fires after N polls (no wall-clock timing, no
+ * infinite loop). A permanently-not-ready candidate is a fixed point, not a cycle, so the
+ * operator signal fences it — the negative control for the dead/redirect candidates. */
+function operatorFence(pollsBeforeAbort: number): { signal: AbortSignal; sleep: () => Promise<void> } {
+  const controller = new AbortController();
+  let polls = 0;
+  return {
+    signal: controller.signal,
+    sleep: async () => {
+      polls += 1;
+      if (polls >= pollsBeforeAbort) controller.abort(new Error("candidate never converged within the operator fence"));
+    },
+  };
+}
+
+/** A candidate that returns 503 until `flip()` makes it semantically healthy. */
+async function listenUntilReady(ready: unknown): Promise<{ url: string; flip: () => void }> {
+  let healthy = false;
+  const server = createServer((_request, response) => {
+    if (healthy) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(ready));
+    } else {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: false }));
+    }
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("test server exposed no TCP port");
+  return { url: `http://127.0.0.1:${address.port}/healthz`, flip: () => (healthy = true) };
+}
+
 afterEach(async () => {
   await Promise.all(
     servers.splice(0).map(
@@ -101,20 +137,46 @@ afterEach(async () => {
 describe("exact-stack smoke coordinator", () => {
   it("fails a dead candidate while a healthy default-port decoy remains untouched", async () => {
     const decoy = await listen({ ok: true, database: "ok", vault: { ok: true } });
+    // A dead port reports the same ECONNREFUSED on every poll: a permanent fixed
+    // point, not a cycle. The operator AbortSignal terminates the wait (no
+    // wall-clock timeout); the healthy default-port decoy is never probed.
+    const fence = operatorFence(2);
     await expect(
-      waitForJsonHealth("orchestrator", "http://127.0.0.1:1/healthz", { delayMs: 0, sleep: async () => {} }),
-    ).rejects.toThrow(/progress cycle|ECONNREFUSED/u);
+      waitForJsonHealth("orchestrator", "http://127.0.0.1:1/healthz", { delayMs: 0, ...fence }),
+    ).rejects.toThrow(/never converged|ECONNREFUSED/u);
     expect(decoy.requests()).toBe(0);
   });
 
   it("rejects a candidate redirect without following the healthy decoy", async () => {
     const decoy = await listen({ ok: true, database: "ok", vault: { ok: true } });
     const candidate = await listen({}, { status: 302, location: decoy.url });
-    await expect(
-      waitForJsonHealth("orchestrator", candidate.url, { delayMs: 0, sleep: async () => {} }),
-    ).rejects.toThrow(/progress cycle|redirect/u);
+    // The redirect is re-reported on every poll (fetch redirect:"error"); it is a
+    // permanent not-ready state fenced by the operator AbortSignal. fetchExact never
+    // follows it, so the healthy decoy stays untouched.
+    const fence = operatorFence(2);
+    await expect(waitForJsonHealth("orchestrator", candidate.url, { delayMs: 0, ...fence })).rejects.toThrow(
+      /never converged|redirect/u,
+    );
     expect(candidate.requests()).toBeGreaterThan(0);
     expect(decoy.requests()).toBe(0);
+  });
+
+  it("waits through repeated identical not-ready probes and resolves once semantic health appears", async () => {
+    // Generic wait / container-stabilization negative control matching the receipt
+    // shape: two identical wrong-URL/not-ready signatures do NOT throw a cycle; the
+    // wait continues and resolves the moment the candidate turns semantically green.
+    // A permanent URL mismatch is the rebind postcondition's responsibility (covered
+    // in stack-stages.test.ts), not the progress wait's.
+    const candidate = await listenUntilReady({ ok: true, database: "ok", vault: { ok: true } });
+    let polls = 0;
+    const body = await waitForJsonHealth("orchestrator", candidate.url, {
+      delayMs: 0,
+      sleep: async () => {
+        polls += 1;
+        if (polls >= 2) candidate.flip();
+      },
+    });
+    expect(body).toEqual({ ok: true, database: "ok", vault: { ok: true } });
   });
 
   it("delegates dynamic ports and binds one explicit or auto-discovered runtime", async () => {

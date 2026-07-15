@@ -30,10 +30,12 @@ import {
 import {
   commandOptions,
   composeArgs,
+  composeLogCapture,
   discoverPorts,
   inspectBuiltImages,
   proveRunner,
   proveSemanticStack,
+  rebindDiscoveredConfig,
   stabilizeContainers,
 } from "./stack-operations.js";
 import {
@@ -227,11 +229,7 @@ const STAGE_RUNNERS_EXACT = {
   },
   "bind-discovered-config": async (state) => {
     if (state.runtime === undefined) throw new Error("runtime unresolved");
-    await runCommand(
-      state.runtime.executable,
-      composeArgs(state.context, "up", "-d", "--no-build", "--no-deps", "--force-recreate", "orchestrator"),
-      commandOptions(state.context.executionRoot, state.env, state.ledger),
-    );
+    await rebindDiscoveredConfig(state.context, state.runtime, state.env, state.ledger);
   },
   "stabilize-containers": async (state) => {
     if (state.runtime === undefined || state.snapshot === undefined) throw new Error("images unresolved");
@@ -361,9 +359,10 @@ const STAGE_RUNNERS_EXACT = {
   "capture-compose-logs": async (state) => {
     if (state.failure === undefined || !state.composeTouched || state.runtime === undefined) return;
     if (state.ledger.abortController.signal.aborted) return;
+    const logCapture = composeLogCapture(state.runtime.provider, 200);
     const logs = await runCommand(
       state.runtime.executable,
-      composeArgs(state.context, "logs", "--no-color", "--tail", "200"),
+      composeArgs(state.context, ...logCapture.globalFlags, "logs", ...logCapture.args),
       {
         cwd: state.context.executionRoot,
         env: state.env,

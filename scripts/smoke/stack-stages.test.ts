@@ -2,7 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createStackContext, resolveHostPorts } from "./stack-context.js";
+import { createStackContext, resolveHostPorts, withDiscoveredPorts } from "./stack-context.js";
 import { DB_GATES, SMOKE_STAGES, STAGE_REGISTRY } from "./stack-gates.js";
 import { DB_STAGE_RUNNERS } from "./stack-db-stage-runners.js";
 import { ExecutedBindings, LifecycleLedger, OnceFinalizer } from "./stack-lifecycle.js";
@@ -190,6 +190,129 @@ describe("production registry failure and signal injection", () => {
       expect(candidate.ledger.terminalState().exitCode).toBe(1);
     } finally {
       Object.assign(STAGE_RUNNERS, originals);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// Fake compose runtime that reproduces the Podman 5.8.2 receipt: a `up --force-recreate`
+// can exit 0 while printing hard-failure text, and `inspect` reports the orchestrator's
+// actual `TANREN_PUBLIC_BASE_URL`. Drives bind-discovered-config without containers.
+const REBIND_FAKE_RUNTIME = `
+const argv = process.argv.slice(2);
+if (argv.includes("up")) {
+  const fs = require("fs");
+  if (process.env.FAKE_REBIND_PROOF) fs.writeFileSync(process.env.FAKE_REBIND_PROOF, argv.join(" "));
+  if (process.env.FAKE_UP_ERROR === "1") {
+    console.error('>>>> Executing external compose provider "podman-compose".');
+    console.error("podman-compose: error: cannot force-recreate a service with active dependents");
+    console.error("Error: executing podman-compose: exit status 2");
+  }
+  process.exit(0);
+}
+if (argv.includes("ps")) { process.stdout.write("orchestrator-container-id\\n"); process.exit(0); }
+if (argv[0] === "inspect") {
+  const container = {
+    Id: "orchestrator-container-id",
+    Image: "sha256:imagerevidencedeadbeef",
+    Config: {
+      Labels: {
+        "com.docker.compose.service": "orchestrator",
+        "com.docker.compose.project": process.env.FAKE_PROJECT || "tanren-smoke-test",
+        "com.docker.compose.project.working_dir": process.env.FAKE_EXECUTION_ROOT || process.cwd()
+      },
+      Env: ["TANREN_PUBLIC_BASE_URL=" + (process.env.FAKE_ORCHESTRATOR_URL || ""), "OTHER=value"]
+    },
+    State: { Status: "running", Running: true }
+  };
+  process.stdout.write(JSON.stringify([container]));
+  process.exit(0);
+}
+process.exit(0);
+`;
+
+describe("bind-discovered-config provider-portable rebind", () => {
+  async function rebindCandidate(options: {
+    upError: boolean;
+    orchestratorUrl: string;
+    root: string;
+  }): Promise<SmokeState> {
+    const { root } = options;
+    const runtime = join(root, "runtime.cjs");
+    await writeFile(runtime, `#!${process.execPath}\n${REBIND_FAKE_RUNTIME}`, { mode: 0o755 });
+    await chmod(runtime, 0o755);
+    const candidate = state(undefined, root);
+    candidate.runtime = { provider: "podman", executable: runtime, socket: join(root, "fake.sock") };
+    candidate.context = withDiscoveredPorts(candidate.context, {
+      ...candidate.context.requestedPorts,
+      orchestrator: 37813,
+    });
+    await mkdir(candidate.context.runtimeDir, { recursive: true });
+    // Node 24 resolves the `--env-file` argv compose emits, so it must exist.
+    await writeFile(candidate.context.explicitEnvPath, "");
+    candidate.env = {
+      ...process.env,
+      FAKE_UP_ERROR: options.upError ? "1" : "",
+      FAKE_ORCHESTRATOR_URL: options.orchestratorUrl,
+      FAKE_PROJECT: candidate.context.project,
+      FAKE_EXECUTION_ROOT: candidate.context.executionRoot,
+      FAKE_REBIND_PROOF: join(root, "rebind-proof.txt"),
+    };
+    return candidate;
+  }
+
+  it("rejects a podman wrapper false success (exit 0 with hard-failure text)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-rebind-false-success-"));
+    try {
+      const candidate = await rebindCandidate({
+        upError: true,
+        orchestratorUrl: "http://127.0.0.1:0",
+        root,
+      });
+      await expect(runStage(candidate, "bind-discovered-config")).rejects.toThrow(
+        /compose wrapper reported an error while exiting successfully.*provider=podman/u,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when an honest wrapper did not apply the discovered URL", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-rebind-stale-url-"));
+    try {
+      const candidate = await rebindCandidate({
+        upError: false,
+        orchestratorUrl: "http://127.0.0.1:0",
+        root,
+      });
+      await expect(runStage(candidate, "bind-discovered-config")).rejects.toThrow(
+        /did not apply the discovered URL.*http:\/\/127\.0\.0\.1:0.*expected discovered candidate http:\/\/127\.0\.0\.1:37813/su,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes an honest rebind that adopts the discovered URL and drops --no-deps", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-rebind-honest-"));
+    try {
+      const candidate = await rebindCandidate({
+        upError: false,
+        orchestratorUrl: "http://127.0.0.1:37813",
+        root,
+      });
+      await runStage(candidate, "bind-discovered-config");
+      const stage = candidate.ledger.stages.find((record) => record.name === "bind-discovered-config");
+      expect(stage).toMatchObject({ status: "passed" });
+      // The recorded stage command is the rebind (verification probes don't overwrite it).
+      expect(stage?.command?.args.join(" ")).toContain("--force-recreate");
+      const proof = await readFile(join(root, "rebind-proof.txt"), "utf8");
+      // The dependent set is recreated together; the podman-conflicting --no-deps is gone.
+      expect(proof).toContain("orchestrator");
+      expect(proof).toContain("worker");
+      expect(proof).toContain("dashboard");
+      expect(proof).not.toContain("--no-deps");
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });

@@ -202,6 +202,23 @@ export function validateContainers(
   return result;
 }
 
+/**
+ * Read the orchestrator's effective `TANREN_PUBLIC_BASE_URL` from raw container
+ * inspect output. Returns `undefined` when no orchestrator container is present.
+ * Used by `bind-discovered-config` to prove a rebind actually took effect rather
+ * than trusting a compose wrapper's exit code (podman-compose returns 0 while
+ * printing dependency errors when force-recreating a service that has dependents).
+ */
+export function orchestratorPublicBaseUrlFromInspect(rawInspect: string): string | undefined {
+  for (const container of parseInspectArray<InspectContainer>(rawInspect, "orchestrator inspect")) {
+    const containerLabels = labels(container.Config?.Labels);
+    if (composeLabel(containerLabels, "service") === "orchestrator") {
+      return environmentValue(container.Config?.Env, "TANREN_PUBLIC_BASE_URL");
+    }
+  }
+  return undefined;
+}
+
 export function assertDiscoveredPorts(requested: HostPorts, discovered: HostPorts): void {
   const published = Object.values(discovered);
   if (published.some((port) => !Number.isSafeInteger(port) || port < 1 || port > 65_535)) {

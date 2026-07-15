@@ -7,13 +7,14 @@ import {
   assertDiscoveredPorts,
   assertRegistryHealth,
   BUILD_ID_LABEL,
+  orchestratorPublicBaseUrlFromInspect,
   type ProvenanceSnapshot,
   validateBuiltImages,
   validateContainers,
 } from "./stack-provenance.js";
 import { waitWhileProgressing as progressWait } from "./stack-progress.js";
 import { abortableDelay, fetchExact, runCommand, waitForJsonHealth } from "./stack-runtime.js";
-import type { CommandEvidence, RuntimeBinding } from "./stack-runtime.js";
+import type { CommandEvidence, CommandOptions, RuntimeBinding, RuntimeProvider } from "./stack-runtime.js";
 
 const COMPOSE_PORTS = {
   orchestrator: ["orchestrator", 3100],
@@ -51,6 +52,122 @@ export function commandOptions(root: string, env: NodeJS.ProcessEnv, ledger: Lif
   };
 }
 
+/**
+ * The dependent service set recreated once the ephemeral host ports are known.
+ * The orchestrator bakes `TANREN_PUBLIC_BASE_URL` into its container env, so it
+ * MUST be recreated to adopt the discovered URL. worker and dashboard declare
+ * `depends_on: orchestrator`; force-recreating orchestrator alone makes
+ * podman-compose choke on those dependents while still exiting 0 (the 8b5cbda
+ * receipt), so the whole set is recreated together — which both providers handle
+ * correctly (the multi-service `up` already used by `start-stack`).
+ */
+export const REBIND_SERVICES = ["orchestrator", "worker", "dashboard"] as const;
+
+/**
+ * Provider-aware compose `logs` invocation. `sanitizeComposeLogs` redacts secrets
+ * and bounds output but does NOT strip ANSI, so each provider suppresses color with
+ * its own valid spelling: docker gets the `logs` subcommand flag `--no-color`;
+ * podman gets the `podman compose` option `--no-ansi` (placed before `logs`),
+ * because podman-compose REJECTS `--no-color` as an unrecognized `logs` argument.
+ * Capture is always bounded (`--tail`) and never follows (no `--follow`).
+ */
+export interface ComposeLogCapture {
+  /** Global options placed before the `logs` subcommand (e.g. podman `--no-ansi`). */
+  readonly globalFlags: readonly string[];
+  /** Subcommand arguments placed after `logs`. */
+  readonly args: readonly string[];
+}
+
+export function composeLogCapture(provider: RuntimeProvider, tail: number): ComposeLogCapture {
+  const tailArgs = ["--tail", String(tail)];
+  if (provider === "docker") return { globalFlags: [], args: ["--no-color", ...tailArgs] };
+  return { globalFlags: ["--no-ansi"], args: tailArgs };
+}
+
+const COMPOSE_WRAPPER_ERROR_PATTERNS = [
+  /^Error: /u,
+  /\b[\w-]*compose: error: /u,
+  /^unrecognized arguments:/u,
+] as readonly RegExp[];
+
+/**
+ * podman-compose prints hard-failure text (its own argparse error or the podman
+ * shim's `Error: executing ...-compose`) to stderr yet can exit 0 when
+ * force-recreating a service that has dependents. Detect that dishonest exit so a
+ * silent rebind never reports success. docker compose is honest (non-zero on
+ * failure), so a matching line there is still treated as a false success.
+ */
+export function composeWrapperFalseSuccess(provider: RuntimeProvider, output: string): string | undefined {
+  const falseSuccessLine = output
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => COMPOSE_WRAPPER_ERROR_PATTERNS.some((pattern) => pattern.test(line)));
+  if (falseSuccessLine === undefined) return undefined;
+  return `compose wrapper reported an error while exiting successfully (provider=${provider}): ${falseSuccessLine}`;
+}
+
+export async function inspectRawContainers(
+  context: StackContext,
+  runtime: RuntimeBinding,
+  env: NodeJS.ProcessEnv,
+  ledger: LifecycleLedger,
+  recordEvidence = true,
+): Promise<string> {
+  // Verification probes (recordEvidence=false) still fence their process group
+  // (onGroup) but do not overwrite the active stage's recorded command, so the
+  // rebind's `up` stays the stage evidence in `bind-discovered-config`.
+  const base = commandOptions(context.executionRoot, env, ledger, true);
+  const opts: CommandOptions = recordEvidence
+    ? { ...base, quiet: true }
+    : { cwd: base.cwd, env: base.env, capture: true, quiet: true, signal: base.signal, onGroup: base.onGroup };
+  const ids = (await runCommand(runtime.executable, composeArgs(context, "ps", "-q"), opts)).stdout
+    .split(/\s+/u)
+    .filter(Boolean);
+  if (ids.length === 0) throw new Error(`compose project ${context.project} has no running containers`);
+  return (await runCommand(runtime.executable, ["inspect", ...ids], opts)).stdout;
+}
+
+export async function readOrchestratorPublicBaseUrl(
+  context: StackContext,
+  runtime: RuntimeBinding,
+  env: NodeJS.ProcessEnv,
+  ledger: LifecycleLedger,
+  recordEvidence = true,
+): Promise<string | undefined> {
+  return orchestratorPublicBaseUrlFromInspect(
+    await inspectRawContainers(context, runtime, env, ledger, recordEvidence),
+  );
+}
+
+/**
+ * Rebind the stack to the discovered host ports: recreate the dependent service
+ * set, refuse a wrapper's false success, and prove the orchestrator actually
+ * adopted the discovered `TANREN_PUBLIC_BASE_URL`. The post-condition check is
+ * authoritative — it does not trust the compose exit code.
+ */
+export async function rebindDiscoveredConfig(
+  context: StackContext,
+  runtime: RuntimeBinding,
+  env: NodeJS.ProcessEnv,
+  ledger: LifecycleLedger,
+): Promise<void> {
+  const rebind = await runCommand(
+    runtime.executable,
+    composeArgs(context, "up", "-d", "--no-build", "--force-recreate", ...REBIND_SERVICES),
+    commandOptions(context.executionRoot, env, ledger, true),
+  );
+  const wrapperOutput = `${rebind.stdout}\n${rebind.stderr}`;
+  const falseSuccess = composeWrapperFalseSuccess(runtime.provider, wrapperOutput);
+  if (falseSuccess !== undefined) throw new Error(falseSuccess);
+  const publicBaseUrl = await readOrchestratorPublicBaseUrl(context, runtime, env, ledger, false);
+  if (publicBaseUrl !== context.endpoints.orchestrator) {
+    throw new Error(
+      `bind-discovered-config did not apply the discovered URL: orchestrator TANREN_PUBLIC_BASE_URL is ${String(publicBaseUrl)}, ` +
+        `expected discovered candidate ${context.endpoints.orchestrator}. Wrapper output:\n${wrapperOutput.trim()}`,
+    );
+  }
+}
+
 export async function inspectBuiltImages(
   context: StackContext,
   runtime: RuntimeBinding,
@@ -84,22 +201,7 @@ export async function inspectContainers(
   images: ProvenanceSnapshot["images"],
   ledger: LifecycleLedger,
 ) {
-  const ids = (
-    await runCommand(runtime.executable, composeArgs(context, "ps", "-q"), {
-      ...commandOptions(context.executionRoot, env, ledger, true),
-      quiet: true,
-    })
-  ).stdout
-    .split(/\s+/u)
-    .filter(Boolean);
-  if (ids.length === 0) throw new Error(`compose project ${context.project} has no running containers`);
-  const raw = (
-    await runCommand(runtime.executable, ["inspect", ...ids], {
-      ...commandOptions(context.executionRoot, env, ledger, true),
-      quiet: true,
-    })
-  ).stdout;
-  return validateContainers(context, images, raw);
+  return validateContainers(context, images, await inspectRawContainers(context, runtime, env, ledger));
 }
 
 export async function discoverPorts(
