@@ -43,33 +43,8 @@ function mockOrchestrator(): void {
     const url = typeof input === "string" ? input : input.toString();
     if (url.endsWith("/auth/me")) return new Response(JSON.stringify({ userId: "u1" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (url.endsWith(`/orgs/${ORG.id}/projects`))
-      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              runId: RUN_ID,
-              specId: "s",
-              projectId: PROJECT.projectId,
-              branch: "b",
-              trigger: "operator",
-              status: "running",
-              outcome: null,
-              startedAt: new Date().toISOString(),
-              endedAt: null,
-              prUrl: null,
-              specTitle: "t",
-              costTotalUsd: "0",
-              lastEventAt: null,
-              needsReview: false,
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    }
+    if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
+      return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
     if (url.includes(`/runs/${RUN_ID}/stream`)) {
       return new Response(FAKE_SSE_BODY, {
         status: 200,

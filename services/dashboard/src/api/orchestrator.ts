@@ -407,25 +407,26 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   // ── run-detail / review / SSE ─────────────────────────────────
   // The dashboard route is `/runs/:runId` (the spec permits deriving
-  // org/project from the run); the orchestrator API is org+project-scoped, so
-  // we resolve the run's location by scanning the operator's orgs + projects
-  // for a matching run, then fetch the snapshot.
+  // org/project from the run); ask the orchestrator's org-scoped location
+  // endpoint rather than listing every project and its runs.
   // -------------------------------------------------------------------------
 
   /**
-   * Resolve which org+project a run belongs to by scanning the operator's
-   * orgs and their projects. `undefined` when the run is not visible. The
-   * snapshot endpoint enforces the real authz boundary; this is just routing.
+   * Resolve which org+project a run belongs to. We must still try each visible
+   * org because the dashboard route has no org segment, but each attempt is a
+   * single org-scoped lookup — never a project/run-list fan-out.
    */
   async findRunLocation(runId: string): Promise<RunLocation | undefined> {
     const orgs = await this.listOrgs();
     for (const org of orgs) {
-      const projects = await this.listProjects(org.id);
-      for (const project of projects) {
-        const runs = await this.listRuns(org.id, project.projectId);
-        if (runs.some((run) => run.runId === runId)) {
-          return { orgId: org.id, projectId: project.projectId };
-        }
+      const response = await this.fetchImpl(
+        `${this.orchestratorUrl}/orgs/${encodeURIComponent(org.id)}/runs/${encodeURIComponent(runId)}/location`,
+        { headers: this.headers() },
+      ).catch(() => {});
+      if (response === undefined || !response.ok) continue;
+      const location = (await response.json()) as Partial<RunLocation>;
+      if (location.orgId === org.id && typeof location.projectId === "string" && location.projectId.length > 0) {
+        return { orgId: location.orgId, projectId: location.projectId };
       }
     }
     return undefined;

@@ -14,6 +14,7 @@ import {
   RunDetail,
   RunEventRow,
   RunListItem,
+  RunLocation,
   RunCostRecord,
   decodeCursor,
   encodeCursor,
@@ -299,6 +300,73 @@ describe("P2A-0014 run-detail API — run detail", () => {
     const response = await app.request(`/orgs/org_acme/projects/${projectId}/runs/${runId}`);
     // The thrown store error propagates — a loud 500, not a 200-with-null-forgeThread.
     expect(response.status).toBe(500);
+  });
+});
+
+describe("run location API", () => {
+  it("returns only the org and project for a visible run without list queries", async () => {
+    const { app, pool } = buildHarness();
+    const { runId, projectId } = seedRunFixture(pool);
+    const response = await app.request(`/orgs/org_acme/runs/${runId}/location`);
+
+    expect(response.status).toBe(200);
+    expect(RunLocation.parse(await response.json())).toEqual({ orgId: "org_acme", projectId });
+    expect(pool.queries.some(({ sql }) => /FROM runs/u.test(sql) && /project_id = \$1/u.test(sql))).toBe(false);
+  });
+
+  it("rejects an unauthorized addressed org without querying the run", async () => {
+    const { app, pool } = buildHarness({ ...alice, orgId: "org_other" });
+    const { runId } = seedRunFixture(pool);
+
+    const response = await app.request(`/orgs/org_acme/runs/${runId}/location`);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "org_access_denied" });
+    expect(pool.queries).toEqual([]);
+  });
+
+  it("returns 404 for absent and cross-org runs without disclosing their location", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedProject({ project_id: "project_other", org_id: "org_other" });
+    pool.seedSpec({ spec_id: "spec_other", project_id: "project_other" });
+    pool.seedRun({ run_id: "run_other", spec_id: "spec_other", project_id: "project_other", org_id: "org_other" });
+
+    for (const runId of ["run_missing", "run_other"]) {
+      const response = await app.request(`/orgs/org_acme/runs/${runId}/location`);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "run_not_found" });
+    }
+  });
+
+  it("folds a project access denial into the same 404 response", async () => {
+    class ProjectDeniedPool extends RunRoutesPool {
+      override async query(sql: string, params: unknown[] = []) {
+        if (sql.trim().startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
+          return { rows: [{ org_id: "org_denied" }], rowCount: 1 };
+        }
+        return super.query(sql, params);
+      }
+    }
+    const pool = new ProjectDeniedPool();
+    const app = new Hono<ActorContextEnv>();
+    app.use(
+      "*",
+      createAuthMiddleware({
+        store: {
+          async findApiTokenByRaw() {},
+          async loadSession() {},
+          async resolveActorContext() {
+            return alice;
+          },
+        } as never,
+        localDevActor: alice,
+      }),
+    );
+    app.route("/orgs", createRunRoutes({ pool: pool.asPgPool() }));
+    const { runId } = seedRunFixture(pool);
+
+    const response = await app.request(`/orgs/org_acme/runs/${runId}/location`);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "run_not_found" });
   });
 });
 

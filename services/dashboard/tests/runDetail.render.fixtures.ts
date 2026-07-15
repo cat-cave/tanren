@@ -248,26 +248,8 @@ export function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
-    if (url.endsWith(`/orgs/${ORG.id}/projects`)) {
-      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    }
-    // run list (used to resolve runId → project)
-    if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              ...RUN_DETAIL.run,
-              specTitle: RUN_DETAIL.spec.title,
-              costTotalUsd: "0.0240",
-              lastEventAt: null,
-              needsReview: false,
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    }
+    if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
+      return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
     // run detail
     if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
       return new Response(JSON.stringify(RUN_DETAIL), { status: 200 });
@@ -292,9 +274,6 @@ export function mockOrchestratorWithProject(previewUrlPattern?: string): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
-    if (url.endsWith(`/orgs/${ORG.id}/projects`)) {
-      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    }
     // project detail (getProject) — carries the merged config incl. preview pattern
     if (url.endsWith(`/orgs/${ORG.id}/projects/${PROJECT.projectId}`)) {
       return new Response(
@@ -313,22 +292,8 @@ export function mockOrchestratorWithProject(previewUrlPattern?: string): void {
         { status: 200 },
       );
     }
-    if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              ...RUN_DETAIL.run,
-              specTitle: RUN_DETAIL.spec.title,
-              costTotalUsd: "0.0240",
-              lastEventAt: null,
-              needsReview: false,
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    }
+    if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
+      return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
     if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
       return new Response(JSON.stringify(RUN_DETAIL), { status: 200 });
     }
