@@ -1,4 +1,5 @@
 import { dirname, relative, resolve } from "node:path";
+import { parseSync } from "oxc-parser";
 
 // Structural architecture checks (Track B wave 3). These are heuristic,
 // AST-light scanners that mirror the style of check-architecture.mjs: regex +
@@ -301,12 +302,68 @@ function packageOf(file) {
   return packageRoots.find((root) => file === root || file.startsWith(`${root}/`));
 }
 
+function stringLiteralSpecifier(node) {
+  return node?.type === "Literal" && typeof node.value === "string" ? node.value : undefined;
+}
+
+// Return syntactically explicit, statically-known dependency specifiers. This
+// intentionally excludes text in comments, strings, and templates, plus
+// dynamic expressions whose target cannot be resolved lexically. `require()`
+// recognition is lexical only: resolving a locally shadowed `require` would
+// require full scope analysis, so that rare form remains conservatively flagged.
+function dependencySpecifiers(file, text) {
+  const sourceFile = parseSync(file, text, { range: true, sourceType: "unambiguous" });
+  const specifiers = [];
+  const add = (node) => {
+    const specifier = stringLiteralSpecifier(node);
+    if (specifier !== undefined) {
+      specifiers.push({ specifier, line: lineFor(text, node.start) });
+    }
+  };
+  const visit = (node) => {
+    if (node === null || typeof node !== "object") {
+      return;
+    }
+    if (
+      node.type === "ImportDeclaration" ||
+      node.type === "ExportNamedDeclaration" ||
+      node.type === "ExportAllDeclaration" ||
+      node.type === "ImportExpression" ||
+      node.type === "TSImportType"
+    ) {
+      add(node.source);
+    } else if (
+      node.type === "TSImportEqualsDeclaration" &&
+      node.moduleReference?.type === "TSExternalModuleReference"
+    ) {
+      add(node.moduleReference.expression);
+    } else if (
+      node.type === "CallExpression" &&
+      node.callee?.type === "Identifier" &&
+      node.callee.name === "require" &&
+      node.arguments.length === 1
+    ) {
+      add(node.arguments[0]);
+    }
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          visit(child);
+        }
+      } else {
+        visit(value);
+      }
+    }
+  };
+  visit(sourceFile.program);
+  return specifiers;
+}
+
 // Flag imports that reach into another workspace package's internals rather
 // than its public entry: bare `@tanren/<pkg>/src/...` specifiers, and relative
 // specifiers that resolve into a DIFFERENT package's tree.
 export function checkCrossPackageDeepImports(projectFiles) {
   const diagnostics = [];
-  const importPattern = /(?:from|import|require)\s*\(?\s*["']([^"']+)["']/gu;
   for (const { file, text } of projectFiles) {
     if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || file.includes("/dist/")) {
       continue;
@@ -318,10 +375,7 @@ export function checkCrossPackageDeepImports(projectFiles) {
       continue;
     }
     const ownPackage = packageOf(file);
-    let match;
-    while ((match = importPattern.exec(text)) !== null) {
-      const specifier = match[1];
-      const line = lineFor(text, match.index);
+    for (const { specifier, line } of dependencySpecifiers(file, text)) {
       if (deepImportAllowlist.has(`${file} -> ${specifier}`)) {
         continue;
       }
