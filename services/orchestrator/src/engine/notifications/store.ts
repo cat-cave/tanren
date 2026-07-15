@@ -250,6 +250,20 @@ export const NotificationRouteStore = {
     );
     return result.rows.map((row) => decodeRouteRow(row));
   },
+
+  // The matrix view needs every route visible to an org. Keep the org
+  // predicate on notification_targets: notification_routes has no org column.
+  async listForOrg(client: QueryClient, orgId: string): Promise<NotificationRouteRow[]> {
+    const result = await client.query<RawRouteRow>(
+      `SELECT ${qualifiedRouteColumns()}
+         FROM notification_routes r
+         JOIN notification_targets t ON r.target_id = t.id
+        WHERE t.org_id = $1
+        ORDER BY r.event_name`,
+      [orgId],
+    );
+    return result.rows.map((row) => decodeRouteRow(row));
+  },
 } as const;
 
 function qualifiedRouteColumns(): string {
