@@ -293,7 +293,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 
-  it("FAIL-CLOSED: SpecNotRunnableError without a live nonterminal run parks (never fabricates already_running)", async () => {
+  it("FAIL-CLOSED: SpecNotRunnableError without a live, in-progress run parks (never fabricates already_running)", async () => {
     const pool = new RecordingPool();
     // No liveRunsBySpec entry — claim race without a proven live run.
     const eventStore = new RecordingEventStore();

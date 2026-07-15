@@ -222,7 +222,7 @@ export interface ResolvedTreeReGate {
 
 /**
  * Durable evidence that a recovery run exists, rather than a comment-level routing claim.
- * `already_running` MUST name the independently verified live nonterminal run id — a bare
+ * `already_running` MUST name the independently verified live, in-progress run id — a bare
  * SpecNotRunnableError is never ownership.
  */
 export type RecoveryRunReceipt =

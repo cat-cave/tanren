@@ -145,7 +145,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 
-  it("returns an already-running receipt only when a live nonterminal run is independently proven", async () => {
+  it("returns an already-running receipt only when a live, in-progress run is independently proven", async () => {
     const enqueuer: ReplanEnqueuer = {
       enqueue(input) {
         return Promise.reject(new SpecNotRunnableError(input.specId, "in_flight"));

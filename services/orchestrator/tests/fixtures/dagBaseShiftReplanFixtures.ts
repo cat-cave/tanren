@@ -1,4 +1,4 @@
-// Test fixtures for SpecStatusReplanRouter routing suites (pool + enqueuers).
+// Test fixtures for SpecStatusReplanRouter routing suites (pool + enqueuer doubles).
 
 import type { AppendEventInput, EventStore } from "../../src/engine/eventStore.js";
 import { SpecNotPreparedForRecoveryError } from "../../src/engine/workflow/specNotPreparedForRecoveryError.js";

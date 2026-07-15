@@ -60,7 +60,7 @@ export interface RecoveryRunEvidence {
 }
 
 /**
- * Typed readback authority for non-fabricable ownership. Production wires
+ * Typed readback authority for ownership that cannot be fabricated. Production wires
  * PgRecoveryEvidencePort (system/BYPASSRLS scope). Tests inject a scripted port;
  * absence of the port at settlement is fail-closed.
  */
