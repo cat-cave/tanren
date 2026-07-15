@@ -4,11 +4,14 @@
  * patches the cost bar, trajectory spine, run status, and per-moment events in
  * place — no page reload, no client router.
  *
- * Terminal state machine (post-completion grace):
- *   live → final-draining (on terminal status) → closed (idle after drain)
- * After terminal: only incremental cost frames apply. Status/header, tasks,
- * trajectory, and snapshot cost resets are forbidden. EventSource errors do
- * not close immediately — an idle-grace timer closes once cost drain quiets.
+ * SSE contract (orchestrator `runs/sse.ts`): the first `snapshot` is a full
+ * run/tasks/events/costs payload; every later frame is a delta. Client machine:
+ *   live → draining (terminal status) → closed (idle after cost drain)
+ * During draining/closed: ignore all `snapshot` fields (including costs) so a
+ * reconnect full snapshot cannot rewrite totals/status/tasks or re-arm drain.
+ * Only `event: costs` deltas may add late cost records while draining.
+ * Drain close is deterministic: terminal entry arms idle; cost deltas re-arm;
+ * stream errors never re-arm; dispose is terminal (no reactivation).
  */
 
 interface BillingAgg {
@@ -43,7 +46,7 @@ interface CostTotalsState {
   bySource: Map<CostRecordFrame["billingMode"], BillingAgg>;
 }
 
-/** Idle window after last post-terminal cost (or terminal enter / error) before close. */
+/** Idle window after terminal entry or last post-terminal cost delta before close. */
 export const COST_DRAIN_IDLE_MS = 2_500;
 
 const COST_SOURCE_VAR: Record<CostRecordFrame["billingMode"], string> = {
@@ -185,7 +188,15 @@ export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: stri
   setStreamState(root, "unavailable", reason);
 }
 
-/** Idle-grace closer: after terminal, close only once cost activity is quiet. */
+/**
+ * Idle-grace closer: after terminal, close once cost activity is quiet.
+ * - enterDrain arms the deadline once (idempotent while already draining).
+ * - noteCostActivity re-arms only for real `event: costs` deltas.
+ * - onStreamError never re-arms or extends (reconnect storms cannot keep-alive).
+ * - dispose is terminal: cancel timer, mark closed, reject all further arms.
+ * - timer callbacks are generation-fenced so a canceled idle cannot fire after
+ *   a later re-arm from real cost activity.
+ */
 export function createCostDrainCloser(
   opts: {
     idleMs?: number;
@@ -198,6 +209,8 @@ export function createCostDrainCloser(
   onStreamError: () => void;
   isDraining: () => boolean;
   isClosed: () => boolean;
+  /** Monotonic fence id for tests / stale-callback rejection. */
+  generation: () => number;
   dispose: () => void;
 } {
   const idleMs = opts.idleMs ?? COST_DRAIN_IDLE_MS;
@@ -207,21 +220,32 @@ export function createCostDrainCloser(
   let closeFn: (() => void) | undefined;
   let draining = false;
   let closed = false;
+  let gen = 0;
 
   const arm = (): void => {
     if (!draining || closed || closeFn === undefined) return;
     if (timer !== undefined) cancel(timer);
+    const myGen = ++gen;
     timer = schedule(() => {
-      if (closed) return;
+      // Stale canceled callback — a newer arm superseded this deadline.
+      if (myGen !== gen || closed) return;
       closed = true;
       draining = false;
-      closeFn?.();
+      timer = undefined;
+      const fn = closeFn;
+      closeFn = undefined;
+      fn?.();
     }, idleMs);
   };
 
   return {
     enterDrain(close) {
       if (closed) return;
+      if (draining) {
+        // Already draining: keep the existing deadline (errors must not extend it).
+        if (closeFn === undefined) closeFn = close;
+        return;
+      }
       draining = true;
       closeFn = close;
       arm();
@@ -231,15 +255,17 @@ export function createCostDrainCloser(
       arm();
     },
     onStreamError() {
-      // Post-terminal error: keep drain open; re-arm idle (do not close now).
-      if (!draining || closed) return;
-      arm();
+      // First (and any) post-terminal error: do not close now, do not re-arm.
     },
     isDraining: () => draining && !closed,
     isClosed: () => closed,
+    generation: () => gen,
     dispose() {
       if (timer !== undefined) cancel(timer);
       timer = undefined;
+      gen += 1; // fence any in-flight scheduled callback
+      closed = true;
+      draining = false;
       closeFn = undefined;
     },
   };
@@ -303,7 +329,11 @@ export interface SnapshotApplyResult {
   costsDelta: number;
 }
 
-/** Snapshot: full reset only while live. After terminal, costs may append; never reset. */
+/**
+ * Snapshot is the initial full payload while live only. During draining/closed
+ * every field is ignored (including costs) — reconnect snapshots must not
+ * mutate totals, status, header, tasks, or the drain deadline.
+ */
 export function applySnapshotFrame(
   root: HTMLElement,
   totals: CostTotalsState,
@@ -311,17 +341,8 @@ export function applySnapshotFrame(
   drain?: { noteCostActivity: () => void; enterDrain: (close: () => void) => void; close: () => void },
 ): SnapshotApplyResult {
   const phase = getRunStreamPhase(root);
-  if (phase === "closed") return { applied: false, costsReset: false, statusApplied: false, costsDelta: 0 };
-
-  if (phase === "draining") {
-    // Cost-drain only: no reset, no status rewrite.
-    const costs = data.costs ?? [];
-    for (const cost of costs) applyCost(totals, cost);
-    if (costs.length > 0) {
-      renderCostBar(root, totals);
-      drain?.noteCostActivity();
-    }
-    return { applied: true, costsReset: false, statusApplied: false, costsDelta: costs.length };
+  if (phase === "draining" || phase === "closed") {
+    return { applied: false, costsReset: false, statusApplied: false, costsDelta: 0 };
   }
 
   setStreamState(root, "live");
@@ -348,6 +369,7 @@ export function applySnapshotFrame(
   };
 }
 
+/** Incremental cost deltas only. Re-arms drain deadline while draining. */
 export function applyCostsFrame(
   root: HTMLElement,
   totals: CostTotalsState,
@@ -357,6 +379,7 @@ export function applyCostsFrame(
   const phase = getRunStreamPhase(root);
   if (phase === "closed") return false;
   if (phase === "live") setStreamState(root, "live");
+  if (costs.length === 0) return true;
   for (const cost of costs) applyCost(totals, cost);
   renderCostBar(root, totals);
   if (phase === "draining") drain?.noteCostActivity();
@@ -375,7 +398,11 @@ export function initRunStream(): void {
   setRunStreamPhase(root, "live");
 
   const drain = createCostDrainCloser();
+  let streamClosed = false;
   const closeStream = (): void => {
+    // Exactly-once: timer, dispose, and error races all funnel here.
+    if (streamClosed) return;
+    streamClosed = true;
     setRunStreamPhase(root, "closed");
     source.close();
     drain.dispose();
@@ -433,10 +460,13 @@ export function initRunStream(): void {
   });
 
   source.addEventListener("error", () => {
-    if (getRunStreamPhase(root) === "closed") return;
+    if (streamClosed || getRunStreamPhase(root) === "closed") return;
     if (getRunStreamPhase(root) === "draining" || isFinalStreamState(root)) {
-      // Deterministic idle-grace close — do not drop mid-drain cost frames.
-      if (!drain.isDraining()) drain.enterDrain(closeStream);
+      // Do not close on first post-terminal error; do not re-arm the deadline.
+      // Existing idle from terminal entry (or last cost delta) still governs close.
+      if (!drain.isDraining() && !drain.isClosed()) {
+        drain.enterDrain(closeStream);
+      }
       drain.onStreamError();
       return;
     }
