@@ -38,7 +38,7 @@ const TopBar = ({ org, project, surface, setSurface, onForge, onNotifications })
         ask forge
         <span className="kbd">⌘K</span>
       </button>
-      <button type="button" className="icon-btn" title="notifications" onClick={onNotifications}>
+      <button type="button" className="icon-btn" title="notifications" aria-label="notifications" onClick={onNotifications}>
         ✉<span className="badge">3</span>
       </button>
       <div className="avatar" title="tw@cat-cave.dev">TW</div>
