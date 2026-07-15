@@ -117,6 +117,7 @@ import {
   MergeQueueInfraBlockedPayload,
   MergeReGateGateReworkRoutedPayload,
   MergeScheduledPayload,
+  mergeQueueAuthoritySignalEventRegistry,
 } from "./schemas/mergeQueue.js";
 import {
   CiFlakyDetectedPayload,
@@ -341,9 +342,7 @@ export const EventRegistry = {
   // GitHub-5xx resilience (GAP #2d): a transient infra error blocked the per-PR merge DRIVE and
   // the hold can no longer recover (re-drive ceiling exhausted / state unconfirmable) — LOUD halt.
   "merge.queue.infra_blocked": MergeQueueInfraBlockedPayload,
-  // §2d: speculative batch-check + bisect. Integrate `default_branch + batch PRs` + CI-check
-  // (checking); a green check merges in DAG order (passed); a failed check is BISECTED to the
-  // offending PR (bisecting → culprit). No failed batch reaches main.
+  // §2d: speculative batch-check; failures are bisected and never reach main.
   "merge.batch.checking": MergeBatchCheckingPayload,
   "merge.batch.passed": MergeBatchPassedPayload,
   "merge.batch.bisecting": MergeBatchBisectingPayload,
@@ -354,6 +353,7 @@ export const EventRegistry = {
   "merge.regate.gate_rework_routed": MergeReGateGateReworkRoutedPayload,
   // A transient/transport INFRA error blocked the batch check: bounded-retry then HOLD loud; no PR blamed.
   "merge.batch.infra_blocked": MergeBatchInfraBlockedPayload,
+  ...mergeQueueAuthoritySignalEventRegistry,
   // Post-merge auto-issue creation (tempering.md dim A): after a run's PR
   // merges, a base-branch CI FAILURE auto-opens ONE tracking issue (the per-
   // merge idempotency marker — never spammed on repeated checks).

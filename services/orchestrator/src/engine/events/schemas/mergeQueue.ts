@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MergeIntegrationMode } from "./integrations.js";
+export { mergeQueueAuthoritySignalEventRegistry } from "./mergeQueueAuthoritySignals.js";
 
 // autonomy-engine.md §2d: the native intelligent merge queue. Under
 // `native_queue`, a ready-to-merge run ENTERS Tanren's own queue instead of

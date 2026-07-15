@@ -12,6 +12,7 @@ import {
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
+import { mergeQueueAuthoritySignalSensitivityRules } from "./sensitivityRules.mergeQueueAuthoritySignals.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints / credential refs / SSH host:port are redacted; secrets / raw tokens / command stdout/stderr are secret. A "[]" path suffix applies to every array element.
 
@@ -475,11 +476,10 @@ export const sensitivityRules: SensitivityRule[] = [
   ...strandSensitivityRules,
   ...ciIntelSensitivityRules,
   ...gateSensitivityRules,
-  // Tanren-native templating (wave 1): registry lifecycle events — non-secret (public).
   ...templatesSensitivityRules,
-  // task #82 window-pause auto-resume (run.paused/resumed/window.refreshed) + Codex critic #18 (usage.accounting_failed).
   ...windowPauseSensitivityRules,
   ...usageAccountingFailedSensitivityRules,
+  ...mergeQueueAuthoritySignalSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

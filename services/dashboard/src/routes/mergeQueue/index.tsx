@@ -13,6 +13,10 @@
  */
 
 import type { Context, Hono } from "hono";
+import {
+  MergeQueueAuthoritySignalsClient,
+  type MergeQueueAuthoritySignalsResponse,
+} from "../../api/mergeQueueAuthoritySignals.js";
 import { MergeQueueClient } from "../../api/mergeQueueClient.js";
 import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -31,19 +35,33 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
   app.get("/merge-queue", async (c: Context) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "mergeQueue" });
     const windowDays = parseWindowDays(c.req.query("windowDays"));
+    const evaluationId = c.req.query("evaluationId")?.trim() || undefined;
     const project = ctx.projects[0];
 
     let metrics: IntegrationMetrics | undefined;
     let stats: QueueStats | undefined;
+    let authoritySignals: MergeQueueAuthoritySignalsResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      [metrics, stats] = await Promise.all([
+      const authorityClient = new MergeQueueAuthoritySignalsClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      const authorityRead =
+        evaluationId === undefined
+          ? null
+          : authorityClient.getAuthoritySignals(ctx.org.id, project.projectId, evaluationId);
+      const [nextMetrics, nextStats, nextAuthoritySignals] = await Promise.all([
         client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
         client.getQueueStats(ctx.org.id, project.projectId, windowDays),
+        authorityRead,
       ]);
+      metrics = nextMetrics;
+      stats = nextStats;
+      if (nextAuthoritySignals !== null) authoritySignals = nextAuthoritySignals;
     }
 
     return renderShell(
@@ -53,6 +71,8 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
       <MergeQueueBody
         metrics={metrics}
         stats={stats}
+        authoritySignals={authoritySignals}
+        authorityEvaluationId={evaluationId}
         windowDays={windowDays}
         projectName={project?.name ?? ""}
         noProject={project === undefined}

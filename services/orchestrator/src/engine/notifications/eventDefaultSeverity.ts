@@ -153,6 +153,10 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // issue is an operator-actionable signal (warn).
   "merge.post_merge_failed": "fail",
   "issue.opened": "warn",
+  // mq-1 typed authority signals: classification is trajectory evidence; an
+  // attributed member policy block is operator-visible remediation work.
+  "merge.signal.classified": "info",
+  "merge.member.policy_blocked": "warn",
 
   // DAG escalation: a spec parked at the terminal `needs_attention` status — the
   // strand reconciler exhausted its bounded re-enqueue budget, OR the

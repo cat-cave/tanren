@@ -13,6 +13,8 @@
  */
 
 import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
+import type { MergeQueueAuthoritySignalsResponse } from "../../api/mergeQueueAuthoritySignals.js";
+import { AuthoritySignalPanel } from "./AuthoritySignalPanel.js";
 import { mqDuration, mqInt, mqPercent, mqTokens } from "./format.js";
 import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 
@@ -21,6 +23,10 @@ export interface MergeQueueBodyProps {
   metrics: IntegrationMetrics | undefined;
   /** Native queue stats, or `undefined` when the read failed / no project. */
   stats: QueueStats | undefined;
+  /** Durable mq-1 event projection, or undefined when absent/unreadable. */
+  authoritySignals: MergeQueueAuthoritySignalsResponse | undefined;
+  /** Evaluation selected through the query string, if any. */
+  authorityEvaluationId: string | undefined;
   /** Active window pill (7d / 30d / 90d). */
   windowDays: number;
   /** Project name for the eyebrow scope line. */
@@ -143,8 +149,10 @@ function StatGrid(props: { cards: StatCard[] }) {
 }
 
 export function MergeQueueBody(props: MergeQueueBodyProps) {
-  const { metrics, stats, windowDays, projectName, noProject } = props;
+  const { metrics, stats, authoritySignals, authorityEvaluationId, windowDays, projectName, noProject } = props;
   const v = verdict(metrics);
+  const evaluationQuery =
+    authorityEvaluationId === undefined ? "" : `&evaluationId=${encodeURIComponent(authorityEvaluationId)}`;
   return (
     <>
       <style data-screen="merge-queue" dangerouslySetInnerHTML={{ __html: MERGE_QUEUE_SCREEN_CSS }} />
@@ -155,7 +163,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
         </div>
         <div class="filters">
           {WINDOWS.map((w) => (
-            <a class={`pill${w === windowDays ? " hot" : ""}`} href={`/merge-queue?windowDays=${w}`}>
+            <a class={`pill${w === windowDays ? " hot" : ""}`} href={`/merge-queue?windowDays=${w}${evaluationQuery}`}>
               {w}d
             </a>
           ))}
@@ -163,6 +171,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
       </div>
       <div class="page-body">
         <div class="merge-queue-screen">
+          <AuthoritySignalPanel evaluationId={authorityEvaluationId} projection={authoritySignals} />
           {noProject ? (
             <section class="panel">
               <div class="empty">

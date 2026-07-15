@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "classification": {
+      "const": "deterministic_policy",
+      "type": "string"
+    },
+    "evaluationId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "findingIds": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "groupId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "memberIds": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "missionNodeId": {
+      "const": "mq-1",
+      "type": "string"
+    },
+    "reasonCode": {
+      "const": "audit_policy",
+      "type": "string"
+    },
+    "repairRoute": {
+      "enum": [
+        "writer_repair",
+        "respec"
+      ],
+      "type": "string"
+    },
+    "retryability": {
+      "const": "non_retryable",
+      "type": "string"
+    },
+    "signalVersion": {
+      "const": "merge_signal.v1",
+      "type": "string"
+    },
+    "sourceEventId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "wakeKey": {
+      "type": "null"
+    }
+  },
+  "required": [
+    "missionNodeId",
+    "evaluationId",
+    "groupId",
+    "memberIds",
+    "findingIds",
+    "signalVersion",
+    "classification",
+    "reasonCode",
+    "retryability",
+    "wakeKey",
+    "repairRoute"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.member.policy_blocked"
+}
