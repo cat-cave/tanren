@@ -37,13 +37,16 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
-import type { EventStore } from "../../../eventStore.js";
+import type { AppendEventInput, EventStore } from "../../../eventStore.js";
 import type { ReplanRouter, ReplanRouteResult } from "../../../contracts/conflictResolution.js";
 import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { SpecNotPreparedForRecoveryError } from "../../specNotPreparedForRecoveryError.js";
 import { createLogger } from "../../../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
 import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
+
+/** Terminal / already-parked statuses the atomic park must not clobber. */
+const PARK_NOT_FROM_STATUSES = ["merged", "cancelled", "needs_attention"] as const;
 
 const log = createLogger("replan-router");
 
@@ -374,18 +377,16 @@ export class SpecStatusReplanRouter implements ReplanRouter {
   }
 
   /**
-   * ESCALATE an enqueue failure: a routed replan whose run could not be created (and no
-   * concurrent tick owns it) is genuinely stuck — park it `needs_attention` (frees the slot,
-   * blocks only dependents) with a LOUD ask. NEVER a bare `replan_routed` strand with no run.
+   * ESCALATE an enqueue failure: park `needs_attention` + matching event ATOMICALLY.
+   * Concurrent terminal/parked specs stay unchanged and emit no park event.
    */
   private async escalateEnqueueFailure(input: { specId: string; newContext: string }, error: unknown): Promise<string> {
-    await this.setSpecStatus(input.specId, "needs_attention");
     const detail = error instanceof Error ? error.message : String(error);
     const message =
       `the autonomous self-heal routed this spec back to the planner but could NOT enqueue the ` +
       `re-plan run (${detail}) — the spec cannot re-drive on its own, so a human must intervene ` +
       `instead of letting it strand. ${input.newContext}`;
-    await this.deps.eventStore.append({
+    await this.parkSpecAtomic(input.specId, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -394,8 +395,6 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       payload: {
         source: "strand",
         specId: input.specId,
-        // The self-heal MECHANISM failed (the re-plan run could not be created) — a
-        // genuinely stuck spec, not a product/merge decision: `persistent_failure`.
         reason: "persistent_failure",
         terminalRuns: [{ runId: this.deps.runId, status: "halted" }],
         attempts: 0,
@@ -406,19 +405,15 @@ export class SpecStatusReplanRouter implements ReplanRouter {
   }
 
   /**
-   * ESCALATE: the spec is at a re-plan FIXED POINT — it is being re-planned against the SAME
-   * conflict it already failed to re-plan onto, so re-planning would just re-conflict
-   * identically. Park it `needs_attention` (frees the slot, blocks only dependents) with a
-   * LOUD human-decision ask. NEVER another silent re-plan, NEVER a count.
+   * ESCALATE at a re-plan FIXED POINT — atomic park + event (same authority as gate rework).
    */
   private async escalate(input: { specId: string; newContext: string }, priorReplans: number): Promise<string> {
-    await this.setSpecStatus(input.specId, "needs_attention");
     const message =
       `the autonomous self-heal reached a FIXED POINT re-planning this spec onto the shifted base: it is ` +
       `being re-planned against the SAME conflicting change it already could not absorb (re-planning again ` +
       `would re-conflict identically) — a human must decide how to proceed (re-scope the spec, or accept it ` +
       `cannot land on this base). ${input.newContext}`;
-    await this.deps.eventStore.append({
+    await this.parkSpecAtomic(input.specId, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -436,8 +431,19 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     return message;
   }
 
-  /** Set the spec status through the REQUIRED writer (audit D-R3.2 sweep). */
-  private async setSpecStatus(specId: string, status: string): Promise<void> {
-    await this.deps.runStateWriter.setSpecStatus({ specId, orgId: this.deps.orgId, status });
+  /**
+   * ATOMIC park to `needs_attention` + `dag.spec.needs_attention` via the writer.
+   * Guarded so concurrent merged/cancelled/needs_attention states neither flip nor emit.
+   */
+  private async parkSpecAtomic(specId: string, event: AppendEventInput): Promise<void> {
+    await this.deps.runStateWriter.updateSpecWithEvent({
+      spec: {
+        specId,
+        orgId: this.deps.orgId,
+        status: "needs_attention",
+        notFromStatuses: [...PARK_NOT_FROM_STATUSES],
+      },
+      event,
+    });
   }
 }

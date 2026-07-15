@@ -29,10 +29,11 @@ const PriorReplanEventRow = z.object({
 });
 
 /**
- * Zod-decoded `events` row for `merge.regate.gate_rework_routed` (SQL filters
- * disposition = reworked). Same fail-closed decode as {@link PriorReplanEventRow}.
+ * Zod-decoded `events` row payload carrier for gate-rework signatures
+ * (`merge.regate.gate_rework_routed` and `merge.batch.gate_rework_routed`).
+ * Shared fail-closed decode — malformed/null/wrong-type rows throw Zod errors.
  */
-const PriorGateReworkEventRow = z.object({
+export const PriorGateReworkEventRow = z.object({
   payload: z.object({
     gateError: z.string().optional(),
   }),

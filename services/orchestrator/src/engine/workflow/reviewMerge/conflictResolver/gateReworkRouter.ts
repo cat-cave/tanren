@@ -310,7 +310,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         specId,
         orgId: this.deps.orgId,
         status: "needs_attention",
-        notFromStatuses: ["merged", "needs_attention"],
+        notFromStatuses: ["merged", "cancelled", "needs_attention"],
       },
       event,
     });

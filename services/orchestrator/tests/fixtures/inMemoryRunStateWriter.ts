@@ -387,15 +387,27 @@ export class InMemoryRunStateWriter implements RunStateWriter {
     return { updated: true, alreadyTerminal: false, specId: "", projectId: "" };
   }
 
+  /**
+   * Scripted current status for notFromStatuses guards on updateSpecWithEvent
+   * (default open = always flips). Set to `merged` / `needs_attention` for no-op parks.
+   */
+  updateSpecCurrentStatus = "open";
   async updateSpecWithEvent(input: UpdateSpecWithEventInput): Promise<UpdateSpecWithEventOutcome> {
     // Round-3 H-R3.3 (spec-level mirror): parse-validate against `specPairSchema`.
     specPairSchema.parse(input);
+    const blocked =
+      input.spec.notFromStatuses !== undefined && input.spec.notFromStatuses.includes(this.updateSpecCurrentStatus);
+    if (blocked) {
+      return { flipped: false, alreadyTerminal: false };
+    }
+    // Event only after the row would move (matches production both-or-neither).
     if (this.options.forwardAppend !== undefined) {
       await this.options.forwardAppend(input.event);
     }
     if (this.options.forwardUpdateSpecWithEvent !== undefined) {
       await this.options.forwardUpdateSpecWithEvent(input);
     }
+    this.updateSpecCurrentStatus = input.spec.status;
     return { flipped: true, alreadyTerminal: false };
   }
 

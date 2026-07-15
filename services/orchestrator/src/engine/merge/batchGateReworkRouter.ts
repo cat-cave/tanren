@@ -40,7 +40,10 @@ import {
   gateErrorSignature,
   type ReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
-import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
+import {
+  buildReplanEnqueuer,
+  PriorGateReworkEventRow,
+} from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { SpecNotPreparedForRecoveryError } from "../workflow/specNotPreparedForRecoveryError.js";
 import { createLogger } from "../observability/logger.js";
@@ -415,7 +418,7 @@ export function buildGateReworkSteering(gateError: string, priorReworks: number)
 async function countPriorGateReworks(pool: pg.Pool, input: { specId: string; orgId: string }): Promise<string[]> {
   const readPool = getSystemPool() ?? pool;
   return runWithOrgScope(readPool, input.orgId, async (client) => {
-    const result = await client.query<{ payload: { gateError?: string } }>(
+    const result = await client.query(
       `SELECT payload
          FROM events
         WHERE spec_id = $1 AND event_type = 'merge.batch.gate_rework_routed'
@@ -423,6 +426,6 @@ async function countPriorGateReworks(pool: pg.Pool, input: { specId: string; org
         ORDER BY ts ASC, id ASC`,
       [input.specId],
     );
-    return result.rows.map((row) => gateErrorSignature(row.payload.gateError ?? ""));
+    return result.rows.map((row) => gateErrorSignature(PriorGateReworkEventRow.parse(row).payload.gateError ?? ""));
   });
 }

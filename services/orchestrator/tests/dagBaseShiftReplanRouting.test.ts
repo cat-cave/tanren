@@ -70,12 +70,22 @@ function buildRouter(deps: {
   eventStore: RecordingEventStore;
   enqueuer?: ReplanEnqueuer;
   priorReplans?: PriorReplanReader;
+  /** Scripted current status for atomic park notFromStatuses (default open). */
+  specStatus?: string;
 }): SpecStatusReplanRouter {
   const writer = new InMemoryRunStateWriter({
     forwardSetSpecStatus: (input) => {
       deps.pool.statusWrites.push({ specId: input.specId, status: input.status });
     },
+    // Atomic park: status flip + park event only when the guard allows a row move.
+    forwardUpdateSpecWithEvent: (input) => {
+      deps.pool.statusWrites.push({ specId: input.spec.specId, status: input.spec.status });
+    },
+    forwardAppend: (event) => {
+      void deps.eventStore.append(event);
+    },
   });
+  writer.updateSpecCurrentStatus = deps.specStatus ?? "open";
   return new SpecStatusReplanRouter({
     pool: deps.pool as unknown as pg.Pool,
     runStateWriter: writer,
@@ -316,7 +326,14 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
       const pool = new RecordingPool();
       const eventStore = new RecordingEventStore();
       const enqueuer = new PrepareFailEnqueuer("not_recoverable", status);
-      const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+      // Seed current status so atomic park notFromStatuses mirrors production row state.
+      const router = buildRouter({
+        pool,
+        eventStore,
+        enqueuer,
+        priorReplans: noPriorReplans,
+        specStatus: status === "weird_status" ? "in_flight" : status,
+      });
       const recovery = await router.routeBackToPlanner({
         specId: `spec_${status}`,
         newContext: "re-plan non-recoverable",
@@ -326,6 +343,46 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
       expect(enqueuer.calls).toHaveLength(1);
       expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
     }
+  });
+
+  it("ATOMIC park: already-merged concurrent terminal is unchanged and emits no park event", async () => {
+    const pool = new RecordingPool();
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new FailingEnqueuer();
+    const router = buildRouter({
+      pool,
+      eventStore,
+      enqueuer,
+      priorReplans: noPriorReplans,
+      specStatus: "merged",
+    });
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_merged",
+      newContext: "re-plan after enqueue fail",
+    });
+    expect(recovery.kind).toBe("parked");
+    expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
+  });
+
+  it("ATOMIC park: already needs_attention is idempotent (no second park event)", async () => {
+    const pool = new RecordingPool();
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new FailingEnqueuer();
+    const router = buildRouter({
+      pool,
+      eventStore,
+      enqueuer,
+      priorReplans: noPriorReplans,
+      specStatus: "needs_attention",
+    });
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_parked",
+      newContext: "re-plan after enqueue fail",
+    });
+    expect(recovery.kind).toBe("parked");
+    expect(pool.statusWrites).toHaveLength(0);
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
   });
 
   it("FAIL-CLOSED: missing-spec prepare parks", async () => {
