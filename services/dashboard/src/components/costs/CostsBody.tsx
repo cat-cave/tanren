@@ -116,7 +116,7 @@ function TotalSpendPanel(props: { summary: CostSummary; burn: BurnProjection }) 
   const secondaryLabel = leadEquivalent ? "real spend (billed)" : "equivalent (api-priced)";
   // Percentages are meaningful only when the selected monetary axis is fully
   // known with a positive denominator AND every priced value in that denominator
-  // belongs to one of the three model rollups. Partial/unknown coverage or a
+  // belongs to one of the three model aggregates. Partial/unknown coverage or a
   // priced attribution anomaly still renders its honest amount and provider row,
   // but never a normalized model split that silently drops part of the total.
   const modelCoverageComplete = leadEquivalent

@@ -67,7 +67,7 @@ export const PRICING_MODEL_META: Record<BillingMode, PricingModelMeta> = {
   // BUDGET-SAFETY C1: NOT a real pricing model — an attribution anomaly. The
   // normal unrecognized-ref producer emits NULL dollars, while the HTTP contract
   // can also carry an independently priced value with this billing mode. Both stay
-  // outside the operator's three model rollups and remain explicit provider rows.
+  // outside the operator's three model aggregates and remain explicit provider rows.
   unattributed: {
     mode: "unattributed",
     label: "unattributed · unrecognized ref",
@@ -189,9 +189,9 @@ export interface CostSummary {
   /** Coverage keeps empty, unknown, known zero, and partial totals distinct. */
   realCoverage: MonetaryCoverage;
   notionalCoverage: MonetaryCoverage;
-  /** Every priced REAL value is represented by the three pricing-model rollups. */
+  /** Every priced REAL value is represented by the three pricing-model aggregates. */
   realModelCoverageComplete: boolean;
-  /** Every priced NOTIONAL value is represented by the three pricing-model rollups. */
+  /** Every priced NOTIONAL value is represented by the three pricing-model aggregates. */
   notionalModelCoverageComplete: boolean;
   /** Which figure the headline leads with (real spend, or equivalent when real is $0). */
   headlineBasis: HeadlineBasis;
@@ -280,7 +280,7 @@ function groupProviders(records: readonly CostRecord[], totalUsd: number): Provi
     }
   >();
   for (const r of records) {
-    // JSON's fixed-length string tuple encoding is injective here; unlike a
+    // JSON's fixed-length string tuple encoding is one-to-one here; unlike a
     // delimiter join, literal `|` characters in provider-controlled fields
     // cannot collapse two distinct source identities into one cost row.
     const key = JSON.stringify([r.cli, r.model, r.provider, r.billingMode, r.costBasis]);

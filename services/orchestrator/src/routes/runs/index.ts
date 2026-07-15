@@ -24,7 +24,6 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, assertRunAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import { ForgeThreadStore, ForgeTurnStore } from "../../engine/forge/index.js";
-import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 import { type RunDetail, type RunListItem, type RunLocation, RECENT_EVENT_CAP } from "./contract.js";
@@ -472,6 +471,3 @@ async function fetchForgeBundle(pool: pg.Pool, args: ForgeBundleArgs): Promise<R
 export type { Insight } from "../../engine/insights/index.js";
 // Re-export contract types for downstream test imports.
 export type { RunListItem, RunDetail };
-// Plus the bundle insight loader helper (rarely needed but useful for SSE
-// extension paths). The actual call lives in list.ts.
-export { loadInsightsForProject };
