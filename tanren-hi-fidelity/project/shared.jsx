@@ -3,7 +3,7 @@
 // =====================================================================
 // TOP BAR
 // =====================================================================
-const TopBar = ({ org, project, surface, setSurface, onForge }) => (
+const TopBar = ({ org, project, surface, setSurface, onForge, onNotifications }) => (
   <header className="topbar">
     <div className="brand">
       <span className="dot"></span>
@@ -38,7 +38,7 @@ const TopBar = ({ org, project, surface, setSurface, onForge }) => (
         ask forge
         <span className="kbd">⌘K</span>
       </button>
-      <button className="icon-btn" title="notifications">
+      <button type="button" className="icon-btn" title="notifications" aria-label="notifications" onClick={onNotifications}>
         ✉<span className="badge">3</span>
       </button>
       <div className="avatar" title="tw@cat-cave.dev">TW</div>
