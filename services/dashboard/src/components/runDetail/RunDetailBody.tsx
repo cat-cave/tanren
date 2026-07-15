@@ -261,7 +261,6 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
           </div>
           <h2 data-rd="moment-headline">{reasoning.headline}</h2>
         </div>
-
         {insightForTask !== undefined && typeof insightForTask["kind"] === "string" ? (
           <div class="subopt">
             <span class="tag">workflow insight · {insightForTask["kind"]}</span>
@@ -272,7 +271,6 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
             </span>
           </div>
         ) : null}
-
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
           <div>
             <h4>intent</h4>
@@ -295,7 +293,6 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
             </div>
           </div>
         </div>
-
         <div>
           <h4>tools called · {reasoning.tools.length}</h4>
           <div style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
@@ -316,7 +313,6 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
             )}
           </div>
         </div>
-
         <div>
           <h4>decisions</h4>
           {reasoning.decisions.length === 0 ? (
@@ -329,7 +325,6 @@ function Reasoning(props: RunDetailBodyProps & { selectedTaskId: string | null }
             </ul>
           )}
         </div>
-
         <div>
           <h4>
             events · this moment ({reasoning.events.length})
@@ -486,7 +481,6 @@ export function RunDetailBody(props: RunDetailBodyProps) {
             </a>
           </div>
         </div>
-
         <div style="margin-top:12px"></div>
         <StatusChips detail={detail} />
         <FailureDiagnostics detail={detail} />
