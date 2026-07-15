@@ -20,6 +20,8 @@ export interface SpecCreateBodyProps {
   project: ProjectSummary;
   milestones: MilestoneSummary[];
   behaviors: BehaviorSummary[];
+  /** Behaviors read failed — tagger is unavailable, not empty. */
+  behaviorsUnavailable?: boolean;
   specs: SpecSummary[];
   /** Spec list read failed — dependency picker is unavailable, not empty. */
   specsUnavailable?: boolean;
@@ -157,8 +159,14 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
 
               <div class="form-field">
                 <label>tag behaviors</label>
-                {props.behaviors.length === 0 ? (
-                  <div class="hint">no behaviors defined for this project yet (P2A-0018)</div>
+                {props.behaviorsUnavailable === true ? (
+                  <div class="hint" data-behaviors-unavailable>
+                    behaviors unavailable — tagger paused (not an empty list)
+                  </div>
+                ) : props.behaviors.length === 0 ? (
+                  <div class="hint" data-behaviors-empty>
+                    no behaviors defined for this project yet (P2A-0018)
+                  </div>
                 ) : (
                   <div class="checkbox-list">
                     {props.behaviors.map((behavior) => (

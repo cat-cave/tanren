@@ -71,8 +71,8 @@ export function mountForgeBff(app: Hono, shellDeps: ShellDeps): void {
       { projectId: parsed.data.projectId, runId: parsed.data.runId },
       parsed.data.threadId,
     );
-    if (result === undefined) {
-      return c.json({ error: "forge_ask_failed" }, 502);
+    if ("error" in result) {
+      return c.json({ error: result.error }, 502);
     }
     return c.json(result);
   });

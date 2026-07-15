@@ -88,17 +88,11 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** listProjects, but undefined on failure (unavailable, not fake empty). */
   async listProjectsMaybe(orgId: string): Promise<ProjectSummary[] | undefined> {
     const json = await this.getJson<{ projects?: ProjectSummary[] }>(`/orgs/${encodeURIComponent(orgId)}/projects`);
-    if (json === undefined || !Array.isArray(json.projects)) return undefined;
+    if (json == null || !Array.isArray(json.projects)) return undefined;
     return json.projects;
   }
 
-  /**
-   * All cost records for a run (`GET .../runs/:runId/costs`), walking the cursor pages
-   * until the cursor is exhausted so the costs dashboard sees the FULL set. Progress-
-   * based: each page MUST yield a NEW cursor — a repeated cursor means the API stopped
-   * advancing, so the walk STOPS on that (returning what it has) rather than looping
-   * forever. Empty on failure.
-   */
+  /** Full run cost walk (cursor pages); stops on null/non-advancing cursor. Empty on failure. */
   async listRunCosts(orgId: string, projectId: string, runId: string): Promise<CostRecord[]> {
     const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
       projectId,
@@ -109,39 +103,23 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     for (;;) {
       const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
       const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => {});
-      if (response === undefined || !response.ok) {
-        break;
-      }
+      if (response === undefined || !response.ok) break;
       const json = (await response.json()) as Partial<CursorPage<CostRecord>>;
-      for (const item of json.items ?? []) {
-        all.push(item);
-      }
+      for (const item of json.items ?? []) all.push(item);
       const nextCursor = json.nextCursor ?? null;
-      // Stop on an exhausted OR non-advancing cursor (a repeated cursor would loop
-      // forever). The dashboard read is best-effort, so a non-advancing API stops the
-      // walk with what it has rather than throwing.
-      if (nextCursor === null || seenCursors.has(nextCursor)) {
-        break;
-      }
+      if (nextCursor === null || seenCursors.has(nextCursor)) break;
       seenCursors.add(nextCursor);
       cursor = nextCursor;
     }
     return all;
   }
 
-  /**
-   * Invoke a Forge write tool (operator-button action) via
-   * `POST /orgs/:orgId/forge/tools`. Returns the raw `{ tool, result }` body or
-   * `undefined` on failure (the caller decides how to surface it).
-   * Goes through `sendJson` so session CSRF rides on the write.
-   */
+  /** Invoke a Forge write tool. `undefined` on failure; CSRF via sendJson. */
   async invokeForgeTool(orgId: string, tool: string, args: Record<string, unknown>): Promise<unknown> {
     const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/forge/tools`, { tool, args });
     if (!result.ok) return undefined;
     return result.body;
   }
-
-  // Product reads/writes below use shared getJson/sendJson; degrade empty on failure.
 
   /** Runs for attention queue + KPIs; empty array on failure. */
   async listRuns(
@@ -166,7 +144,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
     // Missing/non-array items is a broken contract, not empty success.
-    if (json === undefined || !Array.isArray(json.items)) return undefined;
+    if (json == null || !Array.isArray(json.items)) return undefined;
     return json.items;
   }
 
@@ -180,7 +158,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
     );
-    if (json === undefined || !Array.isArray(json.items)) return undefined;
+    if (json == null || !Array.isArray(json.items)) return undefined;
     return json.items;
   }
 
@@ -198,7 +176,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ insights?: InsightSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`,
     );
-    if (json === undefined || !Array.isArray(json.insights)) return undefined;
+    if (json == null || !Array.isArray(json.insights)) return undefined;
     const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall", "ci_flaky"]);
     return json.insights.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
   }
@@ -226,7 +204,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
     );
-    if (json === undefined || !Array.isArray(json.milestones)) return undefined;
+    if (json == null || !Array.isArray(json.milestones)) return undefined;
     return json.milestones;
   }
 
@@ -240,31 +218,52 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ specs?: SpecSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
     );
-    if (json === undefined || !Array.isArray(json.specs)) return undefined;
+    if (json == null || !Array.isArray(json.specs)) return undefined;
     return json.specs;
   }
 
-  /** Project personas — needed to enumerate behaviors. */
+  /** Project personas — needed to enumerate behaviors. Empty on failure. */
   async listPersonas(orgId: string, projectId: string): Promise<PersonaSummary[]> {
+    return (await this.listPersonasMaybe(orgId, projectId)) ?? [];
+  }
+
+  async listPersonasMaybe(orgId: string, projectId: string): Promise<PersonaSummary[] | undefined> {
     const json = await this.getJson<{ personas?: PersonaSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/personas`,
     );
-    return json?.personas ?? [];
+    if (json == null || !Array.isArray(json.personas)) return undefined;
+    return json.personas;
   }
 
-  /** Behaviors for a persona (the spec-form behavior picker). */
+  /** Behaviors for a persona. Empty on failure. */
   async listBehaviors(orgId: string, projectId: string, personaId: string): Promise<BehaviorSummary[]> {
+    return (await this.listBehaviorsMaybe(orgId, projectId, personaId)) ?? [];
+  }
+
+  async listBehaviorsMaybe(
+    orgId: string,
+    projectId: string,
+    personaId: string,
+  ): Promise<BehaviorSummary[] | undefined> {
     const json = await this.getJson<{ behaviors?: BehaviorSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`,
     );
-    return json?.behaviors ?? [];
+    if (json == null || !Array.isArray(json.behaviors)) return undefined;
+    return json.behaviors;
   }
 
-  /** All project behaviors, gathered across personas (spec-form picker). */
+  /** All project behaviors across personas. Empty on failure. */
   async listAllBehaviors(orgId: string, projectId: string): Promise<BehaviorSummary[]> {
-    const personas = await this.listPersonas(orgId, projectId);
-    const lists = await Promise.all(personas.map((persona) => this.listBehaviors(orgId, projectId, persona.id)));
-    return lists.flat();
+    return (await this.listAllBehaviorsMaybe(orgId, projectId)) ?? [];
+  }
+
+  /** All behaviors, undefined when any personas/behaviors read is unavailable. */
+  async listAllBehaviorsMaybe(orgId: string, projectId: string): Promise<BehaviorSummary[] | undefined> {
+    const personas = await this.listPersonasMaybe(orgId, projectId);
+    if (personas === undefined) return undefined;
+    const lists = await Promise.all(personas.map((p) => this.listBehaviorsMaybe(orgId, projectId, p.id)));
+    if (lists.some((list) => list === undefined)) return undefined;
+    return lists.flatMap((list) => list ?? []);
   }
 
   /** Full project incl. merged config (routing + escape hatches). */
@@ -438,18 +437,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return { ok: true, status: result.status, result: result.body as BrownfieldLinkResult };
   }
 
-  // ── run-detail / review / SSE ─────────────────────────────────
-  // The dashboard route is `/runs/:runId` (the spec permits deriving
-  // org/project from the run); the orchestrator API is org+project-scoped, so
-  // we resolve the run's location by scanning the operator's orgs + projects
-  // for a matching run, then fetch the snapshot.
-  // -------------------------------------------------------------------------
-
-  /**
-   * Resolve which org+project a run belongs to by scanning the operator's
-   * orgs and their projects. `undefined` when the run is not visible. The
-   * snapshot endpoint enforces the real authz boundary; this is just routing.
-   */
+  /** Resolve org+project for a run by scanning visible projects. Authz is on the snapshot. */
   async findRunLocation(runId: string): Promise<RunLocation | undefined> {
     const orgs = await this.listOrgs();
     for (const org of orgs) {
@@ -464,12 +452,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return undefined;
   }
 
-  /**
-   * Fetch the full run-detail snapshot. `rawView` opts into unredacted
-   * payloads via `?raw=true` (the orchestrator emits the audit
-   * trail); the dashboard only sets it for admins. `undefined` when the run
-   * is missing or access is denied.
-   */
+  /** Full run-detail snapshot; `rawView` opts into unredacted payloads for admins. */
   async getRunDetail(
     loc: RunLocation,
     runId: string,
@@ -480,13 +463,11 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
       { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) },
     ).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
+    if (response === undefined || !response.ok) return undefined;
     return (await response.json()) as RunDetail;
   }
 
-  /** Build the SSE stream URL for the run's live feed (consumed by the client island). */
+  /** SSE stream URL for the run live feed (client island). */
   streamUrl(loc: RunLocation, runId: string, opts: { rawView?: boolean } = {}): string {
     const query = opts.rawView === true ? "?raw=true" : "";
     return `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}/stream${query}`;

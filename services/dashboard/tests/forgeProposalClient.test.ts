@@ -73,4 +73,48 @@ describe("decideForgeProposal (dashboard proposal client)", () => {
 
     expect(result.outcome).toBe("not_found");
   });
+
+  it("200 {} → failed (incomplete body is not decided)", async () => {
+    const client = clientReturning(200, {}, []);
+
+    const result = await client.decideForgeProposal("org_a", "p1", "approve");
+
+    expect(result.outcome).toBe("failed");
+    expect(result.proposal).toBeUndefined();
+  });
+});
+
+describe("askForge (server client structured failure)", () => {
+  it("returns structured error on incomplete 200 body (never undefined success)", async () => {
+    const client = clientReturning(200, {}, []);
+    // ensureThread needs a thread id first.
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/forge/threads") && (init?.method ?? "GET") === "POST") {
+        return new Response(JSON.stringify({ id: "th_1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const orch = new OrchestratorClient({ orchestratorUrl: "http://orch", fetchImpl });
+    const result = await orch.askForge("org_a", "hello");
+    expect(result).toEqual({ error: "forge_ask_failed" });
+    expect("threadId" in result).toBe(false);
+  });
+
+  it("returns structured error when thread create fails", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ error: "down" }), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    const orch = new OrchestratorClient({ orchestratorUrl: "http://orch", fetchImpl });
+    const result = await orch.askForge("org_a", "hello");
+    expect(result).toEqual({ error: "forge_thread_unavailable" });
+  });
 });

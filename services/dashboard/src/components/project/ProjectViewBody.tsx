@@ -92,10 +92,18 @@ function ForgeNarrationCard(props: ProjectViewBodyProps) {
         </div>
 
         {/* 2. ATTENTION QUEUE: ranked things-that-need-you */}
-        <div class="forge-turn">
-          <div class="turn-label">▮ {model.attention.length} things need you · ranked</div>
-          {model.attention.length === 0 ? (
-            <div class="empty-note">
+        <div class="forge-turn" data-attention-panel={model.attentionUnavailable === true ? "unavailable" : "ok"}>
+          <div class="turn-label">
+            {model.attentionUnavailable === true
+              ? "▮ attention queue · unavailable"
+              : `▮ ${model.attention.length} things need you · ranked`}
+          </div>
+          {model.attentionUnavailable === true ? (
+            <div class="empty-note" data-attention-unavailable>
+              Attention queue unavailable — the run list read failed. This is not an empty queue.
+            </div>
+          ) : model.attention.length === 0 ? (
+            <div class="empty-note" data-attention-empty>
               Nothing needs you right now. Forge will surface review handoffs and open runs here.
             </div>
           ) : (

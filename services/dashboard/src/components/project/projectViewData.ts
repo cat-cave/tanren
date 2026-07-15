@@ -76,6 +76,8 @@ export interface ProjectViewModel {
   activityUnavailable: boolean;
   /** True when run list failed (KPIs that need runs show unavailable markers). */
   runsUnavailable: boolean;
+  /** True when attention queue cannot be built because runs read failed. */
+  attentionUnavailable: boolean;
 }
 
 export interface BuildProjectViewInput {
@@ -298,6 +300,7 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
     availability,
     activityUnavailable: !feedOk,
     runsUnavailable: !runsOk,
+    attentionUnavailable: !runsOk,
   };
 }
 

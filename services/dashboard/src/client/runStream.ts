@@ -4,21 +4,11 @@
  * patches the cost bar, trajectory spine, run status, and per-moment events in
  * place — no page reload, no client router.
  *
- * The server renders the full initial view; this island only reconciles the
- * deltas the SSE frames carry. Frame contract (`SseEventName`):
- *   - `snapshot` { run, tasks, recentEvents, costs }  (initial, full)
- *   - `status`   { runId, status, outcome }
- *   - `task`     <TaskTimelineEntry>                   (single changed task)
- *   - `events`   { events: [...] }                     (new event rows)
- *   - `costs`    { costs: [...] }                       (new cost records)
- *   - `heartbeat`{ ts }
- *
- * It never invents data — it only writes values carried by the frames into the
- * `data-rd="..."` hooks the server emitted. Trajectory-row selection (click)
- * is wired here too so the reasoning pane swaps without a round-trip is left to
- * a full navigation in v0; clicking a moment reloads with `?moment=` so the
- * server re-renders the pane (keeps the reasoning derivation server-side and
- * contract-typed).
+ * Terminal state machine (post-completion grace):
+ *   live → final-draining (on terminal status) → closed (idle after drain)
+ * After terminal: only incremental cost frames apply. Status/header, tasks,
+ * trajectory, and snapshot cost resets are forbidden. EventSource errors do
+ * not close immediately — an idle-grace timer closes once cost drain quiets.
  */
 
 interface BillingAgg {
@@ -53,11 +43,13 @@ interface CostTotalsState {
   bySource: Map<CostRecordFrame["billingMode"], BillingAgg>;
 }
 
+/** Idle window after last post-terminal cost (or terminal enter / error) before close. */
+export const COST_DRAIN_IDLE_MS = 2_500;
+
 const COST_SOURCE_VAR: Record<CostRecordFrame["billingMode"], string> = {
   per_token: "var(--cost-token)",
   subscription: "var(--cost-window)",
   self_hosted: "var(--cost-opportunity)",
-  // BUDGET-SAFETY C1: an unrecognized credential ref (a misconfig) — distinct color.
   unattributed: "var(--cost-unattributed, var(--status-fail))",
 };
 const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
@@ -106,6 +98,17 @@ function setText(root: HTMLElement, key: string, text: string): void {
   if (el !== null) el.textContent = text;
 }
 
+function createDomEl(tag: string): HTMLElement {
+  if (typeof document !== "undefined") return document.createElement(tag);
+  // Node unit tests: minimal element stub (no full DOM).
+  return {
+    className: "",
+    style: {} as CSSStyleDeclaration,
+    textContent: "",
+    append: () => {},
+  } as unknown as HTMLElement;
+}
+
 function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
   setText(root, "cost-per-token", formatUsd(totals.perTokenUsd));
   setText(root, "cost-tokens", `${formatTokens(totals.inputTokens)} / ${formatTokens(totals.outputTokens)}`);
@@ -113,14 +116,14 @@ function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
   if (sources !== null) {
     sources.innerHTML = "";
     for (const [mode, agg] of totals.bySource) {
-      const row = document.createElement("div");
+      const row = createDomEl("div");
       row.className = "source-row";
-      const sw = document.createElement("span");
+      const sw = createDomEl("span");
       sw.className = "sw";
       sw.style.background = COST_SOURCE_VAR[mode];
-      const label = document.createElement("span");
+      const label = createDomEl("span");
       label.textContent = COST_SOURCE_LABEL[mode];
-      const amt = document.createElement("span");
+      const amt = createDomEl("span");
       amt.className = "amt";
       amt.textContent = `${formatTokens(agg.tokens)} tok${agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}`;
       row.append(sw, label, amt);
@@ -129,7 +132,122 @@ function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
   }
 }
 
-function applyStatus(root: HTMLElement, status: string, outcome: string | null): void {
+export function isTerminalRunStatus(status: string): boolean {
+  return ["completed", "failed", "halted", "cancelled", "done"].includes(status);
+}
+
+export function isFinalStreamState(root: HTMLElement): boolean {
+  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+  return flag?.textContent === "● final";
+}
+
+/** Phase: live | draining (terminal, costs still accepted) | closed. */
+export type RunStreamPhase = "live" | "draining" | "closed";
+
+export function getRunStreamPhase(root: HTMLElement): RunStreamPhase {
+  const phase = root.dataset["rdPhase"];
+  if (phase === "draining" || phase === "closed") return phase;
+  return isFinalStreamState(root) ? "draining" : "live";
+}
+
+export function setRunStreamPhase(root: HTMLElement, phase: RunStreamPhase): void {
+  root.dataset["rdPhase"] = phase;
+}
+
+/**
+ * Live-flag transitions. Once final, live/stale/unavailable are no-ops.
+ */
+export function setStreamState(
+  root: HTMLElement,
+  state: "live" | "stale" | "unavailable" | "final",
+  reason?: string,
+): void {
+  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+  if (flag === null) return;
+  if (isFinalStreamState(root) && state !== "final") return;
+  if (state === "final") {
+    flag.textContent = "● final";
+    flag.removeAttribute("title");
+    if (getRunStreamPhase(root) !== "closed") setRunStreamPhase(root, "draining");
+    return;
+  }
+  if (state === "live") {
+    flag.textContent = "↻ live";
+    flag.removeAttribute("title");
+    return;
+  }
+  flag.textContent = state === "stale" ? "⚠ stream stale" : "⚠ stream unavailable";
+  if (reason !== undefined) flag.title = reason;
+}
+
+export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: string): void {
+  if (isFinalStreamState(root) || getRunStreamPhase(root) !== "live") return;
+  setStreamState(root, "unavailable", reason);
+}
+
+/** Idle-grace closer: after terminal, close only once cost activity is quiet. */
+export function createCostDrainCloser(
+  opts: {
+    idleMs?: number;
+    schedule?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+    cancel?: (id: ReturnType<typeof setTimeout>) => void;
+  } = {},
+): {
+  enterDrain: (close: () => void) => void;
+  noteCostActivity: () => void;
+  onStreamError: () => void;
+  isDraining: () => boolean;
+  isClosed: () => boolean;
+  dispose: () => void;
+} {
+  const idleMs = opts.idleMs ?? COST_DRAIN_IDLE_MS;
+  const schedule = opts.schedule ?? setTimeout;
+  const cancel = opts.cancel ?? clearTimeout;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let closeFn: (() => void) | undefined;
+  let draining = false;
+  let closed = false;
+
+  const arm = (): void => {
+    if (!draining || closed || closeFn === undefined) return;
+    if (timer !== undefined) cancel(timer);
+    timer = schedule(() => {
+      if (closed) return;
+      closed = true;
+      draining = false;
+      closeFn?.();
+    }, idleMs);
+  };
+
+  return {
+    enterDrain(close) {
+      if (closed) return;
+      draining = true;
+      closeFn = close;
+      arm();
+    },
+    noteCostActivity() {
+      if (!draining || closed) return;
+      arm();
+    },
+    onStreamError() {
+      // Post-terminal error: keep drain open; re-arm idle (do not close now).
+      if (!draining || closed) return;
+      arm();
+    },
+    isDraining: () => draining && !closed,
+    isClosed: () => closed,
+    dispose() {
+      if (timer !== undefined) cancel(timer);
+      timer = undefined;
+      closeFn = undefined;
+    },
+  };
+}
+
+export function applyStatus(root: HTMLElement, status: string, outcome: string | null): boolean {
+  // After terminal lock, status/header must never demote or rewrite.
+  if (getRunStreamPhase(root) !== "live") return false;
   const chip = root.querySelector<HTMLElement>('[data-rd="run-status"]');
   if (chip !== null) {
     chip.classList.remove("ok", "warn", "bad");
@@ -143,54 +261,15 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
   }
   setText(root, "header-status", status);
   if (isTerminalRunStatus(status)) {
-    // Terminal is sticky: later cost/status/task/snapshot frames must not demote it.
     setStreamState(root, "final");
   }
+  return true;
 }
 
-export function isTerminalRunStatus(status: string): boolean {
-  return ["completed", "failed", "halted", "cancelled", "done"].includes(status);
-}
-
-export function isFinalStreamState(root: HTMLElement): boolean {
-  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
-  return flag?.textContent === "● final";
-}
-
-export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: string): void {
-  if (isFinalStreamState(root)) return;
-  setStreamState(root, "unavailable", reason);
-}
-
-/**
- * Live-flag transitions. Once `final`, later live/stale/unavailable frames are
- * no-ops so grace cost deltas and reconnect noise cannot rewrite the terminal UI.
- */
-export function setStreamState(
-  root: HTMLElement,
-  state: "live" | "stale" | "unavailable" | "final",
-  reason?: string,
-): void {
-  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
-  if (flag === null) return;
-  if (isFinalStreamState(root) && state !== "final") return;
-  if (state === "final") {
-    flag.textContent = "● final";
-    flag.removeAttribute("title");
-    return;
-  }
-  if (state === "live") {
-    flag.textContent = "↻ live";
-    flag.removeAttribute("title");
-    return;
-  }
-  flag.textContent = state === "stale" ? "⚠ stream stale" : "⚠ stream unavailable";
-  if (reason !== undefined) flag.title = reason;
-}
-
-function applyTask(root: HTMLElement, task: TaskFrame): void {
+export function applyTask(root: HTMLElement, task: TaskFrame): boolean {
+  if (getRunStreamPhase(root) !== "live") return false;
   const row = root.querySelector<HTMLElement>(`[data-rd-moment="${task.taskId}"]`);
-  if (row === null) return;
+  if (row === null) return false;
   const dot = row.querySelector<HTMLElement>(".dot");
   const ph = row.querySelector<HTMLElement>(".ph");
   let state: "done" | "live" | "queued" | "failed" = "done";
@@ -214,6 +293,74 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
     ph.textContent = text;
   }
   row.classList.toggle("queued", state === "queued");
+  return true;
+}
+
+export interface SnapshotApplyResult {
+  applied: boolean;
+  costsReset: boolean;
+  statusApplied: boolean;
+  costsDelta: number;
+}
+
+/** Snapshot: full reset only while live. After terminal, costs may append; never reset. */
+export function applySnapshotFrame(
+  root: HTMLElement,
+  totals: CostTotalsState,
+  data: { costs?: CostRecordFrame[]; run?: { status: string; outcome: string | null } },
+  drain?: { noteCostActivity: () => void; enterDrain: (close: () => void) => void; close: () => void },
+): SnapshotApplyResult {
+  const phase = getRunStreamPhase(root);
+  if (phase === "closed") return { applied: false, costsReset: false, statusApplied: false, costsDelta: 0 };
+
+  if (phase === "draining") {
+    // Cost-drain only: no reset, no status rewrite.
+    const costs = data.costs ?? [];
+    for (const cost of costs) applyCost(totals, cost);
+    if (costs.length > 0) {
+      renderCostBar(root, totals);
+      drain?.noteCostActivity();
+    }
+    return { applied: true, costsReset: false, statusApplied: false, costsDelta: costs.length };
+  }
+
+  setStreamState(root, "live");
+  totals.perTokenUsd = 0;
+  totals.inputTokens = 0;
+  totals.outputTokens = 0;
+  totals.cachedInputTokens = 0;
+  totals.totalTokens = 0;
+  totals.bySource.clear();
+  for (const cost of data.costs ?? []) applyCost(totals, cost);
+  renderCostBar(root, totals);
+  let statusApplied = false;
+  if (data.run !== undefined) {
+    statusApplied = applyStatus(root, data.run.status, data.run.outcome);
+    if (isTerminalRunStatus(data.run.status) && drain !== undefined) {
+      drain.enterDrain(drain.close);
+    }
+  }
+  return {
+    applied: true,
+    costsReset: true,
+    statusApplied,
+    costsDelta: data.costs?.length ?? 0,
+  };
+}
+
+export function applyCostsFrame(
+  root: HTMLElement,
+  totals: CostTotalsState,
+  costs: CostRecordFrame[],
+  drain?: { noteCostActivity: () => void },
+): boolean {
+  const phase = getRunStreamPhase(root);
+  if (phase === "closed") return false;
+  if (phase === "live") setStreamState(root, "live");
+  for (const cost of costs) applyCost(totals, cost);
+  renderCostBar(root, totals);
+  if (phase === "draining") drain?.noteCostActivity();
+  return true;
 }
 
 export function initRunStream(): void {
@@ -225,6 +372,19 @@ export function initRunStream(): void {
 
   const totals = emptyTotals();
   const source = new EventSource(url, { withCredentials: true });
+  setRunStreamPhase(root, "live");
+
+  const drain = createCostDrainCloser();
+  const closeStream = (): void => {
+    setRunStreamPhase(root, "closed");
+    source.close();
+    drain.dispose();
+  };
+  const drainHooks = {
+    noteCostActivity: () => drain.noteCostActivity(),
+    enterDrain: (close: () => void) => drain.enterDrain(close),
+    close: closeStream,
+  };
 
   source.addEventListener("snapshot", (event) => {
     try {
@@ -232,18 +392,7 @@ export function initRunStream(): void {
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
       } = JSON.parse(event.data);
-      setStreamState(root, "live");
-      totals.perTokenUsd = 0;
-      totals.inputTokens = 0;
-      totals.outputTokens = 0;
-      totals.cachedInputTokens = 0;
-      totals.totalTokens = 0;
-      totals.bySource.clear();
-      for (const cost of data.costs ?? []) applyCost(totals, cost);
-      renderCostBar(root, totals);
-      if (data.run !== undefined) {
-        applyStatus(root, data.run.status, data.run.outcome);
-      }
+      applySnapshotFrame(root, totals, data, drainHooks);
     } catch {
       setStreamState(root, "stale", "Malformed snapshot frame from the live stream.");
     }
@@ -252,9 +401,7 @@ export function initRunStream(): void {
   source.addEventListener("costs", (event) => {
     try {
       const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
-      setStreamState(root, "live");
-      for (const cost of data.costs ?? []) applyCost(totals, cost);
-      renderCostBar(root, totals);
+      applyCostsFrame(root, totals, data.costs ?? [], drainHooks);
     } catch {
       setStreamState(root, "stale", "Malformed costs frame from the live stream.");
     }
@@ -262,12 +409,13 @@ export function initRunStream(): void {
 
   source.addEventListener("status", (event) => {
     try {
-      const data: {
-        status: string;
-        outcome: string | null;
-      } = JSON.parse(event.data);
+      const data: { status: string; outcome: string | null } = JSON.parse(event.data);
+      if (getRunStreamPhase(root) !== "live") return;
       setStreamState(root, "live");
       applyStatus(root, data.status, data.outcome);
+      if (isTerminalRunStatus(data.status)) {
+        drain.enterDrain(closeStream);
+      }
     } catch {
       setStreamState(root, "stale", "Malformed status frame from the live stream.");
     }
@@ -276,6 +424,7 @@ export function initRunStream(): void {
   source.addEventListener("task", (event) => {
     try {
       const frame: TaskFrame = JSON.parse(event.data);
+      if (getRunStreamPhase(root) !== "live") return;
       setStreamState(root, "live");
       applyTask(root, frame);
     } catch {
@@ -284,10 +433,11 @@ export function initRunStream(): void {
   });
 
   source.addEventListener("error", () => {
-    // Terminal streams end after the grace drain; EventSource reports that as
-    // error + would reconnect forever. Close once final so finished runs rest.
-    if (isFinalStreamState(root)) {
-      source.close();
+    if (getRunStreamPhase(root) === "closed") return;
+    if (getRunStreamPhase(root) === "draining" || isFinalStreamState(root)) {
+      // Deterministic idle-grace close — do not drop mid-drain cost frames.
+      if (!drain.isDraining()) drain.enterDrain(closeStream);
+      drain.onStreamError();
       return;
     }
     markStreamUnavailableUnlessFinal(
@@ -296,9 +446,6 @@ export function initRunStream(): void {
     );
   });
 
-  // Click a trajectory moment → re-render the reasoning pane server-side with
-  // the selected moment (keeps the reasoning derivation contract-typed on the
-  // server rather than reshaping payloads client-side).
   root.addEventListener("click", (clickEvent) => {
     const moment = (clickEvent.target as HTMLElement).closest<HTMLElement>("[data-rd-moment]");
     if (moment === null) return;

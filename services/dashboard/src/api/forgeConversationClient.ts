@@ -51,6 +51,13 @@ export interface ForgeAskResponse {
   proposals: ForgeActionProposal[];
 }
 
+/** Structured failure at the public askForge boundary (never silent undefined). */
+export interface ForgeAskFailure {
+  error: string;
+}
+
+export type ForgeAskResult = ForgeAskResponse | ForgeAskFailure;
+
 /** The outcome of an approve/reject decision (write-action approval). */
 export interface ForgeProposalDecisionResponse {
   /** The proposal in its post-decision state, when the orchestrator returned it. */
@@ -68,18 +75,17 @@ interface TurnPayload {
 export abstract class OrchestratorForgeConversationClient extends OrchestratorRecoveryClient {
   /**
    * Ask Forge a question. Creates a thread for the scope, then runs one
-   * conversation exchange. `threadId` is returned so a follow-up can continue
-   * the same thread. `undefined` on failure so the palette degrades gracefully.
+   * conversation exchange. Failures return `{ error }` — never undefined success.
    */
   async askForge(
     orgId: string,
     question: string,
     scope: ForgeAskScope = {},
     threadId?: string,
-  ): Promise<ForgeAskResponse | undefined> {
+  ): Promise<ForgeAskResult> {
     const resolvedThreadId = threadId ?? (await this.ensureThread(orgId, scope));
     if (resolvedThreadId === undefined) {
-      return undefined;
+      return { error: "forge_thread_unavailable" };
     }
     const result = await this.sendJson<{
       forgeTurn?: TurnPayload;
@@ -88,15 +94,13 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
     }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`,
-      {
-        question,
-      },
+      { question },
       { expectBody: true },
     );
     // 200 {} / missing forgeTurn.render is not a successful ask — fail closed.
     const render = result.body?.forgeTurn?.render;
     if (!result.ok || render === undefined || typeof render.body !== "string") {
-      return undefined;
+      return { error: "forge_ask_failed" };
     }
     return {
       threadId: resolvedThreadId,
@@ -125,7 +129,12 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       { expectBody: true },
     );
     if (result.ok) {
-      return { proposal: result.body?.proposal, outcome: "decided" };
+      // Incomplete 200 bodies (e.g. {}) must not masquerade as decided.
+      const proposal = result.body?.proposal;
+      if (proposal === undefined || typeof proposal !== "object") {
+        return { outcome: "failed" };
+      }
+      return { proposal, outcome: "decided" };
     }
     if (result.status === 409) {
       return { outcome: "already_decided", currentStatus: result.body?.status };

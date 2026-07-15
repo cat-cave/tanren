@@ -260,7 +260,8 @@ export function forgeToolFailureMessage(status: number): string {
 // POSTs the decision to the dashboard proxy and resolves to the resulting
 // status string for the card. 409 (already decided) and 403 (denied) are
 // surfaced honestly so the operator sees the terminal state, never a re-run.
-async function decideProposal(
+// 200 with incomplete body (e.g. {}) fails closed — never fabricates success.
+export async function decideProposal(
   orgId: string,
   proposalId: string,
   decision: "approve" | "reject",
@@ -271,14 +272,24 @@ async function decideProposal(
       headers: csrfWriteHeaders(),
       body: JSON.stringify({ orgId, proposalId }),
     });
-    const body = (await response.json().catch(() => ({}))) as {
-      proposal?: { status?: string };
-      outcome?: string;
-      currentStatus?: string;
-      error?: string;
-      message?: string;
-    };
-    if (response.ok) return { status: body.proposal?.status ?? (decision === "approve" ? "executed" : "rejected") };
+    const raw: unknown = await response.json().catch(() => {});
+    const body =
+      typeof raw === "object" && raw !== null
+        ? (raw as {
+            proposal?: { status?: string };
+            outcome?: string;
+            currentStatus?: string;
+            error?: string;
+            message?: string;
+          })
+        : {};
+    if (response.ok) {
+      const status = body.proposal?.status;
+      if (typeof status !== "string" || status === "") {
+        return { status: "failed", message: "Proposal decision failed: incomplete response body." };
+      }
+      return { status };
+    }
     if (response.status === 409) return { status: body.currentStatus ?? "already decided" };
     if (response.status === 403) return { status: "denied" };
     return { status: "failed", message: errorText(response.status, body, "Proposal decision failed") };

@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askForge,
   csrfWriteHeaders,
+  decideProposal,
   forgeToolFailureMessage,
   injectFormCsrfFields,
   routeForAction,
@@ -185,5 +186,34 @@ describe("askForge (palette error surface)", () => {
     );
     const result = await askForge("org_a", "what is blocked?", {});
     expect("error" in result ? result.error : "").toContain("incomplete response body");
+  });
+});
+
+describe("decideProposal (fail-closed incomplete success)", () => {
+  it("200 {} does not fabricate executed/rejected success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const result = await decideProposal("org_a", "prop_1", "approve");
+    expect(result.status).toBe("failed");
+    expect(result.message).toContain("incomplete response body");
+  });
+
+  it("200 with proposal.status returns that status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ proposal: { status: "executed" } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const result = await decideProposal("org_a", "prop_1", "approve");
+    expect(result).toEqual({ status: "executed" });
   });
 });

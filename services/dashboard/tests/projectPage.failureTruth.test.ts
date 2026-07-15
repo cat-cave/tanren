@@ -59,7 +59,7 @@ describe("project page failure truth", () => {
     vi.unstubAllGlobals();
   });
 
-  it("chat-primary marks KPI/activity unavailable when runs+feed fail (not zeros)", async () => {
+  it("chat-primary marks KPI/activity/attention unavailable when runs+feed fail (not zeros)", async () => {
     vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = init?.method ?? "GET";
@@ -79,6 +79,12 @@ describe("project page failure truth", () => {
     expect(html).toContain("data-activity-unavailable");
     expect(html).toContain("Activity unavailable");
     expect(html).toContain("data-runs-unavailable");
+    // Attention must not collapse to idle-empty when runs are unavailable.
+    expect(html).toContain('data-attention-panel="unavailable"');
+    expect(html).toContain("data-attention-unavailable");
+    expect(html).not.toContain("data-attention-empty");
+    expect(html).not.toContain("Nothing needs you right now");
+    expect(html).not.toContain("0 things need you");
     // Must not claim fabricated week spend $0 from a failed runs read.
     expect(html).not.toMatch(/week spend[\s\S]{0,80}\$0/u);
   });
@@ -166,10 +172,29 @@ describe("project page failure truth", () => {
     expect(html).toContain("— unavailable —");
     expect(html).not.toContain("no other specs to depend on yet");
   });
+
+  it("spec create marks behaviors unavailable when personas read fails (not empty list)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      const base = baseFetch(url, method);
+      if (base !== undefined) return base;
+      if (url.endsWith("/specs") && method === "GET")
+        return new Response(JSON.stringify({ specs: [] }), { status: 200 });
+      if (url.includes("/milestones")) return new Response(JSON.stringify({ milestones: [] }), { status: 200 });
+      if (url.includes("/personas")) return new Response(JSON.stringify({ error: "personas_down" }), { status: 503 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const html = await (await app.request("/projects/project_easy/specs/new")).text();
+    expect(html).toContain("data-behaviors-unavailable");
+    expect(html).not.toContain("data-behaviors-empty");
+    expect(html).not.toContain("no behaviors defined for this project yet");
+  });
 });
 
 describe("buildProjectViewModel availability", () => {
-  it("emits unavailable KPIs and empty activity when sources fail", () => {
+  it("emits unavailable KPIs and attention when sources fail", () => {
     const model = buildProjectViewModel({
       projectId: "p",
       projectName: "P",
@@ -181,9 +206,11 @@ describe("buildProjectViewModel availability", () => {
       weekSpendUsd: undefined,
     });
     expect(model.runsUnavailable).toBe(true);
+    expect(model.attentionUnavailable).toBe(true);
     expect(model.activityUnavailable).toBe(true);
     expect(model.kpis.every((k) => k.unavailable === true)).toBe(true);
     expect(model.activity).toEqual([]);
+    expect(model.attention).toEqual([]);
     expect(model.liveLabel).toContain("unavailable");
   });
 
@@ -199,6 +226,7 @@ describe("buildProjectViewModel availability", () => {
       weekSpendUsd: undefined,
     });
     expect(model.runsUnavailable).toBe(true);
+    expect(model.attentionUnavailable).toBe(true);
     expect(model.activityUnavailable).toBe(false);
     expect(model.activity).toHaveLength(1);
     expect(model.kpis.find((k) => k.k === "in-flight runs")?.unavailable).toBe(true);

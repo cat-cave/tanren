@@ -163,6 +163,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         milestones={data.milestones}
         milestonesUnavailable={data.milestonesUnavailable}
         behaviors={data.behaviors}
+        behaviorsUnavailable={data.behaviorsUnavailable}
         specs={data.specs}
         specsUnavailable={data.specsUnavailable}
         csrfToken={ctx.csrfToken}
@@ -466,6 +467,7 @@ async function renderForm(
       milestones={data.milestones}
       milestonesUnavailable={data.milestonesUnavailable}
       behaviors={data.behaviors}
+      behaviorsUnavailable={data.behaviorsUnavailable}
       specs={data.specs}
       specsUnavailable={data.specsUnavailable}
       error={error}

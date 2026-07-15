@@ -56,13 +56,14 @@ export async function loadSpecListData(client: OrchestratorClient, orgId: string
 export async function loadSpecCreateData(client: OrchestratorClient, orgId: string, projectId: string) {
   const [milestones, behaviors, specs] = await Promise.all([
     client.listMilestonesMaybe(orgId, projectId),
-    client.listAllBehaviors(orgId, projectId),
+    client.listAllBehaviorsMaybe(orgId, projectId),
     client.listSpecsMaybe(orgId, projectId),
   ]);
   return {
     milestones: milestones ?? [],
     milestonesUnavailable: milestones === undefined,
-    behaviors,
+    behaviors: behaviors ?? [],
+    behaviorsUnavailable: behaviors === undefined,
     specs: specs ?? [],
     specsUnavailable: specs === undefined,
   };

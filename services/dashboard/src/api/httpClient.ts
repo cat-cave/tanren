@@ -60,7 +60,10 @@ export abstract class OrchestratorHttpClient {
     if (response === undefined || !response.ok) {
       return undefined;
     }
-    return (await response.json().catch(() => {})) as T | undefined;
+    // JSON `null` is parsed but not a product object — treat as unavailable.
+    const raw: unknown = await response.json().catch(() => {});
+    if (raw == null) return undefined;
+    return raw as T;
   }
 
   protected async sendJson<T = unknown>(
