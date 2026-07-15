@@ -214,7 +214,7 @@ if (argv.includes("ps")) { process.stdout.write("orchestrator-container-id\\n");
 if (argv[0] === "inspect") {
   const container = {
     Id: "orchestrator-container-id",
-    Image: "sha256:imagerevidencedeadbeef",
+    Image: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
     Config: {
       Labels: {
         "com.docker.compose.service": "orchestrator",
