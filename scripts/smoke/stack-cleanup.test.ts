@@ -12,6 +12,43 @@ const roots: string[] = [];
 afterEach(() => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
 describe("exact-label stack cleanup", () => {
+  it("lets a finite delayed Compose teardown reach its terminal result", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-cleanup-delayed-"));
+    roots.push(root);
+    const runtime = join(root, "runtime.cjs");
+    const completionPath = join(root, "compose-completed");
+    const context = withExecutionRoot(
+      createStackContext({
+        root,
+        head: "e".repeat(40),
+        tree: "f".repeat(40),
+        runId: "cleanup-delayed",
+        nonce: "1".repeat(32),
+        runtimeBase: join(root, "owned-runtime"),
+        receiptPath: join(root, "receipt.json"),
+        ports: resolveHostPorts({}, 1_600),
+      }),
+      root,
+    );
+    await mkdir(context.runtimeDir, { recursive: true });
+    await writeFile(context.explicitEnvPath, "");
+    await writeFile(
+      runtime,
+      `#!${process.execPath}\n` +
+        `const fs=require('fs');const a=process.argv.slice(2);` +
+        `if(a[0]==='compose'){setTimeout(()=>fs.writeFileSync(process.env.COMPLETION_FILE,'done'),150)}`,
+      { mode: 0o755 },
+    );
+    await chmod(runtime, 0o755);
+    await teardownCandidateStack(
+      context,
+      { provider: "podman", executable: runtime, socket: join(root, "fake.sock") },
+      { ...process.env, COMPLETION_FILE: completionPath },
+      new LifecycleLedger(),
+    );
+    expect(await readFile(completionPath, "utf8")).toBe("done");
+  });
+
   it("force-removes nonempty owned resources after compose failure and preserves foreign decoys", async () => {
     const root = await mkdtemp(join(tmpdir(), "tanren-cleanup-"));
     roots.push(root);
@@ -92,5 +129,76 @@ describe("exact-label stack cleanup", () => {
     expect(final.images).toEqual({ "foreign-image": { [BUILD_ID_LABEL]: "foreign-build" } });
     expect(final.commands.some((args) => args.includes("--rmi"))).toBe(false);
     expect(final.commands.some((args) => args.join(" ") === "rm -f foreign-container")).toBe(false);
+  });
+
+  it("force-removes Podman lowercase-label owned networks and preserves foreign/malformed decoys", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-cleanup-podman-"));
+    roots.push(root);
+    const runtime = join(root, "runtime.cjs");
+    const statePath = join(root, "state.json");
+    const context = withExecutionRoot(
+      createStackContext({
+        root,
+        head: "1".repeat(40),
+        tree: "2".repeat(40),
+        runId: "cleanup-podman",
+        nonce: "d".repeat(32),
+        runtimeBase: join(root, "owned-runtime"),
+        receiptPath: join(root, "receipt.json"),
+        ports: resolveHostPorts({}, 1_400),
+      }),
+      root,
+    );
+    const projectLabel = "com.docker.compose.project";
+    await mkdir(context.runtimeDir, { recursive: true });
+    await writeFile(context.explicitEnvPath, "");
+    const initial = {
+      commands: [] as string[][],
+      networks: {
+        "owned-network": { labels: { [projectLabel]: context.project }, containers: {} },
+        "foreign-network": { labels: { [projectLabel]: "foreign-project" }, containers: {} },
+        "array-labels": { labels: [{ evil: "true" }], containers: {} },
+        "missing-labels": { containers: {} },
+        "non-string-label": { labels: { [projectLabel]: 123 }, containers: {} },
+      },
+    };
+    await writeFile(statePath, JSON.stringify(initial));
+    await writeFile(
+      runtime,
+      `#!${process.execPath}\n` +
+        `const fs=require('fs');const p=process.env.STATE_FILE;const l=p+'.lock';` +
+        `for(;;){try{fs.mkdirSync(l);break}catch(e){if(e.code!=='EEXIST')throw e;Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5)}}` +
+        `const a=process.argv.slice(2);` +
+        `const s=JSON.parse(fs.readFileSync(p,'utf8'));s.commands.push(a);` +
+        `const save=()=>{const t=p+'.'+process.pid;fs.writeFileSync(t,JSON.stringify(s));fs.renameSync(t,p);fs.rmdirSync(l)};` +
+        `if(a[0]==='network'&&a[1]==='inspect'){const v=s.networks[a[2]];save();if(!v)process.exit(1);process.stdout.write(JSON.stringify([v]));}` +
+        `else if(a[0]==='network'&&a[1]==='rm'){delete s.networks[a.at(-1)];save();}` +
+        `else{save();}`,
+      { mode: 0o755 },
+    );
+    await chmod(runtime, 0o755);
+    const binding = { provider: "podman" as const, executable: runtime, socket: join(root, "fake.sock") };
+    const env = { ...process.env, STATE_FILE: statePath };
+    const ids = ["owned-network", "foreign-network", "array-labels", "missing-labels", "non-string-label"];
+    await forceRemoveOwnedResources(context, binding, env, new LifecycleLedger(), {
+      containers: [],
+      networks: ids,
+      volumes: [],
+      images: [],
+    });
+    const guarded = JSON.parse(await readFile(statePath, "utf8")) as typeof initial;
+    expect(Object.keys(guarded.networks).sort()).toEqual([
+      "array-labels",
+      "foreign-network",
+      "missing-labels",
+      "non-string-label",
+    ]);
+    expect(guarded.commands.some((args) => args.join(" ") === "network rm owned-network")).toBe(true);
+    for (const id of ["foreign-network", "array-labels", "missing-labels", "non-string-label"]) {
+      expect(guarded.commands.some((args) => args.join(" ") === `network rm ${id}`)).toBe(false);
+    }
+    for (const id of ids) {
+      expect(guarded.commands.some((args) => args.join(" ") === `network inspect ${id}`)).toBe(true);
+    }
   });
 });

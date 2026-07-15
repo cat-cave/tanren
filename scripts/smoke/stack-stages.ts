@@ -42,13 +42,7 @@ import {
   assertStableContainers,
   type ProvenanceSnapshot,
 } from "./stack-provenance.js";
-import {
-  abortableDelay,
-  bindRuntimeEnvironment,
-  progressCycleReached,
-  resolveRuntimeBinding,
-  runCommand,
-} from "./stack-runtime.js";
+import { bindRuntimeEnvironment, resolveRuntimeBinding, runCommand } from "./stack-runtime.js";
 import { publishTerminalReceipt, synchronizeSignalFailure, type SmokeState } from "./stack-receipt.js";
 
 const STAGE_RUNNERS_EXACT = {
@@ -366,11 +360,8 @@ const STAGE_RUNNERS_EXACT = {
   },
   "capture-compose-logs": async (state) => {
     if (state.failure === undefined || !state.composeTouched || state.runtime === undefined) return;
-    const local = new AbortController();
-    const onParent = () => local.abort(state.ledger.abortController.signal.reason);
-    state.ledger.abortController.signal.addEventListener("abort", onParent, { once: true });
-    if (state.ledger.abortController.signal.aborted) local.abort(state.ledger.abortController.signal.reason);
-    const pending = runCommand(
+    if (state.ledger.abortController.signal.aborted) return;
+    const logs = await runCommand(
       state.runtime.executable,
       composeArgs(state.context, "logs", "--no-color", "--tail", "200"),
       {
@@ -378,42 +369,22 @@ const STAGE_RUNNERS_EXACT = {
         env: state.env,
         capture: true,
         quiet: true,
-        signal: local.signal,
+        signal: state.ledger.abortController.signal,
         onGroup: (pgid, childState) => state.ledger.recordGroup(pgid, childState),
       },
     );
-    // Logs must complete; a repeated structural state is a non-progress cycle.
-    const signatures: string[] = [];
-    const watchState = { finished: false };
-    const watch = (async () => {
-      while (!watchState.finished && !local.signal.aborted) {
-        signatures.push("compose-logs:running");
-        if (progressCycleReached(signatures)) {
-          local.abort(new Error("compose logs made no completion progress"));
-          return;
-        }
-        await abortableDelay(50, local.signal).catch(() => {});
-      }
-    })();
-    try {
-      const logs = await pending;
-      await assertArtifactPathSafe(
-        state.context.receiptPath,
-        [state.context.runtimeDir, state.buildBase ?? ""],
-        state.context.root,
-      );
-      state.composeLogsPath = `${state.context.receiptPath}.compose.log`;
-      await assertArtifactPathSafe(
-        state.composeLogsPath,
-        [state.context.runtimeDir, state.buildBase ?? ""],
-        state.context.root,
-      );
-      await writeFileAtomic(state.composeLogsPath, sanitizeComposeLogs(`${logs.stdout}\n${logs.stderr}`));
-    } finally {
-      watchState.finished = true;
-      state.ledger.abortController.signal.removeEventListener("abort", onParent);
-      await watch.catch(() => {});
-    }
+    await assertArtifactPathSafe(
+      state.context.receiptPath,
+      [state.context.runtimeDir, state.buildBase ?? ""],
+      state.context.root,
+    );
+    state.composeLogsPath = `${state.context.receiptPath}.compose.log`;
+    await assertArtifactPathSafe(
+      state.composeLogsPath,
+      [state.context.runtimeDir, state.buildBase ?? ""],
+      state.context.root,
+    );
+    await writeFileAtomic(state.composeLogsPath, sanitizeComposeLogs(`${logs.stdout}\n${logs.stderr}`));
   },
   "teardown-stack": async (state) => {
     if (
@@ -452,6 +423,7 @@ const STAGE_RUNNERS_EXACT = {
     ) {
       return;
     }
+    if (!state.resourcesClean) return;
     await removeBuildBase(state.buildBase);
     state.buildBase = undefined;
   },
@@ -464,6 +436,7 @@ const STAGE_RUNNERS_EXACT = {
     ) {
       return;
     }
+    if (!state.resourcesClean) return;
     await removeRuntimeDir(state.context.runtimeDir, state.runtimeOwned);
     state.runtimeOwned = false;
   },

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { join } from "node:path";
 
 // cspell:ignore PGDATABASE PGHOST PGPASSWORD PGPORT PGSERVICE PGSERVICEFILE PGSSLMODE PGUSER
@@ -257,9 +258,17 @@ export function parseComposePort(output: string): number {
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const match = /:(\d+)$/u.exec(line);
-      if (match?.[1] === undefined) throw new Error(`could not parse compose port binding: ${JSON.stringify(line)}`);
-      return parsePort(match[1], "compose port");
+      const bare = /^(\d+)$/u.exec(line);
+      if (bare !== null) return parsePort(bare[1]!, "compose port");
+      const ipv4 = /^([^:[\]]+):(\d+)$/u.exec(line);
+      if (ipv4?.[1] !== undefined && ipv4[2] !== undefined && isIP(ipv4[1]) === 4) {
+        return parsePort(ipv4[2], "compose port");
+      }
+      const ipv6 = /^\[([^\]]+)\]:(\d+)$/u.exec(line);
+      if (ipv6?.[1] !== undefined && ipv6[2] !== undefined && isIP(ipv6[1]) === 6) {
+        return parsePort(ipv6[2], "compose port");
+      }
+      throw new Error(`could not parse compose port binding: ${JSON.stringify(line)}`);
     });
   const unique = [...new Set(bindings)];
   if (unique.length !== 1) throw new Error(`expected one compose host port, got ${JSON.stringify(bindings)}`);

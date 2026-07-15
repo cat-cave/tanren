@@ -114,6 +114,25 @@ describe("smoke stack context", () => {
     expect(() => parseComposePort("not-a-binding\n")).toThrow(/could not parse/u);
   });
 
+  it("accepts Podman Compose's bare decimal published host port and keeps failing closed", () => {
+    expect(parseComposePort("46673\n")).toBe(46673);
+    expect(parseComposePort("46673")).toBe(46673);
+    expect(parseComposePort("46673\n46673\n")).toBe(46673);
+    expect(() => parseComposePort("0\n")).toThrow(/1\.\.65535/u);
+    expect(() => parseComposePort("99999\n")).toThrow(/1\.\.65535/u);
+    expect(() => parseComposePort("46673\n3100\n")).toThrow(/expected one compose host port/u);
+    expect(() => parseComposePort("0x10\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("port-46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("not-a-binding:46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort(":46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("http://decoy:46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("localhost:46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("::1:46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("[not-ipv6]:46673\n")).toThrow(/could not parse/u);
+    expect(() => parseComposePort("0.0.0.0:0\n")).toThrow(/1\.\.65535/u);
+    expect(() => parseComposePort("[::]:65536\n")).toThrow(/1\.\.65535/u);
+  });
+
   it("honors only explicit port controls and rejects collisions", () => {
     const ports = resolveHostPorts({ TANREN_ORCHESTRATOR_HOST_PORT: "4545" }, 1200);
     expect(ports.orchestrator).toBe(4545);

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +8,7 @@ import { DB_STAGE_RUNNERS } from "./stack-db-stage-runners.js";
 import { ExecutedBindings, LifecycleLedger, OnceFinalizer } from "./stack-lifecycle.js";
 import { finalizeSmoke } from "./stack-finalize.js";
 import { synchronizeSignalFailure, type SmokeState } from "./stack-receipt.js";
-import { executeSmoke, STAGE_RUNNERS } from "./stack-stages.js";
+import { executeSmoke, runStage, STAGE_RUNNERS } from "./stack-stages.js";
 
 function state(failureStage?: string, artifactRoot = "/tmp/tanren-stage-test"): SmokeState {
   const context = createStackContext({
@@ -67,6 +67,70 @@ describe("production STAGE_RUNNERS exact completeness", () => {
 });
 
 describe("production registry failure and signal injection", () => {
+  it("waits for finite delayed Compose logs instead of aborting a quiet child", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-compose-logs-"));
+    const runtime = join(root, "runtime.cjs");
+    try {
+      await writeFile(
+        runtime,
+        `#!${process.execPath}\nsetTimeout(()=>process.stdout.write('delayed compose log\\n'),150);\n`,
+        { mode: 0o755 },
+      );
+      await chmod(runtime, 0o755);
+      const candidate = state(undefined, root);
+      candidate.failure = new Error("primary failure");
+      candidate.composeTouched = true;
+      candidate.runtime = { provider: "podman", executable: runtime, socket: join(root, "fake.sock") };
+      candidate.env = { ...process.env };
+      await mkdir(candidate.context.runtimeDir, { recursive: true });
+      await writeFile(candidate.context.explicitEnvPath, "");
+
+      await runStage(candidate, "capture-compose-logs", { allowWhenAborted: true });
+
+      expect(await readFile(`${candidate.context.receiptPath}.compose.log`, "utf8")).toContain("delayed compose log");
+      expect(candidate.ledger.stages.at(-1)).toMatchObject({ name: "capture-compose-logs", status: "passed" });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves cleanup inputs until resource emptiness is proven", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-cleanup-inputs-"));
+    try {
+      const candidate = state(undefined, root);
+      const buildBase = join(root, "build-base");
+      const buildMarker = join(buildBase, "source", "compose.dev.yml");
+      const runtimeMarker = join(candidate.context.runtimeDir, "compose.env");
+      await mkdir(join(buildBase, "source"), { recursive: true });
+      await mkdir(candidate.context.runtimeDir, { recursive: true });
+      await writeFile(buildMarker, "services: {}\n");
+      await writeFile(runtimeMarker, "TANREN_SMOKE=1\n");
+      candidate.failure = new Error("cleanup has not converged");
+      candidate.buildBase = buildBase;
+      candidate.runtimeOwned = true;
+      candidate.resourcesClean = false;
+
+      await runStage(candidate, "remove-build-context", { allowWhenAborted: true });
+      await runStage(candidate, "remove-runtime-dir", { allowWhenAborted: true });
+
+      expect(await readFile(buildMarker, "utf8")).toBe("services: {}\n");
+      expect(await readFile(runtimeMarker, "utf8")).toBe("TANREN_SMOKE=1\n");
+      expect(candidate.buildBase).toBe(buildBase);
+      expect(candidate.runtimeOwned).toBe(true);
+
+      candidate.resourcesClean = true;
+      await runStage(candidate, "remove-build-context", { allowWhenAborted: true });
+      await runStage(candidate, "remove-runtime-dir", { allowWhenAborted: true });
+
+      await expect(readFile(buildMarker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(runtimeMarker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+      expect(candidate.buildBase).toBeUndefined();
+      expect(candidate.runtimeOwned).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("drives the actual coordinator failure boundary at every registered stage", async () => {
     const originals = { ...STAGE_RUNNERS };
     try {

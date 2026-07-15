@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { removeBuildBase } from "./stack-build.js";
 import type { StackContext } from "./stack-context.js";
 import { safeError, type LifecycleLedger } from "./stack-lifecycle.js";
-import { abortableDelay, progressCycleReached } from "./stack-progress.js";
+import { abortableDelay } from "./stack-progress.js";
 import { BUILD_ID_LABEL } from "./stack-provenance.js";
 import { runCommand, type CommandEvidence, type RuntimeBinding } from "./stack-runtime.js";
 import { synchronizeSignalFailure, type SmokeState } from "./stack-receipt.js";
@@ -116,8 +116,8 @@ function labelsFromInspection(raw: string): Record<string, string> {
   const parsed = JSON.parse(raw) as unknown;
   const item = Array.isArray(parsed) ? parsed[0] : parsed;
   if (typeof item !== "object" || item === null) return {};
-  const root = item as { Labels?: unknown; Config?: { Labels?: unknown } };
-  const labels = root.Labels ?? root.Config?.Labels;
+  const root = item as { Labels?: unknown; Config?: { Labels?: unknown }; labels?: unknown };
+  const labels = root.Labels ?? root.Config?.Labels ?? root.labels;
   if (typeof labels !== "object" || labels === null || Array.isArray(labels)) return {};
   return Object.fromEntries(
     Object.entries(labels).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
@@ -200,36 +200,44 @@ export async function teardownCandidateStack(
   ledger: LifecycleLedger,
 ): Promise<void> {
   const downController = new AbortController();
+  const watchController = new AbortController();
+  const parentSignal = ledger.abortController.signal;
+  const abortFromParent = () => downController.abort(parentSignal.reason);
+  if (!parentSignal.aborted) parentSignal.addEventListener("abort", abortFromParent, { once: true });
   const down = runCommand(
     runtime.executable,
     composeArgs(context, "down", "-v", "--remove-orphans"),
     options(context, env, ledger, downController.signal, false),
-  );
-  const signatures: string[] = [];
-  const watchState = { finished: false };
+  ).finally(() => {
+    parentSignal.removeEventListener("abort", abortFromParent);
+    watchController.abort(new Error("compose down reached a terminal result"));
+  });
+  const observed = new Set<string>();
+  let previous: string | undefined;
   const watch = (async () => {
-    while (!watchState.finished && !downController.signal.aborted) {
+    while (!watchController.signal.aborted) {
       try {
-        const owned = await enumerateOwnedResources(context, runtime, env, ledger, downController.signal);
-        signatures.push(
-          `c=${owned.containers.join(",")}|n=${owned.networks.join(",")}|v=${owned.volumes.join(",")}|i=${owned.images.join(",")}`,
-        );
-        if (progressCycleReached(signatures)) {
-          downController.abort(new Error("compose down made no owned-resource progress"));
-          return;
+        const owned = await enumerateOwnedResources(context, runtime, env, ledger);
+        const signature =
+          `c=${owned.containers.join(",")}|n=${owned.networks.join(",")}|` +
+          `v=${owned.volumes.join(",")}|i=${owned.images.join(",")}`;
+        if (signature !== previous) {
+          if (observed.has(signature)) {
+            downController.abort(new Error(`compose down entered an owned-resource cycle at ${signature}`));
+            watchController.abort(new Error(`compose down entered an owned-resource cycle at ${signature}`));
+            return;
+          }
+          observed.add(signature);
+          previous = signature;
         }
       } catch {
-        // The force-removal pass below independently re-enumerates.
+        if (watchController.signal.aborted) return;
+        // A provider read failure is not evidence about resource progress.
       }
-      await abortableDelay(50, downController.signal).catch(() => {});
+      await abortableDelay(50, watchController.signal).catch(() => {});
     }
   })();
-  try {
-    await down.catch(() => {});
-  } finally {
-    watchState.finished = true;
-    await watch.catch(() => {});
-  }
+  await Promise.all([down.catch(() => {}), watch.catch(() => {})]);
   const recoveryController = new AbortController();
   const owned = await enumerateOwnedResources(context, runtime, env, ledger, recoveryController.signal);
   await forceRemoveOwnedResources(context, runtime, env, ledger, owned, recoveryController.signal);
