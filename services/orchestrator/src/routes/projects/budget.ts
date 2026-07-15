@@ -3,12 +3,13 @@
 //
 //   GET  /:orgId/projects/:projectId/budget
 //     → { ceilingUsd | null, period, spentUsd, notionalUsd,
-//         remainingUsd | null, paused }
+//         remainingUsd | null, paused, pauseObservation, failClosed }
 //       the resolved ceiling (project-over-org), the cumulative REAL spend over the
 //       period (the figure the ceiling ALWAYS gates — the doctrine), the API-EQUIVALENT
 //       notional value over the same period (surfaced so a subscription org sees a
 //       non-zero figure; NOT spend, NOT gated), the remaining headroom against real
-//       spend, and whether the walker is paused on budget.
+//       spend, whether the walker is paused on budget, and the latest durable
+//       project-level walker proof when one has been observed.
 //   PUT  /:orgId/projects/:projectId/budget   { ceilingUsd, period? }
 //     → the same shape, re-read after the write. Sets the project's OWN budget,
 //       read-modify-writing `projects.config.budget` through the SAME versioned
@@ -27,6 +28,10 @@ import { z } from "zod";
 import { DEFAULT_BUDGET_PERIOD, migrateProjectConfig } from "../../engine/config/index.js";
 import { type ProjectBudgetState, shouldPauseOnBudget } from "../../engine/contracts/dagWalker.js";
 import { PgBudgetGate } from "../../engine/dag/budgetGate.js";
+import {
+  type BudgetPauseObservation,
+  PgBudgetPauseObservationReader,
+} from "../../engine/dag/budgetPauseObservation.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import { createLogger } from "../../engine/observability/logger.js";
@@ -62,6 +67,8 @@ export interface BudgetView {
   notionalUsd: number;
   remainingUsd: number | null;
   paused: boolean;
+  /** Latest durable project-level DagWalker pause proof; never synthesized. */
+  pauseObservation: BudgetPauseObservation | null;
   /**
    * Fail-closed safety reason when the gate pauses because true spend cannot be
    * trusted (`unpriced_spend` / `unparseable_config` / `unresolvable_project_org`).
@@ -71,7 +78,7 @@ export interface BudgetView {
   failClosed: "unpriced_spend" | "unparseable_config" | "unresolvable_project_org" | null;
 }
 
-function toView(state: ProjectBudgetState): BudgetView {
+function toView(state: ProjectBudgetState, pauseObservation: BudgetPauseObservation | null): BudgetView {
   const ceilingUsd = state.ceilingUsd ?? null;
   return {
     ceilingUsd,
@@ -83,8 +90,22 @@ function toView(state: ProjectBudgetState): BudgetView {
     // BUDGET-SAFETY (C1b/M5): a fail-closed safety pause shows as paused too, not
     // just the genuine ceiling-reached case.
     paused: shouldPauseOnBudget(state),
+    pauseObservation,
     failClosed: state.failClosed ?? null,
   };
+}
+
+async function pauseObservationFor(
+  pool: pg.Pool,
+  orgId: string,
+  projectId: string,
+  state: ProjectBudgetState,
+): Promise<BudgetPauseObservation | null> {
+  // The budget state decides whether the project is paused. The event projection
+  // only explains an active pause; an open gate never replays a historical halt
+  // as if it were current.
+  if (!shouldPauseOnBudget(state)) return null;
+  return new PgBudgetPauseObservationReader(pool).latest(orgId, projectId);
 }
 
 /** GET handler: resolve the project's budget state + render the observation view. */
@@ -94,7 +115,8 @@ export async function handleBudgetGet(c: Context, pool: pg.Pool, orgId: string, 
     return c.json({ error: "project_not_found" }, 404);
   }
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
-  return c.json(toView(state));
+  const pauseObservation = await pauseObservationFor(pool, orgId, projectId, state);
+  return c.json(toView(state, pauseObservation));
 }
 
 /**
@@ -135,6 +157,7 @@ export async function handleBudgetPut(
   await ProjectStore.updateConfig(pool, projectId, migrateProjectConfig(nextConfig), systemActor);
 
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
+  const pauseObservation = await pauseObservationFor(pool, orgId, projectId, state);
 
   // RESUME WAKE (audit §3.7e): the DagWalker is driven by the LISTEN/NOTIFY bus, and a
   // project PAUSED on budget has NO run-terminal / spec-insert notification to re-walk
@@ -152,5 +175,5 @@ export async function handleBudgetPut(
     }
   }
 
-  return c.json(toView(state));
+  return c.json(toView(state, pauseObservation));
 }
