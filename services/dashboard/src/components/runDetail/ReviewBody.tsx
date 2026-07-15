@@ -19,7 +19,13 @@
 
 import type { RunDetail, RunEventRow } from "../../api/types.js";
 import { CsrfField } from "../shell/CsrfField.js";
-import { summarizeCosts, formatUsd, reviewMergeStateFromEvents, type ReviewMergeState } from "./model.js";
+import {
+  summarizeCosts,
+  formatUsd,
+  reviewMergeStateFromEvents,
+  type ForgeReviewPublicationView,
+  type ReviewMergeState,
+} from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
 /** The four merge-integration modes (mirrors MergeIntegration). */
@@ -84,6 +90,69 @@ function reviewMergePill(state: ReviewMergeState): {
     default:
       return { label: "review pending", cls: "warn" };
   }
+}
+
+/**
+ * gv-2: render internal verdict beside forge ID/state/link/head.
+ * Missing or partial forge fields are LOUD (warn/danger) — never green success.
+ */
+export function ForgePublicationPanel(props: {
+  phase: ReviewMergeState["phase"];
+  publication: ForgeReviewPublicationView | undefined;
+}) {
+  const terminal = props.phase === "approved" || props.phase === "changes_requested";
+  if (!terminal && props.publication === undefined) {
+    return null;
+  }
+  const pub = props.publication;
+  if (pub === undefined) {
+    return (
+      <div class="forge-turn" data-review="forge-publication" data-state="unpublished">
+        <h4 style="color: var(--status-warn)">forge publication · unpublished</h4>
+        <div style="font-size:12px; color: var(--fg-2); line-height:1.5">
+          Terminal review has no durable forge receipt (id / state / link / head). Do not treat this as forge-approved.
+        </div>
+      </div>
+    );
+  }
+  if (!pub.complete) {
+    return (
+      <div class="forge-turn" data-review="forge-publication" data-state="malformed">
+        <h4 style="color: var(--status-danger)">forge publication · incomplete receipt</h4>
+        <div style="font-size:12px; color: var(--fg-2); line-height:1.5">
+          Partial forge fields present — refusing to paint success. id={pub.forgeReviewId ?? "—"} state=
+          {pub.forgeReviewState ?? "—"} head={pub.headSha?.slice(0, 7) ?? "—"}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div class="forge-turn" data-review="forge-publication" data-state="published">
+      <h4 style="color: var(--ember-08)">forge publication · {pub.forgeReviewState}</h4>
+      <div style="font-size:12px; color: var(--fg-2); line-height:1.6">
+        <div>
+          reviewer · <b data-review="forge-reviewer">{pub.reviewer ?? "—"}</b>
+        </div>
+        <div>
+          forge id · <code data-review="forge-review-id">{pub.forgeReviewId}</code>
+        </div>
+        <div>
+          head · <code data-review="forge-head-sha">{pub.headSha?.slice(0, 12)}</code>
+        </div>
+        <div>
+          <a
+            href={pub.forgeReviewUrl}
+            target="_blank"
+            rel="noreferrer"
+            data-review="forge-review-link"
+            style="color: var(--ember-08)"
+          >
+            open forge review ↗
+          </a>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Pull writer-deferral items out of the run's typed events (no stdout parsing). */
@@ -366,6 +435,8 @@ export function ReviewBody(props: ReviewBodyProps) {
                     ? "No behaviors to verify on this spec."
                     : `${behaviors.length} behavior(s) left to eyeball. Tick each one as you verify it.`}
                 </div>
+
+                <ForgePublicationPanel phase={reviewState.phase} publication={reviewState.forgePublication} />
               </div>
               <div class="forge-input">
                 <span class="stamp">鍛</span>

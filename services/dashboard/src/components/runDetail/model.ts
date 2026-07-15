@@ -329,6 +329,52 @@ export interface ReviewMergeState {
   mergeSha?: string;
   /** Dispatched merge integration recorded on a merge.* event. */
   integration?: string;
+  /**
+   * gv-2 forge publication bound onto the latest terminal review.* event.
+   * Absent / partial fields must never be painted as success (loud UI).
+   */
+  forgePublication?: ForgeReviewPublicationView;
+}
+
+/** Durable forge receipt fields from review.approved / review.changes_requested. */
+export interface ForgeReviewPublicationView {
+  forgeReviewId?: string;
+  forgeReviewState?: string;
+  forgeReviewUrl?: string;
+  headSha?: string;
+  reviewer?: string;
+  /** True only when all four required receipt fields are non-empty. */
+  complete: boolean;
+}
+
+/**
+ * Extract the forge publication receipt from a terminal review event payload.
+ * Never infers success from missing fields — `complete` is false unless id,
+ * state, url, and headSha are all present and non-empty.
+ */
+export function forgePublicationFromPayload(payload: Record<string, unknown>): ForgeReviewPublicationView {
+  const forgeReviewId = asString(payload["forgeReviewId"]);
+  const forgeReviewState = asString(payload["forgeReviewState"]);
+  const forgeReviewUrl = asString(payload["forgeReviewUrl"]);
+  const headSha = asString(payload["headSha"]);
+  const reviewer = asString(payload["reviewer"]);
+  const complete =
+    forgeReviewId !== undefined &&
+    forgeReviewId !== "" &&
+    forgeReviewState !== undefined &&
+    forgeReviewState !== "" &&
+    forgeReviewUrl !== undefined &&
+    forgeReviewUrl !== "" &&
+    headSha !== undefined &&
+    headSha !== "";
+  return {
+    ...(forgeReviewId !== undefined && { forgeReviewId }),
+    ...(forgeReviewState !== undefined && { forgeReviewState }),
+    ...(forgeReviewUrl !== undefined && { forgeReviewUrl }),
+    ...(headSha !== undefined && { headSha }),
+    ...(reviewer !== undefined && { reviewer }),
+    complete,
+  };
 }
 
 /**
@@ -350,9 +396,11 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
       case "review.changes_requested":
         state.phase = "changes_requested";
         state.message = message;
+        state.forgePublication = forgePublicationFromPayload(payload);
         break;
       case "review.approved":
         if (state.phase !== "merged") state.phase = "approved";
+        state.forgePublication = forgePublicationFromPayload(payload);
         break;
       case "merge.queued":
         state.phase = "merge_queued";

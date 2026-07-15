@@ -121,9 +121,9 @@ export class GitHubVisibilityProjection implements VisibilityProjection {
     });
   }
 
-  // publishReview = submit a forge review COMMENT mirroring Tanren's recorded review
-  // (the provider's `submitReview`). It is a COMMENT event: the projection mirrors the
-  // review for humans; the merge decision is Tanren's, never the host review's state.
+  // publishReview = best-effort forge-UI COMMENT mirror only (never land-authoritative).
+  // Strict simulated-review APPROVE/REQUEST_CHANGES (gv-2) goes through
+  // GitHubReviewMergeService directly with a distinct reviewer token — not this seam.
   async publishReview(input: PublishReviewInput): Promise<void> {
     const repo = parseRepoFullName(input.repoFullName);
     const token = await this.resolveToken();

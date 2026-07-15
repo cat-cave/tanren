@@ -2,6 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "forgeReviewId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "forgeReviewState": {
+      "enum": [
+        "approved",
+        "changes_requested"
+      ],
+      "type": "string"
+    },
+    "forgeReviewUrl": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "headSha": {
+      "minLength": 1,
+      "type": "string"
+    },
     "message": {
       "type": "string"
     },

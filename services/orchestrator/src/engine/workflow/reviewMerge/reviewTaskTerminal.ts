@@ -14,9 +14,14 @@
 // single-finalize invariant, now extended to the pre-terminal observation).
 //
 // One writer call, one transaction, no half-measure.
+//
+// gv-2: when a forge publication receipt is present (strict simulated review),
+// it is bound onto the same atomic `review.approved` / `review.changes_requested`
+// payload — no second audit store.
 
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { PriorEventInput } from "../../eventStore.js";
+import type { ForgeReviewPublication } from "./simulatedReviewPublication.js";
 
 export interface ReviewTaskTerminalBase {
   runId: string;
@@ -45,8 +50,14 @@ export async function markReviewTaskDoneWithEvent(input: {
   reviewer?: string;
   /** changes_requested feedback body (the writer-rework steering payload). */
   feedback?: string;
+  /**
+   * Strict simulated-review forge receipt (gv-2). When present, bound onto the
+   * terminal review.* event so land signals / UI observe the same durable proof.
+   * Human/auto paths omit it.
+   */
+  forgePublication?: ForgeReviewPublication;
 }): Promise<void> {
-  const { writer, base, verdict, prUrl, prNumber, reviewer, feedback } = input;
+  const { writer, base, verdict, prUrl, prNumber, reviewer, feedback, forgePublication } = input;
   // PRE-TERMINAL verdict event (the loud `review.*` observation, downstream
   // consumers key off this event). Bundled into the SAME atomic transaction
   // as the terminal row + `task.completed` via the writer-seam `priorEvents`
@@ -60,13 +71,34 @@ export async function markReviewTaskDoneWithEvent(input: {
   // retry of THIS finalize call dedupes cleanly; a subsequent flip of the
   // verdict (e.g. an explicit re-review with a DIFFERENT outcome) would carry
   // a distinct key and land afresh.
+  //
+  // gv-2: when a forge receipt is present, include its id in the key so a
+  // retry of the same publication reconciles; a contradictory second receipt
+  // for the same verdict still keys to the same terminal outcome (idempotent
+  // finalize) — the receipt fields are those of the first successful commit
+  // that wins under append-if-absent.
   const eventType = verdict === "approved" ? "review.approved" : "review.changes_requested";
+  const forgeFields =
+    forgePublication === undefined
+      ? {}
+      : {
+          forgeReviewId: forgePublication.forgeReviewId,
+          forgeReviewState: forgePublication.forgeReviewState,
+          forgeReviewUrl: forgePublication.forgeReviewUrl,
+          headSha: forgePublication.headSha,
+        };
+  const effectiveReviewer = reviewer ?? forgePublication?.reviewerLogin;
   const verdictEvent: PriorEventInput =
     verdict === "approved"
       ? {
           ...base,
           eventType,
-          payload: { prUrl, prNumber, ...(reviewer !== undefined && { reviewer }) } as never,
+          payload: {
+            prUrl,
+            prNumber,
+            ...(effectiveReviewer !== undefined && { reviewer: effectiveReviewer }),
+            ...forgeFields,
+          } as never,
           idempotencyKey: `${base.runId}:review:${verdict}`,
         }
       : {
@@ -75,8 +107,9 @@ export async function markReviewTaskDoneWithEvent(input: {
           payload: {
             prUrl,
             prNumber,
-            ...(reviewer !== undefined && { reviewer }),
+            ...(effectiveReviewer !== undefined && { reviewer: effectiveReviewer }),
             ...(feedback !== undefined && { message: feedback }),
+            ...forgeFields,
           } as never,
           idempotencyKey: `${base.runId}:review:${verdict}`,
         };
