@@ -48,6 +48,7 @@
     "drizzle-kit": "^0.31.10",
     "knip": "^6.15.0",
     "lefthook": "2.1.9",
+    "oxc-parser": "0.133.0",
     "oxfmt": "^0.53.0",
     "oxlint": "^1.68.0",
     "oxlint-tsgolint": "^0.23.0",
