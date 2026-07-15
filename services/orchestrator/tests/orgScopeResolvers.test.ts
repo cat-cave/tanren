@@ -36,12 +36,11 @@ import {
   withJobOrgScope,
 } from "../src/engine/data/orgScopedDb.js";
 
-// A no-op query stub for the isPool tests (it only reads `connect`).
 const queryStub = async (): Promise<{ rows: never[] }> => ({ rows: [] });
 
-// A fake pool + the single distinct client its connect() hands out. Every
-// statement run on either receiver is recorded verbatim (transaction-control and
-// SET LOCAL statements included) so a test can assert the EXACT routing and SQL.
+// Fake pool + distinct client from connect(). Records SQL on each receiver.
+// totalCount is required so isPool classifies as a pool (connect alone is
+// unsound — PoolClient also has connect).
 interface FakePool {
   pool: pg.Pool;
   client: pg.PoolClient;
@@ -71,8 +70,8 @@ function fakePool(): FakePool {
       fp.connects += 1;
       return client;
     },
+    totalCount: 0,
   } as unknown as pg.Pool;
-  // Return the SAME object the closures mutate so `connects`/`releases` read live.
   return Object.assign(fp, { pool, client }) as unknown as FakePool;
 }
 
@@ -120,9 +119,19 @@ describe("hasOrgScope — scope presence", () => {
 });
 
 describe("isPool — pool vs handed-in-client discriminator", () => {
-  it("is true only when `connect` is a FUNCTION (false for absent or non-function)", () => {
+  // Arm1: totalCount+connect. Arm2: release ⇒ PoolClient (never a pool — even with
+  // connect). Arm3: connect without release (minimal test doubles). Query-only ⇒ false.
+  it("classifies real pools / doubles as pools; rejects PoolClient-shaped clients", () => {
+    const realPool = { query: queryStub, connect: () => ({}), totalCount: 0 };
+    expect(isPool(realPool as unknown as pg.Pool)).toBe(true);
+    // Minimal double: connect, no release (PlannerRunPool shape).
     expect(isPool({ query: queryStub, connect: () => ({}) } as unknown as pg.Pool)).toBe(true);
+    // Query-only: preserve as client.
     expect(isPool({ query: queryStub } as unknown as pg.PoolClient)).toBe(false);
+    // PoolClient: connect + release — must NOT re-checkout (the review #875 bug).
+    expect(isPool({ query: queryStub, connect: () => ({}), release: () => {} } as unknown as pg.PoolClient)).toBe(
+      false,
+    );
     expect(isPool({ query: queryStub, connect: "nope" } as unknown as pg.Pool)).toBe(false);
   });
 });
@@ -259,34 +268,20 @@ describe("orgScopingPool — the pool-shaped routing proxy", () => {
     expect(fp.connects).toBe(1);
   });
 
-  it("BINDS delegated methods to the underlying pool (a DETACHED method still reaches `this`)", () => {
-    // Read a method off the proxy and call it DETACHED: if it were handed back
-    // UNBOUND, `this` would be undefined and the call would throw — so a detached
-    // call returning the pool's own field pins the `.bind(target)` arm. (Calling
-    // it as `scoping.method()` would not distinguish bound from unbound.)
+  it("binds delegated methods + exposes non-function fields off the target", () => {
+    // Detached method must keep `this` (bind arm); plain field is returned as-is.
     const base = {
       query: async () => ({ rows: [] }),
       connect: async () => ({}),
       totalCount: 1234,
+      label: "primary-pool",
       readCount(this: { totalCount: number }) {
         return this.totalCount;
       },
     } as unknown as pg.Pool;
-    const scoping = orgScopingPool(base) as unknown as { readCount: () => number };
-    const detached = scoping.readCount;
-    expect(detached()).toBe(1234);
-  });
-
-  it("exposes a non-function field off the underlying pool unchanged (else-arm)", () => {
-    // The ternary's else-arm returns the raw value for non-functions.
-    const base = {
-      query: async () => ({ rows: [] }),
-      connect: async () => ({}),
-      label: "primary-pool",
-    } as unknown as pg.Pool;
-    const scoping = orgScopingPool(base) as unknown as { label: string };
+    const scoping = orgScopingPool(base) as unknown as { readCount: () => number; label: string };
+    expect(scoping.readCount()).toBe(1234);
     expect(scoping.label).toBe("primary-pool");
-    expect(typeof scoping.label).toBe("string");
   });
 });
 

@@ -5,7 +5,7 @@
 // The prior third arm (no orgId → legacy split) is gone: `PlannerRunContext.orgId`
 // is REQUIRED by the hydration invariant (a run is always tenant-scoped).
 import { runWithOrgScope } from "@tanren/db";
-import type pg from "pg";
+import { isPool } from "../data/orgScopedDb.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import type { FinalizeRunState } from "./plannerRunFinalize.js";
 import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
@@ -43,7 +43,10 @@ export async function finalizeRunCompletedAtomic(
     });
     return;
   }
-  if (typeof (input.pool as { connect?: unknown }).connect === "function") {
+  // Real pool (or orgScopingPool proxy) → org-scoped atomic finalize; unit-test
+  // fakes lack pool counters (`totalCount`) and take the split path below.
+  // `isPool` narrows without cast (must not key on `connect` alone — PoolClient has it).
+  if (isPool(input.pool)) {
     const finalizeInput = {
       runId: context.runId,
       orgId,
@@ -51,7 +54,7 @@ export async function finalizeRunCompletedAtomic(
       outcome: "ok",
       fromStatuses: ["running", "queued"],
     };
-    await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+    await runWithOrgScope(input.pool, orgId, async (client) => {
       await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: evt() });
     });
     return;

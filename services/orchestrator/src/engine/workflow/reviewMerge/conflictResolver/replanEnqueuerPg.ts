@@ -18,6 +18,7 @@ import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../../../auth/schemas.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
+import { isPool, type QueryClient } from "../../../data/orgScopedDb.js";
 import {
   conflictSignatureOf,
   gateErrorSignature,
@@ -26,13 +27,30 @@ import {
 } from "./replanRouter.js";
 
 /**
+ * Resolve a real `pg.Pool` for events-table reads: prefer the BYPASSRLS system
+ * pool (the events table is unreadable to the de-privileged data-plane role),
+ * else the caller's pool when it is a real Pool. No `as pg.Pool` cast — `isPool`
+ * is the typed narrow (workflow layers thread `QueryClient` / `RunStateClient`).
+ */
+function resolveEventsReadPool(fallback: QueryClient): pg.Pool {
+  const system = getSystemPool();
+  if (system !== undefined) return system;
+  if (isPool(fallback)) return fallback;
+  throw new Error("events-table read requires a real pg.Pool when TANREN_SYSTEM_DATABASE_URL / system pool is unset");
+}
+
+/**
  * The production replan enqueuer: re-open the spec to the re-drivable status + append
  * the replan context as steering (one short org-scoped txn that COMMITS first), then
  * enqueue a fresh re-plan run. Routes the run-create through the control plane when a
  * writer is wired, else `createQueuedRunFromSpec` in-process (the same dual path the
  * DagWalker enqueuer uses). Returns the new run id (the observable `replanRunId`).
+ *
+ * The first arg is retained for call-site arity (historical pool threading) but is
+ * unused — all writes route through `runStateWriter` (audit D-R3.2). Accepts
+ * `QueryClient` so workflow seams need no `as pg.Pool` cast.
  */
-export function buildReplanEnqueuer(_pool: pg.Pool, runStateWriter: RunStateWriter): ReplanEnqueuer {
+export function buildReplanEnqueuer(_pool: QueryClient, runStateWriter: RunStateWriter): ReplanEnqueuer {
   return {
     async enqueue(input) {
       // Audit D-R3.2: the writer is REQUIRED — both re-open + steer writes route through
@@ -74,10 +92,10 @@ export function buildReplanEnqueuer(_pool: pg.Pool, runStateWriter: RunStateWrit
  * legacy row without a `conflictSignature` falls back to a hash of its `newContext` so the
  * detector can still tell same-conflict from different-conflict.
  */
-export function buildPriorReplanReader(pool: pg.Pool): PriorReplanReader {
+export function buildPriorReplanReader(pool: QueryClient): PriorReplanReader {
   return {
     async signatures(input) {
-      const readPool = getSystemPool() ?? pool;
+      const readPool = resolveEventsReadPool(pool);
       return runWithOrgScope(readPool, input.orgId, async (client) => {
         const result = await client.query<{
           payload: { conflictSignature?: string; newContext?: string; otherSpecId?: string };
@@ -107,10 +125,10 @@ export function buildPriorReplanReader(pool: pg.Pool): PriorReplanReader {
  * fixed point that escalates.
  */
 export function buildPriorGateReworkReader(
-  pool: pg.Pool,
+  pool: QueryClient,
 ): (input: { specId: string; orgId: string }) => Promise<string[]> {
   return async (input) => {
-    const readPool = getSystemPool() ?? pool;
+    const readPool = resolveEventsReadPool(pool);
     return runWithOrgScope(readPool, input.orgId, async (client) => {
       const result = await client.query<{ payload: { gateError?: string } }>(
         `SELECT payload
