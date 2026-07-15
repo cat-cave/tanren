@@ -15,6 +15,55 @@ interface Captured {
   method: string;
 }
 
+const FORGE_ANSWER = {
+  body: "Proposal decision recorded.",
+  attentionItems: [],
+  insights: [],
+  prompts: [],
+  proposedActions: null,
+};
+
+const FORGE_TURN = {
+  id: "turn_1",
+  threadId: "thread_1",
+  index: 1,
+  source: { kind: "prior_turn", priorTurnId: "turn_0" },
+  audience: "project:member",
+  authorKind: "forge_template",
+  render: FORGE_ANSWER,
+  createdAt: "2026-07-14T12:00:00.000Z",
+};
+
+function proposal(status: "executed" | "rejected") {
+  return {
+    id: "p1",
+    orgId: "org_a",
+    threadId: "thread_1",
+    proposingTurnId: "turn_0",
+    toolName: "tanren.trigger_run",
+    args: { specId: "spec_1" },
+    rationale: "Exercise the spec",
+    status,
+    proposedAt: "2026-07-14T11:59:00.000Z",
+    decidedBy: "user_1",
+    decidedAt: "2026-07-14T12:00:00.000Z",
+    result: status === "executed" ? { runId: "run_1" } : null,
+    error: null,
+  };
+}
+
+const FORGE_THREAD = {
+  id: "th_1",
+  orgId: "org_a",
+  projectId: null,
+  runId: null,
+  scope: "org",
+  title: null,
+  createdAt: "2026-07-14T12:00:00.000Z",
+  updatedAt: "2026-07-14T12:00:00.000Z",
+  closedAt: null,
+};
+
 function clientReturning(status: number, body: unknown, captured: Captured[]): OrchestratorClient {
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     captured.push({ url: String(input), method: init?.method ?? "GET" });
@@ -29,7 +78,7 @@ function clientReturning(status: number, body: unknown, captured: Captured[]): O
 describe("decideForgeProposal (dashboard proposal client)", () => {
   it("approve → decided, hitting the orchestrator approve route", async () => {
     const captured: Captured[] = [];
-    const client = clientReturning(200, { proposal: { id: "p1", status: "executed" } }, captured);
+    const client = clientReturning(200, { proposal: proposal("executed"), turn: FORGE_TURN }, captured);
 
     const result = await client.decideForgeProposal("org_a", "p1", "approve");
 
@@ -41,7 +90,7 @@ describe("decideForgeProposal (dashboard proposal client)", () => {
 
   it("reject → decided, hitting the reject route", async () => {
     const captured: Captured[] = [];
-    const client = clientReturning(200, { proposal: { id: "p1", status: "rejected" } }, captured);
+    const client = clientReturning(200, { proposal: proposal("rejected"), turn: FORGE_TURN }, captured);
 
     const result = await client.decideForgeProposal("org_a", "p1", "reject");
 
@@ -90,7 +139,7 @@ describe("askForge (server client structured failure)", () => {
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/forge/threads") && (init?.method ?? "GET") === "POST") {
-        return new Response(JSON.stringify({ id: "th_1" }), {
+        return new Response(JSON.stringify(FORGE_THREAD), {
           status: 200,
           headers: { "content-type": "application/json" },
         });

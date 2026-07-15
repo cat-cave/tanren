@@ -139,7 +139,7 @@ function mockOrchestrator(opts: { doctor?: unknown; matrix?: unknown; deliveries
     if (url.match(/\/projects$/u) && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));
       state.projectCreates.push(body);
-      return json({ projectId: "project_easy", ...body }, 201);
+      return json({ projectId: "project_easy", orgId: "org_acme", ...body, config: { version: 1 } }, 201);
     }
     if (url.includes("/projects/") && url.endsWith("/link") && method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}"));

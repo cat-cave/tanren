@@ -7,14 +7,8 @@
       "type": "string"
     },
     "id": {
-      "anyOf": [
-        {
-          "type": "number"
-        },
-        {
-          "type": "string"
-        }
-      ]
+      "pattern": "^[1-9]\\d*$",
+      "type": "string"
     },
     "payload": {},
     "projectId": {

@@ -35,6 +35,8 @@ const CAPTURE_AFTER_ROUND = {
   interfaces: [],
   designContract: null,
   architecture: [],
+  lifecycle: null,
+  lifecycleConfirmed: false,
   rulesets: [],
 };
 
@@ -50,10 +52,16 @@ const ROUND_RESULT = {
 const DERIVE_RESULT = {
   projectId: "project_derived",
   projectName: "supply-chain-os",
+  repository: {
+    fullName: "cat-cave/supply-chain-os",
+    repoUrl: "https://github.com/cat-cave/supply-chain-os",
+    defaultBranch: "main",
+  },
   specIds: ["spec_1", "spec_2", "spec_3", "spec_4"],
   personaIds: ["persona_1"],
   behaviorIds: ["behavior_1"],
   milestoneIds: ["m1", "m2"],
+  bootstrap: { errors: [] },
 };
 
 const SPECS = [

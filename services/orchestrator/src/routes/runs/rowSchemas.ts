@@ -49,9 +49,11 @@ export const RawTaskRowSchema = z
 // `ts` is the event timestamp (NOT NULL); `id` is the bigserial cursor key,
 // which pg may hand back as a number or a string — accept either, the contract
 // row schema narrows it again.
+const pgBigserial = z.union([z.string().regex(/^[1-9]\d*$/u), z.number().int().positive().safe()]).transform(String);
+
 export const RawEventRowSchema = z
   .object({
-    id: z.union([z.number(), z.string()]),
+    id: pgBigserial,
     ts: z.coerce.date(),
   })
   .passthrough();
@@ -63,15 +65,16 @@ export const RawEventRowSchema = z
 // accounting). Accept a real number or a digit string from pg; reject missing,
 // null, empty, or boolean so the boundary never silent-launders to 0.
 const pgNonNegInt = z.union([
-  z.number().int().nonnegative(),
+  z.number().int().nonnegative().safe(),
   z
     .string()
     .regex(/^\d+$/u)
-    .transform((value) => Number.parseInt(value, 10)),
+    .transform((value) => Number.parseInt(value, 10))
+    .pipe(z.number().int().nonnegative().safe()),
 ]);
 export const RawCostRowSchema = z
   .object({
-    id: z.union([z.number(), z.string()]),
+    id: pgBigserial,
     recorded_at: z.coerce.date(),
     billing_mode: z.enum(["per_token", "subscription", "self_hosted", "unattributed"]),
     cost_basis: z.enum(["ccusage", "provider_response", "credits", "unknown", "unattributed"]),

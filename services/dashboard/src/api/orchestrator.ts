@@ -33,9 +33,17 @@ import type {
   RunDetail,
   RunListItem,
   RunLocation,
-  RunSummary,
   SpecSummary,
 } from "./types.js";
+import { RunDetailWire } from "./runDetailSchemas.js";
+import {
+  CreatedProjectSchema,
+  decodeWith,
+  ForgeRenderResponseSchema,
+  ForgeThreadIdResponseSchema,
+  QueuedRunResponseSchema,
+  SpecSummarySchema,
+} from "./writeResponseSchemas.js";
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
 
@@ -300,7 +308,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(SpecSummarySchema) },
     );
   }
 
@@ -316,15 +324,15 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     projectId: string,
     specId: string,
     input: { trigger?: string; branch?: string } = {},
-  ): Promise<{ ok: boolean; status: number; body: RunSummary | undefined }> {
-    return this.sendJson<RunSummary>(
+  ): Promise<{ ok: boolean; status: number; body: { runId: string } | undefined }> {
+    return this.sendJson<{ runId: string }>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs/${encodeURIComponent(specId)}/runs`,
       {
         trigger: input.trigger ?? "dashboard",
         ...(input.branch === undefined ? {} : { branch: input.branch }),
       },
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(QueuedRunResponseSchema) },
     );
   }
 
@@ -350,7 +358,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
         scope: "project",
         projectId,
       },
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ForgeThreadIdResponseSchema) },
     );
     const threadId = thread.body?.id;
     if (!thread.ok || threadId === undefined) {
@@ -360,7 +368,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(threadId)}/turns/generate-project-view`,
       budgetUsdPerWeek === undefined ? { projectId } : { projectId, budgetUsdPerWeek },
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ForgeRenderResponseSchema) },
     );
     return turn.body?.render;
   }
@@ -409,11 +417,12 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   /** Create a project row (non-brownfield create path). */
   async createProject(orgId: string, body: Record<string, unknown>): Promise<CreatedProject | undefined> {
-    const result = await this.sendJson("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body, {
+    const result = await this.sendJson<CreatedProject>("POST", `/orgs/${encodeURIComponent(orgId)}/projects`, body, {
       expectBody: true,
+      decode: decodeWith(CreatedProjectSchema),
     });
     if (!result.ok) return undefined;
-    return result.body as CreatedProject;
+    return result.body;
   }
 
   /**
@@ -464,7 +473,8 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) },
     ).catch(() => {});
     if (response === undefined || !response.ok) return undefined;
-    return (await response.json()) as RunDetail;
+    const parsed = RunDetailWire.safeParse(await response.json().catch(() => {}));
+    return parsed.success ? parsed.data : undefined;
   }
 
   /** SSE stream URL for the run live feed (client island). */

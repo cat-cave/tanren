@@ -124,7 +124,7 @@ export const RUN_DETAIL: RunDetail = {
   ],
   recentEvents: [
     {
-      id: 1,
+      id: "1",
       ts: new Date().toISOString(),
       runId: RUN_ID,
       taskId: "write_2",
@@ -135,7 +135,7 @@ export const RUN_DETAIL: RunDetail = {
       redactedPaths: [],
     },
     {
-      id: 2,
+      id: "2",
       ts: new Date().toISOString(),
       runId: RUN_ID,
       taskId: "write_2",
@@ -146,7 +146,7 @@ export const RUN_DETAIL: RunDetail = {
       redactedPaths: [],
     },
     {
-      id: 3,
+      id: "3",
       ts: new Date().toISOString(),
       runId: RUN_ID,
       taskId: "write_2",
@@ -157,7 +157,7 @@ export const RUN_DETAIL: RunDetail = {
       redactedPaths: ["token"],
     },
     {
-      id: 4,
+      id: "4",
       ts: new Date().toISOString(),
       runId: RUN_ID,
       taskId: "write_1",
@@ -174,7 +174,7 @@ export const RUN_DETAIL: RunDetail = {
   ],
   costs: [
     {
-      id: 1,
+      id: "1",
       runId: RUN_ID,
       taskId: "write_1",
       projectId: PROJECT.projectId,
@@ -193,7 +193,7 @@ export const RUN_DETAIL: RunDetail = {
       recordedAt: new Date().toISOString(),
     },
     {
-      id: 2,
+      id: "2",
       runId: RUN_ID,
       taskId: "write_2",
       projectId: PROJECT.projectId,
@@ -212,7 +212,7 @@ export const RUN_DETAIL: RunDetail = {
       recordedAt: new Date().toISOString(),
     },
     {
-      id: 3,
+      id: "3",
       runId: RUN_ID,
       taskId: "audit_1",
       projectId: PROJECT.projectId,

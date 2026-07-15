@@ -59,9 +59,14 @@ export type TaskTimelineEntry = z.infer<typeof TaskTimelineEntry>;
 // rewrite fields per actor scope. `redactedPaths` lists fields the
 // serializer dropped so the dashboard can render a "hidden by redaction"
 // hint without guessing.
+const BigserialId = z.string().regex(/^[1-9]\d*$/u);
+export const SseCursor = z.string().regex(/^(?:0|[1-9]\d*)$/u);
+export type SseCursor = z.infer<typeof SseCursor>;
+const MicroUsdString = z.string().regex(/^\d+(?:\.\d{1,6})?$/u);
+
 export const RunEventRow = z
   .object({
-    id: z.union([z.number(), z.string()]),
+    id: BigserialId,
     ts: z.coerce.date(),
     runId: z.string().nullable(),
     taskId: z.string().nullable(),
@@ -80,20 +85,20 @@ export type RunEventRow = z.infer<typeof RunEventRow>;
 
 export const RunCostRecord = z
   .object({
-    id: z.union([z.number(), z.string()]),
+    id: BigserialId,
     runId: z.string().min(1),
     taskId: z.string().min(1),
     projectId: z.string().min(1),
     cli: z.string().min(1),
     provider: z.string().min(1),
     model: z.string().min(1),
-    inputTokens: z.number().int().nonnegative(),
-    cachedInputTokens: z.number().int().nonnegative(),
-    cacheCreationTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    reasoningOutputTokens: z.number().int().nonnegative(),
-    totalTokens: z.number().int().nonnegative(),
-    costUsd: z.string().min(1).nullable(),
+    inputTokens: z.number().int().nonnegative().safe(),
+    cachedInputTokens: z.number().int().nonnegative().safe(),
+    cacheCreationTokens: z.number().int().nonnegative().safe(),
+    outputTokens: z.number().int().nonnegative().safe(),
+    reasoningOutputTokens: z.number().int().nonnegative().safe(),
+    totalTokens: z.number().int().nonnegative().safe(),
+    costUsd: MicroUsdString.nullable(),
     billingMode: z.enum(["per_token", "subscription", "self_hosted", "unattributed"]),
     costBasis: z.enum(["ccusage", "provider_response", "credits", "unknown", "unattributed"]),
     recordedAt: z.coerce.date(),
@@ -189,7 +194,7 @@ export const MAX_PAGE_SIZE = 200;
 
 export interface DecodedCursor {
   ts: Date;
-  id: number;
+  id: string;
 }
 
 // Encoded cursor = base64("<isoTs>:<id>"). Tests treat it as an opaque token
@@ -223,11 +228,10 @@ export function decodeCursor(value: string): DecodedCursor {
   if (Number.isNaN(ts.getTime())) {
     throw new InvalidCursorError("bad timestamp");
   }
-  const id = Number(idStr);
-  if (!Number.isFinite(id) || !Number.isInteger(id)) {
+  if (!/^[1-9]\d*$/u.test(idStr)) {
     throw new InvalidCursorError("bad id");
   }
-  return { ts, id };
+  return { ts, id: idStr };
 }
 
 export function parsePageSize(raw: string | undefined): number {
@@ -241,38 +245,85 @@ export function parsePageSize(raw: string | undefined): number {
 // SSE frame contract
 // ---------------------------------------------------------------------------
 
-export const SseEventName = z.enum(["snapshot", "status", "task", "events", "costs", "heartbeat"]);
+export const SseEventName = z.enum(["snapshot", "status", "task", "events", "costs", "heartbeat", "drained"]);
 export type SseEventName = z.infer<typeof SseEventName>;
 
 export const SseStatusFrame = z
   .object({
-    runId: z.string(),
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
     status: RunStatus,
     outcome: RunOutcome.nullable(),
   })
   .strict();
 export type SseStatusFrame = z.infer<typeof SseStatusFrame>;
 
+export const SseTaskFrame = z
+  .object({
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
+    task: TaskTimelineEntry,
+    taskWatermark: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+export type SseTaskFrame = z.infer<typeof SseTaskFrame>;
+
 export const SseEventsFrame = z
   .object({
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
     events: z.array(RunEventRow),
+    eventCursor: SseCursor,
   })
   .strict();
 export type SseEventsFrame = z.infer<typeof SseEventsFrame>;
 
 export const SseCostsFrame = z
   .object({
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
     costs: z.array(RunCostRecord),
+    costCursor: SseCursor,
   })
   .strict();
 export type SseCostsFrame = z.infer<typeof SseCostsFrame>;
 
 export const SseHeartbeatFrame = z
   .object({
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
     ts: z.coerce.date(),
   })
   .strict();
 export type SseHeartbeatFrame = z.infer<typeof SseHeartbeatFrame>;
+
+export const SseSnapshotFrame = z
+  .object({
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
+    run: RunSummary,
+    tasks: z.array(TaskTimelineEntry),
+    recentEvents: z.array(RunEventRow),
+    costs: z.array(RunCostRecord),
+    eventCursor: SseCursor,
+    costCursor: SseCursor,
+    taskWatermark: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+export type SseSnapshotFrame = z.infer<typeof SseSnapshotFrame>;
+
+export const SseDrainedFrame = z
+  .object({
+    runId: z.string().min(1),
+    projectId: z.string().min(1),
+    status: RunStatus,
+    outcome: RunOutcome.nullable(),
+    eventCursor: SseCursor,
+    costCursor: SseCursor,
+    taskWatermark: z.string().regex(/^[a-f0-9]{64}$/u),
+  })
+  .strict();
+export type SseDrainedFrame = z.infer<typeof SseDrainedFrame>;
 
 // ---------------------------------------------------------------------------
 // Activity feed

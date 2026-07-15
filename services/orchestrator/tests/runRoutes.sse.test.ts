@@ -51,7 +51,7 @@ function setup() {
     status: "running",
     started_at: new Date("2026-05-01T00:00:00.000Z"),
   });
-  const frames: Array<{ event: string; data: unknown }> = [];
+  const frames: Array<{ event: string; data: unknown; id: string; retry: string }> = [];
   const driver = new SseDriver(
     {
       pool: pool.asPgPool(),
@@ -71,11 +71,18 @@ function setup() {
   return { pool, frames, driver };
 }
 
-function parseFrame(frame: string): { event: string; data: unknown } | undefined {
+function parseFrame(frame: string): { event: string; data: unknown; id: string; retry: string } | undefined {
   const eventMatch = /event:\s*(\S+)/u.exec(frame);
   const dataMatch = /data:\s*(.*)/u.exec(frame);
-  if (eventMatch === null || dataMatch === null) return undefined;
-  return { event: eventMatch[1], data: JSON.parse(dataMatch[1]) };
+  const idMatch = /id:\s*(\S+)/u.exec(frame);
+  const retryMatch = /retry:\s*(\S+)/u.exec(frame);
+  if (eventMatch === null || dataMatch === null || idMatch === null || retryMatch === null) return undefined;
+  return {
+    event: eventMatch[1] as string,
+    data: JSON.parse(dataMatch[1] as string),
+    id: idMatch[1] as string,
+    retry: retryMatch[1] as string,
+  };
 }
 
 describe("P2A-0014 SSE driver", () => {
@@ -88,7 +95,7 @@ describe("P2A-0014 SSE driver", () => {
     const { pool } = setup();
     pool.runs[0].status = "completed";
     pool.runs[0].outcome = "ok";
-    const localFrames: Array<{ event: string; data: unknown }> = [];
+    const localFrames: Array<{ event: string; data: unknown; id: string; retry: string }> = [];
     const localDriver = new SseDriver(
       {
         pool: pool.asPgPool(),
@@ -107,10 +114,25 @@ describe("P2A-0014 SSE driver", () => {
     );
     await localDriver.run();
     expect(localFrames[0]?.event).toBe("snapshot");
-    const snapshot = localFrames[0].data as { run: { runId: string }; tasks: unknown[] };
+    const snapshot = localFrames[0].data as {
+      runId: string;
+      projectId: string;
+      run: { runId: string };
+      tasks: unknown[];
+      eventCursor: string;
+      costCursor: string;
+      taskWatermark: string;
+    };
+    expect(snapshot.runId).toBe("run_x");
+    expect(snapshot.projectId).toBe("project_x");
     expect(snapshot.run.runId).toBe("run_x");
     expect(Array.isArray(snapshot.tasks)).toBe(true);
-    // Driver should stop after grace polls.
+    expect(snapshot.eventCursor).toBe("0");
+    expect(snapshot.costCursor).toBe("0");
+    expect(snapshot.taskWatermark).toMatch(/^[a-f0-9]{64}$/u);
+    expect(localFrames.map((frame) => frame.event)).toEqual(["snapshot", "drained"]);
+    expect(localFrames.map((frame) => frame.id)).toEqual(["1", "2"]);
+    expect(localFrames.every((frame) => frame.retry === "1000")).toBe(true);
     expect(localFrames.some((f) => f.event === "heartbeat")).toBe(false);
     expect(driver).toBeDefined();
     expect(frames).toBeDefined();
@@ -124,7 +146,7 @@ describe("P2A-0014 SSE driver", () => {
       project_id: "project_y",
       status: "running",
     });
-    const captured: Array<{ event: string; data: unknown }> = [];
+    const captured: Array<{ event: string; data: unknown; id: string; retry: string }> = [];
     const driver = new SseDriver(
       {
         pool: pool.asPgPool(),
@@ -167,7 +189,7 @@ describe("P2A-0014 SSE driver", () => {
       status: "running",
     });
     let nowMs = 0;
-    const captured: Array<{ event: string; data: unknown }> = [];
+    const captured: Array<{ event: string; data: unknown; id: string; retry: string }> = [];
     const driver = new SseDriver(
       {
         pool: pool.asPgPool(),
@@ -196,8 +218,9 @@ describe("P2A-0014 SSE driver", () => {
     pool.seedProject({ project_id: "project_n", org_id: "org_acme" });
     pool.seedSpec({ spec_id: "spec_n", project_id: "project_n" });
     pool.seedRun({ run_id: "run_n", spec_id: "spec_n", project_id: "project_n", status: "running" });
+    pool.seedTask({ task_id: "task_late", run_id: "run_n", kind: "write", status: "running" });
     const { listener, channel, fire } = fakeListener();
-    const captured: Array<{ event: string; data: unknown }> = [];
+    const captured: Array<{ event: string; data: unknown; id: string; retry: string }> = [];
     const driver = new SseDriver(
       {
         pool: pool.asPgPool(),
@@ -230,11 +253,61 @@ describe("P2A-0014 SSE driver", () => {
     // 60s backstop elapsing.
     pool.runs[0].status = "completed";
     pool.runs[0].outcome = "ok";
+    // Deliberately invert timestamps relative to ids. SSE cursors are bigserial
+    // id keysets, so the server must emit id order and advance to the max id;
+    // timestamp ordering here would replay/skip rows on the next poll.
+    pool.seedEvent({
+      id: 2,
+      event_type: "test.second",
+      run_id: "run_n",
+      task_id: "task_late",
+      project_id: "project_n",
+      ts: new Date("2026-04-30T00:00:00.000Z"),
+    });
+    pool.seedEvent({
+      id: 1,
+      event_type: "test.first",
+      run_id: "run_n",
+      task_id: "task_late",
+      project_id: "project_n",
+      ts: new Date("2026-05-02T00:00:00.000Z"),
+    });
+    pool.seedCost({
+      id: 2,
+      run_id: "run_n",
+      task_id: "task_late",
+      project_id: "project_n",
+      cost_usd: "0.002",
+      recorded_at: new Date("2026-04-30T00:00:00.000Z"),
+    });
+    pool.seedCost({
+      id: 1,
+      run_id: "run_n",
+      task_id: "task_late",
+      project_id: "project_n",
+      cost_usd: "0.001",
+      recorded_at: new Date("2026-05-02T00:00:00.000Z"),
+    });
     fire("run_n");
 
     await done;
     const status = captured.find((f) => f.event === "status")?.data as { status: string } | undefined;
     expect(status?.status).toBe("completed");
+    expect(captured.map((frame) => frame.event)).toEqual(["snapshot", "events", "costs", "status", "drained"]);
+    const events = captured.find((frame) => frame.event === "events")?.data as {
+      events: Array<{ id: string }>;
+      eventCursor: string;
+    };
+    const costs = captured.find((frame) => frame.event === "costs")?.data as {
+      costs: Array<{ id: string }>;
+      costCursor: string;
+    };
+    const drained = captured.at(-1)?.data as { eventCursor: string; costCursor: string; status: string };
+    expect(events.events.map(({ id }) => id)).toEqual(["1", "2"]);
+    expect(events.eventCursor).toBe("2");
+    expect(costs.costs.map(({ id }) => id)).toEqual(["1", "2"]);
+    expect(costs.costCursor).toBe("2");
+    expect(drained).toMatchObject({ eventCursor: "2", costCursor: "2", status: "completed" });
   });
 
   it("ignores a NOTIFY for a DIFFERENT run (payload filter)", async () => {
@@ -243,7 +316,7 @@ describe("P2A-0014 SSE driver", () => {
     pool.seedSpec({ spec_id: "spec_f", project_id: "project_f" });
     pool.seedRun({ run_id: "run_f", spec_id: "spec_f", project_id: "project_f", status: "running" });
     const { listener, fire } = fakeListener();
-    const captured: Array<{ event: string; data: unknown }> = [];
+    const captured: Array<{ event: string; data: unknown; id: string; retry: string }> = [];
     const driver = new SseDriver(
       {
         pool: pool.asPgPool(),

@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "costCursor": {
+      "pattern": "^(?:0|[1-9]\\d*)$",
+      "type": "string"
+    },
     "costs": {
       "items": {
         "additionalProperties": false,
@@ -122,34 +126,13 @@
       },
       "type": "array"
     },
-    "forgeThread": {
-      "anyOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "recentTurns": {
-              "items": {},
-              "type": "array"
-            },
-            "threadId": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "threadId",
-            "recentTurns"
-          ],
-          "type": "object"
-        },
-        {
-          "type": "null"
-        }
-      ]
+    "eventCursor": {
+      "pattern": "^(?:0|[1-9]\\d*)$",
+      "type": "string"
     },
-    "insights": {
-      "items": {},
-      "type": "array"
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
     },
     "recentEvents": {
       "items": {
@@ -328,45 +311,13 @@
       ],
       "type": "object"
     },
-    "spec": {
-      "additionalProperties": false,
-      "properties": {
-        "behaviorIds": {
-          "items": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "description": {
-          "type": "string"
-        },
-        "milestoneId": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "specId": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "specId",
-        "title",
-        "description",
-        "behaviorIds",
-        "milestoneId"
-      ],
-      "type": "object"
+    "runId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "taskWatermark": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
     },
     "tasks": {
       "items": {
@@ -516,14 +467,16 @@
     }
   },
   "required": [
+    "runId",
+    "projectId",
     "run",
-    "spec",
     "tasks",
     "recentEvents",
     "costs",
-    "insights",
-    "forgeThread"
+    "eventCursor",
+    "costCursor",
+    "taskWatermark"
   ],
   "type": "object",
-  "x-tanren-schema-id": "tanren.http.RunDetail"
+  "x-tanren-schema-id": "tanren.http.SseSnapshotFrame"
 }

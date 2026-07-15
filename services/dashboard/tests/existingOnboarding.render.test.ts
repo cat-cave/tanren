@@ -24,6 +24,13 @@ const PROJECT = {
   allocator: "local_docker",
 };
 
+const CREATED_PROJECT = {
+  ...PROJECT,
+  orgId: ORG.id,
+  runnerImage: "ghcr.io/cat-cave/tanren-runner:latest",
+  config: { version: 1 },
+};
+
 const RECON_RESULT = {
   repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
   filesIndexed: 84,
@@ -108,7 +115,7 @@ function mockOrchestrator(): void {
     if (/\/orgs\/[^/]+\/projects$/u.test(url) && method === "GET")
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (/\/orgs\/[^/]+\/projects$/u.test(url) && method === "POST")
-      return new Response(JSON.stringify(PROJECT), { status: 201 });
+      return new Response(JSON.stringify(CREATED_PROJECT), { status: 201 });
     if (url.endsWith("/link") && method === "POST")
       return new Response(
         JSON.stringify({

@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "costCursor": {
+      "pattern": "^(?:0|[1-9]\\d*)$",
+      "type": "string"
+    },
     "costs": {
       "items": {
         "additionalProperties": false,
@@ -17,12 +21,12 @@
           },
           "cacheCreationTokens": {
             "maximum": 9007199254740991,
-            "minimum": 0,
+            "minimum": -9007199254740991,
             "type": "integer"
           },
           "cachedInputTokens": {
             "maximum": 9007199254740991,
-            "minimum": 0,
+            "minimum": -9007199254740991,
             "type": "integer"
           },
           "cli": {
@@ -42,7 +46,7 @@
           "costUsd": {
             "anyOf": [
               {
-                "minLength": 1,
+                "pattern": "^\\d+(?:\\.\\d{1,6})?$",
                 "type": "string"
               },
               {
@@ -51,18 +55,12 @@
             ]
           },
           "id": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string"
-              }
-            ]
+            "pattern": "^[1-9]\\d*$",
+            "type": "string"
           },
           "inputTokens": {
             "maximum": 9007199254740991,
-            "minimum": 0,
+            "minimum": -9007199254740991,
             "type": "integer"
           },
           "model": {
@@ -71,7 +69,7 @@
           },
           "outputTokens": {
             "maximum": 9007199254740991,
-            "minimum": 0,
+            "minimum": -9007199254740991,
             "type": "integer"
           },
           "projectId": {
@@ -84,7 +82,7 @@
           },
           "reasoningOutputTokens": {
             "maximum": 9007199254740991,
-            "minimum": 0,
+            "minimum": -9007199254740991,
             "type": "integer"
           },
           "recordedAt": {
@@ -101,7 +99,7 @@
           },
           "totalTokens": {
             "maximum": 9007199254740991,
-            "minimum": 0,
+            "minimum": -9007199254740991,
             "type": "integer"
           }
         },
@@ -127,10 +125,21 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
     }
   },
   "required": [
-    "costs"
+    "runId",
+    "projectId",
+    "costs",
+    "costCursor"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.http.SseCostsFrame"

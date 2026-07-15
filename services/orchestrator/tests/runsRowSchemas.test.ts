@@ -73,7 +73,7 @@ describe("run-detail pg-row schemas (RC-6 trust-at-boundary)", () => {
   describe("RawEventRowSchema", () => {
     it("decodes ts to a real Date and accepts a numeric or string id", () => {
       const numeric = RawEventRowSchema.parse({ id: 42, ts: "2026-01-01T00:00:00.000Z" });
-      expect(numeric.id).toBe(42);
+      expect(numeric.id).toBe("42");
       expect(numeric.ts).toBeInstanceOf(Date);
       const stringId = RawEventRowSchema.parse({ id: "42", ts: new Date() });
       expect(stringId.id).toBe("42");
@@ -109,7 +109,7 @@ describe("run-detail pg-row schemas (RC-6 trust-at-boundary)", () => {
         total_tokens: 12,
       });
       expect(decoded.recorded_at).toBeInstanceOf(Date);
-      expect(decoded.id).toBe(7);
+      expect(decoded.id).toBe("7");
       expect(decoded.billing_mode).toBe("per_token");
       expect(decoded.cost_basis).toBe("provider_response");
       expect(decoded.input_tokens).toBe(12);

@@ -28,9 +28,10 @@ export interface OrchestratorClientDeps {
   fetchImpl?: typeof fetch;
 }
 
-export interface SendJsonOptions {
-  expectBody?: boolean;
-}
+export type RuntimeDecoder<T> = (value: unknown) => T | undefined;
+export type SendJsonOptions<T> =
+  | { expectBody?: false; decode?: never }
+  | { expectBody: true; decode: RuntimeDecoder<T> };
 
 export abstract class OrchestratorHttpClient {
   protected readonly orchestratorUrl: string;
@@ -70,7 +71,7 @@ export abstract class OrchestratorHttpClient {
     method: "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
     body?: unknown,
-    options: SendJsonOptions = {},
+    options: SendJsonOptions<T> = {},
   ): Promise<{ ok: boolean; status: number; body: T | undefined }> {
     const writeHeaders: Record<string, string> = body === undefined ? {} : { "content-type": "application/json" };
     // Session-auth state-changing routes require x-csrf-token (orchestrator auth
@@ -90,7 +91,14 @@ export abstract class OrchestratorHttpClient {
     // JSON `null` is a parsed body but not a usable product payload — treat as
     // missing when the caller required a body (same fail-closed as empty/204).
     const raw: unknown = await response.json().catch(() => {});
-    const json = raw === null || raw === undefined ? undefined : (raw as T);
+    // The runtime decoder is the SUCCESS contract. Preserve non-2xx error
+    // payloads for status-specific UI messages; they never become `ok: true`.
+    const json =
+      raw === null || raw === undefined
+        ? undefined
+        : response.ok && options.expectBody === true
+          ? options.decode(raw)
+          : (raw as T);
     if (response.ok && options.expectBody === true && json === undefined) {
       return { ok: false, status: response.status, body: undefined };
     }

@@ -72,6 +72,8 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
       projectId: loc.projectId,
     });
     const base = `/runs/${encodeURIComponent(runId)}`;
+    const streamQuery = new URLSearchParams({ orgId: loc.orgId, projectId: loc.projectId });
+    if (rawView) streamQuery.set("raw", "true");
     return renderShell(
       c,
       ctx,
@@ -82,7 +84,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         rawView={rawView}
         reviewHref={`${base}/review`}
         rawToggleHref={rawView ? base : `${base}?raw=true`}
-        streamUrl={`${base}/stream${rawView ? "?raw=true" : ""}`}
+        streamUrl={`${base}/stream?${streamQuery.toString()}`}
       />,
     );
   });
@@ -93,19 +95,42 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   app.get("/runs/:runId/stream", async (c) => {
     const runId = c.req.param("runId");
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return c.text("run not found", 404);
+    const orgId = c.req.query("orgId");
+    const projectId = c.req.query("projectId");
+    if (orgId === undefined || orgId === "" || projectId === undefined || projectId === "") {
+      return c.text("stream identity is required", 400);
     }
+    const loc = { orgId, projectId };
     const rawView = parseRaw(c) && (await isOrgAdmin(client, loc));
     const upstream = await fetch(client.streamUrl(loc, runId, { rawView }), {
       headers: {
         Accept: "text/event-stream",
         ...(c.req.header("cookie") === undefined ? {} : { cookie: c.req.header("cookie") as string }),
+        ...(c.req.header("last-event-id") === undefined
+          ? {}
+          : { "last-event-id": c.req.header("last-event-id") as string }),
       },
     }).catch(() => {});
-    if (upstream === undefined || upstream.body === null) {
-      return c.text("stream unavailable", 502);
+    if (upstream === undefined) {
+      c.header("retry-after", "1");
+      return c.text("stream temporarily unavailable", 503);
+    }
+    if (!upstream.ok) {
+      if (upstream.status >= 500) c.header("retry-after", "1");
+      return c.text(
+        upstream.status === 401
+          ? "stream authentication required"
+          : upstream.status === 403
+            ? "stream forbidden"
+            : upstream.status === 404
+              ? "run not found"
+              : "stream temporarily unavailable",
+        upstream.status as 401 | 403 | 404 | 500,
+      );
+    }
+    if (upstream.body === null || !upstream.headers.get("content-type")?.startsWith("text/event-stream")) {
+      c.header("retry-after", "1");
+      return c.text("invalid upstream stream", 502);
     }
     return new Response(upstream.body, {
       status: upstream.status,
@@ -113,6 +138,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
         connection: "keep-alive",
+        "x-accel-buffering": "no",
       },
     });
   });

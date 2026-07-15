@@ -79,7 +79,7 @@ export const RUN_DETAIL: RunDetail = {
   ],
   recentEvents: [
     {
-      id: 1,
+      id: "1",
       ts: new Date(Date.now() - 9 * 60_000).toISOString(),
       runId: RUN_ID,
       taskId: "write_1",
@@ -94,7 +94,7 @@ export const RUN_DETAIL: RunDetail = {
       redactedPaths: [],
     },
     {
-      id: 2,
+      id: "2",
       ts: new Date(Date.now() - 5 * 60_000).toISOString(),
       runId: RUN_ID,
       taskId: "plan_1",
@@ -111,7 +111,7 @@ export const RUN_DETAIL: RunDetail = {
       redactedPaths: [],
     },
     {
-      id: 3,
+      id: "3",
       ts: new Date(Date.now() - 4 * 60_000).toISOString(),
       runId: RUN_ID,
       taskId: "plan_1",
@@ -131,7 +131,7 @@ export const RUN_DETAIL: RunDetail = {
   ],
   costs: [
     {
-      id: 1,
+      id: "1",
       runId: RUN_ID,
       taskId: "write_1",
       projectId: PROJECT.projectId,

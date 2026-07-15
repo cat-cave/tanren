@@ -28,7 +28,7 @@ const SELECT_EVENT_COLUMNS = "id, ts, run_id, task_id, spec_id, project_id, even
 /** A keyset cursor over the (ts, id) ordering both paginated reads share. */
 export interface EventCursor {
   ts: Date;
-  id: number;
+  id: string;
 }
 
 export const EventStore = {
@@ -47,7 +47,7 @@ export const EventStore = {
          SELECT ${SELECT_EVENT_COLUMNS}
            FROM events
           WHERE run_id = $1 AND org_id = $3
-          ORDER BY ts DESC, id DESC
+          ORDER BY id DESC
           LIMIT $2
        ) recent
       ORDER BY ts ASC, id ASC`,
@@ -91,14 +91,14 @@ export const EventStore = {
    */
   async selectNewForRunSince(
     client: QueryClient,
-    args: { runId: string; orgId: string; sinceId: number },
+    args: { runId: string; orgId: string; sinceId: string },
     _actor: ActorRef,
   ): Promise<RawEventRow[]> {
     const result = await client.query<RawEventRow>(
       `SELECT ${SELECT_EVENT_COLUMNS}
          FROM events
         WHERE run_id = $1 AND org_id = $3 AND id > $2
-        ORDER BY ts ASC, id ASC
+        ORDER BY id ASC
         LIMIT 200`,
       [args.runId, args.sinceId, args.orgId],
     );

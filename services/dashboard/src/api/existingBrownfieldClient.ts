@@ -19,6 +19,7 @@ import type {
   ReconResult,
   SeedDagResult,
 } from "./existingBrownfieldTypes.js";
+import { ConfigInjectionSchema, decodeWith, ReconResultSchema, SeedDagSchema } from "./writeResponseSchemas.js";
 
 function projectBase(orgId: string, projectId: string): string {
   return `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}`;
@@ -37,7 +38,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
       {
         repoUrl,
       },
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ReconResultSchema) },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -63,7 +64,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
       "POST",
       `${projectBase(orgId, projectId)}/config-injection`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ConfigInjectionSchema) },
     );
     if (!r.ok) {
       const body = r.body as { error?: string; message?: string } | undefined;
@@ -85,6 +86,7 @@ export class ExistingBrownfieldClient extends OrchestratorHttpClient {
   ): Promise<{ ok: boolean; status: number; result: SeedDagResult | undefined; error?: string }> {
     const r = await this.sendJson<SeedDagResult>("POST", `${projectBase(orgId, projectId)}/seed-dag`, input, {
       expectBody: true,
+      decode: decodeWith(SeedDagSchema),
     });
     if (!r.ok) {
       const body = r.body as { error?: string; message?: string } | undefined;

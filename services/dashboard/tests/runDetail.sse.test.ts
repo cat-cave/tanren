@@ -1,110 +1,79 @@
-// SSE proxy test with a FAKE upstream stream (no live orchestrator).
-// The dashboard exposes a same-origin proxy at /runs/:runId/stream that forwards
-// the orchestrator stream with the session cookie; the browser island
-// subscribes to it. Here we stub fetch so the "orchestrator" returns a canned
-// `event:/data:` SSE body and assert the proxy streams it through verbatim with
-// the right content-type.
-
 import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
-const ORG = {
-  id: "org_acme",
-  kind: "github_org",
-  login: "cat-cave",
-  displayName: "Cat Cave",
-  role: "org:admin",
-};
-const PROJECT = {
-  projectId: "project_medium",
-  name: "tanren-fixture-medium",
-  repoUrl: "https://github.com/cat-cave/tanren-fixture-medium",
-  defaultBranch: "main",
-  runnerImage: null,
-  allocator: "local_docker",
-};
-const RUN_ID = "run_medium_001";
-
-// A canned SSE body the fake orchestrator returns: a snapshot frame plus a
-// costs delta and a terminal status frame — the shape the island reduces.
-const FAKE_SSE_BODY = [
-  `event: snapshot\ndata: ${JSON.stringify({ run: { runId: RUN_ID, status: "running", outcome: null }, tasks: [], recentEvents: [], costs: [{ billingMode: "per_token", model: "gpt-5", inputTokens: 100, outputTokens: 50, cachedInputTokens: 0, totalTokens: 150, costUsd: "0.0100" }] })}\n\n`,
-  `event: costs\ndata: ${JSON.stringify({ costs: [{ billingMode: "subscription", model: "claude", inputTokens: 200, outputTokens: 80, cachedInputTokens: 0, totalTokens: 280, costUsd: null }] })}\n\n`,
-  `event: status\ndata: ${JSON.stringify({ runId: RUN_ID, status: "completed", outcome: "ok" })}\n\n`,
-].join("");
+const RUN = "run_1";
+const ORG = "org_1";
+const PROJECT = "project_1";
+const PATH = `/runs/${RUN}/stream?orgId=${ORG}&projectId=${PROJECT}`;
+const SSE = "id: 1\nretry: 1000\nevent: snapshot\ndata: {}\n\n";
 
 function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
-function mockOrchestrator(): void {
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input.toString();
-    if (url.endsWith("/auth/me")) return new Response(JSON.stringify({ userId: "u1" }), { status: 200 });
-    if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
-    if (url.endsWith(`/orgs/${ORG.id}/projects`))
-      return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
-    if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              runId: RUN_ID,
-              specId: "s",
-              projectId: PROJECT.projectId,
-              branch: "b",
-              trigger: "operator",
-              status: "running",
-              outcome: null,
-              startedAt: new Date().toISOString(),
-              endedAt: null,
-              prUrl: null,
-              specTitle: "t",
-              costTotalUsd: "0",
-              lastEventAt: null,
-              needsReview: false,
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    }
-    if (url.includes(`/runs/${RUN_ID}/stream`)) {
-      return new Response(FAKE_SSE_BODY, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      });
-    }
-    return new Response("not found", { status: 404 });
-  });
-}
-
 beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
 });
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
-describe("P2B-0004 SSE proxy (fake stream)", () => {
-  it("proxies the orchestrator stream verbatim as text/event-stream", async () => {
-    mockOrchestrator();
+describe("run-detail SSE proxy identity and outage semantics", () => {
+  it("uses the SSR-provided location directly and preserves protocol headers/body", async () => {
+    const calls: Array<{ url: string; lastEventId: string | null }> = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: input.toString(),
+        lastEventId: new Headers(init?.headers).get("last-event-id"),
+      });
+      return new Response(SSE, { status: 200, headers: { "content-type": "text/event-stream; charset=utf-8" } });
+    });
     const app = await createApp({ pool: stubPool(), skipMigrate: true });
-    const res = await app.request(`/runs/${RUN_ID}/stream`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/event-stream");
-    const body = await res.text();
-    expect(body).toContain("event: snapshot");
-    expect(body).toContain("event: costs");
-    expect(body).toContain("event: status");
-    expect(body).toContain("ok");
+    const response = await app.request(PATH, { headers: { "last-event-id": "17" } });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(SSE);
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(calls).toEqual([
+      {
+        url: `http://localhost:3100/orgs/${ORG}/projects/${PROJECT}/runs/${RUN}/stream`,
+        lastEventId: "17",
+      },
+    ]);
   });
 
-  it("returns 404 for a run the operator cannot see", async () => {
-    mockOrchestrator();
+  it("makes network and upstream-server outages retryable instead of not-found", async () => {
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("connection reset");
+    });
     const app = await createApp({ pool: stubPool(), skipMigrate: true });
-    const res = await app.request(`/runs/run_unknown/stream`);
-    expect(res.status).toBe(404);
+    const network = await app.request(PATH);
+    expect(network.status).toBe(503);
+    expect(network.headers.get("retry-after")).toBe("1");
+    expect(await network.text()).toContain("temporarily unavailable");
+
+    vi.stubGlobal("fetch", async () => new Response("down", { status: 500 }));
+    const server = await app.request(PATH);
+    expect(server.status).toBe(500);
+    expect(server.headers.get("retry-after")).toBe("1");
+  });
+
+  it.each([
+    [401, "authentication"],
+    [403, "forbidden"],
+    [404, "not found"],
+  ])("preserves upstream %i as a distinct non-outage result", async (status, text) => {
+    vi.stubGlobal("fetch", async () => new Response("upstream", { status }));
+    const app = await createApp({ pool: stubPool(), skipMigrate: true });
+    const response = await app.request(PATH);
+    expect(response.status).toBe(status);
+    expect(await response.text()).toContain(text);
+    expect(response.headers.get("retry-after")).toBeNull();
+  });
+
+  it("rejects an unbound proxy request before any upstream scan", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    const app = await createApp({ pool: stubPool(), skipMigrate: true });
+    expect((await app.request(`/runs/${RUN}/stream`)).status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

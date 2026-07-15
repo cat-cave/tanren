@@ -56,20 +56,24 @@ export function handleRunReadSql(
   }
 
   // --- events (SSE delta: id > sinceId) ---
-  if (/FROM events WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY ts ASC, id ASC LIMIT 200/u.test(sql)) {
-    const [runId, sinceId] = params as [string, number];
+  if (/FROM events WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY id ASC LIMIT 200/u.test(sql)) {
+    const [runId, sinceId] = params as [string, string];
     const rows = events()
-      .filter((e) => e.run_id === runId && e.id > sinceId)
-      .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
+      .filter((e) => e.run_id === runId && BigInt(e.id) > BigInt(sinceId))
+      .sort((a, b) => a.id - b.id);
     return { rows, rowCount: rows.length };
   }
 
   // --- events (recent snapshot + project feed) ---
-  if (/FROM events WHERE run_id = \$1 AND org_id = \$3 ORDER BY ts DESC, id DESC LIMIT \$2/u.test(sql)) {
+  if (
+    /FROM \( SELECT .* FROM events WHERE run_id = \$1 AND org_id = \$3 ORDER BY id DESC LIMIT \$2 \) recent ORDER BY ts ASC, id ASC/u.test(
+      sql,
+    )
+  ) {
     const [runId, limit] = params as [string, number];
     const rows = events()
       .filter((e) => e.run_id === runId)
-      .sort((a, b) => b.ts.getTime() - a.ts.getTime() || b.id - a.id)
+      .sort((a, b) => b.id - a.id)
       .slice(0, limit)
       .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
     return { rows, rowCount: rows.length };
@@ -83,15 +87,11 @@ export function handleRunReadSql(
   }
 
   // --- cost_records (SSE delta: id > sinceId) ---
-  if (
-    /FROM cost_records WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY recorded_at ASC, id ASC LIMIT 200/u.test(
-      sql,
-    )
-  ) {
-    const [runId, sinceId] = params as [string, number];
+  if (/FROM cost_records WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY id ASC LIMIT 200/u.test(sql)) {
+    const [runId, sinceId] = params as [string, string];
     const rows = costRecords()
-      .filter((c) => c.run_id === runId && c.id > sinceId)
-      .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
+      .filter((c) => c.run_id === runId && BigInt(c.id) > BigInt(sinceId))
+      .sort((a, b) => a.id - b.id);
     return { rows, rowCount: rows.length };
   }
 

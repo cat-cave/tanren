@@ -19,7 +19,7 @@
 
 import type { RunDetail, RunEventRow } from "../../api/types.js";
 import { CsrfField } from "../shell/CsrfField.js";
-import { summarizeCosts, formatUsd, reviewMergeStateFromEvents, type ReviewMergeState } from "./model.js";
+import { summarizeCosts, formatMicros, reviewMergeStateFromEvents, type ReviewMergeState } from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
 /** The four merge-integration modes (mirrors MergeIntegration). */
@@ -110,7 +110,7 @@ export function deferralsFromEvents(events: RunEventRow[]): ReviewDeferral[] {
           ? payload["reason"]
           : "Deferred by the writer during the run.";
     const tag = typeof payload["tag"] === "string" ? payload["tag"] : "deferred";
-    out.push({ id: String(event.id), tag, title, detail });
+    out.push({ id: event.id, tag, title, detail });
   }
   return out;
 }
@@ -266,7 +266,7 @@ export function ReviewBody(props: ReviewBodyProps) {
             </div>
             <div class="page-title">review with forge</div>
             <div class="sub">
-              {detail.spec.title} · forged by {forgedBy} · {formatUsd(totals.perTokenUsd)}
+              {detail.spec.title} · forged by {forgedBy} · {formatMicros(totals.perTokenMicros)}
             </div>
           </div>
           <div class="rd-actions">

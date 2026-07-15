@@ -13,12 +13,12 @@
     },
     "cacheCreationTokens": {
       "maximum": 9007199254740991,
-      "minimum": 0,
+      "minimum": -9007199254740991,
       "type": "integer"
     },
     "cachedInputTokens": {
       "maximum": 9007199254740991,
-      "minimum": 0,
+      "minimum": -9007199254740991,
       "type": "integer"
     },
     "cli": {
@@ -38,7 +38,7 @@
     "costUsd": {
       "anyOf": [
         {
-          "minLength": 1,
+          "pattern": "^\\d+(?:\\.\\d{1,6})?$",
           "type": "string"
         },
         {
@@ -47,18 +47,12 @@
       ]
     },
     "id": {
-      "anyOf": [
-        {
-          "type": "number"
-        },
-        {
-          "type": "string"
-        }
-      ]
+      "pattern": "^[1-9]\\d*$",
+      "type": "string"
     },
     "inputTokens": {
       "maximum": 9007199254740991,
-      "minimum": 0,
+      "minimum": -9007199254740991,
       "type": "integer"
     },
     "model": {
@@ -67,7 +61,7 @@
     },
     "outputTokens": {
       "maximum": 9007199254740991,
-      "minimum": 0,
+      "minimum": -9007199254740991,
       "type": "integer"
     },
     "projectId": {
@@ -80,7 +74,7 @@
     },
     "reasoningOutputTokens": {
       "maximum": 9007199254740991,
-      "minimum": 0,
+      "minimum": -9007199254740991,
       "type": "integer"
     },
     "recordedAt": {
@@ -97,7 +91,7 @@
     },
     "totalTokens": {
       "maximum": 9007199254740991,
-      "minimum": 0,
+      "minimum": -9007199254740991,
       "type": "integer"
     }
   },

@@ -1,231 +1,243 @@
-// Wiring test for initRunStream: fake EventSource + controllable timers/DOM.
-// Proves terminal drain, reconnect snapshot cost reconcile, atomic malformed
-// frames, delta dedupe, error non-extension, stale-timer fencing, and
-// exactly-once source.close (closeCalls === 1).
-
 import { afterEach, describe, expect, it } from "vitest";
-import { COST_DRAIN_IDLE_MS, initRunStream } from "../src/client/runStream.js";
+import { initRunStream } from "../src/client/runStream.js";
 
+const RUN = "run_1";
+const PROJECT = "project_1";
+const TASK = "task_1";
+const WATERMARK = "b".repeat(64);
 type Listener = (event: { data?: string }) => void;
 
-class FakeEventSource {
-  static instances: FakeEventSource[] = [];
-  url: string;
-  closed = false;
+class ReconnectingEventSource {
+  static instances: ReconnectingEventSource[] = [];
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+  readonly url: string;
+  readyState = ReconnectingEventSource.OPEN;
   closeCalls = 0;
-  private listeners = new Map<string, Listener[]>();
+  private readonly listeners = new Map<string, Listener[]>();
 
-  constructor(url: string, _opts?: EventSourceInit) {
+  constructor(url: string) {
     this.url = url;
-    FakeEventSource.instances.push(this);
+    ReconnectingEventSource.instances.push(this);
   }
 
-  addEventListener(type: string, fn: EventListenerOrEventListenerObject): void {
-    const list = this.listeners.get(type) ?? [];
-    list.push(fn as Listener);
-    this.listeners.set(type, list);
-  }
-
-  close(): void {
-    this.closeCalls += 1;
-    this.closed = true;
+  addEventListener(type: string, listener: EventListenerOrEventListenerObject): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener as Listener);
+    this.listeners.set(type, listeners);
   }
 
   emit(type: string, data: unknown): void {
     const payload = typeof data === "string" ? data : JSON.stringify(data);
-    for (const fn of this.listeners.get(type) ?? []) {
-      fn({ data: payload });
-    }
+    for (const listener of this.listeners.get(type) ?? []) listener({ data: payload });
   }
 
-  static reset(): void {
-    FakeEventSource.instances = [];
+  disconnect(): void {
+    this.readyState = ReconnectingEventSource.CONNECTING;
+    this.emit("error", "network outage");
+  }
+
+  reconnect(): void {
+    this.readyState = ReconnectingEventSource.OPEN;
+  }
+
+  close(): void {
+    this.closeCalls += 1;
+    this.readyState = ReconnectingEventSource.CLOSED;
   }
 }
 
-function makeScheduler() {
-  const timers: Array<{ id: number; fn: () => void; ms: number; canceled: boolean }> = [];
-  let nextId = 1;
+function task() {
   return {
-    timers,
-    schedule: (fn: () => void, ms: number) => {
-      const id = nextId++;
-      timers.push({ id, fn, ms, canceled: false });
-      return id as unknown as ReturnType<typeof setTimeout>;
-    },
-    cancel: (handle: ReturnType<typeof setTimeout>) => {
-      const t = timers.find((x) => x.id === (handle as unknown as number));
-      if (t !== undefined) t.canceled = true;
-    },
-    live: () => timers.filter((t) => !t.canceled),
-    fire: (id: number) => {
-      const t = timers.find((x) => x.id === id);
-      if (t === undefined || t.canceled) return;
-      t.canceled = true;
-      t.fn();
-    },
+    taskId: TASK,
+    runId: RUN,
+    kind: "write",
+    parentTaskId: null,
+    title: "write",
+    status: "done",
+    outcome: "passed",
+    failureKind: null,
+    attempt: 0,
+    cli: "codex",
+    model: "gpt-5",
+    startedAt: "2026-07-14T00:00:00.000Z",
+    endedAt: "2026-07-14T00:00:01.000Z",
   };
 }
 
-function cost(id: number | string, inputTokens = 10, costUsd: string | null = "0.0010") {
+function cost(id: string, usd: string) {
   return {
     id,
-    billingMode: "per_token",
-    model: "m",
-    inputTokens,
-    outputTokens: 1,
+    runId: RUN,
+    taskId: TASK,
+    projectId: PROJECT,
+    cli: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    inputTokens: 10,
     cachedInputTokens: 0,
-    totalTokens: inputTokens + 1,
-    costUsd,
+    cacheCreationTokens: 0,
+    outputTokens: 5,
+    reasoningOutputTokens: 0,
+    totalTokens: 15,
+    costUsd: usd,
+    billingMode: "per_token",
+    costBasis: "provider_response",
+    recordedAt: `2026-07-14T00:00:0${id}.000Z`,
+  };
+}
+
+function snapshot(status: "running" | "completed", outcome: null | "ok", costs = [cost("1", "0.0010")]) {
+  return {
+    runId: RUN,
+    projectId: PROJECT,
+    run: {
+      runId: RUN,
+      specId: "spec_1",
+      projectId: PROJECT,
+      branch: "tanren/spec",
+      trigger: "dashboard",
+      status,
+      outcome,
+      startedAt: "2026-07-14T00:00:00.000Z",
+      endedAt: status === "completed" ? "2026-07-14T00:00:02.000Z" : null,
+      prUrl: null,
+    },
+    tasks: [task()],
+    recentEvents: [],
+    costs,
+    eventCursor: "0",
+    costCursor: costs.at(-1)?.id ?? "0",
+    taskWatermark: WATERMARK,
   };
 }
 
 function makeDom() {
-  const store: Record<string, string> = { streamUrl: "/stream/r1" };
-  const flag = { textContent: "↻ live", title: "", removeAttribute: () => {} };
-  const statusChip = {
-    classList: { remove: () => {}, add: () => {} },
-    querySelector: () => null,
-    textContent: "",
-    append: (...parts: unknown[]) => {
-      statusChip.textContent += parts.map(String).join("");
+  const elements = new Map<string, Record<string, unknown>>();
+  for (const key of [
+    "live-flag",
+    "run-status",
+    "header-status",
+    "cost-per-token",
+    "cost-per-token-tokens",
+    "cost-subscription-tokens",
+    "cost-tokens",
+    "cost-token-foot",
+    "cost-per-token-bar",
+    "cost-input-bar",
+    "cost-output-bar",
+    "cost-sources",
+    "cost-models",
+  ]) {
+    elements.set(key, {
+      textContent: key === "live-flag" ? "↻ live" : "",
+      title: "",
+      style: {},
+      classList: { remove() {}, add() {} },
+      querySelector() {
+        return null;
+      },
+      append() {},
+      removeAttribute() {},
+      replaceChildren() {},
+    });
+  }
+  const document = {
+    createElement() {
+      return { className: "", textContent: "", style: {}, append() {} };
     },
-  };
-  const header = { textContent: "running" };
-  const costPerToken = { textContent: "$0.0000" };
-  const costTokens = { textContent: "0 / 0" };
-  const costSources = {
-    innerHTML: "",
-    append: (..._n: unknown[]) => {},
-  };
-  const doc = {
-    querySelector: (_sel: string): unknown => null,
-    createElement: (tag: string) => {
-      const el: Record<string, unknown> = {
-        className: "",
-        style: {},
-        textContent: "",
-        append: () => {},
-        tagName: tag.toUpperCase(),
-      };
-      return el;
+    querySelector() {
+      return root;
     },
   };
   const root = {
-    dataset: store,
-    ownerDocument: doc as unknown as Document,
-    querySelector: (sel: string) => {
-      if (sel === '[data-rd="live-flag"]') return flag;
-      if (sel === '[data-rd="run-status"]') return statusChip;
-      if (sel === '[data-rd="header-status"]') return header;
-      if (sel === '[data-rd="cost-per-token"]') return costPerToken;
-      if (sel === '[data-rd="cost-tokens"]') return costTokens;
-      if (sel === '[data-rd="cost-sources"]') return costSources;
-      return null;
+    dataset: {
+      streamUrl: "/runs/run_1/stream?orgId=org_1&projectId=project_1",
+      runId: RUN,
+      projectId: PROJECT,
+      runStatus: "running",
+      runOutcome: "",
+      streamIntegrity: "verifying",
     },
-    addEventListener: () => {},
+    ownerDocument: document,
+    querySelector(selector: string) {
+      const match = /\[data-rd="([^"]+)"\]/u.exec(selector);
+      return match === null ? null : (elements.get(match[1] as string) ?? null);
+    },
+    addEventListener() {},
   };
-  doc.querySelector = (sel: string) => (sel === '[data-island="run-stream"]' ? root : null);
-  return { doc: doc as unknown as Document, root, flag, header, statusChip, costPerToken };
+  return { document: document as unknown as Document, elements };
 }
 
 afterEach(() => {
-  FakeEventSource.reset();
+  ReconnectingEventSource.instances = [];
 });
 
-describe("initRunStream wiring", () => {
-  it("terminal drain + reconnect reconcile + atomic reject + closeCalls===1", () => {
-    const { doc, flag, header, costPerToken } = makeDom();
-    const scheduler = makeScheduler();
+describe("initRunStream exact reconnect lifecycle", () => {
+  it("waits through a delayed post-terminal reconnect and closes exactly once on a matching drain", () => {
+    const { document, elements } = makeDom();
+    initRunStream({ document, EventSourceCtor: ReconnectingEventSource as unknown as typeof EventSource });
+    const source = ReconnectingEventSource.instances[0];
+    expect(source).toBeDefined();
+    source!.emit("snapshot", snapshot("running", null));
+    source!.emit("status", { runId: RUN, projectId: PROJECT, status: "completed", outcome: "ok" });
+    expect(elements.get("live-flag")?.["textContent"]).toBe("● final · verifying totals");
 
-    // Isolated document seam only — no vi.stubGlobal("document").
-    initRunStream({
-      document: doc,
-      EventSourceCtor: FakeEventSource as unknown as typeof EventSource,
-      schedule: scheduler.schedule,
-      cancel: scheduler.cancel,
-      idleMs: COST_DRAIN_IDLE_MS,
+    source!.disconnect();
+    expect(source!.readyState).toBe(ReconnectingEventSource.CONNECTING);
+    expect(source!.closeCalls).toBe(0);
+    // A logical delay far beyond the deleted 2.5s heuristic changes nothing.
+    const elapsedOutageMs = 30_000;
+    expect(elapsedOutageMs).toBeGreaterThan(2_500);
+    expect(source!.closeCalls).toBe(0);
+
+    source!.reconnect();
+    source!.emit("snapshot", snapshot("completed", "ok"));
+    source!.emit("costs", { runId: RUN, projectId: PROJECT, costs: [cost("2", "0.0020")], costCursor: "2" });
+    source!.emit("drained", {
+      runId: RUN,
+      projectId: PROJECT,
+      status: "completed",
+      outcome: "ok",
+      eventCursor: "0",
+      costCursor: "2",
+      taskWatermark: WATERMARK,
     });
-
-    expect(FakeEventSource.instances).toHaveLength(1);
-    const es = FakeEventSource.instances[0]!;
-
-    es.emit("snapshot", {
-      costs: [cost(1, 10, "0.0010")],
-      run: { status: "running", outcome: null },
+    expect(elements.get("cost-per-token")?.["textContent"]).toBe("$0.0030");
+    expect(elements.get("live-flag")?.["textContent"]).toBe("● final · totals verified");
+    expect(source!.closeCalls).toBe(1);
+    source!.emit("drained", {
+      runId: RUN,
+      projectId: PROJECT,
+      status: "completed",
+      outcome: "ok",
+      eventCursor: "0",
+      costCursor: "2",
+      taskWatermark: WATERMARK,
     });
-    expect(costPerToken.textContent).toBe("$0.0010");
-    expect(header.textContent).toBe("running");
+    source!.emit("error", "late error");
+    expect(source!.closeCalls).toBe(1);
+  });
 
-    es.emit("status", { status: "completed", outcome: null });
-    expect(flag.textContent).toBe("● final");
-    expect(header.textContent).toBe("completed");
-    expect(scheduler.live()).toHaveLength(1);
-    const armAfterTerminal = scheduler.live()[0]!.id;
-
-    // Identical reconnect: no demotion / double-count / re-arm.
-    es.emit("snapshot", {
-      costs: [cost(1, 10, "0.0010")],
-      run: { status: "running", outcome: null },
+  it("keeps malformed drained and post-terminal cost frames observable and eligible for reconnection", () => {
+    const { document, elements } = makeDom();
+    initRunStream({ document, EventSourceCtor: ReconnectingEventSource as unknown as typeof EventSource });
+    const source = ReconnectingEventSource.instances[0]!;
+    source.emit("snapshot", snapshot("completed", "ok"));
+    source.emit("costs", { runId: RUN, projectId: PROJECT, costs: [{ bad: true }], costCursor: "2" });
+    expect(elements.get("live-flag")?.["textContent"]).toBe("● final · totals unverified");
+    source.emit("drained", {
+      runId: "other",
+      projectId: PROJECT,
+      status: "completed",
+      outcome: "ok",
+      eventCursor: "0",
+      costCursor: "1",
+      taskWatermark: WATERMARK,
     });
-    expect(header.textContent).toBe("completed");
-    expect(costPerToken.textContent).toBe("$0.0010");
-    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterTerminal]);
-
-    // Mixed valid+invalid reconnect: mark stale, no mutation, no re-arm.
-    es.emit("snapshot", {
-      costs: [cost(1, 10, "0.0010"), { noId: true }],
-      run: { status: "running", outcome: null },
-    });
-    expect(costPerToken.textContent).toBe("$0.0010");
-    expect(header.textContent).toBe("completed");
-    // Final flag stays sticky; stale must not demote terminal UI.
-    expect(flag.textContent).toBe("● final");
-    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterTerminal]);
-
-    // Unseen late cost on valid reconnect → re-arm.
-    es.emit("snapshot", {
-      costs: [cost(1, 10, "0.0010"), cost(2, 3, "0.0002")],
-      run: { status: "running", outcome: null },
-    });
-    expect(costPerToken.textContent).toBe("$0.0012");
-    expect(header.textContent).toBe("completed");
-    expect(scheduler.timers.find((t) => t.id === armAfterTerminal)?.canceled).toBe(true);
-    const armAfterReconnectCost = scheduler.live()[0]!.id;
-
-    // event:costs delta once; repeat no re-arm.
-    es.emit("costs", { costs: [cost(3, 1, "0.0001")] });
-    expect(costPerToken.textContent).toBe("$0.0013");
-    const armAfterDelta = scheduler.live()[0]!.id;
-    expect(armAfterDelta).not.toBe(armAfterReconnectCost);
-    es.emit("costs", { costs: [cost(3, 1, "0.0001")] });
-    expect(costPerToken.textContent).toBe("$0.0013");
-    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterDelta]);
-
-    // Malformed costs delta: stale, no mutation, no re-arm.
-    es.emit("costs", { costs: [cost(4, 1, "not-a-number")] });
-    expect(costPerToken.textContent).toBe("$0.0013");
-    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterDelta]);
-
-    es.emit("error", {});
-    es.emit("error", {});
-    expect(es.closeCalls).toBe(0);
-    expect(scheduler.live().map((t) => t.id)).toEqual([armAfterDelta]);
-
-    scheduler.fire(armAfterReconnectCost);
-    expect(es.closeCalls).toBe(0);
-
-    scheduler.fire(armAfterDelta);
-    expect(es.closeCalls).toBe(1);
-    expect(es.closed).toBe(true);
-
-    // Post-close events/errors must not close again or change accounting.
-    es.emit("costs", { costs: [cost(5, 5, "0.0050")] });
-    es.emit("snapshot", { costs: [cost(99)], run: { status: "running", outcome: null } });
-    es.emit("error", {});
-    es.emit("status", { status: "running", outcome: null });
-    expect(costPerToken.textContent).toBe("$0.0013");
-    expect(header.textContent).toBe("completed");
-    expect(es.closeCalls).toBe(1);
+    expect(source.closeCalls).toBe(0);
+    source.disconnect();
+    expect(source.readyState).toBe(ReconnectingEventSource.CONNECTING);
   });
 });

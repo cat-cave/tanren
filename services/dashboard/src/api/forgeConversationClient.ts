@@ -14,6 +14,12 @@
 
 import { OrchestratorRecoveryClient } from "./recoveryClient.js";
 import type { ForgeAnswer } from "./types.js";
+import {
+  decodeWith,
+  ForgeAskResponseSchema,
+  ForgeDecisionResponseSchema,
+  ForgeThreadIdResponseSchema,
+} from "./writeResponseSchemas.js";
 
 /**
  * (write-action approval): a write the Forge answerer proposed, awaiting
@@ -95,7 +101,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads/${encodeURIComponent(resolvedThreadId)}/ask`,
       { question },
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ForgeAskResponseSchema) },
     );
     // 200 {} / missing forgeTurn.render is not a successful ask — fail closed.
     const render = result.body?.forgeTurn?.render;
@@ -126,7 +132,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/proposals/${encodeURIComponent(proposalId)}/${decision}`,
       undefined,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ForgeDecisionResponseSchema) },
     );
     if (result.ok) {
       // Incomplete 200 bodies (e.g. {}) must not masquerade as decided.
@@ -160,7 +166,7 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/forge/threads`,
       body,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(ForgeThreadIdResponseSchema) },
     );
     return thread.ok ? thread.body?.id : undefined;
   }

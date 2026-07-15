@@ -11,6 +11,9 @@
  */
 
 import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
+import { summarizeCostRecords, type CostTotalsState } from "../../client/runCostModel.js";
+
+export { formatMicros, formatTokens } from "../../client/runCostModel.js";
 
 /** The token var for a billing mode's cost-source color. */
 export function costSourceVar(mode: RunCostRecord["billingMode"]): string {
@@ -50,71 +53,9 @@ export function costSourceLabel(mode: RunCostRecord["billingMode"]): string {
   }
 }
 
-export interface CostTotals {
-  /** Real-dollar spend (per-token records with a parsed costUsd). */
-  perTokenUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cachedInputTokens: number;
-  totalTokens: number;
-  /** Per-source token totals, keyed by billing mode. */
-  bySource: Map<RunCostRecord["billingMode"], { tokens: number; usd: number }>;
-  /** Per-model token totals (model → tokens), newest order preserved. */
-  byModel: Map<string, { tokens: number; usd: number; provider: string }>;
-}
-
-/** Sum the typed cost records into the unified cost-bar totals. */
-export function summarizeCosts(costs: RunCostRecord[]): CostTotals {
-  const bySource = new Map<RunCostRecord["billingMode"], { tokens: number; usd: number }>();
-  const byModel = new Map<string, { tokens: number; usd: number; provider: string }>();
-  let perTokenUsd = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cachedInputTokens = 0;
-  let totalTokens = 0;
-
-  for (const cost of costs) {
-    const usd = cost.costUsd === null ? 0 : Number.parseFloat(cost.costUsd);
-    const usdSafe = Number.isFinite(usd) ? usd : 0;
-    inputTokens += cost.inputTokens;
-    outputTokens += cost.outputTokens;
-    cachedInputTokens += cost.cachedInputTokens;
-    totalTokens += cost.totalTokens;
-    if (cost.billingMode === "per_token") {
-      perTokenUsd += usdSafe;
-    }
-    const src = bySource.get(cost.billingMode) ?? { tokens: 0, usd: 0 };
-    src.tokens += cost.totalTokens;
-    src.usd += usdSafe;
-    bySource.set(cost.billingMode, src);
-
-    const model = byModel.get(cost.model) ?? { tokens: 0, usd: 0, provider: cost.provider };
-    model.tokens += cost.totalTokens;
-    model.usd += usdSafe;
-    byModel.set(cost.model, model);
-  }
-
-  return {
-    perTokenUsd,
-    inputTokens,
-    outputTokens,
-    cachedInputTokens,
-    totalTokens,
-    bySource,
-    byModel,
-  };
-}
-
-/** Format a USD amount with a leading `$` and four decimals (sub-cent precision). */
-export function formatUsd(amount: number): string {
-  return `$${amount.toFixed(4)}`;
-}
-
-/** Compact token-count formatting (e.g. 12.4k, 1.2M). */
-export function formatTokens(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
-  return String(count);
+/** SSR and live streaming consume the same exact aggregation authority. */
+export function summarizeCosts(costs: RunCostRecord[]): CostTotalsState {
+  return summarizeCostRecords(costs);
 }
 
 // ---------------------------------------------------------------------------

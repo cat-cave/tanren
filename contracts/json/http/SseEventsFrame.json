@@ -2,6 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "eventCursor": {
+      "pattern": "^(?:0|[1-9]\\d*)$",
+      "type": "string"
+    },
     "events": {
       "items": {
         "additionalProperties": false,
@@ -11,14 +15,8 @@
             "type": "string"
           },
           "id": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "string"
-              }
-            ]
+            "pattern": "^[1-9]\\d*$",
+            "type": "string"
           },
           "payload": {},
           "projectId": {
@@ -87,10 +85,21 @@
         "type": "object"
       },
       "type": "array"
+    },
+    "projectId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runId": {
+      "minLength": 1,
+      "type": "string"
     }
   },
   "required": [
-    "events"
+    "runId",
+    "projectId",
+    "events",
+    "eventCursor"
   ],
   "type": "object",
   "x-tanren-schema-id": "tanren.http.SseEventsFrame"

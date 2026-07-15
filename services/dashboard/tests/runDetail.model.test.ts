@@ -19,7 +19,7 @@ import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from ".
 
 function ev(eventType: string, payload: unknown = {}): RunEventRow {
   return {
-    id: 1,
+    id: "1",
     ts: "2026-05-28T10:00:00.000Z",
     runId: "run_1",
     taskId: null,
@@ -52,7 +52,7 @@ function task(over: Partial<TaskTimelineEntry>): TaskTimelineEntry {
 
 function cost(over: Partial<RunCostRecord>): RunCostRecord {
   return {
-    id: 1,
+    id: "1",
     runId: "run_1",
     taskId: "t1",
     projectId: "p1",
@@ -125,14 +125,14 @@ describe("summarizeCosts — cost bar across all sources", () => {
   it("aggregates real dollars, tokens, and per-source/per-model totals", () => {
     const totals = summarizeCosts([
       cost({
-        id: 1,
+        id: "1",
         billingMode: "per_token",
         costUsd: "0.0200",
         totalTokens: 150,
         model: "gpt-x",
       }),
       cost({
-        id: 2,
+        id: "2",
         billingMode: "subscription",
         costUsd: null,
         totalTokens: 300,
@@ -140,26 +140,26 @@ describe("summarizeCosts — cost bar across all sources", () => {
         provider: "anthropic",
       }),
       cost({
-        id: 3,
+        id: "3",
         billingMode: "self_hosted",
         costUsd: "0.0000",
         totalTokens: 80,
         model: "local-z",
       }),
     ]);
-    expect(totals.perTokenUsd).toBeCloseTo(0.02, 5);
+    expect(totals.perTokenMicros).toBe(20_000n);
     expect(totals.totalTokens).toBe(530);
     expect(totals.bySource.get("per_token")?.tokens).toBe(150);
     expect(totals.bySource.get("subscription")?.tokens).toBe(300);
     expect(totals.bySource.get("self_hosted")?.tokens).toBe(80);
-    expect(totals.byModel.get("claude-y")?.provider).toBe("anthropic");
+    expect(totals.byModel.get("anthropic/claude-y")?.provider).toBe("anthropic");
     // never invents an unknown source: only the three real billing modes appear
     expect([...totals.bySource.keys()].sort()).toEqual(["per_token", "self_hosted", "subscription"]);
   });
 
   it("treats a null/non-numeric costUsd as zero dollars without dropping tokens", () => {
     const totals = summarizeCosts([cost({ costUsd: null, totalTokens: 42 })]);
-    expect(totals.perTokenUsd).toBe(0);
+    expect(totals.perTokenMicros).toBe(0n);
     expect(totals.totalTokens).toBe(42);
   });
 });

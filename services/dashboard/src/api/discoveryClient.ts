@@ -13,6 +13,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { AcceptResult, DiscoveryInsight, DiscoveryResult, PlacementKind, ProposedSpec } from "./discoveryTypes.js";
+import { decodeWith, DiscoveryAcceptSchema, DiscoveryResultSchema } from "./writeResponseSchemas.js";
 
 export class DiscoveryClient extends OrchestratorHttpClient {
   /** Classify an insight into proposed specs + placement options. */
@@ -25,7 +26,7 @@ export class DiscoveryClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/discovery/classify`,
       insight,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(DiscoveryResultSchema) },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -45,7 +46,7 @@ export class DiscoveryClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/discovery/accept`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(DiscoveryAcceptSchema) },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }

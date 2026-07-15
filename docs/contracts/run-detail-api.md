@@ -25,7 +25,9 @@ Schemas live in `services/orchestrator/src/routes/runs/contract.ts`. Re-exports 
 - `RunListItem`, `ProjectFeedItem`
 - `CursorPage<T>`, `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE`
 - `encodeCursor`, `decodeCursor`, `InvalidCursorError`, `parsePageSize`
-- SSE frame schemas: `SseEventName`, `SseStatusFrame`, `SseTaskFrame`, `SseEventsFrame`, `SseCostsFrame`, `SseHeartbeatFrame`
+- SSE frame schemas: `SseEventName`, `SseSnapshotFrame`, `SseStatusFrame`, `SseTaskFrame`, `SseEventsFrame`, `SseCostsFrame`, `SseHeartbeatFrame`, `SseDrainedFrame`
+
+Event and cost bigserial identifiers cross JSON as canonical positive decimal strings. SSE cursors use the same representation and additionally allow `"0"` for an empty baseline. They are never coerced through JavaScript `number`.
 
 ---
 
@@ -159,34 +161,41 @@ Each turn carries the same `render` (`ForgeAnswer` payload from P2A-0008) the Fo
 
 ## `GET /orgs/:orgId/projects/:projectId/runs/:runId/stream` (SSE)
 
-Server-Sent Events stream for live run updates. The stream is event-driven: it `LISTEN`s on the Postgres `tanren_run` channel and re-polls its deltas on a `NOTIFY` wake (`db/src/notify.ts`), with a long backstop interval only bounding latency if a `NOTIFY` is ever missed. The 1s hot poll is gone; the frame format is unchanged.
+Server-Sent Events stream for live run updates. The stream is event-driven: it `LISTEN`s on the Postgres `tanren_run` channel and re-polls its deltas on a `NOTIFY` wake (`db/src/notify.ts`), with a long backstop interval only bounding latency if a `NOTIFY` is ever missed. Each frame has a connection-local `id`, `retry: 1000`, a strict event name, and one JSON object. A reconnect always begins with a new complete snapshot; the protocol id is not a database cursor.
 
 **Frames**
 
 ```text
+id: 1
+retry: 1000
 event: snapshot
-data: { run, tasks, recentEvents, costs }   // initial frame: partial RunDetail
+data: { runId, projectId, run, tasks, recentEvents, costs, eventCursor, costCursor, taskWatermark }
 
 event: status
-data: { runId, status, outcome }
+data: { runId, projectId, status, outcome }
 
 event: task
-data: TaskTimelineEntry                      // one frame per changed task
+data: { runId, projectId, task, taskWatermark }
 
 event: events
-data: { events: RunEventRow[] }              // batch of new events (redacted)
+data: { runId, projectId, events, eventCursor }
 
 event: costs
-data: { costs: RunCostRecord[] }
+data: { runId, projectId, costs, costCursor }
 
 event: heartbeat
-data: { ts: ISO-8601 }                       // every 15s when otherwise idle
+data: { runId, projectId, ts }
+
+event: drained
+data: { runId, projectId, status, outcome, eventCursor, costCursor, taskWatermark }
 ```
 
 **Stream end conditions**
 
-- The connection closes when the run reaches a terminal status (`completed`, `failed`, `cancelled`, `halted`) AND one final post-terminal poll has flushed remaining deltas.
-- Clients should close the connection on the terminal `status` frame; a 60s client-initiated keepalive is recommended.
+- A terminal `status` is workflow truth, not proof that accounting and event delivery are complete. The server continues through post-terminal deltas.
+- After a quiet post-terminal poll proves all currently committed deltas were sent, the server emits one strict `drained` receipt whose cursors and task watermark equal the preceding stream state, then ends the response.
+- Clients close only after validating a matching `drained` receipt. EOF, transport error, terminal status, heartbeat absence, and elapsed time never establish correctness; clients remain eligible for reconnection. A reconnect snapshot reconciles the full state before a later drain can close it.
+- Every known frame is validated in full and against the SSR-rendered run/project identity before any accounting, cursor, workflow state, or DOM mutation. Deltas before the first valid snapshot are rejected.
 
 **Redaction**: same as `/events`. `?raw=true` propagates.
 
@@ -229,6 +238,10 @@ Project activity feed — events across every run in the project, newest-first, 
 ---
 
 ## Change-control
+
+### 2026-07-14 addendum — identity-bound drain and exact cursors
+
+PR #856 clean-replaces the timer-based terminal heuristic with the identity-bound `drained` protocol above. It also changes event/cost bigserial wire ids from `number | string` to canonical strings, adds project identity and monotonic cursors to every state-bearing frame, and adds task watermarks. The dashboard migrates atomically in the same change: SSR and live updates use one exact millionth-of-a-dollar/safe-token reducer, terminal truth stays visible while stream integrity is unverified, and the same-origin proxy addresses the already-resolved org/project directly so transient upstream failure is distinct from authorization and not-found.
 
 Any change to a schema in `contract.ts` requires:
 

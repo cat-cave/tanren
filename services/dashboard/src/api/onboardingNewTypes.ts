@@ -46,6 +46,8 @@ export interface CaptureLifecycle {
   tier3: string;
   build: string;
   deploy: string;
+  upgrade: string;
+  toolchain: Array<{ name: string; version: string }>;
 }
 
 // One domain-adaptive design dimension (native design subsystem, WS-D1) — the
@@ -83,6 +85,7 @@ export interface InterviewCapture {
   designContract: CaptureDesignContract | null;
   architecture: CaptureArchitectureLine[];
   lifecycle: CaptureLifecycle | null;
+  lifecycleConfirmed: boolean;
   rulesets: string[];
 }
 
@@ -118,6 +121,7 @@ export function emptyCapture(): InterviewCapture {
     designContract: null,
     architecture: [],
     lifecycle: null,
+    lifecycleConfirmed: false,
     rulesets: [],
   };
 }

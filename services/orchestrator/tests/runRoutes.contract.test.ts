@@ -346,7 +346,7 @@ describe("P2A-0014 run-detail API — events pagination", () => {
     const ts = new Date("2026-05-27T12:34:56.000Z");
     const encoded = encodeCursor({ ts, id: 42 });
     const decoded = decodeCursor(encoded);
-    expect(decoded.id).toBe(42);
+    expect(decoded.id).toBe("42");
     expect(decoded.ts.toISOString()).toBe(ts.toISOString());
   });
 });

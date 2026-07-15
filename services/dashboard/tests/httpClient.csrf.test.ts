@@ -10,7 +10,14 @@ class ProbeClient extends OrchestratorHttpClient {
   }
 
   writeExpectingBody(path: string, body?: unknown) {
-    return this.sendJson("POST", path, body, { expectBody: true });
+    return this.sendJson<{ ok: boolean }>("POST", path, body, {
+      expectBody: true,
+      decode: (value) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) return;
+        const ok = (value as Record<string, unknown>)["ok"];
+        return typeof ok === "boolean" ? { ok } : undefined;
+      },
+    });
   }
 }
 
@@ -84,6 +91,30 @@ describe("OrchestratorHttpClient CSRF headers", () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe(200);
     expect(result.body).toBeUndefined();
+  });
+
+  it.each([{}, [], { ok: "true" }, { wrong: true }])("fails a typed write on malformed 200 body %#", async (body) => {
+    const client = new ProbeClient({
+      orchestratorUrl: "http://orch",
+      fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
+    });
+    await expect(client.writeExpectingBody("/orgs/o1/thing")).resolves.toEqual({
+      ok: false,
+      status: 200,
+      body: undefined,
+    });
+  });
+
+  it("preserves a non-2xx error body without treating it as typed success", async () => {
+    const client = new ProbeClient({
+      orchestratorUrl: "http://orch",
+      fetchImpl: async () => new Response(JSON.stringify({ error: "conflict" }), { status: 409 }),
+    });
+    await expect(client.writeExpectingBody("/orgs/o1/thing")).resolves.toEqual({
+      ok: false,
+      status: 409,
+      body: { error: "conflict" },
+    });
   });
 
   it("allows a no-body success when the caller does not require a body", async () => {

@@ -154,6 +154,25 @@ const PROJECT_DETAIL = {
   },
 };
 
+const FORGE_ANSWER = {
+  body: "tanren-fixture-easy: 1 run in flight, 1 PR review-ready; $42 spent this week.",
+  attentionItems: [],
+  insights: [],
+  prompts: ["What changed in the latest PR?"],
+  proposedActions: null,
+};
+
+const FORGE_TURN = {
+  id: "turn_project_view",
+  threadId: "thread_1",
+  index: 0,
+  source: { kind: "operator", userId: "u1" },
+  audience: "project:member",
+  authorKind: "forge_template",
+  render: FORGE_ANSWER,
+  createdAt: "2026-05-28T10:06:00.000Z",
+};
+
 export const patchCalls: Array<{ url: string; body: unknown }> = [];
 export const toolCalls: Array<{ url: string; body: unknown }> = [];
 export const specCreateCalls: Array<{ url: string; body: unknown }> = [];
@@ -228,7 +247,21 @@ export function mockOrchestrator(): void {
     }
     if (url.endsWith("/specs") && method === "POST") {
       specCreateCalls.push({ url, body });
-      return new Response(JSON.stringify({ specId: "spec_new", ...body }), { status: 201 });
+      return new Response(
+        JSON.stringify({
+          specId: "spec_new",
+          projectId: "project_easy",
+          orgId: "org_acme",
+          title: body.title,
+          description: body.description,
+          acceptanceCriteria: body.acceptanceCriteria,
+          dependsOn: [],
+          status: "open",
+          priority: "tbd",
+          mode: "from_scratch",
+        }),
+        { status: 201 },
+      );
     }
     if (url.includes("/personas")) {
       return new Response(JSON.stringify({ personas: PERSONAS }), { status: 200 });
@@ -238,20 +271,24 @@ export function mockOrchestrator(): void {
     }
     if (url.includes("/forge/threads") && url.endsWith("/threads") && method === "POST") {
       forgeMutationCalls.push({ url, method, body });
-      return new Response(JSON.stringify({ id: "thread_1" }), { status: 201 });
-    }
-    if (url.includes("/generate-project-view") && method === "POST") {
-      forgeMutationCalls.push({ url, method, body });
       return new Response(
         JSON.stringify({
-          render: {
-            body: "tanren-fixture-easy: 1 run in flight, 1 PR review-ready; $42 spent this week.",
-            attentionItems: [],
-            prompts: ["What changed in the latest PR?"],
-          },
+          id: "thread_1",
+          orgId: "org_acme",
+          projectId: "project_easy",
+          runId: null,
+          scope: "project",
+          title: null,
+          createdAt: "2026-05-28T10:05:00.000Z",
+          updatedAt: "2026-05-28T10:05:00.000Z",
+          closedAt: null,
         }),
         { status: 201 },
       );
+    }
+    if (url.includes("/generate-project-view") && method === "POST") {
+      forgeMutationCalls.push({ url, method, body });
+      return new Response(JSON.stringify(FORGE_TURN), { status: 201 });
     }
     if (url.endsWith("/forge/tools")) {
       toolCalls.push({ url, body });

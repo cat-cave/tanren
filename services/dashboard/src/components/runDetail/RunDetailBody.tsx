@@ -16,18 +16,13 @@
 import type { RunDetail, RunEventRow } from "../../api/types.js";
 import {
   buildTrajectory,
-  costSourceLabel,
-  costSourceVar,
   failedTasks,
-  formatDuration,
-  formatTokens,
-  formatUsd,
   reasoningForTask,
   runFailed,
   spineProgress,
-  summarizeCosts,
   type TrajectoryMoment,
 } from "./model.js";
+import { RunDetailCostBar } from "./RunDetailCostBar.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
 export interface RunDetailBodyProps {
@@ -54,112 +49,6 @@ function relativeAgo(iso: string): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
-}
-
-function CostBar(props: { detail: RunDetail }) {
-  const { detail } = props;
-  const totals = summarizeCosts(detail.costs);
-  const liveTask = detail.tasks.find((t) => t.status === "running" || t.status === "claimed");
-  const attempts = detail.tasks.reduce((max, t) => Math.max(max, t.attempt + 1), 1);
-  const retries = detail.tasks.reduce((sum, t) => sum + t.attempt, 0);
-  const inPct =
-    totals.inputTokens + totals.outputTokens === 0
-      ? 0
-      : (totals.inputTokens / (totals.inputTokens + totals.outputTokens)) * 100;
-  return (
-    <div class="cost-bar" data-rd="cost-bar">
-      {/* per-token: real dollars */}
-      <div class="cost-cell">
-        <div class="row1">
-          <span class="swatch" style="background: var(--cost-token)"></span>
-          <span class="l" style="color: var(--cost-token)">
-            per-token
-          </span>
-          <span class="v" data-rd="cost-per-token">
-            {formatUsd(totals.perTokenUsd)}
-          </span>
-        </div>
-        <div class="bar">
-          <i style={`width: ${Math.min(100, totals.perTokenUsd * 100).toFixed(1)}%; background: var(--cost-token)`}></i>
-        </div>
-        <div class="k">real-dollar spend · {totals.bySource.get("per_token")?.tokens ?? 0} tok</div>
-      </div>
-      {/* window: subscription usage by source */}
-      <div class="cost-cell">
-        <div class="row1">
-          <span class="swatch" style="background: var(--cost-window)"></span>
-          <span class="l" style="color: var(--cost-window)">
-            window
-          </span>
-          <span class="v">{formatTokens(totals.bySource.get("subscription")?.tokens ?? 0)}</span>
-        </div>
-        <div class="source-rows" data-rd="cost-sources">
-          {[...totals.bySource.entries()].map(([mode, agg]) => (
-            <div class="source-row">
-              <span class="sw" style={`background: ${costSourceVar(mode)}`}></span>
-              <span>{costSourceLabel(mode)}</span>
-              <span class="amt">
-                {formatTokens(agg.tokens)} tok{agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-      {/* tokens in / out */}
-      <div class="cost-cell">
-        <div class="row1">
-          <span class="l" style="color: var(--fg-3)">
-            tokens · in / out
-          </span>
-          <span class="v" data-rd="cost-tokens">
-            {formatTokens(totals.inputTokens)} / {formatTokens(totals.outputTokens)}
-          </span>
-        </div>
-        <div class="bar" style="display:flex; gap:2px;">
-          <i style={`width:${inPct.toFixed(1)}%; background: var(--line-2)`}></i>
-          <i style={`width:${(100 - inPct).toFixed(1)}%; background: var(--cost-token)`}></i>
-        </div>
-        <div class="k">
-          cached {formatTokens(totals.cachedInputTokens)} · total {formatTokens(totals.totalTokens)}
-        </div>
-      </div>
-      {/* per-model breakdown (spend rate cell repurposed to real model attribution) */}
-      <div class="cost-cell">
-        <div class="row1">
-          <span class="l" style="color: var(--fg-3)">
-            by model
-          </span>
-        </div>
-        <div class="source-rows">
-          {totals.byModel.size === 0 ? (
-            <div class="source-row">
-              <span>no cost records yet</span>
-            </div>
-          ) : (
-            [...totals.byModel.entries()].map(([model, agg]) => (
-              <div class="source-row">
-                <span>{model}</span>
-                <span class="amt">{formatTokens(agg.tokens)} tok</span>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-      {/* run meta */}
-      <div class="cost-cell meta-cell">
-        <div class="grid">
-          <span class="k">cli</span>
-          <b>{liveTask?.cli ?? detail.tasks[0]?.cli ?? "—"}</b>
-          <span class="k">attempt</span>
-          <b data-rd="meta-attempt">{attempts}</b>
-          <span class="k">elapsed</span>
-          <b data-rd="meta-elapsed">{formatDuration(detail.run.startedAt, detail.run.endedAt) || "—"}</b>
-          <span class="k">retries</span>
-          <b style={retries > 0 ? "color: var(--status-warn)" : "color: var(--status-ok)"}>{retries}</b>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function TrajectoryRow(props: { moment: TrajectoryMoment; index: number; selected: boolean }) {
@@ -190,7 +79,7 @@ function TrajectoryRow(props: { moment: TrajectoryMoment; index: number; selecte
   );
 }
 
-function Trajectory(props: { detail: RunDetail; selectedTaskId: string | null }) {
+function Trajectory(props: { detail: RunDetail; selectedTaskId: string | null; terminal: boolean }) {
   const moments = buildTrajectory(props.detail.tasks);
   const { donePct, livePct } = spineProgress(moments);
   const spineStyle = `background: linear-gradient(to bottom, var(--status-ok) 0%, var(--status-ok) ${donePct}%, var(--ember-08) ${donePct}%, var(--ember-08) ${livePct}%, var(--line-2) ${livePct}%);`;
@@ -199,7 +88,7 @@ function Trajectory(props: { detail: RunDetail; selectedTaskId: string | null })
       <div class="rd-panel-head">
         <h3>trajectory</h3>
         <span class="live" data-rd="live-flag">
-          ↻ live
+          {props.terminal ? "● final · verifying totals" : "↻ live"}
         </span>
       </div>
       <div class="rd-panel-body">
@@ -439,6 +328,7 @@ function FailureDiagnostics(props: { detail: RunDetail }) {
 
 export function RunDetailBody(props: RunDetailBodyProps) {
   const { detail } = props;
+  const terminal = ["completed", "failed", "halted", "cancelled"].includes(detail.run.status);
   // Default selection: the live task, else the most recently started one.
   const live = detail.tasks.find((t) => t.status === "running" || t.status === "claimed");
   const fallback = [...detail.tasks].sort((a, b) => {
@@ -451,7 +341,18 @@ export function RunDetailBody(props: RunDetailBodyProps) {
   return (
     <>
       <style>{RUN_DETAIL_CSS}</style>
-      <div class="rd-root" data-island="run-stream" data-stream-url={props.streamUrl}>
+      <div
+        class="rd-root"
+        data-island="run-stream"
+        data-stream-url={props.streamUrl}
+        data-run-id={detail.run.runId}
+        data-project-id={detail.run.projectId}
+        data-run-status={detail.run.status}
+        data-run-outcome={detail.run.outcome ?? ""}
+        data-run-terminal={terminal ? "true" : "false"}
+        data-stream-integrity="verifying"
+        data-baseline-received="false"
+      >
         <div class="page-head">
           <div>
             <div class="eyebrow">▮ trajectory · scrub through everything</div>
@@ -481,11 +382,11 @@ export function RunDetailBody(props: RunDetailBodyProps) {
         <div style="margin-top:12px"></div>
         <StatusChips detail={detail} />
         <FailureDiagnostics detail={detail} />
-        <CostBar detail={detail} />
+        <RunDetailCostBar detail={detail} />
 
         <div class="page-body" style="padding:0;">
           <div class="split-run">
-            <Trajectory detail={detail} selectedTaskId={selectedTaskId} />
+            <Trajectory detail={detail} selectedTaskId={selectedTaskId} terminal={terminal} />
             <Reasoning {...props} selectedTaskId={selectedTaskId} />
           </div>
         </div>

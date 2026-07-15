@@ -10,6 +10,7 @@
 
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type { DeriveResult, InterviewCapture, InterviewRoundResult } from "./onboardingNewTypes.js";
+import { decodeWith, DeriveResultSchema, InterviewRoundSchema } from "./writeResponseSchemas.js";
 
 export class OnboardingNewClient extends OrchestratorHttpClient {
   /** Run one interview round; returns the next question + updated capture. */
@@ -21,7 +22,7 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/round`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(InterviewRoundSchema) },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
@@ -35,7 +36,7 @@ export class OnboardingNewClient extends OrchestratorHttpClient {
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/onboarding/interview/derive`,
       input,
-      { expectBody: true },
+      { expectBody: true, decode: decodeWith(DeriveResultSchema) },
     );
     return { ok: r.ok, status: r.status, result: r.body };
   }
