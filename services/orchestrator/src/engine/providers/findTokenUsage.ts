@@ -27,6 +27,26 @@ const log = createLogger("provider-usage");
 export const MAX_USAGE_PARSE_DEPTH = 64;
 export const MAX_USAGE_PARSE_NODES = 50_000;
 
+// Splits a JSON Lines stream into its non-empty records. Keep the original line
+// text so callers can apply provider-specific malformed-line policies.
+export function splitNonEmptyJsonlLines(stdout: string): string[] {
+  return stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
+}
+
+// JSONL telemetry events must be objects. Primitive JSON values and arrays are
+// rejected alongside syntactically invalid JSON so each provider can decide
+// whether that rejected line is loud or benign.
+export function parseJsonObject(line: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(line) as unknown;
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** A node/depth-bounded walk that the per-provider shape decoder rides on. */
 export function findTokenUsageBounded(
   provider: string,
