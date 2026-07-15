@@ -80,7 +80,7 @@ export async function findActiveOwnerRunForSpec(
   orgId: string,
   specId: string,
 ): Promise<{ runId: string; status: string } | undefined> {
-  return runWithOrgScope(pool, orgId, async (client) => {
+  return runWithOrgScope(pool, orgId, async (client): Promise<{ runId: string; status: string } | undefined> => {
     const result = await client.query<{ run_id: string; status: string }>(
       `SELECT run_id, status FROM runs
          WHERE spec_id = $1 AND status IN ('queued', 'running', 'paused')
@@ -89,12 +89,10 @@ export async function findActiveOwnerRunForSpec(
       [specId],
     );
     const row = result.rows[0];
-    // Explicit optional result: absent row ⇒ undefined (fail closed), never a fabricated owner.
-    let owner: { runId: string; status: string } | undefined;
-    if (row !== undefined) {
-      owner = { runId: row.run_id, status: row.status };
+    if (row === undefined) {
+      return undefined;
     }
-    return owner;
+    return { runId: row.run_id, status: row.status };
   });
 }
 

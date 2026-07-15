@@ -1,7 +1,7 @@
 // Production RecoveryEvidencePort: settlement-time readback over runs (+ tasks)
 // under system/BYPASSRLS scope (runWithSystemScope). Unscoped app-pool reads see
 // zero rows under RLS and would always fail readback — never raw-query the tenant pool.
-// Fail-closed: every branch returns RecoveryRunEvidence | undefined (no-evidence).
+// Fail-closed: every no-evidence branch returns undefined explicitly.
 
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -13,12 +13,6 @@ import {
   type RecoveryRunEvidence,
 } from "./recoveryOwnership.js";
 
-/** Explicit no-evidence result without a bare `return undefined` (unicorn + consistent-return). */
-function noEvidence(): RecoveryRunEvidence | undefined {
-  const empty: { value?: RecoveryRunEvidence } = {};
-  return empty.value;
-}
-
 export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
   constructor(private readonly pool: pg.Pool) {}
 
@@ -27,7 +21,7 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
     receipt: ConflictRecoveryReceipt;
   }): Promise<RecoveryRunEvidence | undefined> {
     if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) {
-      return noEvidence();
+      return undefined;
     }
     return runWithSystemScope(this.pool, async (client): Promise<RecoveryRunEvidence | undefined> => {
       if (input.receipt.run.kind === "already_running") {
@@ -35,7 +29,7 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
       }
       const run = await this.verifyRun(client, input.receipt.run.replanRunId, input.expectedSpecId);
       if (run === undefined) {
-        return noEvidence();
+        return undefined;
       }
       const taskOk = await this.taskBelongsToRun(
         client,
@@ -43,7 +37,7 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
         input.receipt.run.replanRunId,
       );
       if (!taskOk) {
-        return noEvidence();
+        return undefined;
       }
       return { ...run, plannerTaskId: input.receipt.run.plannerTaskId };
     });
@@ -60,7 +54,7 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
     );
     const row = result.rows[0];
     if (row === undefined || row.spec_id !== expectedSpecId || !isActiveOwnerRunStatus(row.status)) {
-      return noEvidence();
+      return undefined;
     }
     return { runId: row.run_id, specId: row.spec_id, runStatus: row.status };
   }
