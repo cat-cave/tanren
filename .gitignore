@@ -17,4 +17,6 @@ connections.manifest.local.yaml
 
 # Claude Code agent worktrees
 .claude/
+# Codex agent worktrees and local control-plane state
+.codex/
 tanren.acceptance.json

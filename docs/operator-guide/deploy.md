@@ -19,6 +19,20 @@ just smoke           # full local smoke/process-boundary/RLS gate
 just down-dev        # tears the stack down and removes volumes
 ```
 
+`just smoke` is self-contained and fail-closed: it requires a clean committed
+worktree, builds that exact Git tree in a unique Compose project, allocates
+candidate-specific ports and SSH/mTLS material, and discovers the published
+ports before probing them. It verifies semantic health, CLI doctor/status,
+runner SSH, Postgres/RLS gates, the worker mTLS boundary, and image/container
+provenance. It then removes only that project and writes a non-secret JSON
+receipt under `$HOME/.config/tanren/runtime/smoke-receipts/`. Set
+`TANREN_SMOKE_RECEIPT_PATH` to choose the receipt path or
+`TANREN_SMOKE_KEEP_STACK=1` to retain a successful candidate for inspection;
+failed and interrupted candidates are always torn down and retain their receipt
+plus sanitized Compose logs when those logs are available.
+Ambient default-stack URLs and credentials are overwritten; a healthy stack on
+the usual ports cannot make a broken candidate pass.
+
 `just compose-up` and `just compose-down` are kept as backward-compat aliases of `up-dev` / `down-dev`.
 
 The dev profile reads `TANREN_GITHUB_OAUTH_CLIENT_ID` and `TANREN_GITHUB_OAUTH_CLIENT_SECRET` from your local env when present; if they are unset the orchestrator boots without the GitHub OAuth provider registered, matching pre-P2A-0003 behavior.
@@ -154,7 +168,7 @@ Service AppRoles created by the init script have 1-hour token TTLs (24-hour max)
 
 ## CI
 
-`.github/workflows/ci.yml` runs `just ci` (which calls `corepack pnpm run compose:config` against `compose.dev.yml`) followed by `just smoke` (which uses the dev profile). The prod compose file is validated by the architecture-checks script for the docker-socket and host-bind-mount invariants.
+`.github/workflows/ci.yml` runs `just ci` (which calls `corepack pnpm run compose:config` against `compose.dev.yml`) followed by the isolated exact-tree `just smoke` gate described above. The prod compose file is validated by the architecture-checks script for the docker-socket and host-bind-mount invariants.
 
 ## Secret-store backend selection
 

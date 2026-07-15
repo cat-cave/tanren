@@ -60,6 +60,9 @@ export async function authPersistTokenCommand(argv: string[]) {
 
 export async function doctor() {
   const health = await request("/healthz");
+  if (typeof health !== "object" || health === null || !("ok" in health) || health.ok !== true) {
+    throw new Error(`doctor failed: orchestrator is not healthy (${JSON.stringify(health)})`);
+  }
   console.log(JSON.stringify(health, null, 2));
 }
 
@@ -67,8 +70,40 @@ export async function status(runId: string | undefined) {
   if (!runId) {
     throw new Error("usage: tanren status <run_id>");
   }
-  const run = await request(`/runs/${runId}`);
-  console.log(JSON.stringify(run, null, 2));
+  const payload = decodeRunStatus(await request(`/runs/${runId}`), runId);
+  console.log(JSON.stringify(payload, null, 2));
+  return payload;
+}
+
+const RUN_STATUSES = new Set(["queued", "running", "paused", "halted", "completed", "failed", "cancelled"]);
+
+export interface CliRunStatus {
+  run: { run_id: string; status: string };
+  tasks: unknown[];
+  events: unknown[];
+  costs: unknown[];
+}
+
+export function decodeRunStatus(value: unknown, expectedRunId: string): CliRunStatus {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("status failed: response must be an object");
+  }
+  const record = value as Record<string, unknown>;
+  const run = record["run"];
+  if (typeof run !== "object" || run === null || Array.isArray(run)) {
+    throw new Error("status failed: response.run must be an object");
+  }
+  const runRecord = run as Record<string, unknown>;
+  if (runRecord["run_id"] !== expectedRunId) {
+    throw new Error(`status failed: expected run ${expectedRunId}, got ${String(runRecord["run_id"])}`);
+  }
+  if (typeof runRecord["status"] !== "string" || !RUN_STATUSES.has(runRecord["status"])) {
+    throw new Error(`status failed: invalid run status ${String(runRecord["status"])}`);
+  }
+  for (const key of ["tasks", "events", "costs"] as const) {
+    if (!Array.isArray(record[key])) throw new Error(`status failed: response.${key} must be an array`);
+  }
+  return value as CliRunStatus;
 }
 
 export async function createProjectCommand(argv: string[]) {

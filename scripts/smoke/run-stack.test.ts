@@ -1,0 +1,325 @@
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createServer, type Server } from "node:http";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { STAGE_REGISTRY } from "./stack-gates.js";
+import {
+  bindRuntimeEnvironment,
+  findAvailablePorts,
+  processGroupAbsent,
+  resolveRuntimeBinding,
+  waitForJsonHealth,
+} from "./stack-runtime.js";
+
+// cspell:ignore pids
+
+const servers: Server[] = [];
+const temporaryRoots: string[] = [];
+
+async function listen(
+  body: unknown,
+  options: { status?: number; location?: string } = {},
+): Promise<{ url: string; requests: () => number }> {
+  let requestCount = 0;
+  const server = createServer((_request, response) => {
+    requestCount += 1;
+    response.writeHead(options.status ?? 200, {
+      "content-type": "application/json",
+      ...(options.location === undefined ? {} : { location: options.location }),
+    });
+    response.end(JSON.stringify(body));
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") throw new Error("test server exposed no TCP port");
+  return { url: `http://127.0.0.1:${address.port}/healthz`, requests: () => requestCount };
+}
+
+async function temporaryRoot(name: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), `tanren-${name}-`));
+  temporaryRoots.push(root);
+  return root;
+}
+
+async function initCleanRepository(root: string): Promise<void> {
+  await mkdir(root, { recursive: true });
+  execFileSync("git", ["init", "-q", root]);
+  await writeFile(join(root, "tracked"), "clean\n");
+  execFileSync("git", ["-C", root, "add", "tracked"]);
+  execFileSync("git", [
+    "-C",
+    root,
+    "-c",
+    "user.name=Smoke",
+    "-c",
+    "user.email=smoke@example.invalid",
+    "commit",
+    "-qm",
+    "clean",
+  ]);
+}
+
+async function waitUntil(check: () => Promise<boolean>, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (await check()) return;
+    await new Promise<void>((resolve) => {
+      setTimeout(() => resolve(), 20);
+    });
+  }
+  throw new Error(message);
+}
+
+function waitForExit(child: ChildProcess, waitMs: number): Promise<number | null> {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("coordinator did not exit")), waitMs);
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
+
+afterEach(async () => {
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        }),
+    ),
+  );
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+describe("exact-stack smoke coordinator", () => {
+  it("fails a dead candidate while a healthy default-port decoy remains untouched", async () => {
+    const decoy = await listen({ ok: true, database: "ok", vault: { ok: true } });
+    await expect(
+      waitForJsonHealth("orchestrator", "http://127.0.0.1:1/healthz", { delayMs: 0, sleep: async () => {} }),
+    ).rejects.toThrow(/progress cycle|ECONNREFUSED/u);
+    expect(decoy.requests()).toBe(0);
+  });
+
+  it("rejects a candidate redirect without following the healthy decoy", async () => {
+    const decoy = await listen({ ok: true, database: "ok", vault: { ok: true } });
+    const candidate = await listen({}, { status: 302, location: decoy.url });
+    await expect(
+      waitForJsonHealth("orchestrator", candidate.url, { delayMs: 0, sleep: async () => {} }),
+    ).rejects.toThrow(/progress cycle|redirect/u);
+    expect(candidate.requests()).toBeGreaterThan(0);
+    expect(decoy.requests()).toBe(0);
+  });
+
+  it("delegates dynamic ports and binds one explicit or auto-discovered runtime", async () => {
+    expect(findAvailablePorts({}, "same-id")).toEqual({
+      orchestrator: 0,
+      internalMtls: 0,
+      allocator: 0,
+      postgres: 0,
+      runnerSsh: 0,
+      vault: 0,
+      dashboard: 0,
+      ntfy: 0,
+      registry: 0,
+    });
+    await expect(
+      resolveRuntimeBinding(
+        { PATH: "/bin" },
+        { isSocket: async () => true, executable: async (name) => `/bin/${name}` },
+      ),
+    ).rejects.toThrow(/both required/u);
+    const runtime = await resolveRuntimeBinding(
+      { PATH: "/bin", TANREN_SMOKE_RUNTIME: "docker", TANREN_SMOKE_RUNTIME_SOCKET: "/runtime/docker.sock" },
+      { isSocket: async () => true, executable: async (name) => `/bin/${name}` },
+    );
+    const env = bindRuntimeEnvironment({ DOCKER_CONTEXT: "decoy", CONTAINER_HOST: "ssh://decoy" }, runtime);
+    expect(env).toMatchObject({ DOCKER_HOST: "unix:///runtime/docker.sock" });
+    expect(env.DOCKER_CONTEXT).toBeUndefined();
+    expect(env.CONTAINER_HOST).toBeUndefined();
+  });
+
+  it("enters the protected bootstrap through a shell-poison-resistant just boundary", async () => {
+    const root = process.cwd();
+    const temp = await temporaryRoot("shell-poison");
+    const bin = join(temp, "bin");
+    await mkdir(bin);
+    const marker = join(temp, "poison-sourced");
+    const sentinel = join(temp, "tool-ran");
+    const poison = join(temp, "poison.sh");
+    await writeFile(poison, `printf poison > ${JSON.stringify(marker)}\nexit 97\n`);
+    const fakeCorepack = join(bin, "corepack");
+    await writeFile(
+      fakeCorepack,
+      '#!/bin/sh\n[ -z "${BASH_ENV+x}" ] && [ -z "${ENV+x}" ] || exit 98\nprintf clean > "$SMOKE_SENTINEL"\n',
+    );
+    await chmod(fakeCorepack, 0o755);
+    const result = spawnSync("just", ["--justfile", join(root, "justfile"), "smoke"], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        BASH_ENV: poison,
+        ENV: poison,
+        SMOKE_SENTINEL: sentinel,
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(await readFile(sentinel, "utf8")).toBe("clean");
+    await expect(stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    const recipe = /^smoke:\n(?:  .*\n)+/mu.exec(await readFile(join(root, "justfile"), "utf8"))?.[0] ?? "";
+    expect(recipe).toContain("scripts/smoke/stack-bootstrap.ts");
+    expect(recipe).not.toContain("run-stack.ts");
+  });
+
+  it("dirty preflight emits exactly one requested failure receipt before runtime mutation", async () => {
+    const base = await temporaryRoot("dirty-candidate");
+    const candidate = join(base, "candidate");
+    await initCleanRepository(candidate);
+    await writeFile(join(candidate, "dirty"), "untracked\n");
+    const runtimeBase = join(base, "runtime");
+    const receipt = join(base, "dirty-receipt.json");
+    const script = join(process.cwd(), "scripts", "smoke", "stack-bootstrap.ts");
+    const result = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), script], {
+      cwd: candidate,
+      encoding: "utf8",
+      env: { ...process.env, TANREN_SMOKE_RUNTIME_BASE: runtimeBase, TANREN_SMOKE_RECEIPT_PATH: receipt },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/clean committed worktree/u);
+    expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({ status: "failed", cleanup: "completed" });
+    expect((await readdir(base)).filter((name) => name.endsWith("receipt.json"))).toEqual(["dirty-receipt.json"]);
+    await expect(stat(join(runtimeBase, "smoke"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("loads the smoke coordinator from the verified commit archive instead of the checkout", async () => {
+    const base = await temporaryRoot("archive-execution");
+    const candidate = join(base, "candidate");
+    await initCleanRepository(candidate);
+    await mkdir(join(candidate, "scripts", "smoke"), { recursive: true });
+    await writeFile(
+      join(candidate, "scripts", "smoke", "run-stack.ts"),
+      `import { rm, writeFile } from "node:fs/promises";\n` +
+        `export async function runPreparedSmoke(prepared: any): Promise<number> {\n` +
+        `  await writeFile(process.env.TEST_PROOF!, JSON.stringify({ moduleUrl: import.meta.url, executionRoot: prepared.context.executionRoot, checkoutRoot: prepared.context.root, head: prepared.context.head, tree: prepared.context.tree }));\n` +
+        `  await writeFile(prepared.context.receiptPath, JSON.stringify({ status: "passed", context: { nonce: prepared.context.nonce } }));\n` +
+        `  prepared.signalState.sealed = true;\n` +
+        `  await rm(prepared.buildBase, { recursive: true, force: true });\n` +
+        `  return 0;\n` +
+        `}\n`,
+    );
+    execFileSync("git", ["-C", candidate, "add", "scripts/smoke/run-stack.ts"]);
+    execFileSync("git", [
+      "-C",
+      candidate,
+      "-c",
+      "user.name=Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "commit",
+      "-qm",
+      "coordinator fixture",
+    ]);
+    const proofPath = join(base, "archive-proof.json");
+    const receipt = join(base, "archive-receipt.json");
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), join(process.cwd(), "scripts", "smoke", "stack-bootstrap.ts")],
+      {
+        cwd: candidate,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          TEST_PROOF: proofPath,
+          TANREN_SMOKE_RUNTIME_BASE: join(base, "runtime"),
+          TANREN_SMOKE_RECEIPT_PATH: receipt,
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    const proof = JSON.parse(await readFile(proofPath, "utf8")) as {
+      moduleUrl: string;
+      executionRoot: string;
+      checkoutRoot: string;
+      head: string;
+      tree: string;
+    };
+    const modulePath = fileURLToPath(proof.moduleUrl);
+    expect(modulePath).not.toContain(candidate);
+    expect(modulePath).toBe(join(proof.executionRoot, "scripts", "smoke", "run-stack.ts"));
+    expect(proof.checkoutRoot).toBe(candidate);
+    expect(proof.head).toBe(execFileSync("git", ["-C", candidate, "rev-parse", "HEAD"], { encoding: "utf8" }).trim());
+    expect(proof.tree).toBe(
+      execFileSync("git", ["-C", candidate, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim(),
+    );
+    expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({ status: "passed" });
+  });
+
+  it("SIGTERM during a hung bootstrap Git tree fences its whole PGID and emits one receipt", async () => {
+    const base = await temporaryRoot("preflight-signal");
+    const candidate = join(base, "candidate");
+    await initCleanRepository(candidate);
+    const bin = join(base, "bin");
+    await mkdir(bin);
+    const pidFile = join(base, "child-process-ids");
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const fakeGit = join(bin, "git");
+    await writeFile(
+      fakeGit,
+      "#!/bin/sh\n" +
+        'root=""; if [ "$1" = "-C" ]; then root="$2"; shift 2; fi\n' +
+        'case "$1" in\n' +
+        "  status) echo $$ >> \"$PID_FILE\"; \"$REAL_NODE\" -e \"const {spawn}=require('child_process');spawn(process.execPath,['-e','setInterval(()=>{},1e3)'],{stdio:'ignore'});setInterval(()=>{},1e3)\" ;;\n" +
+        '  *) if [ -n "$root" ]; then exec "$REAL_GIT" -C "$root" "$@"; else exec "$REAL_GIT" "$@"; fi ;;\n' +
+        "esac\n",
+    );
+    await chmod(fakeGit, 0o755);
+    const receipt = join(base, "signal.json");
+    const child = spawn(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), join(process.cwd(), "scripts", "smoke", "stack-bootstrap.ts")],
+      {
+        cwd: candidate,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          REAL_GIT: realGit,
+          REAL_NODE: process.execPath,
+          PID_FILE: pidFile,
+          TANREN_SMOKE_RUNTIME_BASE: join(base, "runtime"),
+          TANREN_SMOKE_RECEIPT_PATH: receipt,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    try {
+      await waitUntil(
+        async () => (await readFile(pidFile, "utf8").catch(() => "")).trim() !== "",
+        "Git child never started",
+      );
+      child.kill("SIGTERM");
+      expect(await waitForExit(child, 8_000)).toBe(143);
+      const earlyReceipt = join(tmpdir(), "tanren-smoke-receipts", `bootstrap-bootstrap-${child.pid}.json`);
+      expect(JSON.parse(await readFile(earlyReceipt, "utf8"))).toMatchObject({ status: "failed" });
+      await rm(earlyReceipt, { force: true });
+      const pids = (await readFile(pidFile, "utf8")).trim().split(/\s+/u).map(Number);
+      for (const pid of pids) expect(processGroupAbsent(pid)).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 15_000);
+
+  it("retains the unique 56-stage production registry", () => {
+    const names = STAGE_REGISTRY.map((stage) => stage.name);
+    expect(names).toHaveLength(56);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toEqual(expect.arrayContaining(["publish-receipt", "seed-platform-credentials"]));
+  });
+});

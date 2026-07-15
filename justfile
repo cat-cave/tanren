@@ -1,4 +1,4 @@
-set shell := ["bash", "-euo", "pipefail", "-c"]
+set shell := ["env", "-u", "BASH_ENV", "-u", "ENV", "bash", "--noprofile", "--norc", "-euo", "pipefail", "-c"]
 
 # The allocator API token is required (fail-loud, no silent "dev" default) by
 # buildAllocator + the standalone allocator. Provide a dev default here so every
@@ -171,7 +171,7 @@ build-golden-image:
 # into cwd. Idempotent. Fail-loud on missing `.env` (the BLOCKER); optional files
 # skip silently with a notice. Folded into `up-dev` so a fresh worktree boots cleanly.
 secrets-link:
-  #!/usr/bin/env bash
+  #!/usr/bin/env -S -u BASH_ENV -u ENV bash --noprofile --norc
   set -euo pipefail
   mode="${TANREN_SECRETS_MODE:-canonical}"
   src="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
@@ -270,7 +270,7 @@ secrets-link:
 # Run ONCE from your main checkout if you currently keep secrets inline there;
 # subsequent worktrees only need 'just secrets-link' (which up-dev calls).
 secrets-migrate:
-  #!/usr/bin/env bash
+  #!/usr/bin/env -S -u BASH_ENV -u ENV bash --noprofile --norc
   set -euo pipefail
   dst="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
   mkdir -p "$dst"
@@ -480,7 +480,7 @@ seed-platform-creds env_file="":
 # operator never starts an apex trial that will only halt mid-run for a
 # missing secret. Read-only: doesn't mutate anything.
 doctor:
-  #!/usr/bin/env bash
+  #!/usr/bin/env -S -u BASH_ENV -u ENV bash --noprofile --norc
   set -euo pipefail
   src="${TANREN_SECRETS_DIR:-$HOME/.config/tanren/secrets}"
   fail=0
@@ -591,11 +591,14 @@ wait-for-stack:
 # longer exists in runtime source. The COMMAND SUBSTRATE path (the orchestrator's
 # real SshCommandSubstrate) is proven separately by `smoke-ssh-integration`.
 smoke-connectivity:
+  : "${TANREN_PUBLIC_BASE_URL:?TANREN_PUBLIC_BASE_URL must target the exact smoke stack}"
+  : "${TANREN_SSH_HOST:?TANREN_SSH_HOST must target the exact smoke stack}"
+  : "${TANREN_SSH_PORT:?TANREN_SSH_PORT must target the exact smoke stack}"
   corepack pnpm --filter @tanren/cli tanren doctor
-  ssh -i "$TANREN_RUNTIME_DIR/tanren_runner_key" -p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile="$TANREN_RUNTIME_DIR/tanren_runner_known_hosts" tanren@localhost 'echo tanren-runner-ok'
+  ssh -F /dev/null -i "$TANREN_RUNTIME_DIR/tanren_runner_key" -p "$TANREN_SSH_PORT" -o BatchMode=yes -o ConnectTimeout=5 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$TANREN_RUNTIME_DIR/tanren_runner_known_hosts" "tanren@$TANREN_SSH_HOST" 'echo tanren-runner-ok'
 
 smoke-ssh-integration:
-  fingerprint="$(ssh-keyscan -p 2222 -t ed25519 localhost 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_SSH_INTEGRATION=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST=127.0.0.1 TANREN_SSH_PORT=2222 TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/ssh.integration.test.ts
+  : "${TANREN_SSH_HOST:?TANREN_SSH_HOST must target the exact smoke stack}"; : "${TANREN_SSH_PORT:?TANREN_SSH_PORT must target the exact smoke stack}"; fingerprint="$(ssh-keyscan -p "$TANREN_SSH_PORT" -t ed25519 "$TANREN_SSH_HOST" 2>/dev/null | ssh-keygen -lf - -E sha256 | awk 'NR == 1 { print $2 }')"; test -n "$fingerprint"; TANREN_SSH_INTEGRATION=1 TANREN_SSH_KEY_PATH="$TANREN_RUNTIME_DIR/tanren_runner_key" TANREN_SSH_HOST="$TANREN_SSH_HOST" TANREN_SSH_PORT="$TANREN_SSH_PORT" TANREN_SSH_USER=tanren TANREN_SSH_HOST_FINGERPRINT="$fingerprint" TANREN_SSH_HOST_KEY_ALGORITHMS=ssh-ed25519 corepack pnpm exec vitest run services/orchestrator/tests/ssh.integration.test.ts
 
 live-codex-writer:
   test -n "${TANREN_CODEX_AUTH_JSON_FILE:-}"
@@ -626,26 +629,26 @@ live-phase1-fixture:
 # the role can do every existing operation while no policies are present.
 # DATABASE_URL is the OWNER/superuser connection (the migration role).
 smoke-rls-r1:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR1SessionContext.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR1SessionContext.integration.test.ts
 
 # RLS wave R2 cohort-1 behavior proof: the runs + events read/write loaders run
 # through the org-scoped client (inert — no policies), identical to the pool.
 # Same ephemeral-DB + restricted-role harness as R1.
 smoke-rls-r2:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalRunsEvents.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalRunsEvents.integration.test.ts
 
 # RLS wave R2 cohort-2 behavior proof: the tasks + cost_records read/write sites
 # run through the org-scoped client (inert — no policies), identical to the pool.
 # Same ephemeral-DB + restricted-role harness as R1 / cohort-1.
 smoke-rls-r2-cohort2:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalTasksCosts.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalTasksCosts.integration.test.ts
 
 # RLS wave R2 cohort-3 behavior proof: the specs + runners read/write sites + the
 # worker failure-path finalize UPDATE run through the org-scoped client (inert —
 # no policies), identical to the pool. Same ephemeral-DB + restricted-role
 # harness as R1 / cohort-1 / cohort-2.
 smoke-rls-r2-cohort3:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalSpecsRunnersFinalizers.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalSpecsRunnersFinalizers.integration.test.ts
 
 # RLS wave R2 cohort-4 (FINAL) behavior proof: the forge stores —
 # forge_threads / forge_turns / forge_action_proposals reads + writes — run
@@ -653,7 +656,7 @@ smoke-rls-r2-cohort3:
 # Same ephemeral-DB + restricted-role harness as R1 / cohort-1/2/3. After this
 # all conversion cohorts are complete; only R3 (policies + role flip) remains.
 smoke-rls-r2-cohort4:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalForge.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR2DalForge.integration.test.ts
 
 # RLS wave R3a behavior proof: the residual cohort-4-flagged tenant-table sites
 # — the forge read/write tool dispatchers + `engine/recovery`'s
@@ -664,7 +667,7 @@ smoke-rls-r2-cohort4:
 # tenant query carries context; the worker per-job WORKFLOW execution is the one
 # remaining surface to scope before R3b (see ROADMAP.md).
 smoke-rls-r3a:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aResidualSites.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aResidualSites.integration.test.ts
 
 # RLS wave R3a-worker behavior proof: the per-job WORKFLOW execution carries org
 # context on EVERY tenant-table op (tasks / events / cost_records). Installs a
@@ -674,7 +677,7 @@ smoke-rls-r3a:
 # no-job-org fallback is rejected (empty GUC). Final conversion gating R3b. Same
 # ephemeral-DB + restricted-role harness as R1 / R2 cohorts / R3a.
 smoke-rls-r3a-worker:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aWorkerScoping.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3aWorkerScoping.integration.test.ts
 
 # RLS wave R3b ENFORCEMENT proof: runs the REAL migration (which enables RLS +
 # policies on every tenant table and creates the tanren_app / tanren_system
@@ -685,7 +688,7 @@ smoke-rls-r3a-worker:
 # role reads across orgs (the documented carve-out). Same ephemeral-DB harness
 # as R1 / R2 / R3a. DATABASE_URL is the OWNER/superuser connection.
 smoke-rls-r3b:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3bEnforcement.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsR3bEnforcement.integration.test.ts
 
 # RLS early-failure finalize proof: a run that throws BEFORE the per-job org
 # scope is established (a credential-free run → MissingCredential during context
@@ -696,7 +699,7 @@ smoke-rls-r3b:
 # admits its UPDATE. Same ephemeral-DB + restricted-role harness as the R-wave
 # cohorts. Regression lock for fix/rls-early-failure-finalize-scope.
 smoke-rls-early-finalize:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsEarlyFailureFinalize.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsEarlyFailureFinalize.integration.test.ts
 
 # RLS org-creation bootstrap proof: org creation is a tenant BOOTSTRAP that
 # precedes any org scope — signup / dev-login / onboarding call
@@ -711,7 +714,7 @@ smoke-rls-early-finalize:
 # scope. Same ephemeral-DB + restricted-role harness as the R-wave cohorts.
 # Regression lock for fix/rls-org-creation-bootstrap-scope.
 smoke-rls-org-bootstrap:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOrgCreationBootstrap.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOrgCreationBootstrap.integration.test.ts
 
 # RLS operator/control-plane flow (real PG, enforced `tanren_app` role): drives
 # the LITERAL operator walk live validation found broken — dev-login bootstrap →
@@ -722,7 +725,7 @@ smoke-rls-org-bootstrap:
 # actor resolved with no org scope and the `/orgs/:orgId/*` routes 403'd / read
 # empty. Regression lock for fix/rls-operator-routes-scope.
 smoke-rls-operator-flow:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOperatorFlow.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsOperatorFlow.integration.test.ts
 
 # RLS HTTP-route scoping (real PG, enforced `tanren_app` role): drives the FULL
 # operator→run flow live validation walked, across ALL route shapes — including
@@ -735,7 +738,7 @@ smoke-rls-operator-flow:
 # resource-keyed steps 404 under enforcement. Regression lock for
 # fix/rls-http-route-scoping-complete.
 smoke-rls-http-route-scoping:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsHttpRouteScoping.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsHttpRouteScoping.integration.test.ts
 
 # RLS full-run-lifecycle scoping proof: a REAL org-scoped run drives the REAL
 # allocator + runner allocation + the whole plan→write→check→audit→PR→CI→review→
@@ -746,7 +749,7 @@ smoke-rls-http-route-scoping:
 # OUTSIDE an open connection scope) was RLS-denied in live validation. Runs the
 # REAL migration (RLS enabled). Regression lock for fix/rls-run-lifecycle-scoping.
 smoke-rls-run-lifecycle:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsRunLifecycleScoping.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsRunLifecycleScoping.integration.test.ts
 
 # Workstream D de-priv proof: the STANDALONE allocator service's PgRunnerStore
 # writes the tenant `runners` row INSIDE the run's org scope (restricted app-role
@@ -754,14 +757,14 @@ smoke-rls-run-lifecycle:
 # wrong-org write RLS-denied — while the cross-org sweeper/release path stays on
 # the BYPASSRLS system pool. Runs the REAL migration (RLS enabled).
 smoke-rls-allocator:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/allocator/tests/pgRunnerStore.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/allocator/tests/pgRunnerStore.rls.integration.test.ts
 
 # Environment management (env P3): the `environments` registry DAL (migration
 # 0001_environments_registry, RLS) — `env_key` content-key resolution + capability
 # query under org scope, the cross-org `official` read tier, and the org-scoped WITH
 # CHECK on writes. Same TANREN_RLS_DB_TEST gate.
 smoke-rls-environments:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/environmentRegistry.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/environmentRegistry.integration.test.ts
 
 # Native design subsystem (WS-D1, native-design-subsystem.md): the `design_contracts`
 # DAL (migration 0010_design_contracts, RLS) — the versioned, org-scoped `DesignContract`
@@ -769,7 +772,7 @@ smoke-rls-environments:
 # scope, deny-by-default isolation (org A never sees org B; unscoped sees ZERO), and the
 # org-scoped WITH CHECK on writes. Same TANREN_RLS_DB_TEST gate as the other RLS smokes.
 smoke-rls-design-contracts:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/designContractRegistry.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/designContractRegistry.integration.test.ts
 
 # P8b: the e2e gate's ARTIFACT-READ teeth against a real Postgres. The `just e2e`
 # harness reads the real persisted run / cost_records / DORA rows via
@@ -780,7 +783,7 @@ smoke-rls-design-contracts:
 # same TANREN_RLS_DB_TEST switch as the RLS integration smokes; the credentialed
 # CASES themselves run only under `just e2e`.
 smoke-e2e-artifacts:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run tests/e2e/lib/readRunArtifacts.db.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run tests/e2e/lib/readRunArtifacts.db.test.ts
 
 # §6.2 (apex pre-run audit): the production `PgBudgetGate.resolveBudget` SQL against
 # a real Postgres — the $50-ceiling enforcement's OBSERVATION surface (the org-scoped
@@ -788,7 +791,7 @@ smoke-e2e-artifacts:
 # The budget PREDICATES + the resume are unit/route-pinned over a fake gate; this
 # proves the real gate reads the right state from seeded rows. Gated like the RLS smokes.
 smoke-budget-gate:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/pgBudgetGate.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/pgBudgetGate.integration.test.ts
 
 # §5 cutover gate (tanren-owns-the-engine §5): the frozen MergeAuthority fail-closed
 # truth table driven against the REAL writer-backed LandFinalizer over a real Postgres
@@ -798,7 +801,7 @@ smoke-budget-gate:
 # failure reconciles to merge_state_unknown; a changes_requested review → needs_attention).
 # Provisions an ephemeral DB + migrates it; gated behind the same TANREN_RLS_DB_TEST switch.
 smoke-merge-authority:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/mergeAuthority.writerBacked.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/mergeAuthority.writerBacked.integration.test.ts
 
 # Plane-split P1 cross-process proof: the run-executor worker is a STANDALONE
 # deployable. Seeds a queued plan job against the shared Postgres (the same
@@ -811,7 +814,7 @@ smoke-merge-authority:
 # boundary crossing + the worker-written terminal state, not a green run. See
 # ROADMAP.md.
 smoke-plane-split-worker:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+  corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
 # Plane-split P3 (real PG, enforced RLS): the control-plane run-state WRITE
 # endpoints + the writers. Proves authn-reject, that append-event / record-cost /
@@ -820,7 +823,7 @@ smoke-plane-split-worker:
 # DirectRunStateWriter persists byte-identical rows in-process. Same ephemeral-DB
 # + restricted-role harness as the R-wave cohorts. DATABASE_URL is the owner.
 smoke-plane-split-p3:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3RemoteWrites.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3RemoteWrites.integration.test.ts
 
 # Plane-split P3b (real PG): the DE-PRIVILEGE proof. Migrates a fresh DB (creates
 # the `tanren_dataplane` role + drops event/cost WRITE grants), then proves under
@@ -829,7 +832,7 @@ smoke-plane-split-p3:
 # signals under RLS, and the control-plane `tanren_app` role can still insert the
 # same event (contrast). DATABASE_URL is the owner.
 smoke-plane-split-p3b:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/mergeQueueDequeuedRecovery.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/mergeQueueDequeuedRecovery.rls.integration.test.ts
 
 # Plane-split P3c (real PG): the run/spec/task LIFECYCLE de-privilege proof.
 # Migrates a fresh DB (0035 drops the data plane's runs/specs/tasks WRITE grants),
@@ -838,22 +841,33 @@ smoke-plane-split-p3b:
 # three is kept, and the control-plane `tanren_app` role CAN run the same writes
 # (so the lifecycle still works through the control plane). DATABASE_URL is owner.
 smoke-plane-split-p3c:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3cDeprivilege.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:?DATABASE_URL must target the exact smoke stack}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3cDeprivilege.integration.test.ts
 
-# Plane-split P3b cross-process CUTOVER proof. The compose `worker` now DEFAULTS
-# to the de-privileged `tanren_dataplane` role + remote-writes ON, so the regular
-# `smoke-plane-split-worker` already runs the cutover topology; this recipe makes
-# it explicit + adds the LIVE negative test: connect to the running stack as
-# `tanren_dataplane` and confirm a direct tenant-table write (events) is denied by
-# Postgres. Recreates the worker (idempotent, same defaults) so the stack is
-# restored.
-smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
-  # PRIVATE key via the mounted compose secret file (see up-dev); only the PUBLIC
-  # authorized_keys line is env.
-  TANREN_RUNNER_AUTHORIZED_KEY="$(cat "$TANREN_RUNTIME_DIR/tanren_runner_key.pub")" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
-  TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
+smoke:
+  corepack pnpm exec tsx scripts/smoke/stack-bootstrap.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority
+# Invoked only from the protected coordinator's resolve-runtime stage. Keeping
+# socket discovery in this operator boundary preserves the allocator API rule.
+smoke-runtime-binding:
+  #!/usr/bin/env -S -u BASH_ENV -u ENV bash --noprofile --norc
+  set -euo pipefail
+  runtime="${TANREN_SMOKE_RUNTIME:-}"
+  socket="${TANREN_SMOKE_RUNTIME_SOCKET:-}"
+  if [ -n "$runtime" ] || [ -n "$socket" ]; then
+    : "${runtime:?TANREN_SMOKE_RUNTIME is required with TANREN_SMOKE_RUNTIME_SOCKET}"
+    : "${socket:?TANREN_SMOKE_RUNTIME_SOCKET is required with TANREN_SMOKE_RUNTIME}"
+  elif [ -S /var/run/docker.sock ]; then
+    runtime=docker
+    socket=/var/run/docker.sock
+  elif [ -S "/run/user/$(id -u)/podman/podman.sock" ]; then
+    runtime=podman
+    socket="/run/user/$(id -u)/podman/podman.sock"
+  else
+    echo "no supported container runtime socket found" >&2
+    exit 1
+  fi
+  case "$runtime" in docker|podman) ;; *) echo "runtime must be docker or podman" >&2; exit 1 ;; esac
+  printf '{"provider":"%s","socket":"%s"}\n' "$runtime" "$socket"
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

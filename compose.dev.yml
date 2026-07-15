@@ -8,7 +8,7 @@ services:
     ports:
       # Host port is remappable (default 5432) via TANREN_POSTGRES_HOST_PORT or
       # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 5432.
-      - "${TANREN_POSTGRES_HOST_PORT:-5432}:5432"
+      - "127.0.0.1:${TANREN_POSTGRES_HOST_PORT-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tanren -d tanren"]
       interval: 5s
@@ -29,7 +29,7 @@ services:
     ports:
       # Host port is remappable (default 18200) via TANREN_VAULT_HOST_PORT or
       # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 8200.
-      - "${TANREN_VAULT_HOST_PORT:-18200}:8200"
+      - "127.0.0.1:${TANREN_VAULT_HOST_PORT-18200}:8200"
     healthcheck:
       test: ["CMD", "vault", "status"]
       interval: 5s
@@ -38,8 +38,13 @@ services:
 
   orchestrator:
     build:
-      context: .
+      context: ${TANREN_BUILD_CONTEXT:-.}
       dockerfile: services/orchestrator/Dockerfile
+      args:
+        TANREN_SOURCE_REVISION: ${TANREN_SOURCE_REVISION:-unbound}
+        TANREN_SOURCE_TREE: ${TANREN_SOURCE_TREE:-unbound}
+        TANREN_SMOKE_BUILD_ID: ${TANREN_SMOKE_BUILD_ID:-unbound}
+        TANREN_SMOKE_SERVICE: orchestrator
     environment:
       # RLS R3b (enforcement flip). DATABASE_URL is now the RUNTIME connection as
       # the restricted `tanren_app` role (NOBYPASSRLS, migration 0029): every
@@ -114,14 +119,14 @@ services:
     ports:
       # Host port is remappable (default 3100) via TANREN_ORCHESTRATOR_HOST_PORT
       # or the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 3100.
-      - "${TANREN_ORCHESTRATOR_HOST_PORT:-3100}:3100"
+      - "127.0.0.1:${TANREN_ORCHESTRATOR_HOST_PORT-3100}:3100"
       # Plane-split P2: publish the internal mTLS claim listener so the
       # cross-process smoke can act as a data-plane client against it from the
       # host. In a real deployment this stays on the private control↔data network
       # (not host-published); it is exposed here only for the smoke.
       # Host port is remappable (default 3110) via TANREN_INTERNAL_MTLS_HOST_PORT
       # or the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 3110.
-      - "${TANREN_INTERNAL_MTLS_HOST_PORT:-3110}:3110"
+      - "127.0.0.1:${TANREN_INTERNAL_MTLS_HOST_PORT-3110}:3110"
     healthcheck:
       test:
         - CMD
@@ -159,8 +164,13 @@ services:
     # DB surface, P3 de-privileges to per-run creds). See
     # ROADMAP.md.
     build:
-      context: .
+      context: ${TANREN_BUILD_CONTEXT:-.}
       dockerfile: services/orchestrator/Dockerfile
+      args:
+        TANREN_SOURCE_REVISION: ${TANREN_SOURCE_REVISION:-unbound}
+        TANREN_SOURCE_TREE: ${TANREN_SOURCE_TREE:-unbound}
+        TANREN_SMOKE_BUILD_ID: ${TANREN_SMOKE_BUILD_ID:-unbound}
+        TANREN_SMOKE_SERVICE: worker
     command: ["pnpm", "--filter", "@tanren/orchestrator", "start:worker"]
     environment:
       # Plane-split P3b (the de-privilege CUTOVER): the data plane's runtime pool
@@ -259,8 +269,13 @@ services:
 
   allocator:
     build:
-      context: .
+      context: ${TANREN_BUILD_CONTEXT:-.}
       dockerfile: services/allocator/Dockerfile
+      args:
+        TANREN_SOURCE_REVISION: ${TANREN_SOURCE_REVISION:-unbound}
+        TANREN_SOURCE_TREE: ${TANREN_SOURCE_TREE:-unbound}
+        TANREN_SMOKE_BUILD_ID: ${TANREN_SMOKE_BUILD_ID:-unbound}
+        TANREN_SMOKE_SERVICE: allocator
     environment:
       # RLS R3b: the allocator is partly a cross-org SYSTEM service (it reaps
       # runners across all tenants). Migrations run as owner
@@ -293,15 +308,20 @@ services:
     ports:
       # Host port is remappable (default 3200) via TANREN_ALLOCATOR_HOST_PORT or
       # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container 3200.
-      - "${TANREN_ALLOCATOR_HOST_PORT:-3200}:3200"
+      - "127.0.0.1:${TANREN_ALLOCATOR_HOST_PORT-3200}:3200"
     depends_on:
       postgres:
         condition: service_healthy
 
   dashboard:
     build:
-      context: .
+      context: ${TANREN_BUILD_CONTEXT:-.}
       dockerfile: services/dashboard/Dockerfile
+      args:
+        TANREN_SOURCE_REVISION: ${TANREN_SOURCE_REVISION:-unbound}
+        TANREN_SOURCE_TREE: ${TANREN_SOURCE_TREE:-unbound}
+        TANREN_SMOKE_BUILD_ID: ${TANREN_SMOKE_BUILD_ID:-unbound}
+        TANREN_SMOKE_SERVICE: dashboard
     environment:
       DATABASE_URL: postgres://tanren:tanren@postgres:5432/tanren
       ORCHESTRATOR_URL: http://orchestrator:3100
@@ -319,7 +339,7 @@ services:
       TANREN_DEV_LOGIN: ${TANREN_DEV_LOGIN:-}
     ports:
       # Host port is remappable (default 3000) when :3000 is taken; in-container stays 3000.
-      - "${DASHBOARD_HOST_PORT:-3000}:3000"
+      - "127.0.0.1:${DASHBOARD_HOST_PORT-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -332,8 +352,13 @@ services:
     # this service entirely; the allocator sidecar creates ephemeral runners
     # on demand. See docs/operator-guide/runners.md.
     build:
-      context: .
+      context: ${TANREN_BUILD_CONTEXT:-.}
       dockerfile: runner/Dockerfile
+      args:
+        TANREN_SOURCE_REVISION: ${TANREN_SOURCE_REVISION:-unbound}
+        TANREN_SOURCE_TREE: ${TANREN_SOURCE_TREE:-unbound}
+        TANREN_SMOKE_BUILD_ID: ${TANREN_SMOKE_BUILD_ID:-unbound}
+        TANREN_SMOKE_SERVICE: runner
     cap_add:
       - SYS_ADMIN
     environment:
@@ -341,7 +366,7 @@ services:
     ports:
       # Host port is remappable (default 2222) via TANREN_RUNNER_SSH_HOST_PORT or
       # the bulk-shift TANREN_PORT_OFFSET (see `just up-dev`). In-container sshd 22.
-      - "${TANREN_RUNNER_SSH_HOST_PORT:-2222}:22"
+      - "127.0.0.1:${TANREN_RUNNER_SSH_HOST_PORT-2222}:22"
     security_opt:
       - apparmor=unconfined
       - seccomp=unconfined
@@ -357,7 +382,7 @@ services:
     ports:
       # Default host port shifted off 8080 (common conflict — Tomcat, qBittorrent,
       # gatus, dozzle, hokora). Override with TANREN_NTFY_HOST_PORT when needed.
-      - "${TANREN_NTFY_HOST_PORT:-18080}:80"
+      - "127.0.0.1:${TANREN_NTFY_HOST_PORT-18080}:80"
 
   # Local OCI registry (CNCF distribution / registry:2) — the self-hosted image +
   # build-cache backend the golden-image pipeline pushes to and the later phases
@@ -376,7 +401,7 @@ services:
       # digests (env-management.md §3 "continuous refresh + trim").
       REGISTRY_STORAGE_DELETE_ENABLED: "true"
     ports:
-      - "${TANREN_REGISTRY_HOST_PORT:-5000}:5000"
+      - "127.0.0.1:${TANREN_REGISTRY_HOST_PORT-5000}:5000"
     healthcheck:
       # registry:2 has no shell/curl; probe the v2 API with its bundled wget.
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:5000/v2/"]

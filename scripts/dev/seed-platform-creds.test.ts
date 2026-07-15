@@ -15,6 +15,18 @@ import {
   seedPlatformCredentials,
 } from "./seed-platform-creds.js";
 
+async function inIsolatedCwd<T>(operation: () => Promise<T>): Promise<T> {
+  const original = process.cwd();
+  const isolated = mkdtempSync(join(tmpdir(), "seed-creds-no-source-"));
+  try {
+    process.chdir(isolated);
+    return await operation();
+  } finally {
+    process.chdir(original);
+    rmSync(isolated, { recursive: true, force: true });
+  }
+}
+
 describe("seedPlatformCredentials", () => {
   it("writes the managed-router key to the platform ref from the env var", async () => {
     const store = new InMemorySecretStore();
@@ -23,6 +35,20 @@ describe("seedPlatformCredentials", () => {
     expect(written).toStrictEqual([DEFAULT_MANAGED_CREDENTIAL_REF]);
     const stored = await store.get(DEFAULT_MANAGED_CREDENTIAL_REF);
     expect(stored?.value).toBe("sk-or-test-123");
+  });
+
+  it("does not attempt any env-file read when the nonce credential is injected", () => {
+    const reads: string[] = [];
+    const resolved = resolveSeedSecrets(
+      { [MANAGED_ROUTER_KEY_ENV]: "smoke-sentinel-nonce" },
+      SEED_SECRET_ALLOWLIST,
+      (path) => {
+        reads.push(path);
+        throw new Error("file lookup must be unreachable");
+      },
+    );
+    expect(resolved).toEqual({ [MANAGED_ROUTER_KEY_ENV]: "smoke-sentinel-nonce" });
+    expect(reads).toEqual([]);
   });
 
   it("is platform-scoped — never writes a tenant-namespaced credential ref", async () => {
@@ -51,16 +77,37 @@ describe("seedPlatformCredentials", () => {
     const store = new InMemorySecretStore();
     // No local fallback file on disk in the test cwd → parseAllowlistedEnvFile
     // returns {} for the fallback; no exported env; no TANREN_SECRET_ENV_FILE.
-    await expect(seedPlatformCredentials(store, {})).rejects.toThrow(MissingSeedSecretError);
+    await inIsolatedCwd(async () => {
+      await expect(seedPlatformCredentials(store, {})).rejects.toThrow(MissingSeedSecretError);
+    });
   });
 
   it("FAILS LOUD when the key env var is blank/whitespace, and writes nothing", async () => {
     const store = new InMemorySecretStore();
-    await expect(seedPlatformCredentials(store, { [MANAGED_ROUTER_KEY_ENV]: "   " })).rejects.toThrow(
-      MissingSeedSecretError,
-    );
+    await inIsolatedCwd(async () => {
+      await expect(seedPlatformCredentials(store, { [MANAGED_ROUTER_KEY_ENV]: "   " })).rejects.toThrow(
+        MissingSeedSecretError,
+      );
+    });
     // Fail-before-write: a blank value must not leave a half-seeded platform ref.
     expect(await store.list("credential/")).toStrictEqual([]);
+  });
+
+  it("keeps explicit no-source resolution isolated from a decoy local fallback", async () => {
+    const decoy = mkdtempSync(join(tmpdir(), "seed-creds-decoy-"));
+    writeFileSync(join(decoy, LOCAL_FALLBACK_ENV_FILE), `${MANAGED_ROUTER_KEY_ENV}=must-not-be-consumed\n`);
+    const original = process.cwd();
+    try {
+      process.chdir(decoy);
+      const store = new InMemorySecretStore();
+      await inIsolatedCwd(async () => {
+        await expect(seedPlatformCredentials(store, {})).rejects.toThrow(MissingSeedSecretError);
+      });
+      expect(await store.list("credential/")).toStrictEqual([]);
+    } finally {
+      process.chdir(original);
+      rmSync(decoy, { recursive: true, force: true });
+    }
   });
 
   it("trims surrounding whitespace from the seeded key", async () => {

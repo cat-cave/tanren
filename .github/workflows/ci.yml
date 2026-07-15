@@ -18,9 +18,9 @@ jobs:
       TURBO_TELEMETRY_DISABLED: "1"
       # Secrets mode (just secrets-link): CI has no canonical secrets dir and
       # doesn't need real apex credentials — declare the dev-defaults intent
-      # explicitly so `just up-dev` (called via `just smoke`) symlinks .env to
-      # .env.example. The default `canonical` mode would (correctly) fail loud
-      # on the missing $HOME/.config/tanren/secrets/.env.
+      # explicitly for non-smoke dev recipes. The exact-stack coordinator uses
+      # a nonce-scoped in-memory sentinel and an explicit generated Compose env;
+      # it never links or reads operator secret files.
       TANREN_SECRETS_MODE: dev-defaults
     steps:
       - uses: actions/checkout@v6
@@ -69,5 +69,3 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: just ci
       - run: just smoke
-      - if: always()
-        run: just compose-down

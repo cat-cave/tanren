@@ -26,8 +26,16 @@ function mergeAuthHeaders(init: RequestInit | undefined, auth: Record<string, st
 
 export async function request(path: string, init?: RequestInit): Promise<unknown> {
   const auth = await authHeaders();
-  const finalInit = mergeAuthHeaders(init, auth);
-  const response = await fetch(`${orchestratorUrl}${path}`, finalInit);
+  const target = new URL(path, `${orchestratorUrl.replace(/\/$/u, "")}/`);
+  const finalInit = mergeAuthHeaders({ ...init, redirect: "error" }, auth);
+  const response = await fetch(target, finalInit);
+  if (response.url === "") throw new Error(`${init?.method ?? "GET"} ${path} returned no final URL attestation`);
+  const finalUrl = new URL(response.url);
+  if (finalUrl.origin !== target.origin || finalUrl.href !== target.href) {
+    throw new Error(
+      `${init?.method ?? "GET"} ${path} escaped orchestrator origin: requested ${target.href}, final ${finalUrl.href}`,
+    );
+  }
   if (!response.ok) {
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status} ${await response.text()}`);
   }

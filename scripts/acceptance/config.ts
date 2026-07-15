@@ -45,8 +45,6 @@ interface StackConfig {
   ssh_key_path: string;
   /** SHA256:... fingerprint; auto-discovered from ssh-keyscan if unset. */
   ssh_host_fingerprint?: string;
-  timeout_ms: number;
-  max_ci_polls: number;
   ci_poll_delay_ms: number;
 }
 
@@ -67,8 +65,6 @@ const DEV_COMPOSE_DEFAULTS: StackConfig = {
   ssh_port: 2222,
   ssh_user: "tanren",
   ssh_key_path: resolve(RUNTIME_DIR, "tanren_runner_key"),
-  timeout_ms: 300_000,
-  max_ci_polls: 18,
   ci_poll_delay_ms: 10_000,
 };
 
@@ -181,8 +177,6 @@ function loadStackConfig(): StackConfig {
       process.env.TANREN_SSH_HOST_FINGERPRINT !== undefined && process.env.TANREN_SSH_HOST_FINGERPRINT !== ""
         ? process.env.TANREN_SSH_HOST_FINGERPRINT
         : undefined,
-    timeout_ms: numberFromEnv("TANREN_ACCEPTANCE_TIMEOUT_MS", DEV_COMPOSE_DEFAULTS.timeout_ms),
-    max_ci_polls: numberFromEnv("TANREN_ACCEPTANCE_MAX_CI_POLLS", DEV_COMPOSE_DEFAULTS.max_ci_polls),
     ci_poll_delay_ms: numberFromEnv("TANREN_ACCEPTANCE_CI_POLL_DELAY_MS", DEV_COMPOSE_DEFAULTS.ci_poll_delay_ms),
   };
 }

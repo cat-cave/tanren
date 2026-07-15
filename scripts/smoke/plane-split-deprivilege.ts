@@ -10,9 +10,13 @@
 
 import { createDbPool } from "../../db/src/index.js";
 
-// The de-privileged role the `worker` container connects as after the cutover.
-const DATAPLANE_URL =
-  process.env["TANREN_DATAPLANE_DATABASE_URL"] ?? "postgres://tanren_dataplane:tanren_dataplane@localhost:5432/tanren";
+function requiredDataPlaneUrl(): string {
+  const value = process.env["TANREN_DATAPLANE_DATABASE_URL"]?.trim();
+  if (value === undefined || value === "") {
+    throw new Error("TANREN_DATAPLANE_DATABASE_URL is required for the exact-stack smoke");
+  }
+  return value;
+}
 
 /** True when the smoke should run the live de-privilege negative proof. */
 export function proveDeprivilegeEnabled(): boolean {
@@ -32,7 +36,7 @@ export interface DeprivilegeProbeRun {
  * SUCCEEDS (grant still present) or fails for any other reason.
  */
 export async function proveDataPlaneWriteDenied(run: DeprivilegeProbeRun): Promise<void> {
-  const dataPlane = createDbPool(DATAPLANE_URL);
+  const dataPlane = createDbPool(requiredDataPlaneUrl());
   try {
     const client = await dataPlane.connect();
     try {

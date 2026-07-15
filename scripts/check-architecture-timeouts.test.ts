@@ -356,6 +356,36 @@ describe("no-arbitrary-timeouts (timeout-class eradication lint)", () => {
   });
 });
 
+describe("no-arbitrary-timeouts scans smoke harness at root-relative paths", () => {
+  it("flags violations under root-relative scripts/smoke/ (not only /scripts/smoke/)", () => {
+    const text = "const signal = AbortSignal.timeout(5000);\n";
+    const rootRelative = checkNoArbitraryTimeouts([{ file: "scripts/smoke/run-stack.ts", text }]);
+    const absoluteStyle = checkNoArbitraryTimeouts([{ file: "/repo/scripts/smoke/run-stack.ts", text }]);
+    const testsExcluded = checkNoArbitraryTimeouts([{ file: "scripts/smoke/run-stack.test.ts", text }]);
+    expect(rootRelative.map((item) => item.rule)).toEqual(["no-arbitrary-timeouts"]);
+    expect(absoluteStyle.map((item) => item.rule)).toEqual(["no-arbitrary-timeouts"]);
+    expect(testsExcluded).toEqual([]);
+  });
+
+  it("flags fixed poll-count stall identifiers in root-relative smoke sources", () => {
+    const text = "const MAX_CLAIM_CYCLES = 3;\nfor (let i = 0; i < MAX_CLAIM_CYCLES; i++) {}\n";
+    const flagged = checkNoArbitraryTimeouts([{ file: "scripts/smoke/stack-worker.ts", text }]);
+    expect(flagged.some((item) => item.rule === "no-arbitrary-timeouts")).toBe(true);
+  });
+
+  it("flags literal probe caps and root-relative acceptance harnesses", () => {
+    const literal = "for (let probe = 0; probe < 40; probe += 1) {}\n";
+    expect(
+      checkNoArbitraryTimeouts([{ file: "scripts/smoke/stack-process.ts", text: literal }]).map((item) => item.rule),
+    ).toEqual(["no-arbitrary-timeouts"]);
+    expect(
+      checkNoArbitraryTimeouts([{ file: "scripts/acceptance/easy.ts", text: "AbortSignal.timeout(5)" }]).map(
+        (item) => item.rule,
+      ),
+    ).toEqual(["no-arbitrary-timeouts"]);
+  });
+});
+
 // ENFORCEMENT wiring (Phase-1 SEAL): the lint is no longer report-only — it is part of
 // `runArchitectureChecks` (the exit-1 aggregator), so a synthetic timeout-class violation now
 // surfaces as a diagnostic AND makes the CLI exit NON-ZERO (it used to print + exit 0).

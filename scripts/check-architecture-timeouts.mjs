@@ -101,6 +101,11 @@ const loopCapPatterns = [
   // both SCREAMING_CASE and camelCase RHS bounds, and its captured group is the whole bound
   // identifier so the allowlist / dedup / span-suppression all work uniformly.
   /\bfor\s*\([^)]*<\s*([A-Za-z_$][A-Za-z0-9_$]*(?:pages|rounds|turns|cycles|passes|reworks)[A-Za-z0-9_$]*)\b[^)]*\)/giu,
+  // Literal caps are the same give-up budget without a named constant. Restrict
+  // the counter taxonomy to attempt/probe/poll/retry-style loops so structural
+  // fixed-size transforms are not misclassified.
+  /\bfor\s*\([^;]*\b(?:attempt|probe|poll|retry|retries|try|tries|stall|cycle)[A-Za-z0-9_$]*\b[^;]*;[^;]*<\s*(\d+)\b[^;]*;/giu,
+  /\bwhile\s*\([^)]*\b(?:attempt|probe|poll|retry|retries|try|tries|stall|cycle)[A-Za-z0-9_$]*\b\s*<\s*(\d+)\b[^)]*\)/giu,
 ];
 // Give-up identifiers used to terminally bound a loop (the /max.*(…)/i family). The CAPTURED
 // group is the WHOLE identifier (so the allowlist + dedup see e.g. `maxRetriesPerTransient`,
@@ -222,10 +227,22 @@ function isProductionSource(file) {
   // `just smoke` IS a required handoff gate so its timing primitives are doctrine
   // territory, not test-only fixture territory). Tests under either tree are still
   // excluded.
-  const isUnderSrc = file.includes("/src/");
-  const isHarness = file.includes("/scripts/smoke/") || file.includes("/scripts/acceptance/");
-  if (!isUnderSrc && !isHarness) return false;
-  return !file.includes("/tests/") && !/\.test\.[tj]sx?$/u.test(file);
+  //
+  // Path matching must accept BOTH root-relative paths from the architecture walker
+  // (`scripts/smoke/run-stack.ts`) AND absolute / nested paths (`/repo/scripts/smoke/...`).
+  // The prior `includes("/scripts/smoke/")` form silently skipped root-relative smoke
+  // harness files because they lack a leading slash before `scripts`.
+  const normalized = file.replaceAll("\\", "/");
+  const isUnderSrc = normalized.includes("/src/") || normalized.startsWith("src/");
+  // Harnesses: root-relative and absolute/nested paths use identical policy.
+  const isSmokeHarness =
+    normalized === "scripts/smoke" || normalized.startsWith("scripts/smoke/") || normalized.includes("/scripts/smoke/");
+  const isAcceptanceHarness =
+    normalized === "scripts/acceptance" ||
+    normalized.startsWith("scripts/acceptance/") ||
+    normalized.includes("/scripts/acceptance/");
+  if (!isUnderSrc && !isSmokeHarness && !isAcceptanceHarness) return false;
+  return !normalized.includes("/tests/") && !/\.test\.[tj]sx?$/u.test(normalized);
 }
 
 // Strip `//` line comments and `*`-prefixed block-comment bodies so a taxonomy word in

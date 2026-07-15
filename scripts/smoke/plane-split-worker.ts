@@ -1,69 +1,51 @@
-// Cross-process plane-split smoke. Proves the run-executor worker is a
-// STANDALONE deployable that claims over the mTLS CONTROL-PLANE endpoint: a run
-// enqueued against the shared Postgres (same `job_queue` insert as the
-// control-plane API) is CLAIMED + EXECUTED by the separate `worker` compose
-// container — across the API↔worker process boundary — and finalized under the
-// RLS-enforced `tanren_app` runtime role.
-//
-// Direct claim-channel proof: the smoke hits the live orchestrator's
-// `/internal/claim-job` (a) with the worker's client cert → claims + returns
-// org_id, (b) without a cert → TLS handshake rejected. The worker is itself
-// configured to claim through this endpoint (TANREN_CLAIM_ENDPOINT_URL), so the
-// cross-process boundary below also exercises that mTLS path.
-//
-// This script runs NO worker in-process — it only seeds + enqueues, then
-// observes the live DB until the OTHER process claims + finalizes the job.
-//
-// Credential-free run: no Codex/GitHub creds, so the worker's real
-// claim→execute loop throws on credential resolve + fails the job. The durable
-// cross-process signal is the `job_queue` row — only the worker process could
-// have written its terminal state (`failed`, org stamped, `failure_kind` set).
-// The run row also finalizes to terminal `halted`: the worker's early-failure
-// finalize org-scopes its UPDATE from the CLAIMED org (carried on the queue
-// row, known at claim-time), so RLS admits the write even though credential
-// threw before the run's context loaded. Pre-fix this finalize ran unscoped
-// and RLS denied it, leaving the run stuck `queued`. We confirm the data
-// plane is RLS-gated: run row readable under run's org scope on `tanren_app`,
-// DENIED under empty scope (deny-by-default).
-//
-// Direct WRITE-endpoint proof `proveMtlsWriteEndpoints`: (a) without cert →
-// TLS reject on a write endpoint; (b) with worker cert → finalize + event
-// append land server-side under RLS, retry no-op (exactly-once). When the
-// worker is run with TANREN_DATA_PLANE_REMOTE_WRITES=1, the cross-process run
-// below also finalizes via these endpoints. See ROADMAP.md.
+// Exact-stack plane-split proof: seed through the owner connection, require the
+// separate de-privileged worker to claim over mTLS and finalize remotely, then
+// verify the durable result and deny-by-default RLS behavior through tanren_app.
 
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { createDbPool } from "../../db/src/index.js";
 import { proveDataPlaneWriteDenied, proveDeprivilegeEnabled } from "./plane-split-deprivilege.js";
+import { runScopedOrgRead } from "./plane-split-tx.js";
+import { progressCycleReached } from "./stack-progress.js";
+import { ProcessGroupRegistry } from "./stack-runtime.js";
+import { inspectWorkerContainer, WorkerClaimMonitor } from "./stack-worker.js";
 
-// The dev mTLS material `just gen-mtls-certs` writes to $TANREN_RUNTIME_DIR/mtls — a
-// PERSISTENT host dir (default ~/.config/tanren/runtime/mtls), NOT /tmp which is cleaned mid-run. TANREN_MTLS_DIR overrides.
-const RUNTIME_DIR = process.env["TANREN_RUNTIME_DIR"] ?? `${process.env["HOME"] ?? ""}/.config/tanren/runtime`;
-const MTLS_DIR = process.env["TANREN_MTLS_DIR"] ?? `${RUNTIME_DIR}/mtls`;
-// The orchestrator's internal mTLS listener, reachable on the host (compose maps
-// no host port for :3110, so the smoke talks to it via the published API host —
-// override with TANREN_CLAIM_ENDPOINT_HOST when the listener is host-exposed).
-const CLAIM_ENDPOINT = process.env["TANREN_CLAIM_ENDPOINT_SMOKE_URL"] ?? "https://localhost:3110";
+const workerAbort = new AbortController();
+const workerGroups = new ProcessGroupRegistry();
+const abortWorker = (signal: string) => workerAbort.abort(new Error(`plane-split worker interrupted by ${signal}`));
+const onSigInt = () => abortWorker("SIGINT");
+const onSigTerm = () => abortWorker("SIGTERM");
+process.on("SIGINT", onSigInt);
+process.on("SIGTERM", onSigTerm);
 
-const OWNER_URL = process.env["DATABASE_URL"] ?? "postgres://tanren:tanren@localhost:5432/tanren";
-// The restricted runtime role the worker container actually connects as — we
-// read the worker's results through it to prove the data lives under enforced
-// RLS (the run's org scope admits its own rows).
-const APP_URL = process.env["TANREN_APP_DATABASE_URL"] ?? "postgres://tanren_app:tanren_app@localhost:5432/tanren";
-const POLL_MS = 2_000;
+const MTLS_DIR = requiredEnv("TANREN_MTLS_DIR");
+const CLAIM_ENDPOINT = requiredEnv("TANREN_CLAIM_ENDPOINT_SMOKE_URL");
+
+const OWNER_URL = requiredEnv("DATABASE_URL");
+const APP_URL = requiredEnv("TANREN_APP_DATABASE_URL");
+const PROOF_PATH = requiredEnv("TANREN_SMOKE_PROOF_PATH");
+const WORKER_CONTAINER_ID = requiredEnv("TANREN_SMOKE_WORKER_CONTAINER_ID");
+const RUNTIME_EXECUTABLE = requiredEnv("TANREN_SMOKE_RUNTIME_EXECUTABLE");
+/** Between-probe spacing (cadence), not a deadline or poll budget. */
+const POLL_INTERVAL_MS = 2_000;
 
 const orgId = `org_planesplit_${randomUUID().slice(0, 8)}`;
 const projectId = `project_${randomUUID()}`;
 const specId = `spec_${randomUUID()}`;
 const runId = `run_${randomUUID()}`;
 const plannerTaskId = `task_${randomUUID()}`;
+const canaryRunId = `run_${randomUUID()}`;
+const canaryTaskId = `task_${randomUUID()}`;
 
-async function seedQueuedRun(): Promise<void> {
-  // Seed as the OWNER (bypasses RLS as table owner) — this stands in for the
-  // control-plane API's enqueue, using the SAME job_queue insert shape. The
-  // worker container will claim it cross-process.
+function requiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+  if (value === undefined || value === "") throw new Error(`${name} is required for the exact-stack smoke`);
+  return value;
+}
+
+async function seedQueuedRun(): Promise<{ queueId: number; enqueuedAtMs: number }> {
   const owner = createDbPool(OWNER_URL);
   try {
     await owner.query(
@@ -92,13 +74,31 @@ async function seedQueuedRun(): Promise<void> {
        VALUES ($1, $2, $3, 'plan', 'Plan spec implementation', 'queued', 'answerer', 'fake', 'gpt-5-codex')`,
       [plannerTaskId, runId, orgId],
     );
-    // The same job_queue insert createQueuedRunFromSpec does — stamps org_id so
-    // the worker hydrates the run under runWithOrgScope(jobOrgId).
+    const queued = await owner.query<{ id: number; enqueued_at: Date }>(
+      `INSERT INTO job_queue (run_id, task_id, task_kind, payload, org_id)
+       VALUES ($1, $2, 'plan', $3::jsonb, $4)
+       RETURNING id, enqueued_at`,
+      [runId, plannerTaskId, JSON.stringify({ specId, projectId }), orgId],
+    );
+    await owner.query(
+      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+       VALUES ($1, $2, $3, $4, 'cli', 'tanren/planesplit-canary', 'queued')`,
+      [canaryRunId, specId, projectId, orgId],
+    );
+    await owner.query(
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+       VALUES ($1, $2, $3, 'plan', 'Plan (claim watermark)', 'queued', 'answerer', 'fake', 'gpt-5-codex')`,
+      [canaryTaskId, canaryRunId, orgId],
+    );
     await owner.query(
       `INSERT INTO job_queue (run_id, task_id, task_kind, payload, org_id)
        VALUES ($1, $2, 'plan', $3::jsonb, $4)`,
-      [runId, plannerTaskId, JSON.stringify({ specId, projectId }), orgId],
+      [canaryRunId, canaryTaskId, JSON.stringify({ specId, projectId }), orgId],
     );
+    await owner.query("SELECT pg_notify('tanren_job_queue', '')");
+    const target = queued.rows[0];
+    if (target === undefined) throw new Error("seeded job did not return its durable queue identity");
+    return { queueId: target.id, enqueuedAtMs: target.enqueued_at.getTime() };
   } finally {
     await owner.end();
   }
@@ -109,51 +109,45 @@ interface JobObservation {
   attempts: number;
   failureKind: string | null;
   jobOrgId: string | null;
-  // PgJobQueue.heartbeat ticks heartbeat_at each cycle while claim is held —
-  // pair with status-identity below for a true sign-of-life stall check.
   heartbeatAtMs: number | null;
+  databaseNowMs: number;
 }
 
-// The cross-process signal: the job_queue row (OUTSIDE RLS, read on the owner
-// connection). A separate process claiming + finishing the job moves it out of
-// `queued` and stamps a terminal state.
-async function observeJob(owner: ReturnType<typeof createDbPool>): Promise<JobObservation> {
+async function observeJob(owner: ReturnType<typeof createDbPool>, targetQueueId: number): Promise<JobObservation> {
   const row = await owner.query<{
     status: string;
     attempts: number;
     failure_kind: string | null;
     org_id: string | null;
     heartbeat_at: Date | null;
-  }>("SELECT status, attempts, failure_kind, org_id, heartbeat_at FROM job_queue WHERE task_id = $1", [plannerTaskId]);
+    database_now: Date;
+  }>(
+    `SELECT status, attempts, failure_kind, org_id, heartbeat_at,
+            clock_timestamp() AS database_now
+       FROM job_queue WHERE id = $1 AND task_id = $2`,
+    [targetQueueId, plannerTaskId],
+  );
   const job = row.rows[0];
+  if (job === undefined) throw new Error(`seeded queue row ${targetQueueId} disappeared`);
   return {
-    status: job?.status,
-    attempts: job?.attempts ?? 0,
-    failureKind: job?.failure_kind ?? null,
-    jobOrgId: job?.org_id ?? null,
-    heartbeatAtMs: job?.heartbeat_at instanceof Date ? job.heartbeat_at.getTime() : null,
+    status: job.status,
+    attempts: job.attempts,
+    failureKind: job.failure_kind,
+    jobOrgId: job.org_id,
+    heartbeatAtMs: job.heartbeat_at instanceof Date ? job.heartbeat_at.getTime() : null,
+    databaseNowMs: job.database_now.getTime(),
   };
 }
 
-// Prove the data plane is RLS-gated AND that the worker finalized the run: as the
-// `tanren_app` runtime role (the role the worker container connects as), read the
-// run under the run's org scope (admitted) and under an EMPTY scope (denied,
-// deny-by-default). Returns [scopedRows, emptyScopeRows, scopedStatus] where
-// scopedStatus is the run's terminal status seen under its own org scope.
 async function rlsVisibility(): Promise<[number, number, string | undefined]> {
   const app = createDbPool(APP_URL);
   try {
     const read = async (org: string | null): Promise<{ rows: number; status: string | undefined }> => {
       const client = await app.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query("SELECT set_config('app.current_org_id', $1, true)", [org ?? ""]);
+      return runScopedOrgRead(client, org, async () => {
         const result = await client.query<{ status: string }>("SELECT status FROM runs WHERE run_id = $1", [runId]);
-        await client.query("COMMIT");
         return { rows: result.rowCount ?? 0, status: result.rows[0]?.status };
-      } finally {
-        client.release();
-      }
+      });
     };
     const scoped = await read(orgId);
     const empty = await read(null);
@@ -163,11 +157,6 @@ async function rlsVisibility(): Promise<[number, number, string | undefined]> {
   }
 }
 
-// Seed a SECOND queued run whose job the smoke claims DIRECTLY
-// over the mTLS endpoint. It uses a DISTINCT task_kind (`demo`, an existing
-// allowed kind) so the worker container — which claims only `plan` — never
-// steals it; the smoke's mTLS claim is the only consumer, making the
-// direct-claim proof deterministic.
 const mtlsRunId = `run_${randomUUID()}`;
 const mtlsTaskId = `task_${randomUUID()}`;
 const MTLS_PROBE_KIND = "demo";
@@ -200,9 +189,6 @@ interface ClaimAttempt {
   body: string;
 }
 
-// POST an internal endpoint over mTLS. `withClientCert=false` presents NO client
-// cert, so the server's rejectUnauthorized tears down the handshake (authn
-// closed). Returns the HTTP status + body, or `tls_rejected` on a handshake error.
 function postOverMtls(path: string, payload: unknown, withClientCert: boolean): Promise<ClaimAttempt> {
   const ca = readFileSync(`${MTLS_DIR}/ca.crt`);
   const target = new URL(path, CLAIM_ENDPOINT);
@@ -247,9 +233,6 @@ function claimOverMtls(claimRunId: string, withClientCert: boolean): Promise<Cla
   return postOverMtls("/internal/claim-job", { taskKind: MTLS_PROBE_KIND, runId: claimRunId }, withClientCert);
 }
 
-// Prove the control-plane mTLS claim endpoint directly: (1) a NO-cert caller is
-// rejected at TLS, (2) the worker's client cert claims the seeded job + gets its
-// org_id back. The claim is the SAME atomic CAS, only over mTLS.
 async function proveMtlsClaimEndpoint(): Promise<void> {
   await seedMtlsClaimRun();
   process.stdout.write(`[plane-split-smoke] seeded mTLS-claim run ${mtlsRunId}; probing /internal/claim-job…\n`);
@@ -277,8 +260,6 @@ async function proveMtlsClaimEndpoint(): Promise<void> {
   );
 }
 
-// A run the smoke finalizes DIRECTLY over the mTLS write
-// endpoints (distinct run_id so it never races the worker container).
 const writeRunId = `run_${randomUUID()}`;
 
 async function seedWriteProbeRun(): Promise<void> {
@@ -294,9 +275,6 @@ async function seedWriteProbeRun(): Promise<void> {
   }
 }
 
-// Read the write-probe run's terminal status + the run.failed event count via the
-// OWNER connection (job_queue/owner reads bypass RLS), to confirm the endpoint's
-// server-side org-scoped write landed.
 async function readWriteProbeRun(): Promise<{ status: string | undefined; events: number }> {
   const owner = createDbPool(OWNER_URL);
   try {
@@ -311,11 +289,6 @@ async function readWriteProbeRun(): Promise<{ status: string | undefined; events
   }
 }
 
-// Prove the control-plane mTLS WRITE endpoints directly: (1) a NO-cert caller
-// is rejected at TLS on a write endpoint; (2) the worker's client cert finalizes a
-// seeded run + appends its run.failed event over mTLS, and the rows LAND under the
-// control plane's enforced-RLS org scope — server-side, so the data plane wrote
-// nothing directly. A retried finalize is a no-op (exactly-once).
 async function proveMtlsWriteEndpoints(): Promise<void> {
   await seedWriteProbeRun();
   process.stdout.write(`[plane-split-smoke] seeded write-probe run ${writeRunId}; probing /internal/finalize-run…\n`);
@@ -398,50 +371,61 @@ async function proveMtlsWriteEndpoints(): Promise<void> {
 
 // The worker has finished with the job once it leaves `queued`/`claimed`/`running`.
 const QUEUE_TERMINAL = new Set(["done", "failed", "cancelled", "dead_letter"]);
+const RUN_TERMINAL = new Set(["halted", "completed", "failed", "cancelled"]);
+
+function finalizationMatches(queueStatus: string, runStatus: string): boolean {
+  if (queueStatus === "done") return runStatus === "completed";
+  if (queueStatus === "cancelled") return runStatus === "cancelled";
+  return (
+    (queueStatus === "failed" || queueStatus === "dead_letter") && (runStatus === "halted" || runStatus === "failed")
+  );
+}
 
 async function main(): Promise<void> {
-  // Seed the org/project/spec + the worker's queued run FIRST (this creates the
-  // org/project/spec the mTLS-claim run below reuses), then enqueue.
-  await seedQueuedRun();
+  const target = await seedQueuedRun();
   process.stdout.write(
     `[plane-split-smoke] seeded queued run ${runId} (org ${orgId}); waiting for the worker container…\n`,
   );
 
-  // Prove the control-plane mTLS claim endpoint directly
-  // (authn-closed + a trusted claim that threads org_id) on its OWN seeded job,
-  // claimed by run_id so it never races the worker container's job above.
   await proveMtlsClaimEndpoint();
 
-  // Prove the control-plane mTLS WRITE endpoints directly
-  // (authn-closed + a trusted finalize/append that lands rows server-side under
-  // enforced RLS, exactly-once) on its OWN seeded run.
   await proveMtlsWriteEndpoints();
 
-  // The de-privilege CUTOVER: when proving the de-privilege, confirm a
-  // direct tenant write by the de-privileged data-plane role is denied by
-  // Postgres BEFORE waiting on the worker — a fast, deterministic negative proof.
   if (proveDeprivilegeEnabled()) {
     await proveDataPlaneWriteDenied({ orgId, runId, specId, projectId });
   }
 
   const owner = createDbPool(OWNER_URL);
-  // Halt when both (a) status held identical across STALL_WINDOW polls AND
-  // (b) heartbeat_at did not tick across that same window. Both signals flat
-  // = the worker is truly dead. Either signal advancing = alive, keep waiting.
-  const STALL_WINDOW = 20;
-  const statusHistory: string[] = [];
-  const heartbeatHistory: (number | null)[] = [];
+  // Progress model: target-specific durable claim/finalization signatures. Concurrent
+  // later queue IDs are never treated as progress for this target. Identical target
+  // repeated structural signatures are a non-progress cycle (worker wedged), not a time budget.
+  const claimMonitor = new WorkerClaimMonitor({ expectedWorkerContainerId: WORKER_CONTAINER_ID });
+  const postClaimSignatures: string[] = [];
   try {
     let claimed = false;
     for (;;) {
-      const job = await observeJob(owner);
-      if (!claimed && job.status !== undefined && job.status !== "queued") {
+      const job = await observeJob(owner, target.queueId);
+      const worker = await inspectWorkerContainer(RUNTIME_EXECUTABLE, WORKER_CONTAINER_ID, process.env, {
+        cwd: process.cwd(),
+        signal: workerAbort.signal,
+        onGroup: (pgid, state) => workerGroups.record(pgid, state),
+      });
+      const verdict = claimMonitor.observe({
+        targetQueueId: target.queueId,
+        targetStatus: job.status,
+        targetAttempts: job.attempts,
+        targetHeartbeatAtMs: job.heartbeatAtMs,
+        enqueuedAtMs: target.enqueuedAtMs,
+        databaseNowMs: job.databaseNowMs,
+        ...worker,
+      });
+      if ((verdict === "claimed" || verdict === "finalized") && !claimed) {
         claimed = true;
         process.stdout.write(
           `[plane-split-smoke] worker container CLAIMED the job (job_queue status: ${job.status})\n`,
         );
       }
-      if (job.status !== undefined && QUEUE_TERMINAL.has(job.status)) {
+      if (verdict === "finalized" || (job.status !== undefined && QUEUE_TERMINAL.has(job.status))) {
         if (job.jobOrgId !== orgId) {
           throw new Error(`job org mismatch: expected ${orgId}, got ${String(job.jobOrgId)}`);
         }
@@ -452,14 +436,18 @@ async function main(): Promise<void> {
         if (emptyScopeRows !== 0) {
           throw new Error("run visible under an EMPTY scope on tanren_app — RLS deny-by-default not enforced");
         }
-        // The worker's early-failure finalize must have moved the run OUT of
-        // `queued` (org-scoped from the claimed org). A run stuck `queued` is the
-        // exact bug fix/rls-early-failure-finalize-scope eliminates.
-        if (runStatus === "queued" || runStatus === undefined) {
-          throw new Error(
-            `run stuck in non-terminal state (status=${String(runStatus)}) — the worker's early-failure ` +
-              `finalize did not org-scope its UPDATE (RLS denied it). This is the stuck-queued regression.`,
-          );
+        if (runStatus === undefined || !RUN_TERMINAL.has(runStatus)) {
+          postClaimSignatures.push(`queue=${job.status}|run=${String(runStatus)}|attempts=${job.attempts}`);
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              // Poll cadence only; structural queue/run state controls convergence.
+              resolve();
+            }, POLL_INTERVAL_MS);
+          });
+          continue;
+        }
+        if (!finalizationMatches(job.status!, runStatus)) {
+          throw new Error(`queue/run finalization contradiction: queue=${job.status}, run=${runStatus}`);
         }
         process.stdout.write(
           `[plane-split-smoke] PROOF: the standalone worker container claimed + finished the job across the ` +
@@ -468,28 +456,24 @@ async function main(): Promise<void> {
             `state (status=${String(runStatus)}) and is org-scoped under the tanren_app role ` +
             `(scoped=${scopedRows} row, empty-scope=${emptyScopeRows} rows / deny-by-default)\n`,
         );
+        writeFileSync(
+          PROOF_PATH,
+          `${JSON.stringify({ runId, orgId, projectId, specId, jobStatus: job.status, runStatus, claimEndpoint: CLAIM_ENDPOINT }, null, 2)}\n`,
+          { mode: 0o600 },
+        );
         return;
       }
-      // Only meaningful AFTER claim — pre-claim, heartbeat_at is NULL and
-      // status is 'queued' (both frozen), so this would kill a slow-to-start
-      // worker (wall-clock in disguise). Wait unbounded for claim itself.
       if (claimed) {
-        statusHistory.push(job.status ?? "<undefined>");
-        if (statusHistory.length > STALL_WINDOW) statusHistory.shift();
-        heartbeatHistory.push(job.heartbeatAtMs);
-        if (heartbeatHistory.length > STALL_WINDOW) heartbeatHistory.shift();
-        if (statusHistory.length === STALL_WINDOW && new Set(statusHistory).size === 1) {
-          const heartbeatAdvanced = new Set(heartbeatHistory).size > 1;
-          if (!heartbeatAdvanced) {
-            throw new Error(
-              `STALL: post-claim job_queue status held identical at '${statusHistory[0]}' AND heartbeat_at did not advance ` +
-                `across ${STALL_WINDOW} polls (~${(STALL_WINDOW * POLL_MS) / 1000}s) for run ${runId} — worker dead, halt loud.`,
-            );
-          }
+        const signature = `${job.status ?? "missing"}|${job.attempts}|${String(job.heartbeatAtMs ?? "null")}`;
+        postClaimSignatures.push(signature);
+        if (progressCycleReached(postClaimSignatures)) {
+          throw new Error(
+            `STALL: post-claim target made no durable progress at signature ${signature} for run ${runId}`,
+          );
         }
       }
       await new Promise((resolve) => {
-        setTimeout(resolve, POLL_MS);
+        setTimeout(resolve, POLL_INTERVAL_MS);
       });
     }
   } finally {
@@ -497,4 +481,11 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+try {
+  await main();
+} finally {
+  process.off("SIGINT", onSigInt);
+  process.off("SIGTERM", onSigTerm);
+  await workerGroups.fenceAll();
+  workerGroups.assertEmpty();
+}

@@ -167,30 +167,33 @@ export function resolveSeedSecrets(
   readFile: (path: string, allow: readonly string[]) => Record<string, string> = parseAllowlistedEnvFile,
 ): Record<string, string> {
   const resolved: Record<string, string> = {};
-
-  // 2 + 3: gather file-sourced values (env-file wins over local fallback).
-  const local = readFile(LOCAL_FALLBACK_ENV_FILE, allowlist);
-  const envFilePath = typeof env[SECRET_ENV_FILE_ENV] === "string" ? env[SECRET_ENV_FILE_ENV]!.trim() : "";
-  const fromEnvFile: Record<string, string> = envFilePath === "" ? {} : readFile(envFilePath, allowlist);
-
+  const unresolved: string[] = [];
   for (const key of allowlist) {
-    // 1: exported env wins outright.
     const exported = env[key];
     if (typeof exported === "string" && exported.trim() !== "") {
       resolved[key] = exported.trim();
-      continue;
+    } else {
+      unresolved.push(key);
     }
-    // 2: env-file next.
-    const fileValue = fromEnvFile[key];
-    if (fileValue !== undefined && fileValue.trim() !== "") {
-      resolved[key] = fileValue.trim();
-      continue;
-    }
-    // 3: plaintext-local fallback.
-    const localValue = local[key];
-    if (localValue !== undefined && localValue.trim() !== "") {
-      resolved[key] = localValue.trim();
-    }
+  }
+
+  // File reads are lazy by precedence. An explicitly injected credential (the
+  // exact-stack nonce sentinel) must prevent even an attempted access to local
+  // validation material, not merely win after that material was read.
+  if (unresolved.length === 0) return resolved;
+  const envFilePath = typeof env[SECRET_ENV_FILE_ENV] === "string" ? env[SECRET_ENV_FILE_ENV]!.trim() : "";
+  const fromEnvFile = envFilePath === "" ? {} : readFile(envFilePath, unresolved);
+  const stillUnresolved: string[] = [];
+  for (const key of unresolved) {
+    const value = fromEnvFile[key];
+    if (value !== undefined && value.trim() !== "") resolved[key] = value.trim();
+    else stillUnresolved.push(key);
+  }
+  if (stillUnresolved.length === 0) return resolved;
+  const local = readFile(LOCAL_FALLBACK_ENV_FILE, stillUnresolved);
+  for (const key of stillUnresolved) {
+    const value = local[key];
+    if (value !== undefined && value.trim() !== "") resolved[key] = value.trim();
   }
   return resolved;
 }

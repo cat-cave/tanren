@@ -37,8 +37,6 @@ interface AcceptanceEnvShape {
   sshUser: string;
   sshHostFingerprint: string;
   baseBranch: string;
-  timeoutMs: number;
-  maxCiPolls: number;
   ciPollDelayMs: number;
   configSource: string;
 }
@@ -71,8 +69,6 @@ export async function loadAcceptanceEnv(): Promise<AcceptanceEnvShape> {
     sshUser: config.ssh_user,
     sshHostFingerprint: config.ssh_host_fingerprint,
     baseBranch: config.github_base_branch ?? "main",
-    timeoutMs: config.timeout_ms,
-    maxCiPolls: config.max_ci_polls,
     ciPollDelayMs: config.ci_poll_delay_ms,
     configSource: config.source,
   };

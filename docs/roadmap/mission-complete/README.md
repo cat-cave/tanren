@@ -159,6 +159,12 @@ audit-finding↔spec · one proof substrate → one `verify` CLI family. Detail 
 - **Adversarial cross-model verify per node.** A second agent (different model)
   verifies each built node against its `nodes/*.md` validation column + a negative
   control before it counts as done.
+- **Exact-stack merge proof.** `just smoke` must run from the clean committed tree,
+  build provenance-labelled images into a nonce-isolated runtime/Compose project,
+  discover and rebind runtime-owned host ports, and attest the exact containers,
+  semantic HTTP/CLI/SSH/mTLS/DB surfaces, and terminal run in one JSON receipt.
+  Redirects, default-stack decoys, stale public URLs, container replacement, and
+  failed cleanup are hard failures; failed or interrupted stacks are never retained.
 - **The runnable mechanism** is `build-workflow.mjs.txt`: default phase freezes+builds the
   spine (already done); relaunch it with `args: {phase: "consumers"}` to fan out the
   76 MVP consumer nodes off the now-merged spine (build → push PR → verify, sequential

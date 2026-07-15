@@ -401,6 +401,16 @@ RUN { \
 COPY runner/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+ARG TANREN_SOURCE_REVISION=unbound
+ARG TANREN_SOURCE_TREE=unbound
+ARG TANREN_SMOKE_BUILD_ID=unbound
+ARG TANREN_SMOKE_SERVICE=unbound
+LABEL org.opencontainers.image.revision="${TANREN_SOURCE_REVISION}" \
+  io.tanren.source-tree="${TANREN_SOURCE_TREE}" \
+  io.tanren.smoke.build-id="${TANREN_SMOKE_BUILD_ID}" \
+  io.tanren.smoke.service="${TANREN_SMOKE_SERVICE}"
+RUN printf '%s\n' "${TANREN_SOURCE_REVISION}" > /etc/tanren-source-revision
+
 WORKDIR /workspace
 EXPOSE 22
 
