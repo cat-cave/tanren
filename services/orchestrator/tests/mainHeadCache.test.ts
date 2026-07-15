@@ -1,7 +1,7 @@
 // apex-v35 VOLUME guard: the short-TTL single-flight default-branch head cache returns
 // cached within the TTL, single-flights concurrent misses, busts on a merge to main, and
 // never caches a throw — and `GitHubCodeHost.fetchRef` routes through it while the
-// `landAuthorizedRef` CAS read stays fresh.
+// `landAuthorizedIntegration` CAS read stays fresh.
 
 import { describe, expect, it } from "vitest";
 import { MainHeadCache, mainHeadCacheKey } from "../src/engine/providers/mainHeadCache.js";
@@ -103,12 +103,18 @@ describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
     // A land to main does its OWN fresh (uncached) CAS read, moves the head, and busts the
     // cache → the next fetchRef then goes to GitHub again. So the ref-read count climbs:
     //   1 (first fetchRef) + 1 (land's fresh CAS read) + 1 (post-bust fetchRef) = 3.
-    await host.landAuthorizedRef({ repo, intoMain: "main", expectedMainSha: "head1", authorizedSha: "new" });
+    await host.landAuthorizedIntegration({
+      repo,
+      intoMain: "main",
+      expectedMainSha: "head1",
+      authorizedSha: "new",
+      idempotencyKey: "intent-mhc",
+    });
     await host.fetchRef({ repo, remoteBranch: "main" });
     expect(http.paths.filter((p) => p.startsWith("/repos/o/r/git/ref/heads/")).length).toBe(3);
   });
 
-  it("the landAuthorizedRef CAS read is ALWAYS fresh (never served stale from the cache)", async () => {
+  it("the landAuthorizedIntegration CAS read is ALWAYS fresh (never served stale from the cache)", async () => {
     // The cache holds `head1`, but main has secretly advanced to `head2`. The CAS read must
     // see `head2` (fresh) and reject the land against the stale expected `head1` — proving
     // the cache never feeds the merge decision a stale base.
@@ -121,7 +127,13 @@ describe("GitHubCodeHost fetchRef caching (apex-v35)", () => {
     const host = new GitHubCodeHost(http, async () => ({ token: "t" }), cache);
 
     await expect(
-      host.landAuthorizedRef({ repo, intoMain: "main", expectedMainSha: "head1", authorizedSha: "x" }),
+      host.landAuthorizedIntegration({
+        repo,
+        intoMain: "main",
+        expectedMainSha: "head1",
+        authorizedSha: "x",
+        idempotencyKey: "intent-mhc",
+      }),
     ).rejects.toThrow(/stale compare-and-swap/u);
   });
 });

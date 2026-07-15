@@ -39,6 +39,7 @@ import type {
 } from "../../../contracts/conflictResolution.js";
 import type { OrgGithubAppInstallation } from "../../../config/orgConfig.js";
 import type { GithubAppTokenMinter } from "../../../providers/githubAppTokenMinter.js";
+import type { JjCloneCredential } from "../../../providers/jjWorkspaceVcsCore.js";
 import type { LiveJjWorkspace } from "../../../providers/liveJjWorkspace.js";
 import { quoteSshShellArg } from "../../../ssh/command.js";
 import { trackPublishedHeadCommands } from "../../../providers/jjPublishedHead.js";
@@ -83,6 +84,13 @@ export interface JjConflictApplierDeps {
   githubHttp: GitHubHttpClient;
   /** The shared installation-token minter (its cache lives here). */
   githubAppMinter?: GithubAppTokenMinter;
+  /**
+   * The credential the workspace's HTTPS `origin` remote was `jj git clone`d with — threaded
+   * into the published-head `jj git fetch` (`trackPublishedHeadCommands`) so that fetch
+   * authenticates the SAME private remote identically. `undefined` on the anonymous/public
+   * path (a bare fetch is correct there). Never surfaced in a log/event.
+   */
+  cloneCredential?: JjCloneCredential;
   facts: JjConflictApplierFacts;
   /**
    * An ALREADY-open workspace handle to gather over INSTEAD of cloning a fresh one
@@ -151,6 +159,10 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
     // FAIL-CLOSED: this setup runs through the throwing SSH helper — a fetch/track/assert/config
     // failure aborts the resolve (no `|| true`). The conformance substrate builds a
     // mutable local feature, so it never needs this; it is the live-published-head path.
+    // AUTH: the fetch authenticates the private `origin` remote with the SAME credential the
+    // workspace was cloned with (`this.deps.cloneCredential`) — else (public) a bare fetch. The
+    // token travels only through the command's stdin, never the logged command string.
+    const trackPrep = trackPublishedHeadCommands(facts.headBranch, this.deps.cloneCredential);
     await runWorkspaceSshCommand(this.deps.ssh, this.deps.target, {
       label: "jj conflict-resolve: track the published head + allow rewriting it",
       cwd: this.deps.workspacePath,
@@ -162,9 +174,10 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       }),
       command: [
         "set -eu",
-        ...trackPublishedHeadCommands(facts.headBranch),
+        ...trackPrep.commands,
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
+      ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
     const rebase = await core.rebaseOnto(workspace, facts.headBranch, facts.baseRevision);
     if (rebase.outcome === "clean" || rebase.conflict === undefined) {
@@ -333,6 +346,9 @@ export function buildJjConflictApplier(deps: BuildJjConflictApplierDeps): JjWork
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
     ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+    // Thread the clone credential so the published-head fetch authenticates the private
+    // `origin` remote like the clone did (absent ⇒ the anonymous/public bare-fetch path).
+    ...(deps.live.cloneCredential !== undefined && { cloneCredential: deps.live.cloneCredential }),
     facts: deps.facts,
     ...(deps.preOpenedWorkspace !== undefined && { preOpenedWorkspace: deps.preOpenedWorkspace }),
     release: deps.live.release,

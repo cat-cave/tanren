@@ -28,7 +28,18 @@
   "ignore": [
     "services/dashboard/src/design/index.ts",
     "services/dashboard/src/design/tokens.ts",
-    "services/dashboard/src/api/http.gen.ts"
+    "services/dashboard/src/api/http.gen.ts",
+    "services/orchestrator/src/engine/contracts/cas.ts",
+    "services/orchestrator/src/engine/contracts/behaviorRevision.ts",
+    "services/orchestrator/src/engine/contracts/authoringKernel.ts",
+    "services/orchestrator/src/engine/contracts/mergeAuthority.ts",
+    "services/orchestrator/src/engine/contracts/runtimeVerification.ts",
+    "services/orchestrator/src/engine/contracts/runtimeVerificationPlan.ts",
+    "services/orchestrator/src/engine/contracts/runtimeVerificationAdapters.ts",
+    "services/orchestrator/src/engine/contracts/deployAdapter.ts",
+    "services/orchestrator/src/engine/contracts/gateProof.ts",
+    "services/orchestrator/src/engine/notifications/eventVocabulary.ts",
+    "db/src/eventTypesSeed.ts"
   ],
   "ignoreDependencies": ["@playwright/test", "hono", "@commitlint/cli"],
   "ignoreBinaries": ["just", "playwright"],

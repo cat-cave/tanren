@@ -67,7 +67,7 @@ function deriveApexDag(): ApexDerivedSpec[] {
 
 // ---------------------------------------------------------------------------
 // STAGE 2 — walk + merge: each ready spec lands as a merged PR via the REAL
-// CodeHost CAS land (`landAuthorizedRef` advances `main`). Dependency order is
+// CodeHost CAS land (`landAuthorizedIntegration` advances `main`). Dependency order is
 // honored: a spec whose deps haven't landed waits. This proves merged PRs land +
 // the implemented file is on the base branch + DORA accrues, hermetically.
 // ---------------------------------------------------------------------------
@@ -95,11 +95,12 @@ async function walkAndMerge(host: InMemoryCodeHost, specs: readonly ApexDerivedS
       const authorizedSha = `sha-merged-${spec.specId}`;
       // The REAL CodeHost compare-and-swap land: it REJECTS if main moved underneath
       // (we feed the current head as expectedMainSha, so each land advances main).
-      const landed = await host.landAuthorizedRef({
+      const landed = await host.landAuthorizedIntegration({
         repo: APEX_REPO,
         intoMain: "main",
         authorizedSha,
         expectedMainSha: mainSha,
+        idempotencyKey: `intent-${spec.specId}`,
       });
       mainSha = landed.mainSha;
       landedSpecIds.add(spec.specId);
@@ -214,11 +215,12 @@ async function proveIssueLoop(host: InMemoryCodeHost, baseSha: string): Promise<
   const routedSpecId = "spec_issue_fix_7";
   // The routed fix spec merges through the SAME CodeHost CAS land that the
   // derived specs used — proving the issue loop re-enters the merge machinery.
-  await host.landAuthorizedRef({
+  await host.landAuthorizedIntegration({
     repo: APEX_REPO,
     intoMain: "main",
     authorizedSha: `sha-merged-${routedSpecId}`,
     expectedMainSha: baseSha,
+    idempotencyKey: `intent-${routedSpecId}`,
   });
   return {
     ingestedExternalId: mapped.item.externalId,

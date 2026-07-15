@@ -153,7 +153,7 @@ describe("conflict-resolved land re-enters the MergeAuthority (no parallel merge
     // dispatcher holds it as a recoverable conflict carrying the reconcile reason,
     // NEVER a silent merged/inconsistency. main DID advance (the external land fired).
     expect(result.outcome).toBe("conflict");
-    expect(result.message).toMatch(/merge_state_unknown|durable finalize/u);
+    expect(result.message).toMatch(/merge_state_unknown|durable receipt/u);
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
     expect(events.events).not.toContain("merge.completed");
   });

@@ -97,6 +97,10 @@ export async function openLiveBaseShiftWorkspace(input: {
     //  2. empty the immutable set so rebasing the published head is allowed in this
     //     short-lived workspace.
     // FAIL-CLOSED: a fetch/track/assert/config failure throws (the resolve aborts — no `|| true`).
+    // AUTH: the fetch authenticates the private `origin` remote with the SAME credential the
+    // workspace was cloned with (`live.cloneCredential`) — else (public) a bare fetch. The token
+    // travels only through the command's stdin, never the logged command string.
+    const trackPrep = trackPublishedHeadCommands(ctx.headBranch, live.cloneCredential);
     await runWorkspaceSshCommand(deps.ssh, live.target, {
       label: "base-shift rebase: track the published head + allow rewriting it",
       cwd: live.workspacePath,
@@ -108,9 +112,10 @@ export async function openLiveBaseShiftWorkspace(input: {
       }),
       command: [
         "set -eu",
-        ...trackPublishedHeadCommands(ctx.headBranch),
+        ...trackPrep.commands,
         `jj config set --repo ${quoteSshShellArg('revset-aliases."immutable_heads()"')} ${quoteSshShellArg("none()")}`,
       ].join(" && "),
+      ...(trackPrep.stdin !== undefined && { stdin: trackPrep.stdin }),
     });
     // §3.1 event-pollution side-fix: resolve the SHIFTED base's REAL commit sha (the
     // `integration.rebase` instrumentation must record an actual sha, not the

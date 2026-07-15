@@ -14,15 +14,23 @@
 // the provider bearer.
 
 import type {
+  ApplyPreviewInput,
+  ArtifactIdentity,
+  BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  PreviewRelease,
+  PromoteInput,
   ProvisionOrBindInput,
+  ReleaseTransition,
+  RollbackInput,
   UrlReachabilityProbe,
   VerifyPollPolicy,
 } from "../contracts/deployAdapter.js";
+import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { DeployProvisionerDeps, DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
@@ -64,6 +72,66 @@ export class DirectApiDeployAdapter implements DeployAdapter {
 
   async deploy(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<DeployResult> {
     return deployProvisionerFor(ref.provider, this.deps.provisioner).deploy(grant, ref.appId, source);
+  }
+
+  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(grant, ref, source);
+    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+  }
+
+  async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
+    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    const raw = await provisioner.resolveArtifactIdentity(grant, ref.appId, deploymentId);
+    return {
+      artifactDigest: parseDigest(raw.artifactDigest),
+      providerChecksum: raw.providerChecksum === null ? null : parseProviderChecksum(raw.providerChecksum),
+    };
+  }
+
+  async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
+    const deployed = await this.deploy(grant, ref, input.source);
+    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    const status = await provisioner.deploymentStatus(grant, ref.appId, deployed.deploymentId);
+    this.assertResolvedUrl(ref, deployed.deploymentId, status.url, "apply preview");
+    return {
+      deploymentId: deployed.deploymentId,
+      url: status.url,
+      environment: "preview",
+      artifactDigest: input.artifactDigest,
+      state: "preview",
+    };
+  }
+
+  async promote(grant: OrgGrant, ref: DeployRef, input: PromoteInput): Promise<ReleaseTransition> {
+    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    const promoted = await provisioner.promoteToProduction(grant, ref.appId, input.deploymentId);
+    this.assertResolvedUrl(ref, promoted.deploymentId, promoted.url, "promote");
+    return {
+      deploymentId: promoted.deploymentId,
+      url: promoted.url,
+      environment: "production",
+      artifactDigest: input.artifactDigest,
+      state: "live",
+    };
+  }
+
+  async rollback(grant: OrgGrant, ref: DeployRef, input: RollbackInput): Promise<ReleaseTransition> {
+    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    const restored = await provisioner.rollbackToDeployment(grant, ref.appId, input.targetReleaseInstanceId);
+    this.assertResolvedUrl(ref, restored.deploymentId, restored.url, "rollback");
+    return {
+      deploymentId: restored.deploymentId,
+      url: restored.url,
+      environment: "production",
+      artifactDigest: input.targetArtifactDigest,
+      state: "rolled_back",
+    };
+  }
+
+  async teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void> {
+    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
+    await provisioner.teardownDeployment(grant, ref.appId, previewId);
   }
 
   async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {
@@ -152,5 +220,13 @@ export class DirectApiDeployAdapter implements DeployAdapter {
       );
     }
     return { ready: true, state, url, pollCount, smokeStatus };
+  }
+
+  private assertResolvedUrl(ref: DeployRef, deploymentId: string, url: string, operation: string): void {
+    if (url === "") {
+      throw new Error(
+        `deploy ${operation}: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' returned no resolved URL`,
+      );
+    }
   }
 }
