@@ -7,15 +7,15 @@ export function progressCycleReached(signatures: readonly string[]): boolean {
   return signatures.slice(0, -1).includes(current);
 }
 
-export async function waitWhileProgressing<T>(options: {
+export async function waitWhileProgressing<T, R>(options: {
   probe: () => Promise<T>;
   classify: (
     value: T,
-  ) => { kind: "ready"; value: T } | { kind: "advancing"; signature: string } | { kind: "terminal"; error: Error };
+  ) => { kind: "ready"; value: R } | { kind: "advancing"; signature: string } | { kind: "terminal"; error: Error };
   signal?: AbortSignal;
   pollIntervalMs?: number;
   sleep?: (ms: number) => Promise<void>;
-}): Promise<T> {
+}): Promise<R> {
   const sleep = options.sleep ?? ((ms: number) => delay(ms));
   const interval = options.pollIntervalMs ?? 250;
   const signatures: string[] = [];

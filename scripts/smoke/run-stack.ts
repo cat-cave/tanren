@@ -1,4 +1,11 @@
-import { ExecutedBindings, fingerprintText, LifecycleLedger, OnceFinalizer, safeError } from "./stack-lifecycle.js";
+import {
+  ExecutedBindings,
+  fingerprintText,
+  LifecycleLedger,
+  OnceFinalizer,
+  safeError,
+  type BootstrapInstallEvidence,
+} from "./stack-lifecycle.js";
 import {
   publishPartialReceipt,
   synchronizeSignalFailure,
@@ -20,6 +27,7 @@ export interface PreparedSmokeRun {
   buildSource: string;
   checkoutFingerprint: string;
   executionFingerprint: string;
+  bootstrapInstall?: BootstrapInstallEvidence;
   fallbackReceiptPath: string;
   abortController: AbortController;
   signalState: SmokeSignalState;
@@ -50,6 +58,7 @@ function createState(prepared: PreparedSmokeRun): SmokeState {
     seedFingerprint: fingerprintText(nonceSeed),
     checkoutFingerprint: prepared.checkoutFingerprint,
     executionFingerprint: prepared.executionFingerprint,
+    bootstrapInstall: prepared.bootstrapInstall,
     keepAuthorized: false,
     cleanupFailed: false,
     resourcesClean: false,

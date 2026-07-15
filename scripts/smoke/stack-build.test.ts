@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCleanBuildContext, fingerprintTree } from "./stack-build.js";
+import { createCleanBuildContext, fingerprintTree, type InstallMaterializer } from "./stack-build.js";
 import { LifecycleLedger } from "./stack-lifecycle.js";
 
 const roots: string[] = [];
+const bases: string[] = [];
 
 async function repository(name: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), `tanren-build-${name}-`));
@@ -29,20 +30,47 @@ async function repository(name: string): Promise<string> {
   return root;
 }
 
-afterEach(() => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
+/**
+ * Fixture materializer: writes a real `node_modules` directory inside the clean
+ * source so archive/identity tests verify the source gets its own materialized
+ * dependencies — never a candidate-root borrow. Production-path materialization
+ * (real pnpm install) is proven in stack-build-install.test.ts.
+ */
+function recordingMaterializer(): InstallMaterializer {
+  return async (source) => {
+    await mkdir(join(source, "node_modules"), { recursive: true });
+    await writeFile(join(source, "node_modules", ".installed"), "fixture\n", { mode: 0o600 });
+  };
+}
+
+afterEach(() =>
+  Promise.all([
+    ...roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+    ...bases.splice(0).map((base) => rm(base, { recursive: true, force: true })),
+  ]),
+);
 
 describe("commit-bound build context", () => {
-  it("archives the recorded commit and verifies blob identity against the tree", async () => {
+  it("archives the recorded commit, verifies blob/mode identity, and materializes dependencies in the source", async () => {
     const root = await repository("clean");
     const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const tree = execFileSync("git", ["-C", root, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
-    const bases: string[] = [];
-    const source = await createCleanBuildContext(root, head, tree, process.env, new LifecycleLedger(), (base) =>
-      bases.push(base),
+    const source = await createCleanBuildContext(
+      root,
+      head,
+      tree,
+      process.env,
+      new LifecycleLedger(),
+      (base) => bases.push(base),
+      recordingMaterializer(),
     );
     expect(await readFile(join(source, "tracked.txt"), "utf8")).toBe("clean\n");
     expect((await readFile(join(source, "script.sh"), "utf8")).startsWith("#!/bin/sh")).toBe(true);
-    await Promise.all(bases.map((base) => rm(base, { recursive: true, force: true })));
+    // Materialized node_modules is a real directory under the build base, never a symlink borrow.
+    const nmInfo = await lstat(join(source, "node_modules"));
+    expect(nmInfo.isDirectory()).toBe(true);
+    expect(nmInfo.isSymbolicLink()).toBe(false);
+    expect(await readFile(join(source, "node_modules", ".installed"), "utf8")).toBe("fixture\n");
   });
 
   it("archives a linked worktree through its resolved Git administration directory", async () => {
@@ -53,12 +81,16 @@ describe("commit-bound build context", () => {
     execFileSync("git", ["-C", main, "worktree", "add", "-q", "-b", "smoke-linked", linked]);
     const head = execFileSync("git", ["-C", linked, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const tree = execFileSync("git", ["-C", linked, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
-    const bases: string[] = [];
-    const source = await createCleanBuildContext(linked, head, tree, process.env, new LifecycleLedger(), (base) =>
-      bases.push(base),
+    const source = await createCleanBuildContext(
+      linked,
+      head,
+      tree,
+      process.env,
+      new LifecycleLedger(),
+      (base) => bases.push(base),
+      recordingMaterializer(),
     );
     expect(await readFile(join(source, "tracked.txt"), "utf8")).toBe("linked-main\n");
-    await Promise.all(bases.map((base) => rm(base, { recursive: true, force: true })));
   });
 
   it("ignores poisoned host attributes and .git/info/attributes", async () => {
@@ -69,7 +101,6 @@ describe("commit-bound build context", () => {
     await writeFile(globalAttrs, "* filter=poison\n");
     const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     const tree = execFileSync("git", ["-C", root, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
-    const bases: string[] = [];
     const source = await createCleanBuildContext(
       root,
       head,
@@ -77,11 +108,11 @@ describe("commit-bound build context", () => {
       { ...process.env, GIT_CONFIG_PARAMETERS: `'core.attributesFile=${globalAttrs}'` },
       new LifecycleLedger(),
       (base) => bases.push(base),
+      recordingMaterializer(),
     );
     expect(await readFile(join(source, "tracked.txt"), "utf8")).toBe("attrs\n");
     const before = await fingerprintTree(root);
     expect(await fingerprintTree(root)).toBe(before);
-    await Promise.all(bases.map((base) => rm(base, { recursive: true, force: true })));
   });
 
   it("fingerprints directory symlinks without following their targets", async () => {
@@ -109,6 +140,17 @@ describe("commit-bound build context", () => {
     expect(await fingerprintTree(root)).toBe(first);
   });
 
+  it("treats package-local node_modules as opaque so dependency bytes are never hashed as source", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tanren-fingerprint-nested-node-modules-"));
+    roots.push(root);
+    await mkdir(join(root, "db", "node_modules", "pg"), { recursive: true });
+    const pkg = join(root, "db", "node_modules", "pg", "package.json");
+    await writeFile(pkg, '{"name":"pg","version":"8.0.0"}\n');
+    const first = await fingerprintTree(root);
+    await writeFile(pkg, '{"name":"pg","version":"8.21.0"}\n');
+    expect(await fingerprintTree(root)).toBe(first);
+  });
+
   it("rejects a recorded tree that does not belong to the recorded commit", async () => {
     const root = await repository("tree-binding");
     const head = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -126,10 +168,8 @@ describe("commit-bound build context", () => {
       "second",
     ]);
     const wrongTree = execFileSync("git", ["-C", root, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim();
-    const bases: string[] = [];
     await expect(
       createCleanBuildContext(root, head, wrongTree, process.env, new LifecycleLedger(), (base) => bases.push(base)),
     ).rejects.toThrow(/resolved tree/u);
-    await Promise.all(bases.map((base) => rm(base, { recursive: true, force: true })));
   });
 });

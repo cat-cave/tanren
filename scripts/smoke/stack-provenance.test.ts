@@ -166,7 +166,7 @@ describe("smoke stack provenance", () => {
 
   it("rejects a receipt whose probes name decoy bindings", () => {
     const actual = probeBindings(context);
-    actual.orchestrator = "http://127.0.0.1:3100/healthz";
+    actual["orchestrator"] = "http://127.0.0.1:3100/healthz";
     expect(() => assertProbeBindings(context, actual)).toThrow(/expected candidate/u);
   });
 });

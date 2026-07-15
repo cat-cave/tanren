@@ -65,4 +65,70 @@ describe("smoke path containment", () => {
       }),
     ).rejects.toThrow(/protected checkout path/u);
   });
+
+  // Audit pass-6 regressions: a literal `..cache` child segment is a TRUE child
+  // (not parent traversal), so a naive startsWith("..") overlap rule would let a
+  // nested path silently bypass the containment guard in both directions.
+  it("rejects a runtime nested under the checkout through a literal ..cache segment", async () => {
+    const root = await workspace();
+    const checkout = join(root, "checkout");
+    const runtime = join(checkout, "..cache", "runtime", "run");
+    await mkdir(runtime, { recursive: true });
+    await expect(
+      validateSmokePaths({
+        checkoutRoot: checkout,
+        runtimeBase: join(checkout, "..cache", "runtime"),
+        runtimeDir: runtime,
+        receiptPath: join(root, "outside", "receipt.json"),
+      }),
+    ).rejects.toThrow(/overlaps protected checkout/u);
+  });
+
+  it("rejects a checkout nested under the runtime through a literal ..cache segment (reverse direction)", async () => {
+    const root = await workspace();
+    const runtimeBase = join(root, "outside", "runtime");
+    const runtime = join(runtimeBase, "run");
+    const checkout = join(runtime, "..cache", "checkout");
+    await mkdir(join(checkout, ".git"), { recursive: true });
+    await expect(
+      validateSmokePaths({
+        checkoutRoot: checkout,
+        runtimeBase,
+        runtimeDir: runtime,
+        receiptPath: join(root, "receipts", "receipt.json"),
+      }),
+    ).rejects.toThrow(/overlaps protected checkout/u);
+  });
+
+  it("does not overlap exact parent escapes (siblings reached via ..)", async () => {
+    const root = await workspace();
+    const checkout = join(root, "checkout");
+    const sibling = join(root, "outside-runtime");
+    const runtime = join(sibling, "run");
+    await mkdir(runtime, { recursive: true });
+    await expect(
+      validateSmokePaths({
+        checkoutRoot: checkout,
+        runtimeBase: sibling,
+        runtimeDir: runtime,
+        receiptPath: join(root, "outside", "receipt.json"),
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("does not overlap prefix siblings that share a textual prefix with the checkout", async () => {
+    const root = await workspace();
+    const checkout = join(root, "checkout");
+    const sibling = join(root, "checkout-sibling");
+    const runtime = join(sibling, "run");
+    await mkdir(runtime, { recursive: true });
+    await expect(
+      validateSmokePaths({
+        checkoutRoot: checkout,
+        runtimeBase: sibling,
+        runtimeDir: runtime,
+        receiptPath: join(root, "outside", "receipt.json"),
+      }),
+    ).resolves.toBeDefined();
+  });
 });

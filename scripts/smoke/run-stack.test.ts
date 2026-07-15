@@ -141,8 +141,8 @@ describe("exact-stack smoke coordinator", () => {
     );
     const env = bindRuntimeEnvironment({ DOCKER_CONTEXT: "decoy", CONTAINER_HOST: "ssh://decoy" }, runtime);
     expect(env).toMatchObject({ DOCKER_HOST: "unix:///runtime/docker.sock" });
-    expect(env.DOCKER_CONTEXT).toBeUndefined();
-    expect(env.CONTAINER_HOST).toBeUndefined();
+    expect(env["DOCKER_CONTEXT"]).toBeUndefined();
+    expect(env["CONTAINER_HOST"]).toBeUndefined();
   });
 
   it("enters the protected bootstrap through a shell-poison-resistant just boundary", async () => {
@@ -165,7 +165,7 @@ describe("exact-stack smoke coordinator", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        PATH: `${bin}:${process.env["PATH"] ?? ""}`,
         BASH_ENV: poison,
         ENV: poison,
         SMOKE_SENTINEL: sentinel,
@@ -203,19 +203,26 @@ describe("exact-stack smoke coordinator", () => {
     const base = await temporaryRoot("archive-execution");
     const candidate = join(base, "candidate");
     await initCleanRepository(candidate);
+    // The clean source materializes its own dependencies from the repo lockfile;
+    // a minimal frozen-lockfile fixture lets the real install succeed offline.
+    await writeFile(join(candidate, "package.json"), '{"name":"smoke-archive-fixture","private":true}\n');
+    await writeFile(
+      join(candidate, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n",
+    );
     await mkdir(join(candidate, "scripts", "smoke"), { recursive: true });
     await writeFile(
       join(candidate, "scripts", "smoke", "run-stack.ts"),
       `import { rm, writeFile } from "node:fs/promises";\n` +
         `export async function runPreparedSmoke(prepared: any): Promise<number> {\n` +
-        `  await writeFile(process.env.TEST_PROOF!, JSON.stringify({ moduleUrl: import.meta.url, executionRoot: prepared.context.executionRoot, checkoutRoot: prepared.context.root, head: prepared.context.head, tree: prepared.context.tree }));\n` +
+        `  await writeFile(process.env.TEST_PROOF!, JSON.stringify({ moduleUrl: import.meta.url, executionRoot: prepared.context.executionRoot, checkoutRoot: prepared.context.root, head: prepared.context.head, tree: prepared.context.tree, bootstrapInstall: prepared.bootstrapInstall }));\n` +
         `  await writeFile(prepared.context.receiptPath, JSON.stringify({ status: "passed", context: { nonce: prepared.context.nonce } }));\n` +
         `  prepared.signalState.sealed = true;\n` +
         `  await rm(prepared.buildBase, { recursive: true, force: true });\n` +
         `  return 0;\n` +
         `}\n`,
     );
-    execFileSync("git", ["-C", candidate, "add", "scripts/smoke/run-stack.ts"]);
+    execFileSync("git", ["-C", candidate, "add", "package.json", "pnpm-lock.yaml", "scripts/smoke/run-stack.ts"]);
     execFileSync("git", [
       "-C",
       candidate,
@@ -250,6 +257,14 @@ describe("exact-stack smoke coordinator", () => {
       checkoutRoot: string;
       head: string;
       tree: string;
+      bootstrapInstall?: {
+        command: { executable: string; args: string[]; cwd: string };
+        status: string;
+        groupStarted: boolean;
+        groupExited: boolean;
+        startedAt: string;
+        finishedAt?: string;
+      };
     };
     const modulePath = fileURLToPath(proof.moduleUrl);
     expect(modulePath).not.toContain(candidate);
@@ -259,8 +274,105 @@ describe("exact-stack smoke coordinator", () => {
     expect(proof.tree).toBe(
       execFileSync("git", ["-C", candidate, "rev-parse", "HEAD^{tree}"], { encoding: "utf8" }).trim(),
     );
+    // The prepared coordinator observes the complete bootstrapInstall evidence: the
+    // stack-bootstrap → PreparedSmokeRun → coordinator link is intact.
+    expect(proof.bootstrapInstall).toBeDefined();
+    expect(proof.bootstrapInstall!.status).toBe("passed");
+    expect(proof.bootstrapInstall!.command.cwd).toBe(proof.executionRoot);
+    expect(proof.bootstrapInstall!.command.executable).toMatch(/^\//u);
+    expect(proof.bootstrapInstall!.command.args).toContain("--frozen-lockfile");
+    expect(proof.bootstrapInstall!.command.args).toContain("--prefer-offline");
+    expect(proof.bootstrapInstall!.groupStarted).toBe(true);
+    expect(proof.bootstrapInstall!.groupExited).toBe(true);
+    expect(proof.bootstrapInstall!.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(proof.bootstrapInstall!.finishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
     expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({ status: "passed" });
   });
+
+  it("emits a failure receipt with bootstrap.install when frozen-lockfile install drifts", async () => {
+    const base = await temporaryRoot("lockfile-drift-bootstrap");
+    const candidate = join(base, "candidate");
+    await initCleanRepository(candidate);
+    // Lockfile drifts from package.json: a dependency is declared but absent from the lockfile.
+    // pnpm --frozen-lockfile fails immediately without fetching packages.
+    await writeFile(
+      join(candidate, "package.json"),
+      '{"name":"smoke-drift","private":true,"dependencies":{"express":"^4.0.0"}}\n',
+    );
+    await writeFile(
+      join(candidate, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\n",
+    );
+    execFileSync("git", ["-C", candidate, "add", "package.json", "pnpm-lock.yaml"]);
+    execFileSync("git", [
+      "-C",
+      candidate,
+      "-c",
+      "user.name=Smoke",
+      "-c",
+      "user.email=smoke@example.invalid",
+      "commit",
+      "-qm",
+      "drift",
+    ]);
+    const receipt = join(base, "drift-receipt.json");
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), join(process.cwd(), "scripts", "smoke", "stack-bootstrap.ts")],
+      {
+        cwd: candidate,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          TANREN_SMOKE_RUNTIME_BASE: join(base, "runtime"),
+          TANREN_SMOKE_RECEIPT_PATH: receipt,
+          DATABASE_URL: "postgres://secret-user:secret-password@secret-host/secret-db",
+        },
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/lockfile|OUTDATED_LOCKFILE/iu);
+    const failure = JSON.parse(await readFile(receipt, "utf8")) as {
+      status: string;
+      bootstrap?: {
+        install?: {
+          command: { executable: string; args: string[]; cwd: string };
+          startedAt: string;
+          finishedAt?: string;
+          pgid?: number;
+          groupStarted: boolean;
+          groupExited: boolean;
+          status: string;
+          error?: string;
+        };
+      };
+    };
+    expect(failure.status).toBe("failed");
+    // The bootstrap-failure publisher link is intact: bootstrap.install is in the receipt.
+    // Removing the link from the bootstrap-failure publisher breaks this assertion.
+    expect(failure.bootstrap?.install).toBeDefined();
+    const install = failure.bootstrap!.install!;
+    expect(install.command.executable).toMatch(/^\//u);
+    expect(install.command.args).toContain("--frozen-lockfile");
+    expect(install.command.args).toContain("--prefer-offline");
+    expect(install.command.args.join(" ")).toMatch(/--store-dir \S+/u);
+    // Exact clean-source cwd: inside the owned build base, never the candidate checkout.
+    expect(install.command.cwd).toMatch(/tanren-smoke-source/u);
+    expect(install.command.cwd.endsWith("source")).toBe(true);
+    expect(install.command.cwd).not.toContain(candidate);
+    expect(install.pgid).toBeTypeOf("number");
+    expect(install.groupStarted).toBe(true);
+    expect(install.groupExited).toBe(true);
+    expect(install.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(install.finishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    expect(install.status).toBe("failed");
+    expect(install.error).toMatch(/lockfile|OUTDATED_LOCKFILE/iu);
+    // No environment or secrets are recorded in the bootstrap evidence.
+    const json = JSON.stringify(install);
+    expect(json).not.toContain("secret-user");
+    expect(json).not.toContain("secret-password");
+    expect(json).not.toContain("DATABASE_URL");
+  }, 30_000);
 
   it("SIGTERM during a hung bootstrap Git tree fences its whole PGID and emits one receipt", async () => {
     const base = await temporaryRoot("preflight-signal");
@@ -289,7 +401,7 @@ describe("exact-stack smoke coordinator", () => {
         cwd: candidate,
         env: {
           ...process.env,
-          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          PATH: `${bin}:${process.env["PATH"] ?? ""}`,
           REAL_GIT: realGit,
           REAL_NODE: process.execPath,
           PID_FILE: pidFile,

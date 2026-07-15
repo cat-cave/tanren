@@ -57,6 +57,26 @@ export interface StageEvidence {
   error?: string;
 }
 
+/**
+ * Distinct typed evidence for the bootstrap dependency install. The install
+ * runs BEFORE any of the 56 production stages exist (it prepares the clean
+ * source the coordinator imports), so it cannot borrow the stage-scoped
+ * `recordCommand`/active-stage path. This ledger entry survives into
+ * `PreparedSmokeRun` and the final/partial receipt as `bootstrap.install`,
+ * outside the production-stage list. Never records env/secrets — only sanitized
+ * executable/argv/cwd, the owned process-group start+exit, and terminal status.
+ */
+export interface BootstrapInstallEvidence {
+  command: { executable: string; args: string[]; cwd: string };
+  startedAt: string;
+  finishedAt?: string;
+  pgid?: number;
+  groupStarted: boolean;
+  groupExited: boolean;
+  status: "running" | "passed" | "failed";
+  error?: string;
+}
+
 export type TerminalCommitPhase = "open" | "preparing" | "committed";
 
 export class LifecycleLedger {
@@ -71,6 +91,7 @@ export class LifecycleLedger {
   private terminalPhase: TerminalCommitPhase = "open";
   private committedReceipt: string | undefined;
   private committedExitCode: number | undefined;
+  private bootstrapInstall: BootstrapInstallEvidence | undefined;
 
   constructor(injectedFailure?: string, abortController = new AbortController()) {
     this.abortController = abortController;
@@ -125,6 +146,48 @@ export class LifecycleLedger {
 
   recordGroup(pgid: number, state: "started" | "exited"): void {
     this.processGroups.record(pgid, state);
+  }
+
+  beginBootstrapInstall(command: { executable: string; args: string[]; cwd: string }): void {
+    this.bootstrapInstall = {
+      command: { executable: command.executable, args: redactArgs(command.args), cwd: command.cwd },
+      startedAt: new Date().toISOString(),
+      groupStarted: false,
+      groupExited: false,
+      status: "running",
+    };
+  }
+
+  recordBootstrapInstallSpawn(evidence: CommandEvidence): void {
+    if (this.bootstrapInstall === undefined) return;
+    this.bootstrapInstall.command = {
+      executable: evidence.command,
+      args: redactArgs(evidence.args),
+      cwd: evidence.cwd,
+    };
+    if (evidence.pgid !== undefined) this.bootstrapInstall.pgid = evidence.pgid;
+  }
+
+  recordBootstrapInstallGroup(pgid: number, state: "started" | "exited"): void {
+    this.processGroups.record(pgid, state);
+    if (this.bootstrapInstall === undefined) return;
+    if (state === "started") {
+      this.bootstrapInstall.pgid = pgid;
+      this.bootstrapInstall.groupStarted = true;
+    } else {
+      this.bootstrapInstall.groupExited = true;
+    }
+  }
+
+  completeBootstrapInstall(status: "passed" | "failed", error?: unknown): void {
+    if (this.bootstrapInstall === undefined) return;
+    this.bootstrapInstall.status = status;
+    this.bootstrapInstall.finishedAt = new Date().toISOString();
+    if (error !== undefined) this.bootstrapInstall.error = safeError(error);
+  }
+
+  bootstrapInstallEvidence(): BootstrapInstallEvidence | undefined {
+    return this.bootstrapInstall;
   }
 
   completeActiveForReceipt(status: "passed" | "failed", error?: unknown): void {

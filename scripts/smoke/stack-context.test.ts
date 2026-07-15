@@ -58,29 +58,29 @@ describe("smoke stack context", () => {
       "/tmp/clean-head",
     );
 
-    expect(env.TANREN_PUBLIC_BASE_URL).toBe("http://127.0.0.1:4300");
-    expect(env.TANREN_DASHBOARD_URL).toBe("http://127.0.0.1:4200");
-    expect(env.DATABASE_URL).toContain("127.0.0.1:6632");
-    expect(env.VAULT_ADDR).toBe("http://127.0.0.1:19400");
-    expect(env.TANREN_CLAIM_ENDPOINT_SMOKE_URL).toBe("https://127.0.0.1:4310");
-    expect(env.TANREN_SSH_PORT).toBe("3422");
-    expect(env.COMPOSE_PROJECT_NAME).toBe(candidate.project);
-    expect(env.TANREN_RUNTIME_DIR).toBe(candidate.runtimeDir);
-    expect(env.TANREN_MTLS_DIR).toBe(`${candidate.runtimeDir}/mtls`);
-    expect(env.TANREN_DATA_PLANE_REMOTE_WRITES).toBe("1");
-    expect(env.TANREN_FLY_IMAGE_BUILDER).toBe("0");
-    expect(env.TANREN_NTFY_BASE_URL).toBe("http://ntfy:80");
-    expect(env.BASH_ENV).toBeUndefined();
-    expect(env.ENV).toBeUndefined();
-    expect(env.GIT_DIR).toBeUndefined();
-    expect(env.DOCKER_HOST).toBeUndefined();
-    expect(env.DOCKER_TLS_VERIFY).toBeUndefined();
-    expect(env.COMPOSE_FILE).toBeUndefined();
-    expect(env.PODMAN_CONNECTIONS_CONF).toBeUndefined();
-    expect(env.BUILDKIT_HOST).toBeUndefined();
-    expect(env.PGOPTIONS).toBeUndefined();
-    expect(env.HTTPS_PROXY).toBeUndefined();
-    expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1");
+    expect(env["TANREN_PUBLIC_BASE_URL"]).toBe("http://127.0.0.1:4300");
+    expect(env["TANREN_DASHBOARD_URL"]).toBe("http://127.0.0.1:4200");
+    expect(env["DATABASE_URL"]).toContain("127.0.0.1:6632");
+    expect(env["VAULT_ADDR"]).toBe("http://127.0.0.1:19400");
+    expect(env["TANREN_CLAIM_ENDPOINT_SMOKE_URL"]).toBe("https://127.0.0.1:4310");
+    expect(env["TANREN_SSH_PORT"]).toBe("3422");
+    expect(env["COMPOSE_PROJECT_NAME"]).toBe(candidate.project);
+    expect(env["TANREN_RUNTIME_DIR"]).toBe(candidate.runtimeDir);
+    expect(env["TANREN_MTLS_DIR"]).toBe(`${candidate.runtimeDir}/mtls`);
+    expect(env["TANREN_DATA_PLANE_REMOTE_WRITES"]).toBe("1");
+    expect(env["TANREN_FLY_IMAGE_BUILDER"]).toBe("0");
+    expect(env["TANREN_NTFY_BASE_URL"]).toBe("http://ntfy:80");
+    expect(env["BASH_ENV"]).toBeUndefined();
+    expect(env["ENV"]).toBeUndefined();
+    expect(env["GIT_DIR"]).toBeUndefined();
+    expect(env["DOCKER_HOST"]).toBeUndefined();
+    expect(env["DOCKER_TLS_VERIFY"]).toBeUndefined();
+    expect(env["COMPOSE_FILE"]).toBeUndefined();
+    expect(env["PODMAN_CONNECTIONS_CONF"]).toBeUndefined();
+    expect(env["BUILDKIT_HOST"]).toBeUndefined();
+    expect(env["PGOPTIONS"]).toBeUndefined();
+    expect(env["HTTPS_PROXY"]).toBeUndefined();
+    expect(env["NO_PROXY"]).toBe("127.0.0.1,localhost,::1");
   });
 
   it("gives concurrent worktrees distinct projects and credential roots", () => {

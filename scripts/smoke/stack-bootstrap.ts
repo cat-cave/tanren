@@ -3,7 +3,7 @@ import { link, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { LifecycleLedger } from "./stack-lifecycle.js";
+import type { BootstrapInstallEvidence, LifecycleLedger } from "./stack-lifecycle.js";
 import type { PreparedSmokeRun } from "./run-stack.js";
 
 interface BootstrapSignalState {
@@ -65,6 +65,7 @@ async function publishBootstrapFailure(input: {
   head?: string;
   tree?: string;
   cleanupErrors: string[];
+  bootstrapInstall?: BootstrapInstallEvidence;
 }): Promise<void> {
   if (signalState.sealed) return;
   const receipt = {
@@ -89,6 +90,7 @@ async function publishBootstrapFailure(input: {
         error: sanitizedError(input.error),
       },
     ],
+    ...(input.bootstrapInstall === undefined ? {} : { bootstrap: { install: input.bootstrapInstall } }),
     error: sanitizedError(input.error),
     keepStackAuthorized: false,
   };
@@ -195,6 +197,7 @@ async function bootstrap(): Promise<number> {
     const executionFingerprint = await build.fingerprintTree(buildSource);
     bootstrapLedger.processGroups.assertEmpty();
     context = withExecutionRoot(context, buildSource);
+    const bootstrapInstall = bootstrapLedger.bootstrapInstallEvidence();
     const coordinatorUrl = pathToFileURL(join(buildSource, "scripts", "smoke", "run-stack.ts")).href;
     const coordinator = (await import(coordinatorUrl)) as {
       runPreparedSmoke(prepared: PreparedSmokeRun): Promise<number>;
@@ -208,6 +211,7 @@ async function bootstrap(): Promise<number> {
       buildSource,
       checkoutFingerprint,
       executionFingerprint,
+      bootstrapInstall,
       fallbackReceiptPath,
       abortController,
       signalState,
@@ -229,7 +233,15 @@ async function bootstrap(): Promise<number> {
         cleanupErrors.push(`archive cleanup: ${sanitizedError(cleanupError)}`);
       }
     }
-    await publishBootstrapFailure({ error, receiptPath, nonce, head, tree, cleanupErrors });
+    await publishBootstrapFailure({
+      error,
+      receiptPath,
+      nonce,
+      head,
+      tree,
+      cleanupErrors,
+      bootstrapInstall: bootstrapLedger?.bootstrapInstallEvidence(),
+    });
     process.stderr.write(`${sanitizedError(error)}\n`);
     return signalState.exitCode ?? 1;
   }

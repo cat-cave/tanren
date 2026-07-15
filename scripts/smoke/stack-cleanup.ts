@@ -5,7 +5,7 @@ import type { StackContext } from "./stack-context.js";
 import { safeError, type LifecycleLedger } from "./stack-lifecycle.js";
 import { abortableDelay, progressCycleReached } from "./stack-progress.js";
 import { BUILD_ID_LABEL } from "./stack-provenance.js";
-import { runCommand, type RuntimeBinding } from "./stack-runtime.js";
+import { runCommand, type CommandEvidence, type RuntimeBinding } from "./stack-runtime.js";
 import { synchronizeSignalFailure, type SmokeState } from "./stack-receipt.js";
 
 function composeArgs(context: StackContext, ...args: string[]): string[] {
@@ -43,7 +43,7 @@ function options(
     capture,
     quiet: capture,
     signal,
-    onSpawn: (evidence: { command: string; args: readonly string[] }) => ledger.recordCommand(evidence),
+    onSpawn: (evidence: CommandEvidence) => ledger.recordCommand(evidence),
     onGroup: (pgid: number, state: "started" | "exited") => ledger.recordGroup(pgid, state),
   };
 }

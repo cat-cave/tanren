@@ -117,7 +117,6 @@ export class ProcessGroupRegistry {
 
 export function runCommand(command: string, args: string[], options: CommandOptions): Promise<CommandResult> {
   const evidence: CommandEvidence = { command, args: [...args], cwd: options.cwd };
-  options.onSpawn?.(evidence);
   if (!options.quiet) process.stdout.write(`$ ${command} ${args.join(" ")}\n`);
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
@@ -136,6 +135,10 @@ export function runCommand(command: string, args: string[], options: CommandOpti
       evidence.pgid = pgid;
       options.onGroup?.(pgid, "started");
     }
+    // Fire onSpawn AFTER spawn succeeded and the process-group id is known, so
+    // the evidence callback observes the complete record (cwd + pgid) without a
+    // post-spawn mutation race.
+    options.onSpawn?.(evidence);
     const terminate = () => {
       if (termination !== undefined || pgid === undefined) return;
       termination = {

@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { HostPorts, StackContext } from "./stack-context.js";
 import {
   safeError,
+  type BootstrapInstallEvidence,
   type CandidateIdentity,
   type ExecutedBindings,
   type LifecycleLedger,
@@ -40,6 +41,7 @@ export interface SmokeReceipt {
   cleanupErrors?: string[];
   stages: LifecycleLedger["stages"];
   artifacts?: { composeLogs?: string };
+  bootstrap?: { install?: BootstrapInstallEvidence };
   error?: string;
   keepStackAuthorized?: boolean;
 }
@@ -68,6 +70,7 @@ export interface SmokeState {
   seedFingerprint: string;
   checkoutFingerprint?: string;
   executionFingerprint?: string;
+  bootstrapInstall?: BootstrapInstallEvidence;
   failure?: Error;
   signalExitCode?: number;
   composeLogsPath?: string;
@@ -133,6 +136,7 @@ export function buildReceipt(
     ...(state.cleanupErrors.length === 0 ? {} : { cleanupErrors: [...state.cleanupErrors] }),
     stages: ledger.stages,
     ...(state.composeLogsPath === undefined ? {} : { artifacts: { composeLogs: state.composeLogsPath } }),
+    ...(state.bootstrapInstall === undefined ? {} : { bootstrap: { install: state.bootstrapInstall } }),
     ...(state.failure === undefined ? {} : { error: safeError(state.failure) }),
     keepStackAuthorized: keepAuthorized,
   };

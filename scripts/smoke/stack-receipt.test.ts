@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStackContext, resolveHostPorts } from "./stack-context.js";
-import { ExecutedBindings, LifecycleLedger, OnceFinalizer } from "./stack-lifecycle.js";
-import { publishTerminalReceipt, type SmokeState } from "./stack-receipt.js";
+import { ExecutedBindings, type BootstrapInstallEvidence, LifecycleLedger, OnceFinalizer } from "./stack-lifecycle.js";
+import { buildReceipt, publishTerminalReceipt, type SmokeState } from "./stack-receipt.js";
 
 const roots: string[] = [];
 
@@ -52,6 +52,35 @@ async function publish(state: SmokeState, keep: boolean, recover = async () => {
 }
 
 describe("terminal receipt commit", () => {
+  it("embeds bootstrap.install in the receipt from SmokeState → buildReceipt", async () => {
+    const state = await fixture();
+    const bootstrapInstall: BootstrapInstallEvidence = {
+      command: {
+        executable: "/usr/local/bin/corepack",
+        args: ["pnpm", "install", "--frozen-lockfile", "--prefer-offline", "--store-dir", "/base/cache/pnpm-store"],
+        cwd: "/clean/source",
+      },
+      startedAt: "2026-07-15T00:00:00.000Z",
+      finishedAt: "2026-07-15T00:00:05.000Z",
+      pgid: 4242,
+      groupStarted: true,
+      groupExited: true,
+      status: "passed",
+    };
+    state.bootstrapInstall = bootstrapInstall;
+    const receipt = buildReceipt(state);
+    // The SmokeState → buildReceipt link preserves the exact bootstrap.install shape;
+    // removing state.bootstrapInstall from the receipt builder breaks this assertion.
+    expect(receipt.bootstrap?.install).toEqual(bootstrapInstall);
+    expect(receipt.bootstrap!.install!.command.executable).toBe("/usr/local/bin/corepack");
+    expect(receipt.bootstrap!.install!.command.args).toContain("--frozen-lockfile");
+    expect(receipt.bootstrap!.install!.status).toBe("passed");
+    expect(receipt.bootstrap!.install!.pgid).toBe(4242);
+    // No environment or secret fields are recorded in the bootstrap evidence.
+    const json = JSON.stringify(receipt.bootstrap!.install!);
+    expect(json).not.toMatch(/env|secret|password|token/iu);
+  });
+
   it("authorizes KEEP_STACK only in the sealed passed receipt", async () => {
     const state = await fixture();
     await publish(state, true);

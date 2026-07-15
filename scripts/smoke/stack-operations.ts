@@ -254,7 +254,7 @@ export async function proveSemanticStack(
       onEvidence: (evidence) => bindings.recordHttp(service, evidence),
     });
   }
-  const registry = await fetchExact(expected.registry!, { signal });
+  const registry = await fetchExact(expected["registry"]!, { signal });
   assertRegistryHealth(registry.response);
   bindings.recordHttp("registry", registry.evidence);
   await provePostgres(context, bindings, signal, ledger);

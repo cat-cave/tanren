@@ -1,5 +1,5 @@
 import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // cspell:ignore gitdir
 
@@ -26,8 +26,18 @@ export async function canonicalPath(path: string): Promise<string> {
   return resolve(await realpath(cursor), ...missing);
 }
 
+/**
+ * Native-separator-aware containment test on a {@link relative} result: `""`
+ * is equality; an absolute value is a cross-drive (Windows) non-overlap; only
+ * an exact `..` or a `..${sep}` prefix escapes containment. A literal child
+ * segment like `..cache` is a TRUE child, not parent traversal — a naive
+ * `startsWith("..")` would misclassify it and let nested paths bypass the
+ * overlap guard (audit pass-6 bypass).
+ */
 function isContainedRelativePath(value: string): boolean {
-  return value === "" || (!value.startsWith("..") && !isAbsolute(value));
+  if (value === "") return true;
+  if (isAbsolute(value)) return false;
+  return value !== ".." && !value.startsWith(`..${sep}`);
 }
 
 export function pathsOverlap(left: string, right: string): boolean {

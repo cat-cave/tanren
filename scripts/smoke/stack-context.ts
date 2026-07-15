@@ -134,8 +134,8 @@ export function sanitizeAmbientEnvironment(ambient: Environment): NodeJS.Process
     if (/^(.*_)?(TOKEN|SECRET|PASSWORD|API_KEY|AUTH|CREDENTIAL)(_.*)?$/iu.test(name) && name !== "PATH") continue;
     if (value !== undefined) clean[name] = value;
   }
-  clean.NO_PROXY = "127.0.0.1,localhost,::1";
-  clean.no_proxy = clean.NO_PROXY;
+  clean["NO_PROXY"] = "127.0.0.1,localhost,::1";
+  clean["no_proxy"] = clean["NO_PROXY"];
   return clean;
 }
 
@@ -328,7 +328,7 @@ export function environmentForContext(
     TANREN_SECRETS_MODE: "dev-defaults",
   };
   if (options.seedCredential !== undefined) {
-    resolved.TANREN_E2E_MANAGED_ROUTER_KEY = options.seedCredential;
+    resolved["TANREN_E2E_MANAGED_ROUTER_KEY"] = options.seedCredential;
   }
   return resolved;
 }

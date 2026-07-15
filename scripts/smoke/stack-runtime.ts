@@ -133,7 +133,7 @@ async function isSocket(path: string): Promise<boolean> {
 }
 
 async function executableOnPath(name: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  for (const directory of (env.PATH ?? "").split(delimiter).filter(Boolean)) {
+  for (const directory of (env["PATH"] ?? "").split(delimiter).filter(Boolean)) {
     const candidate = join(directory, name);
     try {
       await access(candidate, constants.X_OK);
@@ -175,8 +175,8 @@ export function bindRuntimeEnvironment(env: NodeJS.ProcessEnv, runtime: RuntimeB
   for (const name of ["DOCKER_HOST", "DOCKER_CONTEXT", "CONTAINER_HOST", "CONTAINER_CONNECTION", "DOCKER_CONFIG"]) {
     delete bound[name];
   }
-  bound.TANREN_DOCKER_SOCK = runtime.socket;
-  if (runtime.provider === "docker") bound.DOCKER_HOST = `unix://${runtime.socket}`;
-  else bound.CONTAINER_HOST = `unix://${runtime.socket}`;
+  bound["TANREN_DOCKER_SOCK"] = runtime.socket;
+  if (runtime.provider === "docker") bound["DOCKER_HOST"] = `unix://${runtime.socket}`;
+  else bound["CONTAINER_HOST"] = `unix://${runtime.socket}`;
   return bound;
 }

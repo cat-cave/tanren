@@ -165,7 +165,7 @@ const STAGE_RUNNERS_EXACT = {
   },
   "setup-mtls": async (state) => {
     await runCommand("just", ["gen-mtls-certs"], commandOptions(state.context.executionRoot, state.env, state.ledger));
-    state.env.TANREN_RUNNER_AUTHORIZED_KEY = (
+    state.env["TANREN_RUNNER_AUTHORIZED_KEY"] = (
       await readFile(join(state.context.runtimeDir, "tanren_runner_key.pub"), "utf8")
     ).trim();
     state.credentials = {
@@ -226,7 +226,7 @@ const STAGE_RUNNERS_EXACT = {
       }),
       state.runtime,
     );
-    state.env.TANREN_RUNNER_AUTHORIZED_KEY = (
+    state.env["TANREN_RUNNER_AUTHORIZED_KEY"] = (
       await readFile(join(state.context.runtimeDir, "tanren_runner_key.pub"), "utf8")
     ).trim();
     await writeFile(state.context.explicitEnvPath, serializeExplicitEnv(state.env), { mode: 0o600 });
@@ -249,8 +249,8 @@ const STAGE_RUNNERS_EXACT = {
       state.ledger,
     );
     state.snapshot = { images: state.snapshot.images, containers };
-    state.env.TANREN_SMOKE_WORKER_CONTAINER_ID = containers.worker.containerId;
-    state.env.TANREN_SMOKE_RUNTIME_EXECUTABLE = state.runtime.executable;
+    state.env["TANREN_SMOKE_WORKER_CONTAINER_ID"] = containers.worker.containerId;
+    state.env["TANREN_SMOKE_RUNTIME_EXECUTABLE"] = state.runtime.executable;
   },
   "semantic-stack": async (state) => {
     await proveSemanticStack(state.context, state.bindings, state.ledger.abortController.signal, state.ledger);
@@ -261,7 +261,7 @@ const STAGE_RUNNERS_EXACT = {
   },
   "seed-platform-credentials": async (state) => {
     // Optional stage always entered; body no-ops unless the nonce sentinel is present.
-    if (state.env.TANREN_E2E_MANAGED_ROUTER_KEY !== state.seedCredential) return;
+    if (state.env["TANREN_E2E_MANAGED_ROUTER_KEY"] !== state.seedCredential) return;
     await runCommand(
       "just",
       ["seed-platform-creds"],
@@ -275,7 +275,7 @@ const STAGE_RUNNERS_EXACT = {
       ...commandOptions(state.context.executionRoot, state.env, state.ledger),
       onSpawn: (evidence) => {
         state.ledger.recordCommand(evidence);
-        state.bindings.record("cliDoctor", state.env.TANREN_PUBLIC_BASE_URL!);
+        state.bindings.record("cliDoctor", state.env["TANREN_PUBLIC_BASE_URL"]!);
       },
     });
   },
@@ -294,14 +294,14 @@ const STAGE_RUNNERS_EXACT = {
     );
   },
   "plane-split-worker": async (state) => {
-    state.env.TANREN_SMOKE_PROOF_PATH = join(state.context.runtimeDir, "plane-split-proof.json");
-    state.env.TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE = "1";
+    state.env["TANREN_SMOKE_PROOF_PATH"] = join(state.context.runtimeDir, "plane-split-proof.json");
+    state.env["TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE"] = "1";
     await runCommand(
       "just",
       ["smoke-plane-split-worker"],
       commandOptions(state.context.executionRoot, state.env, state.ledger),
     );
-    const planeProof = JSON.parse(await readFile(state.env.TANREN_SMOKE_PROOF_PATH, "utf8")) as {
+    const planeProof = JSON.parse(await readFile(state.env["TANREN_SMOKE_PROOF_PATH"]!, "utf8")) as {
       runId?: unknown;
       claimEndpoint?: unknown;
     };
@@ -322,7 +322,7 @@ const STAGE_RUNNERS_EXACT = {
         ...commandOptions(state.context.executionRoot, state.env, state.ledger, true),
         onSpawn: (evidence) => {
           state.ledger.recordCommand(evidence);
-          state.bindings.record("cliStatus", state.env.TANREN_PUBLIC_BASE_URL!);
+          state.bindings.record("cliStatus", state.env["TANREN_PUBLIC_BASE_URL"]!);
         },
       },
     );
