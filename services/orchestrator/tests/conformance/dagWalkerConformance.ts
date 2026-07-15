@@ -292,6 +292,7 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       h.setBudget({ ceilingUsd: 50, period: "total", spentUsd: 50 });
       h.setSpec(node("spec_root", "pending", [], 0));
       h.setSpec(node("spec_other", "pending", [], 1));
+      h.setSpec(node("spec_blocked", "pending", ["spec_missing"], 2));
       const result = await h.walker.walk(h.projectId);
 
       expect(result.status).toBe("budget_paused");
@@ -301,9 +302,25 @@ export function describeDagWalkerConformance(label: string, suite: DagWalkerConf
       expect(paused?.ceilingUsd).toBe(50);
       expect(paused?.spentUsd).toBe(50);
       expect(paused?.period).toBe("total");
+      // GV-5 former-bug negative: this used to be the literal zero. Both roots
+      // are otherwise eligible, while the dependency-blocked spec is excluded.
+      expect(paused?.readyHeldBack).toBe(2);
       // A budget pause is neither a concurrency hold nor a drain.
       expect(h.events.some((e) => e.type === "dag.concurrency.saturated")).toBe(false);
       expect(h.events.some((e) => e.type === "dag.drained")).toBe(false);
+    });
+
+    it("reports every budget-held ready spec even when concurrency would admit only one", async () => {
+      const h = suite.make(1);
+      h.setBudget({ ceilingUsd: 50, period: "total", spentUsd: 50 });
+      h.setSpec(node("spec_a", "pending", [], 0));
+      h.setSpec(node("spec_b", "pending", [], 1));
+      h.setSpec(node("spec_c", "pending", [], 2));
+
+      const result = await h.walker.walk(h.projectId);
+      expect(result.status).toBe("budget_paused");
+      expect(h.enqueues).toEqual([]);
+      expect(h.events.find((event) => event.type === "dag.budget.paused")?.readyHeldBack).toBe(3);
     });
 
     it("pauses on budget when spend EXCEEDS the ceiling too", async () => {

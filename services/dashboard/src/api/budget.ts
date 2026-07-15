@@ -27,6 +27,14 @@ export interface BudgetPutBody {
 /** Fail-closed safety reason from the budget gate (null when open / ceiling-reached). */
 export type BudgetFailClosedReason = "unpriced_spend" | "unparseable_config" | "unresolvable_project_org";
 
+export interface BudgetPauseObservation {
+  eventType: "dag.budget.paused";
+  /** Eligible ready specs stopped by the project-level walker pause. */
+  readyHeldBack: number;
+  /** ISO timestamp of the durable event observation. */
+  observedAt: string;
+}
+
 export interface ProjectBudgetView {
   ceilingUsd: number | null;
   period: BudgetPeriod;
@@ -38,6 +46,8 @@ export interface ProjectBudgetView {
   remainingUsd: number | null;
   /** True when the walker is halted on budget (or fail-closed safety pause). */
   paused: boolean;
+  /** Latest project-level walker proof while the gate is active; null until emitted. */
+  pauseObservation: BudgetPauseObservation | null;
   /**
    * When set, true spend is untrusted — do not paint spent/notional as measured
    * figures (especially not $0.00 placeholders). Null on genuine ceiling-reached
