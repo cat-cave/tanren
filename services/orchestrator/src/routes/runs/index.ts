@@ -41,6 +41,7 @@ import {
   fetchRunTasks,
 } from "./list.js";
 import { registerProjectProgressRoute } from "./progressRoute.js";
+import { registerStackRetargetRoute } from "./stackRetargetRoute.js";
 import { handleSseStream } from "./sse.js";
 import { parseRawViewOptIn } from "./redaction.js";
 
@@ -204,6 +205,10 @@ export function createRunRoutes(options: RunRoutesOptions) {
   // same org-scope discipline as the spec/run/feed reads; kept in its own
   // builder so `createRunRoutes` stays a focused factory.
   registerProjectProgressRoute(app, options);
+
+  // gv-4: transitive stack-retarget safety projection (complete ancestor member
+  // vector). Exclusive body lives in stackRetargetRoute.ts — thin wire only.
+  registerStackRetargetRoute(app, options);
 
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs/:runId/forge
