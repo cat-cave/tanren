@@ -9,6 +9,7 @@
  *   - PR/CI chips + failure diagnostics
  */
 
+import type { FetchStackRetargetResult } from "../../api/stackRetarget.js";
 import type { RunDetail, RunEventRow } from "../../api/types.js";
 import {
   buildTrajectory,
@@ -25,6 +26,7 @@ import {
   type TrajectoryMoment,
 } from "./model.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
+import { StackRetargetPanel } from "./StackRetargetPanel.js";
 
 export interface RunDetailBodyProps {
   detail: RunDetail;
@@ -38,6 +40,8 @@ export interface RunDetailBodyProps {
   rawToggleHref: string;
   /** Same-origin SSE proxy URL the client island subscribes to for live updates. */
   streamUrl: string;
+  /** gv-4: complete ancestor-stack retarget projection (optional for non-run embeds). */
+  stackRetarget?: FetchStackRetargetResult;
 }
 
 function relativeAgo(iso: string): string {
@@ -487,6 +491,7 @@ export function RunDetailBody(props: RunDetailBodyProps) {
         <StatusChips detail={detail} />
         <FailureDiagnostics detail={detail} />
         <CostBar detail={detail} />
+        {props.stackRetarget === undefined ? null : <StackRetargetPanel result={props.stackRetarget} />}
 
         <div class="page-body" style="padding:0;">
           <div class="split-run">

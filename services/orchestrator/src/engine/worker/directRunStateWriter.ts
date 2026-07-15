@@ -30,6 +30,9 @@ import type {
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
+  RecoveryParkInput,
+  RecoveryParkOutcome,
+  RecoveryParkWriter,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
   RunStateWriter,
@@ -80,6 +83,7 @@ import {
 } from "./runStateLifecycleSql.js";
 import { applyFinalizeLand } from "../merge/mergeAuthorityLandFinalizer.js";
 import { applyRecordDraftPrCreated } from "../merge/draftPrCreatedAtomic.js";
+import { applyRecoveryParkAtomic, parseRecoveryParkInput, recoveryParkingFailed } from "./recoveryParkAtomic.js";
 
 /**
  * The in-process run-state writer. Constructed with the worker's pool (typically
@@ -88,7 +92,7 @@ import { applyRecordDraftPrCreated } from "../merge/draftPrCreatedAtomic.js";
  * finalize UPDATE + the matching event share one org-scoped transaction —
  * identical to the worker's prior `withRunFinalizeScope`.
  */
-export class DirectRunStateWriter implements RunStateWriter {
+export class DirectRunStateWriter implements RunStateWriter, RecoveryParkWriter {
   /**
    * apex v87: local pool can INSERT `events` — batch coordinator may co-transact
    * dequeue settle with merge_queue UPDATEs (see `canCoTransactMergeSettle`).
@@ -251,6 +255,21 @@ export class DirectRunStateWriter implements RunStateWriter {
     // matching disposition event), so a misuse is rejected BEFORE any DB I/O.
     specPairSchema.parse(input);
     return runWithOrgScope(this.pool, input.spec.orgId, (client) => applyUpdateSpecWithEvent(client, input));
+  }
+
+  async parkRecoveryAndDequeue(input: RecoveryParkInput): Promise<RecoveryParkOutcome> {
+    const parsed = parseRecoveryParkInput(input);
+    if (parsed === undefined) {
+      return recoveryParkingFailed("invalid_input");
+    }
+    try {
+      return await runWithOrgScope(this.pool, parsed.orgId, (client) => applyRecoveryParkAtomic(client, parsed));
+    } catch {
+      // A pre-COMMIT DB/event failure rolls back; a lost COMMIT acknowledgement is
+      // inherently uncertain. Never fabricate a dequeue receipt in either case —
+      // the idempotent redrive resolves the durable queue anchor.
+      return recoveryParkingFailed("write_failed");
+    }
   }
 
   async resumePausedRunAtomic(input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> {
