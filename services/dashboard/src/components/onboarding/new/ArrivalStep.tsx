@@ -113,7 +113,11 @@ export function ArrivalStep(props: ArrivalStepProps) {
             </div>
           </div>
 
-          <div class="gf-arrival" data-arrival-card>
+          <div
+            class="gf-arrival"
+            data-arrival-card
+            {...(props.unavailable === true ? { role: "alert", "aria-live": "polite" } : {})}
+          >
             <div class="eyebrow">{props.unavailable === true ? "dag unavailable" : "your smithy is ready"}</div>
             <div class="display">
               {props.unavailable === true ? (
@@ -130,7 +134,7 @@ export function ArrivalStep(props: ArrivalStepProps) {
                 </>
               )}
             </div>
-            <div class="sub">
+            <div class="sub" id="arrival-status-hint">
               {props.unavailable === true
                 ? `${props.projectName} exists, but the live DAG read failed. Reload before starting work; this is not an empty project.`
                 : `${props.projectName} is live · tanren will pick a ready leaf spec and start when you light the fire.`}
@@ -144,7 +148,7 @@ export function ArrivalStep(props: ArrivalStepProps) {
             )}
             <div class="footnote">
               {props.unavailable === true
-                ? "↑ arrival paused until the live graph loads"
+                ? "↑ arrival paused until the live graph loads · open smithy stays disabled while metrics are unavailable"
                 : "↑ engine paused until you click"}
             </div>
           </div>

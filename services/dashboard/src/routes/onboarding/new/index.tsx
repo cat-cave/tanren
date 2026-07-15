@@ -30,7 +30,7 @@ import { formField } from "../../formField.js";
 import { OnboardingNewClient } from "../../../api/onboardingNewClient.js";
 import { OrchestratorClient } from "../../../api/orchestrator.js";
 import { emptyCapture, type InterviewCapture } from "../../../api/onboardingNewTypes.js";
-import { getProjectDag, type ProjectDag } from "../../../api/projectDag.js";
+import { getProjectDag, ProjectDagUnavailableError, type ProjectDag } from "../../../api/projectDag.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../../app/mountShell.js";
 import type { ShellContext } from "../../../app/shell.js";
 import { GreenfieldBody } from "../../../components/onboarding/new/GreenfieldBody.js";
@@ -88,7 +88,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
       return renderDerivedStep(c, ctx, deps, step >= 3 ? 3 : 2, projectId);
     }
     // Fresh round 1 (orchestrator interview is a POST — carry CSRF).
-    const { result } = await (
+    const { ok, result } = await (
       await writeNewClient(c, deps)
     ).round(ctx.org.id, {
       round: 1,
@@ -110,7 +110,7 @@ export function mountGreenfieldOnboarding(app: Hono, deps: ShellDeps): void {
           capture: result?.capture ?? emptyCapture(),
           complete: result?.complete ?? false,
         }}
-        error={result === undefined ? "forge is unreachable — try again." : undefined}
+        error={!ok || result === undefined ? "forge is unreachable — try again." : undefined}
         csrfToken={ctx.csrfToken}
       />,
     );
@@ -151,7 +151,7 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
   const round = Number.parseInt(formField(form, "round", "1"), 10) || 1;
   const answer = formField(form, "answer");
   const capture = parseCapture(form["capture"]);
-  const { result } = await (await writeNewClient(c, deps)).round(orgId, { round, answer, capture });
+  const { ok, result } = await (await writeNewClient(c, deps)).round(orgId, { round, answer, capture });
   return renderShell(
     c,
     ctx,
@@ -167,7 +167,7 @@ async function handleRound(c: Context, ctx: ShellContext, deps: ShellDeps, form:
         capture: result?.capture ?? capture,
         complete: result?.complete ?? false,
       }}
-      error={result === undefined ? "forge is unreachable — your answer was kept; try again." : undefined}
+      error={!ok || result === undefined ? "forge is unreachable — your answer was kept; try again." : undefined}
       csrfToken={ctx.csrfToken}
     />,
   );
@@ -227,7 +227,9 @@ async function renderDerivedStep(
 async function loadDag(c: Context, deps: ShellDeps, orgId: string, projectId: string): Promise<ProjectDag | undefined> {
   try {
     return await getProjectDag(orchestratorClient(c, deps), orgId, projectId);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // Only the typed DAG-unavailable path degrades; programming/unknown errors rethrow.
+    if (error instanceof ProjectDagUnavailableError) return undefined;
+    throw error;
   }
 }

@@ -30,18 +30,37 @@ export interface KpiItem {
   k: string;
   v: string;
   tone?: "hot" | "warn";
+  /** Source read failed — render "—" not a fabricated zero. */
+  unavailable?: boolean;
 }
 
 export function KpiStrip(props: { items: KpiItem[] }) {
   return (
     <div class="kpi-strip">
-      {props.items.map((item) => (
-        <div class={`kpi${item.tone ? ` ${item.tone}` : ""}`}>
-          <span class="k">{item.k}</span>
-          <span class="v">{item.v}</span>
-        </div>
-      ))}
+      {props.items.map((item) =>
+        item.unavailable === true ? (
+          <div class="kpi unavailable" data-kpi-unavailable={item.k} title={`${item.k} unavailable`}>
+            <span class="k">{item.k}</span>
+            <span class="v">{item.v}</span>
+          </div>
+        ) : (
+          <div class={`kpi${item.tone ? ` ${item.tone}` : ""}`}>
+            <span class="k">{item.k}</span>
+            <span class="v">{item.v}</span>
+          </div>
+        ),
+      )}
     </div>
+  );
+}
+
+/** Single alert region for page-level unavailable / error copy (no duplicate live regions). */
+export function UnavailableBanner(props: { message: string; children?: unknown }) {
+  return (
+    <section class="placeholder-card" role="alert" aria-live="polite">
+      <p>{props.message}</p>
+      {props.children}
+    </section>
   );
 }
 

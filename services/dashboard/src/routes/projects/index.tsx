@@ -19,10 +19,10 @@ import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } fro
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ProjectDagBody, ProjectDagUnavailableBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
-import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
 import { resolveConfig } from "./projectConfig.js";
 import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
+import { loadProjectPageData, loadSpecCreateData, loadSpecListData } from "./projectPageData.js";
 import { mountSpecDetailRoutes, notFoundBody, resolveProjectMode } from "./specRoutes.js";
 
 function clientFor(c: Context, deps: ShellDeps): OrchestratorClient {
@@ -83,22 +83,7 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     // clientDepsFor). Pulse falls back to data-derived copy when undefined.
     const client = clientFor(c, deps);
     const mode = resolveProjectMode(c);
-    const [runs, insights, milestones, feed] = await Promise.all([
-      client.listRuns(orgId, projectId),
-      client.listInsights(orgId, projectId),
-      client.listMilestones(orgId, projectId),
-      client.listFeed(orgId, projectId),
-    ]);
-    const model = buildProjectViewModel({
-      projectId,
-      projectName: ctx.project.name,
-      runs,
-      insights,
-      milestones,
-      feed,
-      narration: undefined,
-      weekSpendUsd: sumRunCosts(runs),
-    });
+    const { model, insights } = await loadProjectPageData(client, orgId, projectId, ctx.project.name);
     if (mode === "dag") {
       let dag;
       try {
@@ -143,20 +128,19 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     if (ctx.org === undefined || ctx.project === undefined) {
       return renderShell(c, ctx, { title: "tanren · specs" }, notFoundBody(projectId));
     }
-    const client = clientFor(c, deps);
-    const [specs, runs] = await Promise.all([
-      client.listSpecs(ctx.org.id, projectId),
-      client.listRuns(ctx.org.id, projectId),
-    ]);
-    const runBySpec: Record<string, string | undefined> = {};
-    for (const run of runs) {
-      if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
-    }
+    const data = await loadSpecListData(clientFor(c, deps), ctx.org.id, projectId);
     return renderShell(
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} specs` },
-      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} csrfToken={ctx.csrfToken} />,
+      <SpecListBody
+        project={ctx.project}
+        specs={data.specs}
+        runBySpec={data.runBySpec}
+        specsUnavailable={data.specsUnavailable}
+        runsUnavailable={data.runsUnavailable}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 
@@ -169,21 +153,18 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     if (ctx.org === undefined || ctx.project === undefined) {
       return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
     }
-    const client = clientFor(c, deps);
-    const [milestones, behaviors, specs] = await Promise.all([
-      client.listMilestones(ctx.org.id, projectId),
-      client.listAllBehaviors(ctx.org.id, projectId),
-      client.listSpecs(ctx.org.id, projectId),
-    ]);
+    const data = await loadSpecCreateData(clientFor(c, deps), ctx.org.id, projectId);
     return renderShell(
       c,
       ctx,
       { title: `tanren · new spec` },
       <SpecCreateBody
         project={ctx.project}
-        milestones={milestones}
-        behaviors={behaviors}
-        specs={specs}
+        milestones={data.milestones}
+        milestonesUnavailable={data.milestonesUnavailable}
+        behaviors={data.behaviors}
+        specs={data.specs}
+        specsUnavailable={data.specsUnavailable}
         csrfToken={ctx.csrfToken}
       />,
     );
@@ -475,21 +456,18 @@ async function renderForm(
   if (ctx.org === undefined || ctx.project === undefined) {
     return renderShell(c, ctx, { title: "tanren · new spec" }, notFoundBody(projectId));
   }
-  const client = clientFor(c, deps);
-  const [milestones, behaviors, specs] = await Promise.all([
-    client.listMilestones(ctx.org.id, projectId),
-    client.listAllBehaviors(ctx.org.id, projectId),
-    client.listSpecs(ctx.org.id, projectId),
-  ]);
+  const data = await loadSpecCreateData(clientFor(c, deps), ctx.org.id, projectId);
   return renderShell(
     c,
     ctx,
     { title: "tanren · new spec" },
     <SpecCreateBody
       project={ctx.project}
-      milestones={milestones}
-      behaviors={behaviors}
-      specs={specs}
+      milestones={data.milestones}
+      milestonesUnavailable={data.milestonesUnavailable}
+      behaviors={data.behaviors}
+      specs={data.specs}
+      specsUnavailable={data.specsUnavailable}
       error={error}
       values={values}
       csrfToken={ctx.csrfToken}

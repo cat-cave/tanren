@@ -82,14 +82,14 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
 
   /** Projects in an org the operator can access. Empty array on failure. */
   async listProjects(orgId: string): Promise<ProjectSummary[]> {
-    const response = await this.fetchImpl(`${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects`, {
-      headers: this.headers(),
-    }).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return [];
-    }
-    const json = (await response.json()) as { projects?: ProjectSummary[] };
-    return json.projects ?? [];
+    return (await this.listProjectsMaybe(orgId)) ?? [];
+  }
+
+  /** listProjects, but undefined on failure (unavailable, not fake empty). */
+  async listProjectsMaybe(orgId: string): Promise<ProjectSummary[] | undefined> {
+    const json = await this.getJson<{ projects?: ProjectSummary[] }>(`/orgs/${encodeURIComponent(orgId)}/projects`);
+    if (json === undefined || !Array.isArray(json.projects)) return undefined;
+    return json.projects;
   }
 
   /**
@@ -170,26 +170,37 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return json.items;
   }
 
-  /** Project activity feed. */
+  /** Project activity feed. Empty array on failure. */
   async listFeed(orgId: string, projectId: string): Promise<ProjectFeedItem[]> {
+    return (await this.listFeedMaybe(orgId, projectId)) ?? [];
+  }
+
+  /** listFeed, but undefined on failure (unavailable, not fake empty). */
+  async listFeedMaybe(orgId: string, projectId: string): Promise<ProjectFeedItem[] | undefined> {
     const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
     );
-    return json?.items ?? [];
+    if (json === undefined || !Array.isArray(json.items)) return undefined;
+    return json.items;
   }
 
   /**
    * Workflow insights, filtered to the supported kinds (trio plus the
    * `stuck` + `review_stall` and the `ci_flaky` additions).
-   * Acknowledged rows drop out.
+   * Acknowledged rows drop out. Empty array on failure.
    */
   async listInsights(orgId: string, projectId: string): Promise<InsightSummary[]> {
+    return (await this.listInsightsMaybe(orgId, projectId)) ?? [];
+  }
+
+  /** listInsights, but undefined on failure (unavailable, not fake empty). */
+  async listInsightsMaybe(orgId: string, projectId: string): Promise<InsightSummary[] | undefined> {
     const json = await this.getJson<{ insights?: InsightSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`,
     );
-    const all = json?.insights ?? [];
+    if (json === undefined || !Array.isArray(json.insights)) return undefined;
     const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall", "ci_flaky"]);
-    return all.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
+    return json.insights.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
   }
 
   /**
@@ -205,12 +216,18 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return json?.metrics;
   }
 
-  /** Project milestones for the velocity card + spec form. */
+  /** Project milestones for the velocity card + spec form. Empty on failure. */
   async listMilestones(orgId: string, projectId: string): Promise<MilestoneSummary[]> {
+    return (await this.listMilestonesMaybe(orgId, projectId)) ?? [];
+  }
+
+  /** listMilestones, but undefined on failure (unavailable, not fake empty). */
+  async listMilestonesMaybe(orgId: string, projectId: string): Promise<MilestoneSummary[] | undefined> {
     const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
     );
-    return json?.milestones ?? [];
+    if (json === undefined || !Array.isArray(json.milestones)) return undefined;
+    return json.milestones;
   }
 
   /** Project specs (spec list + dependency picker). */

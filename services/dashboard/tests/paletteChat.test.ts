@@ -160,4 +160,30 @@ describe("askForge (palette error surface)", () => {
     const result = await askForge("org_a", "what is blocked?", {});
     expect("error" in result ? result.error : "").toContain("Forge ask failed (502): forge_ask_failed");
   });
+
+  it("fails closed on 200 {} (incomplete success body)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const result = await askForge("org_a", "what is blocked?", {});
+    expect("error" in result ? result.error : "").toContain("incomplete response body");
+  });
+
+  it("fails closed on 200 JSON null", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response("null", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const result = await askForge("org_a", "what is blocked?", {});
+    expect("error" in result ? result.error : "").toContain("incomplete response body");
+  });
 });

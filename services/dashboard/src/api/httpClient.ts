@@ -84,7 +84,10 @@ export abstract class OrchestratorHttpClient {
     if (response === undefined) {
       return { ok: false, status: 0, body: undefined };
     }
-    const json = (await response.json().catch(() => {})) as T | undefined;
+    // JSON `null` is a parsed body but not a usable product payload — treat as
+    // missing when the caller required a body (same fail-closed as empty/204).
+    const raw: unknown = await response.json().catch(() => {});
+    const json = raw === null || raw === undefined ? undefined : (raw as T);
     if (response.ok && options.expectBody === true && json === undefined) {
       return { ok: false, status: response.status, body: undefined };
     }

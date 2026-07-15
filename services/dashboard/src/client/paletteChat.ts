@@ -324,8 +324,17 @@ export function appendPending(chat: HTMLElement): HTMLElement {
   return row;
 }
 
-// POSTs the question to the dashboard's forge-ask proxy. Returns undefined on
-// failure so the caller can render a graceful fallback bubble.
+function isForgeAskResponse(value: unknown): value is ForgeAskResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const rec = value as Record<string, unknown>;
+  if (typeof rec["threadId"] !== "string" || rec["threadId"] === "") return false;
+  const answer = rec["answer"];
+  if (typeof answer !== "object" || answer === null) return false;
+  return typeof (answer as Record<string, unknown>)["body"] === "string";
+}
+
+// POSTs the question to the dashboard's forge-ask proxy. Fail-closed on empty,
+// null, or shape-incomplete 2xx bodies so `{}` never masquerades as an answer.
 export async function askForge(
   orgId: string,
   question: string,
@@ -341,10 +350,18 @@ export async function askForge(
       headers: csrfWriteHeaders(),
       body: JSON.stringify(body),
     });
-    const json = (await response.json().catch(() => {})) as unknown;
+    const raw: unknown = await response.json().catch(() => {});
+    const json = raw === null || raw === undefined ? undefined : raw;
     if (!response.ok) return { error: errorText(response.status, json, "Forge ask failed") };
-    if (json === undefined) return { error: "Forge ask failed: empty response body." };
-    return json as ForgeAskResponse;
+    if (!isForgeAskResponse(json)) {
+      return { error: "Forge ask failed: incomplete response body." };
+    }
+    return {
+      threadId: json.threadId,
+      answer: json.answer,
+      toolsUsed: Array.isArray(json.toolsUsed) ? json.toolsUsed : [],
+      proposals: Array.isArray(json.proposals) ? json.proposals : [],
+    };
   } catch {
     return { error: "Forge ask failed: network unavailable." };
   }

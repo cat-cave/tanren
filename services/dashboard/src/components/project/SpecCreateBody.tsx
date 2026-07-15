@@ -21,6 +21,10 @@ export interface SpecCreateBodyProps {
   milestones: MilestoneSummary[];
   behaviors: BehaviorSummary[];
   specs: SpecSummary[];
+  /** Spec list read failed — dependency picker is unavailable, not empty. */
+  specsUnavailable?: boolean;
+  /** Milestone list read failed — picker is unavailable, not empty. */
+  milestonesUnavailable?: boolean;
   /** Set when a prior submit failed; rendered as an inline error banner. */
   error?: string;
   /** Echo back operator input on validation failure. */
@@ -56,7 +60,11 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
         }
       />
       <div class="page-body">
-        {props.error !== undefined && <div class="form-error">{props.error}</div>}
+        {props.error !== undefined && (
+          <div class="form-error" role="alert" aria-live="polite">
+            {props.error}
+          </div>
+        )}
         <div class="panel">
           <div class="panel-head">
             <h3>
@@ -89,16 +97,34 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
 
               <div class="form-field">
                 <label for="milestone">milestone</label>
-                <select id="milestone" name="milestoneId">
-                  <option value="">— unassigned —</option>
-                  {props.milestones.map((milestone) => (
-                    <option value={milestone.id} selected={values.milestoneId === milestone.id}>
-                      {milestone.label} · {milestone.name}
-                    </option>
-                  ))}
+                <select
+                  id="milestone"
+                  name="milestoneId"
+                  disabled={props.milestonesUnavailable === true}
+                  title={
+                    props.milestonesUnavailable === true
+                      ? "Milestone list unavailable — cannot assign until the read succeeds."
+                      : undefined
+                  }
+                >
+                  <option value="">
+                    {props.milestonesUnavailable === true ? "— unavailable —" : "— unassigned —"}
+                  </option>
+                  {props.milestonesUnavailable !== true &&
+                    props.milestones.map((milestone) => (
+                      <option value={milestone.id} selected={values.milestoneId === milestone.id}>
+                        {milestone.label} · {milestone.name}
+                      </option>
+                    ))}
                 </select>
-                {props.milestones.length === 0 && (
-                  <div class="hint">no milestones yet · create one in project settings</div>
+                {props.milestonesUnavailable === true ? (
+                  <div class="hint" data-milestones-unavailable>
+                    milestones unavailable — not an empty project
+                  </div>
+                ) : (
+                  props.milestones.length === 0 && (
+                    <div class="hint">no milestones yet · create one in project settings</div>
+                  )
                 )}
               </div>
 
@@ -152,7 +178,11 @@ export function SpecCreateBody(props: SpecCreateBodyProps) {
 
               <div class="form-field">
                 <label>spec dependencies (optional)</label>
-                {props.specs.length === 0 ? (
+                {props.specsUnavailable === true ? (
+                  <div class="hint" data-specs-unavailable>
+                    specs unavailable — dependency picker paused (not an empty list)
+                  </div>
+                ) : props.specs.length === 0 ? (
                   <div class="hint">no other specs to depend on yet</div>
                 ) : (
                   <div class="checkbox-list">
@@ -189,6 +219,10 @@ export function SpecListBody(props: {
   project: ProjectSummary;
   specs: SpecSummary[];
   runBySpec: Record<string, string | undefined>;
+  /** Spec list read failed — show unavailable, not empty. */
+  specsUnavailable?: boolean;
+  /** Run list read failed — rows still list; run links mark unavailable. */
+  runsUnavailable?: boolean;
   /** Set when a prior run-trigger failed; shown inline on the row. */
   error?: string;
   /** The spec id the trigger error belongs to. */
@@ -216,12 +250,18 @@ export function SpecListBody(props: {
         <div class="panel">
           <div class="panel-head">
             <h3>
-              specs · <em>{props.specs.length}</em>
+              specs · <em>{props.specsUnavailable === true ? "—" : props.specs.length}</em>
             </h3>
-            <span class="meta">click a row to open its most-recent run</span>
+            <span class="meta">
+              {props.specsUnavailable === true ? "spec list unavailable" : "click a row to open its most-recent run"}
+            </span>
           </div>
           <div class="panel-body">
-            {props.specs.length === 0 ? (
+            {props.specsUnavailable === true ? (
+              <div class="empty-note" data-specs-unavailable role="alert" aria-live="polite">
+                Specs unavailable — the orchestrator list read failed. This is not an empty project.
+              </div>
+            ) : props.specs.length === 0 ? (
               <div class="empty-note">No specs yet. Create one to start forging.</div>
             ) : (
               props.specs.map((spec) => {
@@ -233,7 +273,11 @@ export function SpecListBody(props: {
                 const showError = props.error !== undefined && props.errorSpecId === spec.specId;
                 return (
                   <>
-                    {showError && <div class="row-error">{props.error}</div>}
+                    {showError && (
+                      <div class="row-error" role="alert" aria-live="polite">
+                        {props.error}
+                      </div>
+                    )}
                     <div class="spec-row-wrap">
                       <a class="spec-row" href={href}>
                         <span class={`status st-${spec.status}`}>{spec.status}</span>
@@ -243,7 +287,13 @@ export function SpecListBody(props: {
                             {spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps
                           </div>
                         </div>
-                        <span class="d">{runId === undefined ? "no runs" : "run ↗"}</span>
+                        <span class="d">
+                          {props.runsUnavailable === true
+                            ? "runs unavailable"
+                            : runId === undefined
+                              ? "no runs"
+                              : "run ↗"}
+                        </span>
                         <span class="arrow" style="color:var(--ember-08)">
                           ↗
                         </span>

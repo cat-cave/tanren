@@ -297,6 +297,9 @@ describe("DAG-primary project view (?mode=dag)", () => {
     expect(res.status).toBe(200);
     expect(html).toContain("data-project-dag-unavailable");
     expect(html).toContain("This is not an empty graph");
+    expect(html).toContain('role="alert"');
+    // Side panel reads still succeed — partial data preserved, not zeroed.
+    expect(html).toContain("data-project-partial-ok");
   });
 
   it("defaults to chat-primary and honours the persisted mode cookie", async () => {

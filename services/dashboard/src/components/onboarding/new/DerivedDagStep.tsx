@@ -46,7 +46,7 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
 
       <div class="gf-dag-frame" data-derived-dag>
         {unavailable ? (
-          <div class="gf-dag-empty unavailable" data-derived-dag-unavailable>
+          <div class="gf-dag-empty unavailable" data-derived-dag-unavailable role="alert" aria-live="polite">
             spec DAG unavailable — the orchestrator read failed. This is not an empty project.
           </div>
         ) : dag.nodes.length === 0 ? (
@@ -61,13 +61,24 @@ export function DerivedDagStep(props: DerivedDagStepProps) {
         <input type="hidden" name="projectId" value={props.projectId} />
         <input type="hidden" name="phase" value="advance" />
         <div class="gf-foot">
-          <span class="hint">
+          <span class="hint" id="derived-dag-next-hint">
             {unavailable
               ? "dag read unavailable · arrival is paused until the live graph loads"
               : `↑ ${dag.counts.behaviors} behaviors covered · ${dag.counts.criticalPath} on the critical path · ${ready} leaf specs ready`}
           </span>
           <span class="spacer">
-            <button type="submit" class="btn primary" disabled={unavailable}>
+            <button
+              type="submit"
+              class="btn primary"
+              disabled={unavailable}
+              aria-disabled={unavailable ? "true" : undefined}
+              aria-describedby="derived-dag-next-hint"
+              title={
+                unavailable
+                  ? "Next is disabled until the live DAG read succeeds — this is not an empty project."
+                  : undefined
+              }
+            >
               next · sources &amp; arrival ↗
             </button>
           </span>

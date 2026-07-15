@@ -11,7 +11,7 @@ import type { ProjectDag } from "../../api/projectDag.js";
 import { DagCanvas } from "./DagCanvas.js";
 import { DagStyles } from "./dagStyles.js";
 import { ScreenStyles } from "./screenStyles.js";
-import { KpiStrip, PageHead, relativeTime } from "./shared.js";
+import { KpiStrip, PageHead, relativeTime, UnavailableBanner } from "./shared.js";
 import type { ProjectViewModel } from "./projectViewData.js";
 
 export interface ProjectDagBodyProps {
@@ -65,7 +65,7 @@ export function ProjectDagBody(props: ProjectDagBodyProps) {
           <div class="col dag-rail">
             <ForgePill projectId={props.projectId} model={model} attention={dag.attention.length} />
             {model.velocity !== null && <VelocityCardCompact velocity={model.velocity} />}
-            <ActivityPanel rows={model.activity} />
+            <ActivityPanel rows={model.activity} unavailable={model.activityUnavailable} />
           </div>
         </div>
       </div>
@@ -74,6 +74,11 @@ export function ProjectDagBody(props: ProjectDagBodyProps) {
 }
 
 export function ProjectDagUnavailableBody(props: { projectId: string; projectName: string; model: ProjectViewModel }) {
+  const partialOk =
+    props.model.availability.feed ||
+    props.model.availability.insights ||
+    props.model.availability.milestones ||
+    props.model.availability.runs;
   return (
     <div class="p2b" data-project-mode="dag" data-project-dag-unavailable>
       <ScreenStyles />
@@ -106,9 +111,15 @@ export function ProjectDagUnavailableBody(props: { projectId: string; projectNam
       />
       <KpiStrip items={props.model.kpis} />
       <div class="page-body">
-        <section class="placeholder-card">
-          <p>Project DAG unavailable — the orchestrator spec/run reads failed. This is not an empty graph.</p>
-        </section>
+        <div data-project-dag-unavailable-banner>
+          <UnavailableBanner message="Project DAG unavailable — the orchestrator spec/run reads failed. This is not an empty graph." />
+        </div>
+        {partialOk && (
+          <div class="col dag-rail" data-project-partial-ok>
+            {props.model.velocity !== null && <VelocityCardCompact velocity={props.model.velocity} />}
+            <ActivityPanel rows={props.model.activity} unavailable={props.model.activityUnavailable} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -153,19 +164,25 @@ function VelocityCardCompact(props: { velocity: NonNullable<ProjectViewModel["ve
   );
 }
 
-function ActivityPanel(props: { rows: ProjectViewModel["activity"] }) {
+function ActivityPanel(props: { rows: ProjectViewModel["activity"]; unavailable?: boolean }) {
   return (
-    <div class="activity">
+    <div class="activity" data-activity-panel={props.unavailable === true ? "unavailable" : "ok"}>
       <div class="panel-head">
         <h3>
-          activity · <em>live</em>
+          activity · <em>{props.unavailable === true ? "unavailable" : "live"}</em>
         </h3>
-        <span class="pill run" style="font-size:8px">
-          <span class="d"></span>↻
-        </span>
+        {props.unavailable !== true && (
+          <span class="pill run" style="font-size:8px">
+            <span class="d"></span>↻
+          </span>
+        )}
       </div>
       <div class="body">
-        {props.rows.length === 0 ? (
+        {props.unavailable === true ? (
+          <div class="empty-note" style="padding:12px 13px" data-activity-unavailable>
+            Activity unavailable — the feed read failed. This is not an empty timeline.
+          </div>
+        ) : props.rows.length === 0 ? (
           <div class="empty-note" style="padding:12px 13px">
             No recent events for this project.
           </div>

@@ -5,8 +5,8 @@
  * queue, the DAG snapshot nodes, the velocity ETA, and the activity rows.
  *
  * Kept free of JSX + I/O so it is unit-testable and so the route handler stays
- * a thin orchestration layer. No fabricated data: empty inputs yield empty
- * queues / "no data" states rather than placeholder rows.
+ * a thin orchestration layer. No fabricated data: empty success yields empty
+ * queues; failed reads stay typed-unavailable rather than silent zeros.
  */
 
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
@@ -53,6 +53,14 @@ export interface ActivityRow {
   href: string;
 }
 
+/** Per-source availability for project page reads (true = success, even if empty). */
+export interface ProjectReadAvailability {
+  runs: boolean;
+  insights: boolean;
+  milestones: boolean;
+  feed: boolean;
+}
+
 export interface ProjectViewModel {
   pulseHeadline: string;
   pulseSub: string;
@@ -63,17 +71,24 @@ export interface ProjectViewModel {
   velocity: VelocityModel | null;
   activity: ActivityRow[];
   prompts: string[];
+  availability: ProjectReadAvailability;
+  /** True when activity feed read failed (distinct from genuinely empty). */
+  activityUnavailable: boolean;
+  /** True when run list failed (KPIs that need runs show unavailable markers). */
+  runsUnavailable: boolean;
 }
 
 export interface BuildProjectViewInput {
   projectId: string;
   projectName: string;
-  runs: RunListItem[];
-  insights: InsightSummary[];
-  milestones: MilestoneSummary[];
-  feed: ProjectFeedItem[];
+  /** undefined = read unavailable (not empty success). */
+  runs: RunListItem[] | undefined;
+  insights: InsightSummary[] | undefined;
+  milestones: MilestoneSummary[] | undefined;
+  feed: ProjectFeedItem[] | undefined;
   narration: ForgeAnswer | undefined;
-  weekSpendUsd: number;
+  /** undefined when runs are unavailable — never fabricate $0 from a failed read. */
+  weekSpendUsd: number | undefined;
   weekCapUsd?: number;
   now?: Date;
 }
@@ -94,30 +109,28 @@ export function sumRunCosts(runs: RunListItem[]): number {
   return runs.reduce((acc, run) => acc + (Number(run.costTotalUsd) || 0), 0);
 }
 
-function buildAttention(input: BuildProjectViewInput): AttentionEntry[] {
+function buildAttention(projectId: string, runs: RunListItem[]): AttentionEntry[] {
   const entries: AttentionEntry[] = [];
-  // 1. Pending review handoffs — runs with an open PR in a review state.
-  for (const run of input.runs) {
+  for (const run of runs) {
     if (run.needsReview) {
       entries.push({
         id: `review-${run.runId}`,
         priority: "review",
         title: `${run.specTitle} is review-ready`,
         sub: run.prUrl === null ? `run ${run.runId}` : prHandle(run.prUrl),
-        href: runHref(input.projectId, run.runId),
+        href: runHref(projectId, run.runId),
         tone: "hot",
       });
     }
   }
-  // 2. Open (in-flight) runs the operator may want to watch.
-  for (const run of input.runs) {
+  for (const run of runs) {
     if (OPEN_RUN_STATUSES.has(run.status) && !run.needsReview) {
       entries.push({
         id: `open-${run.runId}`,
         priority: run.status === "running" ? "in flight" : "queued",
         title: `${run.specTitle} is ${run.status}`,
         sub: `run ${run.runId}`,
-        href: runHref(input.projectId, run.runId),
+        href: runHref(projectId, run.runId),
         tone: "",
       });
     }
@@ -130,21 +143,18 @@ function prHandle(prUrl: string): string {
   return match === null ? prUrl : `PR #${match[1]}`;
 }
 
-function buildDagNodes(input: BuildProjectViewInput): DagNode[] {
-  // The DAG snapshot is a read-only, data-derived layout: one node per
-  // recent run, grouped under its milestone label when known, with status
-  // colors. The full DAG-from-spec-graph layout is a later surface (DAG-primary mode).
+function buildDagNodes(projectId: string, runs: RunListItem[], milestones: MilestoneSummary[]): DagNode[] {
   const milestoneFor = (index: number): string => {
-    const milestone = input.milestones[index % Math.max(1, input.milestones.length)];
+    const milestone = milestones[index % Math.max(1, milestones.length)];
     return milestone?.label ?? "—";
   };
-  return input.runs.slice(0, 12).map((run, index) => {
+  return runs.slice(0, 12).map((run, index) => {
     const status = dagStatusForRun(run);
     return {
-      milestone: input.milestones.length > 0 ? milestoneFor(index) : "—",
+      milestone: milestones.length > 0 ? milestoneFor(index) : "—",
       title: run.specTitle,
       status,
-      href: status === "live" || status === "done" || status === "review" ? runHref(input.projectId, run.runId) : null,
+      href: status === "live" || status === "done" || status === "review" ? runHref(projectId, run.runId) : null,
     };
   });
 }
@@ -153,8 +163,6 @@ function dagStatusForRun(run: RunListItem): DagNode["status"] {
   if (run.needsReview) return "review";
   if (run.status === "running") return "live";
   if (run.status === "queued") return "queued";
-  // HALTED-outcome policy set imported from @tanren/db — the prior inline literal
-  // check was missing `convergence_stalled` + `window_exhausted`.
   if (run.outcome !== null && RECOVERABLE_OUTCOMES.has(run.outcome)) {
     return "blocked";
   }
@@ -162,20 +170,15 @@ function dagStatusForRun(run: RunListItem): DagNode["status"] {
   return "queued";
 }
 
-function buildVelocity(input: BuildProjectViewInput): VelocityModel | null {
-  if (input.milestones.length === 0) return null;
-  // Pick the earliest non-done milestone with an ETA as the headline target.
+function buildVelocity(runs: RunListItem[], milestones: MilestoneSummary[], now: Date): VelocityModel | null {
+  if (milestones.length === 0) return null;
   const target =
-    input.milestones.find((m) => m.status !== "done" && m.eta !== null) ??
-    input.milestones.find((m) => m.eta !== null) ??
-    input.milestones[0];
-  // `input.milestones` is non-empty (guarded above), so `target` is defined.
+    milestones.find((m) => m.status !== "done" && m.eta !== null) ??
+    milestones.find((m) => m.eta !== null) ??
+    milestones[0];
   if (target === undefined) return null;
-  // Sparkline: completed-run counts bucketed over recent runs. With no cost/run
-  // history the sparkline is flat-minimal rather than fabricated.
-  const completed = input.runs.filter((run) => dagStatusForRun(run) === "done").length;
-  const spark = buildSparkline(completed, input.runs.length);
-  const now = input.now ?? new Date();
+  const completed = runs.filter((run) => dagStatusForRun(run) === "done").length;
+  const spark = buildSparkline(completed, runs.length);
   const eta = target.eta === null ? null : new Date(target.eta);
   const etaLabel =
     eta !== null && !Number.isNaN(eta.getTime())
@@ -188,13 +191,11 @@ function buildVelocity(input: BuildProjectViewInput): VelocityModel | null {
     milestoneLabel: `${target.label.toLowerCase()} ${target.name.toLowerCase()} · eta`,
     etaLabel,
     statusLabel: onTrack ? "on track" : "behind",
-    trendLabel: `${completed} merged · ${input.runs.length} runs`,
+    trendLabel: `${completed} merged · ${runs.length} runs`,
   };
 }
 
 function buildSparkline(completed: number, total: number): number[] {
-  // A small deterministic ramp scaled by the completion ratio so the card
-  // reflects real throughput without inventing per-day numbers.
   const ratio = total === 0 ? 0 : completed / total;
   const base = [0.4, 0.5, 0.45, 0.6, 0.55, 0.7, 0.65, 0.8, 0.75, 0.9, 0.85, 1];
   return base.map((b) => Math.max(2, Math.round(b * (10 + ratio * 30))));
@@ -207,13 +208,13 @@ function activityKind(eventType: string): ActivityRow["kind"] {
   return "info";
 }
 
-function buildActivity(input: BuildProjectViewInput): ActivityRow[] {
-  return input.feed.slice(0, 12).map((item) => ({
+function buildActivity(projectId: string, feed: ProjectFeedItem[]): ActivityRow[] {
+  return feed.slice(0, 12).map((item) => ({
     ts: item.ts,
     kind: activityKind(item.eventType),
     event: humanizeEvent(item.eventType),
     detail: item.specId === null ? `run ${item.runId}` : `spec ${item.specId}`,
-    href: runHref(input.projectId, item.runId),
+    href: runHref(projectId, item.runId),
   }));
 }
 
@@ -221,49 +222,94 @@ function humanizeEvent(eventType: string): string {
   return eventType.replaceAll(/[._]/gu, " ");
 }
 
+function unavailableKpi(k: string): KpiItem {
+  return { k, v: "—", unavailable: true };
+}
+
 export function buildProjectViewModel(input: BuildProjectViewInput): ProjectViewModel {
-  const inFlight = input.runs.filter((run) => OPEN_RUN_STATUSES.has(run.status)).length;
-  const needsYou = input.runs.filter((run) => run.needsReview).length + input.insights.length;
-  const blocked = input.runs.filter((run) => dagStatusForRun(run) === "blocked").length;
-  const velocity = buildVelocity(input);
+  const runsOk = input.runs !== undefined;
+  const insightsOk = input.insights !== undefined;
+  const milestonesOk = input.milestones !== undefined;
+  const feedOk = input.feed !== undefined;
+  const runs = input.runs ?? [];
+  const insights = input.insights ?? [];
+  const milestones = input.milestones ?? [];
+  const feed = input.feed ?? [];
+  const availability: ProjectReadAvailability = {
+    runs: runsOk,
+    insights: insightsOk,
+    milestones: milestonesOk,
+    feed: feedOk,
+  };
+
+  const inFlight = runs.filter((run) => OPEN_RUN_STATUSES.has(run.status)).length;
+  const needsYou = (runsOk ? runs.filter((run) => run.needsReview).length : 0) + (insightsOk ? insights.length : 0);
+  const blocked = runs.filter((run) => dagStatusForRun(run) === "blocked").length;
+  const velocity = runsOk && milestonesOk ? buildVelocity(runs, milestones, input.now ?? new Date()) : null;
 
   const kpis: KpiItem[] = [
-    { k: "in-flight runs", v: String(inFlight), tone: inFlight > 0 ? "hot" : undefined },
-    { k: "needs you", v: String(needsYou), tone: needsYou > 0 ? "warn" : undefined },
-    {
-      k: "week spend",
-      v:
-        input.weekCapUsd === undefined
-          ? formatUsd(input.weekSpendUsd)
-          : `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`,
-    },
-    { k: "velocity", v: velocity?.trendLabel ?? "—" },
-    { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined },
+    runsOk
+      ? { k: "in-flight runs", v: String(inFlight), tone: inFlight > 0 ? "hot" : undefined }
+      : unavailableKpi("in-flight runs"),
+    runsOk && insightsOk
+      ? { k: "needs you", v: String(needsYou), tone: needsYou > 0 ? "warn" : undefined }
+      : unavailableKpi("needs you"),
+    runsOk && input.weekSpendUsd !== undefined
+      ? {
+          k: "week spend",
+          v:
+            input.weekCapUsd === undefined
+              ? formatUsd(input.weekSpendUsd)
+              : `${formatUsd(input.weekSpendUsd)} / ${formatUsd(input.weekCapUsd)}`,
+        }
+      : unavailableKpi("week spend"),
+    milestonesOk && runsOk ? { k: "velocity", v: velocity?.trendLabel ?? "—" } : unavailableKpi("velocity"),
+    runsOk ? { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined } : unavailableKpi("blocked"),
   ];
 
   const pulseHeadline =
-    input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpendUsd);
-  const recentEvent = input.feed[0];
-  const pulseSub =
-    recentEvent === undefined ? "no recent activity" : `most recent · ${humanizeEvent(recentEvent.eventType)}`;
+    input.narration?.body ??
+    defaultPulse(
+      input.projectName,
+      runsOk ? inFlight : undefined,
+      runsOk && insightsOk ? needsYou : undefined,
+      input.weekSpendUsd,
+    );
+  const recentEvent = feedOk ? feed[0] : undefined;
+  const pulseSub = feedOk
+    ? recentEvent === undefined
+      ? "no recent activity"
+      : `most recent · ${humanizeEvent(recentEvent.eventType)}`
+    : "activity unavailable";
 
   return {
     pulseHeadline,
     pulseSub,
-    liveLabel: `forge live · ${input.feed.length} events`,
+    liveLabel: feedOk ? `forge live · ${feed.length} events` : "activity unavailable",
     kpis,
-    attention: buildAttention(input),
-    dagNodes: buildDagNodes(input),
+    attention: runsOk ? buildAttention(input.projectId, runs) : [],
+    dagNodes: runsOk ? buildDagNodes(input.projectId, runs, milestones) : [],
     velocity,
-    activity: buildActivity(input),
+    activity: feedOk ? buildActivity(input.projectId, feed) : [],
     prompts: input.narration?.prompts ?? [
       "What's the next spec I should run?",
       "How is this week's spend distributed?",
     ],
+    availability,
+    activityUnavailable: !feedOk,
+    runsUnavailable: !runsOk,
   };
 }
 
-function defaultPulse(name: string, inFlight: number, needsYou: number, spend: number): string {
+function defaultPulse(
+  name: string,
+  inFlight: number | undefined,
+  needsYou: number | undefined,
+  spend: number | undefined,
+): string {
+  if (inFlight === undefined || needsYou === undefined || spend === undefined) {
+    return `${name}: some project metrics are unavailable.`;
+  }
   const parts: string[] = [];
   if (inFlight > 0) parts.push(`${inFlight} run(s) in flight`);
   if (needsYou > 0) parts.push(`${needsYou} item(s) need you`);

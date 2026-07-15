@@ -143,12 +143,12 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
   }
   setText(root, "header-status", status);
   if (isTerminalRunStatus(status)) {
-    const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
-    if (flag !== null) flag.textContent = "● final";
+    // Terminal is sticky: later cost/status/task/snapshot frames must not demote it.
+    setStreamState(root, "final");
   }
 }
 
-function isTerminalRunStatus(status: string): boolean {
+export function isTerminalRunStatus(status: string): boolean {
   return ["completed", "failed", "halted", "cancelled", "done"].includes(status);
 }
 
@@ -162,9 +162,23 @@ export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: stri
   setStreamState(root, "unavailable", reason);
 }
 
-export function setStreamState(root: HTMLElement, state: "live" | "stale" | "unavailable", reason?: string): void {
+/**
+ * Live-flag transitions. Once `final`, later live/stale/unavailable frames are
+ * no-ops so grace cost deltas and reconnect noise cannot rewrite the terminal UI.
+ */
+export function setStreamState(
+  root: HTMLElement,
+  state: "live" | "stale" | "unavailable" | "final",
+  reason?: string,
+): void {
   const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
   if (flag === null) return;
+  if (isFinalStreamState(root) && state !== "final") return;
+  if (state === "final") {
+    flag.textContent = "● final";
+    flag.removeAttribute("title");
+    return;
+  }
   if (state === "live") {
     flag.textContent = "↻ live";
     flag.removeAttribute("title");
@@ -270,6 +284,12 @@ export function initRunStream(): void {
   });
 
   source.addEventListener("error", () => {
+    // Terminal streams end after the grace drain; EventSource reports that as
+    // error + would reconnect forever. Close once final so finished runs rest.
+    if (isFinalStreamState(root)) {
+      source.close();
+      return;
+    }
     markStreamUnavailableUnlessFinal(
       root,
       "The browser lost the run event stream; EventSource will keep reconnecting.",

@@ -74,7 +74,7 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
       <div class="onb" data-screen="onboarding-new">
         <Journey step={props.step} />
         {props.error !== undefined && (
-          <div class="gf-card" style="border-color:var(--status-warn)">
+          <div class="gf-card" style="border-color:var(--status-warn)" role="alert" aria-live="polite">
             <div class="body" style="color:var(--status-warn)">
               {props.error}
             </div>

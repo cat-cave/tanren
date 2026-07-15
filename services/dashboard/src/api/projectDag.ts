@@ -198,20 +198,21 @@ function attentionSub(kind: DagStatus, node: DagNode): string {
 
 /**
  * Fetch + assemble the project DAG. Composes the existing typed orchestrator
- * reads (specs, milestones, runs, behaviors). Degrades to an empty graph when
- * a source is unreachable — the view renders a "fresh DAG" empty state rather
- * than 500-ing.
+ * reads (specs, milestones, runs, behaviors). Required sources (specs + runs)
+ * fail loud via `ProjectDagUnavailableError`; milestones degrade to an empty
+ * strip only when that secondary read is unavailable (graph nodes still load).
  */
 export async function getProjectDag(client: OrchestratorClient, orgId: string, projectId: string): Promise<ProjectDag> {
   const [specs, milestones, runs, behaviors] = await Promise.all([
     client.listSpecsMaybe(orgId, projectId),
-    client.listMilestones(orgId, projectId),
+    client.listMilestonesMaybe(orgId, projectId),
     client.listRunsMaybe(orgId, projectId),
     client.listAllBehaviors(orgId, projectId),
   ]);
   if (specs === undefined || runs === undefined) {
     throw new ProjectDagUnavailableError("Project DAG unavailable: required spec or run reads failed.");
   }
+  const milestoneRows = milestones ?? [];
 
   // Behaviour linkage is not yet exposed per-spec by the read API, so we leave
   // `behaviorsBySpec` empty for now and surface the project behaviour count via
@@ -228,7 +229,7 @@ export async function getProjectDag(client: OrchestratorClient, orgId: string, p
       // the DAG-build input so the routing origin surfaces on the DAG node.
       ...(s.triageProvenance !== undefined && { triageProvenance: s.triageProvenance }),
     })),
-    milestones: milestones.map((m) => ({
+    milestones: milestoneRows.map((m) => ({
       id: m.id,
       label: m.label,
       name: m.name,

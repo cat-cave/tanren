@@ -60,9 +60,9 @@ export function ProjectViewBody(props: ProjectViewBodyProps) {
         <div class="split-chat">
           <ForgeNarrationCard {...props} />
           <div class="col">
-            <DagSnapshot nodes={model.dagNodes} />
+            <DagSnapshot nodes={model.dagNodes} runsUnavailable={model.runsUnavailable} />
             {model.velocity !== null && <VelocityCard velocity={model.velocity} />}
-            <ActivityFeed rows={model.activity} />
+            <ActivityFeed rows={model.activity} unavailable={model.activityUnavailable} />
           </div>
         </div>
       </div>
@@ -209,7 +209,7 @@ function SuboptCallout(props: {
  * routes per the hi-fi rule: live/done/review → run detail; blocked/queued →
  * no-op.
  */
-function DagSnapshot(props: { nodes: DagNode[] }) {
+function DagSnapshot(props: { nodes: DagNode[]; runsUnavailable?: boolean }) {
   const cols = 4;
   const cellW = 250;
   const cellH = 56;
@@ -219,13 +219,20 @@ function DagSnapshot(props: { nodes: DagNode[] }) {
   return (
     <div class="dag-shell">
       <div class="dag-head">
-        <span class="pill run">
-          <span class="d"></span>dag · live
+        <span class={`pill ${props.runsUnavailable === true ? "warn" : "run"}`}>
+          <span class="d"></span>
+          {props.runsUnavailable === true ? "dag · unavailable" : "dag · live"}
         </span>
-        <span class="note">{props.nodes.length} nodes · click any node</span>
+        <span class="note">
+          {props.runsUnavailable === true ? "run list unavailable" : `${props.nodes.length} nodes · click any node`}
+        </span>
       </div>
       <div class="dag-canvas">
-        {props.nodes.length === 0 ? (
+        {props.runsUnavailable === true ? (
+          <div class="empty-note" data-runs-unavailable>
+            Run list unavailable — this is not an empty DAG snapshot.
+          </div>
+        ) : props.nodes.length === 0 ? (
           <div class="empty-note">No runs yet — the DAG snapshot renders nodes once a spec runs.</div>
         ) : (
           <svg
@@ -324,19 +331,25 @@ function VelocityCard(props: { velocity: VelocityModel }) {
   );
 }
 
-function ActivityFeed(props: { rows: ActivityRow[] }) {
+function ActivityFeed(props: { rows: ActivityRow[]; unavailable?: boolean }) {
   return (
-    <div class="activity">
+    <div class="activity" data-activity-panel={props.unavailable === true ? "unavailable" : "ok"}>
       <div class="panel-head">
         <h3>
-          activity · <em>live</em>
+          activity · <em>{props.unavailable === true ? "unavailable" : "live"}</em>
         </h3>
-        <span class="pill run" style="font-size:8px">
-          <span class="d"></span>↻
-        </span>
+        {props.unavailable !== true && (
+          <span class="pill run" style="font-size:8px">
+            <span class="d"></span>↻
+          </span>
+        )}
       </div>
       <div class="body">
-        {props.rows.length === 0 ? (
+        {props.unavailable === true ? (
+          <div class="empty-note" style="padding:12px 13px" data-activity-unavailable>
+            Activity unavailable — the feed read failed. This is not an empty timeline.
+          </div>
+        ) : props.rows.length === 0 ? (
           <div class="empty-note" style="padding:12px 13px">
             No recent events for this project.
           </div>

@@ -48,4 +48,30 @@ describe("run stream client status", () => {
     expect(flag.title).toBe("Disconnected");
     expect(isFinalStreamState(root)).toBe(false);
   });
+
+  it("keeps final across later snapshot/cost/status/task live or stale frames", () => {
+    const { root, flag } = rootWithFlag();
+    setStreamState(root, "final");
+    expect(flag.textContent).toBe("● final");
+
+    // Post-terminal grace frames and reconnect noise must not demote final.
+    setStreamState(root, "live");
+    expect(flag.textContent).toBe("● final");
+    setStreamState(root, "stale", "Malformed costs frame from the live stream.");
+    expect(flag.textContent).toBe("● final");
+    expect(flag.title).toBe("");
+    setStreamState(root, "unavailable", "reconnect");
+    expect(flag.textContent).toBe("● final");
+    markStreamUnavailableUnlessFinal(root, "reconnect after terminal EOF");
+    expect(flag.textContent).toBe("● final");
+  });
+
+  it("setStreamState(final) is sticky and idempotent", () => {
+    const { root, flag } = rootWithFlag();
+    setStreamState(root, "live");
+    setStreamState(root, "final");
+    setStreamState(root, "final");
+    expect(isFinalStreamState(root)).toBe(true);
+    expect(flag.textContent).toBe("● final");
+  });
 });

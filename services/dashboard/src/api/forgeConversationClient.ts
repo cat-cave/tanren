@@ -93,8 +93,9 @@ export abstract class OrchestratorForgeConversationClient extends OrchestratorRe
       },
       { expectBody: true },
     );
+    // 200 {} / missing forgeTurn.render is not a successful ask — fail closed.
     const render = result.body?.forgeTurn?.render;
-    if (!result.ok || render === undefined) {
+    if (!result.ok || render === undefined || typeof render.body !== "string") {
       return undefined;
     }
     return {
