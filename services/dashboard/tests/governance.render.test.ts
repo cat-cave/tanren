@@ -4,7 +4,6 @@
 
 import type pg from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GovernanceClient } from "../src/api/governanceClient.js";
 import { createApp } from "../src/main.js";
 
 const ORG = {
@@ -46,6 +45,7 @@ let governancePayload: unknown;
 let governanceGetStatus: number;
 let governancePutStatus: number;
 let governancePutError: string;
+let malformedPutSuccess: boolean;
 let putBodies: unknown[];
 let lastPutHeaders: Record<string, string> | undefined;
 
@@ -69,7 +69,10 @@ function mockOrchestrator(): void {
         if (governancePutStatus >= 200 && governancePutStatus < 300) {
           const auditPosture = (body as { auditPosture?: unknown } | undefined)?.auditPosture;
           governancePayload = { ...(governancePayload as object), auditPosture };
-          return new Response(JSON.stringify(governancePayload), { status: governancePutStatus });
+          const responseBody = malformedPutSuccess
+            ? { ...(governancePayload as object), auditPosture: { blockReviewAt: "P3" } }
+            : governancePayload;
+          return new Response(JSON.stringify(responseBody), { status: governancePutStatus });
         }
         return new Response(JSON.stringify({ error: governancePutError }), { status: governancePutStatus });
       }
@@ -92,6 +95,7 @@ beforeEach(() => {
   governanceGetStatus = 200;
   governancePutStatus = 200;
   governancePutError = "governance_write_failed";
+  malformedPutSuccess = false;
   putBodies = [];
   lastPutHeaders = undefined;
   mockOrchestrator();
@@ -202,6 +206,19 @@ describe("audit-posture governance screen (/settings/governance)", () => {
     expect(html).toContain('data-current-block-review-at="P1"');
   });
 
+  it("reloads and explains a concurrent governance conflict", async () => {
+    governancePutStatus = 409;
+    governancePutError = "project_config_conflict";
+    const app = await build();
+    const response = await postForm(app, "projectId=project_easy&blockReviewAt=P2&p2p3Handling=fix-if-idle");
+    expect(response.headers.get("location")).toContain("err=conflict");
+
+    const html = await (await app.request(response.headers.get("location") ?? "/settings/governance")).text();
+    expect(html).toContain("Governance changed concurrently");
+    expect(html).toContain("Current values were reloaded");
+    expect(html).toContain('data-current-block-review-at="P1"');
+  });
+
   it("renders read failure as unavailable without substituting fake defaults", async () => {
     governanceGetStatus = 500;
     const app = await build();
@@ -211,15 +228,32 @@ describe("audit-posture governance screen (/settings/governance)", () => {
     expect(html).not.toContain("data-current-audit-posture");
   });
 
-  it("fails loudly when a successful governance response is malformed", async () => {
+  it("renders a malformed successful GET as an actionable mounted-screen state", async () => {
     governancePayload = { ...CURRENT_GOVERNANCE, auditPosture: { blockReviewAt: "P1" } };
-    const client = new GovernanceClient({
-      orchestratorUrl: "http://orchestrator.invalid",
-      fetchImpl: globalThis.fetch,
-    });
-    await expect(client.getProjectGovernance("org_acme", "project_easy")).rejects.toThrow(
-      "invalid governance response from orchestrator",
+    const app = await build();
+    const response = await app.request("/settings/governance?projectId=project_easy");
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("data-governance-malformed");
+    expect(html).toContain("Verify orchestrator/dashboard versions");
+    expect(html).not.toContain("data-current-audit-posture");
+  });
+
+  it("renders malformed successful PUT confirmation as an unknown, actionable save outcome", async () => {
+    malformedPutSuccess = true;
+    const app = await build();
+    const response = await postForm(
+      app,
+      "projectId=project_easy&blockReviewAt=P3&p2p3Handling=route-to-dag&autonomousRemediation=true",
     );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toContain("err=malformed_save");
+    const html = await (await app.request(response.headers.get("location") ?? "/settings/governance")).text();
+    expect(html).toContain("acknowledged the save but returned malformed confirmation");
+    expect(html).toContain("Treat the outcome as unknown and verify before retrying");
+    expect(html).toContain('data-current-block-review-at="P3"');
   });
 
   it("refuses an unknown project id before any governance write", async () => {

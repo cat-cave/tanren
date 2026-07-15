@@ -15,7 +15,7 @@ export interface GovernanceBodyProps {
   projects: ProjectSummary[];
   project: ProjectSummary | undefined;
   governance: GovernanceView | undefined;
-  readFailed: boolean;
+  readFailure: "unavailable" | "malformed" | undefined;
   flash: GovernanceFlash;
   csrfToken: string | undefined;
 }
@@ -154,7 +154,14 @@ export function GovernanceBody(props: GovernanceBodyProps) {
                   : "The requested project is not visible. Choose a project above."}
               </div>
             </section>
-          ) : props.readFailed || props.governance === undefined ? (
+          ) : props.readFailure === "malformed" ? (
+            <section class="panel" data-governance-malformed>
+              <div class="panel-body empty">
+                Governance response malformed — no values or defaults were displayed. Verify orchestrator/dashboard
+                versions, then retry the canonical read.
+              </div>
+            </section>
+          ) : props.readFailure === "unavailable" || props.governance === undefined ? (
             <section class="panel" data-governance-unavailable>
               <div class="panel-body empty">
                 Governance unavailable — the canonical orchestrator read failed. No defaults were substituted.

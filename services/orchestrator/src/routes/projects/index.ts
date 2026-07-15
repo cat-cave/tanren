@@ -24,7 +24,7 @@ import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from ".
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
-import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
+import { applyFullConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 import { handleProjectArchive, handleProjectUnarchive, handleProjectUpgrade } from "./lifecycle.js";
@@ -80,9 +80,10 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json(configCheck.response, 400);
     }
     const scopedActor: ActorContext = { ...actor, orgId };
-    const projectInput =
-      configCheck.config === undefined ? parsed.data : { ...parsed.data, config: configCheck.config };
-    const project = await createProject(options.pool, projectInput, scopedActor);
+    // Preserve the caller's raw key presence for createProject's identical
+    // defense-in-depth guard. Passing the default-expanded parse result here
+    // would make schema defaults look caller-supplied on the second check.
+    const project = await createProject(options.pool, parsed.data, scopedActor);
     return c.json(project, 201);
   });
 
@@ -144,17 +145,16 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_project_config", issues: parsed.error.issues }, 400);
     }
-    const ownership = await ProjectStore.getOwnership(options.pool, projectId, systemActor);
-    if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
-      return c.json({ error: "project_not_found" }, 404);
+    const outcome = await applyFullConfigPatch(options.pool, orgId, projectId, parsed.data.config);
+    if (outcome.kind === "not_found") return c.json({ error: "project_not_found" }, 404);
+    if (outcome.kind === "rejected") return c.json(outcome.response, 400);
+    if (outcome.kind === "conflict") {
+      return c.json(
+        { error: "project_config_conflict", message: "project config changed; reload before retrying" },
+        409,
+      );
     }
-    const currentConfig = migrateProjectConfig(await ProjectStore.getConfig(options.pool, projectId, systemActor));
-    const configCheck = checkFullProjectConfigPatch(parsed.data.config, currentConfig);
-    if (!configCheck.ok) {
-      return c.json(configCheck.response, 400);
-    }
-    await ProjectStore.updateConfig(options.pool, projectId, configCheck.config, systemActor);
-    return c.json({ projectId, config: configCheck.config });
+    return c.json({ projectId, config: outcome.config });
   });
 
   // The dedicated dollar-budget surface (autonomy-engine.md §3 proof 6): a

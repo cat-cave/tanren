@@ -49,6 +49,10 @@ function buildHarness(boundActor: ActorContext = admin) {
   );
   pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
 
+  return { app: buildApp(pool, boundActor), pool };
+}
+
+function buildApp(pool: RoutesPool, boundActor: ActorContext): Hono<ActorContextEnv> {
   const app = new Hono<ActorContextEnv>();
   app.use(
     "*",
@@ -66,7 +70,39 @@ function buildHarness(boundActor: ActorContext = admin) {
   // `secrets`/`githubHttp` are only used by the greenfield create path, never by
   // the governance routes — stubbed for construction only.
   app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, githubHttp: {} as never }));
-  return { app, pool };
+  return app;
+}
+
+class InterleavingRoutesPool extends RoutesPool {
+  private configReadCount = 0;
+  private releaseFirstRead: (() => void) | undefined;
+  private firstReadSeen: (() => void) | undefined;
+  readonly memberSnapshotRead = new Promise<void>((resolve) => {
+    this.firstReadSeen = resolve;
+  });
+  private readonly memberMayContinue = new Promise<void>((resolve) => {
+    this.releaseFirstRead = resolve;
+  });
+
+  allowMemberToContinue(): void {
+    this.releaseFirstRead?.();
+  }
+
+  override async query(sql: string, params: unknown[] = []) {
+    const isConfigRead =
+      sql.trim().startsWith("SELECT org_id, config FROM projects WHERE project_id = $1") ||
+      sql.trim().startsWith("SELECT config FROM projects WHERE project_id = $1");
+    if (isConfigRead) {
+      this.configReadCount += 1;
+      if (this.configReadCount === 1) {
+        const result = await super.query(sql, params);
+        this.firstReadSeen?.();
+        await this.memberMayContinue;
+        return result;
+      }
+    }
+    return super.query(sql, params);
+  }
 }
 
 async function getJson(app: Hono<ActorContextEnv>, path: string): Promise<{ status: number; body: any }> {
@@ -142,6 +178,49 @@ describe("project governance routes", () => {
       blockReviewAt: "P3",
       p2p3Handling: "route-to-dag",
       autonomousRemediation: true,
+    });
+  });
+
+  it("does not let a stale member PATCH clobber an interleaved admin audit-posture PUT", async () => {
+    const pool = new InterleavingRoutesPool();
+    pool.seedOrg({ id: "org_acme" });
+    pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
+    const memberApp = buildApp(pool, memberOnly);
+    const adminApp = buildApp(pool, admin);
+
+    const memberRequest = memberApp.request("/orgs/org_acme/projects/proj_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditPosture: {
+            blockReviewAt: "P1",
+            p2p3Handling: "fix-if-idle",
+            autonomousRemediation: false,
+          },
+          credentials: { githubCredentialRef: "credential/member-stale" },
+        },
+      }),
+    });
+    await pool.memberSnapshotRead;
+
+    const adminPut = await putJson(adminApp, "/orgs/org_acme/projects/proj_1/governance", {
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+    });
+    expect(adminPut.status).toBe(200);
+
+    pool.allowMemberToContinue();
+    const memberResponse = await memberRequest;
+    expect(memberResponse.status).toBe(409);
+    await expect(memberResponse.json()).resolves.toMatchObject({
+      error: "project_config_conflict",
+    });
+    expect(pool.projects.get("proj_1")?.config).toMatchObject({
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+    });
+    expect(pool.projects.get("proj_1")?.config).not.toMatchObject({
+      credentials: { githubCredentialRef: "credential/member-stale" },
     });
   });
 
