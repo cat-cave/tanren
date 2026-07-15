@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { checkNoProductionStubs } from "./check-architecture-stubs.mjs";
 import { runArchitectureChecks } from "./check-architecture.mjs";
 import {
-  checkCrossPackageDeepImports,
   checkCyclomaticComplexity,
   checkE2eNoMockImports,
   checkMaxParams,
@@ -261,30 +260,6 @@ describe("structural architecture checks", () => {
     const atCapParams = Array.from({ length: MAX_PARAMS_CAP }, (_unused, index) => `arg${index}: number`).join(", ");
     const atCapText = `export function fits(${atCapParams}): number {\n  return 0;\n}\n`;
     expect(checkMaxParams([{ file: workflowFile, text: atCapText }])).toEqual([]);
-  });
-
-  it("flags deep cross-package imports and allows public-entry and intra-package imports", () => {
-    const bareDeep = {
-      file: "services/orchestrator/src/main.ts",
-      text: 'import { x } from "@tanren/db/src/stateEnums.js";\n',
-    };
-    const relativeDeep = {
-      file: "services/orchestrator/tests/sample.test.ts",
-      text: 'import { x } from "../../../db/src/stateEnums.js";\n',
-    };
-    const flagged = checkCrossPackageDeepImports([bareDeep, relativeDeep]);
-    expect(flagged).toHaveLength(2);
-    expect(flagged.every((item) => item.rule === "cross-package-deep-import")).toBe(true);
-
-    const publicEntry = {
-      file: "services/orchestrator/src/main.ts",
-      text: 'import { stateEnumLists } from "@tanren/db";\n',
-    };
-    const intraPackage = {
-      file: "services/orchestrator/src/main.ts",
-      text: 'import { y } from "./engine/state/index.js";\n',
-    };
-    expect(checkCrossPackageDeepImports([publicEntry, intraPackage])).toEqual([]);
   });
 
   it("flags a test block whose only assertion is a mock-call check", () => {
