@@ -14,24 +14,26 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import { LandCasRejectedError } from "../src/engine/providers/githubCodeHost.js";
-import type { LandAuthorizedRefInput } from "../src/engine/contracts/codeHost.js";
+import type { LandAuthorizedIntegrationInput } from "../src/engine/contracts/codeHost.js";
 import type { MergeForRunInput, MergeProbe } from "../src/engine/workflow/reviewMerge/index.js";
 import { MergeDispatcher, type DispatcherDeps } from "../src/engine/workflow/reviewMerge/mergeDispatcher.js";
 
 /**
- * An ancestry-augmented host that REJECTS the first `landAuthorizedRef` (modeling a batch
+ * An ancestry-augmented host that REJECTS the first `landAuthorizedIntegration` (modeling a batch
  * sibling racing main ahead between the authority's base read and the ff-only CAS write —
  * the TOCTOU window the real ff-only CAS closes), then lands normally. §6.5: a CodeHost
  * fake that models the CAS race so the merge-through rebase-on-CAS path is provable no-DB.
  */
 class RaceOnceCodeHost extends InMemoryCodeHost {
   private rejected = false;
-  override async landAuthorizedRef(input: LandAuthorizedRefInput): ReturnType<InMemoryCodeHost["landAuthorizedRef"]> {
+  override async landAuthorizedIntegration(
+    input: LandAuthorizedIntegrationInput,
+  ): ReturnType<InMemoryCodeHost["landAuthorizedIntegration"]> {
     if (!this.rejected) {
       this.rejected = true;
       throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, "sha-sibling");
     }
-    return super.landAuthorizedRef(input);
+    return super.landAuthorizedIntegration(input);
   }
 }
 
@@ -46,13 +48,15 @@ class AdvancingRaceCodeHost extends InMemoryCodeHost {
   constructor(private readonly rejectCount: number) {
     super();
   }
-  override async landAuthorizedRef(input: LandAuthorizedRefInput): ReturnType<InMemoryCodeHost["landAuthorizedRef"]> {
+  override async landAuthorizedIntegration(
+    input: LandAuthorizedIntegrationInput,
+  ): ReturnType<InMemoryCodeHost["landAuthorizedIntegration"]> {
     if (this.rejections < this.rejectCount) {
       this.rejections += 1;
       // The observed actual main sha ADVANCES every rejection → a CHANGING signature = progress.
       throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, `sha-main-${this.rejections}`);
     }
-    return super.landAuthorizedRef(input);
+    return super.landAuthorizedIntegration(input);
   }
 }
 
@@ -62,7 +66,9 @@ class AdvancingRaceCodeHost extends InMemoryCodeHost {
  * (a real stuck, NOT contention): the progress-based guard must recoverable-hold, never loop.
  */
 class StuckRaceCodeHost extends InMemoryCodeHost {
-  override async landAuthorizedRef(input: LandAuthorizedRefInput): ReturnType<InMemoryCodeHost["landAuthorizedRef"]> {
+  override async landAuthorizedIntegration(
+    input: LandAuthorizedIntegrationInput,
+  ): ReturnType<InMemoryCodeHost["landAuthorizedIntegration"]> {
     // The observed actual main sha NEVER advances → the same rejection signature every attempt.
     throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, "sha-stuck");
   }

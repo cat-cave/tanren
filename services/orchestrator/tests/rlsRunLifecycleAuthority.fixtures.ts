@@ -6,7 +6,7 @@
 // Extracted to a sibling fixture so the test file stays under the max-dependencies cap.
 
 import type { Pool } from "pg";
-import { buildLandFinalizer } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
+import { buildAuthorityLandStore } from "../src/engine/merge/mergeAuthorityLandFinalizer.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 import type { MergeAuthorityBundle } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
@@ -28,7 +28,7 @@ export function lifecycleAuthorityBundle(input: {
   return {
     codeHost: host,
     orgId: input.orgId,
-    finalizerFor: (context) => buildLandFinalizer(input.pool, context, writer),
+    landStoreFor: (context) => buildAuthorityLandStore(input.pool, context, writer),
     gateConfigHash: "gc",
     policyVersion: "pv",
     gateOutcome: { passed: true, results: [] },

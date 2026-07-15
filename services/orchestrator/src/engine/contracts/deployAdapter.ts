@@ -28,6 +28,13 @@
 
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "./integrationProvisioner.js";
 import type { DeploySource, DeployResult } from "../provisioners/deployProvisioner.js";
+// SP-6 binds to the frozen spine identities: the canonical artifact identity is the
+// SP-3 `Digest` (sha256:<hex>); a provider-native checksum is the separately-named
+// SP-3 `ProviderChecksum` (sha512) — NEVER a CAS/proof identity. A release binds the
+// exact behavior revisions it delivers via SP-1's branded `BehaviorRevisionId`. These
+// import from the SOLE spine modules (no re-path, no redeclaration).
+import type { Digest, ProviderChecksum } from "./cas.js";
+import type { BehaviorRevisionId } from "./behaviorRevision.js";
 
 /**
  * Whether to find-or-create a deploy app (`provision`) or link an already-discovered
@@ -152,6 +159,175 @@ export interface VerifyPollPolicy {
   intervalMs: number;
 }
 
+// ===========================================================================
+// SP-6 — the EXTENDED release lifecycle (digest / preview / promote / rollback).
+// These are NOT a V2 port: they extend the SINGLE DeployAdapter contract in place
+// (no V1/V2 split). Every adapter arm implements the full set. The canonical
+// artifact identity is the SP-3 `Digest`; the provider-native checksum is the
+// separately-named SP-3 `ProviderChecksum` (sha512), never a CAS/proof identity.
+// ===========================================================================
+
+/**
+ * The lifecycle state of a persisted release instance (the `release_instances`
+ * table's `state`). A release is BUILT (an artifact exists with a known digest),
+ * applied to a PREVIEW/canary env, PROMOTED to production (LIVE), SUPERSEDED by a
+ * newer live release, ROLLED_BACK to a prior verified artifact, or TORN_DOWN
+ * (a preview reaped). FAILED is a hard terminal (the build/apply/promote errored).
+ */
+export type ReleaseState =
+  | "built"
+  | "preview"
+  | "promoting"
+  | "live"
+  | "superseded"
+  | "rolled_back"
+  | "torn_down"
+  | "failed";
+
+/**
+ * Which environment a release instance targets. `preview` is the pre-merge
+ * preview/canary the symptom contract runs against; `production` is the promoted,
+ * user-facing release. The SAME contract runs against both (pitch §"Preview and
+ * production use the same contract").
+ */
+export type ReleaseEnvironment = "preview" | "production";
+
+/**
+ * A persisted release instance — one row of `release_instances` (migration 0036).
+ * Captures the provider/app/environment, the deployment handle, the IMMUTABLE
+ * source SHA, the canonical SP-3 artifact `Digest`, the separately-named provider
+ * sha512 `ProviderChecksum` (nullable — not every provider reports one), the SCALAR
+ * integration-node identity that produced it (no forward FK — the run model is a
+ * feature bucket that shifts to 0040+), the exact behavior revisions it delivers,
+ * the live URL/channel, the region, the previous verified release it supersedes
+ * (self-ref), and the lifecycle `state`. NON-SECRET — refs, digests, ids, a URL.
+ */
+export interface ReleaseInstanceRecord {
+  /** The release-instance row id (the stable handle promote/rollback/teardown key on). */
+  readonly releaseInstanceId: string;
+  /** The owning org (tenant scope; every query is org-scoped). */
+  readonly orgId: string;
+  /** The owning project. */
+  readonly projectId: string;
+  /** The deploy provider kind (`deploy.vercel` | `deploy.flyio` | `deploy.pulumi` | …). */
+  readonly provider: string;
+  /** The deployed app/project/stack/package id (the deployRef `appId`). */
+  readonly appId: string;
+  /** Which environment this release targets. */
+  readonly environment: ReleaseEnvironment;
+  /** The provider-side deployment handle (the verify/status/promote key). */
+  readonly deploymentId: string;
+  /** The IMMUTABLE source commit SHA the artifact was built from. */
+  readonly sourceRef: string;
+  /** The canonical SP-3 artifact identity (sha256:<hex>) — the release/artifact identity. */
+  readonly artifactDigest: Digest;
+  /** The provider-native sha512 checksum (a SEPARATE identity; NEVER a CAS/proof key), or null. */
+  readonly providerChecksum: ProviderChecksum | null;
+  /** The integration node that produced this release (SCALAR — no forward FK to the run model). */
+  readonly integrationNodeId: string;
+  /** The exact behavior revisions this release delivers (junction rows). */
+  readonly behaviorRevisionIds: readonly BehaviorRevisionId[];
+  /** The resolved live URL/channel the release is reachable at (concrete, no placeholder). */
+  readonly url: string;
+  /** The provider region the release runs in, or null when the provider is regionless. */
+  readonly region: string | null;
+  /** The previously-verified release this one supersedes (self-ref), or null for the first. */
+  readonly previousReleaseInstanceId: string | null;
+  /** The lifecycle state. */
+  readonly state: ReleaseState;
+  /** ISO-8601 creation timestamp. */
+  readonly createdAt: string;
+}
+
+/**
+ * The exact artifact identity of a built/deployed release: the canonical SP-3
+ * `Digest` (sha256) plus the optional provider-native sha512 `ProviderChecksum`.
+ * `resolveArtifactDigest` returns this for an existing deployment; `buildArtifact`
+ * embeds it in its result.
+ */
+export interface ArtifactIdentity {
+  /** The canonical SP-3 artifact identity (sha256:<hex>). */
+  readonly artifactDigest: Digest;
+  /** The provider-native sha512 checksum (a separate identity), or null when unreported. */
+  readonly providerChecksum: ProviderChecksum | null;
+}
+
+/**
+ * The outcome of `buildArtifact`: the exact artifact identity produced from the
+ * merged source, plus the provider build handle + state. This is the "return
+ * artifact digest" step — the release's canonical identity is minted here and
+ * flows onto `release_instances.artifact_digest`.
+ */
+export interface BuildArtifactResult extends ArtifactIdentity {
+  /** The provider-side build/deployment handle the artifact was produced under. */
+  readonly deploymentId: string;
+  /** The provider's reported build state at return (e.g. "built" | "READY"). */
+  readonly state: string;
+}
+
+/** The input to `applyPreview`: the merged source + the artifact + release bindings. */
+export interface ApplyPreviewInput {
+  /** The merged source (repo + ref) the preview deploys. */
+  readonly source: DeploySource;
+  /** The canonical SP-3 artifact identity the preview must run (the exact built artifact). */
+  readonly artifactDigest: Digest;
+  /** The integration node this preview verifies (SCALAR identity carried onto the row). */
+  readonly integrationNodeId: string;
+  /** The exact behavior revisions the preview delivers (bound onto the release instance). */
+  readonly behaviorRevisionIds: readonly BehaviorRevisionId[];
+}
+
+/** A live preview/canary release: the handle the symptom contract runs against, then promotes/teardown. */
+export interface PreviewRelease {
+  /** The provider-side preview deployment handle. */
+  readonly deploymentId: string;
+  /** The resolved live preview URL/channel (concrete, no placeholder). */
+  readonly url: string;
+  /** Always `preview` — the environment this release targets. */
+  readonly environment: ReleaseEnvironment;
+  /** The canonical SP-3 artifact identity the preview is running. */
+  readonly artifactDigest: Digest;
+  /** The lifecycle state at return (`preview`). */
+  readonly state: ReleaseState;
+}
+
+/** The input to `promote`: the verified artifact + the previous live release it supersedes. */
+export interface PromoteInput {
+  /** The provider-side deployment handle of the verified (preview) release to promote. */
+  readonly deploymentId: string;
+  /** The canonical SP-3 artifact identity being promoted (the exact verified artifact). */
+  readonly artifactDigest: Digest;
+  /** The previous live release-instance id this promotion supersedes (self-ref), or null. */
+  readonly previousReleaseInstanceId: string | null;
+}
+
+/** The input to `rollback`: the previously-verified artifact + its release-instance id to restore. */
+export interface RollbackInput {
+  /** The canonical SP-3 artifact identity of the known-good release to restore. */
+  readonly targetArtifactDigest: Digest;
+  /** The release-instance id of the known-good release being restored. */
+  readonly targetReleaseInstanceId: string;
+}
+
+/**
+ * The outcome of `promote` / `rollback`: the now-live production deployment handle +
+ * resolved URL + the artifact it is serving + the lifecycle state (`live` after a
+ * promote, `rolled_back` after a rollback). A TRAFFIC transition only — a code
+ * revert is ordinary P0 work through the full merge path (pitch §"Safe rollback").
+ */
+export interface ReleaseTransition {
+  /** The now-live production deployment handle. */
+  readonly deploymentId: string;
+  /** The resolved live production URL/channel (concrete, no placeholder). */
+  readonly url: string;
+  /** Always `production` — promote/rollback land traffic on production. */
+  readonly environment: ReleaseEnvironment;
+  /** The canonical SP-3 artifact identity now serving traffic. */
+  readonly artifactDigest: Digest;
+  /** The lifecycle state at return (`live` for promote, `rolled_back` for rollback). */
+  readonly state: ReleaseState;
+}
+
 /**
  * The DeployAdapter port. `provisionOrBind` yields the project deploy artifact (the
  * deployRef + config + token alias ref); `deploy` triggers a build+release of the
@@ -159,6 +335,16 @@ export interface VerifyPollPolicy {
  * capability); `status` reads a deployment's current state without polling. A new
  * adapter CLASS (pulumi / mobile_release / …) implements this port and registers as
  * a new `buildDeployAdapter` arm — never a refactor of this contract.
+ *
+ * SP-6 EXTENDS the SAME port (no V1/V2 split) with the release lifecycle:
+ * `buildArtifact` builds the exact source + mints the canonical SP-3 artifact digest;
+ * `resolveArtifactDigest` reads an existing deployment's exact artifact identity;
+ * `applyPreview` deploys the artifact to a preview/canary env; `promote` lands it on
+ * production; `rollback` restores a previously-verified artifact; `teardownPreview`
+ * reaps a preview env. Every arm implements the FULL set; an arm whose provider has
+ * no preview/promote/rollback concept (a package/mobile/manual release) fails LOUD
+ * with a typed capability-boundary error (the codebase's blessed "correct behavior,
+ * NOT a stub" pattern) rather than silently succeeding.
  */
 export interface DeployAdapter {
   /** The adapter class kind this impl speaks for (e.g. "direct_api"). */
@@ -188,4 +374,43 @@ export interface DeployAdapter {
    * reports no URL) — a demo with no surface to exercise is never a silent skip.
    */
   demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface>;
+  /**
+   * BUILD the exact merged `source` into a releasable artifact and return its
+   * canonical SP-3 identity (the sha256 `Digest`) + the optional provider-native
+   * sha512 `ProviderChecksum`. This is the "deploy exact source, return artifact
+   * digest" primitive — the minted digest is the release/artifact identity that
+   * lands on `release_instances.artifact_digest`. A build failure throws LOUD.
+   */
+  buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult>;
+  /**
+   * Read the EXACT artifact identity of an existing deployment (the canonical SP-3
+   * `Digest` + optional provider `ProviderChecksum`) — used to re-bind a running
+   * release to its artifact for verification/promotion. Throws LOUD when the
+   * provider reports no resolvable artifact identity.
+   */
+  resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity>;
+  /**
+   * Deploy the exact artifact to a PREVIEW/canary environment and return the live
+   * preview handle the symptom contract runs against before merge. Throws LOUD when
+   * the provider has no preview/canary concept (a package/mobile/manual release).
+   */
+  applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease>;
+  /**
+   * PROMOTE a verified (preview) artifact to production — a TRAFFIC transition to
+   * the exact verified artifact. Returns the now-live production release. Throws
+   * LOUD when the provider has no promote concept.
+   */
+  promote(grant: OrgGrant, ref: DeployRef, input: PromoteInput): Promise<ReleaseTransition>;
+  /**
+   * ROLL traffic back to a previously-verified artifact — a TRAFFIC rollback only
+   * (a code revert is ordinary P0 work through the merge path). Returns the restored
+   * production release. Throws LOUD when the provider has no rollback concept.
+   */
+  rollback(grant: OrgGrant, ref: DeployRef, input: RollbackInput): Promise<ReleaseTransition>;
+  /**
+   * TEAR DOWN a preview/canary environment (reap its resources) once its contract
+   * has run. Idempotent — a preview already gone is a successful no-op. Throws LOUD
+   * when the provider has no preview concept.
+   */
+  teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void>;
 }

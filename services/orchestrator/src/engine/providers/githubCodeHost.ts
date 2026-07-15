@@ -40,7 +40,7 @@ import type {
   CreateHostRepoInput,
   CreatedHostRepo,
   HostCommit,
-  LandAuthorizedRefInput,
+  LandAuthorizedIntegrationInput,
   LandResult,
   RefAncestry,
 } from "../contracts/codeHost.js";
@@ -422,28 +422,17 @@ export class GitHubCodeHost implements CodeHost {
 
   /**
    * LAND an authorized ref into `main` as a COMPARE-AND-SWAP advance of the
-   * default branch. GitHub's ref-update API offers NO native compare-and-swap
-   * (no `If-Match` on the head sha), so the CAS is built from a read-check PLUS a
-   * FAST-FORWARD-ONLY write, and the write is what actually closes the race:
-   *
-   *   (a) read `intoMain`'s current head; if it is not `expectedMainSha` (or the
-   *       ref is absent) → throw {@link LandCasRejectedError} (fail-closed, cheap
-   *       early-out; this alone is NOT the guard — main can still move after it);
-   *   (b) PATCH `/git/refs/heads/:intoMain` with `{ sha: authorizedSha, force:
-   *       false }`. `authorizedSha` was BUILT ON `expectedMainSha`, so it is a
-   *       fast-forward of `intoMain` ONLY while main still points at
-   *       `expectedMainSha`. If main moved off it between (a) and (b), the
-   *       ff-only update is REJECTED by GitHub (422 "Update is not a fast
-   *       forward"). The ff-only WRITE — not the read — is the atomic guard;
-   *   (c) treat ANY 422 / non-fast-forward on that PATCH as the AUTHORITATIVE CAS
-   *       rejection → throw {@link LandCasRejectedError}. NEVER retry, NEVER set
-   *       `force: true` (that would clobber the racing commit). The transactional
-   *       land reconciles on the typed rejection.
-   *
-   * NEVER a force-push; NEVER the host's "merge PR" API (Tanren already authorized
-   * the commit). The land target is `authorizedSha` exactly — no host merge commit.
+   * default branch. GitHub's ref-update API has NO native CAS (no `If-Match` on
+   * the head sha), so the CAS is a read-check PLUS a FAST-FORWARD-ONLY write, and
+   * the ff-only WRITE — not the read — is what closes the race: `authorizedSha`
+   * was BUILT ON `expectedMainSha`, so GitHub accepts the ff-only PATCH ONLY while
+   * `main` still points at `expectedMainSha`; if main moved, GitHub rejects it
+   * (422 "not a fast forward"), the AUTHORITATIVE CAS rejection →
+   * {@link LandCasRejectedError}. NEVER retry, NEVER `force: true`, NEVER the
+   * host's "merge PR" API — the land target is `authorizedSha` exactly, with no
+   * host merge commit. The per-step (a)/(b)/(c) mechanics are inline below.
    */
-  async landAuthorizedRef(input: LandAuthorizedRefInput): Promise<LandResult> {
+  async landAuthorizedIntegration(input: LandAuthorizedIntegrationInput): Promise<LandResult> {
     const token = await this.resolveToken();
     const refresh = token.refresh;
 
@@ -451,6 +440,12 @@ export class GitHubCodeHost implements CodeHost {
     // still advance between this read and the write below; the ff-only write closes
     // that window.
     const current = await this.readBranchSha(input.repo, input.intoMain);
+    // IDEMPOTENT (SP-4, step 2): if `main` ALREADY points at the authorized head, a prior
+    // attempt of this same effect intent landed — a successful no-op, not a re-land (the
+    // git host + Postgres cannot share a txn, so step 2 is safely retryable).
+    if (current === input.authorizedSha) {
+      return { mainSha: input.authorizedSha };
+    }
     if (current !== input.expectedMainSha) {
       throw new LandCasRejectedError(input.intoMain, input.expectedMainSha, current);
     }
