@@ -38,6 +38,7 @@ import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/
 import type { AncestorStack } from "./ancestorStack.js";
 import type { SpecReadiness } from "./speculation.js";
 import { decideAncestorWait } from "./ancestorWaitGate.js";
+import { pauseDagOnBudget } from "./budgetPause.js";
 import { buildSpeculationConfigResolver } from "./speculationConfigResolver.js";
 import { ancestorLifecycleKey, HeldReDriveBackoff } from "./heldReDriveBackoff.js";
 import { PgBudgetGate } from "./budgetGate.js";
@@ -140,6 +141,18 @@ export class EventEmittingDagWalker implements DagWalker {
       return { projectId, status: "archived", enqueuedSpecIds: [], enqueuedRunIds: [] };
     }
 
+    // Plan the tick BEFORE the budget short-circuit. The plan is the sole
+    // readiness computation, and a truthful budget-pause observation needs to
+    // report every otherwise-eligible spec the money gate stopped. The former
+    // path returned before planning and therefore hard-coded readyHeldBack=0,
+    // even with ready roots in the loaded snapshot.
+    const ceiling = this.concurrency();
+    const plan = planSpeculativeDagTick(snapshot, lifecycle, {
+      concurrencyCeiling: ceiling,
+      threshold: config.threshold,
+      depthCap: config.depthCap,
+    });
+
     // The dollar-budget gate (autonomy-engine.md §3 proof 6 + BUDGET-SAFETY C1b/M5):
     // when the project's cumulative spend has reached the configured ceiling — OR the
     // gate must FAIL CLOSED (unpriced spend / unparseable config) — enqueue NOTHING
@@ -148,7 +161,7 @@ export class EventEmittingDagWalker implements DagWalker {
     // (`ceilingUsd: undefined`, no failClosed) never hits this branch, so behavior is
     // byte-identical to before.
     if (shouldPauseOnBudget(budget)) {
-      return this.pauseOnBudget(projectId, budget);
+      return pauseDagOnBudget(this.deps.events, projectId, budget, plan.toEnqueue.length + plan.readyHeldBack);
     }
 
     // Budget milestone heads-ups (the milestone-notifications chain): below the
@@ -157,13 +170,6 @@ export class EventEmittingDagWalker implements DagWalker {
     // `dag.budget.milestone` is `warn`). Idempotent per band per budget window (the
     // emitter dedups against prior milestone events), so re-walks never re-ping.
     await this.emitBudgetMilestones(projectId, budget);
-
-    const ceiling = this.concurrency();
-    const plan = planSpeculativeDagTick(snapshot, lifecycle, {
-      concurrencyCeiling: ceiling,
-      threshold: config.threshold,
-      depthCap: config.depthCap,
-    });
 
     // Surface every depth-capped HOLD (the "no silent caps" rule, §2c): the spec
     // is not enqueued this tick; the walker re-evaluates on the next ancestor merge.
@@ -238,26 +244,6 @@ export class EventEmittingDagWalker implements DagWalker {
       enqueuedSpecIds,
       enqueuedRunIds,
     };
-  }
-
-  /**
-   * Pause the tick on the dollar-budget gate: enqueue nothing, emit dag.budget.paused
-   * with the configured ceiling + the measured spend (+ the FAIL-CLOSED reason when
-   * this is a safety pause), and return a `budget_paused` result. Reached on a genuine
-   * ceiling-reached pause (ceiling defined) OR a fail-closed pause (BUDGET-SAFETY
-   * C1b/M5 — `ceilingUsd` may be undefined when the config was unparseable, so it
-   * defaults to 0 in the event).
-   */
-  private async pauseOnBudget(projectId: string, budget: ProjectBudgetState): Promise<WalkResult> {
-    await this.deps.events.emitBudgetPaused({
-      projectId,
-      ceilingUsd: budget.ceilingUsd ?? 0,
-      spentUsd: budget.spentUsd,
-      period: budget.period,
-      readyHeldBack: 0,
-      ...(budget.failClosed !== undefined && { reason: budget.failClosed }),
-    });
-    return { projectId, status: "budget_paused", enqueuedSpecIds: [], enqueuedRunIds: [] };
   }
 
   /**

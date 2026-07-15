@@ -39,6 +39,7 @@ const PROJECT_BUDGET_FULL = {
   notionalUsd: 40.5,
   remainingUsd: 37.66,
   paused: false,
+  pauseObservation: null,
   failClosed: null,
 };
 
@@ -49,6 +50,7 @@ const PROJECT_BUDGET_SPARSE = {
   notionalUsd: 0,
   remainingUsd: null,
   paused: false,
+  pauseObservation: null,
   failClosed: null,
 };
 
@@ -57,6 +59,11 @@ const PROJECT_BUDGET_PAUSED = {
   spentUsd: 50,
   remainingUsd: 0,
   paused: true,
+  pauseObservation: {
+    eventType: "dag.budget.paused",
+    readyHeldBack: 2,
+    observedAt: "2026-07-15T13:14:15.000Z",
+  },
   failClosed: null,
 };
 
@@ -204,6 +211,17 @@ describe("budget-halt panel (/budget)", () => {
     const html = await (await app.request("/budget")).text();
     expect(html).toContain("halted on budget");
     expect(html).toContain('role="alert"');
+    expect(html).toContain("Latest walker proof");
+    expect(html).toContain("2</b> eligible ready specs held");
+    expect(html).toContain("2026-07-15T13:14:15.000Z");
+  });
+
+  it("shows proof pending instead of a fabricated zero before the walker event lands", async () => {
+    projectBudgetPayload = { ...PROJECT_BUDGET_PAUSED, pauseObservation: null };
+    const app = await build();
+    const html = await (await app.request("/budget")).text();
+    expect(html).toContain("Walker pause proof pending");
+    expect(html).not.toContain("0</b> eligible ready specs held");
   });
 
   it("does not show the halt banner when paused is false", async () => {
@@ -221,6 +239,7 @@ describe("budget-halt panel (/budget)", () => {
       notionalUsd: 0,
       remainingUsd: null,
       paused: true,
+      pauseObservation: null,
       failClosed: "unresolvable_project_org",
     };
     const app = await build();
@@ -242,6 +261,7 @@ describe("budget-halt panel (/budget)", () => {
       notionalUsd: 60,
       remainingUsd: 0,
       paused: true,
+      pauseObservation: null,
       failClosed: "unpriced_spend",
     };
     const app = await build();

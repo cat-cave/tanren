@@ -73,6 +73,25 @@ export class RoutesPool {
     this.costRecords.push({ project_id: projectId, cost_usd: costUsd, notional_cost_usd: notionalCostUsd });
   }
 
+  seedBudgetPause(input: { orgId: string; projectId: string; readyHeldBack: number; observedAt?: Date }): void {
+    this.events.push({
+      id: this.events.length + 1,
+      ts: input.observedAt ?? new Date("2026-07-15T12:00:00.000Z"),
+      run_id: null,
+      task_id: null,
+      spec_id: null,
+      project_id: input.projectId,
+      org_id: input.orgId,
+      event_type: "dag.budget.paused",
+      payload: {
+        ceilingUsd: 50,
+        spentUsd: 55,
+        period: "total",
+        readyHeldBack: input.readyHeldBack,
+      },
+    });
+  }
+
   seedOrg(input: Partial<OrgRow> & { id: string }): OrgRow {
     const row: OrgRow = {
       id: input.id,
@@ -226,6 +245,26 @@ export class RoutesPool {
       const total = mine.reduce((sum, r) => sum + r.cost_usd, 0);
       const notional = mine.reduce((sum, r) => sum + r.notional_cost_usd, 0);
       return { rows: [{ total: String(total), notional: String(notional), unpriced: "0" }], rowCount: 1 };
+    }
+    // PgBudgetPauseObservationReader: latest project-level DagWalker pause proof.
+    if (trimmed.startsWith("SELECT ts, payload") && trimmed.includes("event_type = 'dag.budget.paused'")) {
+      const orgId = String(params[0]);
+      const projectId = String(params[1]);
+      const latest = this.events
+        .filter(
+          (event) =>
+            event["org_id"] === orgId &&
+            event["project_id"] === projectId &&
+            event["event_type"] === "dag.budget.paused" &&
+            event["run_id"] === null &&
+            event["task_id"] === null &&
+            event["spec_id"] === null,
+        )
+        .sort((a, b) => {
+          const byTime = new Date(String(b["ts"])).getTime() - new Date(String(a["ts"])).getTime();
+          return byTime === 0 ? Number(b["id"]) - Number(a["id"]) : byTime;
+        })[0];
+      return single(latest === undefined ? undefined : { ts: latest["ts"], payload: latest["payload"] });
     }
     if (trimmed.startsWith("INSERT INTO projects")) {
       this.seedProject({

@@ -158,6 +158,35 @@ describe("project budget routes", () => {
     expect(get.body.spentUsd).toBe(55);
     expect(get.body.remainingUsd).toBe(0);
     expect(get.body.paused).toBe(true);
+    // The budget state may reach the ceiling before the next walker tick. Never
+    // fabricate a zero-held proof while no durable pause event exists.
+    expect(get.body.pauseObservation).toBeNull();
+  });
+
+  it("surfaces the latest org-scoped truthful held-ready pause proof", async () => {
+    const { app, pool } = buildHarness();
+    pool.seedCostRecord("proj_1", 55);
+    await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50, period: "total" });
+
+    // A same-project event stamped with another org must never leak through the
+    // org-scoped projection.
+    pool.seedBudgetPause({ orgId: "org_other", projectId: "proj_1", readyHeldBack: 99 });
+    const crossOrgOnly = await getJson(app, "/orgs/org_acme/projects/proj_1/budget");
+    expect(crossOrgOnly.body.pauseObservation).toBeNull();
+
+    pool.seedBudgetPause({
+      orgId: "org_acme",
+      projectId: "proj_1",
+      readyHeldBack: 2,
+      observedAt: new Date("2026-07-15T13:14:15.000Z"),
+    });
+    const get = await getJson(app, "/orgs/org_acme/projects/proj_1/budget");
+    expect(get.status).toBe(200);
+    expect(get.body.pauseObservation).toEqual({
+      eventType: "dag.budget.paused",
+      readyHeldBack: 2,
+      observedAt: "2026-07-15T13:14:15.000Z",
+    });
   });
 
   it("RAISING the ceiling on a PAUSED project fires a re-walk wake so it resumes (audit §3.7e)", async () => {

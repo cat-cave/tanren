@@ -168,6 +168,19 @@ function ConfigForm(props: {
 
 function HaltBanner(props: { budget: ProjectBudgetView }) {
   const uncomputable = isSpendUncomputable(props.budget);
+  const observation = props.budget.pauseObservation;
+  const heldProof =
+    observation === null ? (
+      <span class="halt-sub" data-budget-pause-proof="pending">
+        Walker pause proof pending — no held-ready count is shown until `dag.budget.paused` is durably observed.
+      </span>
+    ) : (
+      <span class="halt-sub" data-budget-pause-proof="observed">
+        Latest walker proof: <b>{observation.readyHeldBack}</b> eligible ready spec
+        {observation.readyHeldBack === 1 ? "" : "s"} held ·{" "}
+        <time datetime={observation.observedAt}>{observation.observedAt}</time>
+      </span>
+    );
   return (
     <section class="halt-banner" role="alert">
       <span class="halt-title">halted on budget</span>
@@ -176,6 +189,7 @@ function HaltBanner(props: { budget: ProjectBudgetView }) {
           ? "Fail-closed safety pause: true spend is unknown (unresolvable org, unparseable config, or unpriced spend rows). Figures are unmeasured — not zero. Fix pricing/config, then re-check; raising the ceiling does not invent missing spend facts."
           : "The DagWalker is paused because real spend has reached this project's ceiling. Raise or clear the ceiling to free headroom; a successful write re-wakes the walk when the gate loosens."}
       </span>
+      {heldProof}
     </section>
   );
 }
