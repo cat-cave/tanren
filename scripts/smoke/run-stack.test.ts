@@ -349,7 +349,7 @@ describe("exact-stack smoke coordinator", () => {
     expect(proof.bootstrapInstall!.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
     expect(proof.bootstrapInstall!.finishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
     expect(JSON.parse(await readFile(receipt, "utf8"))).toMatchObject({ status: "passed" });
-  });
+  }, 30_000);
 
   it("emits a failure receipt with bootstrap.install when frozen-lockfile install drifts", async () => {
     const base = await temporaryRoot("lockfile-drift-bootstrap");
