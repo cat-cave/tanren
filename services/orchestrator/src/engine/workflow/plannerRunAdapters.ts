@@ -5,7 +5,6 @@
  * project's routing table (per-role provider DATA, not a code-level hardcode),
  * wire the lazily-resolved CI gate, and the codexbar + ccusage usage probe.
  */
-import type pg from "pg";
 import type { CiWhen } from "../ci/index.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import type { EventStore } from "../eventStore.js";
@@ -23,7 +22,7 @@ import { defaultUsageProbe } from "./plannerRunUsage.js";
 // adapter/usage builders (the managed capturer lives in plannerRunUsage).
 export { resolveManagedCapturer } from "./plannerRunUsage.js";
 import type { BudgetGate } from "../contracts/dagWalker.js";
-import { PgBudgetGate } from "../dag/budgetGate.js";
+import { resolveBudgetGate } from "../dag/budgetGate.js";
 import { runBudgetCeilingPreflight } from "./budgetPreflight.js";
 import { assertAuditPostureReentersFindings } from "./auditPosturePreflight.js";
 import { DEFAULT_AUDIT_POSTURE } from "../config/index.js";
@@ -450,7 +449,8 @@ export async function resolveRunAdaptersWithBudgetPreflight(
     : usesCodex
       ? defaultUsageProbe(input, ctx)
       : undefined;
-  const budgetGate = input.budgetGate ?? new PgBudgetGate(input.pool as pg.Pool);
+  // Injected gate, else real pool via isPool (no cast). Tests inject; prod always has a pool.
+  const budgetGate = resolveBudgetGate(input.pool, input.budgetGate);
   // Ceiling reachability is about the WRITER's credential: a subscription writer's
   // spend is observable only when a probe covers IT (writer is codex AND a codex
   // probe exists), so a non-codex subscription writer fails closed even if a codex

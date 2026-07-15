@@ -24,19 +24,17 @@
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { isPool, type QueryClient } from "../../data/orgScopedDb.js";
 import type { AppendEventInput, EventStore } from "../../eventStore.js";
 import { PgEventStore } from "../../eventStore.js";
 import type { EventName, EventPayload } from "../../events/index.js";
 
-// Probe a real pg.Pool vs a fake unit-test stub (needs `.connect()` for runWithOrgScope).
-const isRealPool = (p: unknown): boolean => typeof (p as { connect?: unknown }).connect === "function";
-
 /**
  * A slim pool shape — the tenant-scoped write client the seam runs SQL through
  * when neither the writer nor a real pg.Pool is wired (the legacy unit-test
- * split path). Matches `RunStateClient` in `reviewMerge/context.ts`.
+ * split path). Matches `RunStateClient` / `QueryClient`.
  */
-export type ReviewPauseSeamPool = Pick<pg.Pool | pg.PoolClient, "query">;
+export type ReviewPauseSeamPool = QueryClient;
 
 /** The seam input — everything `pollReviewForRun` already holds. */
 export interface ReviewPauseSeamCtx {
@@ -93,8 +91,8 @@ async function applyPauseRunForReview(
  */
 export async function finalizePauseForReviewAtomic(ctx: ReviewPauseSeamCtx, event: AppendEventInput): Promise<void> {
   const { pool, runId, orgId, appendEvent, eventStore } = ctx;
-  if (orgId !== undefined && isRealPool(pool)) {
-    await runWithOrgScope(pool as unknown as pg.Pool, orgId, async (client) => {
+  if (orgId !== undefined && isPool(pool)) {
+    await runWithOrgScope(pool, orgId, async (client) => {
       await applyPauseRunForReview(client, runId, event, eventStore);
     });
     return;
