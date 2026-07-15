@@ -76,12 +76,15 @@ file is owned. Do not edit the frozen `docs/roadmap/mission-complete/build-workf
 
 ## Dependency and merge order
 
-Implementation may proceed from `origin/main` now. The mission-control-plane
-unit also edits `justfile`, so this branch must rebase onto and merge **after**
-`mission/control-plane-recon`; all other overlaps require explicit coordination
-before editing. After that rebase, rerun the full gate and exact-stack smoke
-before merge. README/justfile remain collision-sensitive — keep their changes
-scoped and report them for later rebase.
+Implementation may proceed from `origin/main` now. This unit owns the
+collision-sensitive `justfile`/CI/compose integration and lands **before**
+`mission/control-plane-recon`; the latter must update onto landed smoke main
+before its own final audit/gates. Other overlaps (notably
+`docs/roadmap/mission-complete/README.md`) require explicit coordination before
+editing. Every main advance is absorbed without rewriting history (ordinary
+merge commits), then exact-tree audit plus `just fast-check -> just ci -> live
+just smoke` are rerun at the final clean commit before push/merge. Keep scoped
+changes to collision-sensitive files and report them for the next absorption.
 
 Runtime socket selection stays in the already-authorized operator `justfile`
 boundary. The TypeScript coordinator accepts only the resulting explicit,
@@ -89,12 +92,14 @@ validated provider/socket pair; this unit adds no architecture exception.
 
 ## Gate proof
 
-The uncommitted handoff runs the focused adversarial decoy/isolation suite,
-affected checks, namespace-masked `just fast-check`, and namespace-masked `just ci`.
-Live `just smoke` remains an explicit post-commit, post-rebase prerequisite
-because the coordinator correctly rejects a dirty candidate tree; it is not
-replaced by a weaker synthetic claim. The eventual JSON receipt records only
-non-secret commit/tree, project, image/container, endpoint, and probe evidence.
+The focused adversarial decoy/isolation suite and affected checks run at the
+candidate head as supporting evidence only; they do not stand in for the full
+root gates. Exact-tree audit plus `just fast-check -> just ci -> live just smoke`
+are exact-head prerequisites: the coordinator correctly rejects a dirty
+candidate tree, so live `just smoke` is rerun at the final clean commit before
+push/merge rather than replaced by a weaker synthetic claim. The eventual JSON
+receipt records only non-secret commit/tree, project, image/container, endpoint,
+and probe evidence.
 
 ## Clean-source dependency materialization
 
