@@ -71,8 +71,11 @@ export function createRunRoutes(options: RunRoutesOptions) {
   // -------------------------------------------------------------------------
   // The dashboard's run route intentionally omits a project segment. Resolve its
   // location with one org-scoped run lookup rather than enumerating every
-  // accessible project and its runs. A missing run, cross-org run, and a run
-  // in an inaccessible project all use the same 404 shape.
+  // accessible project and its runs. A missing run, cross-org run, a run in an
+  // inaccessible project, and a project whose org does not match the path org
+  // all use the same 404 shape. Org authorization runs before the run read;
+  // project authorization binds `assertProjectAccess` orgId to the path org
+  // (including platform:admin) before any location is returned.
   app.get("/:orgId/runs/:runId/location", async (c) => {
     const actor = requireActor(c);
     const orgId = c.req.param("orgId");
@@ -85,7 +88,12 @@ export function createRunRoutes(options: RunRoutesOptions) {
       return c.json({ error: "run_not_found" }, 404);
     }
     try {
-      await assertProjectAccess(options.pool, summary.projectId, actor);
+      const projectAuth = await assertProjectAccess(options.pool, summary.projectId, actor);
+      // Path/run organization must equal the project's organization — independent
+      // FKs on runs.project_id and runs.org_id do not prevent inconsistency.
+      if (projectAuth.orgId !== orgId) {
+        return c.json({ error: "run_not_found" }, 404);
+      }
     } catch (error) {
       if (error instanceof ToolAccessDeniedError) {
         return c.json({ error: "run_not_found" }, 404);

@@ -250,6 +250,10 @@ export function mockOrchestrator(): void {
     }
     if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
       return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
+    // Definitive location miss for any other run id (exact contract body).
+    if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
+      return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
+    }
     // run detail
     if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
       return new Response(JSON.stringify(RUN_DETAIL), { status: 200 });
@@ -294,6 +298,9 @@ export function mockOrchestratorWithProject(previewUrlPattern?: string): void {
     }
     if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
       return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
+    if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
+      return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
+    }
     if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
       return new Response(JSON.stringify(RUN_DETAIL), { status: 200 });
     }

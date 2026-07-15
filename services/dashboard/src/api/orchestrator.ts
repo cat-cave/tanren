@@ -13,6 +13,7 @@
 import type { DashboardSession } from "../auth/session.js";
 import type { DoraMetrics } from "./dora.js";
 import { OrchestratorNotificationsClient } from "./notificationsClient.js";
+import { findRunLocation as resolveRunLocation, type FindRunLocationResult } from "./runLocation.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -38,6 +39,7 @@ import type {
 } from "./types.js";
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
+export type { FindRunLocationResult, RunLocation } from "./runLocation.js";
 
 export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
@@ -412,24 +414,20 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
   // -------------------------------------------------------------------------
 
   /**
-   * Resolve which org+project a run belongs to. We must still try each visible
-   * org because the dashboard route has no org segment, but each attempt is a
-   * single org-scoped lookup — never a project/run-list fan-out.
+   * Resolve which org+project a run belongs to. One org-scoped location probe
+   * per visible org — never a project/run-list fan-out. Fail-closed: only a
+   * definitive documented 404 body is not-found; network/auth/upstream/malformed
+   * /multi-match outcomes are explicit kinds (see `FindRunLocationResult`).
    */
-  async findRunLocation(runId: string): Promise<RunLocation | undefined> {
-    const orgs = await this.listOrgs();
-    for (const org of orgs) {
-      const response = await this.fetchImpl(
-        `${this.orchestratorUrl}/orgs/${encodeURIComponent(org.id)}/runs/${encodeURIComponent(runId)}/location`,
-        { headers: this.headers() },
-      ).catch(() => {});
-      if (response === undefined || !response.ok) continue;
-      const location = (await response.json()) as Partial<RunLocation>;
-      if (location.orgId === org.id && typeof location.projectId === "string" && location.projectId.length > 0) {
-        return { orgId: location.orgId, projectId: location.projectId };
-      }
-    }
-    return undefined;
+  async findRunLocation(runId: string): Promise<FindRunLocationResult> {
+    return resolveRunLocation(
+      {
+        orchestratorUrl: this.orchestratorUrl,
+        headers: this.headers(),
+        fetchImpl: this.fetchImpl,
+      },
+      runId,
+    );
   }
 
   /**

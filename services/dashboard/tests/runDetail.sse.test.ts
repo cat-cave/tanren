@@ -45,6 +45,9 @@ function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
       return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
+    if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
+      return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
+    }
     if (url.includes(`/runs/${RUN_ID}/stream`)) {
       return new Response(FAKE_SSE_BODY, {
         status: 200,
