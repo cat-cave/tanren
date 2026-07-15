@@ -64,7 +64,9 @@ const DECISIONS: readonly RebaseDecision[] = [
   "replanned",
   "writer_rework",
   "parked",
-  "held",
+  "terminal_noop",
+  "parking_failed",
+  "parking_required",
 ];
 
 function median(values: number[]): number | null {
@@ -125,13 +127,15 @@ export function deriveIntegrationMetrics(
     replanned: bucketFor(runIdsByDecision.get("replanned")!, tokensByRun, wallClockByRun),
     writer_rework: bucketFor(runIdsByDecision.get("writer_rework")!, tokensByRun, wallClockByRun),
     parked: bucketFor(runIdsByDecision.get("parked")!, tokensByRun, wallClockByRun),
-    held: bucketFor(runIdsByDecision.get("held")!, tokensByRun, wallClockByRun),
+    terminal_noop: bucketFor(runIdsByDecision.get("terminal_noop")!, tokensByRun, wallClockByRun),
+    parking_failed: bucketFor(runIdsByDecision.get("parking_failed")!, tokensByRun, wallClockByRun),
+    parking_required: bucketFor(runIdsByDecision.get("parking_required")!, tokensByRun, wallClockByRun),
   };
   // Denominator = sum of bucket counts (known decisions only — never inflate on unknown).
   const totalRebases = DECISIONS.reduce((n, d) => n + (runIdsByDecision.get(d)?.length ?? 0), 0);
 
   // Headline rebase_vs_rebuild: kept-alive (clean + resolved) vs replanned (rebuilt).
-  // writer_rework / parked / held are recovery paths — not in the kept-alive vs rebuild comparison.
+  // Recovery paths (writer/park/terminal/parking_*) are not in the kept-alive vs rebuild comparison.
   const keptAliveRunIds = [...runIdsByDecision.get("rebased_clean")!, ...runIdsByDecision.get("rebased_resolved")!];
   const keptAliveTokens = keptAliveRunIds.map((id) => tokensByRun.get(id)).filter((t): t is number => t !== undefined);
   const replannedTokens = runIdsByDecision

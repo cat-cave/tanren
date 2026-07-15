@@ -124,8 +124,8 @@ export class PgBaseShiftEventEmitter implements BaseShiftEventEmitter {
     decision: RebaseDecision;
   }): Promise<void> {
     // Org-scoped, plane-aware append (the helper routes through the control plane when
-    // a writer is wired); `held` never reaches here (it throws before the emit).
-    if (input.decision === "held") return;
+    // a writer is wired). Every valid public RebaseDecision is persisted — no silent
+    // suppression. Infra holds throw BaseShiftHeldError before this emit is reached.
     await appendIntegrationRebaseEvent(this.pool, input, this.runStateWriter);
   }
 }

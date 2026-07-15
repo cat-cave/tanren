@@ -41,7 +41,15 @@ export async function appendIntegrationRebaseEvent(
     newBaseSha: string;
     headSha: string;
     rebaseConflicted: boolean;
-    decision: "rebased_clean" | "rebased_resolved" | "replanned" | "writer_rework" | "parked" | "held";
+    decision:
+      | "rebased_clean"
+      | "rebased_resolved"
+      | "replanned"
+      | "writer_rework"
+      | "parked"
+      | "terminal_noop"
+      | "parking_failed"
+      | "parking_required";
   },
   // REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
   // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.

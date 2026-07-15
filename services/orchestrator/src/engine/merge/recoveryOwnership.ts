@@ -167,34 +167,46 @@ export async function verifyRecoveryOwnership(input: {
  * Truthful recovery disposition labels for base-shift instrumentation.
  * Only durable owned planner/writer receipts become replanned/writer_rework —
  * parking_required is NOT "replanned" merely because routing was attempted.
- * parking_failed / terminal_noop are NEVER parked or replanned.
+ * parking_failed / terminal_noop / parking_required keep exact durable tokens
+ * (never collapsed to a silent `held` — infra hold is {@link BaseShiftHeldError} only).
  */
-export type BaseShiftRecoveryDecision = "replanned" | "writer_rework" | "parked" | "held";
+export type BaseShiftRecoveryDecision =
+  | "replanned"
+  | "writer_rework"
+  | "parked"
+  | "terminal_noop"
+  | "parking_failed"
+  | "parking_required";
 
 export function baseShiftDecisionFromRecovery(
   recovery: ConflictRecoveryDisposition | undefined,
 ): BaseShiftRecoveryDecision {
-  if (recovery === undefined || recovery.kind === "parking_required") return "held";
+  // No recovery yet ⇒ parking still required (not an infra hold; not replanned).
+  if (recovery === undefined || recovery.kind === "parking_required") return "parking_required";
   if (recovery.kind === "parked") return "parked";
-  if (recovery.kind === "owned") {
-    return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
-  }
-  // terminal_noop + parking_failed: never replan-as-if-no-park, never label parked.
-  return "held";
+  if (recovery.kind === "terminal_noop") return "terminal_noop";
+  if (recovery.kind === "parking_failed") return "parking_failed";
+  // owned — only remaining arm (planner_replan vs writer_rework receipt).
+  return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
 }
 
-/** Map a gate-rework route result onto a RebaseDecision-compatible label. */
+/** Map a gate-rework route result onto a public RebaseDecision recovery label. */
 export function baseShiftDecisionFromRouteResult(recovery: {
   kind: "owned" | "parked" | "terminal_noop" | "parking_required" | "parking_failed";
 }): BaseShiftRecoveryDecision {
   // GateReworkRouteResult owned is always writer_rework.
   if (recovery.kind === "owned") return "writer_rework";
   if (recovery.kind === "parked") return "parked";
-  // parking_required / terminal_noop / parking_failed: never claim replanned.
-  return "held";
+  if (recovery.kind === "terminal_noop") return "terminal_noop";
+  if (recovery.kind === "parking_failed") return "parking_failed";
+  // parking_required: never claim replanned merely because routing was attempted.
+  return "parking_required";
 }
 
-/** Clear percolation_pending only for durable owned / parked / terminal (retain on parking_failed). */
+/**
+ * Clear percolation_pending only for durable owned / parked / concurrent-terminal.
+ * Retain on parking_failed and parking_required so settle can still recover.
+ */
 export function shouldClearPercolationPending(kind: ConflictRecoveryDisposition["kind"]): boolean {
   return kind === "owned" || kind === "parked" || kind === "terminal_noop";
 }

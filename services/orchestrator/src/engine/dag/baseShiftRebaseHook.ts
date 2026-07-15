@@ -7,11 +7,13 @@
 // `RebaseDecision` onto the dispatcher's `BaseShiftRebaseHook` outcome:
 //   - `rebased_clean` / `rebased_resolved` ⇒ `rebased` (the branch advanced onto base; the
 //     dispatcher re-gates then the authority governs the merge).
-//   - `replanned` ⇒ `held` — the coordinator ALREADY routed the work back to the planner
-//     (kept ALIVE with the shift as context); the merge holds (recoverable) rather than
-//     proceeding on work that no longer fits. NEVER a silent merge, NEVER a discard.
+//   - every other public decision (replanned / writer_rework / parked / terminal_noop /
+//     parking_failed / parking_required) ⇒ `held` with an honest per-decision message —
+//     NEVER claim "re-planned" when the durable decision was not replanned. NEVER a silent
+//     merge, NEVER a discard.
 //   - a `BaseShiftHeldError` (any infra/alloc/clone/gate/resolver fail) ⇒ `held` (loud,
-//     recoverable; the work survives, retried on the next drive).
+//     recoverable; the work survives, retried on the next drive). That path throws *before*
+//     any `integration.rebase` event is emitted.
 //
 // FAIL-CLOSED: the hook never returns `rebased` on anything but a clean/resolved + passing
 // re-gate; everything else holds. When the live seams are not wired (flag OFF / no runner
@@ -21,7 +23,31 @@ import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
 import type { BaseShiftRebaseHook } from "../workflow/reviewMerge/mergeDispatchTypes.js";
-import { type BaseShiftCoordinator, BaseShiftHeldError } from "./baseShiftCoordinator.js";
+import { type BaseShiftCoordinator, BaseShiftHeldError, type RebaseDecision } from "./baseShiftCoordinator.js";
+
+/** Honest merge-hold copy for every non-clean/non-resolved public decision. */
+function mergeHoldMessage(decision: RebaseDecision): string {
+  if (decision === "replanned") {
+    return "base shift re-planned the work (routed back to the planner; merge held)";
+  }
+  if (decision === "writer_rework") {
+    return "base shift routed to writer rework (merge held)";
+  }
+  if (decision === "parked") {
+    return "base shift parked for attention (merge held)";
+  }
+  if (decision === "terminal_noop") {
+    return "base shift concurrent terminal no-op (merge held)";
+  }
+  if (decision === "parking_failed") {
+    return "base shift park failed with intent retained (merge held)";
+  }
+  if (decision === "parking_required") {
+    return "base shift parking still required with pending retained (merge held)";
+  }
+  // rebased_clean / rebased_resolved are not hold paths (call site filters them first).
+  return `base shift decision ${decision} (merge held)`;
+}
 
 /**
  * Build the merge-path `behind` rebase hook over the live (or held) `BaseShiftCoordinator`.
@@ -59,13 +85,14 @@ export function buildBaseShiftRebaseHook(deps: {
         toSha: "",
       });
       // `rebased_clean` / `rebased_resolved` ⇒ the branch advanced onto base (the dispatcher
-      // re-gates then merges); `replanned` ⇒ the work was routed back (hold the merge).
+      // re-gates then merges). Every other public decision holds the merge with an honest
+      // per-decision message (never claim "re-planned" for park/terminal/writer paths).
       // COMMIT-BINDING (§5): surface the rebased head sha so the dispatcher's re-gate
       // anchors its verdict on the rebased PR head (never the stale workspace HEAD).
       if (decision === "rebased_clean" || decision === "rebased_resolved") {
         return { outcome: "rebased", ...(headSha !== "" && { rebasedHeadSha: headSha }) };
       }
-      return { outcome: "held", message: "base shift re-planned the work (routed back to the planner; merge held)" };
+      return { outcome: "held", message: mergeHoldMessage(decision) };
     } catch (error) {
       if (error instanceof BaseShiftHeldError) {
         return { outcome: "held", message: error.message };

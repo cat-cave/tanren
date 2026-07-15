@@ -322,6 +322,37 @@ describe("buildBaseShiftRebaseHook — the merge `behind` path routes through th
     expect(events.decisions).toEqual([{ runId: DEP_RUN, decision: "replanned" }]);
     expect(persistence.replanned).toEqual([{ runId: DEP_RUN, specId: DEP_SPEC }]);
     expect(outcome.outcome).toBe("held");
+    expect(outcome.message).toMatch(/re-planned/iu);
+  });
+
+  it("HOSTILE: parking_failed hold message never claims re-planned", async () => {
+    const { outcome, events } = await runHook({
+      conflictOnRebase: true,
+      resolution: {
+        resolved: false,
+        reason: "collide",
+        recovery: { kind: "parking_failed", message: "park fail", observedStatus: "in_flight" },
+      },
+    });
+    expect(events.decisions).toEqual([{ runId: DEP_RUN, decision: "parking_failed" }]);
+    expect(outcome.outcome).toBe("held");
+    expect(outcome.message).toMatch(/park failed with intent retained/iu);
+    expect(outcome.message).not.toMatch(/re-planned/iu);
+  });
+
+  it("HOSTILE: terminal_noop hold message is concurrent terminal no-op (not re-planned)", async () => {
+    const { outcome, events } = await runHook({
+      conflictOnRebase: true,
+      resolution: {
+        resolved: false,
+        reason: "collide",
+        recovery: { kind: "terminal_noop", status: "merged", message: "already merged" },
+      },
+    });
+    expect(events.decisions).toEqual([{ runId: DEP_RUN, decision: "terminal_noop" }]);
+    expect(outcome.outcome).toBe("held");
+    expect(outcome.message).toMatch(/concurrent terminal no-op/iu);
+    expect(outcome.message).not.toMatch(/re-planned/iu);
   });
 
   it("a CLEAN rebase + passing re-gate ⇒ `rebased_clean` (NO replan, token reuse) ⇒ the hook `rebased`", async () => {

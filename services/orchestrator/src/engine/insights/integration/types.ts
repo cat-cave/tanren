@@ -16,14 +16,19 @@
 
 import { z } from "zod";
 
-/** Recorded base-shift outcomes — the `integration.rebase` `decision` (incl. writer/park). */
+/**
+ * Recorded base-shift outcomes — the `integration.rebase` `decision` (incl. writer/park
+ * and exact terminal/parking dispositions). Infra holds are NOT a public token.
+ */
 export const RebaseDecisionValues = [
   "rebased_clean",
   "rebased_resolved",
   "replanned",
   "writer_rework",
   "parked",
-  "held",
+  "terminal_noop",
+  "parking_failed",
+  "parking_required",
 ] as const;
 export const RebaseDecision = z.enum(RebaseDecisionValues);
 export type RebaseDecision = z.infer<typeof RebaseDecision>;
@@ -89,7 +94,9 @@ export const IntegrationMetrics = z
         replanned: IntegrationDecisionBucket,
         writer_rework: IntegrationDecisionBucket,
         parked: IntegrationDecisionBucket,
-        held: IntegrationDecisionBucket,
+        terminal_noop: IntegrationDecisionBucket,
+        parking_failed: IntegrationDecisionBucket,
+        parking_required: IntegrationDecisionBucket,
       })
       .strict(),
     /** The headline `rebase < rebuild` comparison. */

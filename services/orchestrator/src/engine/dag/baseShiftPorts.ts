@@ -12,14 +12,24 @@ import type { AncestorStack } from "./ancestorStack.js";
 
 /**
  * The instrumentation an `integration.rebase` event records (`rebase_vs_rebuild`, §3).
- * `writer_rework` / `parked` are first-class — never laundered as `replanned`.
+ * Recovery outcomes are first-class and exact — never laundered as `replanned`.
+ * Infra holds throw {@link BaseShiftHeldError} *before* emission and are not a public decision.
  */
-export type RebaseDecision = "rebased_clean" | "rebased_resolved" | "replanned" | "writer_rework" | "parked" | "held";
+export type RebaseDecision =
+  | "rebased_clean"
+  | "rebased_resolved"
+  | "replanned"
+  | "writer_rework"
+  | "parked"
+  | "terminal_noop"
+  | "parking_failed"
+  | "parking_required";
 
 /**
  * A fail-closed HOLD: the rebase/resolver/gate could not settle. The work SURVIVES (the run
  * row + branch are untouched) and is retried on the next notification — NEVER a silent merge,
- * NEVER a silent discard.
+ * NEVER a silent discard. Thrown *before* any `integration.rebase` emit; not a public
+ * `RebaseDecision` token (no event, metric, or UI bucket for infra hold).
  */
 export class BaseShiftHeldError extends Error {
   constructor(

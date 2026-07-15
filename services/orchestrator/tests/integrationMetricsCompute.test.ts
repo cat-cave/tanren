@@ -3,7 +3,8 @@
 // time), so every figure is asserted against hand-built fixture rows — no DB.
 // Covers the per-`decision` buckets, the read-time cost/wall-clock JOIN by runId,
 // the headline kept-alive-vs-replanned comparison, the proof-reuse count, and the
-// honest-absence (`null`) shapes.
+// honest-absence (`null`) shapes. #928: exhaustive over exact recovery decisions;
+// no public `held` token.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -64,22 +65,24 @@ describe("deriveIntegrationMetrics — buckets", () => {
     expect(m.buckets.replanned.medianWallClockSeconds).toBe(600);
 
     expect(m.buckets.rebased_resolved.count).toBe(0);
-    expect(m.buckets.held.count).toBe(0);
+    expect(m.buckets.terminal_noop.count).toBe(0);
+    expect(m.buckets.parking_failed.count).toBe(0);
+    expect(m.buckets.parking_required.count).toBe(0);
     expect(m.totalRebases).toBe(3);
   });
 
   it("reports null medians (not zero) for a bucket whose runs have no cost rows", () => {
     const inputs: IntegrationInputs = {
       ...EMPTY,
-      rebases: [{ runId: "r1", decision: "held" }],
+      rebases: [{ runId: "r1", decision: "terminal_noop" }],
       // no cost row, no run row for r1
     };
     const m = deriveIntegrationMetrics(inputs, OPTIONS);
-    expect(m.buckets.held.count).toBe(1);
-    expect(m.buckets.held.medianTokens).toBeNull();
-    expect(m.buckets.held.tokensSample).toBe(0);
-    expect(m.buckets.held.medianWallClockSeconds).toBeNull();
-    expect(m.buckets.held.wallClockSample).toBe(0);
+    expect(m.buckets.terminal_noop.count).toBe(1);
+    expect(m.buckets.terminal_noop.medianTokens).toBeNull();
+    expect(m.buckets.terminal_noop.tokensSample).toBe(0);
+    expect(m.buckets.terminal_noop.medianWallClockSeconds).toBeNull();
+    expect(m.buckets.terminal_noop.wallClockSample).toBe(0);
   });
 
   it("ignores a run whose wall-clock is unfinished (ended_at null) or negative", () => {
@@ -152,8 +155,8 @@ describe("deriveIntegrationMetrics — envelope", () => {
   });
 });
 
-describe("deriveIntegrationMetrics — exhaustive buckets (F4 hostile)", () => {
-  it("HOSTILE: writer_rework and parked are bucketed (not lost while counting in total)", () => {
+describe("deriveIntegrationMetrics — exhaustive buckets (F4 hostile + #928)", () => {
+  it("HOSTILE: writer/park/terminal/parking_* are bucketed (not lost while counting in total)", () => {
     const inputs: IntegrationInputs = {
       proofReuseCount: 0,
       rebases: [
@@ -161,29 +164,29 @@ describe("deriveIntegrationMetrics — exhaustive buckets (F4 hostile)", () => {
         { runId: "w", decision: "writer_rework" },
         { runId: "p", decision: "parked" },
         { runId: "r", decision: "replanned" },
-        { runId: "h", decision: "held" },
+        { runId: "t", decision: "terminal_noop" },
+        { runId: "f", decision: "parking_failed" },
+        { runId: "q", decision: "parking_required" },
         { runId: "v", decision: "rebased_resolved" },
       ],
       costs: [],
       runs: [],
     };
     const m = deriveIntegrationMetrics(inputs, OPTIONS);
-    // Old bug: totalRebases counted them but buckets omitted writer_rework + parked.
     expect(m.buckets.writer_rework.count).toBe(1);
     expect(m.buckets.parked.count).toBe(1);
-    const sum =
-      m.buckets.rebased_clean.count +
-      m.buckets.rebased_resolved.count +
-      m.buckets.replanned.count +
-      m.buckets.writer_rework.count +
-      m.buckets.parked.count +
-      m.buckets.held.count;
+    expect(m.buckets.terminal_noop.count).toBe(1);
+    expect(m.buckets.parking_failed.count).toBe(1);
+    expect(m.buckets.parking_required.count).toBe(1);
+    const sum = RebaseDecisionValues.reduce((n, d) => n + m.buckets[d].count, 0);
     expect(sum).toBe(m.totalRebases);
-    expect(m.totalRebases).toBe(6);
+    expect(m.totalRebases).toBe(8);
   });
 
-  it("every RebaseDecision value has an explicit public bucket key", () => {
+  it("every RebaseDecision value has an explicit public bucket key (no held token)", () => {
     const m = deriveIntegrationMetrics({ ...EMPTY }, OPTIONS);
+    expect(RebaseDecisionValues).not.toContain("held");
+    expect(m.buckets).not.toHaveProperty("held");
     for (const d of RebaseDecisionValues) {
       expect(m.buckets).toHaveProperty(d);
       expect(m.buckets[d].count).toBe(0);
@@ -196,6 +199,7 @@ describe("deriveIntegrationMetrics — exhaustive buckets (F4 hostile)", () => {
       rebases: [
         { runId: "ok", decision: "rebased_clean" },
         { runId: "bad", decision: "not_a_decision" as "rebased_clean" },
+        { runId: "stale_held", decision: "held" as "rebased_clean" },
       ],
       costs: [],
       runs: [],
@@ -203,5 +207,7 @@ describe("deriveIntegrationMetrics — exhaustive buckets (F4 hostile)", () => {
     const m = deriveIntegrationMetrics(inputs, OPTIONS);
     expect(m.totalRebases).toBe(1);
     expect(m.buckets.rebased_clean.count).toBe(1);
+    // stale `held` payloads (pre-#928) must not invent a bucket or inflate totals.
+    expect(m.buckets).not.toHaveProperty("held");
   });
 });

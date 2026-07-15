@@ -286,7 +286,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
     const rework = await this.routeGateFailToRework(input, result.gateError);
-    // Exhaustive: owned → writer_rework; parked → parked; parking_failed/terminal_noop → held.
+    // Exhaustive: owned → writer_rework; parked → parked; terminal/parking_* keep exact tokens.
     const decision: RebaseDecision = baseShiftDecisionFromRouteResult(rework);
     await this.emit(input, false, decision);
     return { decision, headSha: input.rebase.headSha };

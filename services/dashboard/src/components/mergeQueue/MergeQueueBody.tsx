@@ -85,6 +85,21 @@ function rebaseCards(m: IntegrationMetrics | undefined): StatCard[] {
       sub: "needs attention",
     },
     {
+      label: "terminal no-op",
+      value: mqInt(m?.buckets.terminal_noop.count ?? null),
+      sub: "concurrent terminal no-op",
+    },
+    {
+      label: "park failed",
+      value: mqInt(m?.buckets.parking_failed.count ?? null),
+      sub: "park failed with intent retained",
+    },
+    {
+      label: "parking required",
+      value: mqInt(m?.buckets.parking_required.count ?? null),
+      sub: "parking still required with pending retained",
+    },
+    {
       label: "proof reuse",
       value: mqInt(m?.proofReuseCount ?? null),
       sub: "checks reused, not re-run",

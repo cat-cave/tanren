@@ -12,7 +12,9 @@
         "replanned",
         "writer_rework",
         "parked",
-        "held"
+        "terminal_noop",
+        "parking_failed",
+        "parking_required"
       ],
       "type": "string"
     },

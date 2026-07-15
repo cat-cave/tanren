@@ -47,7 +47,9 @@ const METRICS_FULL = {
     replanned: bucket(2, 24000),
     writer_rework: bucket(0, null),
     parked: bucket(0, null),
-    held: bucket(1, null),
+    terminal_noop: bucket(1, null),
+    parking_failed: bucket(1, null),
+    parking_required: bucket(1, null),
   },
   rebaseVsRebuild: {
     keptAliveMedianTokens: 8000,
@@ -57,7 +59,7 @@ const METRICS_FULL = {
     rebaseCheaper: true,
   },
   proofReuseCount: 9,
-  totalRebases: 20,
+  totalRebases: 22,
   computedAt: "2026-05-28T00:00:00.000Z",
 };
 
@@ -95,7 +97,9 @@ const METRICS_EMPTY = {
     replanned: bucket(0, null),
     writer_rework: bucket(0, null),
     parked: bucket(0, null),
-    held: bucket(0, null),
+    terminal_noop: bucket(0, null),
+    parking_failed: bucket(0, null),
+    parking_required: bucket(0, null),
   },
   rebaseVsRebuild: {
     keptAliveMedianTokens: null,
@@ -197,6 +201,19 @@ describe("merge-queue panel (/merge-queue)", () => {
     expect(html).toContain("24k");
     expect(html).toContain("rebase &lt; rebuild");
     expect(html).toContain("clean rebases");
+  });
+
+  it("renders exact recovery decisions with precise card language (no held token)", async () => {
+    const app = await build();
+    const html = await (await app.request("/merge-queue")).text();
+    expect(html).toContain("terminal no-op");
+    expect(html).toContain("concurrent terminal no-op");
+    expect(html).toContain("park failed");
+    expect(html).toContain("park failed with intent retained");
+    expect(html).toContain("parking required");
+    expect(html).toContain("parking still required with pending retained");
+    // Public surface must not expose the removed infra-hold collapse token.
+    expect(html).not.toMatch(/>\s*held\s*</iu);
   });
 
   it("renders native-queue stats and the dequeue breakdown", async () => {

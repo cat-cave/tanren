@@ -328,18 +328,16 @@ export type DagSpecPercolationReplanPayload = z.infer<typeof DagSpecPercolationR
 //   - `rebased_resolved` — the rebase conflicted (recorded IN the commit, work survived),
 //                          the resolver reconciled it (intent-preserving), and the re-gate
 //                          passed — still NO re-plan (the existing work fit after resolve).
-//   - `replanned`        — the rebased work NO LONGER FITS the new base, so it was routed
-//                          back to the planner WITH the shift as context (work KEPT ALIVE,
-//                          never discarded/merged). "No longer fits" has TWO legitimate
-//                          forms, distinguished by `rebaseConflicted`: (a) the rebase
-//                          CONFLICTED and the resolver could not reconcile it
-//                          (`rebaseConflicted: true`), OR (b) the rebase was CLEAN but the
-//                          fresh re-gate FAILED on the new base (`rebaseConflicted: false`).
-//                          Both are real "the old work doesn't fit the shifted base" replans
-//                          — a clean rebase whose gate fails on the new base genuinely needs
-//                          re-planning, NOT a pretend-conflict.
-//   - `held`             — a fail-closed hold (the rebase/resolver/gate could not settle);
-//                          the work survives and is retried on the next notification.
+//   - `replanned`        — durable planner ownership: the rebased work no longer fits, so
+//                          it was routed back to the planner WITH the shift as context
+//                          (work KEPT ALIVE). Distinct from writer/park/terminal outcomes.
+//   - `writer_rework`    — durable writer ownership after a gate-tier fail on a clean tree.
+//   - `parked`           — needs_attention parking completed; intent retained.
+//   - `terminal_noop`    — concurrent terminal no-op (spec already terminal); intent moot.
+//   - `parking_failed`   — park attempt failed; intent + percolation_pending retained.
+//   - `parking_required` — parking still required; pending retained (not "replanned").
+// Infra holds (rebase/resolver/gate could not settle) throw BaseShiftHeldError *before*
+// this event is emitted — they are NOT a public `decision` token.
 // `sameRunId` is ALWAYS true on this path — it is the never-discard assertion made
 // durable (the dependent's run row is the SAME across the shift). The recorded signal
 // is the categorical `decision` (below) PLUS the kept `runId` — there is NO token or
@@ -364,12 +362,20 @@ export const IntegrationRebasePayload = z
     // INFORMATIONAL: whether the jj rebase itself conflicted (a SUCCESS that recorded the
     // conflict). On `replanned` it distinguishes the two "no longer fits" forms — `true`
     // = the conflict was irreconcilable, `false` = the rebase was clean but the re-gate
-    // failed on the new base. It does NOT gate the decision (a clean-rebase gate-failure
-    // is a real replan).
+    // failed on the new base. It does NOT gate the decision.
     rebaseConflicted: z.boolean(),
-    // What the base shift cost — the `rebase_vs_rebuild` signal. `writer_rework` /
-    // `parked` are distinct from planner `replanned`; `held` is a fail-closed hold.
-    decision: z.enum(["rebased_clean", "rebased_resolved", "replanned", "writer_rework", "parked", "held"]),
+    // What the base shift cost — the `rebase_vs_rebuild` signal. Recovery outcomes are
+    // exact durable tokens (never collapsed to a silent hold).
+    decision: z.enum([
+      "rebased_clean",
+      "rebased_resolved",
+      "replanned",
+      "writer_rework",
+      "parked",
+      "terminal_noop",
+      "parking_failed",
+      "parking_required",
+    ]),
   })
   .strict();
 export type IntegrationRebasePayload = z.infer<typeof IntegrationRebasePayload>;

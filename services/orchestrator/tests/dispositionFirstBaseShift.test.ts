@@ -1,5 +1,7 @@
 // F1 hostile: base-shift threads post-route disposition; pending clear vs retain.
 // Old bug: discard ReplanRouteResult, force decision=replanned, always clear pending.
+// #928: terminal_noop / parking_failed / parking_required are exact public decisions
+// (never collapsed to a silent `held` that production drops).
 
 import { describe, expect, it } from "vitest";
 import type { ConflictRecoveryDisposition, ReplanRouteResult } from "../src/engine/contracts/conflictResolution.js";
@@ -162,15 +164,15 @@ describe("F1 base-shift post-route dispositions + pending clear/retain", () => {
       clear: true,
     },
     {
-      name: "terminal_noop → held",
+      name: "terminal_noop → terminal_noop",
       result: { kind: "terminal_noop" as const, status: "merged" as const, message: "merged" },
-      decision: "held" as const,
+      decision: "terminal_noop" as const,
       clear: true,
     },
     {
-      name: "parking_failed → held (retain pending)",
+      name: "parking_failed → parking_failed (retain pending)",
       result: { kind: "parking_failed" as const, message: "park fail", observedStatus: "in_flight" },
-      decision: "held" as const,
+      decision: "parking_failed" as const,
       clear: false,
     },
   ])("$name", async ({ result, decision, clear }) => {
@@ -202,10 +204,11 @@ describe("F1 base-shift post-route dispositions + pending clear/retain", () => {
       emit,
     );
     expect(persist.replanned).toHaveLength(1);
-    expect(out.decision).toBe("held");
+    // Post-route parking_failed is exact — not replanned, not a silent held.
+    expect(out.decision).toBe("parking_failed");
     expect(out.decision).not.toBe("replanned");
-    expect(baseShiftDecisionFromRecovery({ kind: "parking_required", message: "x" })).toBe("held");
-    expect(baseShiftDecisionFromRouteResult({ kind: "parking_required" })).toBe("held");
+    expect(baseShiftDecisionFromRecovery({ kind: "parking_required", message: "x" })).toBe("parking_required");
+    expect(baseShiftDecisionFromRouteResult({ kind: "parking_required" })).toBe("parking_required");
   });
 
   it("pre-assigned owned/parked/terminal/parking_failed never re-route via recordReplan", async () => {
@@ -231,11 +234,11 @@ describe("F1 base-shift post-route dispositions + pending clear/retain", () => {
       },
       {
         recovery: { kind: "terminal_noop", status: "cancelled", message: "cancelled" },
-        decision: "held",
+        decision: "terminal_noop",
       },
       {
         recovery: { kind: "parking_failed", message: "fail" },
-        decision: "held",
+        decision: "parking_failed",
       },
     ];
     for (const c of cases) {

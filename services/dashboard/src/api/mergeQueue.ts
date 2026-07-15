@@ -46,7 +46,9 @@ export interface IntegrationMetrics {
     replanned: IntegrationDecisionBucket;
     writer_rework: IntegrationDecisionBucket;
     parked: IntegrationDecisionBucket;
-    held: IntegrationDecisionBucket;
+    terminal_noop: IntegrationDecisionBucket;
+    parking_failed: IntegrationDecisionBucket;
+    parking_required: IntegrationDecisionBucket;
   };
   rebaseVsRebuild: RebaseVsRebuild;
   /** How many `integration.proof.reused` events fired in the window. */
