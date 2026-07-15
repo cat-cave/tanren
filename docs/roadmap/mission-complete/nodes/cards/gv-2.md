@@ -55,7 +55,8 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 - Focused tests: `simulatedReviewer.test.ts`,
   `simulatedReviewPublication.test.ts`, `githubReviewMergeSubmit.test.ts`,
   `reviewTaskTerminalRouting.test.ts`, `reviewForgePublicationSchema.test.ts`,
-  `mergeAuthorityGate.test.ts` (review TOCTOU), `runDetail.model.test.ts`
+  `mergeAuthorityGate.test.ts` (review TOCTOU), `simulatedReviewHeadRebind.test.ts`
+  (A→B re-review recovery), `runDetail.model.test.ts`
 
 ## Shared-resource leases (not taken)
 
@@ -125,21 +126,27 @@ Former-bug negative:
 5. `review.approved` present with receipt head A, land head B → land **blocked**
    (does not trust event existence alone).
 6. Partial forge tuples rejected at event schema (all-or-nothing).
+7. Head advance recovery: review A → head advances to B → re-review B posts a new
+   forge receipt that **supersedes** A for land signals (LATEST event); land B
+   succeeds only from B's receipt — A never authorizes B. Same-head retry remains
+   idempotent (first-wins on the head-bound key).
 
 Auth / forge:
 
-7. Distinct reviewer via managed secret seam (App writer + static reviewer; App
+8. Distinct reviewer via managed secret seam (App writer + static reviewer; App
    without static fails closed); reviewer never reuses writer token/identity.
-8. Terminal finalize idempotency is first-wins on
-   `${runId}:review:${verdict}` only — forge review id is **not** in the key;
-   a retry dedupes; a contradictory second receipt for the same key is suppressed.
+9. Terminal finalize idempotency (strict simulated): first-wins on
+   `${runId}:review:${verdict}:${headSha}` — forge review id is **not** in the
+   key; same-head retry dedupes; a re-review on a replacement head uses a distinct
+   key and lands a new durable receipt (one event stream, no second store).
+   Human/auto paths without a forge receipt keep `${runId}:review:${verdict}`.
 
 ## Validation
 
 - Focused: `simulatedReviewer.test.ts`, `simulatedReviewPublication.test.ts`,
   `githubReviewMergeSubmit.test.ts`, `reviewTaskTerminalRouting.test.ts`,
   `reviewForgePublicationSchema.test.ts`, `mergeAuthorityGate.test.ts`,
-  `runDetail.model.test.ts`.
+  `simulatedReviewHeadRebind.test.ts`, `runDetail.model.test.ts`.
 - `just affected-typecheck origin/main`, `just affected-test origin/main`,
   `just fast-check`, `just ci`.
 - Line counts under 500; no migration; no new runtime deps.

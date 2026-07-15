@@ -26,11 +26,11 @@ Each tier was driven by a real operator flow — sign in → create an org → i
 real provider credentials → link a repo → submit a spec → trigger a run → watch
 it merge — entirely through real adapters (no fakes in the runtime path).
 
-| Tier   | Repo        | Integration policy                                                                  | What it proved                                                                                                                                                                                                                                          |
-| ------ | ----------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Easy   | public      | `governancePosture: open` · `mergeIntegration: direct_merge` · `reviewPolicy: auto` | the full loop `plan → real-agent write → check → audit → native gate → merge` reaches a merged PR.                                                                                                                                                      |
-| Medium | public      | same + a two-tier `.tanren/ci.yml` (typecheck + tests)                              | the write stage implements functions so a committed test suite passes; the native `pre_merge` gate (run over SSH, **not** Actions) admits the merge.                                                                                                    |
-| Hard   | **private** | same + `reviewPolicy: simulated`                                                    | private-repo clone auth works; real logic + rigorous CI; the **orchestrator-managed simulated reviewer** posts a real GitHub `COMMENT` review and drives the verdict internally (self-PR-safe) — the human-review path runs end-to-end without a human. |
+| Tier   | Repo        | Integration policy                                                                  | What it proved                                                                                                                                                                                                                                                                                                                                                  |
+| ------ | ----------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Easy   | public      | `governancePosture: open` · `mergeIntegration: direct_merge` · `reviewPolicy: auto` | the full loop `plan → real-agent write → check → audit → native gate → merge` reaches a merged PR.                                                                                                                                                                                                                                                              |
+| Medium | public      | same + a two-tier `.tanren/ci.yml` (typecheck + tests)                              | the write stage implements functions so a committed test suite passes; the native `pre_merge` gate (run over SSH, **not** Actions) admits the merge.                                                                                                                                                                                                            |
+| Hard   | **private** | same + `reviewPolicy: simulated`                                                    | private-repo clone auth works; real logic + rigorous CI; the **orchestrator-managed simulated reviewer** posts a real forge `APPROVE` / `REQUEST_CHANGES` on the exact head via a **distinct reviewer identity** (strict publication, gv-2) and binds the forge receipt onto the terminal `review.*` event — land authorizes only from that exact-head receipt. |
 
 All three of the project's cost models, the event log, and full run/task
 provenance are persisted and inspectable.
@@ -76,9 +76,13 @@ surfaced and fixed a chain of real gaps:
 - **Private-repo clone auth.** The workspace clone authenticates the org's GitHub
   token over HTTPS (token via stdin / `GIT_ASKPASS`, never on the command line),
   so **private target repos work**.
-- **Simulated-reviewer self-PR safety.** The orchestrator-managed simulated
-  reviewer posts a real GitHub **`COMMENT`** review (not `APPROVE`/`REQUEST_CHANGES`,
-  which GitHub forbids on your own PR) and drives the verdict internally.
+- **Strict simulated-review forge publication (gv-2).** The orchestrator-managed
+  simulated reviewer posts real forge **`APPROVE` / `REQUEST_CHANGES`** on the exact
+  head via a **distinct reviewer identity** (App writer + static reviewer token;
+  same-login self-APPROVE fails closed). The durable forge receipt is bound onto
+  the terminal `review.approved` / `review.changes_requested` event; land requires
+  that receipt's `headSha` to equal the head being landed. The old COMMENT /
+  internal-only authority path is deleted.
 
 These prove RLS + the de-privileged plane split + the real harness across the
 **data layer, the run-execution path, the HTTP operator + resource routes, the
