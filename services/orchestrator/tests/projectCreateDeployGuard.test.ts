@@ -284,6 +284,95 @@ describe("generic project creation deploy guard", () => {
     });
   });
 
+  // gv-1: a member PATCH that mutates the governance-owned `auditPosture` DORA knob
+  // must be rejected through the canonical reserved-field guard and leave the
+  // persisted config unchanged (the sole mutation path is the org-admin governance
+  // PUT). `auditPosture` is a nested object, so this also proves the guard compares
+  // structurally rather than tripping on a fresh object reference.
+  it("rejects full config PATCH that changes auditPosture (the authorization bypass)", async () => {
+    const { app, pool } = orgProjectHarness();
+    pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          // Only auditPosture changes (blockReviewAt P1 → P3); benign fields match.
+          auditPosture: { blockReviewAt: "P3", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "reserved_project_config_patch",
+      fields: ["auditPosture"],
+    });
+    // The persisted config is unchanged — no partial write leaked through.
+    expect(pool.projects.get("project_existing")?.config).toEqual({ version: 1 });
+  });
+
+  // gv-1 positive control: a PATCH body that re-states the CURRENT auditPosture
+  // (the default balanced posture) alongside a benign field is accepted. This
+  // proves the structural comparison does not false-flag an unchanged nested
+  // object (a fresh parse yields a new reference, but equal contents).
+  it("allows full config PATCH when auditPosture is re-stated unchanged", async () => {
+    const { app, pool } = orgProjectHarness();
+    pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          // The default balanced posture, stated explicitly — must NOT be reserved out.
+          auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+          credentials: { githubCredentialRef: "credential/github/project" },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      config: { credentials: { githubCredentialRef: "credential/github/project" } },
+    });
+    expect(pool.projects.get("project_existing")?.config).toMatchObject({
+      auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+    });
+  });
+
+  // gv-1 negative control against a project that already has a non-default posture:
+  // re-stating the SAME non-default posture is allowed (structural equal), but any
+  // single-key drift (autonomousRemediation true→false) is reserved out.
+  it("allows PATCH re-stating an existing non-default auditPosture unchanged", async () => {
+    const { app, pool } = orgProjectHarness();
+    const posture = { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true };
+    pool.seedProject({
+      project_id: "project_existing",
+      org_id: "org_acme",
+      config: { version: 1, auditPosture: posture },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          // Re-ordered keys, identical contents — structural equal, not a change.
+          auditPosture: { autonomousRemediation: true, p2p3Handling: "route-to-dag", blockReviewAt: "P3" },
+          credentials: { githubCredentialRef: "credential/github/project" },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(pool.projects.get("project_existing")?.config).toMatchObject({ auditPosture: posture });
+  });
+
   it.each([
     [
       "fake deploy target",

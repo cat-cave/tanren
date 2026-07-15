@@ -28,6 +28,12 @@ const FULL_CONFIG_PATCH_RESERVED_FIELDS = [
   "reviewPolicy",
   "mergeIntegration",
   "governancePosture",
+  // gv-1: `auditPosture` is a governance-owned DORA knob (a governed SETTING like
+  // `governancePosture`/`reviewPolicy`, see auditPostureConfig.ts). It must NOT be
+  // mutable through the generic member PATCH — only through the org-admin governance
+  // PUT. Compared structurally (it is a nested object), so an unchanged value
+  // round-trips while a genuine change is reserved out.
+  "auditPosture",
   ...PROVISIONED_DEPLOY_CONFIG_FIELDS,
 ] as const;
 
@@ -156,7 +162,11 @@ function changedFields(
   currentConfig: ProjectConfigV1,
   fields: readonly (keyof ProjectConfigV1)[],
 ): string[] {
-  return fields.filter((field) => nextConfig[field] !== currentConfig[field]);
+  // `auditPosture` is a nested object, so reference equality (`!==`) would always
+  // report it changed after re-parsing even when the value is identical. Structural
+  // JSON equality preserves the existing primitive-field behavior exactly (primitives
+  // compare by value under ===) while correctly diffing the nested governed setting.
+  return fields.filter((field) => !jsonEqual(nextConfig[field], currentConfig[field]));
 }
 
 function rawRecord(raw: unknown): Record<string, unknown> {
@@ -165,4 +175,30 @@ function rawRecord(raw: unknown): Record<string, unknown> {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+// Structural equality over the JSON value domain (the parsed config values are all
+// JSON-serializable). For primitives this is identical to `===`/`!==`; for objects
+// and arrays it compares recursively so a re-parsed nested governed setting (e.g.
+// `auditPosture`) is only "changed" when its contents genuinely differ.
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+    return false;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => jsonEqual(value, b[index]))
+    );
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const ak = Object.keys(ar);
+  const bk = Object.keys(br);
+  return ak.length === bk.length && ak.every((key) => jsonEqual(ar[key], br[key]));
 }
