@@ -10,6 +10,17 @@ interface OrgCostsFixtureState {
   projects: Map<string, { project_id: string; org_id: string | null }>;
 }
 
+// Canonical production predicates from selectCostListPageForOrg's run/spec
+// LEFT JOIN. The fake matches the org-costs run page by the (shape, WHERE)
+// pair, then refuses any SQL that drops or alters the constrained-join
+// predicates — otherwise dropping `s.project_id = r.project_id AND
+// s.org_id = $1` from production SQL would let a cross-project spec id
+// fabricate a row and this fake would mask the regression (the audit gap).
+const ORG_RUN_PAGE_SHAPE = /FROM runs r\s+LEFT JOIN specs s/u;
+const ORG_RUN_PAGE_WHERE = /WHERE r\.org_id = \$1/u;
+const ORG_RUN_PAGE_CONSTRAINED_JOIN =
+  /LEFT JOIN specs s ON s\.spec_id = r\.spec_id AND s\.project_id = r\.project_id AND s\.org_id = \$1/u;
+
 export function queryOrgCostsReadModel(
   sql: string,
   params: unknown[],
@@ -30,8 +41,24 @@ export function queryOrgCostsReadModel(
       .slice(0, limit);
     return { rows, rowCount: rows.length };
   }
-  if (!/FROM runs r\s+LEFT JOIN specs s/u.test(sql) || !/WHERE r\.org_id = \$1/u.test(sql)) {
-    return undefined;
+  if (!ORG_RUN_PAGE_SHAPE.test(sql)) return undefined;
+  // selectListForProject also has `FROM runs r LEFT JOIN specs s` but joins
+  // only on spec_id and scopes by `r.project_id = $1 AND r.org_id = $2`, so
+  // neither org-costs marker is present and it must fall through to the
+  // list loader unchanged. Anything that carries one marker is declaring
+  // itself an org-costs run page — then both markers must be present and
+  // canonical, or we refuse to fake (the regression this pin catches).
+  const looksLikeOrgCostsRunPage = ORG_RUN_PAGE_CONSTRAINED_JOIN.test(sql) || ORG_RUN_PAGE_WHERE.test(sql);
+  if (!looksLikeOrgCostsRunPage) return undefined;
+  if (!ORG_RUN_PAGE_WHERE.test(sql)) {
+    throw new Error(`org-costs run-page SQL lost its WHERE r.org_id = $1 predicate: ${sql}`);
+  }
+  if (!ORG_RUN_PAGE_CONSTRAINED_JOIN.test(sql)) {
+    throw new Error(
+      "org-costs run-page SQL lost its constrained-join predicates " +
+        "(s.project_id = r.project_id AND s.org_id = $1); refusing to fake: " +
+        sql,
+    );
   }
   const orgId = String(params[0]);
   const cursorAt = params.length === 4 ? (params[1] as Date) : undefined;

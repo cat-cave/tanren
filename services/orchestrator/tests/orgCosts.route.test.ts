@@ -62,8 +62,11 @@ function isOrgCostRead(sql: string): boolean {
 }
 
 function isOrgRunRead(sql: string): boolean {
+  // Canonical LEFT JOIN from selectCostListPageForOrg — dropping a predicate
+  // fails this proof, not just the fake's runtime check in the negative test.
   return (
     sql.includes("FROM runs r") &&
+    sql.includes("LEFT JOIN specs s ON s.spec_id = r.spec_id AND s.project_id = r.project_id AND s.org_id = $1") &&
     sql.includes("WHERE r.org_id = $1") &&
     sql.includes("ORDER BY r.started_at DESC, r.run_id ASC")
   );
@@ -467,5 +470,31 @@ describe("org costs read model", () => {
     const dataReads = queries.filter(({ sql }) => isOrgCostRead(sql) || isOrgRunRead(sql));
     expect(dataReads).toHaveLength(2);
     expect(dataReads.every(({ sql }) => sql.includes("org_id = $1"))).toBe(true);
+  });
+
+  it("fails loudly when production SQL omits or alters the constrained-join predicates (regression pin)", async () => {
+    // Former bug: dropping the constrained-join predicates from
+    // selectCostListPageForOrg would let a cross-project spec id fabricate a
+    // spec_title; this fake matched on shape alone. Feed mutated SQL and
+    // prove each variant throws (isOrgRunRead above pins the route side).
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_run_side", org_id: "org_acme" });
+    pool.seedProject({ project_id: "project_spec_side", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_shared", project_id: "project_spec_side", title: "Other project spec" });
+    pool.seedRun({ run_id: "run_shared", spec_id: "spec_shared", project_id: "project_run_side" });
+    const canonical =
+      "SELECT r.run_id, s.title FROM runs r LEFT JOIN specs s ON s.spec_id = r.spec_id " +
+      "AND s.project_id = r.project_id AND s.org_id = $1 WHERE r.org_id = $1";
+    expect((await pool.query(canonical, ["org_acme", 10])).rows[0]?.spec_title).toBeNull();
+    for (const mutated of [
+      canonical.replace(" AND s.project_id = r.project_id", ""),
+      canonical.replace(" AND s.org_id = $1", ""),
+      canonical.replace("s.org_id = $1", "s.org_id = $2"),
+    ]) {
+      await expect(pool.query(mutated, ["org_acme", 10])).rejects.toThrow(/constrained-join predicates/u);
+    }
+    await expect(
+      pool.query(canonical.replace("WHERE r.org_id = $1", "WHERE r.run_id = $1"), ["org_acme", 10]),
+    ).rejects.toThrow(/WHERE r\.org_id = \$1/u);
   });
 });
