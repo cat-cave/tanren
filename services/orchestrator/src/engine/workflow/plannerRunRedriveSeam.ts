@@ -25,7 +25,7 @@
 // against the worker's pool (logged loudly on a failure — never silent).
 
 import { runWithOrgScope } from "@tanren/db";
-import type pg from "pg";
+import { isPool } from "../data/orgScopedDb.js";
 import type { AppendEventInput } from "../eventStore.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import { applyFinalizeRunWithEvent } from "../worker/runStateAtomicSql.js";
@@ -34,9 +34,6 @@ import type { PlannerRunContext, RunPlannerLoopInput } from "./plannerRun.js";
 import type { FinalizeRunState } from "./plannerRunFinalize.js";
 
 const log = createLogger("run-redrive-seam");
-
-// Probe a real pg.Pool vs a fake unit-test stub (needs `.connect()` for runWithOrgScope).
-const isRealPool = (p: unknown): boolean => typeof (p as { connect?: unknown }).connect === "function";
 
 /** The seam input — every dep `dispositionSeams` already holds. */
 export interface FinalizeRedriveSeamCtx {
@@ -66,7 +63,7 @@ const JOB_QUEUE_FAILURE_MESSAGE_SQL =
  * arm (no orgId → unit-test legacy split without failure_message) is gone:
  * `orgId` is required by the hydration invariant. A fake-pool unit test still
  * lands here on the second branch and falls through to the plain
- * `finalizeRunState` + `appendEvent` split when `isRealPool` returns false. */
+ * `finalizeRunState` + `appendEvent` split when `isPool` returns false. */
 export async function finalizeRedriveAtomicSeam(
   ctx: FinalizeRedriveSeamCtx,
   { runOutcome, runFailedEvent, rawErrorMessage }: FinalizeRedriveSeamInput,
@@ -91,7 +88,7 @@ export async function finalizeRedriveAtomicSeam(
     await persistFailureMessageBestEffort(input.pool, context.runId, rawErrorMessage);
     return;
   }
-  if (isRealPool(input.pool)) {
+  if (isPool(input.pool)) {
     // In-process atomic: runs UPDATE + run.failed event + job_queue
     // failure_message UPDATE in ONE org-scoped transaction.
     const finalizeInput = {
@@ -101,7 +98,7 @@ export async function finalizeRedriveAtomicSeam(
       outcome: runOutcome,
       fromStatuses: ["running", "queued"],
     };
-    await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+    await runWithOrgScope(input.pool, orgId, async (client) => {
       const outcome = await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event: runFailedEvent });
       // The workflow's earlier finalize already landed this run (or another
       // worker did) ⇒ skip the failure_message UPDATE too (there is no
@@ -136,8 +133,9 @@ async function persistFailureMessageBestEffort(
   rawErrorMessage: string,
 ): Promise<void> {
   try {
-    if (!isRealPool(pool)) return;
-    await (pool as unknown as pg.Pool).query(JOB_QUEUE_FAILURE_MESSAGE_SQL, [runId, rawErrorMessage]);
+    // Only a real pool (or pool-shaped proxy) — unit-test fakes skip this path.
+    if (!isPool(pool)) return;
+    await pool.query(JOB_QUEUE_FAILURE_MESSAGE_SQL, [runId, rawErrorMessage]);
   } catch (error) {
     log.error(
       "re-drive failure_message capture failed (best-effort, surfaced — the run.failed event already landed)",

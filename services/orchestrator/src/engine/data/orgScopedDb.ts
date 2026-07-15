@@ -122,17 +122,36 @@ export function hasOrgScope(): boolean {
 }
 
 /**
- * A `pg.Pool` exposes `connect`; a checked-out `PoolClient` does not. Write-path
- * stores (event store, cost recorder, task helpers) are constructed with EITHER
- * the shared pool OR a specific in-transaction client, and need to tell them
- * apart: a pool should route its write through the ambient org-scoped client when
- * a scope is open (RLS R2), while a handed-in client is used verbatim (the caller
- * already owns that transaction, e.g. `createQueuedRunFromSpec`).
+ * Discriminate a real `pg.Pool` (or {@link orgScopingPool} proxy / minimal pool
+ * double) from a checked-out `PoolClient` / query-only client.
+ *
+ * Write-path stores (event store, cost recorder, task helpers) are constructed
+ * with EITHER the shared pool OR a specific in-transaction client: a pool routes
+ * its write through the ambient org-scoped client when a scope is open (RLS R2);
+ * a handed-in client is used verbatim (the caller already owns that transaction,
+ * e.g. `createQueuedRunFromSpec` / a `RunPlannerLoopInput` PoolClient).
+ *
+ * **Do NOT key on `connect` alone.** A `PoolClient` is a `Client` and therefore
+ * has `connect()` — treating that as "is a pool" re-connects an already-checked-
+ * out client, loses the caller's open transaction, and can fail the reconnect.
+ * Order: (1) real Pool surface via `totalCount` + `connect`; (2) reject
+ * `release` (PoolClient); (3) accept connect-without-release test doubles.
  */
 export function isPool(client: QueryClient): client is pg.Pool {
-  // A `pg.Pool` exposes `connect`; a checked-out `PoolClient` does not. Probe via
-  // `in` + a Reflect read (both narrow without an unsafe assertion off the union).
-  return "connect" in client && typeof Reflect.get(client, "connect") === "function";
+  const connectFn = "connect" in client && typeof Reflect.get(client, "connect") === "function";
+  // 1. Real `pg.Pool` (and orgScopingPool Proxy): live counters Client never has.
+  if (connectFn && "totalCount" in client && typeof Reflect.get(client, "totalCount") === "number") {
+    return true;
+  }
+  // 2. PoolClient always carries `release()`; a real Pool does not. Reject so a
+  // handed-in in-transaction client is never re-connected (the unsound case).
+  if ("release" in client && typeof Reflect.get(client, "release") === "function") {
+    return false;
+  }
+  // 3. Minimal pool doubles (tests) implement `connect` without `release` or
+  // totalCount — accept them as pools so callers need no cast; production always
+  // has a real Pool (arm 1).
+  return connectFn;
 }
 
 /**

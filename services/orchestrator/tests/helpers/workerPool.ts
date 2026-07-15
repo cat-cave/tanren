@@ -34,6 +34,8 @@ interface RunRow {
 }
 
 export class WorkerPool {
+  // Pool surface for `isPool` (must not key on `connect` alone — PoolClient has it).
+  readonly totalCount = 0;
   runStatus: { status: string; outcome: string | null } = { status: "queued", outcome: null };
   specStatus = "pending";
   // The orphan-strand SUCCESSOR-run probe (`SELECT 1 FROM runs WHERE spec_id = $1 ...`):
@@ -459,10 +461,11 @@ export class WorkerPool {
   }
 
   // A checked-out client VIEW: shares this fake's `query` (so seeded state is one
-  // store) but is NOT itself a pool — it has no `connect`, exactly like a real
-  // `pg.PoolClient`. This matters for the RLS write-path discriminator
-  // (`isPool`): a store constructed with a handed-in client must be treated as a
-  // client (used verbatim), never re-resolved through the org-scope seam.
+  // store) but is NOT itself a pool — no `totalCount` pool counter, exactly like a
+  // real `pg.PoolClient` (which also has `connect()`, so connect alone is unsound).
+  // This matters for the RLS write-path discriminator (`isPool`): a store
+  // constructed with a handed-in client must be treated as a client (used
+  // verbatim), never re-resolved through the org-scope seam.
   async connect(): Promise<pg.PoolClient> {
     return {
       query: (sql: string, params?: unknown[]) => this.query(sql, params ?? []),

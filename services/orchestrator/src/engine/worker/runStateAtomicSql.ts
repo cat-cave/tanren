@@ -24,6 +24,9 @@
 
 import type pg from "pg";
 import { z } from "zod";
+// Re-export so workflow finalize seams can narrow QueryClient → Pool without an
+// extra module dependency (max-dependencies cap on plannerRunFinalize).
+export { isPool } from "../data/orgScopedDb.js";
 import type {
   FinalizeRunWithEventInput,
   FinalizeRunWithEventOutcome,

@@ -20,17 +20,15 @@ import { resolveWorkflowThrow, type WorkflowErrorDisposition } from "./workflowE
 import type { PreparedRunWorkspace } from "./plannerRunWorkspace.js";
 import type { MergeForRunResult } from "./reviewMerge/index.js";
 import { runWithOrgScope } from "@tanren/db";
-import type pg from "pg";
 import type { PlannerRunContext, PlannerRunResult, RunPlannerLoopInput } from "./plannerRun.js";
 import { finalizeRunCompletedAtomic } from "./runCompletedAtomic.js";
-import { applyFinalizeRunWithEvent, applyUpdateSpecWithEvent } from "../worker/runStateAtomicSql.js";
+// isPool re-exported from the atomic-SQL module so this file stays under the
+// max-dependencies cap (type-only `pg` did not count; a second value import does).
+import { applyFinalizeRunWithEvent, applyUpdateSpecWithEvent, isPool } from "../worker/runStateAtomicSql.js";
 import type { SubtaskLoopOutcome } from "./subtaskLoop.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("run-workspace");
-
-// Probe a real pg.Pool vs a fake unit-test stub (needs `.connect()` for runWithOrgScope).
-const isRealPool = (p: unknown): boolean => typeof (p as { connect?: unknown }).connect === "function";
 
 // Dimension D per-run credential-scoping seam: re-exported here (alongside the
 // other lifecycle-write helpers) so `plannerRun.ts` imports it from a module it
@@ -157,14 +155,14 @@ function dispositionSeams(
         });
         return;
       }
-      if (isRealPool(input.pool)) {
+      if (isPool(input.pool)) {
         const specInput = {
           specId: context.specId,
           orgId,
           status: spec.status,
           ...(spec.notFromStatuses !== undefined && { notFromStatuses: spec.notFromStatuses }),
         };
-        await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+        await runWithOrgScope(input.pool, orgId, async (client) => {
           await applyUpdateSpecWithEvent(client, { spec: specInput, event });
         });
         return;
@@ -186,7 +184,7 @@ function dispositionSeams(
         });
         return;
       }
-      if (isRealPool(input.pool)) {
+      if (isPool(input.pool)) {
         const finalizeInput = {
           runId: context.runId,
           orgId,
@@ -194,7 +192,7 @@ function dispositionSeams(
           outcome: "failed",
           fromStatuses: ["running", "queued"],
         };
-        await runWithOrgScope(input.pool as unknown as pg.Pool, orgId, async (client) => {
+        await runWithOrgScope(input.pool, orgId, async (client) => {
           await applyFinalizeRunWithEvent(client, { finalize: finalizeInput, event });
         });
         return;
