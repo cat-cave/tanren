@@ -123,4 +123,23 @@ describe("PgBaseShiftEventEmitter — every public RebaseDecision persists (#928
     expect(persisted).toEqual([...RebaseDecisionValues]);
     expect(persisted).not.toContain("held");
   });
+
+  it("missing project org rejects loudly and never appends (#audit)", async () => {
+    pool.scriptedProjectOrgId = null;
+    await expect(
+      emitter.emitRebase({
+        projectId: "proj_no_org",
+        specId: "spec_1",
+        runId: "run_reject",
+        branch: "tanren/run",
+        newBaseSha: "base",
+        headSha: "head",
+        rebaseConflicted: false,
+        decision: "rebased_clean",
+      }),
+    ).rejects.toThrow("has no org for the base-shift integration.rebase emit");
+    // A supposedly successful base-shift must never lose its integration.rebase evidence:
+    // the silent-return regression would have skipped the append entirely.
+    expect(writer.appends).toHaveLength(0);
+  });
 });

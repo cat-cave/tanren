@@ -55,8 +55,13 @@ export async function appendIntegrationRebaseEvent(
   // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.
   runStateWriter: RunStateWriter,
 ): Promise<void> {
+  // Loud deterministic error (no silent return): a supposedly successful base-shift must
+  // NEVER lose its `integration.rebase` evidence — a missing org is a data-plane contract
+  // violation, not a skippable case (every sibling write here throws the same shape).
   const orgId = await resolveProjectOrg(pool, input.projectId);
-  if (orgId === null) return;
+  if (orgId === null) {
+    throw new Error(`project ${input.projectId} has no org for the base-shift integration.rebase emit`);
+  }
   const event = {
     runId: input.runId,
     specId: input.specId,

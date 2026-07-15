@@ -185,7 +185,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
    * branch onto the shifted base via the jj core, emits `integration.rebase`, and:
    *   - clean rebase + passing re-gate ⇒ KEEP the run. `rebased_clean`.
    *   - conflicted, resolver fits + re-gate passes ⇒ KEEP the run. `rebased_resolved`.
-   *   - clean/resolved tree + a GATE-tier re-gate FAILURE ⇒ WRITER REWORK (NOT replan). `replanned`.
+   *   - clean/resolved tree + a GATE-tier re-gate FAILURE ⇒ WRITER REWORK (NOT replan). `writer_rework`.
    *   - genuinely irreconcilable resolver (or checker/auditor re-gate rejection) ⇒ re-plan (kept ALIVE).
    *   - any rebase/gate/resolver INFRA failure ⇒ HOLD (fail-closed; the work survives).
    * Returns the `rebase_vs_rebuild` decision for the caller.
