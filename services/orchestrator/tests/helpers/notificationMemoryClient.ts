@@ -38,17 +38,45 @@ export class NotificationMemoryClient {
     if (trimmed.startsWith("INSERT INTO notification_routes")) {
       return this.insertRoute(params);
     }
-    if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notification_routes r")) {
+    // Two production queries share `FROM notification_routes r JOIN
+    // notification_targets t`. Mirror each shape EXACTLY rather than folding
+    // them into one branch: listForOrgEvent filters by `AND r.event_name =
+    // $2` and ships no ORDER BY; listForOrg returns every org route ordered
+    // by (event_name, target_id, id). Folding them previously masked the
+    // missing production ORDER BY — the fake returned Map insertion order,
+    // which happened to look deterministic.
+    if (
+      trimmed.startsWith("SELECT") &&
+      trimmed.includes("FROM notification_routes r") &&
+      trimmed.includes("AND r.event_name = $2")
+    ) {
       const orgId = String(params[0]);
-      const eventName = params[1] === undefined ? undefined : String(params[1]);
+      const eventName = String(params[1]);
       const rows: Array<Record<string, unknown>> = [];
       for (const route of this.routes.values()) {
-        if (eventName !== undefined && route.event_name !== eventName) continue;
+        if (route.event_name !== eventName) continue;
         const target = this.targets.get(String(route.target_id));
         if (target === undefined) continue;
         if (target.org_id !== orgId) continue;
         rows.push(route);
       }
+      return { rowCount: rows.length, rows };
+    }
+    if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notification_routes r")) {
+      const orgId = String(params[0]);
+      const rows: Array<Record<string, unknown>> = [];
+      for (const route of this.routes.values()) {
+        const target = this.targets.get(String(route.target_id));
+        if (target === undefined) continue;
+        if (target.org_id !== orgId) continue;
+        rows.push(route);
+      }
+      rows.sort(
+        (a, b) =>
+          String(a.event_name).localeCompare(String(b.event_name)) ||
+          String(a.target_id).localeCompare(String(b.target_id)) ||
+          String(a.id).localeCompare(String(b.id)),
+      );
       return { rowCount: rows.length, rows };
     }
     if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notification_routes WHERE target_id = $1")) {
