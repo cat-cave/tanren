@@ -29,6 +29,8 @@ function makeRouter(opts: {
   statusWrites: { specId: string; status: string }[];
   /** Current status for notFromStatuses + durable park readback (default open). */
   specStatus?: string;
+  /** When true, durable readback returns no row (parking_failed missing). */
+  missingRow?: boolean;
 }): SpecStatusGateReworkRouter {
   // Sole atomic park authority: recording RunStateWriter (no pool UPDATE / appendEvent split).
   const writer = new InMemoryRunStateWriter({
@@ -42,12 +44,14 @@ function makeRouter(opts: {
       opts.statusWrites.push({ specId: input.spec.specId, status: input.spec.status });
     },
   });
-  writer.updateSpecCurrentStatus = opts.specStatus ?? "open";
+  // missingRow: block flip via notFrom (needs_attention) but readback finds no row → parking_failed.
+  writer.updateSpecCurrentStatus = opts.missingRow ? "needs_attention" : (opts.specStatus ?? "open");
   const status = opts.specStatus ?? "open";
   // eslint-disable-next-line @typescript-eslint/require-await
   const query = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = String(text);
     if (sql.includes("SELECT status FROM specs")) {
+      if (opts.missingRow) return { rows: [], rowCount: 0 };
       return { rows: [{ status }], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
@@ -170,7 +174,7 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     expect(attention?.payload).toMatchObject({ reason: "persistent_failure" });
   });
 
-  it("CONCURRENT CANCEL: terminal_noop with zero status change and zero park event", async () => {
+  it("CONCURRENT CANCEL: terminal_noop with entire durable event set empty (no aux, no park)", async () => {
     const enqueuer: ReplanEnqueuer = {
       enqueue() {
         return Promise.reject(new Error("planner unavailable"));
@@ -189,6 +193,29 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     const recovery = await router.routeGateFailToRework({ specId: SPEC, gateError: "gate failed" });
     expect(recovery).toMatchObject({ kind: "terminal_noop", status: "cancelled" });
     expect(statusWrites).toEqual([]);
-    expect(events.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
+    // Hostile: entire durable event set must be empty — not only needs_attention absence.
+    expect(events.events).toEqual([]);
+  });
+
+  it("HOSTILE: parking_failed missing row — no aux gate_rework_routed, no park event", async () => {
+    const enqueuer: ReplanEnqueuer = {
+      enqueue() {
+        return Promise.reject(new Error("planner unavailable"));
+      },
+    };
+    const events = new FakeEventStore();
+    const statusWrites: { specId: string; status: string }[] = [];
+    const router = makeRouter({
+      enqueuer,
+      priorReworks: [],
+      events,
+      statusWrites,
+      missingRow: true,
+    });
+
+    const recovery = await router.routeGateFailToRework({ specId: SPEC, gateError: "gate failed" });
+    expect(recovery.kind).toBe("parking_failed");
+    expect(events.events).toEqual([]);
+    expect(statusWrites).toEqual([]);
   });
 });

@@ -165,11 +165,13 @@ export function buildDriveConflictResolve(deps: DriveConflictResolveDeps): Confl
     const currentSignature = conflictSignatureOf(conflictContext.message || conflictContext.baseBranch);
     const priorSignatures = await priorConflictSignatures(deps.pool, deps.facts);
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
+      // parking_required: no park attempt yet — settlement invokes SpecEscalator once
+      // (one authority). Never bare unowned; never pretends a park already completed.
       const message =
         `the resolver reached a FIXED POINT on spec ${deps.facts.specId}: it is re-planning against the SAME ` +
         `conflicting change it already could not absorb (re-planning would re-conflict identically) — a product ` +
         `decision is needed (which behavior wins, or whether the architecture must change).`;
-      return { resolved: false, recovery: { kind: "unowned", message } };
+      return { resolved: false, recovery: { kind: "parking_required", message } };
     }
 
     const ctx = await loadDriveRunContext(deps);

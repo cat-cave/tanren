@@ -34,15 +34,11 @@ import {
   type ReGateResult,
   type ReGateVerdict,
 } from "./baseShiftPorts.js";
-import { baseShiftDecisionFromRecovery } from "../merge/recoveryOwnership.js";
+import { baseShiftDecisionFromRecovery, baseShiftDecisionFromRouteResult } from "../merge/recoveryOwnership.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("base-shift");
 
-// Re-export the persistence/node/event ports + the `RebaseDecision` instrumentation type +
-// the re-gate verdict/result + the gate-rework router + the fail-closed `BaseShiftHeldError`
-// (split into `baseShiftPorts.ts` for the line cap) so existing import sites keep importing
-// them from `./baseShiftCoordinator.js`.
 export {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
@@ -93,8 +89,9 @@ export interface BaseShiftReGate {
 
 /**
  * The intent-preserving resolution of a recorded rebase conflict, or `irreconcilable`.
- * An owned/parked recovery disposition proves the resolver already assigned the work; an
- * unowned/absent disposition leaves this coordinator responsible for the replan.
+ * An owned/parked recovery disposition proves the resolver already assigned the work; a
+ * parking_required/absent disposition leaves this coordinator responsible for the replan.
+ * parking_failed / terminal_noop must never be labeled parked or replan-delegated.
  */
 export type ConflictResolution =
   | { resolved: true; headSha: string }
@@ -300,8 +297,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
     const rework = await this.routeGateFailToRework(input, result.gateError);
-    // owned → writer_rework; parked / terminal_noop / unowned → parked (slot-free end).
-    const decision: RebaseDecision = rework.kind === "owned" ? "writer_rework" : "parked";
+    // Exhaustive: owned → writer_rework; parked → parked; parking_failed/terminal_noop → held.
+    const decision: RebaseDecision = baseShiftDecisionFromRouteResult(rework);
     await this.emit(input, false, decision);
     return { decision, headSha: input.rebase.headSha };
   }
@@ -343,9 +340,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // A typed owner/park receipt prevents a second router from double-routing the work.
-      // Only an explicitly unowned (or legacy absent) result delegates replan ownership here.
-      if (resolution.recovery === undefined || resolution.recovery.kind === "unowned") {
+      // Only parking_required / absent (no park attempt yet) delegates replan here.
+      // parked / terminal_noop / parking_failed / owned already assigned disposition.
+      if (resolution.recovery === undefined || resolution.recovery.kind === "parking_required") {
         await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
       }
       const decision = baseShiftDecisionFromRecovery(resolution.recovery);
@@ -367,7 +364,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). The
     // rework router is REQUIRED — every construction site wires it (no silent fallback).
     const rework = await this.routeGateFailToRework(input, result.gateError);
-    const decision: RebaseDecision = rework.kind === "owned" ? "writer_rework" : "parked";
+    const decision: RebaseDecision = baseShiftDecisionFromRouteResult(rework);
     await this.emit(input, true, decision);
     return { decision, headSha: input.rebase.headSha };
   }

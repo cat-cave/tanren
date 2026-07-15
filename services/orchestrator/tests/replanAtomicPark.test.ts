@@ -149,7 +149,7 @@ describe("parkSpecNeedsAttention + settlement race", () => {
     expect(route.kind).toBe("terminal_noop");
   });
 
-  it("mapConflictDriveOutcome: parked → parking complete; terminal_noop → required", () => {
+  it("mapConflictDriveOutcome: exhaustive parking arms", () => {
     const parked = mapConflictDriveOutcome({
       message: "conflict",
       conflictRecovery: {
@@ -168,10 +168,26 @@ describe("parkSpecNeedsAttention + settlement race", () => {
         message: "concurrent cancel",
       },
     });
-    expect(noop).toMatchObject({ kind: "needs_attention", parking: "required" });
+    expect(noop).toMatchObject({
+      kind: "needs_attention",
+      parking: "terminal_noop",
+      terminalStatus: "cancelled",
+    });
+
+    const required = mapConflictDriveOutcome({
+      message: "conflict",
+      conflictRecovery: { kind: "parking_required", message: "fixed point" },
+    });
+    expect(required).toMatchObject({ kind: "needs_attention", parking: "required" });
+
+    const failed = mapConflictDriveOutcome({
+      message: "conflict",
+      conflictRecovery: { kind: "parking_failed", message: "live row", observedStatus: "in_flight" },
+    });
+    expect(failed).toMatchObject({ kind: "needs_attention", parking: "parking_failed" });
   });
 
-  it("settleWriterOwnedOrPark: terminal_noop retires without re-escalating", async () => {
+  it("settleWriterOwnedOrPark: terminal_noop → superseded without SpecEscalator", async () => {
     let escalations = 0;
     const settled = await settleWriterOwnedOrPark(
       {
@@ -179,6 +195,7 @@ describe("parkSpecNeedsAttention + settlement race", () => {
         escalator: {
           escalate: async () => {
             escalations += 1;
+            return { kind: "parked", newlyFlipped: true };
           },
         },
       },
@@ -197,11 +214,11 @@ describe("parkSpecNeedsAttention + settlement race", () => {
       "owned msg",
       "ctx",
     );
-    expect(settled).toEqual({ reason: "needs_attention", message: "concurrent cancel" });
+    expect(settled).toEqual({ action: "dequeue", reason: "superseded", message: "concurrent cancel" });
     expect(escalations).toBe(0);
   });
 
-  it("settleWriterOwnedOrPark: parked retires without re-escalating", async () => {
+  it("settleWriterOwnedOrPark: parked → needs_attention without re-escalating", async () => {
     let escalations = 0;
     const settled = await settleWriterOwnedOrPark(
       {
@@ -209,6 +226,7 @@ describe("parkSpecNeedsAttention + settlement race", () => {
         escalator: {
           escalate: async () => {
             escalations += 1;
+            return { kind: "parked", newlyFlipped: true };
           },
         },
       },
@@ -226,11 +244,74 @@ describe("parkSpecNeedsAttention + settlement race", () => {
       {
         kind: "parked",
         message: "parked",
+        receipt: { kind: "needs_attention", specId: "spec1", source: "writer_rework" },
       },
       "owned msg",
       "ctx",
     );
-    expect(settled).toEqual({ reason: "needs_attention", message: "parked" });
+    expect(settled).toEqual({ action: "dequeue", reason: "needs_attention", message: "parked" });
     expect(escalations).toBe(0);
+  });
+
+  it("settleWriterOwnedOrPark: parking_failed → retain (never dequeue as needs_attention)", async () => {
+    let escalations = 0;
+    const settled = await settleWriterOwnedOrPark(
+      {
+        recoveryEvidence: undefined,
+        escalator: {
+          escalate: async () => {
+            escalations += 1;
+            return { kind: "parked", newlyFlipped: true };
+          },
+        },
+      },
+      "proj",
+      {
+        queueId: "q1",
+        runId: "run1",
+        specId: "spec1",
+        prUrl: "u",
+        prNumber: 1,
+        dependsOn: [],
+        priority: "tbd",
+        orderKey: 0,
+      },
+      { kind: "parking_failed", message: "live in_flight", observedStatus: "in_flight" },
+      "owned msg",
+      "ctx",
+    );
+    expect(settled).toEqual({ action: "retain", message: "live in_flight" });
+    expect(escalations).toBe(0);
+  });
+
+  it("settleWriterOwnedOrPark: parking_required escalates exactly once and branches", async () => {
+    let escalations = 0;
+    const settled = await settleWriterOwnedOrPark(
+      {
+        recoveryEvidence: undefined,
+        escalator: {
+          escalate: async () => {
+            escalations += 1;
+            return { kind: "parked", newlyFlipped: true };
+          },
+        },
+      },
+      "proj",
+      {
+        queueId: "q1",
+        runId: "run1",
+        specId: "spec1",
+        prUrl: "u",
+        prNumber: 1,
+        dependsOn: [],
+        priority: "tbd",
+        orderKey: 0,
+      },
+      { kind: "parking_required", message: "fixed point" },
+      "owned msg",
+      "ctx",
+    );
+    expect(settled).toEqual({ action: "dequeue", reason: "needs_attention", message: "fixed point" });
+    expect(escalations).toBe(1);
   });
 });

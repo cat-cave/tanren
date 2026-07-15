@@ -2,8 +2,9 @@
 // router. Sole write path: RunStateWriter.updateSpecWithEvent. Outcome is never
 // fabricated — a flipped row yields parked; a false flip is parked ONLY after an
 // org-scoped durable readback proves the row is already needs_attention; a concurrent
-// terminal (merged/cancelled/halted) is a typed terminal_noop so settlement never
-// claims parking:complete.
+// terminal (merged/cancelled/halted) is a typed terminal_noop; anything else is
+// parking_failed (live open/in_flight/review, missing row, unknown) — never a
+// catch-all unowned alias.
 
 import type pg from "pg";
 import type { NeedsAttentionRecoveryReceipt, TerminalParkNoopStatus } from "../contracts/conflictResolution.js";
@@ -20,11 +21,14 @@ export const PARK_NOT_FROM_STATUSES = ["merged", "cancelled", "halted", "needs_a
 
 const TERMINAL_NOOP_STATUSES = new Set<string>(["merged", "cancelled", "halted"]);
 
-/** Atomic park outcome — truthful, no fabricated NeedsAttentionRecoveryReceipt. */
+/**
+ * Atomic park outcome after the sole park attempt. Never fabricated:
+ * parked / terminal_noop / parking_failed only — no public unowned alias.
+ */
 export type NeedsAttentionParkOutcome =
   | { kind: "parked"; newlyFlipped: boolean }
   | { kind: "terminal_noop"; status: TerminalParkNoopStatus }
-  | { kind: "unowned"; observedStatus?: string };
+  | { kind: "parking_failed"; observedStatus?: string };
 
 /**
  * Park `specId` → needs_attention + append `dag.spec.needs_attention` atomically.
@@ -59,12 +63,12 @@ export async function parkSpecNeedsAttention(input: {
     return { kind: "terminal_noop", status: status as TerminalParkNoopStatus };
   }
   return {
-    kind: "unowned",
+    kind: "parking_failed",
     ...(status !== undefined && { observedStatus: status }),
   };
 }
 
-/** Build a router-facing parked / terminal_noop / unowned result from the atomic outcome. */
+/** Build a router-facing parked / terminal_noop / parking_failed result from the atomic outcome. */
 export function parkOutcomeToRouteResult(
   outcome: NeedsAttentionParkOutcome,
   input: {
@@ -75,7 +79,7 @@ export function parkOutcomeToRouteResult(
 ):
   | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
   | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
-  | { kind: "unowned"; message: string } {
+  | { kind: "parking_failed"; message: string; observedStatus?: string } {
   if (outcome.kind === "parked") {
     return {
       kind: "parked",
@@ -92,7 +96,8 @@ export function parkOutcomeToRouteResult(
   }
   const observed = outcome.observedStatus === undefined ? " missing row" : ` observed status=${outcome.observedStatus}`;
   return {
-    kind: "unowned",
+    kind: "parking_failed",
     message: `${input.message} (park failed closed:${observed})`,
+    ...(outcome.observedStatus !== undefined && { observedStatus: outcome.observedStatus }),
   };
 }

@@ -107,7 +107,7 @@ describe("conflict resolver — empty-gather short-circuit (§7.2)", () => {
     const result = await resolver(CONTEXT);
     expect(result.resolved).toBe(false);
     if (result.resolved) throw new Error("expected unresolved result");
-    expect(result.recovery.kind).toBe("unowned");
+    expect(result.recovery.kind).toBe("parking_required");
     // No model call; gathered then short-circuited — no apply/publish.
     expect(calls.count).toBe(0);
     expect(log).toEqual(["gather"]);

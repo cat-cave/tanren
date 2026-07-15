@@ -163,18 +163,35 @@ export async function verifyRecoveryOwnership(input: {
   return { ok: true, evidence };
 }
 
-/** Truthful recovery disposition labels for base-shift instrumentation. */
-export type BaseShiftRecoveryDecision = "replanned" | "writer_rework" | "parked";
+/**
+ * Truthful recovery disposition labels for base-shift instrumentation.
+ * parking_failed / terminal_noop are NEVER labeled parked or replanned
+ * (park was attempted or work already terminal — hold for recovery).
+ * parking_required (no park yet) is the only replan-delegation arm.
+ */
+export type BaseShiftRecoveryDecision = "replanned" | "writer_rework" | "parked" | "held";
 
 export function baseShiftDecisionFromRecovery(
   recovery: ConflictRecoveryDisposition | undefined,
 ): BaseShiftRecoveryDecision {
-  if (recovery === undefined || recovery.kind === "unowned") return "replanned";
-  // terminal_noop is NOT parked complete — work already terminal; instrument as parked
-  // only for the slot-free end (never writer_rework / never fake owned replan).
-  if (recovery.kind === "parked" || recovery.kind === "terminal_noop") return "parked";
+  if (recovery === undefined || recovery.kind === "parking_required") return "replanned";
+  if (recovery.kind === "parked") return "parked";
   if (recovery.kind === "owned") {
     return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
   }
-  return "replanned";
+  // terminal_noop + parking_failed: park already attempted or concurrent terminal —
+  // never replan-as-if-no-park, never label parked without durable needs_attention.
+  return "held";
+}
+
+/** Map a gate-rework route result onto a RebaseDecision-compatible label. */
+export function baseShiftDecisionFromRouteResult(recovery: {
+  kind: "owned" | "parked" | "terminal_noop" | "parking_required" | "parking_failed";
+}): BaseShiftRecoveryDecision {
+  // GateReworkRouteResult owned is always writer_rework.
+  if (recovery.kind === "owned") return "writer_rework";
+  if (recovery.kind === "parked") return "parked";
+  if (recovery.kind === "parking_required") return "replanned";
+  // terminal_noop + parking_failed: never parked, never replan-as-if-no-park.
+  return "held";
 }

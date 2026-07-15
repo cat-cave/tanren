@@ -16,7 +16,7 @@ import type {
   SupersededEntry,
 } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter, MergeSettleTransaction } from "../../../src/engine/merge/coordinator.js";
-import type { SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
+import type { SpecEscalateOutcome, SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
 import { MERGE_CLAIM_LEASE_MS } from "../../../src/engine/merge/mergeClaimLease.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
 
@@ -351,10 +351,13 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
  */
 export class RecordingSpecEscalator implements SpecEscalator {
   readonly escalations: { specId: string; message: string }[] = [];
+  /** Scripted park outcome for the next escalate call (default: parked). */
+  nextOutcome: SpecEscalateOutcome = { kind: "parked", newlyFlipped: true };
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
+  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<SpecEscalateOutcome> {
     this.escalations.push({ specId: input.entry.specId, message: input.message });
+    return this.nextOutcome;
   }
 }
 

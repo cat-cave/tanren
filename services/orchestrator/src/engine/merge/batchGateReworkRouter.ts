@@ -224,14 +224,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     });
   }
 
-  /** ESCALATE: the rework loop is at a FIXED POINT (the same gate error recurs) — park
-   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger.
-   *
-   * Task #48 Site I: the aux `merge.batch.gate_rework_routed` event is emitted
-   * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
-   * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. The aux
-   * event is observable lineage; the load-bearing pair is the actual park.
-   * Atomicity replaces best-effort on the pair. */
+  /** ESCALATE: FIXED POINT — sole park first; aux `gate_rework_routed` ONLY after parked. */
   private async escalate(
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
@@ -241,27 +234,35 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
       `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
       `intervene. Latest gate error: ${input.gateError}`;
-    // Aux event first (observable lineage of the routing decision).
-    await this.withScopedStore(orgId, (store) =>
-      store.append({
-        runId: input.culprit.runId,
-        specId: input.culprit.specId,
-        projectId: input.projectId,
-        orgId,
-        eventType: "merge.batch.gate_rework_routed",
-        payload: {
-          integration: "native_queue",
-          specId: input.culprit.specId,
-          runId: input.culprit.runId,
-          prNumber: input.culprit.prNumber,
-          disposition: "escalated",
-          gateError: input.gateError,
-          priorReworks,
-        },
-      }),
-    );
-    // Load-bearing atomic pair: sole updateSpecWithEvent park authority.
-    return this.parkSpecAtomic(orgId, input.culprit.specId, message, {
+    return this.parkThenRecordEscalated(orgId, input, message, priorReworks);
+  }
+
+  /** ESCALATE enqueue failure — park first; aux lineage only after proven parked. */
+  private async escalateEnqueueFailure(
+    orgId: string,
+    input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
+    error: unknown,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message =
+      `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
+      `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. ` +
+      `Gate error: ${input.gateError}`;
+    return this.parkThenRecordEscalated(orgId, input, message, 0);
+  }
+
+  /**
+   * Sole atomic park then conditional aux lineage. `merge.batch.gate_rework_routed`
+   * disposition escalated is emitted ONLY after a proven parked result — never for
+   * terminal_noop or parking_failed (those leave the durable event set empty of aux).
+   */
+  private async parkThenRecordEscalated(
+    orgId: string,
+    input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
+    message: string,
+    priorReworks: number,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
+    const result = await this.parkSpecAtomic(orgId, input.culprit.specId, message, {
       runId: input.culprit.runId,
       specId: input.culprit.specId,
       projectId: input.projectId,
@@ -276,54 +277,27 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         message,
       },
     });
-  }
-
-  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
-   *
-   * Task #48 Site I (variant): same aux-then-atomic-pair shape as `escalate`. */
-  private async escalateEnqueueFailure(
-    orgId: string,
-    input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
-    error: unknown,
-  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
-    const detail = error instanceof Error ? error.message : String(error);
-    const message =
-      `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
-      `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. ` +
-      `Gate error: ${input.gateError}`;
-    await this.withScopedStore(orgId, (store) =>
-      store.append({
-        runId: input.culprit.runId,
-        specId: input.culprit.specId,
-        projectId: input.projectId,
-        orgId,
-        eventType: "merge.batch.gate_rework_routed",
-        payload: {
-          integration: "native_queue",
-          specId: input.culprit.specId,
+    if (result.kind === "parked") {
+      await this.withScopedStore(orgId, (store) =>
+        store.append({
           runId: input.culprit.runId,
-          prNumber: input.culprit.prNumber,
-          disposition: "escalated",
-          gateError: input.gateError,
-          priorReworks: 0,
-        },
-      }),
-    );
-    return this.parkSpecAtomic(orgId, input.culprit.specId, message, {
-      runId: input.culprit.runId,
-      specId: input.culprit.specId,
-      projectId: input.projectId,
-      orgId,
-      eventType: "dag.spec.needs_attention",
-      payload: {
-        source: "strand",
-        specId: input.culprit.specId,
-        reason: "persistent_failure",
-        terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
-        attempts: 0,
-        message,
-      },
-    });
+          specId: input.culprit.specId,
+          projectId: input.projectId,
+          orgId,
+          eventType: "merge.batch.gate_rework_routed",
+          payload: {
+            integration: "native_queue",
+            specId: input.culprit.specId,
+            runId: input.culprit.runId,
+            prNumber: input.culprit.prNumber,
+            disposition: "escalated",
+            gateError: input.gateError,
+            priorReworks,
+          },
+        }),
+      );
+    }
+    return result;
   }
 
   /**

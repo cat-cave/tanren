@@ -344,7 +344,7 @@ export class MergeDispatcher implements LandOps {
       return this.emitConflict(`post-rebase gate failed — routed to writer rework: ${error}`, undefined, recovery);
     }
     return this.emitConflict(`post-rebase gate failed: ${error}`, undefined, {
-      kind: "unowned",
+      kind: "parking_required",
       message: "no writer-rework router is configured",
     });
   }
@@ -435,8 +435,7 @@ export class MergeDispatcher implements LandOps {
         message,
       },
     });
-    // owned → conflict (recovery owner); parked / terminal_noop / unowned → needs_attention
-    // (only parked is parking:complete at the coordinator map — terminal_noop is not).
+    // owned → conflict; other dispositions → needs_attention (+ conflictRecovery for settle).
     const outcome = recovery === undefined ? "blocked" : recovery.kind === "owned" ? "conflict" : "needs_attention";
     await this.finalize(outcome, { taskOutcome: "pending", taskStatus: "running" });
     return this.result(outcome, { message, ...(recovery !== undefined && { conflictRecovery: recovery }) });

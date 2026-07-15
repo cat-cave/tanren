@@ -219,25 +219,18 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
     }
 
     if (outcome.kind === "needs_attention") {
-      await this.recoverableDriveHolds.reset(entry.queueId);
-      // The LOUD TERMINAL ESCALATION (§2c — non-bricking): the resolver judged this spec
-      // GENUINELY irreconcilable. PARK it at `needs_attention` (frees its slot — the rest
-      // of the DAG keeps moving) FIRST, then dequeue `needs_attention` (the entry leaves
-      // the ready set, NEVER re-queued). NOT routed through the recoverable `conflict`
-      // path — re-executing it would just re-conflict forever. The escalator emits the
-      // loud `dag.spec.needs_attention`; the dequeue emits `merge.dequeued`.
-      if (outcome.parking === "required") {
-        await this.deps.escalator.escalate({ projectId, entry, message: outcome.message });
-      }
-      await markDequeuedAfterEvent({
+      // Exhaustive parking matrix (shared with batch settle): complete → needs_attention;
+      // terminal_noop → superseded; parking_failed → retain; required → escalate once.
+      const settleDeps = {
         queue: this.deps.queue,
         events: this.deps.events,
-        projectId,
-        entry,
-        reason: "needs_attention",
-        message: outcome.message,
-        tx: this.deps.tx,
-      });
+        escalator: this.deps.escalator,
+        ...(this.deps.tx !== undefined && { tx: this.deps.tx }),
+      };
+      const settled = await settleDriveOutcome(settleDeps, projectId, entry, outcome);
+      if (settled !== "dequeued") {
+        return { holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
+      }
       return { dequeuedSpecId: entry.specId };
     }
 
@@ -284,9 +277,15 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
         ...(this.deps.recoveryEvidence !== undefined && { recoveryEvidence: this.deps.recoveryEvidence }),
       };
       if (outcome.kind === "failed") {
-        await settleFailedDrive(settleDeps, projectId, entry, outcome.message);
+        const failed = await settleFailedDrive(settleDeps, projectId, entry, outcome.message);
+        if (failed === "retained") {
+          return { holdReason: "merge_retry", retryAfterMs: RE_GATE_PENDING_RETRY_AFTER_MS };
+        }
       } else {
-        await settleDriveOutcome(settleDeps, projectId, entry, outcome);
+        const settled = await settleDriveOutcome(settleDeps, projectId, entry, outcome);
+        if (settled !== "dequeued") {
+          return { holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
+        }
       }
       return { dequeuedSpecId: entry.specId };
     }

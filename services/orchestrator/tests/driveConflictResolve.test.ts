@@ -161,7 +161,7 @@ function scriptedResolver(resolved: boolean): DriveConflictResolveDeps["buildRes
         ? { resolved: true }
         : {
             resolved: false,
-            recovery: { kind: "unowned", message: "scripted resolver assigned no owner" },
+            recovery: { kind: "parking_required", message: "scripted resolver assigned no owner" },
           }) satisfies ConflictResolverHook;
 }
 
@@ -279,7 +279,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 
     expect(result).toEqual({
       resolved: false,
-      recovery: { kind: "unowned", message: "scripted resolver assigned no owner" },
+      recovery: { kind: "parking_required", message: "scripted resolver assigned no owner" },
     });
     expect(allocator.allocateCalls).toBe(1);
     expect(allocator.releaseCalls).toBe(1);
@@ -337,8 +337,8 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
 
     expect(result.resolved).toBe(false);
     if (result.resolved) throw new Error("expected unresolved fixed point");
-    expect(result.recovery.kind).toBe("unowned");
-    if (result.recovery.kind !== "unowned") throw new Error("expected ownerless fixed point");
+    expect(result.recovery.kind).toBe("parking_required");
+    if (result.recovery.kind !== "parking_required") throw new Error("expected parking_required fixed point");
     expect(result.recovery.message).toMatch(/FIXED POINT/u);
     expect(result.recovery.message).toMatch(/product\s+decision is needed/u);
     // NO runner provisioned — escalation short-circuits before allocation.

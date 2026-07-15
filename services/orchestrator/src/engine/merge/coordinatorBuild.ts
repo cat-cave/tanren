@@ -97,13 +97,24 @@ export function mapConflictDriveOutcome(
     return { kind: "conflict", message: merge.message ?? "merge conflict", recovery: recovery.receipt };
   }
   const detail = recovery?.message ?? "merge conflict returned without a durable recovery owner";
-  // parking:complete ONLY for a proven needs_attention park — never a terminal_noop /
-  // unowned / missing disposition (those must still escalate or settle truthfully).
-  return {
-    kind: "needs_attention",
-    message: `${merge.message ?? "merge conflict"}; ${detail}`,
-    parking: recovery?.kind === "parked" ? "complete" : "required",
-  };
+  const message = `${merge.message ?? "merge conflict"}; ${detail}`;
+  // Exhaustive disposition → parking arm (no catch-all alias).
+  if (recovery?.kind === "parked") {
+    return { kind: "needs_attention", message, parking: "complete" };
+  }
+  if (recovery?.kind === "terminal_noop") {
+    return {
+      kind: "needs_attention",
+      message,
+      parking: "terminal_noop",
+      terminalStatus: recovery.status,
+    };
+  }
+  if (recovery?.kind === "parking_failed") {
+    return { kind: "needs_attention", message, parking: "parking_failed" };
+  }
+  // parking_required or missing disposition — escalate exactly once at settlement.
+  return { kind: "needs_attention", message, parking: "required" };
 }
 
 interface RunFacts {
@@ -335,17 +346,27 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // finishes, NEVER dequeued (the old `conflict` mapping bricked the live run) and NEVER
         // bounded by a fixed attempt cap.
         return { kind: "re_gate_pending", message: merge.message ?? "native re-gate not yet terminal" };
-      case "needs_attention":
-        // §3.2: the merge AUTHORITY's genuine-human-decision verdict (HITL pending /
-        // changes_requested at land time). PARK the spec via the escalator (frees its
-        // slot) — NOT a recoverable hold (no re-drive resolves a human decision) and NOT a
-        // terminal conflict dequeue.
-        return {
-          kind: "needs_attention",
-          message: merge.message ?? "merge needs human attention",
-          // terminal_noop / unowned are never parking complete.
-          parking: merge.conflictRecovery?.kind === "parked" ? "complete" : "required",
-        };
+      case "needs_attention": {
+        // §3.2: genuine-human-decision / park disposition. Exhaustive parking arms —
+        // never treat owned as conflict here (that path is the conflict outcome only).
+        const message = merge.message ?? "merge needs human attention";
+        const recovery = merge.conflictRecovery;
+        if (recovery?.kind === "parked") {
+          return { kind: "needs_attention", message, parking: "complete" };
+        }
+        if (recovery?.kind === "terminal_noop") {
+          return {
+            kind: "needs_attention",
+            message,
+            parking: "terminal_noop",
+            terminalStatus: recovery.status,
+          };
+        }
+        if (recovery?.kind === "parking_failed") {
+          return { kind: "needs_attention", message, parking: "parking_failed" };
+        }
+        return { kind: "needs_attention", message, parking: "required" };
+      }
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }

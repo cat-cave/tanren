@@ -69,6 +69,15 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
       `routed to writer rework on sustained merge-queue workspace/infra failure: ${args.message}`,
       args.message,
     );
+    if (settled.action === "retain") {
+      await args.queue.releaseClaim(entry.queueId);
+      log.error("infra escalate retained queue entry after parking_failed", {
+        projectId: args.projectId,
+        specId: entry.specId,
+        message: settled.message,
+      });
+      continue;
+    }
     await markDequeuedAfterEvent({
       queue: args.queue,
       events: args.events,

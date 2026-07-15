@@ -12,5 +12,5 @@ import type { ConflictResolverHook } from "../../src/engine/workflow/reviewMerge
 /** A conflict resolver that records nothing and resolves nothing (test seam). */
 export const noopConflictResolver: ConflictResolverHook = async () => ({
   resolved: false,
-  recovery: { kind: "unowned", message: "test resolver did not assign a recovery owner" },
+  recovery: { kind: "parking_required", message: "test resolver did not assign a recovery owner" },
 });

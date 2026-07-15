@@ -294,7 +294,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(park?.payload.reason).toBe("persistent_failure");
   });
 
-  it("CONCURRENT CANCEL: zero status change, zero park event, terminal_noop (not parking complete)", async () => {
+  it("CONCURRENT CANCEL: terminal_noop — entire durable event set empty (no aux, no park)", async () => {
     const enqueuer: ReplanEnqueuer = {
       enqueue() {
         return Promise.reject(new Error("planner unavailable"));
@@ -318,6 +318,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
 
     expect(recovery).toMatchObject({ kind: "terminal_noop", status: "cancelled" });
     expect(statusWrites).toEqual([]);
-    expect(appended.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
+    // Hostile: not only needs_attention absent — zero durable events of any type.
+    expect(appended).toEqual([]);
   });
 });

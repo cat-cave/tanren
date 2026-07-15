@@ -259,28 +259,34 @@ export type TerminalParkNoopStatus = "merged" | "cancelled" | "halted";
 export type ConflictRecoveryReceipt = PlannerRecoveryReceipt | WriterRecoveryReceipt;
 
 /**
- * Router result after a park attempt. `parked` ONLY when updateSpecWithEvent
- * flipped the row OR org-scoped readback proves already needs_attention — never
- * a fabricated receipt on a concurrent terminal no-op.
+ * Explicit recovery dispositions — no catch-all / legacy alias:
+ *   owned            — durable planner/writer owner receipt
+ *   parked           — needs_attention durably proven (flip or org-scoped readback)
+ *   terminal_noop    — concurrent merged|cancelled|halted; zero park event
+ *   parking_required — no park attempt yet (settlement must escalate exactly once)
+ *   parking_failed   — sole park attempt neither flipped nor proved needs_attention/terminal
  */
 export type ReplanRouteResult =
   | { kind: "owned"; receipt: PlannerRecoveryReceipt }
   | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
   | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
-  | { kind: "unowned"; message: string };
+  | { kind: "parking_required"; message: string }
+  | { kind: "parking_failed"; message: string; observedStatus?: string };
 
 export type GateReworkRouteResult =
   | { kind: "owned"; receipt: WriterRecoveryReceipt }
   | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
   | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
-  | { kind: "unowned"; message: string };
+  | { kind: "parking_required"; message: string }
+  | { kind: "parking_failed"; message: string; observedStatus?: string };
 
 /** What an unresolved conflict can prove to its caller after all routing I/O completed. */
 export type ConflictRecoveryDisposition =
   | { kind: "owned"; receipt: ConflictRecoveryReceipt }
   | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
   | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
-  | { kind: "unowned"; message: string };
+  | { kind: "parking_required"; message: string }
+  | { kind: "parking_failed"; message: string; observedStatus?: string };
 
 /**
  * Routes ONE spec back to the planner with the OTHER spec's change as new

@@ -56,13 +56,18 @@ export type MergeDriveOutcome =
   // The LOUD TERMINAL ESCALATION (autonomy-engine.md §2c — the non-bricking conflict
   // escalation). Recovery could not establish a live planner/writer owner, or the
   // resolver reached a genuine fixed point where re-executing the spec would just
-  // re-conflict forever. Instead the spec PARKS at the terminal
-  // `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
-  // moving (it blocks ONLY its dependents, never the whole graph), is dequeued with
-  // reason `needs_attention`, and is NEVER re-queued. Distinct from the RECOVERABLE
-  // `conflict` (which carries proof that re-execution owns the work) and `failed`
-  // (which settlement must first hand to writer rework or park loudly).
-  | { kind: "needs_attention"; message: string; parking: "required" | "complete" };
+  // re-conflict forever. Settlement branches on `parking`:
+  //   complete        — already parked; dequeue needs_attention (no escalate)
+  //   required        — escalate exactly once, then branch on typed park outcome
+  //   terminal_noop   — concurrent terminal; dequeue superseded (no SpecEscalator)
+  //   parking_failed  — sole park failed; RETAIN entry (never dequeue as parked)
+  | {
+      kind: "needs_attention";
+      message: string;
+      parking: "required" | "complete" | "terminal_noop" | "parking_failed";
+      /** Present when parking === terminal_noop — exact concurrent status. */
+      terminalStatus?: "merged" | "cancelled" | "halted";
+    };
 
 /**
  * One ready-to-merge run in the native queue, as the coordinator orders it. DAG

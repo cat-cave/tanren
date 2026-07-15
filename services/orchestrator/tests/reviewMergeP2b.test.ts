@@ -68,7 +68,7 @@ describe("P2b merge-stage conflict resolution", () => {
       await noopConflictResolver({ runId: "r", prUrl: "u", prNumber: 1, baseBranch: "main", message: "x" }),
     ).toEqual({
       resolved: false,
-      recovery: { kind: "unowned", message: "test resolver did not assign a recovery owner" },
+      recovery: { kind: "parking_required", message: "test resolver did not assign a recovery owner" },
     });
   });
 });

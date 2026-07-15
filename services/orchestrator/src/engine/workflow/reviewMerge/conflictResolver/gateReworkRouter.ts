@@ -192,12 +192,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     }
   }
 
-  /** ESCALATE: the rework loop is at a FIXED POINT (the same re-gate error recurs) — park
-   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger.
-   *
-   * Task #48 Site J: the aux `merge.regate.gate_rework_routed` event is emitted
-   * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
-   * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. */
+  /** ESCALATE: FIXED POINT — sole park first; aux lineage ONLY after proven parked. */
   private async escalate(
     input: { specId: string; gateError: string },
     priorReworks: number,
@@ -206,23 +201,32 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       `the autonomous self-heal reached a FIXED POINT re-working this spec for a base-shift ` +
       `re-gate GATE failure: the SAME gate error recurs after re-authoring (no change to it), so a ` +
       `human must intervene. Latest gate error: ${input.gateError}`;
-    await this.deps.eventStore.append({
-      runId: this.deps.runId,
-      specId: input.specId,
-      projectId: this.deps.projectId,
-      orgId: this.deps.orgId,
-      eventType: "merge.regate.gate_rework_routed",
-      payload: {
-        integration: "native_queue",
-        specId: input.specId,
-        runId: this.deps.runId,
-        prNumber: this.deps.prNumber,
-        disposition: "escalated",
-        gateError: input.gateError,
-        priorReworks,
-      },
-    });
-    return this.parkSpecAtomic(input.specId, message, {
+    return this.parkThenRecordEscalated(input, message, priorReworks);
+  }
+
+  /** ESCALATE enqueue failure — park first; aux lineage only after proven parked. */
+  private async escalateEnqueueFailure(
+    input: { specId: string; gateError: string },
+    error: unknown,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
+    const detail = error instanceof Error ? error.message : String(error);
+    const message =
+      `the autonomous self-heal routed this spec back to the writer to fix a base-shift re-gate GATE ` +
+      `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`;
+    return this.parkThenRecordEscalated(input, message, 0);
+  }
+
+  /**
+   * Sole atomic park then conditional aux lineage. `merge.regate.gate_rework_routed`
+   * disposition escalated is emitted ONLY after a proven parked result — never for
+   * terminal_noop or parking_failed.
+   */
+  private async parkThenRecordEscalated(
+    input: { specId: string; gateError: string },
+    message: string,
+    priorReworks: number,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
+    const result = await this.parkSpecAtomic(input.specId, message, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -237,50 +241,25 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         message,
       },
     });
-  }
-
-  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
-   *
-   * Task #48 Site J (variant): same aux-then-atomic-pair shape as `escalate`. */
-  private async escalateEnqueueFailure(
-    input: { specId: string; gateError: string },
-    error: unknown,
-  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
-    const detail = error instanceof Error ? error.message : String(error);
-    const message =
-      `the autonomous self-heal routed this spec back to the writer to fix a base-shift re-gate GATE ` +
-      `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`;
-    await this.deps.eventStore.append({
-      runId: this.deps.runId,
-      specId: input.specId,
-      projectId: this.deps.projectId,
-      orgId: this.deps.orgId,
-      eventType: "merge.regate.gate_rework_routed",
-      payload: {
-        integration: "native_queue",
-        specId: input.specId,
+    if (result.kind === "parked") {
+      await this.deps.eventStore.append({
         runId: this.deps.runId,
-        prNumber: this.deps.prNumber,
-        disposition: "escalated",
-        gateError: input.gateError,
-        priorReworks: 0,
-      },
-    });
-    return this.parkSpecAtomic(input.specId, message, {
-      runId: this.deps.runId,
-      specId: input.specId,
-      projectId: this.deps.projectId,
-      orgId: this.deps.orgId,
-      eventType: "dag.spec.needs_attention",
-      payload: {
-        source: "strand",
         specId: input.specId,
-        reason: "persistent_failure",
-        terminalRuns: [{ runId: this.deps.runId, status: "halted" }],
-        attempts: 0,
-        message,
-      },
-    });
+        projectId: this.deps.projectId,
+        orgId: this.deps.orgId,
+        eventType: "merge.regate.gate_rework_routed",
+        payload: {
+          integration: "native_queue",
+          specId: input.specId,
+          runId: this.deps.runId,
+          prNumber: this.deps.prNumber,
+          disposition: "escalated",
+          gateError: input.gateError,
+          priorReworks,
+        },
+      });
+    }
+    return result;
   }
 
   /** Sole atomic park authority — inspects flip + durable readback; never fabricates receipt. */

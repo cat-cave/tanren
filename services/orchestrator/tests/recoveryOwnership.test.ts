@@ -316,4 +316,89 @@ describe("EventEmittingMergeCoordinator — evidence port required", () => {
     expect(queue.dequeueReasonOf("run_a")).toBe("needs_attention");
     expect(escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
   });
+
+  it("HOSTILE: same-run non-plan task cannot prove enqueued ownership", async () => {
+    const evidence = new ScriptedRecoveryEvidencePort();
+    evidence.seedNonPlanTask("spec_a", "run_replan", "task_write", "queued");
+    expect(
+      await evidence.verifyOwnedReceipt({
+        expectedSpecId: "spec_a",
+        receipt: {
+          kind: "planner_replan",
+          specId: "spec_a",
+          run: { kind: "enqueued", replanRunId: "run_replan", plannerTaskId: "task_write" },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("HOSTILE: terminal_noop queue reason is superseded (not needs_attention), zero escalate", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const events = new RecordingMergeQueueEventEmitter();
+    const escalator = new RecordingSpecEscalator();
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    runner.script("run_a", {
+      kind: "needs_attention",
+      message: "concurrent cancel",
+      parking: "terminal_noop",
+      terminalStatus: "cancelled",
+    });
+    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
+    await coordinator.coordinate(PROJECT);
+    expect(queue.dequeueReasonOf("run_a")).toBe("superseded");
+    expect(escalator.escalations).toHaveLength(0);
+  });
+
+  it("HOSTILE: parking_failed retains queue entry (never dequeued as needs_attention)", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const events = new RecordingMergeQueueEventEmitter();
+    const escalator = new RecordingSpecEscalator();
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    runner.script("run_a", {
+      kind: "needs_attention",
+      message: "park failed on live in_flight",
+      parking: "parking_failed",
+    });
+    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
+    await coordinator.coordinate(PROJECT);
+    expect(queue.dequeueReasonOf("run_a")).toBeUndefined();
+    expect(escalator.escalations).toHaveLength(0);
+  });
+
+  it("HOSTILE: parking_required escalates exactly once then dequeues needs_attention", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const events = new RecordingMergeQueueEventEmitter();
+    const escalator = new RecordingSpecEscalator();
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    runner.script("run_a", {
+      kind: "needs_attention",
+      message: "fixed point",
+      parking: "required",
+    });
+    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
+    await coordinator.coordinate(PROJECT);
+    expect(queue.dequeueReasonOf("run_a")).toBe("needs_attention");
+    expect(escalator.escalations).toHaveLength(1);
+  });
+
+  it("HOSTILE: parking_required → escalate parking_failed retains entry", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const events = new RecordingMergeQueueEventEmitter();
+    const escalator = new RecordingSpecEscalator();
+    escalator.nextOutcome = { kind: "parking_failed", observedStatus: "in_flight" };
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    runner.script("run_a", {
+      kind: "needs_attention",
+      message: "fixed point",
+      parking: "required",
+    });
+    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
+    await coordinator.coordinate(PROJECT);
+    expect(escalator.escalations).toHaveLength(1);
+    expect(queue.dequeueReasonOf("run_a")).toBeUndefined();
+  });
 });

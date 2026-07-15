@@ -1,23 +1,26 @@
 // The NON-BRICKING conflict-escalation seam for the native merge queue
 // (autonomy-engine.md §2c — the loud, non-bricking conflict escalation). When the
-// intent-preserving conflict resolver (wired in a LATER PR) judges two in-flight
-// specs GENUINELY irreconcilable, the merge drive returns the `needs_attention`
-// outcome and BOTH coordinators (one-at-a-time + batch) route it HERE instead of
-// blindly re-executing it. The escalation PARKS the spec at the terminal
-// `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
-// moving (it blocks ONLY its dependents, never the whole graph) — and emits the loud
-// `dag.spec.needs_attention` event so the parked state is operator-visible. The
-// `merge.dequeued` (reason `needs_attention`) + the `markDequeued` are the
-// coordinators' job; this seam owns the spec-status escalation + the dag event.
+// intent-preserving conflict resolver judges two in-flight specs GENUINELY
+// irreconcilable, the merge drive returns parking_required and BOTH coordinators
+// (one-at-a-time + batch) route it HERE instead of blindly re-executing it.
 //
-// There is NO producer of the escalation yet (the drive resolver still returns the
-// recoverable `conflict`) — this is the foundation the later resolver RETURNS into.
+// SpecEscalator.escalate performs the SOLE atomic park and returns the typed
+// outcome so settlement branches exhaustively: parked → dequeue needs_attention;
+// terminal_noop → dequeue superseded (no needs_attention reason); parking_failed
+// → retain the merge entry (never dequeue as parked).
 
 import type pg from "pg";
+import type { TerminalParkNoopStatus } from "../contracts/conflictResolution.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
-import { parkSpecNeedsAttention } from "./parkNeedsAttention.js";
+import { parkSpecNeedsAttention, type NeedsAttentionParkOutcome } from "./parkNeedsAttention.js";
+
+/** Typed park outcome returned by SpecEscalator — exhaustive settlement branch input. */
+export type SpecEscalateOutcome =
+  | { kind: "parked"; newlyFlipped: boolean }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus }
+  | { kind: "parking_failed"; observedStatus?: string };
 
 /**
  * The seam both coordinators reuse to escalate a genuinely-irreconcilable spec. ONE
@@ -25,13 +28,16 @@ import { parkSpecNeedsAttention } from "./parkNeedsAttention.js";
  */
 export interface SpecEscalator {
   /**
-   * Park the entry's spec at the terminal `needs_attention` status (freeing its merge
-   * slot) + emit the loud `dag.spec.needs_attention` event. Idempotent: an
-   * already-merged/cancelled/halted/needs_attention spec is left untouched (the
-   * guarded flip matches zero rows), so a concurrent settle never double-escalates
-   * or un-merges. A concurrent terminal yields a no-op (no park event).
+   * Sole atomic park of the entry's spec at needs_attention + emit
+   * `dag.spec.needs_attention` when the flip succeeds. Returns the typed outcome
+   * so callers settle truthfully — never invent parked without durable proof.
    */
-  escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void>;
+  escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<SpecEscalateOutcome>;
+}
+
+/** Map the atomic park outcome onto the escalator public type (identity, no alias). */
+export function toSpecEscalateOutcome(outcome: NeedsAttentionParkOutcome): SpecEscalateOutcome {
+  return outcome;
 }
 
 /**
@@ -45,7 +51,7 @@ export class PgSpecEscalator implements SpecEscalator {
     private readonly runStateWriter: RunStateWriter,
   ) {}
 
-  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
+  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<SpecEscalateOutcome> {
     const orgId = await resolveProjectOrg(this.pool, input.projectId);
     // A required-missing org is a LOUD hard failure (never a silent skip): without an
     // org the spec cannot be parked, so a genuine irreconcilable conflict would be
@@ -54,9 +60,7 @@ export class PgSpecEscalator implements SpecEscalator {
       throw new Error(`cannot escalate spec ${input.entry.specId}: project ${input.projectId} has no org`);
     }
 
-    // Sole atomic park authority — inspects UpdateSpecWithEventOutcome internally;
-    // concurrent terminal/parked is a no-op (no fabricated receipt, no clobber).
-    await parkSpecNeedsAttention({
+    const outcome = await parkSpecNeedsAttention({
       writer: this.runStateWriter,
       pool: this.pool,
       orgId,
@@ -76,5 +80,6 @@ export class PgSpecEscalator implements SpecEscalator {
         },
       },
     });
+    return toSpecEscalateOutcome(outcome);
   }
 }

@@ -135,7 +135,10 @@ export function buildIntentPreservingConflictResolver(deps: IntentPreservingReso
       });
       return {
         resolved: false,
-        recovery: { kind: "unowned", message: "conflict resolver gathered no files and established no recovery owner" },
+        recovery: {
+          kind: "parking_required",
+          message: "conflict resolver gathered no files and established no recovery owner",
+        },
       };
     }
     const conflictedPaths = gathered.files.map((f) => f.path);
@@ -352,7 +355,7 @@ async function routeIrreconcilable(
 ): Promise<Extract<ConflictResolverResult, { resolved: false }>> {
   let recovery: ConflictRecoveryDisposition;
   if (replan === undefined) {
-    recovery = { kind: "unowned", message: `resolver returned no replan target: ${reason}` };
+    recovery = { kind: "parking_required", message: `resolver returned no replan target: ${reason}` };
   } else {
     recovery = await deps.replan.routeBackToPlanner({
       specId: replan.specId,
