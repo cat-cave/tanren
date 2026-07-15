@@ -91,8 +91,9 @@ function mergeTaskWriter(pool: ReviewMergePool): {
 describe("P2c-1 speculative-merge-hold (merge stage)", () => {
   it("HOLDS a speculative dependent's merge while an ancestor is unmerged (no land)", async () => {
     const pool = new ReviewMergePool("direct_merge");
-    // The run is speculative (a non-empty ancestor stack) on spec_a + spec_b; only spec_a merged.
-    pool.ancestorStack = STACK_ON_A;
+    // The run is speculative (a non-empty ancestor stack) on spec_a + spec_b; only spec_a
+    // merged. gv-4: membership is the complete stack vector (not direct depends_on alone).
+    pool.ancestorStack = STACK_ON_AB;
     pool.specDependsOn = ["spec_a", "spec_b"];
     pool.mergedAncestors = ["spec_a"];
     const events = new FakeEventStore();
@@ -116,9 +117,10 @@ describe("P2c-1 speculative-merge-hold (merge stage)", () => {
     expect(result.outcome).toBe("blocked");
     expect(landed).toEqual([]);
     const held = events.events.find((e) => e.eventType === "merge.speculative_held");
-    // jj-local: the held event names the immediate-ancestor PR-head branch (the stacked base).
+    // jj-local: the held event names the immediate still-unmerged ancestor PR-head branch
+    // (last remaining stack member — the stacked base after merged heads drop).
     expect(held?.payload).toMatchObject({
-      speculativeBase: "tanren/spec_a",
+      speculativeBase: "tanren/spec_b",
       unmergedAncestors: ["spec_b"],
     });
     expect(events.events.some((e) => e.eventType === "merge.completed")).toBe(false);
