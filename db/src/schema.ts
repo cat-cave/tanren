@@ -480,7 +480,8 @@ export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsig
 export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
-export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
+export * from "./schemaIntegrationLifecycle.js";
+export * from "./schemaIntegrationOperations.js";
 export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";

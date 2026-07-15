@@ -3,8 +3,8 @@
 // The onboarding/greenfield/brownfield flow requests a CAPABILITY ("enable error
 // tracking", "notify on Slack", "deploy") for a project — NOT a leaf secret. For
 // each enabled capability this engine:
-//   1. Resolves the org grant from the `org_integrations` registry
-//      (`OrgIntegrationsStore.getGrant`). If the org hasn't linked that provider,
+//   1. Resolves the org's active control grant from the connection authority
+//      (`IntegrationConnectionsStore.getControlGrant`). If the org hasn't linked that provider,
 //      it returns a structured "link <provider> first" response (with a deep-link
 //      affordance) — NOT a thrown error — so the route/dashboard renders the
 //      link-first prompt instead of a crash.
@@ -36,7 +36,7 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { OrganizationsStore } from "../repositories/organizations.js";
 import { ProjectStore } from "../repositories/projects.js";
 import { ChannelKind } from "../notifications/schemas.js";
@@ -211,7 +211,7 @@ export async function provisionCapability(
 
   // 1. Resolve the org grant. Not-linked is an EXPECTED outcome (a structured
   //    response with a link affordance), not an error.
-  const grant = await OrgIntegrationsStore.getGrant(deps.client, request.orgId, providerKind, deps.actor);
+  const grant = await IntegrationConnectionsStore.getControlGrant(deps.client, request.orgId, providerKind, deps.actor);
   if (grant === undefined) {
     return {
       status: "not_linked",
@@ -219,7 +219,7 @@ export async function provisionCapability(
       providerKind,
       message:
         `link ${providerKind} at the org level first — onboarding requests the '${request.capability}' ` +
-        `capability, but org ${request.orgId} has no ${providerKind} grant in org_integrations.`,
+        `capability, but org ${request.orgId} has no active ${providerKind} control grant.`,
       linkAffordance: { kind: "org_integration_link", providerKind, orgId: request.orgId },
     };
   }

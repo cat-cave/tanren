@@ -29,7 +29,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { DemoSurface, DeployRef } from "../contracts/deployAdapter.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { systemActor } from "../state/actor.js";
 import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
@@ -242,7 +242,7 @@ export class DemoOnDeployWatcher {
    */
   private async resolveSurface(verified: VerifiedDeploy): Promise<DemoSurface> {
     const grant = await runWithSystemScope(this.deps.pool, (client) =>
-      OrgIntegrationsStore.getGrant(client, verified.orgId, verified.provider, systemActor),
+      IntegrationConnectionsStore.getControlGrant(client, verified.orgId, verified.provider, systemActor),
     );
     if (grant === undefined) {
       throw new Error(

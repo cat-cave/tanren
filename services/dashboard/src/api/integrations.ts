@@ -14,20 +14,37 @@
 
 /** A single org grant as returned by `GET /orgs/:orgId/integrations`. */
 export interface OrgIntegrationSummary {
-  id: string;
+  connectionId: string;
+  grantId: string;
   orgId: string;
   providerKind: string;
-  /** Secret-store REF name only — never a secret value. */
-  credentialRef: string;
+  upstreamAccountId: string;
+  authKind: string;
+  authGeneration: number;
+  ownerId: string;
   /** Keys present in the grant metadata; values are never echoed. */
   metadataKeys: string[];
   capabilities: string[];
-  status: string;
+  operations: string[];
+  providerScopes: string[];
+  health: string;
+  connectionStatus: string;
+  grantGeneration: number;
+  grantStatus: string;
+}
+
+export interface IntegrationLifecycleInventory {
+  projectId: string;
+  requirements: { total: number; needsAttention: number };
+  capabilityNodes: { total: number; awaitingGrant: number; ready: number; needsAttention: number };
+  bindings: { total: number; ready: number; drifted: number; needsAttention: number };
+  deliveries: { total: number; completed: number; degraded: number; needsAttention: number };
 }
 
 /** `GET /orgs/:orgId/integrations` envelope. */
 export interface OrgIntegrationsList {
   integrations: OrgIntegrationSummary[];
+  lifecycle?: IntegrationLifecycleInventory;
 }
 
 /**
@@ -73,7 +90,10 @@ export interface DiscoverOutcome {
 export interface LinkOutcome {
   status: string;
   providerKind: string;
-  credentialRef: string;
+  connectionId: string;
+  grantId: string;
+  authGeneration: number;
+  grantGeneration: number;
   capabilities: string[];
   metadataKeys: string[];
 }

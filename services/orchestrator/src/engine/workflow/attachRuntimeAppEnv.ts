@@ -27,7 +27,7 @@ import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { EventStore } from "../eventStore.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { resolveAppEnvForScope } from "./resolveAppEnv.js";
 import type { DeployEnvVar } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "./deployProvisionerFor.js";
@@ -56,7 +56,7 @@ export interface AttachRuntimeAppEnvInput {
   events: EventStore;
   /** The Tanren project whose runtime env is being attached. */
   projectId: string;
-  /** The project's org (resolves the deploy org grant from org_integrations). */
+  /** The project's org (resolves the deploy provider's active control grant). */
   orgId: string;
   /** The deploy artifact ref from the project's config (the deployRef). */
   deployRef: DeployArtifactRef;
@@ -78,7 +78,7 @@ export interface AttachRuntimeAppEnvResult {
  *
  * Steps: (1) resolve the RUNTIME-scoped app env (only entries whose scopes include
  * `runtime`; secret values from the SecretStore); (2) resolve the deploy org grant
- * for the deployRef's provider from `org_integrations`; (3) assert the grant's
+ * for the deployRef's provider from the connection authority; (3) assert the grant's
  * provider matches the deployRef provider (no wrong-app attach); (4) hand the vars
  * to the provider's `attachRuntimeEnv` (the values go ONLY there); (5) emit
  * `app_env.runtime_attached` with the deploy target + KEY NAMES only.
@@ -92,7 +92,9 @@ export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Prom
   const env = await resolveAppEnvForScope({
     client: input.client,
     secrets: input.secrets,
+    orgId: input.orgId,
     projectId: input.projectId,
+    environment: "production",
     scope: "runtime",
     actor: input.actor,
   });
@@ -105,7 +107,12 @@ export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Prom
 
   // (2) The deploy org grant for THIS provider (credential ref + non-secret
   // metadata; never the token value).
-  const grant = await OrgIntegrationsStore.getGrant(input.client, input.orgId, input.deployRef.provider, input.actor);
+  const grant = await IntegrationConnectionsStore.getControlGrant(
+    input.client,
+    input.orgId,
+    input.deployRef.provider,
+    input.actor,
+  );
   if (grant === undefined) {
     throw new Error(
       `attachRuntimeAppEnv: org '${input.orgId}' has no '${input.deployRef.provider}' grant to attach runtime env under`,

@@ -39,7 +39,7 @@ interface PoolState {
    * storms `warn`s per merge.
    */
   alreadyTerminalDemo?: boolean;
-  /** The org grant row (org_integrations) for the deploy provider. */
+  /** The org connection/grant authority row for the deploy provider. */
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
   /** The spec's behaviors (returned by BehaviorStore.listForSpec). */
   behaviors: BehaviorSeed[];
@@ -77,10 +77,35 @@ function fakePool(state: PoolState): pg.Pool {
     }
     // The org grant lookup (demoSurface resolution). `status` is NOT NULL DEFAULT
     // 'linked' on the real row; the store decodes it via the validated read seam.
-    if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
+    if (/FROM org_integration_connections c/u.test(sql) && /c\.provider_kind = \$2/u.test(sql)) {
       return state.grant === undefined
         ? { rows: [], rowCount: 0 }
-        : { rows: [{ status: "linked", ...state.grant }], rowCount: 1 };
+        : {
+            rows: [
+              {
+                connection_id: "connection_demo",
+                grant_id: "grant_demo",
+                org_id: ORG_ID,
+                provider_kind: state.grant.provider_kind,
+                upstream_account_id: "account_demo",
+                auth_kind: "api_key",
+                credential_ref: state.grant.credential_ref,
+                auth_generation: 1,
+                owner_id: "user_demo",
+                health: "healthy",
+                connection_status: "active",
+                metadata: state.grant.metadata,
+                plane: "control",
+                environment: "control",
+                capabilities: ["deploy"],
+                operations: ["deploy"],
+                provider_scopes: [],
+                grant_generation: 1,
+                grant_status: "active",
+              },
+            ],
+            rowCount: 1,
+          };
     }
     // BehaviorStore.listForSpec join.
     if (/FROM behaviors b/u.test(sql) || /INNER JOIN spec_behaviors/u.test(sql)) {

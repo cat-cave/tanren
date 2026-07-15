@@ -14,7 +14,7 @@ import {
   buildIntegrationProvisioner,
   type IntegrationProvisioner,
 } from "../../engine/contracts/integrationProvisioner.js";
-import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import { productionProvisionerDeps } from "../../engine/integrations/provisioningEngine.js";
 import { DeployProvisioner } from "../../engine/provisioners/deployProvisioner.js";
 
@@ -42,7 +42,7 @@ export interface GreenfieldDeployDestroyDeps {
  */
 export async function destroyGreenfieldDeployApp(deps: GreenfieldDeployDestroyDeps): Promise<void> {
   const { pool, secrets, orgId, actorId, target } = deps;
-  const grant = await OrgIntegrationsStore.getGrant(pool, orgId, target.providerKind, {
+  const grant = await IntegrationConnectionsStore.getControlGrant(pool, orgId, target.providerKind, {
     kind: "operator",
     id: actorId,
   });

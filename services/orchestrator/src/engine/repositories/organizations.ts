@@ -1,6 +1,6 @@
 // The `organizations` repository — the small set of org-row reads other
 // engine sites need, pulled onto the `Repositories` seam (mirrors the
-// `ProjectStore` / `OrgIntegrationsStore` shape). Today this exposes the
+// `ProjectStore` / `IntegrationConnectionsStore` shape). Today this exposes the
 // `getLogin(orgId)` slug lookup the deploy provisioners need to namespace
 // every deploy-app name with the org's slug (see `flyDeployProvisioner.ts` +
 // `vercelDeployProvisioner.ts` — the global-namespace collision fix). Other

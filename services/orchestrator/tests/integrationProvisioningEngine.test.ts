@@ -54,20 +54,32 @@ function stubPool(state: StubState): pg.Pool {
       // valid prefix; the SENTRY/SLACK provisioners in this file ignore it.
       return { rows: [{ login: orgId === ORG ? "test-tanren" : "unknown" }], rowCount: 1 };
     }
-    // getGrant → OrgIntegrationsStore.get
-    if (text.includes("FROM org_integrations") && text.includes("provider_kind = $2")) {
+    // getGrant → authoritative connection + active control grant join.
+    if (text.includes("FROM org_integration_connections c") && text.includes("c.provider_kind = $2")) {
       const match = state.integrations.find((r) => r.org_id === params[0] && r.provider_kind === params[1]);
       if (match === undefined) return { rows: [], rowCount: 0 };
       return {
         rows: [
           {
-            id: "oi_1",
+            connection_id: "connection_1",
+            grant_id: "grant_1",
             org_id: match.org_id,
             provider_kind: match.provider_kind,
+            upstream_account_id: "account_1",
+            auth_kind: "api_key",
             credential_ref: match.credential_ref,
+            auth_generation: 1,
+            owner_id: "user_a",
+            health: "healthy",
+            connection_status: "active",
             metadata: match.metadata,
+            plane: "control",
+            environment: "control",
             capabilities: [],
-            status: "linked",
+            operations: [],
+            provider_scopes: [],
+            grant_generation: 1,
+            grant_status: "active",
           },
         ],
         rowCount: 1,

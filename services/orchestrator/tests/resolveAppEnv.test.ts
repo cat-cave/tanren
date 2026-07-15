@@ -23,7 +23,23 @@ class AppEnvDb {
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
     const sql = rawSql.replaceAll(/\s+/gu, " ").trim();
     if (/INSERT INTO project_app_env/u.test(sql)) {
-      const [id, projectId, key, valueRef, plainValue, scopes, source, description] = params as [
+      const [
+        orgId,
+        id,
+        projectId,
+        environment,
+        key,
+        valueRef,
+        plainValue,
+        scopes,
+        source,
+        bindingId,
+        bindingGeneration,
+        secretGeneration,
+        description,
+      ] = params as [
+        string,
+        string,
         string,
         string,
         string,
@@ -31,24 +47,34 @@ class AppEnvDb {
         string | null,
         string[],
         string,
+        string | null,
+        number | null,
+        number | null,
         string,
       ];
       const row = {
         id,
+        org_id: orgId,
         project_id: projectId,
+        environment,
         key,
         value_ref: valueRef,
         plain_value: plainValue,
         scopes,
         source,
+        binding_id: bindingId,
+        binding_generation: bindingGeneration,
+        secret_generation: secretGeneration,
         description,
       };
       this.rows.push(row);
       return { rows: [row], rowCount: 1 };
     }
-    if (/FROM project_app_env WHERE project_id = \$1/u.test(sql)) {
-      const [projectId] = params as [string];
-      const rows = this.rows.filter((r) => r["project_id"] === projectId);
+    if (/FROM project_app_env WHERE org_id = \$1/u.test(sql)) {
+      const [orgId, projectId, environment] = params as [string, string, string];
+      const rows = this.rows.filter(
+        (r) => r["org_id"] === orgId && r["project_id"] === projectId && r["environment"] === environment,
+      );
       return { rows, rowCount: rows.length };
     }
     throw new Error(`AppEnvDb: unrecognized SQL: ${sql}`);
@@ -59,17 +85,39 @@ async function seed(db: AppEnvDb): Promise<void> {
   const client = db as unknown as Pick<pg.Pool, "query">;
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "RESEND_API_KEY", valueRef: "secret://proj/resend", scopes: ["test", "runtime"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "test",
+      key: "RESEND_API_KEY",
+      valueRef: "secret://proj/resend",
+      secretGeneration: 1,
+      scopes: ["test", "runtime"],
+    },
     systemActor,
   );
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "DEV_ONLY", plainValue: "dev-value", scopes: ["dev"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "test",
+      key: "DEV_ONLY",
+      plainValue: "dev-value",
+      scopes: ["dev"],
+    },
     systemActor,
   );
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "PUBLIC_URL", plainValue: "https://app.example", scopes: ["build", "test"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "test",
+      key: "PUBLIC_URL",
+      plainValue: "https://app.example",
+      scopes: ["build", "test"],
+    },
     systemActor,
   );
 }
@@ -84,7 +132,9 @@ describe("resolveAppEnvForScope", () => {
     const testEnv = await resolveAppEnvForScope({
       client: db as unknown as Pick<pg.Pool, "query">,
       secrets,
+      orgId: "org_1",
       projectId: "proj",
+      environment: "test",
       scope: "test",
       actor: systemActor,
     });
@@ -102,7 +152,9 @@ describe("resolveAppEnvForScope", () => {
     const buildEnv = await resolveAppEnvForScope({
       client: db as unknown as Pick<pg.Pool, "query">,
       secrets,
+      orgId: "org_1",
       projectId: "proj",
+      environment: "test",
       scope: "build",
       actor: systemActor,
     });
@@ -112,7 +164,9 @@ describe("resolveAppEnvForScope", () => {
     const devEnv = await resolveAppEnvForScope({
       client: db as unknown as Pick<pg.Pool, "query">,
       secrets,
+      orgId: "org_1",
       projectId: "proj",
+      environment: "test",
       scope: "dev",
       actor: systemActor,
     });
@@ -128,7 +182,9 @@ describe("resolveAppEnvForScope", () => {
       resolveAppEnvForScope({
         client: db as unknown as Pick<pg.Pool, "query">,
         secrets,
+        orgId: "org_1",
         projectId: "proj",
+        environment: "test",
         scope: "runtime",
         actor: systemActor,
       }),

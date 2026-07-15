@@ -20,10 +20,17 @@ const actor: ActorContext = {
   source: "session",
 };
 
-// A pool that returns no org_integrations rows (nothing linked) and absorbs writes.
-const emptyQuery = async (): Promise<{ rows: unknown[]; rowCount: number }> => ({ rows: [], rowCount: 0 });
-function emptyPool(): never {
-  return { query: emptyQuery } as never;
+type Query = (sql: string, params?: readonly unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
+
+function poolFor(query: Query): pg.Pool {
+  const client = { query, release() {} };
+  return { query, connect: async () => client } as unknown as pg.Pool;
+}
+
+// A pool that returns no connection/grant rows and absorbs transaction control.
+const emptyQuery: Query = async () => ({ rows: [], rowCount: 0 });
+function emptyPool(): pg.Pool {
+  return poolFor(emptyQuery);
 }
 
 function harness(who: ActorContext | undefined = actor) {
@@ -96,46 +103,109 @@ describe("integration provisioning routes (P-INT-2)", () => {
   });
 });
 
-// A stateful in-memory pool modeling `org_integrations` so a LINK upsert is then
-// visible to discover. Only the SQL shapes the integration routes/engine issue.
+// A stateful in-memory pool modeling the authoritative connection + grant join so
+// a LINK is visible to discover and list through the same repository path.
 function statefulPool(): pg.Pool {
   const rows: Record<string, unknown>[] = [];
   // eslint-disable-next-line @typescript-eslint/require-await
   const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET )/u.test(text)) return { rows: [], rowCount: 0 };
-    if (/INSERT INTO org_integrations/u.test(text)) {
-      const [id, orgId, providerKind, credentialRef, metadata, capabilities, status] = params as string[];
+    if (text.startsWith("WITH connection AS ( INSERT INTO org_integration_connections")) {
+      const [
+        orgId,
+        connectionId,
+        providerKind,
+        upstreamAccountId,
+        authKind,
+        credentialRef,
+        ownerId,
+        metadata,
+        grantId,
+        capabilities,
+        operations,
+        providerScopes,
+      ] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string[],
+        string[],
+        string[],
+      ];
       const row = {
-        id,
+        connection_id: connectionId,
+        grant_id: grantId,
         org_id: orgId,
         provider_kind: providerKind,
+        upstream_account_id: upstreamAccountId,
+        auth_kind: authKind,
         credential_ref: credentialRef,
+        auth_generation: 1,
+        owner_id: ownerId,
+        health: "unknown",
+        connection_status: "active",
         metadata: JSON.parse(metadata ?? "{}"),
-        capabilities: JSON.parse(capabilities ?? "[]"),
-        status,
+        plane: "control",
+        environment: "control",
+        capabilities,
+        operations,
+        provider_scopes: providerScopes,
+        grant_generation: 1,
+        grant_status: "active",
       };
-      const existing = rows.findIndex((r) => r["org_id"] === orgId && r["provider_kind"] === providerKind);
+      const existing = rows.findIndex(
+        (r) =>
+          r["org_id"] === orgId &&
+          r["provider_kind"] === providerKind &&
+          r["upstream_account_id"] === upstreamAccountId,
+      );
       if (existing === -1) rows.push(row);
       else rows[existing] = row;
       return { rows: [row], rowCount: 1 };
     }
-    if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(text)) {
+    if (/FROM org_integration_connections c JOIN org_integration_grants g/u.test(text)) {
       const [orgId, providerKind] = params as string[];
-      const found = rows.filter((r) => r["org_id"] === orgId && r["provider_kind"] === providerKind);
+      const found = rows.filter(
+        (r) => r["org_id"] === orgId && (providerKind === undefined || r["provider_kind"] === providerKind),
+      );
       return { rows: found, rowCount: found.length };
     }
-    // list(orgId) — ORDER BY provider_kind, no provider filter.
-    if (/FROM org_integrations WHERE org_id = \$1 ORDER BY provider_kind/u.test(text)) {
-      const [orgId] = params as string[];
-      const found = rows
-        .filter((r) => r["org_id"] === orgId)
-        .sort((a, b) => String(a["provider_kind"]).localeCompare(String(b["provider_kind"])));
-      return { rows: found, rowCount: found.length };
+    if (text.startsWith("SELECT p.project_id,")) {
+      const [orgId, projectId] = params as string[];
+      if (orgId !== "org_acme" || projectId !== "proj_1") return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            project_id: projectId,
+            requirement_total: "2",
+            requirement_needs_attention: "1",
+            capability_total: "3",
+            capability_awaiting_grant: "1",
+            capability_ready: "1",
+            capability_needs_attention: "1",
+            binding_total: "1",
+            binding_ready: "1",
+            binding_drifted: "0",
+            binding_needs_attention: "0",
+            delivery_total: "1",
+            delivery_completed: "1",
+            delivery_degraded: "0",
+            delivery_needs_attention: "0",
+          },
+        ],
+        rowCount: 1,
+      };
     }
     return { rows: [], rowCount: 0 };
   };
-  return { query } as unknown as pg.Pool;
+  return poolFor(query);
 }
 
 function linkHarness(who: ActorContext, pool: pg.Pool, secrets: InMemorySecretStore) {
@@ -168,16 +238,27 @@ describe("integration LINK route (POST /:orgId/integrations/:providerKind)", () 
     const link = await app.request("/orgs/org_acme/integrations/deploy.vercel", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: "vercel_team_token", metadata: { teamId: "team_abc" } }),
+      body: JSON.stringify({
+        token: "vercel_team_token",
+        upstreamAccountId: "team_abc",
+        authKind: "api_key",
+        metadata: { teamId: "team_abc" },
+      }),
     });
     expect(link.status).toBe(201);
-    const linkBody = (await link.json()) as { status: string; credentialRef: string; capabilities: string[] };
+    const linkBody = (await link.json()) as {
+      status: string;
+      connectionId: string;
+      grantId: string;
+      capabilities: string[];
+    };
     expect(linkBody.status).toBe("linked");
     expect(linkBody.capabilities).toEqual(["deploy"]);
-    // The token is stored under the ref by VALUE in the store; the body carries the
-    // ref NAME only (never the value).
+    // The token is stored by value in the secret store; the body carries neither
+    // the value nor the internal credential ref.
     expect(JSON.stringify(linkBody)).not.toContain("vercel_team_token");
-    const stored = await secrets.get(linkBody.credentialRef);
+    expect(JSON.stringify(linkBody)).not.toContain("credentialRef");
+    const stored = await secrets.get("secret://org/org_acme/integration/deploy.vercel/token");
     expect(stored?.value).toBe("vercel_team_token");
 
     // discover for the same provider now resolves the grant (no longer not_linked);
@@ -232,6 +313,8 @@ describe("integration LIST route (GET /:orgId/integrations)", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         token: "sentry_super_secret",
+        upstreamAccountId: "sentry_acme",
+        authKind: "api_key",
         metadata: { orgSlug: "unique-sentry-org-slug-xyz" },
       }),
     });
@@ -244,24 +327,39 @@ describe("integration LIST route (GET /:orgId/integrations)", () => {
     const body = (await res.json()) as {
       integrations: Array<{
         providerKind: string;
-        credentialRef: string;
         metadataKeys: string[];
         capabilities: string[];
-        status: string;
+        connectionStatus: string;
+        grantStatus: string;
       }>;
     };
     expect(body.integrations).toHaveLength(1);
     const row = body.integrations[0]!;
     expect(row.providerKind).toBe("sentry");
     expect(row.capabilities).toEqual(["errors"]);
-    expect(row.status).toBe("linked");
-    expect(row.credentialRef).toBe("secret://org/org_acme/integration/sentry/token");
+    expect(row.connectionStatus).toBe("active");
+    expect(row.grantStatus).toBe("active");
     expect(row.metadataKeys).toEqual(["orgSlug"]);
     // Never leak the token value or metadata VALUES.
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("sentry_super_secret");
+    expect(serialized).not.toContain("credentialRef");
     expect(serialized).not.toContain("unique-sentry-org-slug-xyz");
     expect(serialized).not.toMatch(/"metadata"\s*:/u);
+  });
+
+  it("makes lifecycle state callable for a selected project", async () => {
+    const app = linkHarness(actor, statefulPool(), new InMemorySecretStore());
+    const res = await app.request("/orgs/org_acme/integrations?projectId=proj_1", { method: "GET" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { lifecycle: unknown };
+    expect(body.lifecycle).toEqual({
+      projectId: "proj_1",
+      requirements: { total: 2, needsAttention: 1 },
+      capabilityNodes: { total: 3, awaitingGrant: 1, ready: 1, needsAttention: 1 },
+      bindings: { total: 1, ready: 1, drifted: 0, needsAttention: 0 },
+      deliveries: { total: 1, completed: 1, degraded: 0, needsAttention: 0 },
+    });
   });
 
   it("guards cross-org list access with 403", async () => {

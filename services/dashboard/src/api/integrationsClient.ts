@@ -20,8 +20,9 @@ import type { DiscoverOutcome, LinkOutcome, OrgIntegrationsList, ProvisionOutcom
 
 export class IntegrationsClient extends OrchestratorHttpClient {
   /** Org grants (Plane A). Undefined on network/HTTP failure — empty list is a real empty. */
-  async list(orgId: string): Promise<OrgIntegrationsList | undefined> {
-    return this.getJson<OrgIntegrationsList>(`/orgs/${encodeURIComponent(orgId)}/integrations`);
+  async list(orgId: string, projectId?: string): Promise<OrgIntegrationsList | undefined> {
+    const query = projectId === undefined || projectId === "" ? "" : `?projectId=${encodeURIComponent(projectId)}`;
+    return this.getJson<OrgIntegrationsList>(`/orgs/${encodeURIComponent(orgId)}/integrations${query}`);
   }
 
   /**
@@ -31,7 +32,12 @@ export class IntegrationsClient extends OrchestratorHttpClient {
   async link(
     orgId: string,
     providerKind: string,
-    input: { token: string; metadata?: Record<string, unknown> },
+    input: {
+      token: string;
+      upstreamAccountId: string;
+      authKind: "api_key" | "oauth2" | "bot_token" | "webhook" | "workload_identity";
+      metadata?: Record<string, unknown>;
+    },
   ): Promise<{ ok: boolean; status: number; body: LinkOutcome | undefined }> {
     const r = await this.sendJson<LinkOutcome>(
       "POST",

@@ -25,7 +25,7 @@ interface PoolState {
   /** The project config (carries the deploy target). */
   config: Record<string, unknown>;
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown>; status?: string };
-  /** The deploy-intent grant LIST (OrgIntegrationsStore.list); [] = no deploy intent. */
+  /** The deploy-intent grant LIST (IntegrationConnectionsStore.list); [] = no deploy intent. */
   linkedGrants?: Array<{ provider_kind: string; capabilities?: string[]; credential_ref?: string }>;
   /** A prior deploy.triggered exists (resume-verify path). */
   alreadyDeployed?: boolean;
@@ -43,7 +43,7 @@ interface PoolState {
 
 function fakePool(state: PoolState): pg.Pool {
   // eslint-disable-next-line @typescript-eslint/require-await
-  const query = async (sql: string, _params?: readonly unknown[]) => {
+  const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
     if (/event_type = 'merge\.completed'/u.test(sql)) {
@@ -69,24 +69,54 @@ function fakePool(state: PoolState): pg.Pool {
     if (/SELECT config, org_id FROM projects/u.test(sql)) {
       return { rows: [{ config: state.config, org_id: ORG_ID }], rowCount: 1 };
     }
-    if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
-      return state.grant === undefined ? { rows: [], rowCount: 0 } : { rows: [{ ...state.grant }], rowCount: 1 };
-    }
-    if (/FROM org_integrations WHERE org_id = \$1 ORDER BY provider_kind/u.test(sql)) {
-      // The deploy-intent probe (OrgIntegrationsStore.list): map domain rows to row shape.
-      const rows = (state.linkedGrants ?? []).map((g, i) => ({
-        id: `int_${i}`,
+    if (/FROM org_integration_connections c/u.test(sql) && /JOIN org_integration_grants g/u.test(sql)) {
+      const providerKind = params[1] as string | undefined;
+      const grants =
+        providerKind === undefined
+          ? (state.linkedGrants ?? []).map((grant) => ({
+              ...grant,
+              metadata: {},
+              credential_ref: grant.credential_ref ?? "secret://org/x",
+            }))
+          : state.grant === undefined || state.grant.provider_kind !== providerKind
+            ? []
+            : [state.grant];
+      const rows = grants.map((grant, index) => ({
+        connection_id: `connection_${index}`,
+        grant_id: `grant_${index}`,
         org_id: ORG_ID,
-        provider_kind: g.provider_kind,
-        credential_ref: g.credential_ref ?? "secret://org/x",
-        metadata: {},
-        capabilities: g.capabilities ?? [],
-        status: "linked",
+        provider_kind: grant.provider_kind,
+        upstream_account_id: `account_${index}`,
+        auth_kind: "api_key",
+        credential_ref: grant.credential_ref ?? "secret://org/x",
+        auth_generation: 1,
+        owner_id: "tanren-engine",
+        health: "healthy",
+        connection_status: "active",
+        metadata: "metadata" in grant ? grant.metadata : {},
+        plane: "control",
+        environment: "control",
+        capabilities: "capabilities" in grant ? (grant.capabilities ?? []) : ["deploy"],
+        operations: ["deploy"],
+        provider_scopes: [],
+        grant_generation: 1,
+        grant_status: "active",
       }));
       return { rows, rowCount: rows.length };
     }
-    if (/FROM project_app_env WHERE project_id/u.test(sql)) {
-      return { rows: state.appEnv ?? [], rowCount: (state.appEnv ?? []).length };
+    if (/FROM project_app_env[\s\S]*WHERE org_id/u.test(sql)) {
+      const rows = (state.appEnv ?? []).map((row, index) => ({
+        id: `env_${index}`,
+        org_id: ORG_ID,
+        project_id: PROJECT_ID,
+        environment: "production",
+        binding_id: null,
+        binding_generation: null,
+        secret_generation: row["value_ref"] === null ? null : 1,
+        description: "",
+        ...row,
+      }));
+      return { rows, rowCount: rows.length };
     }
     return { rows: [], rowCount: 0 };
   };
@@ -109,27 +139,19 @@ function secrets(): InMemorySecretStore {
   return store;
 }
 
-// The scripted transport assigns the created app id `vercel_app_1` (the provider-side handle
-// the provisioner would have stored as `deployAppId`). `version: 1` mirrors a real persisted
-// config — the watcher parses it through the strict migrator (a missing version is a LOUD error).
 const VERCEL_APP_ID = "vercel_app_1";
 const VERCEL_TARGET = { version: 1, deployProvider: "deploy.vercel", deployAppId: VERCEL_APP_ID };
 const VERCEL_GRANT = {
   provider_kind: "deploy.vercel",
   credential_ref: "secret://org/deploy-token",
   metadata: { teamId: "team_abc", slug: "acme" },
-  // `status` (+ app_env `source`) are NOT NULL on the real rows — the fakes carry them so the seam decode passes.
   status: "linked",
 };
 
-// The REAL v13 github gitSource shape Vercel's deployments API requires: org + bare repo + the
-// commit in `sha` (and `ref`, which accepts a SHA).
 function githubGitSource(org: string, repo: string, sha: string): Record<string, string> {
   return { type: "github", org, repo, ref: sha, sha };
 }
 
-// Assert a DURABLE org-scoped `deploy.skipped` with the given reason + detail substring was
-// recorded (not a console-only swallow).
 function expectSkipped(events: RecordingEventStore, reason: string, detailSubstr: string): void {
   const skipped = events.appends.find((a) => a.eventType === "deploy.skipped");
   expect(skipped).toBeDefined();
@@ -145,7 +167,6 @@ async function run(state: PoolState, transport: ScriptedDeployTransport, events:
     secrets: secrets(),
     transport,
     eventStore: events,
-    // Scripted smoke probe + instant poll so verify runs over the scripted transport (READY by default).
     urlProbe: scriptedUrlProbe(),
     verifyPoll: instantVerifyPollPolicy(),
   });
@@ -154,8 +175,6 @@ async function run(state: PoolState, transport: ScriptedDeployTransport, events:
 
 describe("DeployOnMergeWatcher (a deploy happened)", () => {
   it("triggers a real deploy of the merged ref + attaches runtime env + records deploy.triggered", async () => {
-    // The app must exist on the provider for `deploy` to resolve it. Seed it via a
-    // create POST so `listApps` returns it under the generated id (VERCEL_APP_ID).
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -183,16 +202,13 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       events,
     );
 
-    // A real deploy fired with the merged COMMIT SHA in the REAL v13 github gitSource shape.
     const triggered = transport.deploysTriggered();
     expect(triggered).toHaveLength(1);
     expect(triggered[0]!.body["gitSource"]).toEqual(githubGitSource("acme", "widget", MERGE_SHA));
     expect(transport.envByApp()[VERCEL_APP_ID]).toEqual({ RESEND_API_KEY: "re_live_secret" });
-    // ENV BEFORE TRIGGER: `set_env` was attached BEFORE `deploy_trigger` (the lead `create` seeded the app).
     const log = transport.requestLog();
     expect(log.indexOf("set_env")).toBeGreaterThanOrEqual(0);
     expect(log.indexOf("set_env")).toBeLessThan(log.indexOf("deploy_trigger"));
-    // deploy.triggered recorded under the org scope, with a resolved URL (no secret).
     const deploy = events.appends.find((a) => a.eventType === "deploy.triggered");
     expect(deploy).toBeDefined();
     expect(deploy!.ambientOrgId).toBe(ORG_ID);
@@ -200,14 +216,12 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(payload["provider"]).toBe("deploy.vercel");
     expect(payload["url"]).toMatch(/^https:\/\//u);
     expect(JSON.stringify(deploy)).not.toContain("re_live_secret");
-    // AUDIT-EVIDENCE BASELINE: policy version + service actor (no approver) + a NON-SECRET provenance ref.
     expect(payload["policyVersion"]).toBe(1);
     expect(payload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
     expect(payload["approvingActor"]).toBeUndefined();
     expect(payload["artifact"]).toEqual({ provenanceRef: `deploy.vercel:vercel_deploy_1@${MERGE_SHA}` });
     expect((payload["artifact"] as Record<string, unknown>)["checksum"]).toBeUndefined();
 
-    // PROVEN, not fire-and-forget: verify polled to READY + smoked the URL → deploy.verified.
     const verified = events.appends.find((a) => a.eventType === "deploy.verified");
     expect(verified).toBeDefined();
     expect(verified!.ambientOrgId).toBe(ORG_ID);
@@ -219,7 +233,6 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(JSON.stringify(verified)).not.toContain("deploy_token");
     expect(vPayload["policyVersion"]).toBe(1);
     expect(vPayload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
-    // NEGATIVE CONTROL: a normal product deploys on merge as before — no guard skips it.
     expect(events.appends.find((a) => a.eventType === "deploy.skipped")).toBeUndefined();
   });
 
@@ -240,8 +253,6 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
     });
-    // ERROR on every poll — the SAME verify failure recurs with no new information, so the
-    // retry escalates LOUD on INTELLIGENT non-convergence (a fixed point), NOT a hardcoded count.
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
@@ -249,18 +260,14 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(failed).toBeDefined();
     expect(failed!.ambientOrgId).toBe(ORG_ID);
     const fPayload = failed!.payload as Record<string, unknown>;
-    // `attempts` is observability (re-drives the non-convergence took), NOT a cap.
     expect(typeof fPayload["attempts"]).toBe("number");
     expect(fPayload["attempts"] as number).toBeGreaterThanOrEqual(2);
-    // The reason is a FIXED non-secret summary — NOT the raw verify error / provider state.
     expect(fPayload["reason"]).toContain("did not reach a live deployment");
     expect(fPayload["reason"]).not.toMatch(/ERROR/u);
     expect(JSON.stringify(failed)).not.toContain("deploy_token");
   });
 
   it("records a DURABLE trigger-phase deploy.failed when an EXPECTED deploy throws before any trigger", async () => {
-    // A deploy is EXPECTED (a target resolved) but throws BEFORE the verify retry (a denied
-    // egress target) — it must append a LOUD trigger-phase `deploy.failed`, not swallow it.
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -276,17 +283,14 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
-      // A restrictive policy that DENIES the target — a trigger-phase failure the watcher records.
       egressPolicy: {
         allowsEgress: () => ({ allowed: true, reason: "test" }),
         allowsDeployTarget: () => ({ allowed: false, reason: "off-allowlist deploy target" }),
       },
     });
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/not .*allowed by the egress policy/u);
-    // No deploy fired (the target was denied) and the deploy was NEVER proven live.
     expect(transport.deploysTriggered()).toEqual([]);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeUndefined();
-    // The LOUD + DURABLE record: an org-scoped trigger-phase deploy.failed, no deploymentId/attempts.
     const failed = events.appends.find((a) => a.eventType === "deploy.failed");
     expect(failed).toBeDefined();
     expect(failed!.ambientOrgId).toBe(ORG_ID);
@@ -299,8 +303,6 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("does NOT double-record on a verify-phase failure (only the verify-phase deploy.failed)", async () => {
-    // A verify exhaustion records its OWN verify-phase deploy.failed; the outer trigger-phase
-    // guard must NOT add a second one for the same throw.
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",
@@ -325,8 +327,6 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
   });
 
   it("is TERMINAL on deploy.failed: a re-check after a prior failure is a no-op (no self-loop)", async () => {
-    // deploy.failed is run-scoped (its append wakes the subscriber), so a prior one gates
-    // check() to a no-op — never re-verify nor append a second deploy.failed.
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
       method: "POST",

@@ -9,19 +9,19 @@ import type pg from "pg";
 import { systemActor } from "../src/engine/state/actor.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { AppEnvironmentStore } from "../src/engine/repositories/appEnvironment.js";
-import { OrgIntegrationsStore } from "../src/engine/repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../src/engine/repositories/integrationConnections.js";
 import { attachRuntimeAppEnv } from "../src/engine/workflow/attachRuntimeAppEnv.js";
 import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 
 const RUNTIME_SECRET = "re_live_super_secret";
 
-// A minimal in-memory pg target for the two tables the attach flow reads:
-// project_app_env (the runtime env) + org_integrations (the deploy grant). Models
+// A minimal in-memory pg target for the lifecycle tables the attach flow reads:
+// project_app_env (the runtime env) + connection/control-grant authority. Models
 // rows so the flow's scope-filter + grant resolution run without a real database.
 class AttachDb {
   readonly appEnvRows: Record<string, unknown>[] = [];
-  readonly orgIntegrationRows: Record<string, unknown>[] = [];
+  readonly integrationRows: Record<string, unknown>[] = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async query(
@@ -30,7 +30,23 @@ class AttachDb {
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
     const sql = rawSql.replaceAll(/\s+/gu, " ").trim();
     if (/INSERT INTO project_app_env/u.test(sql)) {
-      const [id, projectId, key, valueRef, plainValue, scopes, source, description] = params as [
+      const [
+        orgId,
+        id,
+        projectId,
+        environment,
+        key,
+        valueRef,
+        plainValue,
+        scopes,
+        source,
+        bindingId,
+        bindingGeneration,
+        secretGeneration,
+        description,
+      ] = params as [
+        string,
+        string,
         string,
         string,
         string,
@@ -38,51 +54,91 @@ class AttachDb {
         string | null,
         string[],
         string,
-        string,
-      ];
-      const row = {
-        id,
-        project_id: projectId,
-        key,
-        value_ref: valueRef,
-        plain_value: plainValue,
-        scopes,
-        source,
-        description,
-      };
-      this.appEnvRows.push(row);
-      return { rows: [row], rowCount: 1 };
-    }
-    if (/FROM project_app_env WHERE project_id = \$1/u.test(sql)) {
-      const [projectId] = params as [string];
-      const rows = this.appEnvRows.filter((r) => r["project_id"] === projectId);
-      return { rows, rowCount: rows.length };
-    }
-    if (/INSERT INTO org_integrations/u.test(sql)) {
-      const [id, orgId, providerKind, credentialRef, metadata, capabilities, status] = params as [
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
+        string | null,
+        number | null,
+        number | null,
         string,
       ];
       const row = {
         id,
         org_id: orgId,
-        provider_kind: providerKind,
-        credential_ref: credentialRef,
-        metadata: JSON.parse(metadata),
-        capabilities: JSON.parse(capabilities),
-        status,
+        project_id: projectId,
+        environment,
+        key,
+        value_ref: valueRef,
+        plain_value: plainValue,
+        scopes,
+        source,
+        binding_id: bindingId,
+        binding_generation: bindingGeneration,
+        secret_generation: secretGeneration,
+        description,
       };
-      this.orgIntegrationRows.push(row);
+      this.appEnvRows.push(row);
       return { rows: [row], rowCount: 1 };
     }
-    if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
+    if (/FROM project_app_env WHERE org_id = \$1/u.test(sql)) {
+      const [orgId, projectId, environment] = params as [string, string, string];
+      const rows = this.appEnvRows.filter(
+        (r) => r["org_id"] === orgId && r["project_id"] === projectId && r["environment"] === environment,
+      );
+      return { rows, rowCount: rows.length };
+    }
+    if (sql.startsWith("WITH connection AS ( INSERT INTO org_integration_connections")) {
+      const [
+        orgId,
+        connectionId,
+        providerKind,
+        upstreamAccountId,
+        authKind,
+        credentialRef,
+        ownerId,
+        metadata,
+        grantId,
+        capabilities,
+        operations,
+        providerScopes,
+      ] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string[],
+        string[],
+        string[],
+      ];
+      const row = {
+        connection_id: connectionId,
+        grant_id: grantId,
+        org_id: orgId,
+        provider_kind: providerKind,
+        upstream_account_id: upstreamAccountId,
+        auth_kind: authKind,
+        credential_ref: credentialRef,
+        auth_generation: 1,
+        owner_id: ownerId,
+        health: "unknown",
+        connection_status: "active",
+        metadata: JSON.parse(metadata),
+        plane: "control",
+        environment: "control",
+        capabilities,
+        operations,
+        provider_scopes: providerScopes,
+        grant_generation: 1,
+        grant_status: "active",
+      };
+      this.integrationRows.push(row);
+      return { rows: [row], rowCount: 1 };
+    }
+    if (/FROM org_integration_connections c JOIN org_integration_grants g/u.test(sql)) {
       const [orgId, providerKind] = params as [string, string];
-      const rows = this.orgIntegrationRows.filter((r) => r["org_id"] === orgId && r["provider_kind"] === providerKind);
+      const rows = this.integrationRows.filter((r) => r["org_id"] === orgId && r["provider_kind"] === providerKind);
       return { rows, rowCount: rows.length };
     }
     throw new Error(`AttachDb: unrecognized SQL: ${sql}`);
@@ -97,30 +153,67 @@ async function seedAppEnv(db: AttachDb): Promise<void> {
   // NOT reach the deployed app.
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "RESEND_API_KEY", valueRef: "secret://proj/resend", scopes: ["runtime"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "production",
+      key: "RESEND_API_KEY",
+      valueRef: "secret://proj/resend",
+      secretGeneration: 1,
+      scopes: ["runtime"],
+    },
     systemActor,
   );
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "PUBLIC_URL", plainValue: "https://app.example", scopes: ["runtime", "build"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "production",
+      key: "PUBLIC_URL",
+      plainValue: "https://app.example",
+      scopes: ["runtime", "build"],
+    },
     systemActor,
   );
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "DEV_ONLY", plainValue: "dev-value", scopes: ["dev"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "production",
+      key: "DEV_ONLY",
+      plainValue: "dev-value",
+      scopes: ["dev"],
+    },
     systemActor,
   );
   await AppEnvironmentStore.upsert(
     client,
-    { projectId: "proj", key: "CI_ONLY", plainValue: "ci-value", scopes: ["test"] },
+    {
+      orgId: "org_1",
+      projectId: "proj",
+      environment: "production",
+      key: "CI_ONLY",
+      plainValue: "ci-value",
+      scopes: ["test"],
+    },
     systemActor,
   );
 }
 
 async function seedGrant(db: AttachDb, providerKind: string, metadata: Record<string, unknown>): Promise<void> {
-  await OrgIntegrationsStore.upsert(
+  await IntegrationConnectionsStore.linkControlGrant(
     db as unknown as Client,
-    { orgId: "org_1", providerKind, credentialRef: "secret://org/deploy-token", metadata, capabilities: ["deploy"] },
+    {
+      orgId: "org_1",
+      providerKind,
+      upstreamAccountId: "account-1",
+      authKind: "api_key",
+      credentialRef: "secret://org/deploy-token",
+      metadata,
+      capabilities: ["deploy"],
+    },
     systemActor,
   );
 }
@@ -219,7 +312,14 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
     // Only a dev-scoped entry — nothing runtime.
     await AppEnvironmentStore.upsert(
       client,
-      { projectId: "proj", key: "DEV_ONLY", plainValue: "d", scopes: ["dev"] },
+      {
+        orgId: "org_1",
+        projectId: "proj",
+        environment: "production",
+        key: "DEV_ONLY",
+        plainValue: "d",
+        scopes: ["dev"],
+      },
       systemActor,
     );
     await seedGrant(db, "deploy.vercel", {});

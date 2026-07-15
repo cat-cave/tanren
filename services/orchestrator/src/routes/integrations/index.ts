@@ -9,7 +9,7 @@
 //     Body: { capability, providerKind?, mode, chosenResourceId?, stack?, name? }.
 //     Requests a CAPABILITY ("enable error tracking", "notify on Slack",
 //     "deploy") for the project — NOT a leaf secret. The engine resolves the org
-//     grant from `org_integrations`, builds the provisioner with PRODUCTION deps,
+//     active control grant, builds the provisioner with PRODUCTION deps,
 //     applies confirm-with-smart-default (discover → create/bind), persists the
 //     artifact over the existing surfaces, emits `integration.provisioned`, and
 //     returns what was created/bound BY REFERENCE (never a secret value).
@@ -33,6 +33,7 @@
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
+import { runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import { PgEventStore } from "../../engine/eventStore.js";
@@ -46,7 +47,8 @@ import {
   provisionCapability,
   resolveProviderKind,
 } from "../../engine/integrations/provisioningEngine.js";
-import { OrgIntegrationsStore } from "../../engine/repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
+import { IntegrationLifecycleInventoryStore } from "../../engine/repositories/integrationLifecycleInventory.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -65,6 +67,8 @@ const ProvisionMode = z.enum(["greenfield", "brownfield"]);
 const LinkBody = z
   .object({
     token: z.string().min(1).max(4096),
+    upstreamAccountId: z.string().min(1).max(200),
+    authKind: z.enum(["api_key", "oauth2", "bot_token", "webhook", "workload_identity"]),
     metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
@@ -93,21 +97,37 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const rows = await OrgIntegrationsStore.list(options.pool, orgId, {
-      kind: "operator",
-      id: actor.userId,
-    });
-    // Strip metadata values; surface only the keys (same discipline as link).
+    const projectId = c.req.query("projectId");
+    const operator = { kind: "operator" as const, id: actor.userId };
+    const { rows, lifecycle } = await runWithOrgScope(options.pool, orgId, async (client) => ({
+      rows: await IntegrationConnectionsStore.listControlGrants(client, orgId, operator),
+      lifecycle:
+        projectId === undefined || projectId === ""
+          ? undefined
+          : await IntegrationLifecycleInventoryStore.getForProject(client, orgId, projectId, operator),
+    }));
+    if (projectId !== undefined && projectId !== "" && lifecycle === undefined) {
+      return c.json({ error: "project_not_found" }, 404);
+    }
     const integrations = rows.map((row) => ({
-      id: row.id,
+      connectionId: row.connectionId,
+      grantId: row.grantId,
       orgId: row.orgId,
       providerKind: row.providerKind,
-      credentialRef: row.credentialRef,
+      upstreamAccountId: row.upstreamAccountId,
+      authKind: row.authKind,
+      authGeneration: row.authGeneration,
+      ownerId: row.ownerId,
       metadataKeys: Object.keys(row.metadata),
       capabilities: row.capabilities,
-      status: row.status,
+      operations: row.operations,
+      providerScopes: row.providerScopes,
+      health: row.health,
+      connectionStatus: row.connectionStatus,
+      grantGeneration: row.grantGeneration,
+      grantStatus: row.grantStatus,
     }));
-    return c.json({ integrations }, 200);
+    return c.json({ integrations, ...(lifecycle === undefined ? {} : { lifecycle }) }, 200);
   });
 
   app.post("/:orgId/projects/:projectId/integrations/provision", async (c) => {
@@ -129,14 +149,16 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       return c.json({ error: "unresolvable_capability", message: messageOf(error) }, 400);
     }
     try {
-      const outcome = await provisionCapability(
-        {
-          client: options.pool,
-          secrets: options.secrets,
-          events,
-          actor: { kind: "operator", id: actor.userId },
-        },
-        { projectId, orgId, ...parsed.data },
+      const outcome = await runWithOrgScope(options.pool, orgId, (client) =>
+        provisionCapability(
+          {
+            client,
+            secrets: options.secrets,
+            events,
+            actor: { kind: "operator", id: actor.userId },
+          },
+          { projectId, orgId, ...parsed.data },
+        ),
       );
       // not_linked is a successful, structured response (not an error path).
       return c.json(outcome, outcome.status === "not_linked" ? 200 : 201);
@@ -147,8 +169,8 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
 
   // POST /:orgId/integrations/:providerKind — LINK an org integration grant. The
   // API-drivable "connect Vercel/Fly/Slack/Sentry" surface: validates + stores the
-  // provider token in the SecretStore (REF only) and records the `org_integrations`
-  // grant so `provision`/`discover` then work (they no longer return not_linked).
+  // provider token in the SecretStore (REF only), creates the connection authority,
+  // and links its active control grant so `provision`/`discover` then work.
   // Org-ADMIN gated (a write); a non-admin → 403. The token VALUE is never echoed,
   // logged, or placed in an event — only its ref name.
   app.post("/:orgId/integrations/:providerKind", async (c) => {
@@ -173,17 +195,20 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       // in the SecretStore; the grant + event carry the ref name alone.
       const credentialRef = `secret://org/${orgId}/integration/${providerKind}/token`;
       await options.secrets.put({ ref: credentialRef, value: parsed.data.token });
-      const grant = await OrgIntegrationsStore.upsert(
-        options.pool,
-        {
-          orgId,
-          providerKind,
-          credentialRef,
-          metadata: parsed.data.metadata ?? {},
-          capabilities,
-          status: "linked",
-        },
-        { kind: "operator", id: actor.userId },
+      const grant = await runWithOrgScope(options.pool, orgId, (client) =>
+        IntegrationConnectionsStore.linkControlGrant(
+          client,
+          {
+            orgId,
+            providerKind,
+            upstreamAccountId: parsed.data.upstreamAccountId,
+            authKind: parsed.data.authKind,
+            credentialRef,
+            metadata: parsed.data.metadata ?? {},
+            capabilities,
+          },
+          { kind: "operator", id: actor.userId },
+        ),
       );
       // The grant upsert IS the durable audit record (org-scoped under RLS); no
       // `events` append here — `events` is project-scoped (its org_id derives from a
@@ -193,7 +218,10 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
         {
           status: "linked",
           providerKind,
-          credentialRef,
+          connectionId: grant.connectionId,
+          grantId: grant.grantId,
+          authGeneration: grant.authGeneration,
+          grantGeneration: grant.grantGeneration,
           capabilities,
           metadataKeys: Object.keys(grant.metadata),
         },
@@ -218,10 +246,12 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
     } catch (error) {
       return c.json({ error: "unresolvable_capability", message: messageOf(error) }, 400);
     }
-    const grant = await OrgIntegrationsStore.getGrant(options.pool, orgId, providerKind, {
-      kind: "operator",
-      id: actor.userId,
-    });
+    const grant = await runWithOrgScope(options.pool, orgId, (client) =>
+      IntegrationConnectionsStore.getControlGrant(client, orgId, providerKind, {
+        kind: "operator",
+        id: actor.userId,
+      }),
+    );
     if (grant === undefined) {
       return c.json(
         {

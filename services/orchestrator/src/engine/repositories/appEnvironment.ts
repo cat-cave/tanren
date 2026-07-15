@@ -1,85 +1,90 @@
-// Plane B data-access: the `project_app_env` store (migration 0051) — the built
-// PRODUCT's own env vars + secrets, per project, DISTINCT from `org_integrations`
-// (Tanren's own integrations). upsert/list/get/delete in the Repositories seam
-// shape: every method takes the caller's `QueryClient` (the org-scope carrier) +
-// `ActorRef`, so under RLS (project→org chain) an off-scope client sees ZERO rows.
-//
-// Each entry sets EXACTLY ONE of `valueRef` (secret-manager ref) / `plainValue`
-// (non-secret inline) — the DB CHECK enforces it; the upsert asserts it too so a
-// caller gets a clear error before hitting the DB. Secret VALUES live only in the
-// secret manager; this store holds the REF, never the value.
-
-import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import type pg from "pg";
 import { z } from "zod";
 import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-/** The phases an entry can reach (subset stored per entry on `scopes`). */
 export const APP_ENV_SCOPES = ["build", "test", "runtime", "dev"] as const;
 export type AppEnvScope = (typeof APP_ENV_SCOPES)[number];
 
-/** How the entry's value was supplied. */
+export const APP_ENVIRONMENTS = ["dev", "test", "preview", "production"] as const;
+export type AppEnvironment = (typeof APP_ENVIRONMENTS)[number];
+
 export const APP_ENV_SOURCES = ["byo", "provisioned"] as const;
 export type AppEnvSource = (typeof APP_ENV_SOURCES)[number];
 
-/** A `project_app_env` row, in domain shape. Exactly one of valueRef/plainValue set. */
 export interface AppEnvEntry {
   id: string;
+  orgId: string;
   projectId: string;
+  environment: AppEnvironment;
   key: string;
   valueRef: string | null;
   plainValue: string | null;
   scopes: AppEnvScope[];
   source: AppEnvSource;
+  bindingId: string | null;
+  bindingGeneration: number | null;
+  secretGeneration: number | null;
   description: string;
 }
 
-/** The fields an upsert supplies; `id`/timestamps are managed by the store/DB. */
 export interface UpsertAppEnvInput {
+  orgId: string;
   projectId: string;
+  environment: AppEnvironment;
   key: string;
   valueRef?: string;
   plainValue?: string;
   scopes: AppEnvScope[];
   source?: AppEnvSource;
+  bindingId?: string;
+  bindingGeneration?: number;
+  secretGeneration?: number;
   description?: string;
 }
 
 interface AppEnvRow {
   id: string;
+  org_id: string;
   project_id: string;
+  environment: string;
   key: string;
   value_ref: string | null;
   plain_value: string | null;
   scopes: string[] | null;
   source: string;
+  binding_id: string | null;
+  binding_generation: number | null;
+  secret_generation: number | null;
   description: string;
 }
 
 function mapRow(row: AppEnvRow): AppEnvEntry {
   return {
     id: row.id,
+    orgId: row.org_id,
     projectId: row.project_id,
+    environment: oneOf(row.environment, APP_ENVIRONMENTS, "project_app_env.environment"),
     key: row.key,
     valueRef: row.value_ref,
     plainValue: row.plain_value,
     scopes: z.array(z.enum(APP_ENV_SCOPES)).parse(row.scopes ?? []),
     source: oneOf(row.source, APP_ENV_SOURCES, "project_app_env.source"),
+    bindingId: row.binding_id,
+    bindingGeneration: row.binding_generation,
+    secretGeneration: row.secret_generation,
     description: row.description,
   };
 }
 
-const COLUMNS = "id, project_id, key, value_ref, plain_value, scopes, source, description";
+const COLUMNS = `id, org_id, project_id, environment, key, value_ref,
+  plain_value, scopes, source, binding_id, binding_generation,
+  secret_generation, description`;
 
-/**
- * Reject an entry that does not set EXACTLY ONE of valueRef/plainValue before it
- * reaches the DB CHECK — a clear application-level error rather than a constraint
- * violation. (The DB CHECK is the load-bearing guarantee; this is ergonomics.)
- */
-function assertValueXor(input: UpsertAppEnvInput): void {
+function assertInput(input: UpsertAppEnvInput): void {
   const hasRef = input.valueRef !== undefined;
   const hasPlain = input.plainValue !== undefined;
   if (hasRef === hasPlain) {
@@ -87,70 +92,116 @@ function assertValueXor(input: UpsertAppEnvInput): void {
       `project_app_env entry '${input.key}' must set exactly one of valueRef (secret) / plainValue (non-secret)`,
     );
   }
+  if (hasRef !== (input.secretGeneration !== undefined)) {
+    throw new Error(`project_app_env secret entry '${input.key}' must carry its secretGeneration`);
+  }
+  if (input.secretGeneration !== undefined && input.secretGeneration < 1) {
+    throw new Error(`project_app_env secretGeneration for '${input.key}' must be >= 1`);
+  }
+  const source = input.source ?? "byo";
+  const hasBinding = input.bindingId !== undefined || input.bindingGeneration !== undefined;
+  if (source === "byo" && hasBinding) {
+    throw new Error(`BYO project_app_env entry '${input.key}' cannot claim an integration binding`);
+  }
+  if (
+    source === "provisioned" &&
+    (input.bindingId === undefined || input.bindingGeneration === undefined || input.bindingGeneration < 1)
+  ) {
+    throw new Error(`provisioned project_app_env entry '${input.key}' requires a binding and generation`);
+  }
 }
 
 export const AppEnvironmentStore = {
-  /**
-   * Upsert an app-env entry keyed on (project_id, key) — re-adding a key updates
-   * the existing row rather than duplicating (the unique index backs ON CONFLICT).
-   * Asserts the value XOR before the write. Returns the persisted row.
-   */
   async upsert(client: QueryClient, input: UpsertAppEnvInput, _actor: ActorRef): Promise<AppEnvEntry> {
-    assertValueXor(input);
+    assertInput(input);
     const result = await client.query<AppEnvRow>(
-      `INSERT INTO project_app_env (id, project_id, key, value_ref, plain_value, scopes, source, description, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, now())
-       ON CONFLICT (project_id, key) DO UPDATE SET
+      `INSERT INTO project_app_env
+         (org_id, id, project_id, environment, key, value_ref, plain_value,
+          scopes, source, binding_id, binding_generation, secret_generation,
+          description, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9, $10, $11, $12, $13, now())
+       ON CONFLICT (org_id, project_id, environment, key) DO UPDATE SET
          value_ref = EXCLUDED.value_ref,
          plain_value = EXCLUDED.plain_value,
          scopes = EXCLUDED.scopes,
          source = EXCLUDED.source,
+         binding_id = EXCLUDED.binding_id,
+         binding_generation = EXCLUDED.binding_generation,
+         secret_generation = EXCLUDED.secret_generation,
          description = EXCLUDED.description,
          updated_at = now()
        RETURNING ${COLUMNS}`,
       [
+        input.orgId,
         randomUUID(),
         input.projectId,
+        input.environment,
         input.key,
         input.valueRef ?? null,
         input.plainValue ?? null,
         input.scopes,
         input.source ?? "byo",
+        input.bindingId ?? null,
+        input.bindingGeneration ?? null,
+        input.secretGeneration ?? null,
         input.description ?? "",
       ],
     );
     const row = result.rows[0];
     if (row === undefined) {
-      throw new Error(`project_app_env upsert returned no row for (${input.projectId}, ${input.key})`);
+      throw new Error(
+        `project_app_env upsert returned no row for (${input.orgId}, ${input.projectId}, ${input.environment}, ${input.key})`,
+      );
     }
     return mapRow(row);
   },
 
-  /** List a project's app-env entries, ordered by key. */
-  async list(client: QueryClient, projectId: string, _actor: ActorRef): Promise<AppEnvEntry[]> {
+  async list(
+    client: QueryClient,
+    orgId: string,
+    projectId: string,
+    environment: AppEnvironment,
+    _actor: ActorRef,
+  ): Promise<AppEnvEntry[]> {
     const result = await client.query<AppEnvRow>(
-      `SELECT ${COLUMNS} FROM project_app_env WHERE project_id = $1 ORDER BY key`,
-      [projectId],
+      `SELECT ${COLUMNS} FROM project_app_env
+       WHERE org_id = $1 AND project_id = $2 AND environment = $3 ORDER BY key`,
+      [orgId, projectId, environment],
     );
     return result.rows.map(mapRow);
   },
 
-  /** Read one entry by (project_id, key), or undefined when absent/off-scope. */
-  async get(client: QueryClient, projectId: string, key: string, _actor: ActorRef): Promise<AppEnvEntry | undefined> {
+  async get(
+    client: QueryClient,
+    orgId: string,
+    projectId: string,
+    environment: AppEnvironment,
+    key: string,
+    _actor: ActorRef,
+  ): Promise<AppEnvEntry | undefined> {
     const result = await client.query<AppEnvRow>(
-      `SELECT ${COLUMNS} FROM project_app_env WHERE project_id = $1 AND key = $2`,
-      [projectId, key],
+      `SELECT ${COLUMNS} FROM project_app_env
+       WHERE org_id = $1 AND project_id = $2 AND environment = $3 AND key = $4`,
+      [orgId, projectId, environment, key],
     );
     const row = result.rows[0];
     return row === undefined ? undefined : mapRow(row);
   },
 
-  /** Delete an entry by (project_id, key). Returns true when a row matched. */
-  async delete(client: QueryClient, projectId: string, key: string, _actor: ActorRef): Promise<boolean> {
-    const result = await client.query("DELETE FROM project_app_env WHERE project_id = $1 AND key = $2 RETURNING id", [
-      projectId,
-      key,
-    ]);
+  async delete(
+    client: QueryClient,
+    orgId: string,
+    projectId: string,
+    environment: AppEnvironment,
+    key: string,
+    _actor: ActorRef,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `DELETE FROM project_app_env
+       WHERE org_id = $1 AND project_id = $2 AND environment = $3 AND key = $4
+       RETURNING id`,
+      [orgId, projectId, environment, key],
+    );
     return (result.rowCount ?? 0) > 0;
   },
 } as const;

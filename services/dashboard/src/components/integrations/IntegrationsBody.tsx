@@ -10,7 +10,12 @@
  * error). Read failure → "unavailable", never a fabricated empty grant list.
  */
 
-import { LINKABLE_PROVIDER_KINDS, PROJECT_CAPABILITIES, type OrgIntegrationSummary } from "../../api/integrations.js";
+import {
+  LINKABLE_PROVIDER_KINDS,
+  PROJECT_CAPABILITIES,
+  type IntegrationLifecycleInventory,
+  type OrgIntegrationSummary,
+} from "../../api/integrations.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { capabilitiesLabel, isProviderLinked, providerLabel, statusLabel } from "./format.js";
 import { INTEGRATIONS_SCREEN_CSS } from "./styles.js";
@@ -20,6 +25,8 @@ export interface IntegrationsBodyProps {
   integrations: OrgIntegrationSummary[] | undefined;
   /** Active project id for Plane-B enable forms (empty when no project). */
   projectId: string;
+  /** Foundation lifecycle read model; undefined means unavailable, never zero. */
+  lifecycle: IntegrationLifecycleInventory | undefined;
   /** Project name for the eyebrow scope line. */
   projectName: string;
   /** Whether the operator has a visible project at all. */
@@ -38,7 +45,8 @@ export interface IntegrationsBodyProps {
 }
 
 export function IntegrationsBody(props: IntegrationsBodyProps) {
-  const { integrations, projectId, projectName, noProject, isOrgAdmin, notice, notLinked, csrfToken } = props;
+  const { integrations, projectId, lifecycle, projectName, noProject, isOrgAdmin, notice, notLinked, csrfToken } =
+    props;
   const unavailable = integrations === undefined;
   const grants = integrations ?? [];
 
@@ -98,6 +106,27 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                     </select>
                   </div>
                   <div class="field">
+                    <label for="upstreamAccountId">account / workspace id</label>
+                    <input
+                      id="upstreamAccountId"
+                      name="upstreamAccountId"
+                      type="text"
+                      required
+                      autocomplete="off"
+                      placeholder="provider account id"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="authKind">auth kind</label>
+                    <select id="authKind" name="authKind" required>
+                      <option value="api_key">api key</option>
+                      <option value="bot_token">bot token</option>
+                      <option value="webhook">webhook</option>
+                      <option value="oauth2">oauth 2</option>
+                      <option value="workload_identity">workload identity</option>
+                    </select>
+                  </div>
+                  <div class="field">
                     <label for="token">token (write-only)</label>
                     <input
                       id="token"
@@ -122,6 +151,45 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                 <div class="note">
                   <b>↑ plane a.</b> The token is stored under a secret REF and never echoed. Metadata values stay
                   server-side; only keys surface on the grant card. Hetzner is out of scope here.
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ── in-1: durable lifecycle foundation ─────────────────────── */}
+          <section class="panel" data-lifecycle-inventory>
+            <div class="panel-pad">
+              <div class="mini-eyebrow">
+                integration lifecycle <span class="window-tag">(project · durable state)</span>
+              </div>
+              {noProject ? (
+                <div class="empty">No project visible; lifecycle state is not applicable.</div>
+              ) : unavailable || lifecycle === undefined ? (
+                <div class="empty" data-lifecycle-unavailable>
+                  Lifecycle inventory unavailable — no zero counts are fabricated.
+                </div>
+              ) : (
+                <div class="int-grid">
+                  <LifecycleCard
+                    label="requirements"
+                    value={lifecycle.requirements.total}
+                    detail={`${lifecycle.requirements.needsAttention} need attention`}
+                  />
+                  <LifecycleCard
+                    label="capability nodes"
+                    value={lifecycle.capabilityNodes.total}
+                    detail={`${lifecycle.capabilityNodes.ready} ready · ${lifecycle.capabilityNodes.awaitingGrant} awaiting grant`}
+                  />
+                  <LifecycleCard
+                    label="bindings"
+                    value={lifecycle.bindings.total}
+                    detail={`${lifecycle.bindings.ready} ready · ${lifecycle.bindings.drifted} drifted`}
+                  />
+                  <LifecycleCard
+                    label="deliveries"
+                    value={lifecycle.deliveries.total}
+                    detail={`${lifecycle.deliveries.completed} complete · ${lifecycle.deliveries.degraded} degraded`}
+                  />
                 </div>
               )}
             </div>
@@ -190,15 +258,28 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
 
 function GrantCard(props: { row: OrgIntegrationSummary }) {
   const { row } = props;
+  const active = row.connectionStatus === "active" && row.grantStatus === "active";
   return (
-    <div class={`int-card${row.status === "linked" ? " linked" : ""}`} data-provider={row.providerKind}>
+    <div class={`int-card${active ? " linked" : ""}`} data-provider={row.providerKind}>
       <span class="label">{providerLabel(row.providerKind)}</span>
-      <span class={`value${row.status === "linked" ? "" : " empty"}`}>{statusLabel(row.status)}</span>
+      <span class={`value${active ? "" : " empty"}`}>{statusLabel(row.grantStatus)}</span>
       <span class="sub">capabilities · {capabilitiesLabel(row.capabilities)}</span>
-      <span class="ref" title="credential ref name only">
-        {row.credentialRef}
+      <span class="ref">account · {row.upstreamAccountId}</span>
+      <span class="sub">
+        {row.authKind} · auth generation {row.authGeneration} · grant generation {row.grantGeneration}
       </span>
+      <span class="sub">health · {statusLabel(row.health)}</span>
       {row.metadataKeys.length > 0 ? <span class="sub">metadata keys · {row.metadataKeys.join(", ")}</span> : null}
+    </div>
+  );
+}
+
+function LifecycleCard(props: { label: string; value: number; detail: string }) {
+  return (
+    <div class="int-card" data-lifecycle-kind={props.label}>
+      <span class="label">{props.label}</span>
+      <span class="value">{props.value}</span>
+      <span class="sub">{props.detail}</span>
     </div>
   );
 }

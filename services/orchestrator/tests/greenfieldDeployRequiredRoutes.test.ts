@@ -14,22 +14,30 @@ import {
 class LinkedDeployRoutesPool extends RoutesPool {
   override async query(sql: string, params: unknown[] = []) {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
-    if (
-      text.startsWith(
-        "SELECT id, org_id, provider_kind, credential_ref, metadata, capabilities, status FROM org_integrations",
-      )
-    ) {
+    if (text.includes("FROM org_integration_connections c") && text.includes("c.provider_kind = $2")) {
       const [orgId, providerKind] = params as string[];
       return {
         rows: [
           {
-            id: "integration_1",
+            connection_id: "connection_1",
+            grant_id: "grant_1",
             org_id: orgId,
             provider_kind: providerKind,
+            upstream_account_id: "account_1",
+            auth_kind: "api_key",
             credential_ref: "secret://missing/deploy-token",
+            auth_generation: 1,
+            owner_id: "user_alice",
+            health: "healthy",
+            connection_status: "active",
             metadata: {},
+            plane: "control",
+            environment: "control",
             capabilities: ["deploy"],
-            status: "linked",
+            operations: ["deploy"],
+            provider_scopes: [],
+            grant_generation: 1,
+            grant_status: "active",
           },
         ],
         rowCount: 1,

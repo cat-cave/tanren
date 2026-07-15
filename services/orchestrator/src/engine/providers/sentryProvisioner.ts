@@ -21,7 +21,7 @@
 // project client key/DSN). `team:read` is needed if the configured team must be
 // resolved. The runtime `sentryConnector` (intake) needs only `event:read` /
 // `project:read` — a strictly narrower set. Document this for the operator when
-// they grant the org token in `org_integrations`.
+// they link the org connection and its control grant.
 //
 // IDEMPOTENCY (mandatory, per the port contract): `provision` finds the existing
 // project whose slug matches the stable Tanren-derived slug and reuses it; a

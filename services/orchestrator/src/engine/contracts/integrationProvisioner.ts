@@ -78,7 +78,7 @@ export type CapabilityId = string;
 export type ProvisionMode = "greenfield" | "brownfield";
 
 /**
- * The org-level grant resolved from the `org_integrations` registry: the managed
+ * The org-level active control grant resolved from the connection authority: the managed
  * credential REF (resolved against the SecretStore by the provider — never the
  * secret value) plus the NON-SECRET org metadata (sentry org slug, slack
  * workspace id, …). This is what every provisioner method runs under.

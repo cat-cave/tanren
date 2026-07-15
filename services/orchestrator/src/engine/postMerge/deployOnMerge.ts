@@ -45,7 +45,7 @@ import {
 import { type EgressPolicy, defaultEgressPolicy } from "../security/egressPolicy.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import type { FlyImageBuilder } from "../provisioners/flyImageBuilder.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
@@ -247,7 +247,7 @@ export class DeployOnMergeWatcher {
     if (grant === undefined) {
       throw new Error(
         `deployOnMerge: project '${merged.projectId}' configures deploy '${target.provider}' but org ` +
-          `'${target.orgId}' has no matching grant in org_integrations`,
+          `'${target.orgId}' has no matching grant in the active connection authority`,
       );
     }
 
@@ -398,7 +398,7 @@ export class DeployOnMergeWatcher {
   /**
    * Resolve the project's deploy intent on merge (system-scoped) into the THREE-WAY
    * {@link DeployTargetResolution}. Reads the project config + probes the org's
-   * `org_integrations` grants for deploy intent, then defers the configured/none/
+   * active control grants for deploy intent, then defers the configured/none/
    * incomplete decision to {@link resolveDeployTarget} (full rationale there).
    */
   private async loadDeployTarget(projectId: string): Promise<DeployTargetResolution> {
@@ -419,7 +419,7 @@ export class DeployOnMergeWatcher {
       // Probe whether a deploy is EXPECTED: does the org link a deploy-capable
       // integration grant? Only consulted to distinguish an incomplete-but-expected
       // deploy (LOUD) from a legitimate "no deploy configured" no-op.
-      const grants = await OrgIntegrationsStore.list(client, orgId, systemActor);
+      const grants = await IntegrationConnectionsStore.listControlGrants(client, orgId, systemActor);
       return resolveDeployTarget({ orgId, config, deployIntent: grantsSignalDeployIntent(grants) });
     });
   }
@@ -459,7 +459,7 @@ export class DeployOnMergeWatcher {
 
   private async loadGrant(target: ProjectDeployTarget) {
     return runWithSystemScope(this.deps.pool, async (client) =>
-      OrgIntegrationsStore.getGrant(client, target.orgId, target.provider, systemActor),
+      IntegrationConnectionsStore.getControlGrant(client, target.orgId, target.provider, systemActor),
     );
   }
 }

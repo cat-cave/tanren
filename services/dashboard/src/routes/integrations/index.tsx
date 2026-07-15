@@ -12,7 +12,7 @@
 import type { Context, Hono } from "hono";
 import { clientDepsFor } from "../../api/clientDeps.js";
 import { IntegrationsClient } from "../../api/integrationsClient.js";
-import type { OrgIntegrationSummary } from "../../api/integrations.js";
+import type { IntegrationLifecycleInventory, OrgIntegrationSummary } from "../../api/integrations.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { IntegrationsBody } from "../../components/integrations/IntegrationsBody.js";
 import { formField } from "../formField.js";
@@ -48,12 +48,14 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const notLinkedMessage = c.req.query("notLinkedMsg");
 
     let integrations: OrgIntegrationSummary[] | undefined;
+    let lifecycle: IntegrationLifecycleInventory | undefined;
     if (ctx.org !== undefined) {
       const client = readClient(c, deps);
-      const list = await client.list(ctx.org.id);
+      const list = await client.list(ctx.org.id, project?.projectId);
       // undefined list → read failure (unavailable). Present empty array only
       // when the orchestrator explicitly returned { integrations: [] }.
       integrations = list?.integrations;
+      lifecycle = list?.lifecycle;
     }
 
     return renderShell(
@@ -63,6 +65,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
       <IntegrationsBody
         integrations={integrations}
         projectId={project?.projectId ?? ""}
+        lifecycle={lifecycle}
         projectName={project?.name ?? ""}
         noProject={project === undefined}
         isOrgAdmin={isOrgAdminRole(ctx.org?.role)}
@@ -89,12 +92,14 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     }
     const form = await c.req.parseBody();
     const providerKind = formField(form, "providerKind").trim();
+    const upstreamAccountId = formField(form, "upstreamAccountId").trim();
+    const authKind = parseAuthKind(formField(form, "authKind").trim());
     const token = formField(form, "token");
-    if (providerKind === "" || token === "") {
-      return redirectTo(c, "/integrations", "missing provider or token");
+    if (providerKind === "" || upstreamAccountId === "" || authKind === undefined || token === "") {
+      return redirectTo(c, "/integrations", "missing provider, account, auth kind, or token");
     }
     const client = await writeClient(c, deps);
-    const result = await client.link(orgId, providerKind, { token });
+    const result = await client.link(orgId, providerKind, { token, upstreamAccountId, authKind });
     if (result.status === 403) {
       return redirectTo(c, "/integrations", "org admin required to link");
     }
@@ -141,4 +146,19 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     }
     return redirectTo(c, "/integrations", `enabled ${capability}${providerKind === "" ? "" : ` via ${providerKind}`}`);
   });
+}
+
+function parseAuthKind(
+  value: string,
+): "api_key" | "oauth2" | "bot_token" | "webhook" | "workload_identity" | undefined {
+  switch (value) {
+    case "api_key":
+    case "oauth2":
+    case "bot_token":
+    case "webhook":
+    case "workload_identity":
+      return value;
+    default:
+      return undefined;
+  }
 }

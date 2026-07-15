@@ -2,12 +2,8 @@ import { sql } from "drizzle-orm";
 import { type AnyPgColumn, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
-// `runs` lives here (not in schema.ts) so the benchmark sub-schema —
-// `experiment_trials.run_id` FK → runs — can reference it from a core module
-// WITHOUT importing schema.ts (schema.ts re-exports the sub-schemas, so a
-// sub-schema importing schema.ts closes an import cycle the lint `no-cycle`
-// rule rejects). It is part of the core run-execution chain anyway. schema.ts
-// re-exports it so `schema.runs` is unchanged for every consumer.
+// `runs` lives here so benchmark sub-schemas can reference it without importing
+// schema.ts and closing an import cycle. schema.ts re-exports it for consumers.
 
 // Core identity + project/spec tables. These are referenced by the split
 // sub-schema files (schemaForge, schemaInbox, …). Keeping them here — rather
@@ -54,7 +50,10 @@ export const projects = pgTable(
       .notNull()
       .references(() => organizations.id),
   },
-  (table) => [index("projects_org_id").on(table.orgId)],
+  (table) => [
+    uniqueIndex("projects_org_project_unique").on(table.orgId, table.projectId),
+    index("projects_org_id").on(table.orgId),
+  ],
 );
 
 export const specs = pgTable(
@@ -100,6 +99,7 @@ export const specs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    uniqueIndex("specs_org_spec_unique").on(table.orgId, table.specId),
     enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
     enumCheck("specs_priority_check", table.priority, ["P0", "P1", "P2", "tbd"]),
     enumCheck("specs_mode_check", table.mode, ["specialize_seed", "from_scratch"]),

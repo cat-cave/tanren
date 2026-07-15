@@ -239,7 +239,23 @@ describe("plane isolation — resolveAppEnvForScope reads only project_app_env",
     ): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
       const sql = rawSql.replaceAll(/\s+/gu, " ").trim();
       if (/INSERT INTO project_app_env/u.test(sql)) {
-        const [id, projectId, key, valueRef, plainValue, scopes, source, description] = params as [
+        const [
+          orgId,
+          id,
+          projectId,
+          environment,
+          key,
+          valueRef,
+          plainValue,
+          scopes,
+          source,
+          bindingId,
+          bindingGeneration,
+          secretGeneration,
+          description,
+        ] = params as [
+          string,
+          string,
           string,
           string,
           string,
@@ -247,24 +263,34 @@ describe("plane isolation — resolveAppEnvForScope reads only project_app_env",
           string | null,
           string[],
           string,
+          string | null,
+          number | null,
+          number | null,
           string,
         ];
         const row = {
           id,
+          org_id: orgId,
           project_id: projectId,
+          environment,
           key,
           value_ref: valueRef,
           plain_value: plainValue,
           scopes,
           source,
+          binding_id: bindingId,
+          binding_generation: bindingGeneration,
+          secret_generation: secretGeneration,
           description,
         };
         this.rows.push(row);
         return { rows: [row], rowCount: 1 };
       }
-      if (/^SELECT .* FROM project_app_env WHERE project_id = \$1/u.test(sql)) {
-        const [projectId] = params as [string];
-        const rows = this.rows.filter((r) => r["project_id"] === projectId);
+      if (/^SELECT .* FROM project_app_env WHERE org_id = \$1/u.test(sql)) {
+        const [orgId, projectId, environment] = params as [string, string, string];
+        const rows = this.rows.filter(
+          (r) => r["org_id"] === orgId && r["project_id"] === projectId && r["environment"] === environment,
+        );
         return { rows, rowCount: rows.length };
       }
       throw new Error(`AppEnvDb: unrecognized SQL: ${sql}`);
@@ -277,7 +303,15 @@ describe("plane isolation — resolveAppEnvForScope reads only project_app_env",
     // Seed a project app-env entry (the app's own secret) referencing the store.
     await AppEnvironmentStore.upsert(
       client,
-      { projectId: "proj", key: "RESEND_API_KEY", valueRef: "secret://proj/resend", scopes: ["test"] },
+      {
+        orgId: "org_1",
+        projectId: "proj",
+        environment: "test",
+        key: "RESEND_API_KEY",
+        valueRef: "secret://proj/resend",
+        secretGeneration: 1,
+        scopes: ["test"],
+      },
       systemActor,
     );
 
@@ -292,7 +326,9 @@ describe("plane isolation — resolveAppEnvForScope reads only project_app_env",
     const resolved = await resolveAppEnvForScope({
       client,
       secrets,
+      orgId: "org_1",
       projectId: "proj",
+      environment: "test",
       scope: "test",
       actor: systemActor,
     });

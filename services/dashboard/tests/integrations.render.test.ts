@@ -33,33 +33,67 @@ const PROJECTS = [
 const LINKED_INTEGRATIONS = {
   integrations: [
     {
-      id: "int_sentry",
+      connectionId: "connection_sentry",
+      grantId: "grant_sentry",
       orgId: "org_acme",
       providerKind: "sentry",
-      credentialRef: "secret://org/org_acme/integration/sentry/token",
+      upstreamAccountId: "sentry_acme",
+      authKind: "api_key",
+      authGeneration: 2,
+      ownerId: "user_alice",
       metadataKeys: ["orgSlug"],
       capabilities: ["errors"],
-      status: "linked",
+      operations: ["errors"],
+      providerScopes: [],
+      health: "healthy",
+      connectionStatus: "active",
+      grantGeneration: 3,
+      grantStatus: "active",
     },
     {
-      id: "int_slack",
+      connectionId: "connection_slack",
+      grantId: "grant_slack",
       orgId: "org_acme",
       providerKind: "slack",
-      credentialRef: "secret://org/org_acme/integration/slack/token",
+      upstreamAccountId: "workspace_acme",
+      authKind: "bot_token",
+      authGeneration: 1,
+      ownerId: "user_alice",
       metadataKeys: [],
       capabilities: ["notify"],
-      status: "linked",
+      operations: ["notify"],
+      providerScopes: ["chat:write"],
+      health: "healthy",
+      connectionStatus: "active",
+      grantGeneration: 1,
+      grantStatus: "active",
     },
     {
-      id: "int_vercel",
+      connectionId: "connection_vercel",
+      grantId: "grant_vercel",
       orgId: "org_acme",
       providerKind: "deploy.vercel",
-      credentialRef: "secret://org/org_acme/integration/deploy.vercel/token",
+      upstreamAccountId: "team_abc",
+      authKind: "api_key",
+      authGeneration: 1,
+      ownerId: "user_alice",
       metadataKeys: ["teamId"],
       capabilities: ["deploy"],
-      status: "linked",
+      operations: ["deploy"],
+      providerScopes: [],
+      health: "unknown",
+      connectionStatus: "active",
+      grantGeneration: 1,
+      grantStatus: "active",
     },
   ],
+  lifecycle: {
+    projectId: "project_easy",
+    requirements: { total: 2, needsAttention: 1 },
+    capabilityNodes: { total: 3, awaitingGrant: 1, ready: 1, needsAttention: 1 },
+    bindings: { total: 1, ready: 1, drifted: 0, needsAttention: 0 },
+    deliveries: { total: 1, completed: 1, degraded: 0, needsAttention: 0 },
+  },
 };
 
 const EMPTY_INTEGRATIONS = { integrations: [] };
@@ -104,7 +138,10 @@ function mockOrchestrator(): void {
         JSON.stringify({
           status: "linked",
           providerKind: "sentry",
-          credentialRef: "secret://org/org_acme/integration/sentry/token",
+          connectionId: "connection_sentry",
+          grantId: "grant_sentry",
+          authGeneration: 1,
+          grantGeneration: 1,
           capabilities: ["errors"],
           metadataKeys: [],
         }),
@@ -165,11 +202,13 @@ describe("integrations two-plane panel (/integrations)", () => {
     const html = await (await app.request("/integrations")).text();
     expect(html).toContain("plane a · org grants");
     expect(html).toContain("plane b · project enable");
-    // Linked providers surface as cards with credential REF names (never values).
+    // Linked providers surface as authority cards without credential refs or values.
     expect(html).toContain('data-provider="sentry"');
     expect(html).toContain('data-provider="slack"');
     expect(html).toContain('data-provider="deploy.vercel"');
-    expect(html).toContain("secret://org/org_acme/integration/sentry/token");
+    expect(html).not.toContain("secret://org/");
+    expect(html).toContain("account · sentry_acme");
+    expect(html).toContain("auth generation 2 · grant generation 3");
     expect(html).toContain("capabilities · errors");
     // Linked capabilities show ready state + enable form.
     expect(html).toContain('data-capability="errors"');
@@ -177,6 +216,10 @@ describe("integrations two-plane panel (/integrations)", () => {
     expect(html).toContain('action="/integrations/enable"');
     // Org-admin link form is present.
     expect(html).toContain("data-link-form");
+    // IN-1 foundation is visible as truthful persisted-state counts.
+    expect(html).toContain("data-lifecycle-inventory");
+    expect(html).toContain('data-lifecycle-kind="requirements"');
+    expect(html).toContain("1 need attention");
     // Hetzner stays out of scope.
     expect(html).not.toContain("hetzner");
   });

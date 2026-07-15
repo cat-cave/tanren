@@ -32,7 +32,7 @@ import {
   type GreenfieldRepositoryCreateDeps,
 } from "./greenfieldRepoCreate.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
-import { OrganizationsStore, OrgIntegrationsStore } from "../../engine/repositories/index.js";
+import { OrganizationsStore, IntegrationConnectionsStore } from "../../engine/repositories/index.js";
 import {
   productionProvisionerDeps,
   type NotLinkedResult,
@@ -347,7 +347,10 @@ export async function preflightGreenfieldDeploy(
   providerKind: "deploy.vercel" | "deploy.flyio",
   actorId: string,
 ): Promise<NotLinkedResult | undefined> {
-  const grant = await OrgIntegrationsStore.getGrant(pool, orgId, providerKind, { kind: "operator", id: actorId });
+  const grant = await IntegrationConnectionsStore.getControlGrant(pool, orgId, providerKind, {
+    kind: "operator",
+    id: actorId,
+  });
   if (grant !== undefined) return undefined;
   return deployNotLinkedOutcome(orgId, providerKind);
 }
@@ -359,7 +362,7 @@ export function deployNotLinkedOutcome(orgId: string, providerKind: "deploy.verc
     providerKind,
     message:
       `link ${providerKind} at the org level first — greenfield/apex creation requires a real ` +
-      `deploy target, but org ${orgId} has no ${providerKind} grant in org_integrations.`,
+      `deploy target, but org ${orgId} has no active ${providerKind} control grant.`,
     linkAffordance: { kind: "org_integration_link", providerKind, orgId },
   };
 }
@@ -406,7 +409,7 @@ export async function prepareGreenfieldDeploy(input: {
   };
 }): Promise<NotLinkedResult | PreparedGreenfieldDeploy> {
   const providerKind = input.deploy.providerKind;
-  const grant = await OrgIntegrationsStore.getGrant(input.pool, input.orgId, providerKind, {
+  const grant = await IntegrationConnectionsStore.getControlGrant(input.pool, input.orgId, providerKind, {
     kind: "operator",
     id: input.actorId,
   });
