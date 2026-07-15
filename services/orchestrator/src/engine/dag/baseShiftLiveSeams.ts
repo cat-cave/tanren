@@ -345,7 +345,7 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
       // The base-shift dependent has no real PR handle (the rebase is over a runner-local
       // workspace) — 0, like the resolver's own `prNumber: 0` for this path.
       prNumber: 0,
-      enqueuer: buildReplanEnqueuer(this.deps.scopedPool, this.deps.runStateWriter),
+      enqueuer: buildReplanEnqueuer(this.deps.runStateWriter),
       priorReworks: buildPriorGateReworkReader(this.deps.scopedPool),
     });
     return router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });

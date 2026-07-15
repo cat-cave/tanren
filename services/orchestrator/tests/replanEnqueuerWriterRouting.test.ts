@@ -1,9 +1,8 @@
 // Unit test for the recovery prepare plane-split: buildReplanEnqueuer routes the
 // atomic prepareSpecForRecovery (steering + allowlisted reopen) + createQueuedRun
-// through the writer — never raw UPDATE specs on the de-privileged data-plane pool.
+// through the writer only (single-arg factory; no pool arity).
 
 import { describe, expect, it } from "vitest";
-import type pg from "pg";
 import { buildReplanEnqueuer } from "../src/engine/workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import type {
   CreateQueuedRunInput,
@@ -19,7 +18,6 @@ const PROJECT = "project_v55_fix";
 interface Calls {
   prepareSpecForRecovery: PrepareSpecForRecoveryInput[];
   createQueuedRun: CreateQueuedRunInput[];
-  rawQueries: string[];
 }
 
 function recordingWriter(
@@ -67,25 +65,10 @@ function recordingWriter(
   } as unknown as RunStateWriter;
 }
 
-function recordingPool(rawQueries: string[]): pg.Pool {
-  // eslint-disable-next-line @typescript-eslint/require-await
-  const query = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
-    rawQueries.push(String(text));
-    return { rows: [], rowCount: 0 };
-  };
-  return {
-    query,
-    // eslint-disable-next-line @typescript-eslint/require-await
-    connect: async () => ({ query, release: () => {} }),
-  } as unknown as pg.Pool;
-}
-
 describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () => {
-  it("routes prepare + createQueuedRun through the writer (no raw UPDATE specs on the pool)", async () => {
-    const calls: Calls = { prepareSpecForRecovery: [], createQueuedRun: [], rawQueries: [] };
-    const writer = recordingWriter(calls);
-    const pool = recordingPool(calls.rawQueries);
-    const enqueuer = buildReplanEnqueuer(pool, writer);
+  it("routes prepare + createQueuedRun through the writer (writer-only arity)", async () => {
+    const calls: Calls = { prepareSpecForRecovery: [], createQueuedRun: [] };
+    const enqueuer = buildReplanEnqueuer(recordingWriter(calls));
 
     const result = await enqueuer.enqueue({
       specId: "spec_rework",
@@ -105,15 +88,15 @@ describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () 
     ]);
     expect(calls.createQueuedRun).toHaveLength(1);
     expect(calls.createQueuedRun[0]?.input).toEqual({ specId: "spec_rework", trigger: "replan_routed" });
-    expect(calls.rawQueries.some((q) => /UPDATE\s+specs/iu.test(q))).toBe(false);
     expect(result.replanRunId).toBe("run_1");
     expect(result.plannerTaskId).toBe("task_1");
   });
 
   it("does not create a run when prepare refuses a terminal status", async () => {
-    const calls: Calls = { prepareSpecForRecovery: [], createQueuedRun: [], rawQueries: [] };
-    const writer = recordingWriter(calls, { prepared: false, reason: "not_recoverable", status: "merged" });
-    const enqueuer = buildReplanEnqueuer(recordingPool(calls.rawQueries), writer);
+    const calls: Calls = { prepareSpecForRecovery: [], createQueuedRun: [] };
+    const enqueuer = buildReplanEnqueuer(
+      recordingWriter(calls, { prepared: false, reason: "not_recoverable", status: "merged" }),
+    );
 
     await expect(
       enqueuer.enqueue({
@@ -129,9 +112,8 @@ describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () 
   });
 
   it("does not create a run when prepare reports missing spec", async () => {
-    const calls: Calls = { prepareSpecForRecovery: [], createQueuedRun: [], rawQueries: [] };
-    const writer = recordingWriter(calls, { prepared: false, reason: "missing" });
-    const enqueuer = buildReplanEnqueuer(recordingPool(calls.rawQueries), writer);
+    const calls: Calls = { prepareSpecForRecovery: [], createQueuedRun: [] };
+    const enqueuer = buildReplanEnqueuer(recordingWriter(calls, { prepared: false, reason: "missing" }));
 
     await expect(
       enqueuer.enqueue({

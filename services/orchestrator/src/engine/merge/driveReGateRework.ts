@@ -39,7 +39,7 @@ export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps)
     runId: deps.runId,
     projectId: deps.projectId,
     prNumber: deps.prNumber,
-    enqueuer: buildReplanEnqueuer(deps.pool, deps.runStateWriter),
+    enqueuer: buildReplanEnqueuer(deps.runStateWriter),
     priorReworks: buildPriorGateReworkReader(deps.pool),
   });
 }

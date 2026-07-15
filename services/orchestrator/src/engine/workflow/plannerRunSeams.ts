@@ -156,7 +156,7 @@ export function reGateGateReworkSeam(
       runId: context.runId,
       projectId: context.projectId,
       prNumber: deps.prNumber,
-      enqueuer: buildReplanEnqueuer(input.pool as pg.Pool, input.runStateWriter),
+      enqueuer: buildReplanEnqueuer(input.runStateWriter),
       priorReworks: buildPriorGateReworkReader(input.pool as pg.Pool),
     }),
   };

@@ -298,7 +298,7 @@ export async function recordReplanContext(
   // spec `in_flight` with no live run. The enqueuer + the bounded-replan counter are built
   // over the RAW pool (the run-create + the events-count read open their own connections),
   // independent of the event-append plane below.
-  const enqueuer = buildReplanEnqueuer(pool, runStateWriter);
+  const enqueuer = buildReplanEnqueuer(runStateWriter);
   const priorReplans = buildPriorReplanReader(pool);
   const router = new SpecStatusReplanRouter({
     pool,

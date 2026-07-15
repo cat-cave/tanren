@@ -177,11 +177,7 @@ export interface PriorReplanReader {
 export interface SpecStatusReplanRouterDeps {
   /** Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError. */
   pool: pg.Pool;
-  /**
-   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
-   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
-   * in production.
-   */
+  /** REQUIRED: run-state writer for status / prepare / enqueue under the data plane. */
   runStateWriter: RunStateWriter;
   /** REQUIRED tenant key (v68 fix). Every eventStore.append stamps this directly
    * rather than re-derive via a SELECT-join — a null org_id row trips RLS. */

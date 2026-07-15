@@ -37,11 +37,7 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 export interface DefaultConflictResolverDeps {
   pool: QueryClient;
-  /**
-   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
-   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
-   * in production.
-   */
+  /** REQUIRED: run-state writer for status / prepare / enqueue under the data plane. */
   runStateWriter: RunStateWriter;
   eventStore: EventStore;
   ssh: CommandSubstrate;
@@ -167,11 +163,8 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,
-      // The enqueuer + counter open their OWN connections (the run-create + the
-      // events-count read), so they need a real pool — every call site passes one (the
-      // `QueryClient` static type is for the in-loop query ergonomics; the same cast the
-      // budget gate uses for `deps.pool`).
-      enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
+      // Enqueuer is writer-only; prior-replan reader needs the pool for events (org GUC).
+      enqueuer: buildReplanEnqueuer(deps.runStateWriter),
       priorReplans: buildPriorReplanReader(deps.pool as pg.Pool),
     }),
     // v35 RE-GATE GATE-FAIL → WRITER REWORK: a re-gate that fails a deterministic GATE TIER
@@ -189,7 +182,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
       runId: deps.runId,
       projectId: deps.projectId,
       prNumber: deps.prNumber ?? 0,
-      enqueuer: buildReplanEnqueuer(deps.pool as pg.Pool, deps.runStateWriter),
+      enqueuer: buildReplanEnqueuer(deps.runStateWriter),
       priorReworks: buildPriorGateReworkReader(deps.pool as pg.Pool),
     }),
     ...(deps.upstreamChange !== undefined && { upstreamChange: deps.upstreamChange }),

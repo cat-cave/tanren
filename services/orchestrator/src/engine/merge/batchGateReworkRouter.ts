@@ -49,11 +49,7 @@ const log = createLogger("batch-gate-rework");
 
 export interface BatchGateReworkRouterDeps {
   pool: pg.Pool;
-  /**
-   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
-   * de-privileged data plane. PR #714's `runStateWriterFromEnv` always returns one, so
-   * the old `runWithOrgScope + new PgEventStore` fallback was unreachable in production.
-   */
+  /** REQUIRED: run-state writer for status / prepare / enqueue under the data plane. */
   runStateWriter: RunStateWriter;
   /** Enqueues the writer-rework run (re-open + steering + run-create). Production wires `buildReplanEnqueuer`. */
   enqueuer?: ReplanEnqueuer;
@@ -87,8 +83,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
   private readonly resolveOrg: (projectId: string) => Promise<string | null>;
 
   constructor(private readonly deps: BatchGateReworkRouterDeps) {
-    this.enqueuer = deps.enqueuer ?? buildReplanEnqueuer(deps.pool, deps.runStateWriter);
-    // runStateWriter is REQUIRED — the writer-undefined fallback is dropped.
+    this.enqueuer = deps.enqueuer ?? buildReplanEnqueuer(deps.runStateWriter);
     this.priorReworks = deps.priorReworks ?? ((input) => countPriorGateReworks(deps.pool, input));
     this.resolveOrg = deps.resolveOrg ?? ((projectId) => resolveProjectOrg(deps.pool, projectId));
   }

@@ -42,11 +42,7 @@ const log = createLogger("regate-gate-rework");
 export interface SpecStatusGateReworkRouterDeps {
   /** Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError. */
   pool: pg.Pool;
-  /**
-   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
-   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
-   * in production; the prior optional slot was a split-write hazard.
-   */
+  /** REQUIRED: run-state writer for status / prepare / enqueue under the data plane. */
   runStateWriter: RunStateWriter;
   /** REQUIRED tenant key (v68 fix). Every eventStore.append stamps this directly
    * rather than re-derive via a SELECT-join — a null org_id row trips RLS. */
@@ -307,10 +303,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     return message;
   }
 
-  /** Task #48 Site J: ATOMIC spec park to `needs_attention` + the matching
-   * `dag.spec.needs_attention` event in ONE org-scoped transaction through the
-   * REQUIRED writer (audit D-R3.2 — the no-writer split-write fallback was
-   * unreachable in production after PR #714). */
+  /** ATOMIC park to `needs_attention` + `dag.spec.needs_attention` via the writer. */
   private async parkSpecAtomic(specId: string, event: AppendEventInput): Promise<void> {
     await this.deps.runStateWriter.updateSpecWithEvent({
       spec: {
