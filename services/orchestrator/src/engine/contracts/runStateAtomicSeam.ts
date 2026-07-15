@@ -17,6 +17,59 @@
 import type { AppendEventInput } from "../eventStore.js";
 import type { FinalizeRunInput, SetSpecStatusInput } from "./runStateWriter.js";
 
+/** Exact, tenant-bound identity of the merge candidate that recovery must park. */
+export interface RecoveryParkInput {
+  orgId: string;
+  projectId: string;
+  queueId: string;
+  runId: string;
+  specId: string;
+  message: string;
+}
+
+/** Why an atomic recovery park could not be proven. */
+export type RecoveryParkFailureReason =
+  | "invalid_input"
+  | "ownership_missing"
+  | "queue_not_active"
+  | "spec_not_recoverable"
+  | "write_failed"
+  | "transport_failed";
+
+/** Durable result of the atomic spec-park + ordered events + queue dequeue. */
+export type RecoveryParkOutcome =
+  | { kind: "parked"; newlyParked: boolean }
+  | {
+      kind: "parking_failed";
+      /** The exact active queue row was locked, but its spec cannot be parked. */
+      reason: "spec_not_recoverable";
+      /** This disposition is legal only when active retention was proven. */
+      queueDisposition: "retained";
+      /** Paced retry signal; callers must not treat failure as a dequeue receipt. */
+      retryAfterMs: number;
+    }
+  | {
+      kind: "parking_failed";
+      reason: Exclude<RecoveryParkFailureReason, "spec_not_recoverable">;
+      /**
+       * Invalid/missing/inactive ownership and write/transport uncertainty cannot
+       * prove a live retained row. COMMIT may also have won while its acknowledgement
+       * was lost, so only an idempotent redrive may resolve the durable state.
+       */
+      queueDisposition: "unknown";
+      /** Paced retry signal; callers must not treat failure as a dequeue receipt. */
+      retryAfterMs: number;
+    };
+
+/**
+ * Interface-segregated recovery park authority. Kept outside {@link RunStateWriter}
+ * so unrelated writer fixtures do not acquire a fake method; production Direct and
+ * HTTP writers implement both ports, and recovery consumers require their intersection.
+ */
+export interface RecoveryParkWriter {
+  parkRecoveryAndDequeue(input: RecoveryParkInput): Promise<RecoveryParkOutcome>;
+}
+
 /**
  * The atomic terminal-run input (task #48 — RUN-LEVEL mirror of
  * `UpdateTaskWithEventInput`). Pairing enforced by `runPairSchema`

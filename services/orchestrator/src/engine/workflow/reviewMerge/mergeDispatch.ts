@@ -127,8 +127,10 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
     // §3.2/§3.3: re-target the PR base — the stacked-PR WALK (the base tracks the immediate
     // still-unmerged ancestor + drops merged heads from `ancestor_stack`, landing on
     // `default_branch` once the stack empties). The MERGE HOLD is UNCHANGED and handled
-    // below; this only walks the BASE.
-    await applySpeculativeRetarget({
+    // below; this only walks the BASE. The walk returns its SOLE canonical retarget result;
+    // the held event below reuses that exact `toBase` for `speculativeBase` — never a
+    // recomputed second walk (the held base must reflect the post-walk remaining tip).
+    const retarget = await applySpeculativeRetarget({
       pool: input.pool,
       eventStore,
       // Audit finding D3/H3 sweep: the writer is REQUIRED — the
@@ -159,9 +161,13 @@ export async function mergeForRun(input: MergeForRunInput): Promise<MergeForRunR
           prUrl: context.prUrl,
           prNumber: pr.pullNumber,
           integration,
-          // jj-local: the held PR stacks on its immediate unmerged ancestor's PR-head branch
-          // (the LAST stack entry), or `default_branch` once the stack empties. No host ref.
-          speculativeBase: speculative.ancestorStack.at(-1)?.branch || context.baseBranch,
+          // jj-local: the held PR's speculative base is the post-walk remaining tip —
+          // the LAST STILL-UNMERGED ancestor's PR-head branch after the merged heads
+          // drop, or `default_branch` once the stack empties. This is the EXACT
+          // `toBase` the sole walk authority already computed above; never the pre-drop
+          // stack tip, which a just-merged immediate ancestor would otherwise leave as
+          // a stale merged base.
+          speculativeBase: retarget.toBase,
           unmergedAncestors: speculative.unmergedAncestors,
         },
       });
