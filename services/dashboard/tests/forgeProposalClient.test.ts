@@ -86,7 +86,6 @@ describe("decideForgeProposal (dashboard proposal client)", () => {
 
 describe("askForge (server client structured failure)", () => {
   it("returns structured error on incomplete 200 body (never undefined success)", async () => {
-    const client = clientReturning(200, {}, []);
     // ensureThread needs a thread id first.
     const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

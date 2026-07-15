@@ -62,7 +62,7 @@ export abstract class OrchestratorHttpClient {
     }
     // JSON `null` is parsed but not a product object — treat as unavailable.
     const raw: unknown = await response.json().catch(() => {});
-    if (raw == null) return undefined;
+    if (raw === undefined || raw === null) return undefined;
     return raw as T;
   }
 

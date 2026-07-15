@@ -88,7 +88,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** listProjects, but undefined on failure (unavailable, not fake empty). */
   async listProjectsMaybe(orgId: string): Promise<ProjectSummary[] | undefined> {
     const json = await this.getJson<{ projects?: ProjectSummary[] }>(`/orgs/${encodeURIComponent(orgId)}/projects`);
-    if (json == null || !Array.isArray(json.projects)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.projects)) return undefined;
     return json.projects;
   }
 
@@ -144,7 +144,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
     // Missing/non-array items is a broken contract, not empty success.
-    if (json == null || !Array.isArray(json.items)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.items)) return undefined;
     return json.items;
   }
 
@@ -158,7 +158,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ items?: ProjectFeedItem[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/feed`,
     );
-    if (json == null || !Array.isArray(json.items)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.items)) return undefined;
     return json.items;
   }
 
@@ -176,7 +176,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ insights?: InsightSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/insights`,
     );
-    if (json == null || !Array.isArray(json.insights)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.insights)) return undefined;
     const supported = new Set(["retry_hotspot", "model_mismatch", "pace_anomaly", "stuck", "review_stall", "ci_flaky"]);
     return json.insights.filter((insight) => supported.has(insight.kind) && insight.acknowledgedAt === null);
   }
@@ -204,7 +204,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ milestones?: MilestoneSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/milestones`,
     );
-    if (json == null || !Array.isArray(json.milestones)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.milestones)) return undefined;
     return json.milestones;
   }
 
@@ -218,7 +218,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ specs?: SpecSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/specs`,
     );
-    if (json == null || !Array.isArray(json.specs)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.specs)) return undefined;
     return json.specs;
   }
 
@@ -231,7 +231,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ personas?: PersonaSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/personas`,
     );
-    if (json == null || !Array.isArray(json.personas)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.personas)) return undefined;
     return json.personas;
   }
 
@@ -248,7 +248,7 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     const json = await this.getJson<{ behaviors?: BehaviorSummary[] }>(
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/behaviors?personaId=${encodeURIComponent(personaId)}`,
     );
-    if (json == null || !Array.isArray(json.behaviors)) return undefined;
+    if (json === undefined || json === null || !Array.isArray(json.behaviors)) return undefined;
     return json.behaviors;
   }
 

@@ -8,9 +8,10 @@
  *   live → draining (terminal) → closed (idle after cost quiet)
  *
  * Cost accounting uses stable `RunCostRecord.id`: live snapshot resets totals +
- * seen-ids; draining reconciling a reconnect snapshot applies only unseen cost
- * ids (run/status/tasks ignored); closed ignores all. Only newly applied costs
- * re-arm the drain deadline. Errors never re-arm.
+ * seen-ids only after a fully valid costs array parses (atomic); draining
+ * reconciling a reconnect snapshot applies only unseen cost ids (run/status/
+ * tasks ignored); closed ignores all. Malformed costs frames throw and handlers
+ * mark stale with no mutation. Only newly applied costs re-arm the deadline.
  */
 
 import {
@@ -19,7 +20,6 @@ import {
   parseCostRecords,
   renderCostBar,
   resetTotals,
-  type CostRecordFrame,
   type CostTotalsState,
 } from "./runStreamCosts.js";
 import {
@@ -40,7 +40,9 @@ export type { RunStreamPhase } from "./runStreamDrain.js";
 export {
   applyCost,
   applyCostList,
+  CostFrameParseError,
   emptyTotals,
+  isFiniteDecimalString,
   parseCostRecord,
   parseCostRecords,
   resetTotals,
@@ -126,10 +128,11 @@ export type DrainHooks = {
 };
 
 /**
- * Live: full reset of totals+seen, apply all parsed costs, apply status.
+ * Live: parse costs atomically first, then reset totals+seen and apply.
  * Draining: ignore run/status/tasks; reconcile costs by unseen id only;
  *   re-arm only when at least one new id applied.
  * Closed: ignore everything.
+ * Throws CostFrameParseError before any totals mutation when costs are invalid.
  */
 export function applySnapshotFrame(
   root: HTMLElement,
@@ -142,8 +145,10 @@ export function applySnapshotFrame(
     return { applied: false, costsReset: false, statusApplied: false, costsDelta: 0 };
   }
 
+  // Atomic boundary: validate full costs array before any mutation / re-arm.
+  const costs = parseCostRecords(data.costs ?? []);
+
   if (phase === "draining") {
-    const costs = parseCostRecords(data.costs);
     const n = applyCostList(totals, costs);
     if (n > 0) {
       renderCostBar(root, totals);
@@ -154,7 +159,6 @@ export function applySnapshotFrame(
 
   setStreamState(root, "live");
   resetTotals(totals);
-  const costs = parseCostRecords(data.costs);
   const n = applyCostList(totals, costs);
   renderCostBar(root, totals);
   let statusApplied = false;
@@ -168,8 +172,9 @@ export function applySnapshotFrame(
 }
 
 /**
- * Incremental `event: costs` deltas. Dedupes by id; re-arms drain only when
- * at least one unseen id was applied.
+ * Incremental `event: costs` deltas. Atomic parse first; dedupes by id;
+ * re-arms drain only when at least one unseen id was applied.
+ * Throws CostFrameParseError before mutation on malformed frames.
  */
 export function applyCostsFrame(
   root: HTMLElement,
@@ -179,8 +184,8 @@ export function applyCostsFrame(
 ): { applied: boolean; costsDelta: number } {
   const phase = getRunStreamPhase(root);
   if (phase === "closed") return { applied: false, costsDelta: 0 };
+  const costs = parseCostRecords(costsRaw ?? []);
   if (phase === "live") setStreamState(root, "live");
-  const costs = parseCostRecords(costsRaw);
   const n = applyCostList(totals, costs);
   if (n > 0) {
     renderCostBar(root, totals);
@@ -199,13 +204,13 @@ export interface RunStreamInitDeps {
 }
 
 export function initRunStream(deps: RunStreamInitDeps = {}): void {
-  const doc = deps.document ?? (typeof document !== "undefined" ? document : undefined);
+  const doc = deps.document ?? (typeof document === "undefined" ? undefined : document);
   if (doc === undefined) return;
   const root = doc.querySelector<HTMLElement>('[data-island="run-stream"]');
   if (root === null) return;
   const url = root.dataset["streamUrl"];
   if (url === undefined || url === "") return;
-  const ES = deps.EventSourceCtor ?? (typeof EventSource !== "undefined" ? EventSource : undefined);
+  const ES = deps.EventSourceCtor ?? (typeof EventSource === "undefined" ? undefined : EventSource);
   if (ES === undefined) return;
 
   const totals = emptyTotals();
@@ -231,11 +236,15 @@ export function initRunStream(deps: RunStreamInitDeps = {}): void {
     close: closeStream,
   };
 
+  const eventData = (event: Event): string => {
+    const data = "data" in event ? (event as { data: unknown }).data : undefined;
+    if (typeof data !== "string") throw new Error("SSE event data must be a string");
+    return data;
+  };
+
   source.addEventListener("snapshot", (event) => {
     try {
-      const data: { costs?: unknown; run?: { status: string; outcome: string | null } } = JSON.parse(
-        (event as MessageEvent).data as string,
-      );
+      const data: { costs?: unknown; run?: { status: string; outcome: string | null } } = JSON.parse(eventData(event));
       applySnapshotFrame(root, totals, data, drainHooks);
     } catch {
       setStreamState(root, "stale", "Malformed snapshot frame from the live stream.");
@@ -244,7 +253,7 @@ export function initRunStream(deps: RunStreamInitDeps = {}): void {
 
   source.addEventListener("costs", (event) => {
     try {
-      const data: { costs?: unknown } = JSON.parse((event as MessageEvent).data as string);
+      const data: { costs?: unknown } = JSON.parse(eventData(event));
       applyCostsFrame(root, totals, data.costs ?? [], drainHooks);
     } catch {
       setStreamState(root, "stale", "Malformed costs frame from the live stream.");
@@ -253,7 +262,7 @@ export function initRunStream(deps: RunStreamInitDeps = {}): void {
 
   source.addEventListener("status", (event) => {
     try {
-      const data: { status: string; outcome: string | null } = JSON.parse((event as MessageEvent).data as string);
+      const data: { status: string; outcome: string | null } = JSON.parse(eventData(event));
       if (getRunStreamPhase(root) !== "live") return;
       setStreamState(root, "live");
       applyStatus(root, data.status, data.outcome);
@@ -267,7 +276,7 @@ export function initRunStream(deps: RunStreamInitDeps = {}): void {
 
   source.addEventListener("task", (event) => {
     try {
-      const frame: TaskFrame = JSON.parse((event as MessageEvent).data as string);
+      const frame: TaskFrame = JSON.parse(eventData(event));
       if (getRunStreamPhase(root) !== "live") return;
       setStreamState(root, "live");
       applyTask(root, frame);
@@ -296,10 +305,9 @@ export function initRunStream(deps: RunStreamInitDeps = {}): void {
     if (moment === null) return;
     const taskId = moment.dataset["rdMoment"];
     if (taskId === undefined) return;
-    const params = new URLSearchParams(typeof window !== "undefined" ? window.location.search : "");
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
     params.set("moment", taskId);
-    if (typeof window !== "undefined") {
-      window.location.search = params.toString();
-    }
+    window.location.search = params.toString();
   });
 }

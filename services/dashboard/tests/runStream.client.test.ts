@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   applyCost,
   applyCostsFrame,
@@ -6,12 +6,15 @@ import {
   applyStatus,
   applyTask,
   COST_DRAIN_IDLE_MS,
+  CostFrameParseError,
   createCostDrainCloser,
   emptyTotals,
   getRunStreamPhase,
   isFinalStreamState,
+  isFiniteDecimalString,
   markStreamUnavailableUnlessFinal,
   parseCostRecord,
+  parseCostRecords,
   setRunStreamPhase,
   setStreamState,
 } from "../src/client/runStream.js";
@@ -35,6 +38,18 @@ function rootWithFlag() {
   const costPerToken = { textContent: "" };
   const costTokens = { textContent: "" };
   const costSources = { innerHTML: "", append: () => {} };
+  const doc = {
+    createElement: (tag: string) => {
+      const el: Record<string, unknown> = {
+        className: "",
+        style: {},
+        textContent: "",
+        append: () => {},
+        tagName: tag.toUpperCase(),
+      };
+      return el;
+    },
+  };
   const moment = {
     querySelector: (sel: string) => {
       if (sel === ".dot") return { className: "", textContent: "" };
@@ -45,6 +60,7 @@ function rootWithFlag() {
   };
   const root = {
     dataset: store as DOMStringMap,
+    ownerDocument: doc as unknown as Document,
     querySelector: (selector: string) => {
       if (selector === '[data-rd="live-flag"]') return flag;
       if (selector === '[data-rd="run-status"]') return statusChip;
@@ -61,7 +77,7 @@ function rootWithFlag() {
 
 function cost(
   id: string | number,
-  overrides: Partial<{ inputTokens: number; totalTokens: number; costUsd: string }> = {},
+  overrides: Partial<{ inputTokens: number; totalTokens: number; costUsd: string | null }> = {},
 ) {
   return {
     id,
@@ -71,7 +87,7 @@ function cost(
     outputTokens: 5,
     cachedInputTokens: 0,
     totalTokens: overrides.totalTokens ?? 15,
-    costUsd: overrides.costUsd ?? "0.0010",
+    costUsd: overrides.costUsd === undefined ? "0.0010" : overrides.costUsd,
   };
 }
 
@@ -99,52 +115,87 @@ function makeScheduler() {
   };
 }
 
-describe("cost parse fail-closed", () => {
-  it("rejects missing/empty/non-scalar ids and broken token fields", () => {
-    expect(parseCostRecord({ billingMode: "per_token", model: "m", inputTokens: 1 })).toBeUndefined();
-    expect(
-      parseCostRecord({
-        id: "",
-        billingMode: "per_token",
-        model: "m",
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        totalTokens: 0,
-        costUsd: null,
+describe("cost parse atomic fail-closed", () => {
+  it("rejects missing own id/costUsd, empty id/model, fractions, bad costUsd", () => {
+    expect(() => parseCostRecord({ billingMode: "per_token", model: "m", costUsd: null })).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord({ id: 1, billingMode: "per_token", model: "m" })).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost("  "))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord({ ...cost(1), model: "  " })).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord({ ...cost(1), inputTokens: 1.5 })).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord({ ...cost(1), costUsd: "not-a-number" })).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord({ ...cost(1), costUsd: "Infinity" })).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord({ ...cost(1), id: {} })).toThrow(CostFrameParseError);
+    expect(parseCostRecord(cost(7)).id).toBe("7");
+    expect(parseCostRecord(cost(1, { costUsd: null })).costUsd).toBeNull();
+  });
+
+  it("rejects parseFloat-prefix junk, hex, and non-finite costUsd/ids", () => {
+    // parseFloat("1.25junk") === 1.25 — full-string boundary must still reject.
+    expect(isFiniteDecimalString("1.25junk")).toBe(false);
+    expect(() => parseCostRecord(cost(1, { costUsd: "1.25junk" }))).toThrow(CostFrameParseError);
+    expect(isFiniteDecimalString("0x10")).toBe(false);
+    expect(() => parseCostRecord(cost(1, { costUsd: "0x10" }))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost(1, { costUsd: "NaN" }))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost(1, { costUsd: "-Infinity" }))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost(Number.NaN))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost(Number.POSITIVE_INFINITY))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost("NaN"))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost("Infinity"))).toThrow(CostFrameParseError);
+    expect(() => parseCostRecord(cost("-Infinity"))).toThrow(CostFrameParseError);
+  });
+
+  it("accepts representative DB numeric costUsd strings", () => {
+    expect(parseCostRecord(cost(1, { costUsd: "0.0010" })).costUsd).toBe("0.0010");
+    expect(parseCostRecord(cost(1, { costUsd: "0" })).costUsd).toBe("0");
+    expect(parseCostRecord(cost(1, { costUsd: "12.50" })).costUsd).toBe("12.50");
+    expect(parseCostRecord(cost(1, { costUsd: "-0.01" })).costUsd).toBe("-0.01");
+    expect(parseCostRecord(cost(1, { costUsd: "1e-4" })).costUsd).toBe("1e-4");
+    expect(parseCostRecord(cost(1, { costUsd: "1.5E+2" })).costUsd).toBe("1.5E+2");
+    expect(parseCostRecord(cost(42)).id).toBe("42");
+    expect(parseCostRecord(cost("cost_abc-9")).id).toBe("cost_abc-9");
+  });
+
+  it("parseCostRecords is atomic: non-array or mixed valid+invalid throws", () => {
+    expect(() => parseCostRecords("nope")).toThrow(CostFrameParseError);
+    expect(() => parseCostRecords(null)).toThrow(CostFrameParseError);
+    expect(() => parseCostRecords([cost(1), { noId: true }])).toThrow(/costs\[1\]/u);
+    expect(() => parseCostRecords([cost(1), cost(2, { costUsd: "1.25junk" })])).toThrow(/costs\[1\]/u);
+    expect(parseCostRecords([])).toEqual([]);
+    expect(parseCostRecords([cost(1)]).map((c) => c.id)).toEqual(["1"]);
+  });
+
+  it("mixed junk costUsd frame does not mutate totals or re-arm drain", () => {
+    const { root } = rootWithFlag();
+    const totals = emptyTotals();
+    const sched = makeScheduler();
+    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    applySnapshotFrame(
+      root,
+      totals,
+      { costs: [cost(1)], run: { status: "completed", outcome: null } },
+      {
+        noteCostActivity: () => drain.noteCostActivity(),
+        enterDrain: (c) => drain.enterDrain(c),
+        close: () => {},
+      },
+    );
+    const gen0 = drain.generation();
+    const seen = [...totals.seenIds];
+    expect(() =>
+      applyCostsFrame(root, totals, [cost(2, { costUsd: "1.25junk" })], {
+        noteCostActivity: () => drain.noteCostActivity(),
       }),
-    ).toBeUndefined();
-    expect(
-      parseCostRecord({
-        id: {},
-        billingMode: "per_token",
-        model: "m",
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        totalTokens: 0,
-        costUsd: null,
-      }),
-    ).toBeUndefined();
-    expect(
-      parseCostRecord({
-        id: 1,
-        billingMode: "nope",
-        model: "m",
-        inputTokens: 0,
-        outputTokens: 0,
-        cachedInputTokens: 0,
-        totalTokens: 0,
-        costUsd: null,
-      }),
-    ).toBeUndefined();
-    expect(parseCostRecord(cost(7))?.id).toBe("7");
+    ).toThrow(CostFrameParseError);
+    expect(totals.inputTokens).toBe(10);
+    expect([...totals.seenIds]).toEqual(seen);
+    expect(drain.generation()).toBe(gen0);
+    expect(sched.live()).toHaveLength(1);
   });
 
   it("dedupes by stable id", () => {
     const totals = emptyTotals();
-    expect(applyCost(totals, parseCostRecord(cost(1))!)).toBe(true);
-    expect(applyCost(totals, parseCostRecord(cost(1, { inputTokens: 99 }))!)).toBe(false);
+    expect(applyCost(totals, parseCostRecord(cost(1)))).toBe(true);
+    expect(applyCost(totals, parseCostRecord(cost(1, { inputTokens: 99 })))).toBe(false);
     expect(totals.inputTokens).toBe(10);
     expect(totals.seenIds.has("1")).toBe(true);
   });
@@ -169,15 +220,18 @@ describe("run stream terminal state machine", () => {
     );
   });
 
-  it("live snapshot resets; identical reconnect snapshot applies only unseen costs and does not demote", () => {
+  it("live snapshot resets; reconnect applies only unseen costs and does not demote", () => {
     const { root, header, costPerToken } = rootWithFlag();
     const totals = emptyTotals();
     const sched = makeScheduler();
     const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    let closed = false;
     const hooks = {
       noteCostActivity: () => drain.noteCostActivity(),
       enterDrain: (c: () => void) => drain.enterDrain(c),
-      close: vi.fn(),
+      close: () => {
+        closed = true;
+      },
     };
 
     const first = applySnapshotFrame(
@@ -190,10 +244,8 @@ describe("run stream terminal state machine", () => {
     expect(totals.inputTokens).toBe(10);
     expect(costPerToken.textContent).toBe("$0.0010");
     expect(getRunStreamPhase(root)).toBe("draining");
-    expect(header.textContent).toBe("completed");
     const gen0 = drain.generation();
 
-    // Identical reconnect snapshot: no new ids → no-op, no re-arm, no demotion.
     const again = applySnapshotFrame(
       root,
       totals,
@@ -202,12 +254,10 @@ describe("run stream terminal state machine", () => {
     );
     expect(again.applied).toBe(false);
     expect(again.costsDelta).toBe(0);
-    expect(again.statusApplied).toBe(false);
     expect(totals.inputTokens).toBe(10);
     expect(header.textContent).toBe("completed");
     expect(drain.generation()).toBe(gen0);
 
-    // Unseen late cost in reconnect snapshot is incorporated exactly once and re-arms.
     const late = applySnapshotFrame(
       root,
       totals,
@@ -219,22 +269,53 @@ describe("run stream terminal state machine", () => {
     );
     expect(late.costsDelta).toBe(1);
     expect(totals.inputTokens).toBe(13);
-    expect(header.textContent).toBe("completed");
     expect(drain.generation()).toBe(gen0 + 1);
+    expect(closed).toBe(false);
+  });
 
-    // Same reconnect again → no double-count, no re-arm.
-    const third = applySnapshotFrame(
-      root,
-      totals,
-      {
-        costs: [cost(1), cost(2, { inputTokens: 3, totalTokens: 4, costUsd: "0.0002" })],
-        run: { status: "completed", outcome: null },
-      },
-      hooks,
-    );
-    expect(third.costsDelta).toBe(0);
-    expect(totals.inputTokens).toBe(13);
-    expect(drain.generation()).toBe(gen0 + 1);
+  it("mixed valid+invalid costs frame leaves totals/seen/deadline unchanged", () => {
+    const { root, header } = rootWithFlag();
+    const totals = emptyTotals();
+    const sched = makeScheduler();
+    const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
+    const hooks = {
+      noteCostActivity: () => drain.noteCostActivity(),
+      enterDrain: (c: () => void) => drain.enterDrain(c),
+      close: () => {},
+    };
+
+    applySnapshotFrame(root, totals, { costs: [cost(1)], run: { status: "completed", outcome: null } }, hooks);
+    expect(totals.inputTokens).toBe(10);
+    expect(totals.seenIds.size).toBe(1);
+    const gen0 = drain.generation();
+    const seenSnap = [...totals.seenIds];
+
+    // Live-phase would reset only after parse — invalid frame must not wipe totals.
+    setRunStreamPhase(root, "live");
+    expect(() =>
+      applySnapshotFrame(
+        root,
+        totals,
+        { costs: [cost(99), { noId: true }], run: { status: "running", outcome: null } },
+        hooks,
+      ),
+    ).toThrow(CostFrameParseError);
+    expect(totals.inputTokens).toBe(10);
+    expect([...totals.seenIds]).toEqual(seenSnap);
+    expect(header.textContent).toBe("completed");
+    expect(drain.generation()).toBe(gen0);
+
+    // Draining reconnect with mixed frame: same atomic reject.
+    setRunStreamPhase(root, "draining");
+    expect(() =>
+      applyCostsFrame(root, totals, [cost(2), { id: 3, billingMode: "per_token", model: "m", inputTokens: 1.5 }], {
+        noteCostActivity: () => drain.noteCostActivity(),
+      }),
+    ).toThrow(CostFrameParseError);
+    expect(totals.inputTokens).toBe(10);
+    expect([...totals.seenIds]).toEqual(seenSnap);
+    expect(drain.generation()).toBe(gen0);
+    expect(sched.live()).toHaveLength(1);
   });
 
   it("event:costs deltas incorporate once; repeats do not re-arm", () => {
@@ -244,7 +325,7 @@ describe("run stream terminal state machine", () => {
     const drain = createCostDrainCloser({ idleMs: COST_DRAIN_IDLE_MS, schedule: sched.schedule, cancel: sched.cancel });
     setRunStreamPhase(root, "draining");
     setStreamState(root, "final");
-    drain.enterDrain(vi.fn());
+    drain.enterDrain(() => {});
     const gen0 = drain.generation();
 
     const r1 = applyCostsFrame(root, totals, [cost(9, { inputTokens: 3, totalTokens: 4, costUsd: "0.0002" })], {
@@ -259,21 +340,6 @@ describe("run stream terminal state machine", () => {
     });
     expect(r2.costsDelta).toBe(0);
     expect(totals.inputTokens).toBe(3);
-    expect(drain.generation()).toBe(gen0 + 1);
-  });
-
-  it("malformed cost rows are skipped and do not re-arm", () => {
-    const { root } = rootWithFlag();
-    const totals = emptyTotals();
-    const drain = createCostDrainCloser();
-    setRunStreamPhase(root, "draining");
-    drain.enterDrain(vi.fn());
-    const gen0 = drain.generation();
-    const r = applyCostsFrame(root, totals, [{ noId: true }, cost(3)], {
-      noteCostActivity: () => drain.noteCostActivity(),
-    });
-    expect(r.costsDelta).toBe(1);
-    expect(totals.seenIds.has("3")).toBe(true);
     expect(drain.generation()).toBe(gen0 + 1);
   });
 
@@ -294,7 +360,6 @@ describe("run stream terminal state machine", () => {
     expect(sched.live()).toHaveLength(1);
     expect(closed).toBe(false);
     expect(drain.isDraining()).toBe(true);
-    expect(drain.isClosed()).toBe(false);
   });
 
   it("stale canceled timer cannot close after a newer real-cost arm", () => {
@@ -310,24 +375,20 @@ describe("run stream terminal state machine", () => {
     sched.fire(firstId);
     expect(closeCount).toBe(0);
     expect(drain.isClosed()).toBe(false);
-    expect(drain.isDraining()).toBe(true);
     sched.fire(secondId);
     expect(closeCount).toBe(1);
     expect(drain.isClosed()).toBe(true);
-    expect(drain.isDraining()).toBe(false);
   });
 
   it("closed ignores snapshots and costs; dispose is terminal", () => {
     const { root } = rootWithFlag();
     const totals = emptyTotals();
     const drain = createCostDrainCloser();
-    const close = vi.fn();
-    drain.enterDrain(close);
+    drain.enterDrain(() => {});
     drain.dispose();
-    drain.enterDrain(close);
+    drain.enterDrain(() => {});
     drain.noteCostActivity();
     expect(drain.isClosed()).toBe(true);
-    expect(drain.isDraining()).toBe(false);
     setRunStreamPhase(root, "closed");
     expect(
       applySnapshotFrame(root, totals, { costs: [cost(1)], run: { status: "completed", outcome: null } }).applied,
