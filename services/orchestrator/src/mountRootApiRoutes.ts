@@ -81,9 +81,9 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }
-    const projectInput =
-      configCheck.config === undefined ? parsed.data : { ...parsed.data, config: configCheck.config };
-    return c.json(await createProject(pool, projectInput, actorOf(c)), 201);
+    // Keep raw key presence intact for createProject's identical inner guard;
+    // default-expanded values must not be mistaken for caller-supplied settings.
+    return c.json(await createProject(pool, parsed.data, actorOf(c)), 201);
   });
 
   app.post("/specs", async (c) => {

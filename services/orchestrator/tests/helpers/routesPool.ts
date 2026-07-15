@@ -240,6 +240,19 @@ export class RoutesPool {
       });
       return { rows: [], rowCount: 1 };
     }
+    // ProjectStore.updateConfigIfCurrent: atomic JSONB compare-and-swap. The
+    // expected value is the exact snapshot returned by getConfigSnapshot.
+    if (trimmed.startsWith("UPDATE projects SET config") && trimmed.includes("config IS NOT DISTINCT FROM")) {
+      const project = this.projects.get(String(params[1]));
+      if (project === undefined) return { rows: [], rowCount: 0 };
+      const orgMatches = project.org_id === null || project.org_id === String(params[2]);
+      const expected = JSON.parse(String(params[3])) as unknown;
+      if (!orgMatches || JSON.stringify(project.config) !== JSON.stringify(expected)) {
+        return { rows: [], rowCount: 0 };
+      }
+      project.config = JSON.parse(String(params[0])) as unknown;
+      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
     if (trimmed.startsWith("UPDATE projects SET config")) {
       const project = this.projects.get(String(params[1]));
       if (project === undefined) return { rows: [], rowCount: 0 };

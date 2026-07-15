@@ -55,9 +55,7 @@ export class ProjectConfigWriteRejectedError extends Error {
   }
 }
 
-type ProjectConfigCheck =
-  | { ok: true; config?: ProjectConfigV1 }
-  | { ok: false; response: ProjectConfigWriteRejectionResponse };
+type ProjectConfigCheck = { ok: true } | { ok: false; response: ProjectConfigWriteRejectionResponse };
 
 type ProjectConfigPatchCheck =
   | { ok: true; config: ProjectConfigV1 }
@@ -68,7 +66,8 @@ export function checkGenericProjectCreateConfig(rawConfig: Record<string, unknow
     return { ok: true };
   }
   try {
-    return { ok: true, config: assertProjectCreateConfigAllowed(rawConfig) };
+    assertProjectCreateConfigAllowed(rawConfig);
+    return { ok: true };
   } catch (error) {
     if (error instanceof ProjectConfigWriteRejectedError) {
       return { ok: false, response: error.response };
@@ -149,6 +148,12 @@ function reservedAutonomyCreateFields(config: ProjectConfigV1, raw: Record<strin
   }
   if (config.governancePosture !== BROWNFIELD_SAFE_GOVERNANCE_POSTURE && raw["governancePosture"] !== undefined) {
     fields.push("governancePosture");
+  }
+  // Unlike the legacy autonomy toggles above, audit posture has no caller-safe
+  // value on generic creation: even its defaults are governance-owned. A trusted
+  // provisioner bypasses this whole guard with the branded proof above.
+  if (raw["auditPosture"] !== undefined) {
+    fields.push("auditPosture");
   }
   return fields;
 }

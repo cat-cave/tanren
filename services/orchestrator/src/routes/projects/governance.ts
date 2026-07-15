@@ -85,10 +85,10 @@ export async function handleGovernanceGet(
 }
 
 /**
- * PUT handler: set the project's governance settings by read-modify-writing the
- * named keys on `projects.config`, then re-read + return the resolved view. Only
- * the named fields change; the rest of the config round-trips untouched through
- * the versioned parser so the persisted blob is always a valid ProjectConfigV1.
+ * PUT handler: set the project's governance settings through the canonical
+ * config compare-and-swap. A concurrent member/config writer produces an
+ * actionable conflict instead of losing either authority's fields. Only named
+ * settings change.
  */
 export async function handleGovernancePut(
   c: Context,
@@ -97,24 +97,28 @@ export async function handleGovernancePut(
   projectId: string,
   body: z.infer<typeof GovernancePutSchema>,
 ): Promise<Response> {
-  const ownership = await ProjectStore.getOwnership(pool, projectId, systemActor);
-  if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined || (snapshot.orgId !== null && snapshot.orgId !== orgId)) {
     return c.json({ error: "project_not_found" }, 404);
   }
 
-  const current = migrateProjectConfig(await ProjectStore.getConfig(pool, projectId, systemActor));
-  const nextConfig = {
+  const current = migrateProjectConfig(snapshot.config);
+  const validated = migrateProjectConfig({
     ...current,
     ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
     ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
     ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
     ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
     ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
-  };
-  // Round-trip through the versioned parser so the persisted blob is always a valid
-  // ProjectConfigV1.
-  const validated = migrateProjectConfig(nextConfig);
-  await ProjectStore.updateConfig(pool, projectId, validated, systemActor);
-
-  return c.json(toView(validated));
+  });
+  const updated = await ProjectStore.updateConfigIfCurrent(
+    pool,
+    projectId,
+    orgId,
+    snapshot.config,
+    validated,
+    systemActor,
+  );
+  if (updated) return c.json(toView(validated));
+  return c.json({ error: "project_config_conflict", message: "project config changed; reload before retrying" }, 409);
 }

@@ -49,13 +49,21 @@ export abstract class OrchestratorHttpClient {
   }
 
   protected async getJson<T>(path: string): Promise<T | undefined> {
+    const result = await this.getJsonResponse<T>(path);
+    return result.ok ? result.body : undefined;
+  }
+
+  /**
+   * Status-preserving GET for consumers that must distinguish an unavailable
+   * endpoint from a successful response with malformed/absent JSON.
+   */
+  protected async getJsonResponse<T>(path: string): Promise<{ ok: boolean; status: number; body: T | undefined }> {
     const response = await this.fetchImpl(`${this.orchestratorUrl}${path}`, {
       headers: this.headers(),
     }).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
-    return (await response.json().catch(() => {})) as T | undefined;
+    if (response === undefined) return { ok: false, status: 0, body: undefined };
+    const body = (await response.json().catch(() => {})) as T | undefined;
+    return { ok: response.ok, status: response.status, body };
   }
 
   protected async sendJson<T = unknown>(

@@ -45,6 +45,11 @@ interface RawProjectRow {
   org_id?: unknown;
 }
 
+export interface ProjectConfigSnapshot {
+  orgId: string | null;
+  config: unknown;
+}
+
 // The exact column list the list/read routes used (7 columns, no org_id) — the
 // fakes + RLS column expectations key off this prefix.
 const SELECT_PROJECT_COLUMNS = "project_id, name, repo_url, default_branch, runner_image, allocator, config";
@@ -162,6 +167,21 @@ export const ProjectStore = {
     };
   },
 
+  /** The org + exact config value used as the compare-and-swap snapshot. */
+  async getConfigSnapshot(
+    client: QueryClient,
+    projectId: string,
+    _actor: ActorRef,
+  ): Promise<ProjectConfigSnapshot | undefined> {
+    const result = await client.query<{ org_id?: unknown; config?: unknown }>(
+      "SELECT org_id, config FROM projects WHERE project_id = $1",
+      [projectId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) return undefined;
+    return { orgId: nullableText(row.org_id), config: row.config };
+  },
+
   /** The raw stored `config` blob for a project (the posture writer read-modify-writes it). */
   async getConfig(client: QueryClient, projectId: string, _actor: ActorRef): Promise<unknown> {
     const result = await client.query<{ config?: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
@@ -176,6 +196,29 @@ export const ProjectStore = {
       JSON.stringify(config),
       projectId,
     ]);
+  },
+
+  /**
+   * Replace config only while the exact JSONB snapshot is still current. This is
+   * the canonical lost-update guard for independently authorized config writers.
+   */
+  async updateConfigIfCurrent(
+    client: QueryClient,
+    projectId: string,
+    orgId: string,
+    currentConfig: unknown,
+    nextConfig: unknown,
+    _actor: ActorRef,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `UPDATE projects SET config = $1::jsonb
+        WHERE project_id = $2
+          AND (org_id = $3 OR org_id IS NULL)
+          AND config IS NOT DISTINCT FROM $4::jsonb
+      RETURNING project_id`,
+      [JSON.stringify(nextConfig), projectId, orgId, JSON.stringify(currentConfig)],
+    );
+    return (result.rowCount ?? 0) > 0;
   },
 
   /** Set a project's repo URL (the brownfield link write). */

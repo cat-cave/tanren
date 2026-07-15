@@ -51,13 +51,3 @@ export const GovernanceViewSchema = z
   })
   .strict();
 export type GovernanceView = z.infer<typeof GovernanceViewSchema>;
-
-/** Parse a successful canonical response, with a stable fail-loud error. */
-export function parseGovernanceView(value: unknown): GovernanceView {
-  const parsed = GovernanceViewSchema.safeParse(value);
-  if (!parsed.success) {
-    const fields = parsed.error.issues.map((issue) => issue.path.join(".") || "response").join(", ");
-    throw new Error(`invalid governance response from orchestrator: ${fields}`);
-  }
-  return parsed.data;
-}
