@@ -119,6 +119,11 @@ SCREEN_MOUNTS.push(mountIntegrationsScreen);
 import { mountOverviewScreen } from "../routes/overview/index.js";
 SCREEN_MOUNTS.push(mountOverviewScreen);
 
+// governance safety settings — validated auditPosture read + canonical
+// org-admin PUT proxy. Fulfils the onboarding link at /settings/governance.
+import { mountGovernanceScreen } from "../routes/governance/index.js";
+SCREEN_MOUNTS.push(mountGovernanceScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
