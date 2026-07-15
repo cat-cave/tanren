@@ -301,7 +301,12 @@ export class ReviewMergePool {
     }
     if (sql.includes("FROM specs") && sql.includes("status = 'merged'")) {
       const held = new Set(sql.includes("merge.speculative_held") ? this.unresolvedSpeculativeHolds : []);
-      const merged = this.mergedAncestors.filter((spec_id) => !held.has(spec_id));
+      // gv-4: honor ANY($2::text[]) so an incomplete candidate set (the old
+      // direct-only depends_on bug) cannot silently return every merged ancestor.
+      const requested = Array.isArray(params[1]) ? new Set(params[1] as string[]) : null;
+      const merged = this.mergedAncestors.filter(
+        (spec_id) => !held.has(spec_id) && (requested === null || requested.has(spec_id)),
+      );
       return { rows: merged.map((spec_id) => ({ spec_id })), rowCount: merged.length };
     }
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {

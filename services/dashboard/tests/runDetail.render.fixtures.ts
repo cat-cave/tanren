@@ -239,6 +239,43 @@ export function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
+/** gv-4 stack-retarget projection fixture (transitive members + walk target). */
+export const STACK_RETARGET = {
+  missionNodeId: "gv-4" as const,
+  runId: RUN_ID,
+  projectId: PROJECT.projectId,
+  orgId: ORG.id,
+  speculative: true,
+  defaultBranch: "main",
+  members: [
+    {
+      specId: "spec_a",
+      runId: "run_a",
+      branch: "tanren/run_a",
+      headSha: "a".repeat(40),
+      merged: true,
+    },
+    {
+      specId: "spec_b",
+      runId: "run_b",
+      branch: "tanren/run_b",
+      headSha: "b".repeat(40),
+      merged: false,
+    },
+  ],
+  mergedSpecIds: ["spec_a"],
+  unmergedAncestors: ["spec_b"],
+  toBase: "tanren/run_b",
+  remainingStack: [
+    {
+      specId: "spec_b",
+      runId: "run_b",
+      branch: "tanren/run_b",
+      headSha: "b".repeat(40),
+    },
+  ],
+};
+
 export function mockOrchestrator(): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -253,6 +290,10 @@ export function mockOrchestrator(): void {
     // Definitive location miss for any other run id (exact contract body).
     if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
       return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
+    }
+    // gv-4: must match before the generic run-detail path.
+    if (url.includes(`/runs/${RUN_ID}/stack-retarget`)) {
+      return new Response(JSON.stringify(STACK_RETARGET), { status: 200 });
     }
     // run detail
     if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
@@ -300,6 +341,9 @@ export function mockOrchestratorWithProject(previewUrlPattern?: string): void {
       return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
     if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
       return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
+    }
+    if (url.includes(`/runs/${RUN_ID}/stack-retarget`)) {
+      return new Response(JSON.stringify(STACK_RETARGET), { status: 200 });
     }
     if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
       return new Response(JSON.stringify(RUN_DETAIL), { status: 200 });
