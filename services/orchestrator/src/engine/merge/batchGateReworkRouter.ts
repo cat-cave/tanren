@@ -130,7 +130,6 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         orgId,
         projectId: input.projectId,
         steeringNote,
-        reopenStatus: "open",
       });
       await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
       return {

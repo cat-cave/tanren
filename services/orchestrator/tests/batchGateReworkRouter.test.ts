@@ -104,11 +104,11 @@ function makeRouter(opts: {
 
 describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () => {
   it("re-authors the culprit (carrying the gate error as steering) + records reworked when under the budget", async () => {
-    const enqueued: Array<{ specId: string; steeringNote: string; reopenStatus: string }> = [];
+    const enqueued: Array<{ specId: string; steeringNote: string }> = [];
     const enqueuer: ReplanEnqueuer = {
       // eslint-disable-next-line @typescript-eslint/require-await
       async enqueue(input) {
-        enqueued.push({ specId: input.specId, steeringNote: input.steeringNote, reopenStatus: input.reopenStatus });
+        enqueued.push({ specId: input.specId, steeringNote: input.steeringNote });
         return { replanRunId: "run_rework_1", plannerTaskId: "task_1" };
       },
     };
@@ -134,7 +134,6 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     // A fresh rework run was enqueued, re-opening the spec to `open` and carrying the ACTUAL
     // gate error in the steering (no_silent_fallback — never rework blind).
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0]?.reopenStatus).toBe("open");
     expect(enqueued[0]?.steeringNote).toContain(gateError);
     // The observable routing event is recorded as `reworked` + a replan_queued lineage.
     const routed = appended.find((e) => e.eventType === "merge.batch.gate_rework_routed");

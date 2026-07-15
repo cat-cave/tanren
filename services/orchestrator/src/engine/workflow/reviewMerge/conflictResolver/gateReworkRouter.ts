@@ -103,7 +103,6 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         orgId: this.deps.orgId,
         projectId: this.deps.projectId,
         steeringNote,
-        reopenStatus: "open",
       });
       await this.recordReworked(input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
       return {

@@ -1,8 +1,12 @@
 // Durable recovery-ownership proofs for conflict / gate-rework settlement.
 // SpecNotRunnableError is never ownership. already_running requires an actively-driving
 // run (queued/running/paused — NOT halted). Spec re-open is allowlisted only for
-// open/in_flight/review via atomic prepareSpecForRecovery. Settlement requires a typed
-// RecoveryEvidencePort that re-reads under system/BYPASSRLS scope; absence fails closed.
+// open/in_flight/review via atomic prepareSpecForRecovery (always target status `open`).
+// Settlement requires a typed RecoveryEvidencePort that re-reads under system/BYPASSRLS;
+// absence fails closed.
+//
+// OWNERSHIP IDENTITY: replan/rework receipts name the NEW owner run + spec
+// (+ planner task for enqueued). The stale PR/head being replaced is never evidence.
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
@@ -32,14 +36,15 @@ export function isActiveOwnerRunStatus(status: string): boolean {
 }
 
 /**
- * Atomic recovery prepare input (steering + allowlisted reopen). Lives here so the
- * allowlist and the writer contract share one vocabulary without bloating runStateWriter.
+ * Atomic recovery prepare input. Target status is always `open` (hardcoded in SQL).
+ * `steeringNote` is optional so rollback can prepare without mutating description;
+ * replan/rework HTTP and writer paths require a non-empty note at their Zod/enqueuer seams.
  */
 export interface PrepareSpecForRecoveryInput {
   specId: string;
   orgId: string;
-  steeringNote: string;
-  reopenStatus: string;
+  /** When present and non-empty, appended as operator steering before reopen. */
+  steeringNote?: string;
 }
 
 export type PrepareSpecForRecoveryResult =
@@ -109,6 +114,7 @@ export async function loadSpecStatusForRecovery(
 /**
  * Structural pre-check only (non-empty ids + matching specId). NEVER sufficient for
  * settlement — callers must still pass {@link RecoveryEvidencePort.verifyOwnedReceipt}.
+ * Receipt ids name the NEW owner run/task, never the stale PR/head being replaced.
  */
 export function hasStructuralOwnedReceiptShape(receipt: ConflictRecoveryReceipt, expectedSpecId: string): boolean {
   if (receipt.specId !== expectedSpecId) return false;
@@ -119,6 +125,40 @@ export function hasStructuralOwnedReceiptShape(receipt: ConflictRecoveryReceipt,
     return receipt.run.runId.trim() !== "";
   }
   return false;
+}
+
+/**
+ * Shared settlement-time ownership proof for conflict replan AND writer rework.
+ * Missing port, wrong/missing store rows, inactive run, or failed readback ⇒ not ok
+ * (caller parks needs_attention before dequeue).
+ */
+export async function verifyRecoveryOwnership(input: {
+  evidence: RecoveryEvidencePort | undefined;
+  expectedSpecId: string;
+  receipt: ConflictRecoveryReceipt;
+  contextMessage: string;
+}): Promise<{ ok: true; evidence: RecoveryRunEvidence } | { ok: false; message: string }> {
+  if (input.evidence === undefined) {
+    return {
+      ok: false,
+      message:
+        `recovery ownership cannot be verified for ${input.expectedSpecId}: no RecoveryEvidencePort is wired ` +
+        `(fail closed — ownership is the new owner run+spec+task, never a stale PR/head): ${input.contextMessage}`,
+    };
+  }
+  const evidence = await input.evidence.verifyOwnedReceipt({
+    expectedSpecId: input.expectedSpecId,
+    receipt: input.receipt,
+  });
+  if (evidence === undefined) {
+    return {
+      ok: false,
+      message:
+        `recovery ownership receipt failed settlement-time store readback for ${input.expectedSpecId} ` +
+        `(new owner run+spec+task must re-verify; stale PR/head is not evidence): ${input.contextMessage}`,
+    };
+  }
+  return { ok: true, evidence };
 }
 
 /** Truthful recovery disposition labels for base-shift instrumentation. */

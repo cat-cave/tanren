@@ -97,12 +97,14 @@ const appendSpecSteeringSchema = z.object({
   steeringNote: z.string().min(1),
 });
 
-const prepareSpecForRecoverySchema = z.object({
-  specId: z.string().min(1),
-  orgId: z.string().min(1),
-  steeringNote: z.string().min(1),
-  reopenStatus: z.string().min(1),
-});
+// Target status is always `open` server-side — reject any peer-supplied reopenStatus.
+const prepareSpecForRecoverySchema = z
+  .object({
+    specId: z.string().min(1),
+    orgId: z.string().min(1),
+    steeringNote: z.string().min(1),
+  })
+  .strict();
 
 const setRunSpeculativeBaseSchema = z.object({
   runId: z.string().min(1),

@@ -84,7 +84,6 @@ describe("applyPrepareSpecForRecovery — atomic allowlist", () => {
       specId: "s1",
       orgId: "o1",
       steeringNote: "note",
-      reopenStatus: "open",
     });
     expect(refused).toEqual({ prepared: false, reason: "not_recoverable", status: "merged" });
     expect(ops.some((o) => o.includes("UPDATE specs"))).toBe(false);
@@ -94,10 +93,31 @@ describe("applyPrepareSpecForRecovery — atomic allowlist", () => {
       specId: "s1",
       orgId: "o1",
       steeringNote: "note",
-      reopenStatus: "open",
     });
     expect(ok).toEqual({ prepared: true, fromStatus: "in_flight" });
-    expect(ops.some((o) => o.includes("UPDATE specs") && o.includes("operator steering"))).toBe(true);
+    expect(ops.some((o) => o.includes("UPDATE specs") && o.includes("status = 'open'"))).toBe(true);
+  });
+
+  it("reopen-only prepare (no steering) still hardcodes open and writes zero steering", async () => {
+    const ops: string[] = [];
+    let status = "review";
+    const client = {
+      async query(sql: string, _params?: unknown[]) {
+        ops.push(String(sql).replaceAll(/\s+/gu, " ").trim());
+        if (String(sql).includes("SELECT status") && String(sql).includes("FOR UPDATE")) {
+          return { rows: [{ status }], rowCount: 1 };
+        }
+        if (String(sql).includes("UPDATE specs")) {
+          status = "open";
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      },
+    };
+    const ok = await applyPrepareSpecForRecovery(client, { specId: "s1", orgId: "o1" });
+    expect(ok).toEqual({ prepared: true, fromStatus: "review" });
+    expect(ops.some((o) => o.includes("operator steering"))).toBe(false);
+    expect(ops.some((o) => o.includes("status = 'open'"))).toBe(true);
   });
 });
 
@@ -251,7 +271,29 @@ describe("EventEmittingMergeCoordinator — evidence port required", () => {
     expect(queue.dequeueReasonOf("run_a")).toBe("conflict");
   });
 
-  it("routes failed drive to writer rework when gateRework is wired", async () => {
+  it("routes failed drive to writer rework when gateRework + evidence are wired", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const events = new RecordingMergeQueueEventEmitter();
+    const escalator = new RecordingSpecEscalator();
+    const gateRework = new RecordingBatchGateReworkRouter();
+    const evidence = new ScriptedRecoveryEvidencePort();
+    evidence.seedEnqueued("spec_a", "run_rework_spec_a", "task_rework_spec_a", "queued");
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    runner.script("run_a", { kind: "failed", message: "fresh pre_merge failed" });
+    const coordinator = new EventEmittingMergeCoordinator({
+      queue,
+      runner,
+      events,
+      escalator,
+      gateRework,
+      recoveryEvidence: evidence,
+    });
+    await coordinator.coordinate(PROJECT);
+    expect(queue.dequeueReasonOf("run_a")).toBe("superseded");
+  });
+
+  it("FAIL-CLOSED: failed drive with writer receipt but no evidence port parks", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
@@ -267,6 +309,7 @@ describe("EventEmittingMergeCoordinator — evidence port required", () => {
       gateRework,
     });
     await coordinator.coordinate(PROJECT);
-    expect(queue.dequeueReasonOf("run_a")).toBe("superseded");
+    expect(queue.dequeueReasonOf("run_a")).toBe("needs_attention");
+    expect(escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
   });
 });

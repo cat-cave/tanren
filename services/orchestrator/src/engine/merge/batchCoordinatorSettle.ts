@@ -33,7 +33,8 @@ import {
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
 import { createLogger } from "../observability/logger.js";
-import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
+import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
+import type { ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
 
 const log = createLogger("batch-coordinator");
 
@@ -55,9 +56,9 @@ export interface BatchSettleDeps {
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /**
-   * Settlement-time ownership readback. REQUIRED for conflict retirement in production
-   * (PgRecoveryEvidencePort). Absent ⇒ fail closed (park needs_attention) — never accept a
-   * typed receipt without store proof.
+   * Settlement-time ownership readback. REQUIRED for conflict AND writer-rework retirement
+   * in production (PgRecoveryEvidencePort). Absent ⇒ fail closed (park needs_attention).
+   * Receipts name the NEW owner run+spec(+planner task), never the stale PR/head.
    */
   recoveryEvidence?: RecoveryEvidencePort;
 }
@@ -92,19 +93,24 @@ export async function settleBisectCulprit(
   failMessage: string,
 ): Promise<void> {
   if (isGateFail && deps.gateRework !== undefined) {
-    // The WRITER rework path: re-author the culprit to fix the integration-only gate
-    // failure, then retire the OLD entry (the re-authored run re-queues a fresh one).
+    // WRITER rework path: route first, then settlement-time store readback of the NEW owner
+    // before retiring the stale entry as superseded (never mint-only ownership).
     const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    const settled = await settleWriterOwnedOrPark(
+      deps,
+      projectId,
+      culprit,
+      recovery,
+      `integrated-tree gate failure handed to writer rework: ${failMessage}`,
+      failMessage,
+    );
     await markDequeuedAfterEvent({
       queue: deps.queue,
       events: deps.events,
       projectId,
       entry: culprit,
-      reason: recovery.kind === "owned" ? "superseded" : "needs_attention",
-      message:
-        recovery.kind === "owned"
-          ? `integrated-tree gate failure handed to writer rework: ${failMessage}`
-          : recovery.message,
+      reason: settled.reason,
+      message: settled.message,
       tx: deps.tx,
     });
     return;
@@ -219,7 +225,12 @@ export async function settleDriveOutcome(
   }
 
   if (outcome.kind === "conflict") {
-    const verified = await verifyConflictOwnership(deps, entry, outcome.recovery, outcome.message);
+    const verified = await verifyRecoveryOwnership({
+      evidence: deps.recoveryEvidence,
+      expectedSpecId: entry.specId,
+      receipt: outcome.recovery,
+      contextMessage: outcome.message,
+    });
     if (!verified.ok) {
       await deps.escalator.escalate({ projectId, entry, message: verified.message });
       await markDequeuedAfterEvent({
@@ -354,34 +365,33 @@ export async function driveConflictCulprit(
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
 
-/** Settlement-time ownership proof: port must be wired and must re-read an active owner run. */
-async function verifyConflictOwnership(
-  deps: BatchSettleDeps,
-  entry: MergeQueueEntry,
-  recovery: Extract<MergeDriveOutcome, { kind: "conflict" }>["recovery"],
-  driveMessage: string,
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  if (deps.recoveryEvidence === undefined) {
-    return {
-      ok: false,
-      message:
-        `merge conflict recovery cannot be verified for ${entry.specId}: no RecoveryEvidencePort is wired ` +
-        `(fail closed): ${driveMessage}`,
-    };
+/**
+ * After a writer-rework router returns owned/parked, prove the NEW owner before
+ * superseding the stale queue entry. Shared by settleBisectCulprit, settleFailedDrive,
+ * and escalateInfraHoldToWriter.
+ */
+export async function settleWriterOwnedOrPark(
+  deps: Pick<BatchSettleDeps, "recoveryEvidence" | "escalator">,
+  projectId: string,
+  culprit: MergeQueueEntry,
+  recovery: { kind: "owned"; receipt: ConflictRecoveryReceipt } | { kind: "parked"; message: string },
+  ownedMessage: string,
+  contextMessage: string,
+): Promise<{ reason: "superseded" | "needs_attention"; message: string }> {
+  if (recovery.kind !== "owned") {
+    return { reason: "needs_attention", message: recovery.message };
   }
-  const evidence = await deps.recoveryEvidence.verifyOwnedReceipt({
-    expectedSpecId: entry.specId,
-    receipt: recovery,
+  const verified = await verifyRecoveryOwnership({
+    evidence: deps.recoveryEvidence,
+    expectedSpecId: culprit.specId,
+    receipt: recovery.receipt,
+    contextMessage,
   });
-  if (evidence === undefined) {
-    return {
-      ok: false,
-      message:
-        `merge conflict recovery receipt failed settlement-time store readback for ${entry.specId}: ` +
-        `${driveMessage}`,
-    };
+  if (!verified.ok) {
+    await deps.escalator.escalate({ projectId, entry: culprit, message: verified.message });
+    return { reason: "needs_attention", message: verified.message };
   }
-  return { ok: true };
+  return { reason: "superseded", message: ownedMessage };
 }
 
 /** Assign an owner to every failed fresh merge drive before the stale entry retires. Shared with EventEmittingMergeCoordinator. */
@@ -400,8 +410,16 @@ export async function settleFailedDrive(
     await deps.escalator.escalate({ projectId, entry: culprit, message });
   } else {
     const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
-    reason = recovery.kind === "owned" ? "superseded" : "needs_attention";
-    message = recovery.kind === "owned" ? `${gateError}; handed to writer rework` : recovery.message;
+    const settled = await settleWriterOwnedOrPark(
+      deps,
+      projectId,
+      culprit,
+      recovery,
+      `${gateError}; handed to writer rework`,
+      gateError,
+    );
+    reason = settled.reason;
+    message = settled.message;
   }
   await markDequeuedAfterEvent({
     queue: deps.queue,

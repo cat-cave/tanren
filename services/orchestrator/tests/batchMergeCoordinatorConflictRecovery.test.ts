@@ -16,7 +16,6 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
-
 const PROJECT = "project_batch_conflict_recovery";
 
 interface Harness {
@@ -65,6 +64,11 @@ function seedPair(h: Harness): void {
   h.checker.baseConflictWhenContains("spec_b");
 }
 
+/** Seed store proof matching RecordingBatchGateReworkRouter mint ids. */
+function seedWriterReworkEvidence(h: Harness, specId: string): void {
+  h.evidence.seedEnqueued(specId, `run_rework_${specId}`, `task_rework_${specId}`, "queued");
+}
+
 function scriptOwnedConflict(
   h: Harness,
   message: string,
@@ -88,18 +92,15 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       }
       return { kind: "merged" };
     };
-
     const first = await h.coordinator.coordinate(PROJECT);
-
     expect(first.holdReason).toBe("infra_error");
     expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }, { runId: "run_spec_b" }, { runId: "run_spec_c" }]);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
     expect(h.queue.statusOf("run_spec_c")).toBe("queued");
     expect(h.queue.statusOf("run_spec_d")).toBe("queued");
-
+    seedWriterReworkEvidence(h, "spec_c");
     const sustained = await h.coordinator.coordinate(PROJECT);
-
     expect(sustained.holdReason).toBe("all_blocked");
     expect(h.runner.drives).toEqual([
       { runId: "run_spec_a" },
@@ -117,7 +118,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     const formation = formBatch(await h.queue.loadSnapshot(PROJECT), 8);
     expect(formation.batch.map((entry) => entry.specId)).toEqual(["spec_d"]);
   });
-
   it("holds serialized when the culprit claim is lost after the prefix, then recovers without reversing order", async () => {
     const h = makeHarness();
     let now = 1_000_000;
@@ -135,22 +135,17 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       }
       return originalClaim(queueId);
     };
-
     const serialized = await h.coordinator.coordinate(PROJECT);
-
     expect(serialized.holdReason).toBe("serialized");
     expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }]);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("merging");
-
     now += (serialized.retryAfterMs ?? 0) + 1;
     const recovered = await h.coordinator.coordinate(PROJECT);
-
     expect(recovered.mergedSpecId).toBe("spec_b");
     expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }, { runId: "run_spec_b" }]);
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
   });
-
   it("does not drive the culprit when a passing-prefix member is still waiting on re-gate", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
@@ -158,9 +153,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     seed(h, "spec_c");
     h.checker.conflictWhenContains("spec_c");
     h.runner.script("run_spec_b", { kind: "re_gate_pending", message: "prefix B pre_merge is still running" });
-
     const held = await h.coordinator.coordinate(PROJECT);
-
     expect(held.holdReason).toBe("merge_retry");
     expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }, { runId: "run_spec_b" }]);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
@@ -168,7 +161,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     expect(h.queue.statusOf("run_spec_c")).toBe("queued");
     expect(h.gateRework.routed).toEqual([]);
   });
-
   it("does not drive the culprit after a partial-prefix claim loss", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
@@ -185,43 +177,46 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       }
       return originalClaim(queueId);
     };
-
     const serialized = await h.coordinator.coordinate(PROJECT);
-
     expect(serialized.holdReason).toBe("serialized");
     expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }]);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("merging");
     expect(h.queue.statusOf("run_spec_c")).toBe("queued");
   });
-
   it("routes a failed fresh conflict re-gate to writer ownership before retiring the stale entry", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
     h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge test failed" });
+    seedWriterReworkEvidence(h, "spec_b");
     const routeSpy = vi.spyOn(h.gateRework, "routeGateFailToRework");
     const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
-
     const result = await h.coordinator.coordinate(PROJECT);
-
     expect(h.gateRework.routed.map((route) => route.specId)).toEqual(["spec_b"]);
     expect(h.gateRework.routed[0]?.gateError).toContain("fresh pre_merge test failed");
     expect(routeSpy.mock.invocationCallOrder[0]).toBeLessThan(dequeueSpy.mock.invocationCallOrder[0] ?? 0);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("superseded");
     expect(result.dequeuedSpecId).toBe("spec_b");
   });
-
+  it("FAIL-CLOSED: failed-drive writer receipt without store proof parks needs_attention", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.conflictWhenContains("spec_b");
+    h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge test failed" });
+    await h.coordinator.coordinate(PROJECT);
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations[0]?.message).toMatch(/RecoveryEvidencePort|store readback/u);
+  });
   it("parks a failed fresh conflict re-gate at needs_attention when no rework router exists", async () => {
     const h = makeHarness({ wireGateRework: false });
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
     h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge build failed" });
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.gateRework.routed).toEqual([]);
     expect(h.escalator.escalations).toEqual([
       {
@@ -232,21 +227,19 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     ]);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("scopes a sustained base-conflict drive failure to its named culprit", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.checker.baseConflictWhenContains("spec_b");
+    seedWriterReworkEvidence(h, "spec_b");
     h.runner.driveMerge = async ({ runId }) => {
       h.runner.drives.push({ runId });
       throw new RefResetTransientError("persistent base-conflict resolver outage");
     };
-
     const first = await h.coordinator.coordinate(PROJECT);
     const sustained = await h.coordinator.coordinate(PROJECT);
-
     expect(first.holdReason).toBe("infra_error");
     expect(sustained.holdReason).toBe("all_blocked");
     expect(h.runner.drives).toEqual([{ runId: "run_spec_b" }, { runId: "run_spec_b" }]);
@@ -257,7 +250,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     const formation = formBatch(await h.queue.loadSnapshot(PROJECT), 8);
     expect(formation.batch.map((entry) => entry.specId)).toEqual(["spec_a", "spec_c"]);
   });
-
   it("fails closed when a production merge conflict has no durable recovery owner", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
@@ -267,9 +259,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       "run_spec_b",
       mapConflictDriveOutcome({ message: "resolver returned conflict without routing a replan" }),
     );
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
     expect(h.queue.statusOf("run_spec_a")).toBe("queued");
@@ -277,7 +267,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
       "spec_b",
     ]);
   });
-
   it("permits conflict retirement only after settlement-time store readback of the planner run", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
@@ -298,25 +287,21 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
         },
       }),
     );
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("conflict");
     expect(h.escalator.escalations).toEqual([]);
     expect(h.queue.statusOf("run_spec_a")).toBe("queued");
   });
-
   it("routes a failed passing-batch prefix member to writer rework before dequeue", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge failed on the advanced base" });
+    seedWriterReworkEvidence(h, "spec_b");
     const routeSpy = vi.spyOn(h.gateRework, "routeGateFailToRework");
     const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.runner.drives).toEqual([{ runId: "run_spec_a" }, { runId: "run_spec_b" }]);
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("superseded");
@@ -324,38 +309,31 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     expect(h.gateRework.routed.map((route) => route.specId)).toEqual(["spec_b"]);
     expect(routeSpy.mock.invocationCallOrder[0]).toBeLessThan(dequeueSpy.mock.invocationCallOrder[0] ?? 0);
   });
-
   it("parks a failed passing-batch prefix member when the writer router is absent", async () => {
     const h = makeHarness({ wireGateRework: false });
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.runner.script("run_spec_b", { kind: "failed", message: "fresh pre_merge failed without a router" });
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.queue.statusOf("run_spec_c")).toBe("queued");
     expect(h.escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
   });
-
   it("parks a bisected gate-fail culprit when the writer router assembly is absent", async () => {
     const h = makeHarness({ wireGateRework: false });
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.checker.failWhenContains("spec_b");
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
     expect(h.events.events.filter((event) => event.type === "merge.dequeued").map((event) => event.specId)).toEqual([
       "spec_b",
     ]);
   });
-
   it("rejects a wrong-spec owned receipt (forged cross-spec ownership)", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -369,7 +347,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.escalator.escalations.map((e) => e.specId)).toEqual(["spec_b"]);
   });
-
   it("rejects an owned receipt with empty durable identifiers", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -381,7 +358,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     await h.coordinator.coordinate(PROJECT);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("rejects already_running without a runId (structural forge)", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -393,7 +369,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     await h.coordinator.coordinate(PROJECT);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("FAIL-CLOSED: absent RecoveryEvidencePort parks even with a well-formed typed receipt", async () => {
     const h = makeHarness({ wireEvidence: false });
     seedPair(h);
@@ -406,7 +381,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
   });
-
   it("FAIL-CLOSED: halted run is not active owner evidence at settlement", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -419,7 +393,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     await h.coordinator.coordinate(PROJECT);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("FAIL-CLOSED: run-to-spec mismatch at settlement", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -432,7 +405,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     await h.coordinator.coordinate(PROJECT);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("FAIL-CLOSED: terminal run after mint-before-settle (evidence expires)", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -446,7 +418,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     await h.coordinator.coordinate(PROJECT);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("FAIL-CLOSED: forged enqueued receipt with wrong plannerTaskId", async () => {
     const h = makeHarness();
     seedPair(h);
@@ -459,7 +430,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     await h.coordinator.coordinate(PROJECT);
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
-
   it("keeps conflict-bisect suffix eligible after prefix lands and culprit is driven", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
@@ -482,9 +452,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
         },
       }),
     );
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
     expect(h.queue.dequeueReasonOf("run_spec_c")).toBe("conflict");

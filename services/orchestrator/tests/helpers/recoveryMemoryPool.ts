@@ -155,13 +155,21 @@ export class RecoveryMemoryPool {
       const spec = this.specs.get(String(params[0]));
       return spec ? { rows: [{ status: spec.status }], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
-    // atomic prepare: steering + reopen in one UPDATE
-    if (t.startsWith("UPDATE specs") && t.includes("operator steering") && t.includes("status = $3")) {
+    // atomic prepare: steering + reopen to open
+    if (t.startsWith("UPDATE specs") && t.includes("operator steering") && t.includes("status = 'open'")) {
       const spec = this.specs.get(String(params[0]));
       if (spec === undefined) return { rows: [], rowCount: 0 };
       if (!["open", "in_flight", "review"].includes(spec.status)) return { rows: [], rowCount: 0 };
       spec.description = `${spec.description}\n\n[operator steering] ${String(params[1])}`;
-      spec.status = String(params[2]);
+      spec.status = "open";
+      return { rows: [], rowCount: 1 };
+    }
+    // atomic prepare: reopen-only (rollback, no steering)
+    if (t.startsWith("UPDATE specs SET status = 'open' WHERE spec_id = $1") && !t.includes("operator steering")) {
+      const spec = this.specs.get(String(params[0]));
+      if (spec === undefined) return { rows: [], rowCount: 0 };
+      if (!["open", "in_flight", "review"].includes(spec.status)) return { rows: [], rowCount: 0 };
+      spec.status = "open";
       return { rows: [], rowCount: 1 };
     }
 

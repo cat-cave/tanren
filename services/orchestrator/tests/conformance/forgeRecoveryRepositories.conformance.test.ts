@@ -140,23 +140,14 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(all).toHaveLength(2);
     });
 
-    it("appends steering + reopens a non-terminal spec on the caller's client", async () => {
+    it("appends steering on the caller's client", async () => {
       const d = db();
       seedSpec(d);
       await repos.recovery.appendSteeringToSpec(clientA(d), "spec_a", "go left", systemActor);
       expect(d.specs[0]!.description).toContain("[operator steering] go left");
-      await repos.recovery.reopenSpecForReplan(clientA(d), "spec_a", systemActor);
-      expect(d.specs[0]!.status).toBe("open");
     });
 
-    it("leaves terminal specs untouched on reopen", async () => {
-      const d = db();
-      seedSpec(d, { status: "merged" });
-      await repos.recovery.reopenSpecForReplan(clientA(d), "spec_a", systemActor);
-      expect(d.specs[0]!.status).toBe("merged");
-    });
-
-    it("scopes the run + captured reads + spec writes to the org (off-scope sees zero)", async () => {
+    it("scopes the run + captured reads + steering write to the org (off-scope sees zero)", async () => {
       const d = db();
       seedRun(d);
       seedSpec(d);
@@ -164,9 +155,9 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.recovery.getRun(clientB(d), "run_a", systemActor)).toBeUndefined();
       expect(await repos.recovery.getLastCapturedEventPayload(clientB(d), "run_a", systemActor)).toBeUndefined();
       expect(await repos.recovery.listCapturedEventPayloads(clientB(d), "run_a", systemActor)).toHaveLength(0);
-      // An off-scope reopen matches no visible spec → no status change.
-      await repos.recovery.reopenSpecForReplan(clientB(d), "spec_a", systemActor);
-      expect(d.specs[0]!.status).toBe("in_flight");
+      // Off-scope steering matches no visible spec → description unchanged.
+      await repos.recovery.appendSteeringToSpec(clientB(d), "spec_a", "nope", systemActor);
+      expect(d.specs[0]!.description).not.toContain("nope");
     });
   });
 

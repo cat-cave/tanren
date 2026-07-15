@@ -75,7 +75,6 @@ describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () 
       orgId: ORG,
       projectId: PROJECT,
       steeringNote: "[gate fail] step lint: missing-semicolon at vitest.config.ts:42",
-      reopenStatus: "open",
     });
 
     expect(calls.prepareSpecForRecovery).toEqual([
@@ -83,7 +82,6 @@ describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () 
         specId: "spec_rework",
         orgId: ORG,
         steeringNote: "[gate fail] step lint: missing-semicolon at vitest.config.ts:42",
-        reopenStatus: "open",
       },
     ]);
     expect(calls.createQueuedRun).toHaveLength(1);
@@ -104,7 +102,6 @@ describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () 
         orgId: ORG,
         projectId: PROJECT,
         steeringNote: "nope",
-        reopenStatus: "open",
       }),
     ).rejects.toBeInstanceOf(SpecNotPreparedForRecoveryError);
 
@@ -121,7 +118,6 @@ describe("buildReplanEnqueuer — atomic prepareSpecForRecovery via writer", () 
         orgId: ORG,
         projectId: PROJECT,
         steeringNote: "nope",
-        reopenStatus: "open",
       }),
     ).rejects.toBeInstanceOf(SpecNotPreparedForRecoveryError);
 

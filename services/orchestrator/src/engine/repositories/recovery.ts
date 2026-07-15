@@ -7,7 +7,8 @@
 //   - the halted-run row read (`runs`),
 //   - the captured-commit lineage reads (`events`, the most-recent + all
 //     `workspace.git_captured` payloads, ordered ts DESC, id DESC),
-//   - the spec-steering append + the spec reopen-for-replan writes (`specs`).
+//   - the legacy standalone steering append (recovery replan/rollback use atomic
+//     prepareSpecForRecovery instead).
 //
 // Every method runs on the client the caller hands in (the org-scope carrier),
 // so under RLS an org-scoped client sees only that org's rows — byte-identical
@@ -74,7 +75,7 @@ export const RecoveryStore = {
     return result.rows.map((r) => r.payload);
   },
 
-  /** Append the operator's steering note to the spec description. */
+  /** Append the operator's steering note to the spec description (standalone; not recovery prepare). */
   async appendSteeringToSpec(
     client: QueryClient,
     specId: string,
@@ -87,13 +88,5 @@ export const RecoveryStore = {
         WHERE spec_id = $1`,
       [specId, steeringNote],
     );
-  },
-
-  /**
-   * Reopen the spec (status → 'open') so the recovery replan can re-claim it,
-   * leaving the terminal `merged` spec untouched.
-   */
-  async reopenSpecForReplan(client: QueryClient, specId: string, _actor: ActorRef): Promise<void> {
-    await client.query(`UPDATE specs SET status = 'open' WHERE spec_id = $1 AND status <> 'merged'`, [specId]);
   },
 } as const;

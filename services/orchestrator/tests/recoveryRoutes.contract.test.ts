@@ -190,6 +190,21 @@ describe("P2B-0008 rollback_to_commit", () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe("unknown_commit");
   });
+
+  it("refuses terminal (merged) spec with zero writes and no run queue", async () => {
+    h.pool.specs.set(SPEC, {
+      ...h.pool.specs.get(SPEC)!,
+      status: "merged",
+      description: "already merged",
+    });
+    const beforeRuns = h.pool.runs.size;
+    const res = await post(h.app, `${base}/rollback`, { commitSha: "9f3a2b4", confirmed: true });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("spec_not_prepared_for_recovery");
+    expect(h.pool.specs.get(SPEC)!.status).toBe("merged");
+    expect(h.pool.specs.get(SPEC)!.description).toBe("already merged");
+    expect(h.pool.runs.size).toBe(beforeRuns);
+  });
 });
 
 describe("P2B-0008 open_inspection_thread", () => {

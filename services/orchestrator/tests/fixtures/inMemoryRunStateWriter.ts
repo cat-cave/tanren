@@ -359,7 +359,7 @@ export class InMemoryRunStateWriter implements RunStateWriter {
       await this.options.forwardSetSpecStatus({
         specId: input.specId,
         orgId: input.orgId,
-        status: input.reopenStatus,
+        status: "open",
       });
     }
     return { prepared: true, fromStatus: this.prepareSpecStatus };

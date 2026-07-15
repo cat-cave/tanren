@@ -91,7 +91,6 @@ class RecordingEnqueuer implements ReplanEnqueuer {
     orgId: string;
     projectId: string;
     steeringNote: string;
-    reopenStatus: string;
   }> = [];
   constructor(private readonly replanRunId = "run_replan_new") {}
   async enqueue(input: {
@@ -99,7 +98,6 @@ class RecordingEnqueuer implements ReplanEnqueuer {
     orgId: string;
     projectId: string;
     steeringNote: string;
-    reopenStatus: string;
   }): Promise<{ replanRunId: string; plannerTaskId: string }> {
     this.calls.push(input);
     return { replanRunId: this.replanRunId, plannerTaskId: `task_${this.replanRunId}` };
@@ -203,7 +201,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(enqueuer.calls[0]).toMatchObject({ specId: "spec_b", orgId: ORG, projectId: PROJECT });
     // (2) re-opened to the RE-DRIVABLE `open` status — NOT `in_flight` (the dead end the
     // walker reads as occupying a slot, which the run-create claim cannot take).
-    expect(enqueuer.calls[0]?.reopenStatus).toBe("open");
+    expect(enqueuer.calls[0]?.steeringNote).toContain("re-plan ON TOP OF");
 
     // (3) the durable replan-context event is appended (the carrier the next planner reads),
     // carrying the re-drivable status — NOT `in_flight`.

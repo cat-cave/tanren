@@ -261,6 +261,8 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.throwInfraAlways(new RefResetTransientError("HTTP 504 (persistent gateway outage)"));
+    // Store proof for the owned member only (recording router mint ids).
+    h.evidence.seedEnqueued("spec_a", "run_rework_spec_a", "task_rework_spec_a", "queued");
 
     const firstHold = await h.coordinator.coordinate(PROJECT);
     expect(firstHold.holdReason).toBe("infra_error");
@@ -404,6 +406,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.checker.failWhenContains("spec_b");
+    h.evidence.seedEnqueued("spec_b", "run_rework_spec_b", "task_rework_spec_b", "queued");
 
     await h.coordinator.coordinate(PROJECT);
 
@@ -414,6 +417,19 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.gateRework.routed.map((r) => r.specId)).toEqual(["spec_b"]);
     expect(h.batchEvents.events.some((e) => e.type === "culprit")).toBe(true);
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
+  });
+
+  it("FAIL-CLOSED: infra escalate owned member without store proof parks needs_attention", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    h.checker.throwInfraAlways(new RefResetTransientError("HTTP 504 (persistent)"));
+    // No evidence seed — mint alone is never enough to supersede.
+
+    await h.coordinator.coordinate(PROJECT);
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_a")).toBe("needs_attention");
+    expect(h.escalator.escalations[0]?.message).toMatch(/RecoveryEvidencePort|store readback/u);
   });
 
   it("a GENUINE conflict bisects → culprit → DRIVEN through the resolver; a recoverable-conflict outcome retires the entry only after the resolver ran", async () => {

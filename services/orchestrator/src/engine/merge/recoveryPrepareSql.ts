@@ -1,5 +1,6 @@
-// Atomic prepareSpecForRecovery SQL applier (steering + allowlisted reopen).
-// Shared by DirectRunStateWriter, the control-plane route, and dashboard replanWithSteering.
+// Atomic prepareSpecForRecovery SQL applier.
+// Sole legal target status is always `open` (never caller-controlled).
+// Optional steering note: replan/rework pass one; rollback prepares with none.
 
 import type { PrepareSpecForRecoveryInput, PrepareSpecForRecoveryResult } from "./recoveryOwnership.js";
 import { RECOVERABLE_SOURCE_SPEC_STATUSES } from "./recoveryOwnership.js";
@@ -13,7 +14,7 @@ type QueryClient = {
 
 /**
  * ATOMIC recovery prepare. Locks the row; refuses missing/terminal/unknown with ZERO
- * writes; otherwise appends steering and sets reopen status in the caller's transaction.
+ * writes; otherwise reopens to `open` and optionally appends steering in the caller's txn.
  */
 export async function applyPrepareSpecForRecovery(
   client: QueryClient,
@@ -28,12 +29,17 @@ export async function applyPrepareSpecForRecovery(
   if (!(RECOVERABLE_SOURCE_SPEC_STATUSES as readonly string[]).includes(fromStatus)) {
     return { prepared: false, reason: "not_recoverable", status: fromStatus };
   }
-  await client.query(
-    `UPDATE specs
-        SET description = description || E'\n\n[operator steering] ' || $2,
-            status = $3
-      WHERE spec_id = $1`,
-    [input.specId, input.steeringNote, input.reopenStatus],
-  );
+  const note = input.steeringNote?.trim() ?? "";
+  if (note.length > 0) {
+    await client.query(
+      `UPDATE specs
+          SET description = description || E'\n\n[operator steering] ' || $2,
+              status = 'open'
+        WHERE spec_id = $1`,
+      [input.specId, note],
+    );
+  } else {
+    await client.query(`UPDATE specs SET status = 'open' WHERE spec_id = $1`, [input.specId]);
+  }
   return { prepared: true, fromStatus };
 }

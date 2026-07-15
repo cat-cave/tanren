@@ -343,6 +343,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       events,
       batchEvents,
       gateRework,
+      escalator: this.deps.escalator,
       ceiling,
       projectId,
       batch,
@@ -350,6 +351,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       holds: verdict.holds,
       queueDepth,
       ...(tx === undefined ? {} : { tx }),
+      ...(this.deps.recoveryEvidence !== undefined && { recoveryEvidence: this.deps.recoveryEvidence }),
     });
   }
 

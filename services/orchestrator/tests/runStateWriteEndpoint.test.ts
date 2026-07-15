@@ -70,6 +70,19 @@ describe("plane-split P3 — write endpoint authn + validation (no DB)", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects prepare-spec-for-recovery when peer submits reopenStatus (target is server-fixed open)", async () => {
+    const app = createInternalRunStateWriteRoutes({ pool: THROWING_POOL, verifier: new AllowAllPeerVerifier() });
+    const response = await post(app, "/internal/prepare-spec-for-recovery", {
+      specId: "spec_1",
+      orgId: "org_1",
+      steeringNote: "note",
+      reopenStatus: "in_flight",
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toBe("invalid_prepare_spec_for_recovery");
+  });
+
   // Codex r5 §3: the de-privileged mTLS data plane can POST any string for
   // status/outcome; a NON-ENUM value must be a controlled 422 `invalid_run_state`
   // AT THE ROUTE — never relayed to the DB to explode against the CHECK constraint

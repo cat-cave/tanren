@@ -166,14 +166,13 @@ export async function replanWithSteering(
   actor: ActorContext,
 ): Promise<ReplanResult> {
   assertRecoverable(ctx);
-  // Atomic prepare in a short org-scoped txn (steering + allowlisted reopen), then
+  // Atomic prepare in a short org-scoped txn (steering + reopen to open), then
   // createQueuedRun on its own connection — prepare must COMMIT first so the claim sees open.
   const prep = await runWithOrgScope(pool, orgId, (client) =>
     applyPrepareSpecForRecovery(client, {
       specId: ctx.specId,
       orgId,
       steeringNote,
-      reopenStatus: "open",
     }),
   );
   if (!prep.prepared) {
@@ -235,16 +234,18 @@ export async function rollbackToCommit(
   if (ctx.lastGoodCommit === null) {
     throw new NoPriorCommitError(ctx.runId);
   }
-  // RLS R3a: the captured-commit read + the spec-reopen UPDATE run in one short
-  // org-scoped txn (commits before the nested `createQueuedRunFromSpec` claims
-  // the spec — see replanWithSteering for the ordering rationale). Inert in R1.
-  await runWithOrgScope(pool, orgId, async (client) => {
+  // Captured-commit validate + atomic allowlisted prepare (no steering) in one org-scoped
+  // txn; createQueuedRun only after prepare commits so the claim sees open.
+  const prep = await runWithOrgScope(pool, orgId, async (client) => {
     const captured = await loadCapturedCommits(client, ctx.runId);
     if (!captured.includes(args.commitSha)) {
       throw new UnknownCommitError(args.commitSha);
     }
-    await reopenSpecForReplan(client, ctx.specId);
+    return applyPrepareSpecForRecovery(client, { specId: ctx.specId, orgId });
   });
+  if (!prep.prepared) {
+    throw new SpecNotPreparedForRecoveryError(ctx.specId, prep.reason, prep.status);
+  }
   const run = await createQueuedRunFromSpec(pool, { specId: ctx.specId, trigger: "dashboard" }, { ...actor, orgId });
   await runWithOrgScope(pool, orgId, async (client) => {
     await new PgEventStore(client).append({
@@ -329,12 +330,4 @@ export async function openInspectionThread(
     specId: ctx.specId,
     threadId: thread.id,
   };
-}
-
-/**
- * Re-open the spec so `createQueuedRunFromSpec` can queue a fresh run (rollback path).
- * Recovery replan uses atomic applyPrepareSpecForRecovery instead.
- */
-async function reopenSpecForReplan(pool: QueryClient, specId: string): Promise<void> {
-  await RecoveryStore.reopenSpecForReplan(pool, specId, systemActor);
 }

@@ -27,6 +27,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch_gate_rework";
 
@@ -38,31 +39,41 @@ interface Harness {
   events: RecordingMergeQueueEventEmitter;
   batchEvents: RecordingBatchMergeEventEmitter;
   gateRework: RecordingBatchGateReworkRouter;
+  evidence: ScriptedRecoveryEvidencePort;
+  escalator: RecordingSpecEscalator;
 }
 
-function makeHarness(): Harness {
+function makeHarness(opts: { wireEvidence?: boolean } = {}): Harness {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
   const checker = new InMemoryBatchChecker();
   const events = new RecordingMergeQueueEventEmitter();
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const gateRework = new RecordingBatchGateReworkRouter();
+  const evidence = new ScriptedRecoveryEvidencePort();
+  const escalator = new RecordingSpecEscalator();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
     checker,
     events,
     batchEvents,
-    escalator: new RecordingSpecEscalator(),
+    escalator,
     gateRework,
+    ...(opts.wireEvidence !== false ? { recoveryEvidence: evidence } : {}),
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
   });
-  return { coordinator, queue, runner, checker, events, batchEvents, gateRework };
+  return { coordinator, queue, runner, checker, events, batchEvents, gateRework, evidence, escalator };
 }
 
 function seed(h: Harness, specId: string): void {
   h.queue.seed({ runId: `run_${specId}`, specId, dependsOn: [], priority: "tbd" as SpecPriority });
+}
+
+/** Seed store proof for RecordingBatchGateReworkRouter's deterministic receipt ids. */
+function seedWriterReworkEvidence(h: Harness, specId: string): void {
+  h.evidence.seedEnqueued(specId, `run_rework_${specId}`, `task_rework_${specId}`, "queued");
 }
 
 describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 strand fix)", () => {
@@ -75,6 +86,7 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     seed(h, "spec_c");
     seed(h, "spec_d");
     h.checker.failWhenContains("spec_c");
+    seedWriterReworkEvidence(h, "spec_c");
     const dequeueSpy = vi.spyOn(h.events, "emitDequeued");
     const culpritSpy = vi.spyOn(h.batchEvents, "emitCulprit");
 
@@ -156,5 +168,32 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     expect(queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(escalator.escalations.map((entry) => entry.specId)).toEqual(["spec_b"]);
     expect(queue.statusOf("run_spec_a")).toBe("merged");
+  });
+
+  it("FAIL-CLOSED: gate-fail owned receipt without RecoveryEvidencePort parks (never mint-only supersede)", async () => {
+    const h = makeHarness({ wireEvidence: false });
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.failWhenContains("spec_b");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.gateRework.routed.map((r) => r.specId)).toEqual(["spec_b"]);
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
+  });
+
+  it("FAIL-CLOSED: gate-fail owned receipt with wrong planner task parks at settlement", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.failWhenContains("spec_b");
+    // Seed wrong task id — structural mint matches router, store readback fails.
+    h.evidence.seedEnqueued("spec_b", "run_rework_spec_b", "task_OTHER", "queued");
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations[0]?.message).toMatch(/store readback/u);
   });
 });

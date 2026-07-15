@@ -49,7 +49,6 @@ export function buildReplanEnqueuer(runStateWriter: RunStateWriter): ReplanEnque
         specId: input.specId,
         orgId: input.orgId,
         steeringNote: input.steeringNote,
-        reopenStatus: input.reopenStatus,
       });
       if (!prep.prepared) {
         throw new SpecNotPreparedForRecoveryError(input.specId, prep.reason, prep.status);

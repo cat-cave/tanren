@@ -158,8 +158,6 @@ export interface ReplanEnqueuer {
     projectId: string;
     /** The replan context appended to the spec as steering (the next planner re-authors on it). */
     steeringNote: string;
-    /** The re-drivable status to re-open the spec to before the run-create claims it. */
-    reopenStatus: string;
   }): Promise<{ replanRunId: string; plannerTaskId: string }>;
 }
 
@@ -192,8 +190,6 @@ export interface SpecStatusReplanRouterDeps {
   enqueuer?: ReplanEnqueuer;
   /** Reads the spec's prior re-plan conflict signatures (the convergence-detector input). */
   priorReplans?: PriorReplanReader;
-  /** The status a routed-back spec returns to so it can be re-driven (default `open`). */
-  replanStatus?: string;
 }
 
 export class SpecStatusReplanRouter implements ReplanRouter {
@@ -221,10 +217,9 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       };
     }
 
-    // Enqueuer atomically prepares (steering + allowlisted reopen) then createQueuedRun.
+    // Enqueuer atomically prepares (steering + reopen to open) then createQueuedRun.
     // Terminal/missing/unknown specs never receive steering (prepare fails closed).
-    const status = this.deps.replanStatus ?? "open";
-    const enqueue = await this.enqueueReplan(input, status);
+    const enqueue = await this.enqueueReplan(input);
     if (enqueue.outcome === "no-enqueuer") {
       const message = await this.escalateEnqueueFailure(input, "no re-plan enqueuer is configured");
       return {
@@ -271,7 +266,7 @@ export class SpecStatusReplanRouter implements ReplanRouter {
         specId: input.specId,
         ...(input.otherSpecId !== undefined && { otherSpecId: input.otherSpecId }),
         newContext: input.newContext,
-        replanStatus: status,
+        replanStatus: "open",
         // The fixed-point axis: which conflict this re-plan was routed against, so the next
         // routing's detector can tell "the same conflict recurred" (stuck) from "a different
         // conflict" (progress) — never a count.
@@ -326,10 +321,10 @@ export class SpecStatusReplanRouter implements ReplanRouter {
    *                         never silently strand the spec at `replan_routed`);
    *   - `no-enqueuer`    — no enqueuer wired (the degenerate/test status-only path).
    */
-  private async enqueueReplan(
-    input: { specId: string; newContext: string },
-    status: string,
-  ): Promise<
+  private async enqueueReplan(input: {
+    specId: string;
+    newContext: string;
+  }): Promise<
     | { outcome: "enqueued"; replanRunId: string; plannerTaskId: string }
     | { outcome: "already-running"; runId: string }
     | { outcome: "no-live-run" }
@@ -343,7 +338,6 @@ export class SpecStatusReplanRouter implements ReplanRouter {
         orgId: this.deps.orgId,
         projectId: this.deps.projectId,
         steeringNote: input.newContext,
-        reopenStatus: status,
       });
       return { outcome: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId };
     } catch (error) {
