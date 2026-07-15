@@ -195,8 +195,9 @@ export function authorityBundle(
   return {
     codeHost: host,
     orgId: "org_1",
-    finalizerFor: (context) => ({
-      finalizeLanded: async (input: { mainSha: string }) => {
+    landStoreFor: (context) => ({
+      persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+      recordLandReceipt: async (input: { mainSha: string }) => {
         landed.push(input.mainSha);
         await options.events?.append({
           eventType: "merge.completed",
@@ -205,7 +206,7 @@ export function authorityBundle(
             prNumber: context.prNumber,
             integration: context.integration,
             mergeSha: input.mainSha,
-            // The §5 audit envelope the real finalizer stamps (policy version +
+            // The §5 audit envelope the real receipt stamps (policy version +
             // initiating/approving actors) — so the AUDIT-EVIDENCE assertions hold.
             ...context.auditEnvelope,
           },

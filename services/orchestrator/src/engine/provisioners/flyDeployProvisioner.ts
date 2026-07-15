@@ -18,9 +18,11 @@
 // via `OrganizationsStore.getLogin` before this provisioner is called).
 //
 // API surface used (Fly Machines REST API):
-//   - GET  /v1/apps?org_slug=<org>      → list the org's apps (discover)
-//   - POST /v1/apps                     → create an app under the org (provision)
-//   - POST /v1/apps/{app}/machines      → TRIGGER a release (run the app's image)
+//   - GET    /v1/apps?org_slug=<org>            → list the org's apps (discover)
+//   - POST   /v1/apps                           → create an app under the org (provision)
+//   - POST   /v1/apps/{app}/machines            → TRIGGER a release (run the app's image)
+//   - GET    /v1/apps/{app}/machines            → list the app's machines (reap: find prior ones)
+//   - DELETE /v1/apps/{app}/machines/{id}?force → reap a prior machine (single-instance convergence)
 // And the Fly GraphQL API (https://api.fly.io/graphql) for IP allocation — the Machines
 // REST *release* path does not allocate IPs (the `allocateIpAddress` GraphQL mutation is
 // the surface used here; the Machines REST `ip_assignments` endpoint is an alternative):
@@ -40,7 +42,10 @@
 //
 // Deploy trigger: `triggerDeploy` POSTs `/v1/apps/{app}/machines` to create + run a
 // machine from the app's image — the Machines-API release equivalent of `fly deploy`
-// — and returns the machine id + the app's stable URL + its reported state.
+// — and returns the machine id + the app's stable URL + its reported state. It then
+// REAPS every other machine of the app (`reapOtherMachines`) so a single-instance,
+// file-backed app converges to exactly one machine per release instead of accumulating
+// one per deploy (which fragments a local store across machines — apex v96 root cause).
 //
 // MERGE-REFLECTING PRECEDENCE (PR2): `triggerDeploy` now has TWO image sources,
 // tried in this order:
@@ -63,6 +68,7 @@ import type { OrgGrant, ProjectContext } from "../contracts/integrationProvision
 import {
   DeployProvisioner,
   type DeployApp,
+  type DeployArtifactIdentity,
   type DeployEnvVar,
   type DeploymentStatus,
   type DeployProviderApi,
@@ -71,8 +77,16 @@ import {
   type DeploySource,
 } from "./deployProvisioner.js";
 import type { FlyImageBuilder } from "./flyImageBuilder.js";
+import { flyMachineConfig } from "./flyMachineConfig.js";
+import {
+  FLY_API_BASE,
+  resolveFlyArtifactIdentity,
+  teardownFlyDeployment,
+  transitionFlyDeployment,
+} from "./flyReleaseLifecycle.js";
 
-const FLY_API_BASE = "https://api.machines.dev";
+export { flyMachineConfig } from "./flyMachineConfig.js";
+
 // The Fly GraphQL API — the ONLY surface that allocates app IP addresses (the Machines
 // REST API does not). Used right after app creation to give the app a shared IPv4 so
 // `https://<app>.fly.dev` routes.
@@ -86,43 +100,6 @@ interface FlyApp {
 
 interface FlyAppsListResponse {
   apps?: FlyApp[];
-}
-
-/**
- * The Fly Machines release config for a static-image deploy: the image, the shared
- * guest size, the TCP service that maps edge ports 80/443 → `internal_port` 3000
- * (matching `fly.toml`'s internal_port so `<app>.fly.dev` routes to the app), and an
- * HTTP health check on `/`. Extracted as a pure helper so the release body is assertable
- * directly in the test (and a later build-from-source PR can swap the image source without
- * touching the port mapping).
- */
-export function flyMachineConfig(image: string): Record<string, unknown> {
-  return {
-    image,
-    guest: { cpu_kind: "shared", cpus: 1, memory_mb: 256 },
-    services: [
-      {
-        protocol: "tcp",
-        internal_port: 3000,
-        ports: [
-          { port: 80, handlers: ["http"], force_https: true },
-          { port: 443, handlers: ["tls", "http"] },
-        ],
-      },
-    ],
-    checks: {
-      httpget: {
-        type: "http",
-        port: 3000,
-        method: "get",
-        path: "/",
-        interval: "15s",
-        // eslint-disable-next-line no-inline-comments — the inline arch-allow bless is required: the arch scanner's `timeout:` pattern is single-line (no multi-line lookahead), so the annotation must ride the same raw line.
-        timeout: "10s", // arch-allow: timeout-class — Fly Machines HTTP health-check per-probe bound (API config field sent to Fly, not a JS timer / wall-clock deadline on a running command)
-        grace_period: "10s",
-      },
-    },
-  };
 }
 
 /**
@@ -370,7 +347,91 @@ class FlyDeployApi implements DeployProviderApi {
     if (body.id === undefined) {
       throw new Error(`fly trigger deploy for '${app.name}' returned no machine id: ${response.text}`);
     }
+    // Reap every OTHER machine of this app so a single-instance app converges to exactly ONE
+    // machine per release. Fly's `POST /v1/apps/{app}/machines` CREATES a NEW machine on every
+    // deploy and never retires the prior one, so over N deploys an app accumulates N machines.
+    // For a single-instance, file-backed app that is fatal: each machine has its OWN local store,
+    // so a write that lands on one machine and a later read that hits another reads the record as
+    // "missing" — the data FRAGMENTS across machines (confirmed live on apex v96: ~30 machines →
+    // persistence appears broken; reaping to 1 → persistence works). Runs AFTER the new machine is
+    // created (`body.id` is now serving), so there is NO serving gap. Best-effort by contract — the
+    // new release is already live, so a listing/transport failure here must NEVER fail the deploy.
+    await this.reapOtherMachines(app.name, token, body.id);
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
+  }
+
+  // Destroy every machine of `appName` except `keepId`, so a single-instance app
+  // converges to exactly one machine per deploy instead of accumulating one per
+  // release. Best-effort by contract (see the call site).
+  private async reapOtherMachines(appName: string, token: string, keepId: string): Promise<void> {
+    try {
+      const list = await this.transport.request({
+        method: "GET",
+        url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!list.ok) {
+        return;
+      }
+      const machines = (list.json ?? []) as ReadonlyArray<{ id?: string }>;
+      for (const machine of machines) {
+        if (machine.id === undefined || machine.id === keepId) {
+          continue;
+        }
+        await this.transport
+          .request({
+            method: "DELETE",
+            url: `${FLY_API_BASE}/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machine.id)}?force=true`,
+            headers: { authorization: `Bearer ${token}` },
+          })
+          .catch(() => {});
+      }
+    } catch {
+      // Reap is best-effort: a listing/transport failure must not fail the deploy.
+    }
+  }
+
+  async resolveArtifactIdentity(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployArtifactIdentity> {
+    return resolveFlyArtifactIdentity({ transport: this.transport, token, appName: app.name, deploymentId });
+  }
+
+  async promoteToProduction(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    deploymentId: string,
+  ): Promise<DeployResult> {
+    return transitionFlyDeployment({
+      transport: this.transport,
+      token,
+      appName: app.name,
+      deploymentId,
+      operation: "promote",
+    });
+  }
+
+  async rollbackToDeployment(
+    _grant: OrgGrant,
+    token: string,
+    app: DeployApp,
+    targetDeploymentId: string,
+  ): Promise<DeployResult> {
+    return transitionFlyDeployment({
+      transport: this.transport,
+      token,
+      appName: app.name,
+      deploymentId: targetDeploymentId,
+      operation: "rollback",
+    });
+  }
+
+  async teardownDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void> {
+    await teardownFlyDeployment({ transport: this.transport, token, appName: app.name, deploymentId });
   }
 
   async destroyApp(_grant: OrgGrant, token: string, app: DeployApp): Promise<void> {

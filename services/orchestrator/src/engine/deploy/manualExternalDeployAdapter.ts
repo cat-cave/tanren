@@ -27,15 +27,23 @@
 // `pgManualAttestationStore.ts`. This module wires the adapter over that seam.
 
 import type {
+  ApplyPreviewInput,
+  ArtifactIdentity,
+  BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  PreviewRelease,
+  PromoteInput,
   ProvisionOrBindInput,
+  ReleaseTransition,
+  RollbackInput,
   UrlReachabilityProbe,
   VerifyPollPolicy,
 } from "../contracts/deployAdapter.js";
+import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { EventStore } from "../eventStore.js";
@@ -133,6 +141,19 @@ function declaredSurfaceKind(grant: OrgGrant): ManualExternalSurfaceKind {
   );
 }
 
+/** Read the optional operator-attested artifact identity as raw provider strings. */
+function declaredArtifactIdentity(grant: OrgGrant): {
+  artifactDigest?: string;
+  providerChecksum?: string | null;
+} {
+  const artifactDigest = grant.metadata["manualExternalArtifactDigest"];
+  const providerChecksum = grant.metadata["manualExternalProviderChecksum"];
+  return {
+    ...(typeof artifactDigest === "string" ? { artifactDigest } : {}),
+    ...(providerChecksum === null || typeof providerChecksum === "string" ? { providerChecksum } : {}),
+  };
+}
+
 /** The confirmation-route path notification consumers render as a link/CLI hint. */
 export function manualExternalConfirmationPath(orgId: string, projectId: string, deploymentId: string): string {
   return `/orgs/${orgId}/projects/${projectId}/deploys/${encodeURIComponent(deploymentId)}/confirm`;
@@ -222,6 +243,67 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       });
     }
     return { deploymentId, url, state: "pending_manual_confirmation" };
+  }
+
+  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(grant, ref, source);
+    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+  }
+
+  async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
+    // A manual, out-of-band delivery has no provider to read an artifact identity from,
+    // so the OPERATOR declares it on the org grant metadata; we assert the deployment was
+    // recorded (LOUD when not) and then validate + brand the declared identity. Reading
+    // from the grant (not a persisted column) keeps the durable attestation store — and
+    // its migration 0031 table — unchanged; SP-6's only schema owner stays 0036.
+    await this.loadRecord(ref, deploymentId);
+    const { artifactDigest: rawDigest, providerChecksum: rawProviderChecksum } = declaredArtifactIdentity(grant);
+    if (rawDigest === undefined || rawDigest === "") {
+      throw new DeployAdapterOperationError(
+        MANUAL_EXTERNAL_ADAPTER_KIND,
+        `manual deployment '${deploymentId}' has no operator-declared artifact digest — set grant metadata 'manualExternalArtifactDigest' to the deployed artifact's canonical sha256 identity`,
+      );
+    }
+    return {
+      artifactDigest: parseDigest(rawDigest),
+      providerChecksum:
+        rawProviderChecksum === undefined || rawProviderChecksum === null
+          ? null
+          : parseProviderChecksum(rawProviderChecksum),
+    };
+  }
+
+  async applyPreview(_grant: OrgGrant, _ref: DeployRef, _input: ApplyPreviewInput): Promise<PreviewRelease> {
+    // An out-of-band manual release has no environment or traffic surface to preview.
+    throw new DeployAdapterOperationError(
+      MANUAL_EXTERNAL_ADAPTER_KIND,
+      "applyPreview is not a capability of the manual_external adapter class — a manual release has no preview/promote/rollback/teardown surface",
+    );
+  }
+
+  async promote(_grant: OrgGrant, _ref: DeployRef, _input: PromoteInput): Promise<ReleaseTransition> {
+    // An out-of-band manual release has no environment or traffic surface to promote.
+    throw new DeployAdapterOperationError(
+      MANUAL_EXTERNAL_ADAPTER_KIND,
+      "promote is not a capability of the manual_external adapter class — a manual release has no preview/promote/rollback/teardown surface",
+    );
+  }
+
+  async rollback(_grant: OrgGrant, _ref: DeployRef, _input: RollbackInput): Promise<ReleaseTransition> {
+    // An out-of-band manual release has no environment or traffic surface to roll back.
+    throw new DeployAdapterOperationError(
+      MANUAL_EXTERNAL_ADAPTER_KIND,
+      "rollback is not a capability of the manual_external adapter class — a manual release has no preview/promote/rollback/teardown surface",
+    );
+  }
+
+  async teardownPreview(_grant: OrgGrant, _ref: DeployRef, _previewId: string): Promise<void> {
+    // An out-of-band manual release has no environment or traffic surface to tear down.
+    throw new DeployAdapterOperationError(
+      MANUAL_EXTERNAL_ADAPTER_KIND,
+      "teardownPreview is not a capability of the manual_external adapter class — a manual release has no preview/promote/rollback/teardown surface",
+    );
   }
 
   async status(_grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {

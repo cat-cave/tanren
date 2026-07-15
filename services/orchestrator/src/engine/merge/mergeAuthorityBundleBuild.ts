@@ -14,7 +14,7 @@
 
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/projectConfig.js";
-import { buildLandFinalizer } from "./mergeAuthorityLandFinalizer.js";
+import { buildAuthorityLandStore } from "./mergeAuthorityLandFinalizer.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
@@ -123,7 +123,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
   return {
     codeHost: codeHostFor(input.githubHttp, input.resolveToken),
     orgId: input.orgId,
-    finalizerFor: (context) => buildLandFinalizer(input.pool, context, input.runStateWriter),
+    landStoreFor: (context) => buildAuthorityLandStore(input.pool, context, input.runStateWriter),
     gateConfigHash: "",
     policyVersion: String(input.policyVersion),
     gateOutcome: input.gateOutcome,
