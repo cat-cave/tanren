@@ -362,4 +362,96 @@ describe("project budget routes", () => {
     const { status } = await getJson(app, "/orgs/org_acme/projects/nope/budget");
     expect(status).toBe(404);
   });
+
+  it("fails loud with 409 when a sibling config write lands before budget CAS", async () => {
+    // Budget PUT and governance PUT share the whole-config CAS authority. A
+    // concurrent sibling write must never clobber the other — conflict fails loud.
+    class BudgetInterleavePool extends RoutesPool {
+      private configReadCount = 0;
+      private releaseFirstRead: (() => void) | undefined;
+      private firstReadSeen: (() => void) | undefined;
+      readonly budgetSnapshotRead = new Promise<void>((resolve) => {
+        this.firstReadSeen = resolve;
+      });
+      private readonly budgetMayContinue = new Promise<void>((resolve) => {
+        this.releaseFirstRead = resolve;
+      });
+
+      allowBudgetToContinue(): void {
+        this.releaseFirstRead?.();
+      }
+
+      override async query(sql: string, params: unknown[] = []) {
+        const isConfigRead =
+          sql.trim().startsWith("SELECT org_id, config FROM projects WHERE project_id = $1") ||
+          sql.trim().startsWith("SELECT config FROM projects WHERE project_id = $1");
+        if (isConfigRead) {
+          this.configReadCount += 1;
+          if (this.configReadCount === 1) {
+            const result = await super.query(sql, params);
+            this.firstReadSeen?.();
+            await this.budgetMayContinue;
+            return result;
+          }
+        }
+        return super.query(sql, params);
+      }
+    }
+
+    const pool = new BudgetInterleavePool();
+    pool.seedOrg({ id: "org_acme" });
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    pool.seedProject({
+      project_id: "proj_1",
+      org_id: "org_acme",
+      config: {
+        version: 1,
+        auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+      },
+    });
+    const app = new Hono<ActorContextEnv>();
+    app.use(
+      "*",
+      createAuthMiddleware({
+        store: {
+          async findApiTokenByRaw() {},
+          async loadSession() {},
+          async resolveActorContext() {
+            return admin;
+          },
+        } as never,
+        localDevActor: admin,
+      }),
+    );
+    app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, githubHttp: {} as never }));
+
+    const budgetRequest = app.request("/orgs/org_acme/projects/proj_1/budget", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ceilingUsd: 50, period: "total" }),
+    });
+    await pool.budgetSnapshotRead;
+
+    // Sibling governance write lands while budget holds a stale snapshot.
+    const gov = await app.request("/orgs/org_acme/projects/proj_1/governance", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+      }),
+    });
+    expect(gov.status).toBe(200);
+
+    pool.allowBudgetToContinue();
+    const budgetResponse = await budgetRequest;
+    expect(budgetResponse.status).toBe(409);
+    await expect(budgetResponse.json()).resolves.toMatchObject({ error: "project_config_conflict" });
+    // Posture from the sibling write survives; budget must not have been applied.
+    expect(pool.projects.get("proj_1")?.config).toMatchObject({
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+    });
+    expect(pool.projects.get("proj_1")?.config).not.toMatchObject({
+      budget: { ceilingUsd: 50, period: "total" },
+    });
+  });
 });

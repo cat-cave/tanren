@@ -182,7 +182,7 @@ export const ProjectStore = {
     return { orgId: nullableText(row.org_id), config: row.config };
   },
 
-  /** The raw stored `config` blob for a project (the posture writer read-modify-writes it). */
+  /** The raw stored `config` blob for a project (read-only observers + non-CAS helpers). */
   async getConfig(client: QueryClient, projectId: string, _actor: ActorRef): Promise<unknown> {
     const result = await client.query<{ config?: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
       projectId,
@@ -190,7 +190,14 @@ export const ProjectStore = {
     return result.rows[0]?.config;
   },
 
-  /** Overwrite a project's `config` blob (the project PATCH + brownfield posture write). */
+  /**
+   * Unconditional config overwrite. Residual LWW path retained only while the
+   * integration provisioning writer (`engine/integrations/provisioningEngine.ts`,
+   * currently leased by IN-1) still calls it. Every other shared-config writer
+   * MUST use `updateConfigIfCurrent`. Delete this method in the post-IN-1 cutover
+   * once provisioning is on the expected-snapshot CAS authority — no compatibility
+   * wrapper, no parallel LWW authority after that cutover.
+   */
   async updateConfig(client: QueryClient, projectId: string, config: unknown, _actor: ActorRef): Promise<void> {
     await client.query("UPDATE projects SET config = $1::jsonb WHERE project_id = $2", [
       JSON.stringify(config),
@@ -200,7 +207,9 @@ export const ProjectStore = {
 
   /**
    * Replace config only while the exact JSONB snapshot is still current. This is
-   * the canonical lost-update guard for independently authorized config writers.
+   * the sole shared-config write authority for independently authorized writers
+   * (governance PUT, member PATCH, budget PUT, brownfield posture). Postgres
+   * `IS NOT DISTINCT FROM ...::jsonb` is the equality model (key-order invariant).
    */
   async updateConfigIfCurrent(
     client: QueryClient,

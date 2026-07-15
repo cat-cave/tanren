@@ -221,13 +221,19 @@ export function createBrownfieldFullTrackRoutes(options: BrownfieldFullTrackOpti
     const parsed = GovernanceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_governance", issues: parsed.error.issues }, 400);
     const posture = parsed.data.posture;
-    const next = await persistPosture(options.pool, guard.projectId, posture);
+    const persisted = await persistPosture(options.pool, guard.orgId, guard.projectId, posture);
+    if (!persisted.ok) {
+      return c.json(
+        { error: "project_config_conflict", message: "project config changed; reload before retrying" },
+        409,
+      );
+    }
     return c.json(
       {
         projectId: guard.projectId,
         governancePosture: posture,
         externalPushPolicy: externalPushPolicy(posture),
-        config: next,
+        config: persisted.config,
       },
       200,
     );
@@ -351,12 +357,30 @@ async function fetchIssuesFor(
   });
 }
 
-async function persistPosture(pool: pg.Pool, projectId: string, posture: GovernancePostureType): Promise<unknown> {
-  const config = await ProjectStore.getConfig(pool, projectId, systemActor);
-  const current = migrateProjectConfig(config);
-  const next = { ...current, governancePosture: posture };
-  await ProjectStore.updateConfig(pool, projectId, next, systemActor);
-  return next;
+/**
+ * Persist brownfield governance posture through the canonical expected-snapshot
+ * CAS. A concurrent budget/admin config write must not be clobbered and must not
+ * erase this posture either — conflict fails loud for the caller to reload.
+ */
+async function persistPosture(
+  pool: pg.Pool,
+  orgId: string,
+  projectId: string,
+  posture: GovernancePostureType,
+): Promise<{ ok: true; config: unknown } | { ok: false; kind: "conflict" }> {
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined) return { ok: false, kind: "conflict" };
+  const current = migrateProjectConfig(snapshot.config);
+  const next = migrateProjectConfig({ ...current, governancePosture: posture });
+  const updated = await ProjectStore.updateConfigIfCurrent(
+    pool,
+    projectId,
+    orgId,
+    snapshot.config,
+    next,
+    systemActor,
+  );
+  return updated ? { ok: true, config: next } : { ok: false, kind: "conflict" };
 }
 
 function externalPushPolicy(posture: GovernancePostureType): string {

@@ -11,10 +11,11 @@
 //       spend, whether the walker is paused on budget, and the latest durable
 //       project-level walker proof when one has been observed.
 //   PUT  /:orgId/projects/:projectId/budget   { ceilingUsd, period? }
-//     → the same shape, re-read after the write. Sets the project's OWN budget,
-//       read-modify-writing `projects.config.budget` through the SAME versioned
+//     → the same shape, re-read after the write. Sets the project's OWN budget by
+//       expected-snapshot CAS of `projects.config.budget` through the SAME versioned
 //       project-config path the rest of the config uses — a dedicated, discoverable
 //       endpoint so an operator never hand-crafts a full config PATCH to change it.
+//       Concurrent sibling config writers fail loud with 409 rather than clobber.
 //       `ceilingUsd: null` CLEARS the project budget (back to the org default /
 //       unlimited).
 //
@@ -120,9 +121,11 @@ export async function handleBudgetGet(c: Context, pool: pg.Pool, orgId: string, 
 }
 
 /**
- * PUT handler: set (or clear) the project's OWN budget by read-modify-writing
- * `projects.config.budget`, then re-read + return the resolved view. `ceilingUsd:
- * null` removes the project budget (the org default / unlimited then applies).
+ * PUT handler: set (or clear) the project's OWN budget by compare-and-swapping
+ * `projects.config.budget` against the exact snapshot, then re-read + return the
+ * resolved view. A concurrent sibling config write returns 409 rather than
+ * clobbering the other authority's fields. `ceilingUsd: null` removes the project
+ * budget (the org default / unlimited then applies).
  */
 export async function handleBudgetPut(
   c: Context,
@@ -131,8 +134,8 @@ export async function handleBudgetPut(
   projectId: string,
   body: z.infer<typeof BudgetPutSchema>,
 ): Promise<Response> {
-  const ownership = await ProjectStore.getOwnership(pool, projectId, systemActor);
-  if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined || (snapshot.orgId !== null && snapshot.orgId !== orgId)) {
     return c.json({ error: "project_not_found" }, 404);
   }
 
@@ -140,8 +143,7 @@ export async function handleBudgetPut(
   // project can fire the re-walk wake below (audit §3.7e).
   const before = await new PgBudgetGate(pool).resolveBudget(projectId);
 
-  const rawConfig = await ProjectStore.getConfig(pool, projectId, systemActor);
-  const current = migrateProjectConfig(rawConfig);
+  const current = migrateProjectConfig(snapshot.config);
   const nextConfig = {
     ...current,
     budget:
@@ -154,7 +156,21 @@ export async function handleBudgetPut(
   };
   // Round-trip through the versioned parser so the persisted blob is always a valid
   // ProjectConfigV1 (drops the `budget` key entirely when cleared — `.strict()`).
-  await ProjectStore.updateConfig(pool, projectId, migrateProjectConfig(nextConfig), systemActor);
+  // Canonical expected-snapshot CAS — never an unconditional overwrite.
+  const updated = await ProjectStore.updateConfigIfCurrent(
+    pool,
+    projectId,
+    orgId,
+    snapshot.config,
+    migrateProjectConfig(nextConfig),
+    systemActor,
+  );
+  if (!updated) {
+    return c.json(
+      { error: "project_config_conflict", message: "project config changed; reload before retrying" },
+      409,
+    );
+  }
 
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
   const pauseObservation = await pauseObservationFor(pool, orgId, projectId, state);
