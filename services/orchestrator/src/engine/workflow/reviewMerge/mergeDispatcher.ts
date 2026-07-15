@@ -1,10 +1,6 @@
-// the MergeDispatcher — the per-run merge driver, split out of
-// mergeDispatch.ts to keep each file under the 500-line architecture cap.
-// `mergeForRun` builds the dispatcher and calls one of its mode methods
-// (handOff / enqueueNative / directMerge / blockByPosture). directMerge runs
-// the up-to-date enforcement (ensureUpToDate) BEFORE the merge: a behind
-// branch is rebased + re-gated, a dirty/422 branch is routed to the
-// conflict-resolver hook — never merged stale, never merged broken.
+// The MergeDispatcher — per-run merge driver (split from mergeDispatch.ts for the line cap).
+// Mode methods: handOff / enqueueNative / directMerge / blockByPosture. directMerge enforces
+// up-to-date first: behind → rebase+re-gate; conflict → resolver — never stale/broken land.
 
 import { routeTaskUpdate } from "../taskWriteRouting.js";
 import { serviceAuditActor, type AuditEnvelope } from "../../events/schemas/audit.js";
@@ -21,6 +17,7 @@ import {
   type MergeProbe,
 } from "./mergeDispatchTypes.js";
 import type { ConflictRecoveryDisposition } from "../../contracts/conflictResolution.js";
+import { shouldEmitOwnedConflictAux } from "../../merge/recoveryOwnership.js";
 import { landViaAuthority, rebaseBehindBranch, reGateResolvedTree, type LandOps } from "./mergeLandPaths.js";
 import { markMergeTaskDoneWithEvent, markMergeTaskFailedWithEvent } from "./mergeTaskTerminal.js";
 
@@ -417,25 +414,26 @@ export class MergeDispatcher implements LandOps {
     });
   }
 
-  /** Emit a conflict, but expose `conflict` only when a durable recovery owner exists. */
+  /** Disposition-first: aux merge.conflict only for owned (or blocked holds); never for park fail/terminal. */
   async emitConflict(
     message: string,
     headBranch?: string,
     recovery?: ConflictRecoveryDisposition,
   ): Promise<MergeForRunResult> {
     const { eventStore, context } = this.deps;
-    await eventStore.append({
-      ...this.base(),
-      eventType: "merge.conflict",
-      payload: {
-        ...this.prFields(),
-        integration: this.mergeLabel(),
-        baseBranch: context.baseBranch,
-        ...(headBranch !== undefined && { headBranch }),
-        message,
-      },
-    });
-    // owned → conflict; other dispositions → needs_attention (+ conflictRecovery for settle).
+    if (recovery === undefined || shouldEmitOwnedConflictAux(recovery.kind)) {
+      await eventStore.append({
+        ...this.base(),
+        eventType: "merge.conflict",
+        payload: {
+          ...this.prFields(),
+          integration: this.mergeLabel(),
+          baseBranch: context.baseBranch,
+          ...(headBranch !== undefined && { headBranch }),
+          message,
+        },
+      });
+    }
     const outcome = recovery === undefined ? "blocked" : recovery.kind === "owned" ? "conflict" : "needs_attention";
     await this.finalize(outcome, { taskOutcome: "pending", taskStatus: "running" });
     return this.result(outcome, { message, ...(recovery !== undefined && { conflictRecovery: recovery }) });

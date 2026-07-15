@@ -75,6 +75,16 @@ function rebaseCards(m: IntegrationMetrics | undefined): StatCard[] {
       sub: "had to rebuild",
     },
     {
+      label: "writer rework",
+      value: mqInt(m?.buckets.writer_rework.count ?? null),
+      sub: "gate-fail re-author",
+    },
+    {
+      label: "parked",
+      value: mqInt(m?.buckets.parked.count ?? null),
+      sub: "needs attention",
+    },
+    {
       label: "proof reuse",
       value: mqInt(m?.proofReuseCount ?? null),
       sub: "checks reused, not re-run",

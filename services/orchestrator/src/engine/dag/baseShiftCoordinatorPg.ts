@@ -12,9 +12,11 @@
 
 import type pg from "pg";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { ReplanRouteResult } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import { shouldClearPercolationPending } from "../merge/recoveryOwnership.js";
 import type {
   BaseShiftEventEmitter,
   BaseShiftNodeReader,
@@ -71,11 +73,14 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
     ancestorSpecId: string;
     ancestorSha: string;
     reason: string;
-  }): Promise<void> {
-    // Route the dependent back to the planner WITH the shift as context (kept ALIVE);
-    // then CLEAR the in-flight marker so the settle does not also try to resolve it.
-    await recordReplanContext(this.pool, input, this.runStateWriter);
-    await clearPercolationPending(this.pool, { projectId: input.projectId, runId: input.runId }, this.runStateWriter);
+  }): Promise<ReplanRouteResult> {
+    // Route back to the planner; clear pending ONLY when recovery is durably owned,
+    // parked, or terminal — retain on parking_failed so settle can still recover.
+    const recovery = await recordReplanContext(this.pool, input, this.runStateWriter);
+    if (shouldClearPercolationPending(recovery.kind)) {
+      await clearPercolationPending(this.pool, { projectId: input.projectId, runId: input.runId }, this.runStateWriter);
+    }
+    return recovery;
   }
 }
 

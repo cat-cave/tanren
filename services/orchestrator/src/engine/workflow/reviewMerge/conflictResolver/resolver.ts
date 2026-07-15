@@ -42,6 +42,7 @@ import {
   type SpecIntent,
   type WorkspaceConflictApplier,
 } from "../../../contracts/conflictResolution.js";
+import { shouldEmitOwnedConflictAux } from "../../../merge/recoveryOwnership.js";
 import type { ConflictContext, ConflictResolverHook, ConflictResolverResult } from "../mergeDispatchTypes.js";
 import { createLogger } from "../../../observability/logger.js";
 import type { EntityMergeOutcome } from "./entityMergeFirstPass.js";
@@ -340,10 +341,10 @@ async function handleFailedReGate(
 }
 
 /**
- * The irreconcilable / failed-re-gate tail: route the chosen spec back to the
- * planner (intent stays alive), abort the in-progress merge, emit the inspectable
- * event, and return the router's durable recovery disposition (NOT a merge).
- * `fromFailedReGate` distinguishes the Answerer's diagnosis from a re-gate failure.
+ * The irreconcilable / failed-re-gate tail: route the chosen spec, abort, then
+ * emit aux history ONLY when the final disposition still makes the claim true.
+ * owned → irreconcilable with replanned fields; parked relies on park lineage;
+ * terminal_noop / parking_failed / parking_required leave no misleading aux.
  */
 async function routeIrreconcilable(
   deps: IntentPreservingResolverDeps,
@@ -364,24 +365,28 @@ async function routeIrreconcilable(
     });
   }
   await deps.applier.abort();
-  await deps.eventStore.append({
-    runId: context.runId,
-    specId: deps.mergingSpecIntent.specId,
-    projectId: deps.projectId,
-    orgId: deps.orgId,
-    eventType: "merge.conflict.irreconcilable",
-    payload: {
-      prUrl: context.prUrl,
-      prNumber: context.prNumber,
-      integration: "direct_merge",
-      baseBranch: context.baseBranch,
-      mergingSpecId: deps.mergingSpecIntent.specId,
-      ...(provenance.conflictingSpecId !== undefined && { conflictingSpecId: provenance.conflictingSpecId }),
-      ...(replan !== undefined && { replanned: replan.which, replannedSpecId: replan.specId }),
-      reason,
-      fromFailedReGate,
-    },
-  });
+  // Disposition-first aux: only durable owned replan claims irreconcilable+replanned.
+  if (shouldEmitOwnedConflictAux(recovery.kind) && replan !== undefined) {
+    await deps.eventStore.append({
+      runId: context.runId,
+      specId: deps.mergingSpecIntent.specId,
+      projectId: deps.projectId,
+      orgId: deps.orgId,
+      eventType: "merge.conflict.irreconcilable",
+      payload: {
+        prUrl: context.prUrl,
+        prNumber: context.prNumber,
+        integration: "direct_merge",
+        baseBranch: context.baseBranch,
+        mergingSpecId: deps.mergingSpecIntent.specId,
+        ...(provenance.conflictingSpecId !== undefined && { conflictingSpecId: provenance.conflictingSpecId }),
+        replanned: replan.which,
+        replannedSpecId: replan.specId,
+        reason,
+        fromFailedReGate,
+      },
+    });
+  }
   return { resolved: false, recovery };
 }
 

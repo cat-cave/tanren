@@ -144,7 +144,16 @@ const noNodes: BaseShiftNodeReader = {
 const noopPersistence: BaseShiftPersistence = {
   async repointBase() {},
   async markInFlight() {},
-  async recordReplan() {},
+  async recordReplan() {
+    return {
+      kind: "owned" as const,
+      receipt: {
+        kind: "planner_replan" as const,
+        specId: "spec_b",
+        run: { kind: "already_running" as const, runId: "run_b" },
+      },
+    };
+  },
 };
 const noopEvents: BaseShiftEventEmitter = {
   async emitRebase() {},

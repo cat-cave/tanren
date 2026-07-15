@@ -11,6 +11,7 @@ import {
   type DeriveIntegrationOptions,
   type IntegrationInputs,
 } from "../src/engine/insights/integration/index.js";
+import { RebaseDecisionValues } from "../src/engine/insights/integration/types.js";
 
 const WINDOW_END = new Date("2026-05-28T00:00:00.000Z");
 const WINDOW_DAYS = 30;
@@ -148,5 +149,59 @@ describe("deriveIntegrationMetrics — envelope", () => {
     expect(m.windowDays).toBe(WINDOW_DAYS);
     expect(m.computedAt).toBe(WINDOW_END.toISOString());
     expect(m.rebaseVsRebuild.rebaseCheaper).toBeNull();
+  });
+});
+
+describe("deriveIntegrationMetrics — exhaustive buckets (F4 hostile)", () => {
+  it("HOSTILE: writer_rework and parked are bucketed (not lost while counting in total)", () => {
+    const inputs: IntegrationInputs = {
+      proofReuseCount: 0,
+      rebases: [
+        { runId: "c", decision: "rebased_clean" },
+        { runId: "w", decision: "writer_rework" },
+        { runId: "p", decision: "parked" },
+        { runId: "r", decision: "replanned" },
+        { runId: "h", decision: "held" },
+        { runId: "v", decision: "rebased_resolved" },
+      ],
+      costs: [],
+      runs: [],
+    };
+    const m = deriveIntegrationMetrics(inputs, OPTIONS);
+    // Old bug: totalRebases counted them but buckets omitted writer_rework + parked.
+    expect(m.buckets.writer_rework.count).toBe(1);
+    expect(m.buckets.parked.count).toBe(1);
+    const sum =
+      m.buckets.rebased_clean.count +
+      m.buckets.rebased_resolved.count +
+      m.buckets.replanned.count +
+      m.buckets.writer_rework.count +
+      m.buckets.parked.count +
+      m.buckets.held.count;
+    expect(sum).toBe(m.totalRebases);
+    expect(m.totalRebases).toBe(6);
+  });
+
+  it("every RebaseDecision value has an explicit public bucket key", () => {
+    const m = deriveIntegrationMetrics({ ...EMPTY }, OPTIONS);
+    for (const d of RebaseDecisionValues) {
+      expect(m.buckets).toHaveProperty(d);
+      expect(m.buckets[d].count).toBe(0);
+    }
+  });
+
+  it("unknown decision payloads are excluded from denominator (not silently lost)", () => {
+    const inputs: IntegrationInputs = {
+      proofReuseCount: 0,
+      rebases: [
+        { runId: "ok", decision: "rebased_clean" },
+        { runId: "bad", decision: "not_a_decision" as "rebased_clean" },
+      ],
+      costs: [],
+      runs: [],
+    };
+    const m = deriveIntegrationMetrics(inputs, OPTIONS);
+    expect(m.totalRebases).toBe(1);
+    expect(m.buckets.rebased_clean.count).toBe(1);
   });
 });

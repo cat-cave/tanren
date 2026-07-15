@@ -78,12 +78,17 @@ export const IntegrationMetrics = z
     /** Upper bound of the observation window — "now" at compute time (ISO). */
     windowEnd: z.string(),
     windowDays: z.number().int().positive(),
-    /** Per-`decision` buckets with counts + joined median token / wall-clock cost. */
+    /**
+     * Per-`decision` buckets — exhaustive over every {@link RebaseDecision}.
+     * No decision is silently dropped; counts partition totalRebases.
+     */
     buckets: z
       .object({
         rebased_clean: IntegrationDecisionBucket,
         rebased_resolved: IntegrationDecisionBucket,
         replanned: IntegrationDecisionBucket,
+        writer_rework: IntegrationDecisionBucket,
+        parked: IntegrationDecisionBucket,
         held: IntegrationDecisionBucket,
       })
       .strict(),
@@ -91,7 +96,12 @@ export const IntegrationMetrics = z
     rebaseVsRebuild: RebaseVsRebuild,
     /** How many `integration.proof.reused` events fired in the window (least-repeated-work). */
     proofReuseCount: z.number().int().nonnegative(),
-    /** Total `integration.rebase` events observed across all buckets. */
+    /**
+     * Denominator: count of known-decision `integration.rebase` events in the window.
+     * Equals the sum of all bucket counts (every RebaseDecision has a bucket).
+     * Unknown payload decisions are excluded rather than silently lost from buckets
+     * while still inflating the total.
+     */
     totalRebases: z.number().int().nonnegative(),
     computedAt: z.string(),
   })

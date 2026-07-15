@@ -39,15 +39,19 @@ export interface IntegrationMetrics {
   windowStart: string;
   windowEnd: string;
   windowDays: number;
+  /** Exhaustive per-decision buckets — sum of counts equals totalRebases. */
   buckets: {
     rebased_clean: IntegrationDecisionBucket;
     rebased_resolved: IntegrationDecisionBucket;
     replanned: IntegrationDecisionBucket;
+    writer_rework: IntegrationDecisionBucket;
+    parked: IntegrationDecisionBucket;
     held: IntegrationDecisionBucket;
   };
   rebaseVsRebuild: RebaseVsRebuild;
   /** How many `integration.proof.reused` events fired in the window. */
   proofReuseCount: number;
+  /** Sum of all bucket counts (every known RebaseDecision has a bucket). */
   totalRebases: number;
   computedAt: string;
 }

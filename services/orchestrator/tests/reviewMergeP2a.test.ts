@@ -204,8 +204,9 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
   });
 
   it("re-gated CI FAILS with NO rework router wired → loud needs_attention", async () => {
-    // An out-of-band / test caller with no rework router: still RECOVERABLE (the recovery
-    // surface re-drives), NEVER the old terminal merge.failed — never a silent merge either.
+    // An out-of-band / test caller with no rework router: still RECOVERABLE (parking_required
+    // for settlement to escalate once), NEVER the old terminal merge.failed — and NEVER a
+    // pre-authority merge.conflict aux that races the sole park authority.
     const pool = new ReviewMergePool("direct_merge");
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({ mergeability: BEHIND });
@@ -228,10 +229,12 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
     });
 
     expect(result.outcome).toBe("needs_attention");
+    expect(result.conflictRecovery?.kind).toBe("parking_required");
     expect(landed).toEqual([]);
     const types = events.events.map((e) => e.eventType);
     expect(types).toContain("merge.rebased");
-    expect(types).toContain("merge.conflict");
+    // Disposition-first: parking_required must not claim merge.conflict before the park authority.
+    expect(types).not.toContain("merge.conflict");
     expect(types).not.toContain("merge.failed");
     expect(types).not.toContain("merge.completed");
     expect(pool.tasks.find((t) => t.kind === "merge")?.status).toBe("running");

@@ -1,26 +1,15 @@
-// The ONE base-shift handler (tanren-owns-the-engine.md §3 never-discard + §7 "the two divergent
-// base-shift handlers → one"). A base shift is NEW CONTEXT, never a reason to throw work away: an
-// ancestor lands, OR an unrelated spec lands and moves a shared base. Both the percolation kick-off
-// and the merge-path `behind` mergeability route HERE.
-//
-// THE KEYSTONE — never-discard rebase replaces supersede+regenerate (the deleted
-// `PgPercolationReexecutor` cancelled+dequeued the run and re-planned from scratch, discarding every
-// token). This coordinator instead: (a) loads the affected `integration_nodes` (S0); (b) rebases the
-// dependent's EXISTING branch onto the shifted base via `WorkspaceVcsCore.rebaseOnto` (jj) — KEEPING
-// the same run/branch row (the run id returns UNCHANGED as the re-exec id, so the settle pass
-// advances `verified_ancestor_shas` after the re-gate); (c) re-gates the rebased/resolved branch;
-// (d) on a re-gate GATE-tier failure (a CLEAN/byte-clean tree — no conflict — that just fails
-// lint/test/build on the new base) routes to WRITER REWORK, NOT replan/escalate-as-irreconcilable;
-// re-plans ONLY on a genuine irreconcilable conflict (or a checker/auditor re-gate rejection). A
-// clean rebase + passing gate NEVER re-plans.
-//
-// FAIL-CLOSED (§0): a rebase/gate/resolver INFRA failure HOLDS (the work survives, retried next
-// notification) — never silently merges/discards. jj's first-class conflicts make "a conflict must
-// never brick" true by construction: a conflicting rebase SUCCEEDS and records the conflict IN the
-// commit (`rebaseOnto` never throws), so even an irreconcilable shift keeps the work alive.
+// The ONE base-shift handler (tanren-owns-the-engine.md §3 never-discard + §7). A base shift is
+// NEW CONTEXT, never a reason to throw work away. Never-discard rebase: (a) load integration_nodes;
+// (b) jj-rebase the EXISTING branch in place (same run id); (c) re-gate; (d) GATE-tier fail →
+// writer rework; genuine irreconcilable → replan (kept alive). Clean rebase + pass never re-plans.
+// FAIL-CLOSED: infra failure HOLDS (work survives). jj records conflicts in-commit — never bricks.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { ConflictRecoveryDisposition, GateReworkRouteResult } from "../contracts/conflictResolution.js";
+import type {
+  ConflictRecoveryDisposition,
+  GateReworkRouteResult,
+  ReplanRouteResult,
+} from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
@@ -340,12 +329,13 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // Only parking_required / absent (no park attempt yet) delegates replan here.
-      // parked / terminal_noop / parking_failed / owned already assigned disposition.
-      if (resolution.recovery === undefined || resolution.recovery.kind === "parking_required") {
-        await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
+      // parking_required / absent → replan and use the POST-route disposition.
+      // owned / parked / terminal_noop / parking_failed already assigned — never replan.
+      let recovery: ConflictRecoveryDisposition | undefined = resolution.recovery;
+      if (recovery === undefined || recovery.kind === "parking_required") {
+        recovery = await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
       }
-      const decision = baseShiftDecisionFromRecovery(resolution.recovery);
+      const decision = baseShiftDecisionFromRecovery(recovery);
       await this.emit(input, true, decision);
       return { decision, headSha: input.rebase.headSha };
     }
@@ -452,12 +442,12 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     });
   }
 
-  /** Route the dependent back to the planner WITH the shift as context (kept ALIVE). */
+  /** Route back to the planner; return the actual post-route disposition (never invent replanned). */
   private async replan(
     input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
     reason: string,
-  ): Promise<void> {
-    await this.deps.persistence.recordReplan({
+  ): Promise<ReplanRouteResult> {
+    return this.deps.persistence.recordReplan({
       projectId: input.projectId,
       specId: input.dependent.specId,
       runId: input.dependent.runId,

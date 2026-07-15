@@ -131,8 +131,16 @@ class RecordingPersistence implements BaseShiftPersistence {
     // behind path must NOT reach here (it is wrapped by MarkerSuppressedBaseShiftPersistence).
     this.markedInFlight.push({ runId: input.runId, ancestorSpecId: input.pending.ancestorSpecId });
   }
-  async recordReplan(input: { runId: string; specId: string }): Promise<void> {
+  async recordReplan(input: { runId: string; specId: string }) {
     this.replanned.push({ runId: input.runId, specId: input.specId });
+    return {
+      kind: "owned" as const,
+      receipt: {
+        kind: "planner_replan" as const,
+        specId: input.specId,
+        run: { kind: "already_running" as const, runId: input.runId },
+      },
+    };
   }
 }
 

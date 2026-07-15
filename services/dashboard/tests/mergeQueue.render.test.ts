@@ -45,6 +45,8 @@ const METRICS_FULL = {
     rebased_clean: bucket(12, 8000),
     rebased_resolved: bucket(5, 9000),
     replanned: bucket(2, 24000),
+    writer_rework: bucket(0, null),
+    parked: bucket(0, null),
     held: bucket(1, null),
   },
   rebaseVsRebuild: {
@@ -91,6 +93,8 @@ const METRICS_EMPTY = {
     rebased_clean: bucket(0, null),
     rebased_resolved: bucket(0, null),
     replanned: bucket(0, null),
+    writer_rework: bucket(0, null),
+    parked: bucket(0, null),
     held: bucket(0, null),
   },
   rebaseVsRebuild: {

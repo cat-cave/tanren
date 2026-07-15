@@ -50,7 +50,9 @@ import { PgDagAncestorStackResolver } from "./walkerPg.js";
 import { type ChangePercolationCoordinator, PercolatingCoordinator } from "./percolation.js";
 import { PercolatingKickOff } from "./percolationOperation.js";
 import { PgPercolationEventEmitter, PgPercolationReadModel } from "./percolationPg.js";
+import { shouldClearPercolationPending } from "../merge/recoveryOwnership.js";
 import { clearPercolationPending, recordReplanContext, recordVerifiedAncestorSha } from "./percolationWrites.js";
+import type { ReplanRouteResult } from "../contracts/conflictResolution.js";
 
 export interface BuildPercolationCoordinatorDeps {
   pool: pg.Pool;
@@ -105,7 +107,7 @@ export class PgPercolationSettler implements PercolationSettler {
     // bug), refuse to advance `verified_ancestor_shas` — clear the marker and route to
     // replan instead, never silently unblocking the merge on a reviewer's "changes_requested".
     if (input.pending.reviewVerdict === "changes_requested") {
-      await recordReplanContext(
+      const recovery = await recordReplanContext(
         this.pool,
         {
           projectId: input.projectId,
@@ -117,11 +119,13 @@ export class PgPercolationSettler implements PercolationSettler {
         },
         this.runStateWriter,
       );
-      await clearPercolationPending(
-        this.pool,
-        { projectId: input.projectId, runId: input.dependent.runId },
-        this.runStateWriter,
-      );
+      if (shouldClearPercolationPending(recovery.kind)) {
+        await clearPercolationPending(
+          this.pool,
+          { projectId: input.projectId, runId: input.dependent.runId },
+          this.runStateWriter,
+        );
+      }
       return;
     }
     await recordVerifiedAncestorSha(
@@ -148,7 +152,7 @@ export class PgPercolationSettler implements PercolationSettler {
     pending: PercolationPending;
     reason: string;
   }): Promise<void> {
-    await recordReplanContext(
+    const recovery = await recordReplanContext(
       this.pool,
       {
         projectId: input.projectId,
@@ -160,11 +164,13 @@ export class PgPercolationSettler implements PercolationSettler {
       },
       this.runStateWriter,
     );
-    await clearPercolationPending(
-      this.pool,
-      { projectId: input.projectId, runId: input.dependent.runId },
-      this.runStateWriter,
-    );
+    if (shouldClearPercolationPending(recovery.kind)) {
+      await clearPercolationPending(
+        this.pool,
+        { projectId: input.projectId, runId: input.dependent.runId },
+        this.runStateWriter,
+      );
+    }
   }
 }
 
@@ -229,8 +235,8 @@ export class MarkerSuppressedBaseShiftPersistence implements BaseShiftPersistenc
     ancestorSpecId: string;
     ancestorSha: string;
     reason: string;
-  }): Promise<void> {
-    await this.inner.recordReplan(input);
+  }): Promise<ReplanRouteResult> {
+    return this.inner.recordReplan(input);
   }
 }
 

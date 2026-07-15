@@ -6,7 +6,7 @@
 // keep importing from `./baseShiftCoordinator.js` unchanged.
 
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
+import type { GateReworkRouteResult, ReplanRouteResult } from "../contracts/conflictResolution.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
 import type { AncestorStack } from "./ancestorStack.js";
 
@@ -91,7 +91,11 @@ export interface BaseShiftPersistence {
     runId: string;
     pending: { ancestorSpecId: string; toSha: string; reviewVerdict?: "changes_requested" };
   }): Promise<void>;
-  /** Record the replan context (intent stays ALIVE) when the old work no longer fits. */
+  /**
+   * Route the dependent back to the planner (intent stays ALIVE) and return the
+   * actual post-route disposition. Pending is cleared only for durable owned /
+   * parked / terminal outcomes — retained on parking_failed.
+   */
   recordReplan(input: {
     projectId: string;
     specId: string;
@@ -99,7 +103,7 @@ export interface BaseShiftPersistence {
     ancestorSpecId: string;
     ancestorSha: string;
     reason: string;
-  }): Promise<void>;
+  }): Promise<ReplanRouteResult>;
 }
 
 /** Reads the affected `integration_nodes` for a base shift (S0 observe model). */

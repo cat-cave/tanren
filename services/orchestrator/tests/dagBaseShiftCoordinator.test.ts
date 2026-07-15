@@ -171,6 +171,15 @@ class RecordingPersistence implements BaseShiftPersistence {
   readonly repointStacks: Array<{ runId: string; ancestorStack: AncestorStack }> = [];
   readonly markedInFlight: Array<{ runId: string; ancestorSpecId: string; toSha: string }> = [];
   readonly replanned: Array<{ runId: string; specId: string; reason: string }> = [];
+  /** Scripted post-route disposition returned from recordReplan (default: owned planner). */
+  replanResult: Awaited<ReturnType<BaseShiftPersistence["recordReplan"]>> = {
+    kind: "owned",
+    receipt: {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "enqueued", replanRunId: "run_replan", plannerTaskId: "task_replan" },
+    },
+  };
   async repointBase(input: { runId: string; ancestorStack: AncestorStack }): Promise<void> {
     this.repointStacks.push({ runId: input.runId, ancestorStack: input.ancestorStack });
   }
@@ -181,8 +190,9 @@ class RecordingPersistence implements BaseShiftPersistence {
       toSha: input.pending.toSha,
     });
   }
-  async recordReplan(input: { runId: string; specId: string; reason: string }): Promise<void> {
+  async recordReplan(input: { runId: string; specId: string; reason: string }) {
     this.replanned.push({ runId: input.runId, specId: input.specId, reason: input.reason });
+    return this.replanResult;
   }
 }
 

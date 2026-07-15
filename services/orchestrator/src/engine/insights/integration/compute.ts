@@ -118,14 +118,20 @@ export function deriveIntegrationMetrics(
   for (const d of DECISIONS) runIdsByDecision.set(d, []);
   for (const ev of rebases) runIdsByDecision.get(ev.decision)?.push(ev.runId);
 
+  // Exhaustive: every RebaseDecision has an explicit bucket (no silent drop).
   const buckets = {
     rebased_clean: bucketFor(runIdsByDecision.get("rebased_clean")!, tokensByRun, wallClockByRun),
     rebased_resolved: bucketFor(runIdsByDecision.get("rebased_resolved")!, tokensByRun, wallClockByRun),
     replanned: bucketFor(runIdsByDecision.get("replanned")!, tokensByRun, wallClockByRun),
+    writer_rework: bucketFor(runIdsByDecision.get("writer_rework")!, tokensByRun, wallClockByRun),
+    parked: bucketFor(runIdsByDecision.get("parked")!, tokensByRun, wallClockByRun),
     held: bucketFor(runIdsByDecision.get("held")!, tokensByRun, wallClockByRun),
   };
+  // Denominator = sum of bucket counts (known decisions only — never inflate on unknown).
+  const totalRebases = DECISIONS.reduce((n, d) => n + (runIdsByDecision.get(d)?.length ?? 0), 0);
 
   // Headline rebase_vs_rebuild: kept-alive (clean + resolved) vs replanned (rebuilt).
+  // writer_rework / parked / held are recovery paths — not in the kept-alive vs rebuild comparison.
   const keptAliveRunIds = [...runIdsByDecision.get("rebased_clean")!, ...runIdsByDecision.get("rebased_resolved")!];
   const keptAliveTokens = keptAliveRunIds.map((id) => tokensByRun.get(id)).filter((t): t is number => t !== undefined);
   const replannedTokens = runIdsByDecision
@@ -150,7 +156,7 @@ export function deriveIntegrationMetrics(
       rebaseCheaper,
     },
     proofReuseCount,
-    totalRebases: rebases.length,
+    totalRebases,
     computedAt: options.windowEnd.toISOString(),
   });
 }

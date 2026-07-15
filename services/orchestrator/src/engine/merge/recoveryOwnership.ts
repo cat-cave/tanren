@@ -165,22 +165,21 @@ export async function verifyRecoveryOwnership(input: {
 
 /**
  * Truthful recovery disposition labels for base-shift instrumentation.
- * parking_failed / terminal_noop are NEVER labeled parked or replanned
- * (park was attempted or work already terminal — hold for recovery).
- * parking_required (no park yet) is the only replan-delegation arm.
+ * Only durable owned planner/writer receipts become replanned/writer_rework —
+ * parking_required is NOT "replanned" merely because routing was attempted.
+ * parking_failed / terminal_noop are NEVER parked or replanned.
  */
 export type BaseShiftRecoveryDecision = "replanned" | "writer_rework" | "parked" | "held";
 
 export function baseShiftDecisionFromRecovery(
   recovery: ConflictRecoveryDisposition | undefined,
 ): BaseShiftRecoveryDecision {
-  if (recovery === undefined || recovery.kind === "parking_required") return "replanned";
+  if (recovery === undefined || recovery.kind === "parking_required") return "held";
   if (recovery.kind === "parked") return "parked";
   if (recovery.kind === "owned") {
     return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
   }
-  // terminal_noop + parking_failed: park already attempted or concurrent terminal —
-  // never replan-as-if-no-park, never label parked without durable needs_attention.
+  // terminal_noop + parking_failed: never replan-as-if-no-park, never label parked.
   return "held";
 }
 
@@ -191,7 +190,16 @@ export function baseShiftDecisionFromRouteResult(recovery: {
   // GateReworkRouteResult owned is always writer_rework.
   if (recovery.kind === "owned") return "writer_rework";
   if (recovery.kind === "parked") return "parked";
-  if (recovery.kind === "parking_required") return "replanned";
-  // terminal_noop + parking_failed: never parked, never replan-as-if-no-park.
+  // parking_required / terminal_noop / parking_failed: never claim replanned.
   return "held";
+}
+
+/** Clear percolation_pending only for durable owned / parked / terminal (retain on parking_failed). */
+export function shouldClearPercolationPending(kind: ConflictRecoveryDisposition["kind"]): boolean {
+  return kind === "owned" || kind === "parked" || kind === "terminal_noop";
+}
+
+/** Aux merge.conflict / irreconcilable+replanned only for durable owned recovery. */
+export function shouldEmitOwnedConflictAux(kind: ConflictRecoveryDisposition["kind"] | undefined): boolean {
+  return kind === "owned";
 }
