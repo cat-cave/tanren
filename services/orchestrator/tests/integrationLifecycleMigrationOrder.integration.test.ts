@@ -1,4 +1,4 @@
-// cspell:ignore conrelid confrelid contype relnamespace nspname
+// cspell:ignore conrelid confrelid contype relnamespace nspname schemaname conname connamespace
 import { migrate } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -121,7 +121,13 @@ describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => 
 
   it("applies the complete migration chain to a genuinely empty database", () => {
     if (migrateError !== undefined) {
-      throw migrateError;
+      const error =
+        migrateError instanceof Error
+          ? migrateError
+          : new Error(`Migration failed with non-Error value: ${String(migrateError)}`, {
+              cause: migrateError,
+            });
+      throw error;
     }
     expect(migrateError).toBeUndefined();
   });
