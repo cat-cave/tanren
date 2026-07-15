@@ -9,6 +9,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import { PgBudgetPauseObservationReader } from "../src/engine/dag/budgetPauseObservation.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createOrgRoutes } from "../src/routes/orgs/index.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
@@ -187,6 +188,100 @@ describe("project budget routes", () => {
       readyHeldBack: 2,
       observedAt: "2026-07-15T13:14:15.000Z",
     });
+  });
+
+  it("selects the WALKER event over a newer same-org/task-loop pause (run-scoped events never shadow it)", async () => {
+    // GV-5 finding #2: a task-loop `dag.budget.paused` carries non-null task/run/spec
+    // identity. The observation projection is the PROJECT-LEVEL walker proof
+    // (run_id/task_id/spec_id IS NULL), so a NEWER run-scoped pause must never
+    // shadow an OLDER walker event. Exercises the real SQL filter shape, not a helper.
+    const { app, pool } = buildHarness();
+    pool.seedCostRecord("proj_1", 55);
+    await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50, period: "total" });
+
+    // OLDER walker proof (project-level: null ids) — the canonical observation.
+    pool.seedBudgetPause({
+      orgId: "org_acme",
+      projectId: "proj_1",
+      readyHeldBack: 2,
+      observedAt: new Date("2026-07-15T12:00:00.000Z"),
+    });
+    // NEWER task-loop pause (run-scoped: non-null ids) stamped on the SAME org/project.
+    pool.seedBudgetPause({
+      orgId: "org_acme",
+      projectId: "proj_1",
+      readyHeldBack: 99,
+      observedAt: new Date("2026-07-15T23:59:59.000Z"),
+      runId: "run_loop",
+      taskId: "task_loop",
+      specId: "spec_loop",
+    });
+
+    const reader = new PgBudgetPauseObservationReader(pool.asPgPool());
+    const observation = await reader.latest("org_acme", "proj_1");
+    // The walker event (readyHeldBack 2) wins; the newer run-scoped 99 is filtered out.
+    expect(observation).toMatchObject({ eventType: "dag.budget.paused", readyHeldBack: 2 });
+
+    const get = await getJson(app, "/orgs/org_acme/projects/proj_1/budget");
+    expect(get.body.pauseObservation).toMatchObject({ readyHeldBack: 2 });
+    expect(get.body.pauseObservation).not.toMatchObject({ readyHeldBack: 99 });
+  });
+
+  it("a malformed pause PAYLOAD fails LOUD at the decoder boundary (never a silent null observation)", async () => {
+    // GV-5 finding #3: a corrupt historical row must not become a fabricated zero/no-observation.
+    // The decoder re-validates the payload at the HTTP boundary and throws (fail-loud).
+    const { app, pool } = buildHarness();
+    pool.seedCostRecord("proj_1", 55);
+    await putJson(app, "/orgs/org_acme/projects/proj_1/budget", { ceilingUsd: 50, period: "total" });
+    pool.seedBudgetPause({
+      orgId: "org_acme",
+      projectId: "proj_1",
+      readyHeldBack: 0,
+      payload: { ceilingUsd: 50, spentUsd: 55, period: "total", readyHeldBack: "not-a-number" },
+    });
+
+    const reader = new PgBudgetPauseObservationReader(pool.asPgPool());
+    await expect(reader.latest("org_acme", "proj_1")).rejects.toThrow(/expected|invalid/iu);
+
+    // Route consequence: the budget GET fails LOUD (500) rather than returning a
+    // silent 200 with a null/fabricated observation.
+    const get = await getJson(app, "/orgs/org_acme/projects/proj_1/budget");
+    expect(get.status).toBe(500);
+    // No budget view rendered — never a silent observation.
+    expect(get.body).toBeNull();
+  });
+
+  it("a malformed pause TIMESTAMP fails LOUD at the decoder boundary", async () => {
+    // GV-5 finding #3: an invalid timestamp must throw at the decoder, never silently
+    // degrade into a no-observation state.
+    const { pool } = buildHarness();
+    pool.seedBudgetPause({
+      orgId: "org_acme",
+      projectId: "proj_1",
+      readyHeldBack: 1,
+      ts: "not-an-iso-timestamp",
+    });
+    const reader = new PgBudgetPauseObservationReader(pool.asPgPool());
+    await expect(reader.latest("org_acme", "proj_1")).rejects.toThrow(/expected|invalid|datetime/iu);
+  });
+
+  it("an invalid row shape (undecodable payload) fails LOUD at the decoder boundary", async () => {
+    // GV-5 finding #3: a row whose payload cannot decode (missing/undefined) must
+    // throw, never become a fabricated observation.
+    const { pool } = buildHarness();
+    pool.events.push({
+      id: pool.events.length + 1,
+      ts: new Date("2026-07-15T12:00:00.000Z"),
+      run_id: null,
+      task_id: null,
+      spec_id: null,
+      project_id: "proj_1",
+      org_id: "org_acme",
+      event_type: "dag.budget.paused",
+      payload: undefined,
+    });
+    const reader = new PgBudgetPauseObservationReader(pool.asPgPool());
+    await expect(reader.latest("org_acme", "proj_1")).rejects.toThrow(/expected|invalid/iu);
   });
 
   it("RAISING the ceiling on a PAUSED project fires a re-walk wake so it resumes (audit §3.7e)", async () => {

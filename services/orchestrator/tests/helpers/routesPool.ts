@@ -73,17 +73,33 @@ export class RoutesPool {
     this.costRecords.push({ project_id: projectId, cost_usd: costUsd, notional_cost_usd: notionalCostUsd });
   }
 
-  seedBudgetPause(input: { orgId: string; projectId: string; readyHeldBack: number; observedAt?: Date }): void {
+  seedBudgetPause(input: {
+    orgId: string;
+    projectId: string;
+    readyHeldBack: number;
+    observedAt?: Date;
+    /**
+     * GV-5 finding #2: non-null ids seed a TASK-LOOP pause event (run-scoped),
+     * which the walker-event filter (run_id/task_id/spec_id IS NULL) must EXCLUDE.
+     */
+    runId?: string;
+    taskId?: string;
+    specId?: string;
+    /** GV-5 finding #3: override the payload to seed a MALFORMED row (decoder proof). */
+    payload?: unknown;
+    /** GV-5 finding #3: override the ts to seed a MALFORMED timestamp (decoder proof). */
+    ts?: unknown;
+  }): void {
     this.events.push({
       id: this.events.length + 1,
-      ts: input.observedAt ?? new Date("2026-07-15T12:00:00.000Z"),
-      run_id: null,
-      task_id: null,
-      spec_id: null,
+      ts: input.ts ?? input.observedAt ?? new Date("2026-07-15T12:00:00.000Z"),
+      run_id: input.runId ?? null,
+      task_id: input.taskId ?? null,
+      spec_id: input.specId ?? null,
       project_id: input.projectId,
       org_id: input.orgId,
       event_type: "dag.budget.paused",
-      payload: {
+      payload: input.payload ?? {
         ceilingUsd: 50,
         spentUsd: 55,
         period: "total",
