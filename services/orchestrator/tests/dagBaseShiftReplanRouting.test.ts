@@ -20,98 +20,16 @@
 // scripted prior-replan counter + a recording event store — no real DB/runner needed.
 
 import { describe, expect, it } from "vitest";
-import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
-import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import type { AppendEventInput } from "../src/engine/eventStore.js";
+import type pg from "pg";
 import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 import {
-  conflictSignatureOf,
-  type PriorReplanReader,
-  type ReplanEnqueuer,
-  SpecStatusReplanRouter,
-} from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
-
-const ORG = "org_replan";
-const PROJECT = "project_replan";
-
-/** Pool supporting runWithOrgScope (BEGIN/SET LOCAL/COMMIT) + active-owner SELECTs. */
-class RecordingPool {
-  readonly statusWrites: Array<{ specId: string; status: string }> = [];
-  readonly scopeOps: string[] = [];
-  /** Live active owner runs for org-scoped proof. */
-  liveRunsBySpec = new Map<string, { run_id: string; status: string }>();
-  async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
-    const text = sql.replaceAll(/\s+/gu, " ").trim();
-    if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SET LOCAL")) {
-      this.scopeOps.push(text);
-      return { rows: [] };
-    }
-    if (text.startsWith("UPDATE specs SET status")) {
-      this.statusWrites.push({ specId: String(params?.[0]), status: String(params?.[1]) });
-      return { rows: [] };
-    }
-    if (text.includes("FROM runs") && text.includes("status IN")) {
-      const live = this.liveRunsBySpec.get(String(params?.[0]));
-      if (live === undefined || !["queued", "running", "paused"].includes(live.status)) {
-        return { rows: [] };
-      }
-      return { rows: [live] };
-    }
-    throw new Error(`unexpected pool query in replan-routing test: ${text}`);
-  }
-  async connect() {
-    return { query: this.query.bind(this), release: () => {} };
-  }
-}
-
-/** Enqueuer that refuses prepare for named specs (simulates terminal/missing). */
-class PrepareFailEnqueuer implements ReplanEnqueuer {
-  readonly calls: Array<{ specId: string }> = [];
-  constructor(
-    private readonly reason: "missing" | "not_recoverable" = "not_recoverable",
-    private readonly status = "merged",
-  ) {}
-  async enqueue(input: { specId: string }): Promise<{ replanRunId: string; plannerTaskId: string }> {
-    this.calls.push({ specId: input.specId });
-    throw new SpecNotPreparedForRecoveryError(input.specId, this.reason, this.status);
-  }
-}
-
-/** Records the events the router appends (the timeline carrier). */
-class RecordingEventStore implements Pick<EventStore, "append"> {
-  readonly events: AppendEventInput[] = [];
-  async append(input: AppendEventInput): Promise<void> {
-    this.events.push(input);
-  }
-}
-
-/** Records the re-plan run enqueue (the never-discard re-author) — returns a fixed run id. */
-class RecordingEnqueuer implements ReplanEnqueuer {
-  readonly calls: Array<{
-    specId: string;
-    orgId: string;
-    projectId: string;
-    steeringNote: string;
-  }> = [];
-  constructor(private readonly replanRunId = "run_replan_new") {}
-  async enqueue(input: {
-    specId: string;
-    orgId: string;
-    projectId: string;
-    steeringNote: string;
-  }): Promise<{ replanRunId: string; plannerTaskId: string }> {
-    this.calls.push(input);
-    return { replanRunId: this.replanRunId, plannerTaskId: `task_${this.replanRunId}` };
-  }
-}
-
-/** An enqueuer that THROWS the benign already-claimed race (a concurrent tick took the spec). */
-class AlreadyClaimedEnqueuer implements ReplanEnqueuer {
-  calls = 0;
-  async enqueue(input: { specId: string }): Promise<{ replanRunId: string; plannerTaskId: string }> {
-    this.calls += 1;
-    throw new SpecNotRunnableError(input.specId, "in_flight");
-  }
-}
+  AlreadyClaimedEnqueuer,
+  PrepareFailEnqueuer,
+  RecordingEnqueuer,
+  RecordingEventStore,
+  RecordingPool,
+} from "./fixtures/dagBaseShiftReplanFixtures.js";
 
 /** An enqueuer that FAILS genuinely (no run created, no concurrent tick owns the spec). */
 class FailingEnqueuer implements ReplanEnqueuer {
@@ -122,6 +40,15 @@ class FailingEnqueuer implements ReplanEnqueuer {
     throw this.error;
   }
 }
+import {
+  conflictSignatureOf,
+  type PriorReplanReader,
+  type ReplanEnqueuer,
+  SpecStatusReplanRouter,
+} from "../src/engine/workflow/reviewMerge/conflictResolver/replanRouter.js";
+
+const ORG = "org_replan";
+const PROJECT = "project_replan";
 
 /** A scripted prior-replan reader returning the given conflict signatures (the detector input). */
 function readerReturning(signatures: string[]): PriorReplanReader {
@@ -134,7 +61,7 @@ const noPriorReplans = readerReturning([]);
 /** Find the (asserted-present) event of a type and return its payload as a record. */
 function payloadOf(events: AppendEventInput[], eventType: string): Record<string, unknown> {
   const event = events.find((e) => e.eventType === eventType);
-  expect(event, `expected a ${eventType} event`).toBeDefined();
+  expect(event).toBeDefined();
   return (event as AppendEventInput).payload as Record<string, unknown>;
 }
 
@@ -150,7 +77,7 @@ function buildRouter(deps: {
     },
   });
   return new SpecStatusReplanRouter({
-    pool: deps.pool as unknown as import("pg").Pool,
+    pool: deps.pool as unknown as pg.Pool,
     runStateWriter: writer,
     orgId: ORG,
     eventStore: deps.eventStore,
@@ -394,8 +321,9 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
         specId: `spec_${status}`,
         newContext: "re-plan non-recoverable",
       });
-      expect(recovery.kind, status).toBe("parked");
-      expect(enqueuer.calls).toHaveLength(1); // prepare path invoked, refused
+      expect(recovery.kind).toBe("parked");
+      // prepare path invoked, refused
+      expect(enqueuer.calls).toHaveLength(1);
       expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
     }
   });
@@ -443,6 +371,6 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
       newContext: "re-plan",
       otherSpecId: "spec_a",
     });
-    expect(pool.scopeOps).toEqual(expect.arrayContaining(["BEGIN", expect.stringMatching(/^SET LOCAL/), "COMMIT"]));
+    expect(pool.scopeOps).toEqual(expect.arrayContaining(["BEGIN", expect.stringMatching(/^SET LOCAL/u), "COMMIT"]));
   });
 });

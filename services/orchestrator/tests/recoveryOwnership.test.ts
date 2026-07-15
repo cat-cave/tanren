@@ -23,13 +23,15 @@ import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidenc
 import { applyPrepareSpecForRecovery } from "../src/engine/worker/runStateLifecycleSql.js";
 import type pg from "pg";
 
-describe("hasStructuralOwnedReceiptShape — pre-check only", () => {
-  const ownedEnqueued = (specId: string, runId = "run_r", taskId = "task_r"): ConflictRecoveryReceipt => ({
+function ownedEnqueued(specId: string, runId = "run_r", taskId = "task_r"): ConflictRecoveryReceipt {
+  return {
     kind: "planner_replan",
     specId,
     run: { kind: "enqueued", replanRunId: runId, plannerTaskId: taskId },
-  });
+  };
+}
 
+describe("hasStructuralOwnedReceiptShape — pre-check only", () => {
   it("accepts matching non-empty enqueued shape", () => {
     expect(hasStructuralOwnedReceiptShape(ownedEnqueued("spec_a"), "spec_a")).toBe(true);
   });
@@ -122,14 +124,14 @@ describe("applyPrepareSpecForRecovery — atomic allowlist", () => {
 });
 
 /** Pool that records every SQL text (BEGIN / SET LOCAL / query / COMMIT). */
-function scopeAwarePool(handlers: Array<{ match: (sql: string) => boolean; rows: unknown[] }>) {
+function scopeAwarePool(handlers: Array<{ accepts: (sql: string) => boolean; rows: unknown[] }>) {
   const ops: string[] = [];
   // eslint-disable-next-line @typescript-eslint/require-await
   const query = async (sql: string) => {
     const text = String(sql);
     ops.push(text.replaceAll(/\s+/gu, " ").trim());
     for (const h of handlers) {
-      if (h.match(text)) return { rows: h.rows, rowCount: h.rows.length };
+      if (h.accepts(text)) return { rows: h.rows, rowCount: h.rows.length };
     }
     return { rows: [], rowCount: 0 };
   };
@@ -137,35 +139,37 @@ function scopeAwarePool(handlers: Array<{ match: (sql: string) => boolean; rows:
     query,
     // eslint-disable-next-line @typescript-eslint/require-await
     connect: async () => ({ query, release: () => {} }),
-    _ops: ops,
+    recordedOps: ops,
   };
-  return pool as unknown as pg.Pool & { _ops: string[] };
+  return pool as unknown as pg.Pool & { recordedOps: string[] };
 }
 
 describe("routing reads — runWithOrgScope (RLS-visible)", () => {
   it("findActiveOwnerRunForSpec emits BEGIN + SET LOCAL app.current_org_id + COMMIT", async () => {
     const pool = scopeAwarePool([
       {
-        match: (s) => s.includes("FROM runs") && s.includes("queued"),
+        accepts: (s) => s.includes("FROM runs") && s.includes("queued"),
         rows: [{ run_id: "run_live", status: "running" }],
       },
     ]);
     const found = await findActiveOwnerRunForSpec(pool, "org_tenant", "spec_a");
     expect(found).toEqual({ runId: "run_live", status: "running" });
-    expect(pool._ops[0]).toBe("BEGIN");
-    expect(pool._ops.some((o) => o.includes("SET LOCAL app.current_org_id = 'org_tenant'"))).toBe(true);
-    expect(pool._ops.at(-1)).toBe("COMMIT");
+    expect(pool.recordedOps[0]).toBe("BEGIN");
+    expect(pool.recordedOps.some((o) => o.includes("SET LOCAL app.current_org_id = 'org_tenant'"))).toBe(true);
+    expect(pool.recordedOps.at(-1)).toBe("COMMIT");
   });
 
   it("loadSpecStatusForRecovery fails closed when scope is omitted (zero rows under RLS)", async () => {
     const pool = scopeAwarePool([
-      { match: (s) => s.includes("FROM specs") && s.includes("status"), rows: [{ status: "in_flight" }] },
+      { accepts: (s) => s.includes("FROM specs") && s.includes("status"), rows: [{ status: "in_flight" }] },
     ]);
     const status = await loadSpecStatusForRecovery(pool, "org_tenant", "spec_a");
     expect(status).toBe("in_flight");
-    expect(pool._ops.some((o) => o.includes("SET LOCAL app.current_org_id = 'org_tenant'"))).toBe(true);
+    expect(pool.recordedOps.some((o) => o.includes("SET LOCAL app.current_org_id = 'org_tenant'"))).toBe(true);
     // Without SET LOCAL a production app-pool read would see zero — prove the GUC was set.
-    expect(pool._ops.filter((o) => o.startsWith("BEGIN") || o.includes("SET LOCAL")).length).toBeGreaterThanOrEqual(2);
+    expect(
+      pool.recordedOps.filter((o) => o.startsWith("BEGIN") || o.includes("SET LOCAL")).length,
+    ).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -177,10 +181,10 @@ describe("PgRecoveryEvidencePort — system-scope readback", () => {
   it("uses system scope BEGIN/COMMIT (not unscoped raw app query)", async () => {
     const pool = scopeAwarePool([
       {
-        match: (s) => s.includes("FROM runs") && s.includes("run_id"),
+        accepts: (s) => s.includes("FROM runs") && s.includes("run_id"),
         rows: [{ run_id: "run_r", spec_id: "spec_a", status: "queued" }],
       },
-      { match: (s) => s.includes("FROM tasks"), rows: [{ task_id: "task_r" }] },
+      { accepts: (s) => s.includes("FROM tasks"), rows: [{ task_id: "task_r" }] },
     ]);
     setSystemPool(pool);
     const port = new PgRecoveryEvidencePort(pool);
@@ -193,15 +197,15 @@ describe("PgRecoveryEvidencePort — system-scope readback", () => {
       },
     });
     expect(evidence?.runId).toBe("run_r");
-    expect(pool._ops).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
+    expect(pool.recordedOps).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
     // System scope does NOT set app.current_org_id (BYPASSRLS path).
-    expect(pool._ops.some((o) => o.includes("app.current_org_id"))).toBe(false);
+    expect(pool.recordedOps.some((o) => o.includes("app.current_org_id"))).toBe(false);
   });
 
   it("rejects halted run status", async () => {
     const pool = scopeAwarePool([
       {
-        match: (s) => s.includes("FROM runs"),
+        accepts: (s) => s.includes("FROM runs"),
         rows: [{ run_id: "run_r", spec_id: "spec_a", status: "halted" }],
       },
     ]);

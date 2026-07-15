@@ -10,7 +10,7 @@ import type {
   PrepareSpecForRecoveryResult,
   RunStateWriter,
 } from "../src/engine/contracts/runStateWriter.js";
-import { SpecNotPreparedForRecoveryError } from "../src/engine/workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../src/engine/workflow/specNotPreparedForRecoveryError.js";
 
 const ORG = "org_v55_fix";
 const PROJECT = "project_v55_fix";
@@ -20,15 +20,15 @@ interface Calls {
   createQueuedRun: CreateQueuedRunInput[];
 }
 
-function recordingWriter(
-  calls: Calls,
-  prepareResult: PrepareSpecForRecoveryResult = { prepared: true, fromStatus: "in_flight" },
-): RunStateWriter {
+const DEFAULT_PREPARE_OK: PrepareSpecForRecoveryResult = { prepared: true, fromStatus: "in_flight" };
+
+function recordingWriter(calls: Calls, prepareResult?: PrepareSpecForRecoveryResult): RunStateWriter {
+  const prep = prepareResult ?? DEFAULT_PREPARE_OK;
   return {
     // eslint-disable-next-line @typescript-eslint/require-await
     async prepareSpecForRecovery(input: PrepareSpecForRecoveryInput) {
       calls.prepareSpecForRecovery.push(input);
-      return prepareResult;
+      return prep;
     },
     // eslint-disable-next-line @typescript-eslint/require-await
     async createQueuedRun(input: CreateQueuedRunInput) {

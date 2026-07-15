@@ -41,7 +41,8 @@ import {
   type ReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
-import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../workflow/specNotPreparedForRecoveryError.js";
 import { createLogger } from "../observability/logger.js";
 import { findActiveOwnerRunForSpec } from "./recoveryOwnership.js";
 

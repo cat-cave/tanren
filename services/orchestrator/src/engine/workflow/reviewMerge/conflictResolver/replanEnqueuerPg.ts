@@ -7,7 +7,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../../../auth/schemas.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
-import { SpecNotPreparedForRecoveryError } from "../../../workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../../../workflow/specNotPreparedForRecoveryError.js";
 import {
   conflictSignatureOf,
   gateErrorSignature,

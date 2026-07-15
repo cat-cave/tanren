@@ -16,6 +16,8 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
+import type { ConflictRecoveryReceipt } from "../src/engine/contracts/conflictResolution.js";
+
 const PROJECT = "project_batch_conflict_recovery";
 
 interface Harness {
@@ -46,8 +48,8 @@ function makeHarness(opts: { wireGateRework?: boolean; wireEvidence?: boolean } 
     events,
     batchEvents,
     escalator,
-    ...(opts.wireGateRework !== false ? { gateRework } : {}),
-    ...(opts.wireEvidence !== false ? { recoveryEvidence: evidence } : {}),
+    ...(opts.wireGateRework === false ? {} : { gateRework }),
+    ...(opts.wireEvidence === false ? {} : { recoveryEvidence: evidence }),
     resolveMaxBatchSize: () => Promise.resolve(8),
     sleep: () => Promise.resolve(),
   });
@@ -69,11 +71,7 @@ function seedWriterReworkEvidence(h: Harness, specId: string): void {
   h.evidence.seedEnqueued(specId, `run_rework_${specId}`, `task_rework_${specId}`, "queued");
 }
 
-function scriptOwnedConflict(
-  h: Harness,
-  message: string,
-  receipt: import("../src/engine/contracts/conflictResolution.js").ConflictRecoveryReceipt,
-): void {
+function scriptOwnedConflict(h: Harness, message: string, receipt: ConflictRecoveryReceipt): void {
   h.runner.script("run_spec_b", mapConflictDriveOutcome({ message, conflictRecovery: { kind: "owned", receipt } }));
 }
 

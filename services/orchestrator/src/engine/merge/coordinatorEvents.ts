@@ -10,7 +10,7 @@ import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { EventStore } from "../eventStore.js";
 import type { DequeueReason, MergeQueueEntry } from "../contracts/mergeCoordinator.js";
-import type { MergeQueueEventEmitter } from "./coordinator.js";
+import type { MergeQueueEventEmitter } from "./mergeQueueSettle.js";
 
 /**
  * A queue-event emitter bound to a SINGLE already-resolved {@link EventStore} (an

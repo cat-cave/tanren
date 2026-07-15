@@ -12,10 +12,6 @@
 // PgBatchMergeEventEmitter (merge.batch.*). The max batch size is resolved per-project
 // from `projects.config.maxBatchSize` (the config knob, the single source of truth).
 
-import { runWithSystemScope } from "@tanren/db";
-import type pg from "pg";
-import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
-import { DEFAULT_MAX_BATCH_SIZE } from "../config/shared.js";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
 import { BatchMergeCoordinator } from "./batchCoordinator.js";
@@ -26,43 +22,19 @@ import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBu
 import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
 import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
+import { resolveMaxBatchSize } from "./maxBatchSize.js";
 import { PgRecoveryEvidencePort } from "./recoveryEvidencePg.js";
+
+export { resolveMaxBatchSize } from "./maxBatchSize.js";
 
 /**
  * apex v87: local both-or-neither settle (`PgMergeSettleTransaction`) opens
  * `PgEventStore` on the worker pool — only legal when the writer declares
  * `localMergeSettleCoTx` (Direct; pool can INSERT `events`). HttpRunStateWriter
- * omits the flag; wiring the local settle would throw
- * `permission denied for table events` on every dequeue (bisect / gate rework /
- * needs_attention / infra escalate) and fail the coordinate pass every ~15s.
- * Remote writers use sequential event-first through the writer-backed emitters.
+ * omits the flag; remote writers use sequential event-first through the writer.
  */
 export function canCoTransactMergeSettle(writer: BuildMergeCoordinatorDeps["runStateWriter"]): boolean {
   return writer.localMergeSettleCoTx === true;
-}
-
-/**
- * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
- * scope — the single config source of truth.
- *
- * no_silent_fallbacks: an ABSENT config (the `'{}'::jsonb` default a fresh project
- * carries; `isAbsentProjectConfig`) legitimately uses the schema default. But a
- * PRESENT-but-CORRUPT config must NOT be silently masked as the default — a corrupt
- * blob silently capping at the wrong batch size is a wrong-CAP fallback. A parse
- * failure PROPAGATES (loud, fail-closed) rather than being swallowed.
- */
-export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Promise<number> {
-  const config = await runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ config: unknown }>("SELECT config FROM projects WHERE project_id = $1", [
-      projectId,
-    ]);
-    return result.rows[0]?.config;
-  });
-  if (isAbsentProjectConfig(config)) {
-    return DEFAULT_MAX_BATCH_SIZE;
-  }
-  // Present config: a parse failure here is genuine corruption — let it propagate.
-  return migrateProjectConfig(config).maxBatchSize;
 }
 
 /** Assemble the production BatchMergeCoordinator (the native-queue driver). */

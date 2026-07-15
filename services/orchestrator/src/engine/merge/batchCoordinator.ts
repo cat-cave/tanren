@@ -22,7 +22,7 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
-import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./coordinator.js";
+import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./mergeQueueSettle.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
 import {

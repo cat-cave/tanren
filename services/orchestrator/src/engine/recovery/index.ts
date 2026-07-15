@@ -20,7 +20,7 @@ import { ForgeThreadStore } from "../forge/index.js";
 import { RecoveryStore } from "../repositories/recovery.js";
 import { systemActor } from "../state/actor.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
-import { SpecNotPreparedForRecoveryError } from "../workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../workflow/specNotPreparedForRecoveryError.js";
 import { applyPrepareSpecForRecovery } from "../worker/runStateLifecycleSql.js";
 
 // Re-export the shared policy set so callers reading recovery from this module

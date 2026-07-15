@@ -49,8 +49,8 @@ export class ScriptedRecoveryEvidencePort implements RecoveryEvidencePort {
     expectedSpecId: string;
     receipt: ConflictRecoveryReceipt;
   }): Promise<RecoveryRunEvidence | undefined> {
-    if (this.rejectAll) return undefined;
-    if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) return undefined;
+    if (this.rejectAll) return;
+    if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) return;
 
     const namedRunId =
       input.receipt.run.kind === "already_running" ? input.receipt.run.runId : input.receipt.run.replanRunId;
@@ -61,12 +61,13 @@ export class ScriptedRecoveryEvidencePort implements RecoveryEvidencePort {
       for (const run of runs) {
         if (run.runId !== namedRunId) continue;
         const effectiveSpec = run.wrongSpecId ?? specId;
-        if (effectiveSpec !== input.expectedSpecId) return undefined;
-        if (!isActiveOwnerRunStatus(run.status)) return undefined;
-        if (plannerTaskId !== undefined) {
-          if (run.plannerTaskIds === undefined || !run.plannerTaskIds.includes(plannerTaskId)) {
-            return undefined;
-          }
+        if (effectiveSpec !== input.expectedSpecId) continue;
+        if (!isActiveOwnerRunStatus(run.status)) continue;
+        if (
+          plannerTaskId !== undefined &&
+          (run.plannerTaskIds === undefined || !run.plannerTaskIds.includes(plannerTaskId))
+        ) {
+          continue;
         }
         return {
           runId: run.runId,
@@ -76,6 +77,5 @@ export class ScriptedRecoveryEvidencePort implements RecoveryEvidencePort {
         };
       }
     }
-    return undefined;
   }
 }

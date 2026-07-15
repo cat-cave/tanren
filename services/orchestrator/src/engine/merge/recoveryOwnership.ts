@@ -89,8 +89,9 @@ export async function findActiveOwnerRunForSpec(
       [specId],
     );
     const row = result.rows[0];
-    if (row === undefined) return undefined;
-    return { runId: row.run_id, status: row.status };
+    if (row !== undefined) {
+      return { runId: row.run_id, status: row.status };
+    }
   });
 }
 

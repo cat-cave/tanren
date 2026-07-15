@@ -24,7 +24,7 @@
 // `retrySchedule.ts` source.
 
 import type { MergeDriveOutcome, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
-import type { MergeQueueEventEmitter } from "./coordinator.js";
+import type { MergeQueueEventEmitter } from "./mergeQueueSettle.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
 import { isSustainedInfraNonRecovery } from "./infraNonRecovery.js";
 import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";

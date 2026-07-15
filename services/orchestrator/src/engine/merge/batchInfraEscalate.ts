@@ -6,7 +6,11 @@
 
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
+import {
+  markDequeuedAfterEvent,
+  type MergeQueueEventEmitter,
+  type MergeSettleTransaction,
+} from "./mergeQueueSettle.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import type { BatchInfraHoldCeiling } from "./batchInfraHoldCeiling.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";

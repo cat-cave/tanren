@@ -31,7 +31,7 @@ import {
   UnknownCommitError,
   type HaltedRunContext,
 } from "../../engine/recovery/index.js";
-import { SpecNotPreparedForRecoveryError } from "../../engine/workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../../engine/workflow/specNotPreparedForRecoveryError.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 

@@ -4,7 +4,6 @@
 
 import {
   type CoordinateResult,
-  type DequeueReason,
   type MergeCoordinator,
   type MergeDriveOutcome,
   type MergeQueueEntry,
@@ -25,6 +24,17 @@ import { createLogger } from "../observability/logger.js";
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import { settleDriveOutcome, settleFailedDrive } from "./batchCoordinatorSettle.js";
 import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
+import {
+  markDequeuedAfterEvent,
+  markInfraBlockedAfterEvent,
+  type MergeQueueEventEmitter,
+  type MergeSettleTransaction,
+} from "./mergeQueueSettle.js";
+
+// Re-export settle helpers so existing `from "./coordinator.js"` call sites stay valid
+// without pulling settle mapping into this module's dependency graph.
+export { markDequeuedAfterEvent, markInfraBlockedAfterEvent };
+export type { MergeQueueEventEmitter, MergeSettleTransaction };
 
 const log = createLogger("merge-coordinator");
 
@@ -48,32 +58,6 @@ const TRANSIENT_DRIVE_HOLD_ALERT_RETRY_AFTER_MS = alertRetryAfterMs;
  * import the heavy run-loop seam graph. Tests inject a fake runner directly.
  */
 export type DriveMergeForQueuedRun = (input: { runId: string; projectId: string }) => Promise<MergeDriveOutcome>;
-
-/** What the coordinator needs to emit the queue events (org-scoped, eventStore). */
-export interface MergeQueueEventEmitter {
-  /** merge.queue.advanced: the coordinator selected the DAG-ordered head to merge. */
-  emitAdvanced(input: { projectId: string; entry: MergeQueueEntry; queueDepth: number }): Promise<void>;
-  /** merge.dequeued: an entry left the queue without merging (conflict/blocked/failed/superseded). */
-  emitDequeued(input: {
-    projectId: string;
-    entry: MergeQueueEntry;
-    reason: DequeueReason;
-    message: string;
-  }): Promise<void>;
-  /**
-   * merge.queue.infra_blocked (GAP #2d): a transient merge-drive infra error could no
-   * longer continue on the short retry — the entry exhausted its re-drive ceiling, or
-   * the merge state was unconfirmable (auto-retry could double-merge). A LOUD
-   * operator-visible alert/halt.
-   */
-  emitInfraBlocked(input: {
-    projectId: string;
-    entry: MergeQueueEntry;
-    kind: "ceiling" | "ambiguous" | "missing_required_credential";
-    attempts: number;
-    message: string;
-  }): Promise<void>;
-}
 
 export interface MergeCoordinatorDeps {
   queue: MergeQueueModel;
@@ -110,96 +94,6 @@ export interface MergeCoordinatorDeps {
    * Absent ⇒ conflict parks fail closed (never accept a bare typed receipt).
    */
   recoveryEvidence?: RecoveryEvidencePort;
-}
-
-/**
- * ATOMICITY SEAM (audit RC-4 #3): the both-or-neither settle transaction. The
- * `markDequeuedAfterEvent` / `markInfraBlockedAfterEvent` paths emit a durable queue
- * event AND flip the `merge_queue` row to `dequeued`. Without a shared transaction a
- * crash BETWEEN the two committed writes leaves a split brain: the event bus says the
- * entry dequeued while the row is still `merging` (or vice versa). This seam runs both
- * writes on ONE org-scoped transaction so they COMMIT together or ROLL BACK together.
- *
- * The event-first ORDERING is preserved INSIDE the transaction (the event append is
- * issued before the row UPDATE) so the long-standing split-brain guard still holds: a
- * failing event append rolls back the whole unit, leaving the entry active and the
- * failure visible to the coordinator. When no runner is wired (the in-memory fakes do
- * inject one; a caller that does not falls back to the sequential path), the prior
- * emit-then-update ordering runs unchanged.
- */
-export interface MergeSettleTransaction {
-  /**
-   * Run `work` inside ONE org-scoped transaction for `projectId`. The `events` +
-   * `queue` handed to `work` write through the SAME client, so the event append and
-   * the queue settle either both commit or both roll back. `work` must issue the
-   * event append BEFORE the queue update to preserve the event-first ordering.
-   */
-  run(
-    projectId: string,
-    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
-  ): Promise<void>;
-}
-
-/**
- * Queue/event split-brain guard + ATOMICITY (audit RC-4 #3): terminal dequeue is
- * never made durable before its durable event, AND — when a {@link MergeSettleTransaction}
- * is wired — the event append and the row UPDATE run in ONE transaction (both-commit-or-
- * both-roll-back), so a crash between them can never leave the bus saying "dequeued"
- * while the row is still `merging`. Without a runner the sequential emit-then-update
- * path runs (the event-first guard still holds: a failed append leaves the entry active).
- */
-export async function markDequeuedAfterEvent(input: {
-  queue: MergeQueueModel;
-  events: MergeQueueEventEmitter;
-  projectId: string;
-  entry: MergeQueueEntry;
-  reason: DequeueReason;
-  message: string;
-  tx?: MergeSettleTransaction;
-}): Promise<void> {
-  const settle = async (events: MergeQueueEventEmitter, queue: MergeQueueModel): Promise<void> => {
-    // EVENT-FIRST inside the transaction: the durable event precedes the row UPDATE, so
-    // a failing append rolls back the whole unit and the entry stays active/visible.
-    await events.emitDequeued({
-      projectId: input.projectId,
-      entry: input.entry,
-      reason: input.reason,
-      message: input.message,
-    });
-    await queue.markDequeued(input.entry.queueId, input.reason);
-  };
-  if (input.tx !== undefined) {
-    await input.tx.run(input.projectId, (ctx) => settle(ctx.events, ctx.queue));
-    return;
-  }
-  await settle(input.events, input.queue);
-}
-
-export async function markInfraBlockedAfterEvent(input: {
-  queue: MergeQueueModel;
-  events: MergeQueueEventEmitter;
-  projectId: string;
-  entry: MergeQueueEntry;
-  kind: "ceiling" | "ambiguous" | "missing_required_credential";
-  attempts: number;
-  message: string;
-  tx?: MergeSettleTransaction;
-}): Promise<void> {
-  const settle = async (events: MergeQueueEventEmitter, queue: MergeQueueModel): Promise<void> => {
-    await events.emitInfraBlocked({
-      projectId: input.projectId,
-      entry: input.entry,
-      kind: input.kind,
-      attempts: input.attempts,
-      message: input.message,
-    });
-    await queue.markDequeued(input.entry.queueId, "blocked");
-  };
-  if (input.tx !== undefined) {
-    await input.tx.run(input.projectId, (ctx) => settle(ctx.events, ctx.queue));
-    return;
-  }
-  await settle(input.events, input.queue);
 }
 
 /**

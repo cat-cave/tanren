@@ -18,6 +18,7 @@ import { buildInLoopBaseShiftRebaseHook } from "../merge/inLoopBaseShift.js";
 import { SpecStatusGateReworkRouter } from "./reviewMerge/conflictResolver/gateReworkRouter.js";
 import { buildPriorGateReworkReader, buildReplanEnqueuer } from "./reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import type pg from "pg";
+import type { Pool } from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { ActorRef } from "../state/actor.js";
 import { designResolverActor } from "../design/designWriterContext.js";
@@ -149,7 +150,7 @@ export function reGateGateReworkSeam(
   const orgId = context.orgId;
   return {
     reGateGateRework: new SpecStatusGateReworkRouter({
-      pool: input.pool as import("pg").Pool,
+      pool: input.pool as Pool,
       runStateWriter: input.runStateWriter,
       orgId,
       eventStore: deps.eventStore,

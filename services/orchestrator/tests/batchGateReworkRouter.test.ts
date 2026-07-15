@@ -8,7 +8,8 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { PgBatchGateReworkRouter } from "../src/engine/merge/batchGateReworkRouter.js";
-import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../src/engine/workflow/specNotPreparedForRecoveryError.js";
 import {
   gateErrorSignature,
   type ReplanEnqueuer,

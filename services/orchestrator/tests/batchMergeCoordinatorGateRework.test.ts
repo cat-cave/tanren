@@ -60,7 +60,7 @@ function makeHarness(opts: { wireEvidence?: boolean } = {}): Harness {
     batchEvents,
     escalator,
     gateRework,
-    ...(opts.wireEvidence !== false ? { recoveryEvidence: evidence } : {}),
+    ...(opts.wireEvidence === false ? {} : { recoveryEvidence: evidence }),
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
   });

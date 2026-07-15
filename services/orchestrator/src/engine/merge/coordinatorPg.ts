@@ -18,11 +18,8 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { PgEventStore } from "../eventStore.js";
 import { ClientBoundMergeQueueEventEmitter } from "./coordinatorEvents.js";
-import {
-  type DriveMergeForQueuedRun,
-  type MergeQueueEventEmitter,
-  type MergeSettleTransaction,
-} from "./coordinator.js";
+import type { DriveMergeForQueuedRun } from "./coordinator.js";
+import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./mergeQueueSettle.js";
 import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
 import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
 

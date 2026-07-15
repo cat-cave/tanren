@@ -32,7 +32,8 @@ import type { GateReworkRouter, GateReworkRouteResult } from "../../../contracts
 import type { AppendEventInput, EventStore } from "../../../eventStore.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { buildGateReworkSteering } from "../../../merge/batchGateReworkRouter.js";
-import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../../projectSpecErrors.js";
+import { SpecNotRunnableError } from "../../projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError } from "../../specNotPreparedForRecoveryError.js";
 import { createLogger } from "../../../observability/logger.js";
 import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
 import { atReplanFixedPoint, gateErrorSignature, type ReplanEnqueuer } from "./replanRouter.js";

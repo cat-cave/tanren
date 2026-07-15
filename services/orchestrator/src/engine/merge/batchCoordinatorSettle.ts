@@ -25,7 +25,11 @@ import type {
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
+import {
+  markDequeuedAfterEvent,
+  type MergeQueueEventEmitter,
+  type MergeSettleTransaction,
+} from "./mergeQueueSettle.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import {
   holdOrHaltRecoverableDrive,

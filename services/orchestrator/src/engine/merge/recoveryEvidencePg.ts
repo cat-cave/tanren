@@ -20,20 +20,24 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
     receipt: ConflictRecoveryReceipt;
   }): Promise<RecoveryRunEvidence | undefined> {
     if (!hasStructuralOwnedReceiptShape(input.receipt, input.expectedSpecId)) {
-      return undefined;
+      return;
     }
     return runWithSystemScope(this.pool, async (client) => {
       if (input.receipt.run.kind === "already_running") {
         return this.verifyRun(client, input.receipt.run.runId, input.expectedSpecId);
       }
       const run = await this.verifyRun(client, input.receipt.run.replanRunId, input.expectedSpecId);
-      if (run === undefined) return undefined;
+      if (run === undefined) {
+        return;
+      }
       const taskOk = await this.taskBelongsToRun(
         client,
         input.receipt.run.plannerTaskId,
         input.receipt.run.replanRunId,
       );
-      if (!taskOk) return undefined;
+      if (!taskOk) {
+        return;
+      }
       return { ...run, plannerTaskId: input.receipt.run.plannerTaskId };
     });
   }
@@ -48,10 +52,9 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
       [runId],
     );
     const row = result.rows[0];
-    if (row === undefined) return undefined;
-    if (row.spec_id !== expectedSpecId) return undefined;
-    if (!isActiveOwnerRunStatus(row.status)) return undefined;
-    return { runId: row.run_id, specId: row.spec_id, runStatus: row.status };
+    if (row !== undefined && row.spec_id === expectedSpecId && isActiveOwnerRunStatus(row.status)) {
+      return { runId: row.run_id, specId: row.spec_id, runStatus: row.status };
+    }
   }
 
   private async taskBelongsToRun(client: pg.PoolClient, plannerTaskId: string, runId: string): Promise<boolean> {
