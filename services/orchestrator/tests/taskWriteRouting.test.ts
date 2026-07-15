@@ -13,6 +13,20 @@ class FakeTaskPool {
   }
 }
 
+/**
+ * A pool whose `tasks` SELECT returns a single MALFORMED row — the decode gate
+ * (`ExistingTaskRow.parse`) must reject it as a Zod failure rather than handing a
+ * wrong-type task_id to the downstream UPDATE (which would then target the wrong row).
+ */
+class MalformedTaskRowPool {
+  constructor(private readonly row: unknown) {}
+
+  async query(sql: string): Promise<{ rows: unknown[]; rowCount: number }> {
+    if (/SELECT task_id FROM tasks/u.test(sql)) return { rows: [this.row], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  }
+}
+
 class RecordingWriter implements Pick<RunStateWriter, "updateTask"> {
   updates: UpdateTaskInput[] = [];
 
@@ -59,5 +73,31 @@ describe("applyUpdateTask", () => {
     expect(queries[0]?.sql).toContain("outcome = NULL");
     expect(queries[0]?.sql).toContain("failure_kind = NULL");
     expect(queries[0]?.sql).toContain("ended_at = NULL");
+  });
+});
+
+describe("ensureSystemTask — ExistingTaskRow Zod decode rejects malformed rows", () => {
+  it("REJECTS a task_id that is a number (wrong primitive type)", async () => {
+    const pool = new MalformedTaskRowPool({ task_id: 123 });
+
+    await expect(
+      ensureSystemTask(pool, { runId: "run_1", kind: "merge", title: "Merge pull request" }),
+    ).rejects.toThrow(/invalid_type/u);
+  });
+
+  it("REJECTS a null task_id", async () => {
+    const pool = new MalformedTaskRowPool({ task_id: null });
+
+    await expect(
+      ensureSystemTask(pool, { runId: "run_1", kind: "merge", title: "Merge pull request" }),
+    ).rejects.toThrow(/invalid_type/u);
+  });
+
+  it("REJECTS a row missing the task_id key entirely", async () => {
+    const pool = new MalformedTaskRowPool({ unrelated: "field" });
+
+    await expect(
+      ensureSystemTask(pool, { runId: "run_1", kind: "merge", title: "Merge pull request" }),
+    ).rejects.toThrow(/invalid_type/u);
   });
 });

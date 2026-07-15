@@ -16,6 +16,7 @@
 
 import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import type { ActorContext } from "../../../../auth/schemas.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { isPool, type QueryClient } from "../../../data/orgScopedDb.js";
@@ -25,6 +26,31 @@ import {
   type PriorReplanReader,
   type ReplanEnqueuer,
 } from "./replanRouter.js";
+
+/**
+ * Zod-decoded `events` row for `merge.conflict.replan_routed` — replaces the prior
+ * `client.query<{ payload: {...} }>` query generic (an unchecked cast that trusted
+ * the jsonb shape at runtime). A malformed/legacy payload now fails as a typed
+ * validation error instead of silently coercing via `??`.
+ */
+const PriorReplanEventRow = z.object({
+  payload: z.object({
+    conflictSignature: z.string().optional(),
+    newContext: z.string().optional(),
+    otherSpecId: z.string().optional(),
+  }),
+});
+
+/**
+ * Zod-decoded `events` row for `merge.regate.gate_rework_routed` — same rationale
+ * as {@link PriorReplanEventRow}: the query generic was an unchecked cast; the SQL
+ * already filters `disposition = 'reworked'`, so only `gateError` is read here.
+ */
+const PriorGateReworkEventRow = z.object({
+  payload: z.object({
+    gateError: z.string().optional(),
+  }),
+});
 
 /**
  * Resolve a real `pg.Pool` for events-table reads: prefer the BYPASSRLS system
@@ -97,19 +123,17 @@ export function buildPriorReplanReader(pool: QueryClient): PriorReplanReader {
     async signatures(input) {
       const readPool = resolveEventsReadPool(pool);
       return runWithOrgScope(readPool, input.orgId, async (client) => {
-        const result = await client.query<{
-          payload: { conflictSignature?: string; newContext?: string; otherSpecId?: string };
-        }>(
+        const result = await client.query(
           `SELECT payload
              FROM events
             WHERE spec_id = $1 AND event_type = 'merge.conflict.replan_routed'
             ORDER BY ts ASC, id ASC`,
           [input.specId],
         );
-        return result.rows.map(
-          (row) =>
-            row.payload.conflictSignature ?? conflictSignatureOf(row.payload.newContext ?? "", row.payload.otherSpecId),
-        );
+        return result.rows.map((row) => {
+          const payload = PriorReplanEventRow.parse(row).payload;
+          return payload.conflictSignature ?? conflictSignatureOf(payload.newContext ?? "", payload.otherSpecId);
+        });
       });
     },
   };
@@ -130,7 +154,7 @@ export function buildPriorGateReworkReader(
   return async (input) => {
     const readPool = resolveEventsReadPool(pool);
     return runWithOrgScope(readPool, input.orgId, async (client) => {
-      const result = await client.query<{ payload: { gateError?: string } }>(
+      const result = await client.query(
         `SELECT payload
            FROM events
           WHERE spec_id = $1 AND event_type = 'merge.regate.gate_rework_routed'
@@ -138,7 +162,7 @@ export function buildPriorGateReworkReader(
           ORDER BY ts ASC, id ASC`,
         [input.specId],
       );
-      return result.rows.map((row) => gateErrorSignature(row.payload.gateError ?? ""));
+      return result.rows.map((row) => gateErrorSignature(PriorGateReworkEventRow.parse(row).payload.gateError ?? ""));
     });
   };
 }
