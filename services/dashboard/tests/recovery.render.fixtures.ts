@@ -203,6 +203,8 @@ export function mockOrchestrator(
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+    // The halted-run index itself legitimately lists projects and their runs;
+    // run-detail/recovery routing below uses the location endpoint instead.
     if (url.endsWith(`/orgs/${ORG.id}/projects`))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {
@@ -210,17 +212,16 @@ export function mockOrchestrator(
       return new Response(
         JSON.stringify({
           items: [
-            {
-              ...run,
-              specTitle: RUN_DETAIL.spec.title,
-              costTotalUsd: "0.84",
-              lastEventAt: null,
-              needsReview: false,
-            },
+            { ...run, specTitle: RUN_DETAIL.spec.title, costTotalUsd: "0.84", lastEventAt: null, needsReview: false },
           ],
         }),
         { status: 200 },
       );
+    }
+    if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
+      return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
+    if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
+      return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
     }
     if (url.endsWith(`/projects/${PROJECT.projectId}/specs`))
       return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
