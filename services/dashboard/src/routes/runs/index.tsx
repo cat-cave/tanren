@@ -16,6 +16,7 @@
 
 import type { Context, Hono } from "hono";
 import { OrchestratorClient } from "../../api/orchestrator.js";
+import { fetchStackRetarget } from "../../api/stackRetarget.js";
 import type { RunLocation } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { RunDetailBody } from "../../components/runDetail/RunDetailBody.js";
@@ -73,6 +74,19 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     if (detail === undefined) {
       return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "projects");
     }
+    // gv-4: complete ancestor member vector + walk target (sole base authority).
+    const cookie = c.req.header("cookie");
+    const stackRetarget = await fetchStackRetarget(
+      {
+        orchestratorUrl: deps.orchestratorUrl,
+        headers: {
+          Accept: "application/json",
+          ...(cookie !== undefined && cookie !== "" ? { cookie } : {}),
+        },
+        fetchImpl: globalThis.fetch,
+      },
+      { orgId: loc.orgId, projectId: loc.projectId, runId },
+    );
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
       projectId: loc.projectId,
@@ -89,6 +103,7 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
         reviewHref={`${base}/review`}
         rawToggleHref={rawView ? base : `${base}?raw=true`}
         streamUrl={`${base}/stream${rawView ? "?raw=true" : ""}`}
+        stackRetarget={stackRetarget}
       />,
     );
   });
