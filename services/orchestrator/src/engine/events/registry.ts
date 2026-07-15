@@ -181,10 +181,9 @@ import {
   DagSpecSpeculativePayload,
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
-} from "./schemas/dag.js";
-// Single source of truth mapping event names → typed Zod payload schemas. To add: (1)
-// Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
-// sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
+  runtimeVerificationEventRegistry,
+} from "./schemas/graph.js";
+// Single source of truth mapping event names → typed Zod payload schemas.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
@@ -444,6 +443,7 @@ export const EventRegistry = {
   // `proofReuseKey` matched the live inputs EXACTLY, so it SKIPPED the re-gate and reused the verdict
   // — emitted ONLY on an exact match against a passing proof (any drift / non-pass / unknown recomputes).
   "integration.proof.reused": IntegrationProofReusedPayload,
+  ...runtimeVerificationEventRegistry,
   // A spec parked at the terminal needs_attention status (the DAG frees its slot +
   // blocks only its dependents, asking a human loudly). Reached by the native merge
   // queue's conflict resolver when two intents are genuinely irreconcilable.

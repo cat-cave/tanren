@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "analysisId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "changedTargets": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "spec",
+              "source",
+              "component",
+              "integration",
+              "design"
+            ],
+            "type": "string"
+          },
+          "targetRef": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetRef"
+        ],
+        "type": "object"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "excluded": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "behaviorRevisionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "inspectedEdgeIds": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "reason": {
+            "const": "no_reachable_changed_target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "behaviorRevisionId",
+          "reason",
+          "inspectedEdgeIds"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "mode": {
+      "enum": [
+        "targeted",
+        "expanded_unknown",
+        "no_active_behaviors"
+      ],
+      "type": "string"
+    },
+    "selected": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "behaviorRevisionId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "edgeId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "direct_edge",
+                      "type": "string"
+                    },
+                    "target": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "spec",
+                            "source",
+                            "component",
+                            "integration",
+                            "design"
+                          ],
+                          "type": "string"
+                        },
+                        "targetRef": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "targetRef"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "edgeId",
+                    "target"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "dependencyBehaviorRevisionId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "edgeId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "transitive_dependency",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "edgeId",
+                    "dependencyBehaviorRevisionId"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "unknown_target",
+                      "type": "string"
+                    },
+                    "target": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "enum": [
+                            "spec",
+                            "source",
+                            "component",
+                            "integration",
+                            "design"
+                          ],
+                          "type": "string"
+                        },
+                        "targetRef": {
+                          "maxLength": 2000,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "targetRef"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "target"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "uncovered_behavior",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "edgeId": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "const": "dangling_dependency",
+                      "type": "string"
+                    },
+                    "targetRef": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "edgeId",
+                    "targetRef"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "no_changed_targets",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "behaviorRevisionId",
+          "reasons"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "unknownTargets": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "spec",
+              "source",
+              "component",
+              "integration",
+              "design"
+            ],
+            "type": "string"
+          },
+          "targetRef": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetRef"
+        ],
+        "type": "object"
+      },
+      "maxItems": 500,
+      "type": "array"
+    },
+    "version": {
+      "const": "v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "analysisId",
+    "mode",
+    "changedTargets",
+    "unknownTargets",
+    "selected",
+    "excluded"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.coverage.selection_analyzed"
+}

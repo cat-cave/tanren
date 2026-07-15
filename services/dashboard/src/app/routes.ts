@@ -98,6 +98,14 @@ export const NAV_GROUPS: NavGroup[] = [
         phase: "2b",
         spec: "P2B-0008",
       },
+      {
+        id: "behaviorCoverage",
+        glyph: "⊢",
+        label: "behavior coverage",
+        path: "/projects/:projectId/behavior-coverage",
+        phase: "2b",
+        spec: "rv-4",
+      },
     ],
   },
   {

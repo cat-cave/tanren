@@ -15,7 +15,7 @@ import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.
 import type { GitHubHttpClient } from "./engine/providers/github.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
-import { createBehaviorRoutes } from "./routes/behaviors/index.js";
+import { createBehaviorRoutes, createLiveBehaviorCoverageRoutes } from "./routes/behaviors/mount.js";
 import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { createCredentialRoutes, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
@@ -157,6 +157,7 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));
   app.route("/orgs", createBehaviorRoutes({ pool: scopedPool }));
+  app.route("/orgs", createLiveBehaviorCoverageRoutes(scopedPool));
   app.route("/orgs", createMilestoneRoutes({ pool: scopedPool }));
   mountBrownfieldRoutes(app, {
     pool: scopedPool,
