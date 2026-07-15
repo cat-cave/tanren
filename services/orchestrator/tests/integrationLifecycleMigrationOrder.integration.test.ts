@@ -153,7 +153,7 @@ describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => 
   it("rejects wrong-org project and cross-binding selection rows via composite FKs", async () => {
     expect(migrateError).toBeUndefined();
 
-    // capability_nodes_project_fk: org_id A + project_id belonging to org B.
+    // integration_requirements_project_fk: org_id A + project_id belonging to org B.
     await expect(
       ownerPool.query(
         `INSERT INTO integration_requirements

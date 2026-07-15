@@ -853,9 +853,16 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
   TANREN_RUNNER_AUTHORIZED_KEY="$(cat "$TANREN_RUNTIME_DIR/tanren_runner_key.pub")" docker compose -f compose.dev.yml up -d --no-deps --force-recreate worker
   TANREN_PLANE_SPLIT_PROVE_DEPRIVILEGE=1 DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" corepack pnpm exec tsx scripts/smoke/plane-split-worker.ts
 
-# IN-1: fresh ephemeral database proof for all lifecycle RLS/FK boundaries.
+# IN-1: fresh ephemeral database proof for all lifecycle RLS/FK boundaries and
+# for migration-chain ordering. The RLS file proves tenant isolation under the
+# restricted `tanren_app` role; the migration-order file proves chain 0000->0041
+# applies cleanly on an empty PostgreSQL database and that the composite
+# org-qualified FKs/unique keys materialize and reject wrong-org/cross-binding
+# rows. Both files share the same owner/superuser DATABASE_URL +
+# TANREN_RLS_DB_TEST=1 harness; the migration-order test manages its own
+# ephemeral database + cleanup (same pattern as the lifecycle RLS proof).
 smoke-rls-integration-lifecycle:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/integrationLifecycleRls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts
 
 smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-integration-lifecycle smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority
 
