@@ -19,6 +19,11 @@ import {
   specPairSchema,
 } from "../../engine/worker/runStateLifecycleSql.js";
 import { applyRecordDraftPrCreated } from "../../engine/merge/draftPrCreatedAtomic.js";
+import {
+  applyRecoveryParkAtomic,
+  recoveryParkingFailed,
+  recoveryParkInputSchema,
+} from "../../engine/worker/recoveryParkAtomic.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
 // apex v86: post-PR-open atomic block (github.pr.created + merge_queue + merge.scheduled).
@@ -100,6 +105,28 @@ const updateSpecWithEventRouteShape = z
  * endpoint on the internal write app. Called from `registerRunStateLifecycleRoutes`. */
 export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRouteDeps): void {
   const authnPeer = (c: Context): boolean => verifyInternalPeer(deps.verifier, c);
+
+  // Recovery park authority: exact ownership readback + spec park + ordered
+  // events + queue dequeue all run on ONE org-scoped transaction. Expected
+  // precondition failures and write/commit uncertainty are typed 200 outcomes
+  // so the remote writer can retain/re-drive rather than infer success.
+  app.post("/internal/park-recovery-and-dequeue", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = recoveryParkInputSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_recovery_park", issues: parsed.error.issues }, 400);
+    }
+    try {
+      const outcome = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+        applyRecoveryParkAtomic(client, parsed.data),
+      );
+      return c.json(outcome, 200);
+    } catch {
+      return c.json(recoveryParkingFailed("write_failed"), 200);
+    }
+  });
 
   // apex v86: ATOMIC post-PR-open writes under the control plane's events grant.
   // Response: 200 `{ created: boolean }` (merge_queue INSERT outcome).
