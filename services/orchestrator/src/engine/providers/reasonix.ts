@@ -6,7 +6,7 @@ import { quoteSshShellArg } from "../ssh/command.js";
 import type { TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 import { buildActivityWatchdog } from "../ssh/activityWatchdog.js";
-import { findTokenUsageBounded } from "./findTokenUsage.js";
+import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
 
 // reasonix harness adapter (DeepSeek-native, npm `reasonix`) — a Writer-only
 // CLI harness conforming to the v1 harness protocol
@@ -144,7 +144,7 @@ export function buildReasonixWriterCommand(input: { apiKey: string; task: string
 // on the phrase, not the event type, so a minor CLI wording change still
 // surfaces it). Mirrors opencode's stream parser.
 export function parseReasonixStreamTelemetry(stdout: string): ReasonixEventTelemetry {
-  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
+  const lines = splitNonEmptyJsonlLines(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   for (const line of lines) {
@@ -218,17 +218,6 @@ function numberField(record: Record<string, unknown>, keys: string[]): number | 
     }
   }
   return undefined;
-}
-
-function parseJsonObject(line: string): Record<string, unknown> | undefined {
-  try {
-    const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function failedResult(

@@ -9,7 +9,7 @@ import { AnswererSchemaValidationError, AnswererStalledError, throwIfTransientSs
 import { parseWithOneSchemaRepair } from "./answererRepair.js";
 import type { AnswererAdapter, TokenUsage, UsageLimitSignal, WriterAdapter, WriterResult } from "./types.js";
 import { findOpenRouterGenerationId, foldGenerationId } from "./openRouterGenerationId.js";
-import { findTokenUsageBounded } from "./findTokenUsage.js";
+import { findTokenUsageBounded, parseJsonObject, splitNonEmptyJsonlLines } from "./findTokenUsage.js";
 import { captureBaselineSha, captureGitStateAfterWriter } from "./writerGit.js";
 
 // Claude CLI Writer + Answerer adapters. They mirror the Codex adapter
@@ -296,7 +296,7 @@ export function buildAnswererPrompt(prompt: string, schemaName: string, jsonSche
 // usage-limit error surfaces as an `error`/`result` event carrying the stable
 // "usage limit" phrase (matched on the phrase, not the event type).
 export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry {
-  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
+  const lines = splitNonEmptyJsonlLines(stdout);
   let tokenUsage: TokenUsage | undefined;
   let usageLimit: UsageLimitSignal | undefined;
   let openRouterGenerationId: string | undefined;
@@ -327,7 +327,7 @@ export function parseClaudeStreamTelemetry(stdout: string): ClaudeEventTelemetry
 // emits a terminal `{"type":"result","result":"<text>"}`; we fall back to the
 // last assistant text block if the result envelope is absent.
 export function extractClaudeFinalText(stdout: string): string {
-  const lines = stdout.split(/\r?\n/u).filter((line) => line.trim() !== "");
+  const lines = splitNonEmptyJsonlLines(stdout);
   let lastAssistantText: string | undefined;
   for (const line of lines) {
     const parsed = parseJsonObject(line);
@@ -448,17 +448,6 @@ function numberField(record: Record<string, unknown>, keys: string[]): number | 
     }
   }
   return undefined;
-}
-
-function parseJsonObject(line: string): Record<string, unknown> | undefined {
-  try {
-    const value = JSON.parse(line) as unknown;
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function answererWorkspacePath(dependencies: ClaudeAnswererDependencies, schemaName: string): string {
