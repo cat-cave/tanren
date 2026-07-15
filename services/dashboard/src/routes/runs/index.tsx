@@ -21,6 +21,11 @@ import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountSh
 import { RunDetailBody } from "../../components/runDetail/RunDetailBody.js";
 import { ReviewBody, type MergeIntegration } from "../../components/runDetail/ReviewBody.js";
 import { derivePreviewUrl } from "../../components/runDetail/model.js";
+import {
+  httpStatusForLocationResult,
+  renderRunLocationFailure,
+  streamTextForLocationResult,
+} from "./runLocationOutcome.js";
 
 /** Admin scopes that may opt into raw (unredacted) event payloads. */
 const ADMIN_ROLES = new Set(["org:admin", "platform:admin", "project:admin"]);
@@ -57,15 +62,16 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
     if (runId === "halted") return next();
 
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return renderNotFound(c, deps, runId);
+    const resolved = await client.findRunLocation(runId);
+    if (resolved.kind !== "found") {
+      return renderRunLocationFailure(c, deps, runId, resolved, "projects");
     }
+    const loc = resolved.location;
     const canViewRaw = await isOrgAdmin(client, loc);
     const rawView = parseRaw(c) && canViewRaw;
     const detail = await client.getRunDetail(loc, runId, { rawView });
     if (detail === undefined) {
-      return renderNotFound(c, deps, runId);
+      return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "projects");
     }
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
@@ -93,10 +99,11 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   app.get("/runs/:runId/stream", async (c) => {
     const runId = c.req.param("runId");
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return c.text("run not found", 404);
+    const resolved = await client.findRunLocation(runId);
+    if (resolved.kind !== "found") {
+      return c.text(streamTextForLocationResult(resolved), httpStatusForLocationResult(resolved));
     }
+    const loc = resolved.location;
     const rawView = parseRaw(c) && (await isOrgAdmin(client, loc));
     const upstream = await fetch(client.streamUrl(loc, runId, { rawView }), {
       headers: {
@@ -123,13 +130,14 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   app.get("/runs/:runId/review", async (c) => {
     const runId = c.req.param("runId");
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return renderNotFound(c, deps, runId);
+    const resolved = await client.findRunLocation(runId);
+    if (resolved.kind !== "found") {
+      return renderRunLocationFailure(c, deps, runId, resolved, "projects");
     }
+    const loc = resolved.location;
     const detail = await client.getRunDetail(loc, runId);
     if (detail === undefined) {
-      return renderNotFound(c, deps, runId);
+      return renderRunLocationFailure(c, deps, runId, { kind: "not_found" }, "projects");
     }
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
@@ -168,10 +176,11 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   app.post("/runs/:runId/review/request-changes", async (c) => {
     const runId = c.req.param("runId");
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return renderNotFound(c, deps, runId);
+    const resolved = await client.findRunLocation(runId);
+    if (resolved.kind !== "found") {
+      return renderRunLocationFailure(c, deps, runId, resolved, "projects");
     }
+    const loc = resolved.location;
     const detail = await client.getRunDetail(loc, runId);
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
@@ -199,10 +208,11 @@ export function mountRunDetailScreens(app: Hono, deps: ShellDeps): void {
   app.post("/runs/:runId/review/sign-off", async (c) => {
     const runId = c.req.param("runId");
     const client = clientFor(c, deps);
-    const loc = await client.findRunLocation(runId);
-    if (loc === undefined) {
-      return renderNotFound(c, deps, runId);
+    const resolved = await client.findRunLocation(runId);
+    if (resolved.kind !== "found") {
+      return renderRunLocationFailure(c, deps, runId, resolved, "projects");
     }
+    const loc = resolved.location;
     const mode = await resolveMergeIntegration(client, loc);
     const ctx = await loadShellContext(c, deps, {
       activeNavId: "projects",
@@ -234,35 +244,6 @@ async function isOrgAdmin(client: OrchestratorClient, loc: RunLocation): Promise
   const orgs = await client.listOrgs();
   const org = orgs.find((o) => o.id === loc.orgId);
   return org !== undefined && actorCanViewRaw(org.role);
-}
-
-function renderNotFound(c: Context, deps: ShellDeps, runId: string) {
-  return loadShellContext(c, deps, { activeNavId: "projects" }).then((ctx) =>
-    renderShell(c, ctx, { title: "tanren · run not found" }, <RunNotFoundBody runId={runId} />),
-  );
-}
-
-function RunNotFoundBody(props: { runId: string }) {
-  return (
-    <>
-      <div class="page-head">
-        <div>
-          <div class="eyebrow">run · not found</div>
-          <div class="page-title">run not visible</div>
-        </div>
-      </div>
-      <div class="page-body">
-        <section class="placeholder-card">
-          <p>
-            No run <code>{props.runId}</code> is visible to you, or it has not started yet.
-          </p>
-          <p class="placeholder-note">
-            <a href="/projects">← back to projects</a>
-          </p>
-        </section>
-      </div>
-    </>
-  );
 }
 
 function RequestChangesAck(props: { runId: string; specTitle: string; runHref: string }) {

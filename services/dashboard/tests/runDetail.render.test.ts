@@ -115,12 +115,38 @@ describe("P2B-0004 run-detail screen", () => {
     expect(html).not.toContain("the agent");
   });
 
-  it("renders run-not-found for an unknown run", async () => {
+  it("renders run-not-found for an unknown run with honest 404", async () => {
     mockOrchestrator();
     const app = await build();
     const res = await app.request("/runs/run_does_not_exist");
+    expect(res.status).toBe(404);
     const html = await res.text();
     expect(html).toContain("run not visible");
+    expect(html).toContain('data-run-location="not_found"');
+    expect(html).not.toContain('data-run-location="unavailable"');
+  });
+
+  it("renders unavailable (not not-found) when location probes error", async () => {
+    mockOrchestrator();
+    const prior = globalThis.fetch as typeof fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/runs/run_outage/location")) {
+          return new Response(JSON.stringify({ error: "internal" }), { status: 503 });
+        }
+        return prior(input, init);
+      }),
+    );
+    const app = await build();
+    const res = await app.request("/runs/run_outage");
+    expect(res.status).toBe(502);
+    const html = await res.text();
+    expect(html).toContain("run location unavailable");
+    expect(html).toContain('data-run-location="unavailable"');
+    expect(html).toContain('role="alert"');
+    expect(html).not.toContain("run not visible");
   });
 });
 

@@ -302,6 +302,8 @@ describe("P2A-0014 run-detail API — run detail", () => {
   });
 });
 
+// Location route coverage lives in runLocation.route.test.ts (line-cap split).
+
 describe("P2A-0014 run-detail API — events pagination", () => {
   it("paginates with cursor + pageSize and yields nextCursor only when more pages exist", async () => {
     const { app, pool } = buildHarness();

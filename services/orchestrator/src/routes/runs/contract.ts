@@ -31,6 +31,19 @@ export const RunSummary = z
   .strict();
 export type RunSummary = z.infer<typeof RunSummary>;
 
+/**
+ * Minimal, tenant-scoped routing information for a run. This deliberately
+ * omits run data: callers use it only to address the project-scoped detail
+ * and stream endpoints after the location route has enforced visibility.
+ */
+export const RunLocation = z
+  .object({
+    orgId: z.string().min(1),
+    projectId: z.string().min(1),
+  })
+  .strict();
+export type RunLocation = z.infer<typeof RunLocation>;
+
 export const TaskTimelineEntry = z
   .object({
     taskId: z.string().min(1),
