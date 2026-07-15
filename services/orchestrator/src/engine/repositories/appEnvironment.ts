@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type pg from "pg";
 import { z } from "zod";
-import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+import type { IntegrationQueryClient } from "./integrationQuery.js";
 
 export const APP_ENV_SCOPES = ["build", "test", "runtime", "dev"] as const;
 export type AppEnvScope = (typeof APP_ENV_SCOPES)[number];
@@ -46,33 +43,35 @@ export interface UpsertAppEnvInput {
   description?: string;
 }
 
-interface AppEnvRow {
-  id: string;
-  org_id: string;
-  project_id: string;
-  environment: string;
-  key: string;
-  value_ref: string | null;
-  plain_value: string | null;
-  scopes: string[] | null;
-  source: string;
-  binding_id: string | null;
-  binding_generation: number | null;
-  secret_generation: number | null;
-  description: string;
-}
+const AppEnvRow = z.object({
+  id: z.string(),
+  org_id: z.string(),
+  project_id: z.string(),
+  environment: z.enum(APP_ENVIRONMENTS),
+  key: z.string(),
+  value_ref: z.string().nullable(),
+  plain_value: z.string().nullable(),
+  scopes: z.array(z.enum(APP_ENV_SCOPES)).nullable(),
+  source: z.enum(APP_ENV_SOURCES),
+  binding_id: z.string().nullable(),
+  binding_generation: z.coerce.number().int().positive().nullable(),
+  secret_generation: z.coerce.number().int().positive().nullable(),
+  description: z.string(),
+});
+type AppEnvRow = z.infer<typeof AppEnvRow>;
 
-function mapRow(row: AppEnvRow): AppEnvEntry {
+function mapRow(value: unknown): AppEnvEntry {
+  const row = AppEnvRow.parse(value);
   return {
     id: row.id,
     orgId: row.org_id,
     projectId: row.project_id,
-    environment: oneOf(row.environment, APP_ENVIRONMENTS, "project_app_env.environment"),
+    environment: row.environment,
     key: row.key,
     valueRef: row.value_ref,
     plainValue: row.plain_value,
-    scopes: z.array(z.enum(APP_ENV_SCOPES)).parse(row.scopes ?? []),
-    source: oneOf(row.source, APP_ENV_SOURCES, "project_app_env.source"),
+    scopes: row.scopes ?? [],
+    source: row.source,
     bindingId: row.binding_id,
     bindingGeneration: row.binding_generation,
     secretGeneration: row.secret_generation,
@@ -112,9 +111,9 @@ function assertInput(input: UpsertAppEnvInput): void {
 }
 
 export const AppEnvironmentStore = {
-  async upsert(client: QueryClient, input: UpsertAppEnvInput, _actor: ActorRef): Promise<AppEnvEntry> {
+  async upsert(client: IntegrationQueryClient, input: UpsertAppEnvInput, _actor: ActorRef): Promise<AppEnvEntry> {
     assertInput(input);
-    const result = await client.query<AppEnvRow>(
+    const result = await client.query(
       `INSERT INTO project_app_env
          (org_id, id, project_id, environment, key, value_ref, plain_value,
           scopes, source, binding_id, binding_generation, secret_generation,
@@ -157,13 +156,13 @@ export const AppEnvironmentStore = {
   },
 
   async list(
-    client: QueryClient,
+    client: IntegrationQueryClient,
     orgId: string,
     projectId: string,
     environment: AppEnvironment,
     _actor: ActorRef,
   ): Promise<AppEnvEntry[]> {
-    const result = await client.query<AppEnvRow>(
+    const result = await client.query(
       `SELECT ${COLUMNS} FROM project_app_env
        WHERE org_id = $1 AND project_id = $2 AND environment = $3 ORDER BY key`,
       [orgId, projectId, environment],
@@ -172,14 +171,14 @@ export const AppEnvironmentStore = {
   },
 
   async get(
-    client: QueryClient,
+    client: IntegrationQueryClient,
     orgId: string,
     projectId: string,
     environment: AppEnvironment,
     key: string,
     _actor: ActorRef,
   ): Promise<AppEnvEntry | undefined> {
-    const result = await client.query<AppEnvRow>(
+    const result = await client.query(
       `SELECT ${COLUMNS} FROM project_app_env
        WHERE org_id = $1 AND project_id = $2 AND environment = $3 AND key = $4`,
       [orgId, projectId, environment, key],
@@ -189,7 +188,7 @@ export const AppEnvironmentStore = {
   },
 
   async delete(
-    client: QueryClient,
+    client: IntegrationQueryClient,
     orgId: string,
     projectId: string,
     environment: AppEnvironment,

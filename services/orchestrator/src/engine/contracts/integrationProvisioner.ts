@@ -84,7 +84,12 @@ export type ProvisionMode = "greenfield" | "brownfield";
  * workspace id, …). This is what every provisioner method runs under.
  */
 export interface OrgGrant {
+  connectionId: string;
+  grantId: string;
   providerKind: string;
+  upstreamAccountId: string;
+  authGeneration: number;
+  grantGeneration: number;
   /** Secret-manager ref for the org credential. NEVER the secret value itself. */
   credentialRef: string;
   /** Non-secret org metadata (sentry org slug, slack workspace id, hetzner project, …). */

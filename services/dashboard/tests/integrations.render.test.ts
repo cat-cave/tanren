@@ -8,7 +8,7 @@
 //   - empty / not_linked 200 path surfaces the link-first affordance;
 //   - read failure → "unavailable" (no fabricated empty grant list).
 
-import type pg from "pg";
+import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/main.js";
 
@@ -49,6 +49,7 @@ const LINKED_INTEGRATIONS = {
       connectionStatus: "active",
       grantGeneration: 3,
       grantStatus: "active",
+      selectedForProject: true,
     },
     {
       connectionId: "connection_slack",
@@ -67,6 +68,7 @@ const LINKED_INTEGRATIONS = {
       connectionStatus: "active",
       grantGeneration: 1,
       grantStatus: "active",
+      selectedForProject: true,
     },
     {
       connectionId: "connection_vercel",
@@ -85,6 +87,7 @@ const LINKED_INTEGRATIONS = {
       connectionStatus: "active",
       grantGeneration: 1,
       grantStatus: "active",
+      selectedForProject: false,
     },
   ],
   lifecycle: {
@@ -104,8 +107,16 @@ let listMode: ListMode = "linked";
 let provisionBody: unknown = { status: "provisioned", capability: "errors", providerKind: "sentry" };
 let provisionStatus = 201;
 
-function stubPool(): pg.Pool {
-  return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
+function stubPool(): Pool {
+  const pool = new Pool();
+  vi.spyOn(pool, "query").mockResolvedValue({
+    rows: [{ ok: 1 }],
+    rowCount: 1,
+    command: "SELECT",
+    oid: 0,
+    fields: [],
+  });
+  return pool;
 }
 
 function mockOrchestrator(): void {
@@ -150,6 +161,20 @@ function mockOrchestrator(): void {
     }
     if (/\/integrations\/provision/u.test(url) && method === "POST") {
       return new Response(JSON.stringify(provisionBody), { status: provisionStatus });
+    }
+    if (/\/integrations\/[^/]+\/selection$/u.test(url) && method === "PUT") {
+      return new Response(
+        JSON.stringify({
+          status: "selected",
+          providerKind: "deploy.vercel",
+          connectionId: "connection_vercel",
+          grantId: "grant_vercel",
+          upstreamAccountId: "team_abc",
+          authGeneration: 1,
+          grantGeneration: 1,
+        }),
+        { status: 200 },
+      );
     }
     if (/\/integrations\/discover/u.test(url)) {
       // not_linked is a 200 — branch on body.status.
@@ -210,9 +235,11 @@ describe("integrations two-plane panel (/integrations)", () => {
     expect(html).toContain("account · sentry_acme");
     expect(html).toContain("auth generation 2 · grant generation 3");
     expect(html).toContain("capabilities · errors");
-    // Linked capabilities show ready state + enable form.
+    expect(html).toContain("selected for project");
+    expect(html).toContain("use this account");
+    // Only explicitly selected capabilities show ready state + enable form.
     expect(html).toContain('data-capability="errors"');
-    expect(html).toContain(">linked<");
+    expect(html).toContain("account selected");
     expect(html).toContain('action="/integrations/enable"');
     // Org-admin link form is present.
     expect(html).toContain("data-link-form");
@@ -222,6 +249,38 @@ describe("integrations two-plane panel (/integrations)", () => {
     expect(html).toContain("1 need attention");
     // Hetzner stays out of scope.
     expect(html).not.toContain("hetzner");
+  });
+
+  it("proxies an exact account selection and renders selection-required truthfully", async () => {
+    const app = await build();
+    const selected = await app.request("/integrations/select", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "projectId=project_easy&providerKind=deploy.vercel&connectionId=connection_vercel&grantId=grant_vercel",
+    });
+    expect(selected.status).toBe(303);
+    expect(selected.headers.get("location")).toContain("selected%20deploy.vercel%20account");
+
+    provisionBody = {
+      status: "selection_required",
+      capability: "errors",
+      providerKind: "sentry",
+      reason: "selected_grant_unavailable",
+      message: "choose an active sentry account",
+      candidates: [],
+    };
+    provisionStatus = 409;
+    const response = await app.request("/integrations/enable", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "projectId=project_easy&capability=errors&providerKind=sentry",
+    });
+    const location = response.headers.get("location") ?? "";
+    expect(response.status).toBe(303);
+    expect(location).toContain("selectionRequired=sentry");
+    const html = await (await app.request(location)).text();
+    expect(html).toContain('data-selection-required="sentry"');
+    expect(html).toContain("choose an active sentry account");
   });
 
   it("renders empty plane-a copy when nothing is linked (not an error)", async () => {

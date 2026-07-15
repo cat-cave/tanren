@@ -16,7 +16,13 @@
  */
 
 import { OrchestratorHttpClient } from "./httpClient.js";
-import type { DiscoverOutcome, LinkOutcome, OrgIntegrationsList, ProvisionOutcome } from "./integrations.js";
+import type {
+  DiscoverOutcome,
+  LinkOutcome,
+  OrgIntegrationsList,
+  ProvisionOutcome,
+  SelectGrantOutcome,
+} from "./integrations.js";
 
 export class IntegrationsClient extends OrchestratorHttpClient {
   /** Org grants (Plane A). Undefined on network/HTTP failure — empty list is a real empty. */
@@ -67,6 +73,21 @@ export class IntegrationsClient extends OrchestratorHttpClient {
     const r = await this.sendJson<ProvisionOutcome>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/integrations/provision`,
+      input,
+    );
+    return { ok: r.ok, status: r.status, body: r.body };
+  }
+
+  /** Persist the exact account/grant this project will use for one provider. */
+  async selectGrant(
+    orgId: string,
+    projectId: string,
+    providerKind: string,
+    input: { connectionId: string; grantId: string },
+  ): Promise<{ ok: boolean; status: number; body: SelectGrantOutcome | undefined }> {
+    const r = await this.sendJson<SelectGrantOutcome>(
+      "PUT",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/integrations/${encodeURIComponent(providerKind)}/selection`,
       input,
     );
     return { ok: r.ok, status: r.status, body: r.body };

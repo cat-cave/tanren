@@ -38,6 +38,13 @@ export function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = 
       providerKind,
       action: "provision" as const,
       mode: "greenfield" as const,
+      authority: {
+        connectionId: "connection_1",
+        grantId: "grant_1",
+        upstreamAccountId: "account_1",
+        authGeneration: 1,
+        grantGeneration: 1,
+      },
       secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
       surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
     },

@@ -368,12 +368,13 @@ cite); the merge-engine cutover rationale is
 - **Integration provisioning — the two-plane model.** An operator grants
   high-level org/workspace access once and Tanren provisions/discovers/binds every
   project-level leaf resource itself (the `IntegrationProvisioner` port + registry
-  - `org_integrations`; Sentry/Slack/Fly/Vercel provisioners + the Hetzner
-    allocator are shipped). Plane A is the integrations Tanren uses; Plane B is the
-    app environment the built product needs, injected over SSH
-    (`engine/ssh/appEnvPrelude.ts`) — **never** as Actions secrets (under v21 there
-    is no `setActionsSecret`). The design-of-record is
-    `docs/operator-guide/integration-provisioning.md`.
+  over versioned org connections/grants and an exact per-project selection;
+  Sentry/Slack/Fly/Vercel provisioners + the Hetzner allocator are shipped).
+  Plane A is the integrations Tanren uses; Plane B is the
+  app environment the built product needs, injected over SSH
+  (`engine/ssh/appEnvPrelude.ts`) — **never** as Actions secrets (under v21 there
+  is no `setActionsSecret`). The design-of-record is
+  `docs/operator-guide/integration-provisioning.md`.
 - **`LISTEN/NOTIFY` is the event substrate** (`routes/runs/sse.ts`,
   `eventStore.ts`, `db/src/notify.ts`, channel `tanren_run`) — it replaced 1s
   polling. The autonomy layer reacts to `run.*` / `merge.completed` events on this

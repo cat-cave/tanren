@@ -1,3 +1,4 @@
+// cspell:ignore relforcerowsecurity relnamespace schemaname nspname tablename
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -16,6 +17,24 @@ const ORG_B = "org_in_lifecycle_b";
 const PROJECT_A = "project_in_lifecycle_a";
 const PROJECT_B = "project_in_lifecycle_b";
 const DIGEST = `sha256:${"a".repeat(64)}`;
+const LIFECYCLE_TABLES = [
+  "behavior_integration_requirements",
+  "capability_node_dependencies",
+  "capability_nodes",
+  "delivery_runs",
+  "delivery_stage_attempts",
+  "integration_binding_env",
+  "integration_bindings",
+  "integration_reconciliations",
+  "integration_requirements",
+  "integration_resource_snapshots",
+  "integration_validation_proofs",
+  "org_integration_connections",
+  "org_integration_grants",
+  "project_app_env",
+  "project_integration_grant_selections",
+  "spec_capability_dependencies",
+] as const;
 
 function dbName(): string {
   return `tanren_in_lifecycle_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -90,6 +109,33 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
     connectionB = linkedB.connectionId;
     grantB = linkedB.grantId;
 
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      IntegrationConnectionsStore.selectControlGrant(
+        client,
+        {
+          orgId: ORG_A,
+          projectId: PROJECT_A,
+          providerKind: "sentry",
+          connectionId: connectionA,
+          grantId: grantA,
+        },
+        systemActor,
+      ),
+    );
+    await runWithOrgScope(runtimePool, ORG_B, (client) =>
+      IntegrationConnectionsStore.selectControlGrant(
+        client,
+        {
+          orgId: ORG_B,
+          projectId: PROJECT_B,
+          providerKind: "sentry",
+          connectionId: connectionB,
+          grantId: grantB,
+        },
+        systemActor,
+      ),
+    );
+
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       await client.query(
         `INSERT INTO integration_requirements
@@ -160,6 +206,27 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
     expect(bFromA.rowCount).toBe(0);
   });
 
+  it("enables and forces the exact policy on every lifecycle table", async () => {
+    const catalog = await ownerPool.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+      policy_count: string;
+    }>(
+      `SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity, count(p.policyname)::text AS policy_count
+       FROM pg_class c
+       JOIN pg_namespace n ON n.oid = c.relnamespace
+       LEFT JOIN pg_policies p ON p.schemaname = n.nspname AND p.tablename = c.relname
+       WHERE n.nspname = 'public' AND c.relname = ANY($1::text[])
+       GROUP BY c.relname, c.relrowsecurity, c.relforcerowsecurity
+       ORDER BY c.relname`,
+      [[...LIFECYCLE_TABLES]],
+    );
+    expect(catalog.rows).toHaveLength(LIFECYCLE_TABLES.length);
+    expect(catalog.rows.every((row) => row.relrowsecurity && row.relforcerowsecurity)).toBe(true);
+    expect(catalog.rows.every((row) => row.policy_count === "1")).toBe(true);
+  });
+
   it("rejects an org-spoofed connection write through the real policy", async () => {
     await expect(
       runWithOrgScope(runtimePool, ORG_A, (client) =>
@@ -190,6 +257,21 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
         ),
       ),
     ).rejects.toThrow(/foreign key/u);
+
+    const crossSelection = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      IntegrationConnectionsStore.selectControlGrant(
+        client,
+        {
+          orgId: ORG_A,
+          projectId: PROJECT_A,
+          providerKind: "sentry",
+          connectionId: connectionB,
+          grantId: grantB,
+        },
+        systemActor,
+      ),
+    );
+    expect(crossSelection).toBeUndefined();
 
     await expect(
       runWithOrgScope(runtimePool, ORG_A, (client) =>

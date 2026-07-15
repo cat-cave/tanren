@@ -1,44 +1,19 @@
-// the capability → provisioner onboarding engine (orchestrator side).
-//
-// The onboarding/greenfield/brownfield flow requests a CAPABILITY ("enable error
-// tracking", "notify on Slack", "deploy") for a project — NOT a leaf secret. For
-// each enabled capability this engine:
-//   1. Resolves the org's active control grant from the connection authority
-//      (`IntegrationConnectionsStore.getControlGrant`). If the org hasn't linked that provider,
-//      it returns a structured "link <provider> first" response (with a deep-link
-//      affordance) — NOT a thrown error — so the route/dashboard renders the
-//      link-first prompt instead of a crash.
-//   2. Builds the provisioner via `buildIntegrationProvisioner(kind, deps)` with
-//      the PRODUCTION deps (the real fetch transport + the configured SecretStore)
-//      — see `productionProvisionerDeps` below. This is where the registry's deps
-//      are actually supplied in prod (until now only tests passed them).
-//   3. Applies confirm-with-smart-default (O-3): `discover(grant)` →
-//      `resolveSmartDefault(discovered, mode, project)` (greenfield→create,
-//      brownfield→bind-match-else-create); the operator can override with an
-//      explicit `chosenResourceId`. Then `provision`/`bind`.
-//   4. Persists the resulting `ProvisionedArtifact` over the EXISTING surfaces:
-//      `inboxSource` → inbox_sources; `notificationTarget` → notification targets;
-//      `projectConfig` → projects.config; `secretRefs` are already in the secret
-//      manager (written by the provisioner). All org-scoped under RLS via the
-//      caller's scoped QueryClient.
-//   5. Emits `integration.provisioned` (refs only — never secret values) and
-//      returns what was created/bound by REFERENCE.
+// Capability onboarding resolves one exact, persisted project grant; releases the
+// scoped DB transaction; performs discover/provision/bind; then durably writes the
+// artifact and `integration.provisioned` through EventStore in a fresh short scope.
+// Missing links and ambiguous/stale selections are structured no-effect outcomes.
 //
 // SECRET DISCIPLINE: this engine never reads, returns, or logs a secret value.
 // Provisioners write DSNs/tokens into the SecretStore and surface only `secretRefs`
 // (the manager ref NAMES); this engine persists/echoes those names alone. The
 // returned `ProvisionOutcome` and the emitted event carry ref NAMES, never values.
 //
-// IDEMPOTENCY: re-running a capability for the same project is safe — `provision`
-// is the provider's find-or-create (it never mints a second Sentry project / Slack
-// channel), and the inbox-source / notification-target persistence is upsert-keyed
-// on (project, kind) so a re-onboard updates rather than duplicating.
+// Provider find-or-create plus keyed local upserts make retries idempotent.
 
-import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
-import { OrganizationsStore } from "../repositories/organizations.js";
-import { ProjectStore } from "../repositories/projects.js";
+import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { EventStore } from "../eventStore.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -53,8 +28,6 @@ import {
   type ProvisionMode,
 } from "../contracts/integrationProvisioner.js";
 import type { ActorRef } from "../state/actor.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * The canonical capability → provider-kind correspondence. Onboarding asks for a
@@ -166,6 +139,24 @@ export interface NotLinkedResult {
   linkAffordance: { kind: "org_integration_link"; providerKind: string; orgId: string };
 }
 
+/** No provider call was attempted because this project has no usable exact account choice. */
+export interface SelectionRequiredResult {
+  status: "selection_required";
+  capability: string;
+  providerKind: string;
+  reason: "selection_missing" | "multiple_eligible" | "selected_grant_unavailable";
+  message: string;
+  candidates: Array<{
+    connectionId: string;
+    grantId: string;
+    providerKind: string;
+    upstreamAccountId: string;
+    health: string;
+    authGeneration: number;
+    grantGeneration: number;
+  }>;
+}
+
 /** A successful provision/bind, by REFERENCE only — no secret values. */
 export interface ProvisionedResult {
   status: "provisioned";
@@ -173,6 +164,13 @@ export interface ProvisionedResult {
   providerKind: string;
   action: "provision" | "bind";
   mode: ProvisionMode;
+  authority: {
+    connectionId: string;
+    grantId: string;
+    upstreamAccountId: string;
+    authGeneration: number;
+    grantGeneration: number;
+  };
   /** The secret-manager ref NAMES the provisioner stored (never values). */
   secretRefNames: string[];
   surfaces: {
@@ -183,14 +181,16 @@ export interface ProvisionedResult {
   };
 }
 
-export type ProvisionOutcome = NotLinkedResult | ProvisionedResult;
+export type ProvisionOutcome = NotLinkedResult | SelectionRequiredResult | ProvisionedResult;
 
 /** The engine's injected collaborators. `buildProvisioner` defaults to the real
  * registry wired with production deps; tests inject a fake provisioner + an
  * in-memory SecretStore. Nothing here is a production default stand-in — the
  * default IS the real registry. */
 export interface ProvisioningEngineDeps {
-  client: QueryClient;
+  database: {
+    withOrgScope<T>(orgId: string, work: (client: IntegrationQueryClient) => Promise<T>): Promise<T>;
+  };
   secrets: SecretStore;
   events: EventStore;
   actor: ActorRef;
@@ -209,10 +209,30 @@ export async function provisionCapability(
 ): Promise<ProvisionOutcome> {
   const providerKind = resolveProviderKind(request.capability, request.providerKind);
 
-  // 1. Resolve the org grant. Not-linked is an EXPECTED outcome (a structured
-  //    response with a link affordance), not an error.
-  const grant = await IntegrationConnectionsStore.getControlGrant(deps.client, request.orgId, providerKind, deps.actor);
-  if (grant === undefined) {
+  // Complete all authority reads in a short transaction, then release it before
+  // any provider network I/O. A foreign/missing project cannot reach a provider.
+  const authority = await deps.database.withOrgScope(request.orgId, async (client) => {
+    const project = await client.query(
+      `SELECT p.project_id, o.login AS org_slug
+       FROM projects p JOIN organizations o ON o.id = p.org_id
+       WHERE p.org_id = $1 AND p.project_id = $2`,
+      [request.orgId, request.projectId],
+    );
+    const parsed = z.object({ project_id: z.string(), org_slug: z.string() }).safeParse(project.rows[0]);
+    if (!parsed.success) {
+      throw new Error(`project '${request.projectId}' is not owned by org '${request.orgId}'`);
+    }
+    const resolution = await IntegrationConnectionsStore.resolveControlGrant(
+      client,
+      request.orgId,
+      request.projectId,
+      providerKind,
+      deps.actor,
+    );
+    return { resolution, orgSlug: parsed.data.org_slug };
+  });
+  const { resolution } = authority;
+  if (resolution.status === "not_linked") {
     return {
       status: "not_linked",
       capability: request.capability,
@@ -223,6 +243,17 @@ export async function provisionCapability(
       linkAffordance: { kind: "org_integration_link", providerKind, orgId: request.orgId },
     };
   }
+  if (resolution.status === "selection_required") {
+    return {
+      status: "selection_required",
+      capability: request.capability,
+      providerKind,
+      reason: resolution.reason,
+      message: `select an active ${providerKind} account for project ${request.projectId} before provider operations run.`,
+      candidates: resolution.candidates,
+    };
+  }
+  const grant = resolution.grant;
 
   // 2. Build the provisioner with PRODUCTION deps (or the test override).
   const provisioner =
@@ -230,17 +261,10 @@ export async function provisionCapability(
       ? buildIntegrationProvisioner(providerKind, productionProvisionerDeps(deps.secrets))
       : deps.buildProvisioner(providerKind);
 
-  // Resolve the Tanren org slug (organizations.login) — REQUIRED on the project
-  // context for the deploy-app namespacing rule (task #27): every Fly/Vercel app
-  // Tanren creates is named `<orgSlug>-<projectName>` so a project named `linkly`
-  // cannot collide on Fly's global app-name namespace. Sentry/Slack ignore it,
-  // but resolving it unconditionally keeps the construction site mechanical.
-  const orgSlug = await OrganizationsStore.getLogin(deps.client, request.orgId, deps.actor);
-
   const projectCtx = {
     projectId: request.projectId,
     orgId: request.orgId,
-    orgSlug,
+    orgSlug: authority.orgSlug,
     ...(request.stack === undefined ? {} : { stack: request.stack }),
     ...(request.name === undefined ? {} : { name: request.name }),
   };
@@ -265,27 +289,32 @@ export async function provisionCapability(
   }
 
   // 4. Persist the artifact over the existing surfaces (org-scoped under RLS).
-  const surfaces = await persistArtifact(deps, request, artifact);
-
-  // 5. Emit the event (refs only) + return by reference.
   const secretRefNames = Object.values(artifact.secretRefs ?? {});
-  await deps.events.append({
-    projectId: request.projectId,
-    orgId: request.orgId,
-    eventType: "integration.provisioned",
-    payload: {
-      capability: request.capability,
-      providerKind,
-      action,
-      mode: request.mode,
-      secretRefNames,
-      surfaces: {
-        ...(surfaces.inboxSourceId === undefined ? {} : { inboxSourceId: surfaces.inboxSourceId }),
-        ...(surfaces.notificationTargetId === undefined ? {} : { notificationTargetId: surfaces.notificationTargetId }),
-        projectConfigKeys: surfaces.projectConfigKeys,
-        ...(surfaces.deployRef === undefined ? {} : { deployRef: surfaces.deployRef }),
+  // Commit Tanren state and its event atomically in a fresh short transaction,
+  // after the idempotent provider operation has returned.
+  const surfaces = await deps.database.withOrgScope(request.orgId, async (client) => {
+    const persisted = await persistArtifact(client, request, artifact);
+    await deps.events.append({
+      projectId: request.projectId,
+      orgId: request.orgId,
+      eventType: "integration.provisioned",
+      payload: {
+        capability: request.capability,
+        providerKind,
+        action,
+        mode: request.mode,
+        secretRefNames,
+        surfaces: {
+          ...(persisted.inboxSourceId === undefined ? {} : { inboxSourceId: persisted.inboxSourceId }),
+          ...(persisted.notificationTargetId === undefined
+            ? {}
+            : { notificationTargetId: persisted.notificationTargetId }),
+          projectConfigKeys: persisted.projectConfigKeys,
+          ...(persisted.deployRef === undefined ? {} : { deployRef: persisted.deployRef }),
+        },
       },
-    },
+    });
+    return persisted;
   });
 
   return {
@@ -294,6 +323,13 @@ export async function provisionCapability(
     providerKind,
     action,
     mode: request.mode,
+    authority: {
+      connectionId: grant.connectionId,
+      grantId: grant.grantId,
+      upstreamAccountId: grant.upstreamAccountId,
+      authGeneration: grant.authGeneration,
+      grantGeneration: grant.grantGeneration,
+    },
     secretRefNames,
     surfaces,
   };
@@ -314,25 +350,33 @@ interface PersistedSurfaces {
  * them) — we never touch values here.
  */
 async function persistArtifact(
-  deps: ProvisioningEngineDeps,
+  client: IntegrationQueryClient,
   request: ProvisionRequest,
   artifact: ProvisionedArtifact,
 ): Promise<PersistedSurfaces> {
   const result: PersistedSurfaces = { projectConfigKeys: [] };
 
   if (artifact.projectConfig !== undefined && Object.keys(artifact.projectConfig).length > 0) {
-    const current = asRecord(await ProjectStore.getConfig(deps.client, request.projectId, deps.actor));
+    const currentRow = await client.query("SELECT config FROM projects WHERE org_id = $1 AND project_id = $2", [
+      request.orgId,
+      request.projectId,
+    ]);
+    const current = asRecord(z.object({ config: z.unknown() }).parse(currentRow.rows[0]).config);
     const next = { ...current, ...artifact.projectConfig };
-    await ProjectStore.updateConfig(deps.client, request.projectId, next, deps.actor);
+    await client.query("UPDATE projects SET config = $1::jsonb WHERE org_id = $2 AND project_id = $3", [
+      JSON.stringify(next),
+      request.orgId,
+      request.projectId,
+    ]);
     result.projectConfigKeys = Object.keys(artifact.projectConfig);
   }
 
   if (artifact.inboxSource !== undefined) {
-    result.inboxSourceId = await upsertInboxSource(deps.client, request, artifact.inboxSource);
+    result.inboxSourceId = await upsertInboxSource(client, request, artifact.inboxSource);
   }
 
   if (artifact.notificationTarget !== undefined) {
-    result.notificationTargetId = await upsertNotificationTarget(deps.client, request, artifact.notificationTarget);
+    result.notificationTargetId = await upsertNotificationTarget(client, request, artifact.notificationTarget);
   }
 
   if (artifact.deployRef !== undefined) {
@@ -360,14 +404,14 @@ const MANAGED_BY = "integration-provisioner";
  * The conflict target repeats the index predicate so it binds to that partial index.
  */
 async function upsertInboxSource(
-  client: QueryClient,
+  client: IntegrationQueryClient,
   request: ProvisionRequest,
   inboxSource: { kind: string; config: Record<string, unknown> },
 ): Promise<string> {
   const name = `${inboxSource.kind} (${request.name ?? request.projectId})`;
   const id = `src_${randomUUID()}`;
   const config = { ...inboxSource.config, managedBy: MANAGED_BY };
-  const result = await client.query<{ id: string }>(
+  const result = await client.query(
     `INSERT INTO inbox_sources (id, org_id, project_id, kind, name, detail, config, enabled, auto_route)
      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
      ON CONFLICT (org_id, project_id, kind) WHERE (config->>'managedBy') = '${MANAGED_BY}' DO UPDATE SET
@@ -382,7 +426,7 @@ async function upsertInboxSource(
       `inbox_sources upsert returned no row for (${request.orgId}, ${request.projectId}, ${inboxSource.kind})`,
     );
   }
-  return row.id;
+  return z.object({ id: z.string() }).parse(row).id;
 }
 
 /**
@@ -397,7 +441,7 @@ async function upsertInboxSource(
  * Secret REFS in config (botTokenRef) are refs only — never values.
  */
 async function upsertNotificationTarget(
-  client: QueryClient,
+  client: IntegrationQueryClient,
   request: ProvisionRequest,
   notificationTarget: { kind: string; config: Record<string, unknown> },
 ): Promise<string> {
@@ -405,7 +449,7 @@ async function upsertNotificationTarget(
   const destination = notificationTargetDestination(notificationTarget.config);
   const label = `${notificationTarget.kind} (${request.name ?? request.projectId})`;
   const id = `notif_target_${randomUUID()}`;
-  const result = await client.query<{ id: string }>(
+  const result = await client.query(
     `INSERT INTO notification_targets
        (id, org_id, scope, user_id, channel_kind, destination, label, enabled, weekend_mute)
      VALUES ($1, $2, 'org', NULL, $3, $4, $5, 1, 0)
@@ -420,7 +464,7 @@ async function upsertNotificationTarget(
       `notification_targets upsert returned no row for (${request.orgId}, ${channelKind}, ${destination})`,
     );
   }
-  return row.id;
+  return z.object({ id: z.string() }).parse(row).id;
 }
 
 /**

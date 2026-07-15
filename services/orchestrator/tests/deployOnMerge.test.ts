@@ -1,7 +1,4 @@
-// Deploy-on-merge ("a deploy happened") coverage: env-before-trigger ordering; no-config +
-// no-intent no-op; a
-// PRE-resolution failure records a DURABLE `deploy.skipped` BEFORE failing LOUD; idempotency +
-// a missing grant fails LOUD. Driven over a fake pool + the scripted transport (no Postgres).
+// Deploy-on-merge authority, ordering, terminal idempotency, and failure coverage.
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
@@ -22,22 +19,15 @@ const PRIOR_DEPLOYMENT_ID = "vercel_dep_prior";
 
 interface PoolState {
   merged: boolean;
-  /** The project config (carries the deploy target). */
   config: Record<string, unknown>;
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown>; status?: string };
   /** The deploy-intent grant LIST (IntegrationConnectionsStore.list); [] = no deploy intent. */
   linkedGrants?: Array<{ provider_kind: string; capabilities?: string[]; credential_ref?: string }>;
-  /** A prior deploy.triggered exists (resume-verify path). */
   alreadyDeployed?: boolean;
-  /** A prior deploy.verified exists (full idempotency — skip entirely). */
   alreadyVerified?: boolean;
-  /** A prior deploy.failed exists (TERMINAL — skip entirely, no self-loop). */
   alreadyFailed?: boolean;
-  /** A prior deploy.skipped exists (TERMINAL — a pre-resolution skip must not re-loop). */
   alreadySkipped?: boolean;
-  /** Omit mergeSha from merge.completed (a merge that recorded no SHA — fail loud). */
   noMergeSha?: boolean;
-  /** Runtime app-env rows (project_app_env) the attach flow reads. */
   appEnv?: Record<string, unknown>[];
 }
 
@@ -69,16 +59,23 @@ function fakePool(state: PoolState): pg.Pool {
     if (/SELECT config, org_id FROM projects/u.test(sql)) {
       return { rows: [{ config: state.config, org_id: ORG_ID }], rowCount: 1 };
     }
+    if (/SELECT connection_id, grant_id FROM project_integration_grant_selections/u.test(sql)) {
+      const providerKind = params[2] as string;
+      const selected = state.grant !== undefined && state.grant.provider_kind === providerKind;
+      return selected
+        ? { rows: [{ connection_id: "connection_0", grant_id: "grant_0" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
     if (/FROM org_integration_connections c/u.test(sql) && /JOIN org_integration_grants g/u.test(sql)) {
-      const providerKind = params[1] as string | undefined;
+      const projectId = params[1] as string | null;
       const grants =
-        providerKind === undefined
+        projectId === null
           ? (state.linkedGrants ?? []).map((grant) => ({
               ...grant,
               metadata: {},
               credential_ref: grant.credential_ref ?? "secret://org/x",
             }))
-          : state.grant === undefined || state.grant.provider_kind !== providerKind
+          : state.grant === undefined
             ? []
             : [state.grant];
       const rows = grants.map((grant, index) => ({
@@ -101,6 +98,7 @@ function fakePool(state: PoolState): pg.Pool {
         provider_scopes: [],
         grant_generation: 1,
         grant_status: "active",
+        selected_for_project: projectId === PROJECT_ID,
       }));
       return { rows, rowCount: rows.length };
     }

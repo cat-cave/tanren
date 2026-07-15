@@ -23,17 +23,15 @@
 // asserted to match the resolved provisioner, so a wrong-provider config can never
 // silently attach to the wrong app.
 
-import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
+import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { EventStore } from "../eventStore.js";
-import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
+import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { resolveAppEnvForScope } from "./resolveAppEnv.js";
 import type { DeployEnvVar } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "./deployProvisionerFor.js";
 import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * The `deployRef` the deploy provisioner wrote into `projects.config`:
@@ -47,7 +45,7 @@ export interface DeployArtifactRef {
 
 export interface AttachRuntimeAppEnvInput {
   /** Org-scoped query client (RLS gates the app-env + org-grant reads). */
-  client: QueryClient;
+  client: IntegrationQueryClient;
   /** The SecretStore runtime secret refs (and the org deploy token) resolve against. */
   secrets: SecretStore;
   /** The deploy transport the provisioner runs over (scripted fake in tests). */
@@ -60,6 +58,8 @@ export interface AttachRuntimeAppEnvInput {
   orgId: string;
   /** The deploy artifact ref from the project's config (the deployRef). */
   deployRef: DeployArtifactRef;
+  /** Exact project-selected deploy authority, resolved once by the caller. */
+  grant: OrgGrant;
   actor: ActorRef;
 }
 
@@ -105,20 +105,10 @@ export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Prom
     return { provider: input.deployRef.provider, appId: input.deployRef.appId, attachedKeys: [] };
   }
 
-  // (2) The deploy org grant for THIS provider (credential ref + non-secret
-  // metadata; never the token value).
-  const grant = await IntegrationConnectionsStore.getControlGrant(
-    input.client,
-    input.orgId,
-    input.deployRef.provider,
-    input.actor,
-  );
-  if (grant === undefined) {
-    throw new Error(
-      `attachRuntimeAppEnv: org '${input.orgId}' has no '${input.deployRef.provider}' grant to attach runtime env under`,
-    );
-  }
-  // (3) The grant's provider must match the deployRef's — a guard against attaching
+  // The caller resolves one exact project selection and threads it through env
+  // attach and deploy, preventing mixed-account work across the two effects.
+  const grant = input.grant;
+  // The grant's provider must match the deployRef's — a guard against attaching
   // this project's runtime env onto an app under the wrong provider's grant.
   if (grant.providerKind !== input.deployRef.provider) {
     throw new Error(

@@ -70,6 +70,8 @@ export type DestroyDeployAppCallback = (target: {
   providerKind: "deploy.vercel" | "deploy.flyio";
   appId: string;
   appName: string;
+  connectionId: string;
+  grantId: string;
 }) => Promise<void>;
 
 /**

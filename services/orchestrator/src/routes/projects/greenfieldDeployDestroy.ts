@@ -29,7 +29,13 @@ export interface GreenfieldDeployDestroyDeps {
    * returns `appId: app.id ?? app.name`), so dropping one silently mis-routes
    * the DELETE and lets the 404 swallow hide the gap.
    */
-  target: { providerKind: "deploy.vercel" | "deploy.flyio"; appId: string; appName: string };
+  target: {
+    providerKind: "deploy.vercel" | "deploy.flyio";
+    appId: string;
+    appName: string;
+    connectionId: string;
+    grantId: string;
+  };
 }
 
 /**
@@ -42,10 +48,17 @@ export interface GreenfieldDeployDestroyDeps {
  */
 export async function destroyGreenfieldDeployApp(deps: GreenfieldDeployDestroyDeps): Promise<void> {
   const { pool, secrets, orgId, actorId, target } = deps;
-  const grant = await IntegrationConnectionsStore.getControlGrant(pool, orgId, target.providerKind, {
-    kind: "operator",
-    id: actorId,
-  });
+  const grant = await IntegrationConnectionsStore.getControlGrantByIds(
+    pool,
+    orgId,
+    target.providerKind,
+    target.connectionId,
+    target.grantId,
+    {
+      kind: "operator",
+      id: actorId,
+    },
+  );
   if (grant === undefined) {
     throw new Error(
       `${target.providerKind}: cannot destroy deploy app '${target.appName}' (id '${target.appId}') — the org grant ` +

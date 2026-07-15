@@ -241,15 +241,27 @@ export class DemoOnDeployWatcher {
    * production yet".
    */
   private async resolveSurface(verified: VerifiedDeploy): Promise<DemoSurface> {
-    const grant = await runWithSystemScope(this.deps.pool, (client) =>
-      IntegrationConnectionsStore.getControlGrant(client, verified.orgId, verified.provider, systemActor),
+    const resolution = await runWithSystemScope(this.deps.pool, (client) =>
+      IntegrationConnectionsStore.resolveControlGrant(
+        client,
+        verified.orgId,
+        verified.projectId,
+        verified.provider,
+        systemActor,
+      ),
     );
-    if (grant === undefined) {
+    if (resolution.status === "not_linked") {
       throw new Error(
         `demoOnDeploy: run '${verified.runId}' has a verified deploy on '${verified.provider}' but org ` +
           `'${verified.orgId}' has no matching grant — cannot resolve the demo surface`,
       );
     }
+    if (resolution.status === "selection_required") {
+      throw new Error(
+        `demoOnDeploy: project '${verified.projectId}' has no usable explicit '${verified.provider}' account selection (${resolution.reason})`,
+      );
+    }
+    const grant = resolution.grant;
     const adapterKind = adapterKindForProviderKind(verified.provider);
     const adapter = buildDeployAdapter(adapterKind, {
       provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },

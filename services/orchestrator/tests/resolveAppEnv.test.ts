@@ -4,7 +4,7 @@
 // and never leaks an out-of-scope entry. A misconfigured secret ref fails loudly.
 
 import { describe, expect, it } from "vitest";
-import type pg from "pg";
+import type { IntegrationQueryClient } from "../src/engine/repositories/integrationQuery.js";
 import { systemActor } from "../src/engine/state/actor.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { AppEnvironmentStore } from "../src/engine/repositories/appEnvironment.js";
@@ -13,7 +13,7 @@ import { resolveAppEnvForScope } from "../src/engine/workflow/resolveAppEnv.js";
 // A minimal single-project in-memory pg target for the app-env table. RLS is not
 // the concern here (the repo conformance covers it); this only models the rows so
 // the resolver's scope-filtering + secret-resolution can be exercised.
-class AppEnvDb {
+class AppEnvDb implements IntegrationQueryClient {
   readonly rows: Record<string, unknown>[] = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -82,7 +82,7 @@ class AppEnvDb {
 }
 
 async function seed(db: AppEnvDb): Promise<void> {
-  const client = db as unknown as Pick<pg.Pool, "query">;
+  const client = db;
   await AppEnvironmentStore.upsert(
     client,
     {
@@ -130,7 +130,7 @@ describe("resolveAppEnvForScope", () => {
     await secrets.put({ ref: "secret://proj/resend", value: "re_live_xyz" });
 
     const testEnv = await resolveAppEnvForScope({
-      client: db as unknown as Pick<pg.Pool, "query">,
+      client: db,
       secrets,
       orgId: "org_1",
       projectId: "proj",
@@ -150,7 +150,7 @@ describe("resolveAppEnvForScope", () => {
     await secrets.put({ ref: "secret://proj/resend", value: "re_live_xyz" });
 
     const buildEnv = await resolveAppEnvForScope({
-      client: db as unknown as Pick<pg.Pool, "query">,
+      client: db,
       secrets,
       orgId: "org_1",
       projectId: "proj",
@@ -162,7 +162,7 @@ describe("resolveAppEnvForScope", () => {
     expect(buildEnv).toEqual({ PUBLIC_URL: "https://app.example" });
 
     const devEnv = await resolveAppEnvForScope({
-      client: db as unknown as Pick<pg.Pool, "query">,
+      client: db,
       secrets,
       orgId: "org_1",
       projectId: "proj",
@@ -180,7 +180,7 @@ describe("resolveAppEnvForScope", () => {
     const secrets = new FakeSecretStore();
     await expect(
       resolveAppEnvForScope({
-        client: db as unknown as Pick<pg.Pool, "query">,
+        client: db,
         secrets,
         orgId: "org_1",
         projectId: "proj",

@@ -66,7 +66,10 @@ export function appWithGreenfieldRoutes(
   pool: RoutesPool,
   githubHttp: FakeRepoCreateHttp = new FakeRepoCreateHttp(),
   onboardingOverrides: Partial<
-    Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy" | "materializeTemplate" | "runFragmentAuthoring">
+    Pick<
+      OnboardingRoutesOptions,
+      "preflightDeploy" | "prepareDeploy" | "persistDeploySelection" | "materializeTemplate" | "runFragmentAuthoring"
+    >
   > = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
   // secret read THROWS — exercising the no_silent_fallbacks fix that a token-resolution
@@ -108,6 +111,7 @@ export function appWithGreenfieldRoutes(
       answererFactory: () => completingAnswerer,
       githubHttp,
       githubAppMinter,
+      persistDeploySelection: async () => {},
       // Compose+materialize stub: every greenfield derive composes a
       // fragment-based template; the stub returns a fixture seed without
       // touching GitHub. Overridable per test.
@@ -132,6 +136,13 @@ export function preparedDeploy(
       providerKind,
       action: "provision",
       mode: "greenfield",
+      authority: {
+        connectionId: "connection_1",
+        grantId: "grant_1",
+        upstreamAccountId: "account_1",
+        authGeneration: 1,
+        grantGeneration: 1,
+      },
       secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
       surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
     },

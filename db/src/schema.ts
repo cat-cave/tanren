@@ -482,6 +482,8 @@ export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
 export * from "./schemaIntegrationLifecycle.js";
 export * from "./schemaIntegrationOperations.js";
+export * from "./schemaIntegrationEnvironment.js";
+export * from "./schemaIntegrationSelection.js";
 export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";

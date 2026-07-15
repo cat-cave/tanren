@@ -19,16 +19,19 @@ export {
 } from "./engine.js";
 export {
   DeployNotLinkedError,
+  DeploySelectionRequiredError,
   DeployProviderInvalidError,
   DeployProviderMissingError,
   DeployProvisioningUnavailableError,
-  isDeployNotLinked,
+  isDeployUnavailable,
   missingDeployProviderError,
   missingDeployProvisionerError,
   resolveGreenfieldDeployDependency,
   type DeployPreflightCallback,
   type GreenfieldDeployDependency,
+  type GreenfieldDeployUnavailable,
   type PrepareDeployCallback,
+  type PersistDeploySelectionCallback,
   type PreparedGreenfieldDeploy,
 } from "./deployDependency.js";
 

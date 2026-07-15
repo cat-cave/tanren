@@ -1,8 +1,9 @@
 # Integration provisioning boundaries
 
 > **Status — built (design-of-record).** The provisioner substrate is shipped:
-> the `org_integrations` table + repo, the `IntegrationProvisioner` contract +
-> registry, the Sentry / Slack / Fly / Vercel provisioners, the `hetznerAllocator`,
+> versioned org connections and grants, an explicit per-project grant selection,
+> the `IntegrationProvisioner` contract + registry, the Sentry / Slack / Fly /
+> Vercel provisioners, the `hetznerAllocator`,
 > and the per-project **App Environment** store
 > (`engine/repositories/appEnvironment.ts` +
 > `engine/workflow/{attachRuntimeAppEnv,resolveAppEnv}.ts`, injected over SSH by
@@ -32,7 +33,9 @@ stored, and injected differently:
   **Tanren** uses to operate on the user's behalf — ingest issues (Sentry/Linear),
   notify + interact (Slack as a Forge interaction plane), provision compute + run
   (cloud allocators), deploy (Vercel/Fly), VCS (the GitHub App). Org-granted,
-  Tanren-managed via `org_integrations` + the `IntegrationProvisioner` port.
+  Tanren-managed through `org_integration_connections`,
+  `org_integration_grants`, and the `IntegrationProvisioner` port. A project
+  selects one exact active connection/grant before any provider operation.
 
 - **Plane B — the built project's app environment** (see "Project app environment"
   below): the environment variables + secrets the **product Tanren is building**
@@ -49,7 +52,7 @@ is Plane B. They are configured and injected independently.
 ## Project app environment (Plane B — the built product's own secrets)
 
 A per-project **App Environment** store holds the building product's env vars +
-secrets, distinct from `org_integrations`:
+secrets, distinct from Tanren's connection/grant authority:
 
 - **Entry shape:** `{ key (e.g. RESEND_API_KEY), value (secret → secret manager;
 non-secret config → projects.config), scopes: [build | test | runtime | dev],
@@ -132,9 +135,11 @@ worthwhile per provider — not missing foundations.
 
 The boundary model above is realized by:
 
-1. The `org_integrations` config surface (separate from `inbox_sources` and
-   notification targets): non-secret provider metadata + refs to managed
-   credentials, behind the `org_integrations` table + repository.
+1. The connection/grant authority (separate from `inbox_sources` and
+   notification targets): one connection per upstream account, account-specific
+   managed-credential refs, versioned grants, and an exact per-project selection.
+   Multiple accounts for one provider never share a credential ref, and no
+   consumer silently chooses a newest row.
 2. The `IntegrationProvisioner` contract + registry — provider provisioner ports
    separate from the runtime poll/send adapters (Sentry / Slack / Fly / Vercel
    provisioners + the `hetznerAllocator`).
@@ -144,7 +149,8 @@ The boundary model above is realized by:
    Autonomous greenfield/apex creation also requests `deploy` up front. The
    caller must name `deploy.vercel` or `deploy.flyio`; when the org has not linked
    that provider, creation returns structured `not_linked` evidence instead of
-   creating a project with no deploy path.
+   creating a project with no deploy path. When more than one account is eligible,
+   the surface returns `selection_required` before provider I/O.
 4. Leaf-resource manual entry (BYO) remains the path for providers that do not
    expose provisioning APIs or require workspace-owner interactive consent.
 

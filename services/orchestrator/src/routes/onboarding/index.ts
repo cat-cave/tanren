@@ -30,6 +30,7 @@ import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import {
   DeployNotLinkedError,
+  DeploySelectionRequiredError,
   DeployProviderInvalidError,
   DeployProviderMissingError,
   DeployProvisioningUnavailableError,
@@ -44,6 +45,7 @@ import {
   UnresolvableLifecycleError,
   type DeployPreflightCallback,
   type InterviewAnswerer,
+  type PersistDeploySelectionCallback,
   type PrepareDeployCallback,
 } from "../../engine/forge/interview/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
@@ -77,6 +79,7 @@ import {
 import { deleteGreenfieldRepository } from "../projects/greenfieldRepoDelete.js";
 import { probeGreenfieldRepositoryBareAutoInit } from "../projects/greenfieldRepoProbe.js";
 import { destroyGreenfieldDeployApp } from "../projects/greenfieldDeployDestroy.js";
+import { persistGreenfieldDeploySelection } from "../projects/greenfieldDeployAuthority.js";
 
 export interface OnboardingRoutesOptions {
   pool: pg.Pool;
@@ -97,6 +100,8 @@ export interface OnboardingRoutesOptions {
   githubAppMinter?: GithubAppTokenMinter;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
+  /** Test seam; production persists through the greenfield authority below. */
+  persistDeploySelection?: PersistDeploySelectionCallback;
   // The COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md). Every
   // greenfield derive composes a fragment-based template from the captured
   // lifecycle and materializes it into a fresh seed repo — this seam does the
@@ -185,7 +190,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
     try {
       const preflightDeploy =
         options.preflightDeploy ??
-        ((input) => preflightGreenfieldDeploy(options.pool, input.orgId, input.providerKind, actor.userId));
+        ((input) =>
+          preflightGreenfieldDeploy({
+            client: options.pool,
+            actorId: actor.userId,
+            ...input,
+          }));
       const prepareDeploy =
         options.prepareDeploy ??
         ((input) =>
@@ -216,6 +226,11 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           ...buildGreenfieldRepoCallbacks(options, githubHttp, orgId),
           ...(parsed.data.autonomy === undefined ? {} : { autonomy: parsed.data.autonomy }),
           ...(parsed.data.deploy === undefined ? {} : { deploy: parsed.data.deploy }),
+          persistDeploySelection:
+            options.persistDeploySelection ??
+            (async (selection) => {
+              await persistGreenfieldDeploySelection(options.pool, selection, actor.userId);
+            }),
           // TASK #78 — derive transactional rollback. Threads the deploy-DESTROY
           // compensation through the same org grant + provisioner registry the
           // prepareDeploy uses, so a derive that provisions a deploy app + then
@@ -334,6 +349,9 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       }
       if (error instanceof DeployNotLinkedError) {
         return respond({ error: "deploy_not_linked", ...error.outcome }, 409);
+      }
+      if (error instanceof DeploySelectionRequiredError) {
+        return respond({ error: "deploy_selection_required", ...error.outcome }, 409);
       }
       if (error instanceof DeployProvisioningUnavailableError) {
         return respond({ error: "deploy_provisioning_unavailable", message: error.message }, 500);

@@ -12,10 +12,9 @@
 // identity columns. The org slug (the lowercase, hostname-safe `login`) is
 // itself non-secret — it already surfaces in operator-visible org URLs.
 
-import type pg from "pg";
+import { z } from "zod";
+import type { IntegrationQueryClient } from "./integrationQuery.js";
 import type { ActorRef } from "../state/actor.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * Thrown when `getLogin` is asked for an `orgId` that has no row (or the row
@@ -41,12 +40,12 @@ export const OrganizationsStore = {
    * collisions within an org structurally impossible. FAIL-LOUD on a missing
    * org (never a silent un-namespaced fallback).
    */
-  async getLogin(client: QueryClient, orgId: string, _actor: ActorRef): Promise<string> {
-    const result = await client.query<{ login: string }>("SELECT login FROM organizations WHERE id = $1", [orgId]);
+  async getLogin(client: IntegrationQueryClient, orgId: string, _actor: ActorRef): Promise<string> {
+    const result = await client.query("SELECT login FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
     if (row === undefined) {
       throw new OrganizationNotFoundError(orgId);
     }
-    return row.login;
+    return z.object({ login: z.string() }).parse(row).login;
   },
 } as const;

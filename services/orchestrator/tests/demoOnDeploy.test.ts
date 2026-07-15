@@ -53,7 +53,7 @@ const VERCEL_GRANT = {
 
 function fakePool(state: PoolState): pg.Pool {
   // eslint-disable-next-line @typescript-eslint/require-await
-  const query = async (sql: string, _params?: readonly unknown[]) => {
+  const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
     // loadVerifiedDeploy: the deploy.verified event + run/project + a prior TERMINAL
@@ -77,7 +77,13 @@ function fakePool(state: PoolState): pg.Pool {
     }
     // The org grant lookup (demoSurface resolution). `status` is NOT NULL DEFAULT
     // 'linked' on the real row; the store decodes it via the validated read seam.
-    if (/FROM org_integration_connections c/u.test(sql) && /c\.provider_kind = \$2/u.test(sql)) {
+    if (/SELECT connection_id, grant_id FROM project_integration_grant_selections/u.test(sql)) {
+      const selected = state.grant !== undefined && state.grant.provider_kind === params[2];
+      return selected
+        ? { rows: [{ connection_id: "connection_demo", grant_id: "grant_demo" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
+    if (/FROM org_integration_connections c/u.test(sql)) {
       return state.grant === undefined
         ? { rows: [], rowCount: 0 }
         : {
@@ -102,6 +108,7 @@ function fakePool(state: PoolState): pg.Pool {
                 provider_scopes: [],
                 grant_generation: 1,
                 grant_status: "active",
+                selected_for_project: true,
               },
             ],
             rowCount: 1,

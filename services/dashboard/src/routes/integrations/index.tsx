@@ -46,6 +46,8 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const notice = noticeRaw === undefined || noticeRaw === "" ? undefined : noticeRaw;
     const notLinkedProvider = c.req.query("notLinked");
     const notLinkedMessage = c.req.query("notLinkedMsg");
+    const selectionProvider = c.req.query("selectionRequired");
+    const selectionMessage = c.req.query("selectionMsg");
 
     let integrations: OrgIntegrationSummary[] | undefined;
     let lifecycle: IntegrationLifecycleInventory | undefined;
@@ -78,9 +80,37 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
                 ...(notLinkedMessage === undefined || notLinkedMessage === "" ? {} : { message: notLinkedMessage }),
               }
         }
+        selectionRequired={
+          selectionProvider === undefined || selectionProvider === ""
+            ? undefined
+            : {
+                providerKind: selectionProvider,
+                ...(selectionMessage === undefined || selectionMessage === "" ? {} : { message: selectionMessage }),
+              }
+        }
         csrfToken={ctx.csrfToken}
       />,
     );
+  });
+
+  // Persist the account choice before any provider discovery/provision call.
+  app.post("/integrations/select", async (c: Context) => {
+    const ctx = await loadShellContext(c, deps, { activeNavId: "integrations" });
+    const orgId = ctx.org?.id;
+    if (orgId === undefined) return redirectTo(c, "/integrations", "no org in session");
+    const form = await c.req.parseBody();
+    const projectId = formField(form, "projectId").trim();
+    const providerKind = formField(form, "providerKind").trim();
+    const connectionId = formField(form, "connectionId").trim();
+    const grantId = formField(form, "grantId").trim();
+    if (projectId === "" || providerKind === "" || connectionId === "" || grantId === "") {
+      return redirectTo(c, "/integrations", "missing account selection fields");
+    }
+    const client = await writeClient(c, deps);
+    const result = await client.selectGrant(orgId, projectId, providerKind, { connectionId, grantId });
+    return result.ok
+      ? redirectTo(c, "/integrations", `selected ${providerKind} account`)
+      : redirectTo(c, "/integrations", `account selection failed (${result.status})`);
   });
 
   // ── link (Plane A write) ────────────────────────────────────────────────
@@ -139,6 +169,11 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
       const msg = "message" in result.body && typeof result.body.message === "string" ? result.body.message : undefined;
       const qs = new URLSearchParams({ notLinked: pk });
       if (msg !== undefined) qs.set("notLinkedMsg", msg);
+      return c.redirect(`/integrations?${qs.toString()}`, 303);
+    }
+    if (result.body?.status === "selection_required") {
+      const qs = new URLSearchParams({ selectionRequired: result.body.providerKind });
+      if (result.body.message !== undefined) qs.set("selectionMsg", result.body.message);
       return c.redirect(`/integrations?${qs.toString()}`, 303);
     }
     if (!result.ok) {

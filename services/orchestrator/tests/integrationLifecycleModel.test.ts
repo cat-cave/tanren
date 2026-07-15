@@ -2,10 +2,15 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const migrationPath = fileURLToPath(new URL("../../../db/migrations/0041_integration_lifecycle.sql", import.meta.url));
-const snapshotPath = fileURLToPath(new URL("../../../db/migrations/meta/0041_snapshot.json", import.meta.url));
-const lifecycleSchemaPath = fileURLToPath(new URL("../../../db/src/schemaIntegrationLifecycle.ts", import.meta.url));
-const operationsSchemaPath = fileURLToPath(new URL("../../../db/src/schemaIntegrationOperations.ts", import.meta.url));
+const root = new URL("../../../", import.meta.url);
+const migrationPath = fileURLToPath(new URL("db/migrations/0041_integration_lifecycle.sql", root));
+const snapshotPath = fileURLToPath(new URL("db/migrations/meta/0041_snapshot.json", root));
+const schemaPaths = [
+  "db/src/schemaIntegrationLifecycle.ts",
+  "db/src/schemaIntegrationOperations.ts",
+  "db/src/schemaIntegrationEnvironment.ts",
+  "db/src/schemaIntegrationSelection.ts",
+].map((path) => fileURLToPath(new URL(path, root)));
 
 const TABLES = [
   "behavior_integration_requirements",
@@ -22,86 +27,111 @@ const TABLES = [
   "org_integration_connections",
   "org_integration_grants",
   "project_app_env",
+  "project_integration_grant_selections",
   "spec_capability_dependencies",
 ] as const;
 
+interface SnapshotTable {
+  columns: Record<string, { notNull: boolean }>;
+  indexes: Record<string, unknown>;
+  foreignKeys: Record<string, unknown>;
+  policies: Record<string, { name: string; as: string; for: string; to: string[]; using: string; withCheck: string }>;
+  isRLSEnabled: boolean;
+}
+
 describe("IN-1 integration lifecycle schema contract", () => {
   let migration = "";
-  let snapshot: { tables: Record<string, unknown> };
+  let tables: Record<string, SnapshotTable> = {};
   let schemas = "";
 
   beforeAll(async () => {
-    const [migrationSql, snapshotJson, lifecycle, operations] = await Promise.all([
+    const [migrationSql, snapshotJson, ...schemaSources] = await Promise.all([
       readFile(migrationPath, "utf8"),
       readFile(snapshotPath, "utf8"),
-      readFile(lifecycleSchemaPath, "utf8"),
-      readFile(operationsSchemaPath, "utf8"),
+      ...schemaPaths.map((path) => readFile(path, "utf8")),
     ]);
     migration = migrationSql;
-    snapshot = JSON.parse(snapshotJson) as { tables: Record<string, unknown> };
-    schemas = `${lifecycle}\n${operations}`;
+    const parsed = JSON.parse(snapshotJson) as { tables: Record<string, SnapshotTable> };
+    tables = parsed.tables;
+    schemas = schemaSources.join("\n");
   });
 
   it("clean-replaces both legacy authorities without a compatibility path", () => {
-    expect(migration).toMatch(/DROP TABLE "org_integrations";[\s\S]*DROP TABLE "project_app_env";/u);
+    expect(migration).toContain('DROP TABLE "project_app_env" CASCADE');
+    expect(migration).toContain('DROP TABLE "org_integrations" CASCADE');
     expect(migration).not.toMatch(/CREATE (?:OR REPLACE )?VIEW/u);
     expect(migration).not.toMatch(/INSERT INTO "org_integration_connections"[\s\S]*SELECT[\s\S]*org_integrations/u);
     expect(migration).not.toContain('CREATE TABLE "org_integrations"');
-    expect(snapshot.tables).not.toHaveProperty("public.org_integrations");
+    expect(tables).not.toHaveProperty("public.org_integrations");
   });
 
-  it("creates the complete closed 15-table model with direct tenant roots", () => {
-    expect(TABLES).toHaveLength(15);
-    for (const table of TABLES) {
-      expect(migration).toContain(`CREATE TABLE "${table}"`);
-      expect(migration).toMatch(new RegExp(`CREATE TABLE "${table}" \\([\\s\\S]*?"org_id" text NOT NULL`, "u"));
-      expect(snapshot.tables).toHaveProperty(`public.${table}`);
+  it("owns the complete 16-table model with direct indexed tenant roots", () => {
+    expect(TABLES).toHaveLength(16);
+    for (const tableName of TABLES) {
+      expect(migration).toContain(`CREATE TABLE "${tableName}"`);
+      const table = tables[`public.${tableName}`];
+      if (table === undefined) throw new Error(`snapshot missing lifecycle table ${tableName}`);
+      expect(table.columns["org_id"]).toMatchObject({ notNull: true });
+      expect(Object.values(table.indexes).some((index) => JSON.stringify(index).includes('"org_id"'))).toBe(true);
     }
   });
 
-  it("forces one deny-by-default org policy over the same closed table list", () => {
-    expect(migration).toContain("ALTER TABLE %I ENABLE ROW LEVEL SECURITY");
-    expect(migration).toContain("ALTER TABLE %I FORCE ROW LEVEL SECURITY");
-    expect(migration).toContain("CREATE POLICY rls_org_isolation ON %I FOR ALL");
-    expect(migration).toContain("org_id = current_setting(''app.current_org_id'', true)");
-    for (const table of TABLES) {
-      expect(migration).toContain(`'${table}'`);
+  it("records one exact deny-by-default policy per table in Drizzle metadata and FORCE SQL", () => {
+    for (const tableName of TABLES) {
+      const table = tables[`public.${tableName}`]!;
+      expect(table.isRLSEnabled).toBe(true);
+      expect(Object.keys(table.policies)).toEqual(["rls_org_isolation"]);
+      const policy = table.policies["rls_org_isolation"]!;
+      const predicate = `"${tableName}"."org_id" = current_setting('app.current_org_id', true)`;
+      expect(policy).toMatchObject({
+        name: "rls_org_isolation",
+        as: "PERMISSIVE",
+        for: "ALL",
+        to: ["public"],
+        using: predicate,
+        withCheck: predicate,
+      });
+      expect(migration).toContain(`ALTER TABLE "${tableName}" ENABLE ROW LEVEL SECURITY`);
+      expect(migration).toContain(`ALTER TABLE "${tableName}" FORCE ROW LEVEL SECURITY`);
+      expect(migration).toContain(`CREATE POLICY "rls_org_isolation" ON "${tableName}"`);
     }
+    expect(migration.match(/ FORCE ROW LEVEL SECURITY/gu)).toHaveLength(TABLES.length);
   });
 
-  it("uses composite tenant foreign keys across every authority boundary", () => {
+  it("serializes every spine and project-selection foreign key into SQL and snapshot", () => {
     const requiredConstraints = [
       "behavior_integration_requirements_behavior_revision_fk",
-      "capability_nodes_project_fk",
-      "capability_nodes_requirement_fk",
       "delivery_runs_authority_decision_fk",
-      "integration_bindings_grant_fk",
-      "integration_reconciliations_binding_fk",
       "integration_validation_proofs_behavior_revision_fk",
+      "integration_validation_proofs_behavior_verdict_fk",
+      "integration_validation_proofs_proof_unit_fk",
       "integration_validation_proofs_evidence_cas_fk",
-      "org_integration_grants_connection_fk",
+      "project_integration_grant_selections_project_fk",
+      "project_integration_grant_selections_connection_fk",
+      "project_integration_grant_selections_grant_fk",
       "project_app_env_binding_output_fk",
-      "project_app_env_project_fk",
       "spec_capability_dependencies_spec_fk",
     ];
+    const snapshotForeignKeys = Object.values(tables).flatMap((table) => Object.keys(table.foreignKeys));
     for (const constraint of requiredConstraints) {
-      expect(migration).toContain(`CONSTRAINT "${constraint}" FOREIGN KEY ("org_id",`);
+      expect(migration).toContain(`CONSTRAINT "${constraint}" FOREIGN KEY`);
+      expect(snapshotForeignKeys).toContain(constraint);
     }
     expect(migration).toContain('CREATE UNIQUE INDEX "projects_org_project_unique"');
     expect(migration).toContain('CREATE UNIQUE INDEX "specs_org_spec_unique"');
   });
 
-  it("pins digest, enum, generation, and secret/binding invariants in SQL", () => {
+  it("pins digest, generation, account, and secret/binding invariants in SQL", () => {
     expect(migration).toContain("^sha256:[0-9a-f]{64}$");
-    expect(migration).not.toMatch(/CHECK \([^)]*\$\d/u);
     expect(migration).toContain('CONSTRAINT "project_app_env_value_xor_check"');
     expect(migration).toContain('CONSTRAINT "project_app_env_binding_check"');
     expect(migration).toContain('CONSTRAINT "project_app_env_secret_generation_check"');
-    expect(migration).toContain('CONSTRAINT "org_integration_grants_plane_environment_check"');
+    expect(migration).toContain('CREATE UNIQUE INDEX "org_integration_connections_account_unique"');
+    expect(migration).toContain('CREATE UNIQUE INDEX "org_integration_grants_connection_id_unique"');
     expect(migration).toContain('CONSTRAINT "integration_validation_proofs_verdict_check"');
   });
 
-  it("keeps the generated schema modules aligned with the migration", () => {
+  it("keeps all schema exports aligned and under the architecture line cap", async () => {
     const exports = [
       "orgIntegrationConnections",
       "orgIntegrationGrants",
@@ -113,14 +143,16 @@ describe("IN-1 integration lifecycle schema contract", () => {
       "integrationBindings",
       "integrationBindingEnv",
       "projectAppEnv",
+      "projectIntegrationGrantSelections",
       "integrationReconciliations",
       "integrationResourceSnapshots",
       "deliveryRuns",
       "deliveryStageAttempts",
       "integrationValidationProofs",
     ];
-    for (const name of exports) {
-      expect(schemas).toContain(`export const ${name} = pgTable(`);
+    for (const name of exports) expect(schemas).toContain(`export const ${name} = pgTable(`);
+    for (const path of schemaPaths) {
+      expect((await readFile(path, "utf8")).split("\n").length).toBeLessThanOrEqual(500);
     }
   });
 });

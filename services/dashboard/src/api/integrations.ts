@@ -31,6 +31,7 @@ export interface OrgIntegrationSummary {
   connectionStatus: string;
   grantGeneration: number;
   grantStatus: string;
+  selectedForProject: boolean;
 }
 
 export interface IntegrationLifecycleInventory {
@@ -64,14 +65,33 @@ export interface NotLinkedOutcome {
 }
 
 export interface LinkedProvisionOutcome {
-  status: string;
+  status: "provisioned";
   capability?: string;
   providerKind?: string;
   /** Opaque refs / surface ids — never secret material. */
   [key: string]: unknown;
 }
 
-export type ProvisionOutcome = NotLinkedOutcome | LinkedProvisionOutcome;
+export interface GrantSelectionCandidate {
+  connectionId: string;
+  grantId: string;
+  providerKind: string;
+  upstreamAccountId: string;
+  health: string;
+  authGeneration: number;
+  grantGeneration: number;
+}
+
+export interface SelectionRequiredOutcome {
+  status: "selection_required";
+  capability?: string;
+  providerKind: string;
+  reason: "selection_missing" | "multiple_eligible" | "selected_grant_unavailable";
+  message?: string;
+  candidates: GrantSelectionCandidate[];
+}
+
+export type ProvisionOutcome = NotLinkedOutcome | SelectionRequiredOutcome | LinkedProvisionOutcome;
 
 export interface DiscoverOutcome {
   status: string;
@@ -79,6 +99,8 @@ export interface DiscoverOutcome {
   providerKind?: string;
   resources?: unknown[];
   message?: string;
+  reason?: SelectionRequiredOutcome["reason"];
+  candidates?: GrantSelectionCandidate[];
   linkAffordance?: {
     kind: string;
     providerKind: string;
@@ -96,6 +118,16 @@ export interface LinkOutcome {
   grantGeneration: number;
   capabilities: string[];
   metadataKeys: string[];
+}
+
+export interface SelectGrantOutcome {
+  status: "selected";
+  providerKind: string;
+  connectionId: string;
+  grantId: string;
+  upstreamAccountId: string;
+  authGeneration: number;
+  grantGeneration: number;
 }
 
 /**

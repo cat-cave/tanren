@@ -13,6 +13,14 @@ import {
 } from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
 import { integrationBindings, integrationRequirements } from "./schemaIntegrationLifecycle.js";
+import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
+import {
+  authorityDecisionsReference,
+  behaviorRevisionsReference,
+  behaviorVerdictsReference,
+  casArtifactsReference,
+  proofUnitsReference,
+} from "./schemaSpineReferences.js";
 
 const digestPattern = sql.raw("'^sha256:[0-9a-f]{64}$'");
 
@@ -83,8 +91,9 @@ export const integrationReconciliations = pgTable(
       sql`${table.status} IN ('pending','claimed','retry_scheduled','succeeded','fixed_point','state_unknown','needs_attention')`,
     ),
     check("integration_reconciliations_attempt_check", sql`${table.attempt} >= 0`),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const integrationResourceSnapshots = pgTable(
   "integration_resource_snapshots",
@@ -136,8 +145,9 @@ export const integrationResourceSnapshots = pgTable(
       "integration_resource_snapshots_health_check",
       sql`${table.health} IN ('unknown','healthy','degraded','missing')`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const deliveryRuns = pgTable(
   "delivery_runs",
@@ -166,6 +176,11 @@ export const deliveryRuns = pgTable(
       foreignColumns: [projects.orgId, projects.projectId],
       name: "delivery_runs_project_fk",
     }),
+    foreignKey({
+      columns: [table.orgId, table.authorityDecisionId],
+      foreignColumns: [authorityDecisionsReference.orgId, authorityDecisionsReference.id],
+      name: "delivery_runs_authority_decision_fk",
+    }),
     uniqueIndex("delivery_runs_authority_decision_unique").on(table.orgId, table.authorityDecisionId),
     index("delivery_runs_org_id").on(table.orgId),
     index("delivery_runs_claimable").on(table.orgId, table.status, table.retryAfter, table.id),
@@ -181,8 +196,9 @@ export const deliveryRuns = pgTable(
       "delivery_runs_completed_check",
       sql`(${table.status} = 'completed' AND ${table.completedAt} IS NOT NULL) OR (${table.status} <> 'completed' AND ${table.completedAt} IS NULL)`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const deliveryStageAttempts = pgTable(
   "delivery_stage_attempts",
@@ -232,8 +248,9 @@ export const deliveryStageAttempts = pgTable(
       "delivery_stage_attempts_claim_check",
       sql`(${table.claimOwner} IS NULL AND ${table.claimExpiresAt} IS NULL) OR (${table.claimOwner} IS NOT NULL AND ${table.claimExpiresAt} IS NOT NULL)`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const integrationValidationProofs = pgTable(
   "integration_validation_proofs",
@@ -245,6 +262,8 @@ export const integrationValidationProofs = pgTable(
     projectId: text("project_id").notNull(),
     specId: text("spec_id").notNull(),
     behaviorRevisionId: text("behavior_revision_id").notNull(),
+    behaviorVerdictId: text("behavior_verdict_id").notNull(),
+    proofUnitDigest: text("proof_unit_digest").notNull(),
     requirementId: text("requirement_id").notNull(),
     bindingId: text("binding_id").notNull(),
     bindingGeneration: integer("binding_generation").notNull(),
@@ -276,6 +295,21 @@ export const integrationValidationProofs = pgTable(
       name: "integration_validation_proofs_spec_fk",
     }),
     foreignKey({
+      columns: [table.orgId, table.behaviorRevisionId],
+      foreignColumns: [behaviorRevisionsReference.orgId, behaviorRevisionsReference.id],
+      name: "integration_validation_proofs_behavior_revision_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.behaviorVerdictId],
+      foreignColumns: [behaviorVerdictsReference.orgId, behaviorVerdictsReference.id],
+      name: "integration_validation_proofs_behavior_verdict_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.proofUnitDigest],
+      foreignColumns: [proofUnitsReference.orgId, proofUnitsReference.proofUnitDigest],
+      name: "integration_validation_proofs_proof_unit_fk",
+    }),
+    foreignKey({
       columns: [table.orgId, table.requirementId],
       foreignColumns: [integrationRequirements.orgId, integrationRequirements.id],
       name: "integration_validation_proofs_requirement_fk",
@@ -289,6 +323,11 @@ export const integrationValidationProofs = pgTable(
       columns: [table.orgId, table.deliveryRunId],
       foreignColumns: [deliveryRuns.orgId, deliveryRuns.id],
       name: "integration_validation_proofs_delivery_run_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.evidenceDigest],
+      foreignColumns: [casArtifactsReference.orgId, casArtifactsReference.digest],
+      name: "integration_validation_proofs_evidence_cas_fk",
     }),
     uniqueIndex("integration_validation_proofs_reuse_unique").on(
       table.orgId,
@@ -305,5 +344,6 @@ export const integrationValidationProofs = pgTable(
     check("integration_validation_proofs_trigger_digest_check", sql`${table.triggerDigest} ~ ${digestPattern}`),
     check("integration_validation_proofs_evidence_digest_check", sql`${table.evidenceDigest} ~ ${digestPattern}`),
     check("integration_validation_proofs_verdict_check", sql`${table.verdict} IN ('passed','failed','degraded')`),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();

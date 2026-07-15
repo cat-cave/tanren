@@ -24,6 +24,10 @@ Exclusive:
 - `docs/roadmap/mission-complete/nodes/cards/integration-lifecycle-data-model.md`
 - `db/src/schemaIntegrationLifecycle.ts`
 - `db/src/schemaIntegrationOperations.ts`
+- `db/src/schemaIntegrationEnvironment.ts`
+- `db/src/schemaIntegrationPolicy.ts`
+- `db/src/schemaIntegrationSelection.ts`
+- `db/src/schemaSpineReferences.ts`
 - `services/orchestrator/src/engine/repositories/integrationConnections.ts`
 - `services/orchestrator/src/engine/repositories/integrationLifecycleInventory.ts`
 - `services/orchestrator/tests/integrationLifecycleModel.test.ts`
@@ -44,7 +48,14 @@ Integration-specific cutover paths:
 - `services/orchestrator/src/engine/postMerge/deployOnMerge.ts`
 - `services/orchestrator/src/engine/postMerge/deployTargetResolution.ts`
 - `services/orchestrator/src/routes/projects/greenfield.ts`
+- `services/orchestrator/src/routes/projects/greenfieldDeployAuthority.ts`
 - `services/orchestrator/src/routes/projects/greenfieldDeployDestroy.ts`
+- `services/orchestrator/src/routes/onboarding/index.ts`
+- `services/orchestrator/src/engine/forge/interview/deployDependency.ts`
+- `services/orchestrator/src/engine/forge/interview/derive.ts`
+- `services/orchestrator/src/engine/forge/interview/deriveCompensation.ts`
+- `services/orchestrator/src/engine/forge/interview/engine.ts`
+- `services/orchestrator/src/engine/forge/interview/index.ts`
 - `services/orchestrator/src/engine/workflow/resolveAppEnv.ts`
 - `services/orchestrator/src/engine/workflow/attachRuntimeAppEnv.ts`
 - `services/orchestrator/src/engine/worker/runExecutor.ts`
@@ -92,6 +103,7 @@ The migration owns these tables:
 - `integration_bindings`
 - `integration_binding_env`
 - `project_app_env` (clean replacement of the old shape)
+- `project_integration_grant_selections`
 - `integration_reconciliations`
 - `integration_resource_snapshots`
 - `delivery_runs`
@@ -109,6 +121,11 @@ one connection plus its explicit `control` grant in a single database statement,
 and every caller reads through that new store. The old one-row-per-provider
 authority is not retained behind an alias.
 
+The project-selection table binds one exact active connection/grant to each
+`(org_id, project_id, provider_kind)`. A single eligible account still requires
+that durable choice once the project exists; multiple eligible accounts return a
+sanitized `selection_required` result before provider construction or I/O.
+
 ## Callable and visible slice
 
 `in-20` still owns the full lifecycle HTTP API and `in-21` owns the complete
@@ -122,9 +139,16 @@ The live node proof uses the existing named `integration.provisioned` event whil
 the provision path resolves its authority from the new connection+grant model.
 `in-3` later expands the vocabulary; this node does not bypass SP-8 serialization.
 
+Connections, grants, project selections, and app-environment rows are active
+production authorities in IN-1. Requirement/capability/binding/delivery rows are
+truthfully read by the lifecycle inventory. Reconciliation, snapshot, stage, and
+validation-proof producers remain owned by their declared downstream nodes; IN-1
+installs their tenant-safe schema but does not fabricate rows or claim those
+workers are complete.
+
 ## Verification
 
-- Schema contract test asserts all 15 tables, direct `org_id`, composite tenant
+- Schema contract test asserts all 16 tables, direct `org_id`, composite tenant
   FKs, enum/digest/XOR checks, forced RLS, and absence of `org_integrations`.
 - Real-Postgres test applies migrations and proves unset-org reads return zero,
   same-org reads succeed, cross-org reads return zero, and cross-org FK/write

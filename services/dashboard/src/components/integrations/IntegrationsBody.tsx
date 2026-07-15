@@ -40,13 +40,25 @@ export interface IntegrationsBodyProps {
    * 200 path, not an error. Rendered as a link-first affordance.
    */
   notLinked?: { providerKind: string; message?: string };
+  /** A provider is linked, but this project must choose one exact account. */
+  selectionRequired?: { providerKind: string; message?: string };
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
 }
 
 export function IntegrationsBody(props: IntegrationsBodyProps) {
-  const { integrations, projectId, lifecycle, projectName, noProject, isOrgAdmin, notice, notLinked, csrfToken } =
-    props;
+  const {
+    integrations,
+    projectId,
+    lifecycle,
+    projectName,
+    noProject,
+    isOrgAdmin,
+    notice,
+    notLinked,
+    selectionRequired,
+    csrfToken,
+  } = props;
   const unavailable = integrations === undefined;
   const grants = integrations ?? [];
 
@@ -70,6 +82,14 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                 : `: ${notLinked.message}`}
             </div>
           )}
+          {selectionRequired === undefined ? null : (
+            <div class="notice warn" data-selection-required={selectionRequired.providerKind}>
+              account selection required — {providerLabel(selectionRequired.providerKind)}
+              {selectionRequired.message === undefined || selectionRequired.message === ""
+                ? ". choose an account below before enabling this capability."
+                : `: ${selectionRequired.message}`}
+            </div>
+          )}
 
           {/* ── Plane A: org grants ─────────────────────────────────────── */}
           <section class="panel">
@@ -89,7 +109,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
               ) : (
                 <div class="int-grid">
                   {grants.map((row) => (
-                    <GrantCard row={row} />
+                    <GrantCard row={row} projectId={projectId} csrfToken={csrfToken} />
                   ))}
                 </div>
               )}
@@ -195,69 +215,91 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
             </div>
           </section>
 
-          {/* ── Plane B: project capabilities ───────────────────────────── */}
-          <section class="panel">
-            <div class="panel-pad">
-              <div class="mini-eyebrow">
-                plane b · project enable <span class="window-tag">(sentry · slack · deploy.vercel / deploy.flyio)</span>
-              </div>
-              {noProject ? (
-                <div class="empty">
-                  No project visible yet. Onboard one to enable capabilities against an org grant.
-                </div>
-              ) : unavailable ? (
-                <div class="empty">Capability enable is paused while the org grant list is unavailable.</div>
-              ) : (
-                <>
-                  {PROJECT_CAPABILITIES.map((cap) => {
-                    const linked = isProviderLinked(grants, cap.providerKind);
-                    return (
-                      <div class="cap-row" data-capability={cap.capability} data-provider={cap.providerKind}>
-                        <span class="glyph">{cap.glyph}</span>
-                        <div class="meta">
-                          <div class="name">{cap.label}</div>
-                          <div class="desc">
-                            {cap.capability} → {cap.providerKind}
-                          </div>
-                        </div>
-                        <span class={`state ${linked ? "ready" : "need-link"}`}>
-                          {linked ? "linked" : "not linked"}
-                        </span>
-                        {linked ? (
-                          <form method="post" action="/integrations/enable">
-                            <CsrfField token={csrfToken} />
-                            <input type="hidden" name="projectId" value={projectId} />
-                            <input type="hidden" name="capability" value={cap.capability} />
-                            <input type="hidden" name="providerKind" value={cap.providerKind} />
-                            <button class="btn" type="submit">
-                              enable
-                            </button>
-                          </form>
-                        ) : (
-                          <button class="btn" type="button" disabled title="link provider at org first">
-                            enable
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <div class="note">
-                    <b>↑ plane b.</b> Enabling a capability provisions or binds a project artifact from the org grant.
-                    If the provider is not linked, the orchestrator returns <b>status: not_linked</b> as a <b>200</b> —
-                    link first, do not treat it as an error.
-                  </div>
-                </>
-              )}
-            </div>
-          </section>
+          <ProjectCapabilities
+            grants={grants}
+            projectId={projectId}
+            noProject={noProject}
+            unavailable={unavailable}
+            csrfToken={csrfToken}
+          />
         </div>
       </div>
     </>
   );
 }
 
-function GrantCard(props: { row: OrgIntegrationSummary }) {
-  const { row } = props;
+function ProjectCapabilities(props: {
+  grants: OrgIntegrationSummary[];
+  projectId: string;
+  noProject: boolean;
+  unavailable: boolean;
+  csrfToken?: string;
+}) {
+  return (
+    <section class="panel">
+      <div class="panel-pad">
+        <div class="mini-eyebrow">
+          plane b · project enable <span class="window-tag">(sentry · slack · deploy.vercel / deploy.flyio)</span>
+        </div>
+        {props.noProject ? (
+          <div class="empty">No project visible yet. Onboard one to enable capabilities against an org grant.</div>
+        ) : props.unavailable ? (
+          <div class="empty">Capability enable is paused while the org grant list is unavailable.</div>
+        ) : (
+          <>
+            {PROJECT_CAPABILITIES.map((cap) => {
+              const linked = isProviderLinked(props.grants, cap.providerKind);
+              const selected = props.grants.some(
+                (grant) => grant.providerKind === cap.providerKind && grant.selectedForProject,
+              );
+              return (
+                <div class="cap-row" data-capability={cap.capability} data-provider={cap.providerKind}>
+                  <span class="glyph">{cap.glyph}</span>
+                  <div class="meta">
+                    <div class="name">{cap.label}</div>
+                    <div class="desc">
+                      {cap.capability} → {cap.providerKind}
+                    </div>
+                  </div>
+                  <span class={`state ${selected ? "ready" : "need-link"}`}>
+                    {selected ? "account selected" : linked ? "choose account" : "not linked"}
+                  </span>
+                  {selected ? (
+                    <form method="post" action="/integrations/enable">
+                      <CsrfField token={props.csrfToken} />
+                      <input type="hidden" name="projectId" value={props.projectId} />
+                      <input type="hidden" name="capability" value={cap.capability} />
+                      <input type="hidden" name="providerKind" value={cap.providerKind} />
+                      <button class="btn" type="submit">
+                        enable
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      class="btn"
+                      type="button"
+                      disabled
+                      title={linked ? "choose an account above first" : "link provider at org first"}
+                    >
+                      enable
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            <div class="note">
+              <b>↑ plane b.</b> Enabling a capability provisions or binds a project artifact from the selected org
+              grant. A missing link is a structured <b>status: not_linked</b> response, not a fake success.
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function GrantCard(props: { row: OrgIntegrationSummary; projectId: string; csrfToken?: string }) {
+  const { row, projectId, csrfToken } = props;
   const active = row.connectionStatus === "active" && row.grantStatus === "active";
   return (
     <div class={`int-card${active ? " linked" : ""}`} data-provider={row.providerKind}>
@@ -269,6 +311,19 @@ function GrantCard(props: { row: OrgIntegrationSummary }) {
         {row.authKind} · auth generation {row.authGeneration} · grant generation {row.grantGeneration}
       </span>
       <span class="sub">health · {statusLabel(row.health)}</span>
+      {row.selectedForProject ? <span class="state ready">selected for project</span> : null}
+      {active && projectId !== "" && !row.selectedForProject ? (
+        <form method="post" action="/integrations/select">
+          <CsrfField token={csrfToken} />
+          <input type="hidden" name="projectId" value={projectId} />
+          <input type="hidden" name="providerKind" value={row.providerKind} />
+          <input type="hidden" name="connectionId" value={row.connectionId} />
+          <input type="hidden" name="grantId" value={row.grantId} />
+          <button class="btn" type="submit">
+            use this account
+          </button>
+        </form>
+      ) : null}
       {row.metadataKeys.length > 0 ? <span class="sub">metadata keys · {row.metadataKeys.join(", ")}</span> : null}
     </div>
   );

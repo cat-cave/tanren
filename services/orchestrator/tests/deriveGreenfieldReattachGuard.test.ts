@@ -74,6 +74,13 @@ function preparedFlyDeploy(): PreparedGreenfieldDeploy {
       providerKind: "deploy.flyio",
       action: "provision",
       mode: "greenfield",
+      authority: {
+        connectionId: "connection_1",
+        grantId: "grant_1",
+        upstreamAccountId: "account_1",
+        authGeneration: 1,
+        grantGeneration: 1,
+      },
       secretRefNames: ["secret://deploy/deploy.flyio/fly_app_42/token"],
       surfaces: {
         projectConfigKeys: ["deployProvider", "deployAppId", "deployAppName"],

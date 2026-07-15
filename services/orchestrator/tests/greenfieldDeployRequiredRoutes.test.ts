@@ -14,8 +14,9 @@ import {
 class LinkedDeployRoutesPool extends RoutesPool {
   override async query(sql: string, params: unknown[] = []) {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
-    if (text.includes("FROM org_integration_connections c") && text.includes("c.provider_kind = $2")) {
-      const [orgId, providerKind] = params as string[];
+    if (text.includes("FROM org_integration_connections c")) {
+      const orgId = String(params[0]);
+      const providerKind = "deploy.vercel";
       return {
         rows: [
           {
@@ -38,6 +39,7 @@ class LinkedDeployRoutesPool extends RoutesPool {
             provider_scopes: [],
             grant_generation: 1,
             grant_status: "active",
+            selected_for_project: false,
           },
         ],
         rowCount: 1,

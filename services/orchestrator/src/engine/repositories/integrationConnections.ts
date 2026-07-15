@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
-import type pg from "pg";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
-import { oneOf } from "../data/pgRows.js";
 import type { ActorRef } from "../state/actor.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+import type { IntegrationQueryClient } from "./integrationQuery.js";
 
 export const INTEGRATION_CONNECTION_HEALTH = ["unknown", "healthy", "degraded", "invalid"] as const;
 export type IntegrationConnectionHealth = (typeof INTEGRATION_CONNECTION_HEALTH)[number];
@@ -15,6 +12,30 @@ export type IntegrationConnectionStatus = (typeof INTEGRATION_CONNECTION_STATUSE
 
 export const INTEGRATION_GRANT_STATUSES = ["pending", "active", "expired", "revoked"] as const;
 export type IntegrationGrantStatus = (typeof INTEGRATION_GRANT_STATUSES)[number];
+
+const ConnectionGrantRow = z.object({
+  connection_id: z.string(),
+  grant_id: z.string(),
+  org_id: z.string(),
+  provider_kind: z.string(),
+  upstream_account_id: z.string(),
+  auth_kind: z.string(),
+  credential_ref: z.string(),
+  auth_generation: z.coerce.number().int().positive(),
+  owner_id: z.string(),
+  health: z.enum(INTEGRATION_CONNECTION_HEALTH),
+  connection_status: z.enum(INTEGRATION_CONNECTION_STATUSES),
+  metadata: z.record(z.string(), z.unknown()),
+  plane: z.literal("control"),
+  environment: z.literal("control"),
+  capabilities: z.array(z.string()).nullable(),
+  operations: z.array(z.string()).nullable(),
+  provider_scopes: z.array(z.string()).nullable(),
+  grant_generation: z.coerce.number().int().positive(),
+  grant_status: z.enum(INTEGRATION_GRANT_STATUSES),
+  selected_for_project: z.boolean().optional().default(false),
+});
+type ConnectionGrantRow = z.infer<typeof ConnectionGrantRow>;
 
 export interface IntegrationConnectionGrant {
   connectionId: string;
@@ -36,6 +57,7 @@ export interface IntegrationConnectionGrant {
   providerScopes: string[];
   grantGeneration: number;
   grantStatus: IntegrationGrantStatus;
+  selectedForProject: boolean;
 }
 
 export interface LinkControlIntegrationInput {
@@ -52,62 +74,24 @@ export interface LinkControlIntegrationInput {
   consentRevision?: string;
 }
 
-interface ConnectionGrantRow {
-  connection_id: string;
-  grant_id: string;
-  org_id: string;
-  provider_kind: string;
-  upstream_account_id: string;
-  auth_kind: string;
-  credential_ref: string;
-  auth_generation: number;
-  owner_id: string;
-  health: string;
-  connection_status: string;
-  metadata: unknown;
-  plane: string;
-  environment: string;
-  capabilities: string[] | null;
-  operations: string[] | null;
-  provider_scopes: string[] | null;
-  grant_generation: number;
-  grant_status: string;
+export interface ControlGrantCandidate {
+  connectionId: string;
+  grantId: string;
+  providerKind: string;
+  upstreamAccountId: string;
+  health: IntegrationConnectionHealth;
+  authGeneration: number;
+  grantGeneration: number;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return z.record(z.string(), z.unknown()).catch({}).parse(value);
-}
-
-function mapRow(row: ConnectionGrantRow): IntegrationConnectionGrant {
-  if (row.plane !== "control" || row.environment !== "control") {
-    throw new Error(`control integration query returned ${row.plane}/${row.environment}`);
-  }
-  return {
-    connectionId: row.connection_id,
-    grantId: row.grant_id,
-    orgId: row.org_id,
-    providerKind: row.provider_kind,
-    upstreamAccountId: row.upstream_account_id,
-    authKind: row.auth_kind,
-    credentialRef: row.credential_ref,
-    authGeneration: row.auth_generation,
-    ownerId: row.owner_id,
-    health: oneOf(row.health, INTEGRATION_CONNECTION_HEALTH, "org_integration_connections.health"),
-    connectionStatus: oneOf(
-      row.connection_status,
-      INTEGRATION_CONNECTION_STATUSES,
-      "org_integration_connections.status",
-    ),
-    metadata: asRecord(row.metadata),
-    plane: "control",
-    environment: "control",
-    capabilities: row.capabilities ?? [],
-    operations: row.operations ?? [],
-    providerScopes: row.provider_scopes ?? [],
-    grantGeneration: row.grant_generation,
-    grantStatus: oneOf(row.grant_status, INTEGRATION_GRANT_STATUSES, "org_integration_grants.status"),
-  };
-}
+export type ControlGrantResolution =
+  | { status: "selected"; grant: OrgGrant }
+  | { status: "not_linked" }
+  | {
+      status: "selection_required";
+      reason: "selection_missing" | "multiple_eligible" | "selected_grant_unavailable";
+      candidates: ControlGrantCandidate[];
+    };
 
 const SELECT_COLUMNS = `
   c.id AS connection_id,
@@ -130,21 +114,77 @@ const SELECT_COLUMNS = `
   g.generation AS grant_generation,
   g.status AS grant_status`;
 
+function mapRow(value: unknown): IntegrationConnectionGrant {
+  const row = ConnectionGrantRow.parse(value);
+  return {
+    connectionId: row.connection_id,
+    grantId: row.grant_id,
+    orgId: row.org_id,
+    providerKind: row.provider_kind,
+    upstreamAccountId: row.upstream_account_id,
+    authKind: row.auth_kind,
+    credentialRef: row.credential_ref,
+    authGeneration: row.auth_generation,
+    ownerId: row.owner_id,
+    health: row.health,
+    connectionStatus: row.connection_status,
+    metadata: row.metadata,
+    plane: row.plane,
+    environment: row.environment,
+    capabilities: row.capabilities ?? [],
+    operations: row.operations ?? [],
+    providerScopes: row.provider_scopes ?? [],
+    grantGeneration: row.grant_generation,
+    grantStatus: row.grant_status,
+    selectedForProject: row.selected_for_project,
+  };
+}
+
+function asGrant(linked: IntegrationConnectionGrant): OrgGrant {
+  return {
+    connectionId: linked.connectionId,
+    grantId: linked.grantId,
+    providerKind: linked.providerKind,
+    upstreamAccountId: linked.upstreamAccountId,
+    credentialRef: linked.credentialRef,
+    authGeneration: linked.authGeneration,
+    grantGeneration: linked.grantGeneration,
+    metadata: linked.metadata,
+  };
+}
+
+function asCandidate(linked: IntegrationConnectionGrant): ControlGrantCandidate {
+  return {
+    connectionId: linked.connectionId,
+    grantId: linked.grantId,
+    providerKind: linked.providerKind,
+    upstreamAccountId: linked.upstreamAccountId,
+    health: linked.health,
+    authGeneration: linked.authGeneration,
+    grantGeneration: linked.grantGeneration,
+  };
+}
+
+/** Stable per-account ref: rotation reuses one slot; sibling accounts never collide. */
+export function credentialRefForIntegrationAccount(
+  orgId: string,
+  providerKind: string,
+  upstreamAccountId: string,
+): string {
+  const accountKey = createHash("sha256").update(providerKind).update("\0").update(upstreamAccountId).digest("hex");
+  return `secret://org/${encodeURIComponent(orgId)}/integration/${encodeURIComponent(providerKind)}/account/${accountKey}/token`;
+}
+
 export const IntegrationConnectionsStore = {
-  /**
-   * Link or rotate one control-plane connection and its explicit grant in one SQL
-   * statement. The credential value has already been placed in the secret store;
-   * only its opaque ref is persisted here.
-   */
   async linkControlGrant(
-    client: QueryClient,
+    client: IntegrationQueryClient,
     input: LinkControlIntegrationInput,
     actor: ActorRef,
   ): Promise<IntegrationConnectionGrant> {
     const connectionId = randomUUID();
     const grantId = randomUUID();
     const ownerId = actor.id ?? actor.label ?? actor.kind;
-    const result = await client.query<ConnectionGrantRow>(
+    const result = await client.query(
       `WITH connection AS (
          INSERT INTO org_integration_connections
            (org_id, id, provider_kind, upstream_account_id, auth_kind, credential_ref,
@@ -155,10 +195,7 @@ export const IntegrationConnectionsStore = {
            credential_ref = EXCLUDED.credential_ref,
            auth_generation = org_integration_connections.auth_generation + 1,
            owner_id = EXCLUDED.owner_id,
-           health = 'unknown',
-           metadata = EXCLUDED.metadata,
-           status = 'active',
-           updated_at = now()
+           health = 'unknown', metadata = EXCLUDED.metadata, status = 'active', updated_at = now()
          RETURNING *
        ), control_grant AS (
          INSERT INTO org_integration_grants
@@ -169,17 +206,13 @@ export const IntegrationConnectionsStore = {
                 $12::text[], '{}'::jsonb, $13, $14, 1, 'active', now()
          FROM connection
          ON CONFLICT (org_id, connection_id, plane, environment) WHERE status = 'active'
-         DO UPDATE SET
-           capabilities = EXCLUDED.capabilities,
-           operations = EXCLUDED.operations,
-           provider_scopes = EXCLUDED.provider_scopes,
-           policy_revision = EXCLUDED.policy_revision,
+         DO UPDATE SET capabilities = EXCLUDED.capabilities, operations = EXCLUDED.operations,
+           provider_scopes = EXCLUDED.provider_scopes, policy_revision = EXCLUDED.policy_revision,
            consent_revision = EXCLUDED.consent_revision,
-           generation = org_integration_grants.generation + 1,
-           updated_at = now()
+           generation = org_integration_grants.generation + 1, updated_at = now()
          RETURNING *
        )
-       SELECT ${SELECT_COLUMNS}
+       SELECT ${SELECT_COLUMNS}, false AS selected_for_project
        FROM connection c
        JOIN control_grant g ON g.org_id = c.org_id AND g.connection_id = c.id`,
       [
@@ -206,60 +239,117 @@ export const IntegrationConnectionsStore = {
     return mapRow(row);
   },
 
-  async listControlGrants(client: QueryClient, orgId: string, _actor: ActorRef): Promise<IntegrationConnectionGrant[]> {
-    const result = await client.query<ConnectionGrantRow>(
-      `SELECT ${SELECT_COLUMNS}
+  async listControlGrants(
+    client: IntegrationQueryClient,
+    orgId: string,
+    _actor: ActorRef,
+    projectId?: string,
+  ): Promise<IntegrationConnectionGrant[]> {
+    const result = await client.query(
+      `SELECT ${SELECT_COLUMNS},
+         (s.connection_id = c.id AND s.grant_id = g.id) AS selected_for_project
        FROM org_integration_connections c
-       JOIN org_integration_grants g
-         ON g.org_id = c.org_id AND g.connection_id = c.id
+       JOIN org_integration_grants g ON g.org_id = c.org_id AND g.connection_id = c.id
+       LEFT JOIN project_integration_grant_selections s
+         ON s.org_id = c.org_id AND s.project_id = $2 AND s.provider_kind = c.provider_kind
        WHERE c.org_id = $1 AND c.status = 'active'
          AND g.plane = 'control' AND g.environment = 'control' AND g.status = 'active'
        ORDER BY c.provider_kind, c.upstream_account_id`,
-      [orgId],
+      [orgId, projectId ?? null],
     );
     return result.rows.map(mapRow);
   },
 
-  async getControlGrant(
-    client: QueryClient,
+  async resolveControlGrant(
+    client: IntegrationQueryClient,
     orgId: string,
+    projectId: string,
     providerKind: string,
-    _actor: ActorRef,
-  ): Promise<OrgGrant | undefined> {
-    const result = await client.query<ConnectionGrantRow>(
-      `SELECT ${SELECT_COLUMNS}
-       FROM org_integration_connections c
-       JOIN org_integration_grants g
-         ON g.org_id = c.org_id AND g.connection_id = c.id
-       WHERE c.org_id = $1 AND c.provider_kind = $2 AND c.status = 'active'
-         AND g.plane = 'control' AND g.environment = 'control' AND g.status = 'active'
-       ORDER BY c.updated_at DESC
-       LIMIT 1`,
-      [orgId, providerKind],
+    actor: ActorRef,
+  ): Promise<ControlGrantResolution> {
+    const selection = await client.query(
+      `SELECT connection_id, grant_id FROM project_integration_grant_selections
+       WHERE org_id = $1 AND project_id = $2 AND provider_kind = $3`,
+      [orgId, projectId, providerKind],
     );
-    const row = result.rows[0];
-    if (row === undefined) {
-      return undefined;
-    }
-    const linked = mapRow(row);
+    const eligible = (await this.listControlGrants(client, orgId, actor, projectId)).filter(
+      (row) => row.providerKind === providerKind,
+    );
+    if (eligible.length === 0 && selection.rows[0] === undefined) return { status: "not_linked" };
+
+    const selected = eligible.find((row) => row.selectedForProject);
+    if (selected !== undefined) return { status: "selected", grant: asGrant(selected) };
+
+    const reason =
+      selection.rows[0] === undefined
+        ? eligible.length > 1
+          ? "multiple_eligible"
+          : "selection_missing"
+        : "selected_grant_unavailable";
     return {
-      providerKind: linked.providerKind,
-      credentialRef: linked.credentialRef,
-      metadata: linked.metadata,
+      status: "selection_required",
+      reason,
+      candidates: eligible.map((row) => asCandidate(row)),
     };
   },
 
-  async revoke(client: QueryClient, orgId: string, connectionId: string, _actor: ActorRef): Promise<boolean> {
+  /** Resolve an exact account before a project exists (greenfield compensation). */
+  async getControlGrantByIds(
+    client: IntegrationQueryClient,
+    orgId: string,
+    providerKind: string,
+    connectionId: string,
+    grantId: string,
+    actor: ActorRef,
+  ): Promise<OrgGrant | undefined> {
+    const eligible = await this.listControlGrants(client, orgId, actor);
+    const linked = eligible.find(
+      (row) => row.providerKind === providerKind && row.connectionId === connectionId && row.grantId === grantId,
+    );
+    return linked === undefined ? undefined : asGrant(linked);
+  },
+
+  async selectControlGrant(
+    client: IntegrationQueryClient,
+    input: { orgId: string; projectId: string; providerKind: string; connectionId: string; grantId: string },
+    actor: ActorRef,
+  ): Promise<OrgGrant | undefined> {
+    const selectedBy = actor.id ?? actor.label ?? actor.kind;
+    const result = await client.query(
+      `INSERT INTO project_integration_grant_selections
+         (org_id, project_id, provider_kind, connection_id, grant_id, selected_by, selected_at, updated_at)
+       SELECT p.org_id, p.project_id, c.provider_kind, c.id, g.id, $6, now(), now()
+       FROM projects p
+       JOIN org_integration_connections c
+         ON c.org_id = p.org_id AND c.provider_kind = $3 AND c.id = $4 AND c.status = 'active'
+       JOIN org_integration_grants g
+         ON g.org_id = c.org_id AND g.connection_id = c.id AND g.id = $5
+        AND g.plane = 'control' AND g.environment = 'control' AND g.status = 'active'
+       WHERE p.org_id = $1 AND p.project_id = $2
+       ON CONFLICT (org_id, project_id, provider_kind) DO UPDATE SET
+         connection_id = EXCLUDED.connection_id, grant_id = EXCLUDED.grant_id,
+         selected_by = EXCLUDED.selected_by, selected_at = now(), updated_at = now()
+       RETURNING connection_id, grant_id`,
+      [input.orgId, input.projectId, input.providerKind, input.connectionId, input.grantId, selectedBy],
+    );
+    if (result.rows[0] === undefined) return undefined;
+    const resolved = await this.resolveControlGrant(client, input.orgId, input.projectId, input.providerKind, actor);
+    return resolved.status === "selected" ? resolved.grant : undefined;
+  },
+
+  async revoke(
+    client: IntegrationQueryClient,
+    orgId: string,
+    connectionId: string,
+    _actor: ActorRef,
+  ): Promise<boolean> {
     const result = await client.query(
       `WITH revoked_grants AS (
-         UPDATE org_integration_grants
-         SET status = 'revoked', revoked_at = now(), updated_at = now()
+         UPDATE org_integration_grants SET status = 'revoked', revoked_at = now(), updated_at = now()
          WHERE org_id = $1 AND connection_id = $2 AND status <> 'revoked'
        )
-       UPDATE org_integration_connections
-       SET status = 'revoked', updated_at = now()
-       WHERE org_id = $1 AND id = $2 AND status <> 'revoked'
-       RETURNING id`,
+       UPDATE org_integration_connections SET status = 'revoked', updated_at = now()
+       WHERE org_id = $1 AND id = $2 AND status <> 'revoked' RETURNING id`,
       [orgId, connectionId],
     );
     return (result.rowCount ?? 0) > 0;

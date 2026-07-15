@@ -10,15 +10,13 @@
 // org-scoped (the caller hands an org-scope-carrying `QueryClient`), so RLS gates
 // which project's entries are even visible.
 
-import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { AppEnvironmentStore, type AppEnvironment, type AppEnvScope } from "../repositories/appEnvironment.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 
 export interface ResolveAppEnvInput {
-  client: QueryClient;
+  client: IntegrationQueryClient;
   secrets: SecretStore;
   orgId: string;
   projectId: string;

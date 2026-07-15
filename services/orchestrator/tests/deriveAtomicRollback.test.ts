@@ -85,7 +85,13 @@ interface RecordedCreates {
   reposDeleted: Array<{ owner: string; name: string }>;
   pushedRepos: string[];
   deploysProvisioned: Array<{ providerKind: string; appId: string; appName: string }>;
-  deploysDestroyed: Array<{ providerKind: string; appId: string; appName: string }>;
+  deploysDestroyed: Array<{
+    providerKind: string;
+    appId: string;
+    appName: string;
+    connectionId: string;
+    grantId: string;
+  }>;
 }
 
 function newRecorder(): RecordedCreates {
@@ -111,6 +117,13 @@ function preparedFlyDeploy(): PreparedGreenfieldDeploy {
       providerKind: "deploy.flyio",
       action: "provision",
       mode: "greenfield",
+      authority: {
+        connectionId: "connection_1",
+        grantId: "grant_1",
+        upstreamAccountId: "account_1",
+        authGeneration: 1,
+        grantGeneration: 1,
+      },
       secretRefNames: ["secret://deploy/deploy.flyio/fly_app_42/token"],
       surfaces: {
         projectConfigKeys: ["deployProvider", "deployAppId", "deployAppName"],
@@ -311,7 +324,13 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
       { providerKind: "deploy.flyio", appId: "fly_app_42", appName: "org_a-linkly" },
     ]);
     expect(rec.deploysDestroyed).toEqual([
-      { providerKind: "deploy.flyio", appId: "fly_app_42", appName: "org_a-linkly" },
+      {
+        providerKind: "deploy.flyio",
+        appId: "fly_app_42",
+        appName: "org_a-linkly",
+        connectionId: "connection_1",
+        grantId: "grant_1",
+      },
     ]);
     expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(state.projects.size).toBe(0);

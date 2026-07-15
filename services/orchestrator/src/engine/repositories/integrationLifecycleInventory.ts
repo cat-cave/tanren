@@ -1,8 +1,6 @@
-import type pg from "pg";
 import { z } from "zod";
 import type { ActorRef } from "../state/actor.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+import type { IntegrationQueryClient } from "./integrationQuery.js";
 
 const Count = z.coerce.number().int().nonnegative();
 
@@ -14,23 +12,23 @@ export interface IntegrationLifecycleInventory {
   deliveries: { total: number; completed: number; degraded: number; needsAttention: number };
 }
 
-interface InventoryRow {
-  project_id: string;
-  requirement_total: unknown;
-  requirement_needs_attention: unknown;
-  capability_total: unknown;
-  capability_awaiting_grant: unknown;
-  capability_ready: unknown;
-  capability_needs_attention: unknown;
-  binding_total: unknown;
-  binding_ready: unknown;
-  binding_drifted: unknown;
-  binding_needs_attention: unknown;
-  delivery_total: unknown;
-  delivery_completed: unknown;
-  delivery_degraded: unknown;
-  delivery_needs_attention: unknown;
-}
+const InventoryRow = z.object({
+  project_id: z.string(),
+  requirement_total: Count,
+  requirement_needs_attention: Count,
+  capability_total: Count,
+  capability_awaiting_grant: Count,
+  capability_ready: Count,
+  capability_needs_attention: Count,
+  binding_total: Count,
+  binding_ready: Count,
+  binding_drifted: Count,
+  binding_needs_attention: Count,
+  delivery_total: Count,
+  delivery_completed: Count,
+  delivery_degraded: Count,
+  delivery_needs_attention: Count,
+});
 
 function count(value: unknown): number {
   return Count.parse(value);
@@ -38,12 +36,12 @@ function count(value: unknown): number {
 
 export const IntegrationLifecycleInventoryStore = {
   async getForProject(
-    client: QueryClient,
+    client: IntegrationQueryClient,
     orgId: string,
     projectId: string,
     _actor: ActorRef,
   ): Promise<IntegrationLifecycleInventory | undefined> {
-    const result = await client.query<InventoryRow>(
+    const result = await client.query(
       `SELECT p.project_id,
          (SELECT count(*) FROM integration_requirements r
           WHERE r.org_id = p.org_id AND r.project_id = p.project_id) AS requirement_total,
@@ -87,10 +85,11 @@ export const IntegrationLifecycleInventoryStore = {
        WHERE p.org_id = $1 AND p.project_id = $2`,
       [orgId, projectId],
     );
-    const row = result.rows[0];
-    if (row === undefined) {
+    const value = result.rows[0];
+    if (value === undefined) {
       return undefined;
     }
+    const row = InventoryRow.parse(value);
     return {
       projectId: row.project_id,
       requirements: {

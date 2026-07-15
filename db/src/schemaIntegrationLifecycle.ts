@@ -12,6 +12,8 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
+import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
+import { behaviorRevisionsReference } from "./schemaSpineReferences.js";
 
 const digestPattern = sql.raw("'^sha256:[0-9a-f]{64}$'");
 
@@ -44,6 +46,7 @@ export const orgIntegrationConnections = pgTable(
       table.providerKind,
       table.upstreamAccountId,
     ),
+    uniqueIndex("org_integration_connections_provider_id_unique").on(table.orgId, table.providerKind, table.id),
     index("org_integration_connections_org_id").on(table.orgId),
     index("org_integration_connections_org_provider").on(table.orgId, table.providerKind),
     check("org_integration_connections_auth_generation_check", sql`${table.authGeneration} >= 1`),
@@ -56,8 +59,9 @@ export const orgIntegrationConnections = pgTable(
       sql`${table.health} IN ('unknown','healthy','degraded','invalid')`,
     ),
     check("org_integration_connections_status_check", sql`${table.status} IN ('active','revoked')`),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const orgIntegrationGrants = pgTable(
   "org_integration_grants",
@@ -107,6 +111,7 @@ export const orgIntegrationGrants = pgTable(
       table.environment,
       table.generation,
     ),
+    uniqueIndex("org_integration_grants_connection_id_unique").on(table.orgId, table.connectionId, table.id),
     uniqueIndex("org_integration_grants_active_unique")
       .on(table.orgId, table.connectionId, table.plane, table.environment)
       .where(sql`status = 'active'`),
@@ -127,8 +132,9 @@ export const orgIntegrationGrants = pgTable(
       "org_integration_grants_revoked_check",
       sql`(${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL) OR (${table.status} <> 'revoked' AND ${table.revokedAt} IS NULL)`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const integrationRequirements = pgTable(
   "integration_requirements",
@@ -187,8 +193,9 @@ export const integrationRequirements = pgTable(
       "integration_requirements_superseded_check",
       sql`(${table.status} = 'superseded' AND ${table.supersededBy} IS NOT NULL) OR (${table.status} <> 'superseded' AND ${table.supersededBy} IS NULL)`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const behaviorIntegrationRequirements = pgTable(
   "behavior_integration_requirements",
@@ -208,14 +215,20 @@ export const behaviorIntegrationRequirements = pgTable(
       foreignColumns: [integrationRequirements.orgId, integrationRequirements.id],
       name: "behavior_integration_requirements_requirement_fk",
     }),
+    foreignKey({
+      columns: [table.orgId, table.behaviorRevisionId],
+      foreignColumns: [behaviorRevisionsReference.orgId, behaviorRevisionsReference.id],
+      name: "behavior_integration_requirements_behavior_revision_fk",
+    }),
     index("behavior_integration_requirements_org_id").on(table.orgId),
     index("behavior_integration_requirements_org_behavior").on(table.orgId, table.behaviorRevisionId),
     check(
       "behavior_integration_requirements_role_check",
       sql`${table.relationRole} IN ('requires','triggers','observes')`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const capabilityNodes = pgTable(
   "capability_nodes",
@@ -266,8 +279,9 @@ export const capabilityNodes = pgTable(
     check("capability_nodes_wait_reason_check", sql`${table.status} = 'awaiting_grant' OR ${table.waitReason} IS NULL`),
     check("capability_nodes_priority_check", sql`${table.priority} >= 0`),
     check("capability_nodes_generation_check", sql`${table.generation} >= 1`),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const capabilityNodeDependencies = pgTable(
   "capability_node_dependencies",
@@ -296,8 +310,9 @@ export const capabilityNodeDependencies = pgTable(
       "capability_node_dependencies_no_self_check",
       sql`${table.capabilityNodeId} <> ${table.dependsOnCapabilityNodeId}`,
     ),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const specCapabilityDependencies = pgTable(
   "spec_capability_dependencies",
@@ -323,8 +338,9 @@ export const specCapabilityDependencies = pgTable(
     }),
     index("spec_capability_dependencies_org_id").on(table.orgId),
     index("spec_capability_dependencies_org_spec").on(table.orgId, table.specId),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const integrationBindings = pgTable(
   "integration_bindings",
@@ -396,8 +412,9 @@ export const integrationBindings = pgTable(
       sql`${table.status} IN ('pending','ready','drifted','needs_attention','retired')`,
     ),
     check("integration_bindings_drift_check", sql`${table.driftState} IN ('unknown','in_sync','drifted')`),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
+).enableRLS();
 
 export const integrationBindingEnv = pgTable(
   "integration_binding_env",
@@ -425,66 +442,6 @@ export const integrationBindingEnv = pgTable(
     index("integration_binding_env_org_id").on(table.orgId),
     check("integration_binding_env_classification_check", sql`${table.classification} IN ('secret','non_secret')`),
     check("integration_binding_env_required_check", sql`${table.required} IN (0,1)`),
+    integrationOrgIsolationPolicy(table.orgId),
   ],
-);
-
-export const projectAppEnv = pgTable(
-  "project_app_env",
-  {
-    orgId: text("org_id")
-      .notNull()
-      .references(() => organizations.id),
-    id: text("id").notNull(),
-    projectId: text("project_id").notNull(),
-    environment: text("environment").notNull(),
-    key: text("key").notNull(),
-    valueRef: text("value_ref"),
-    plainValue: text("plain_value"),
-    scopes: text("scopes")
-      .array()
-      .notNull()
-      .default(sql`'{}'::text[]`),
-    source: text("source").notNull(),
-    bindingId: text("binding_id"),
-    bindingGeneration: integer("binding_generation"),
-    secretGeneration: integer("secret_generation"),
-    description: text("description").notNull().default(""),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.orgId, table.id] }),
-    foreignKey({
-      columns: [table.orgId, table.projectId],
-      foreignColumns: [projects.orgId, projects.projectId],
-      name: "project_app_env_project_fk",
-    }),
-    foreignKey({
-      columns: [table.orgId, table.bindingId, table.key],
-      foreignColumns: [integrationBindingEnv.orgId, integrationBindingEnv.bindingId, integrationBindingEnv.key],
-      name: "project_app_env_binding_output_fk",
-    }),
-    uniqueIndex("project_app_env_project_environment_key_unique").on(
-      table.orgId,
-      table.projectId,
-      table.environment,
-      table.key,
-    ),
-    index("project_app_env_org_id").on(table.orgId),
-    index("project_app_env_org_project").on(table.orgId, table.projectId),
-    check("project_app_env_environment_check", sql`${table.environment} IN ('dev','test','preview','production')`),
-    check("project_app_env_source_check", sql`${table.source} IN ('byo','provisioned')`),
-    check(
-      "project_app_env_value_xor_check",
-      sql`(${table.valueRef} IS NOT NULL AND ${table.plainValue} IS NULL) OR (${table.valueRef} IS NULL AND ${table.plainValue} IS NOT NULL)`,
-    ),
-    check(
-      "project_app_env_binding_check",
-      sql`(${table.source} = 'byo' AND ${table.bindingId} IS NULL AND ${table.bindingGeneration} IS NULL) OR (${table.source} = 'provisioned' AND ${table.bindingId} IS NOT NULL AND ${table.bindingGeneration} >= 1)`,
-    ),
-    check(
-      "project_app_env_secret_generation_check",
-      sql`(${table.valueRef} IS NULL AND ${table.secretGeneration} IS NULL) OR (${table.valueRef} IS NOT NULL AND ${table.secretGeneration} >= 1)`,
-    ),
-  ],
-);
+).enableRLS();
