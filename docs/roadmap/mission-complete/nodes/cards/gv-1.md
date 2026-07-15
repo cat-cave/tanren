@@ -1,8 +1,8 @@
 # gv-1 — auditPosture write-guard safety repair
 
-**Phase**: governance Phase 0 (safety repairs) · `sm` (small mechanical)  
-**Base**: `origin/main` `77553687f5ee476eaa72fd203d90449d31fbe254`  
-**Branch**: `node/gv-1-audit-posture-write-guard`  
+**Phase**: governance Phase 0 (safety repairs) · `sm` (small mechanical)
+**Base**: `origin/main` `e6a6ded0c813b61f1ec6634158b30471f48b14f0`
+**Branch**: `node/gv-1-audit-posture-write-guard`
 **Worktree**: `.codex/worktrees/gv-1-audit-posture-guard`
 
 **Purpose**: close the authorization bypass where a generic member `PATCH
@@ -33,13 +33,26 @@ round-trips untouched. The sole supported mutation path remains the org-admin
 - `services/orchestrator/src/engine/workflow/projectConfigWriteGuards.ts`
 - `services/orchestrator/tests/projectCreateDeployGuard.test.ts`
 - `services/orchestrator/tests/governanceRoutes.test.ts` (add the positive
-  admin-PUT auditPosture proof; the existing harness is reused)
+  admin-PUT auditPosture proof and wrong-org negative; the existing harness is
+  reused)
+- `services/dashboard/src/api/governance.ts`
+- `services/dashboard/src/api/governanceClient.ts`
+- `services/dashboard/src/routes/governance/index.tsx`
+- `services/dashboard/src/components/governance/GovernanceBody.tsx`
+- `services/dashboard/src/components/governance/styles.ts`
+- `services/dashboard/tests/governance.render.test.ts`
 - `docs/roadmap/mission-complete/nodes/cards/gv-1.md`
 
 ## Shared-resource leases, not owned paths
 
-No migration, no event registry, no nav / `screens.ts` / `main.ts`. No new
-route or store. Does not touch mq-1, rv-4, integration lifecycle, or #856.
+- `services/dashboard/src/app/routes.ts` (serialized lease: append the one real
+  `/settings/governance` nav row)
+- `services/dashboard/src/app/screens.ts` (serialized lease: append the one
+  governance screen mount)
+
+No migration, no event registry, and no `main.ts`. No new orchestrator route or
+store: the dashboard is a strict BFF/UI consumer of the canonical governance
+GET/PUT. Does not touch mq-1, rv-4, integration lifecycle, or #856.
 
 ## Consumes
 
@@ -53,6 +66,10 @@ route or store. Does not touch mq-1, rv-4, integration lifecycle, or #856.
   config is unchanged.
 - Member `PATCH` carrying `auditPosture` identical to the current value → HTTP 200
   (the unchanged nested value round-trips).
+- `/settings/governance` reads the current project posture from the canonical
+  GET and an org-admin save proxies only `auditPosture` to the canonical PUT.
+- Save success and validation/authorization/server failures remain visibly
+  actionable on the rendered screen; malformed success payloads fail loudly.
 
 ## Negative controls
 
@@ -66,11 +83,14 @@ route or store. Does not touch mq-1, rv-4, integration lifecycle, or #856.
 
 - Focused: `projectCreateDeployGuard.test.ts` (mutation-negative + positive).
 - Existing proof: `governanceRoutes.test.ts` (org-admin PUT still changes
-  `auditPosture`; non-admin 403).
+  `auditPosture`; non-admin and wrong-org writes are denied).
+- Dashboard proof: `governance.render.test.ts` (current read, scoped admin save,
+  invalid form, non-admin/server failure visibility, malformed-response failure).
 - `just affected-typecheck` / `affected-test`, format/lint/diff-check, <500
   lines per file.
 
 ## Serialization
 
-None beyond the standard worktree isolation. The guard file has a single owner
-(this card).
+The orchestrator granted GV-1 the serialized dashboard `routes.ts` / `screens.ts`
+lease for this repair. No other shared file is touched; the guard file remains a
+single-owner path under this card.

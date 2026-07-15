@@ -30,10 +30,23 @@ const memberOnly: ActorContext = {
   source: "session",
 };
 
+const otherOrgAdmin: ActorContext = {
+  userId: "user_other_admin",
+  orgId: "org_other",
+  projectId: null,
+  scopes: ["org:member", "org:admin"],
+  source: "session",
+};
+
 function buildHarness(boundActor: ActorContext = admin) {
   const pool = new RoutesPool();
   pool.seedOrg({ id: "org_acme" });
-  pool.seedMembership("org_acme", boundActor.userId, boundActor.scopes.includes("org:admin") ? "admin" : "member");
+  if (boundActor.orgId !== "org_acme") pool.seedOrg({ id: boundActor.orgId });
+  pool.seedMembership(
+    boundActor.orgId,
+    boundActor.userId,
+    boundActor.scopes.includes("org:admin") ? "admin" : "member",
+  );
   pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
 
   const app = new Hono<ActorContextEnv>();
@@ -162,6 +175,17 @@ describe("project governance routes", () => {
     const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { reviewPolicy: "auto" });
     expect(put.status).toBe(403);
     expect(put.body.error).toBe("org_admin_required");
+  });
+
+  it("does not let an admin of another org mutate this project's governance", async () => {
+    const { app, pool } = buildHarness(otherOrgAdmin);
+    const before = pool.projects.get("proj_1")?.config;
+    const put = await putJson(app, "/orgs/org_other/projects/proj_1/governance", {
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+    });
+    expect(put.status).toBe(404);
+    expect(put.body.error).toBe("project_not_found");
+    expect(pool.projects.get("proj_1")?.config).toEqual(before);
   });
 
   it("allows a non-admin member to READ governance", async () => {

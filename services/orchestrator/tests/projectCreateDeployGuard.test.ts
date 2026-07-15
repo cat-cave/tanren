@@ -17,6 +17,7 @@ const actor: ActorContext = {
   scopes: ["org:member", "org:admin"],
   source: "session",
 };
+const memberActor: ActorContext = { ...actor, scopes: ["org:member"] };
 
 describe("generic project creation deploy guard", () => {
   it("rejects org-scoped greenfield config before creating a project", async () => {
@@ -290,7 +291,7 @@ describe("generic project creation deploy guard", () => {
   // PUT). `auditPosture` is a nested object, so this also proves the guard compares
   // structurally rather than tripping on a fresh object reference.
   it("rejects full config PATCH that changes auditPosture (the authorization bypass)", async () => {
-    const { app, pool } = orgProjectHarness();
+    const { app, pool } = orgProjectHarness(memberActor);
     pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
 
     const response = await app.request("/orgs/org_acme/projects/project_existing", {
@@ -319,7 +320,7 @@ describe("generic project creation deploy guard", () => {
   // proves the structural comparison does not false-flag an unchanged nested
   // object (a fresh parse yields a new reference, but equal contents).
   it("allows full config PATCH when auditPosture is re-stated unchanged", async () => {
-    const { app, pool } = orgProjectHarness();
+    const { app, pool } = orgProjectHarness(memberActor);
     pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
 
     const response = await app.request("/orgs/org_acme/projects/project_existing", {
@@ -348,7 +349,7 @@ describe("generic project creation deploy guard", () => {
   // re-stating the SAME non-default posture is allowed (structural equal), but any
   // single-key drift (autonomousRemediation true→false) is reserved out.
   it("allows PATCH re-stating an existing non-default auditPosture unchanged", async () => {
-    const { app, pool } = orgProjectHarness();
+    const { app, pool } = orgProjectHarness(memberActor);
     const posture = { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true };
     pool.seedProject({
       project_id: "project_existing",
@@ -371,6 +372,42 @@ describe("generic project creation deploy guard", () => {
 
     expect(response.status).toBe(200);
     expect(pool.projects.get("project_existing")?.config).toMatchObject({ auditPosture: posture });
+
+    const persisted = structuredClone(pool.projects.get("project_existing")?.config);
+    const drift = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          ...(persisted as Record<string, unknown>),
+          auditPosture: { ...posture, autonomousRemediation: false },
+        },
+      }),
+    });
+    expect(drift.status).toBe(400);
+    await expect(drift.json()).resolves.toMatchObject({
+      error: "reserved_project_config_patch",
+      fields: ["auditPosture"],
+    });
+    expect(pool.projects.get("project_existing")?.config).toEqual(persisted);
+  });
+
+  it.each([
+    ["array", []],
+    ["null", null],
+    ["unknown object key", { blockReviewAt: "P1", unexpected: true }],
+  ])("rejects malformed %s auditPosture without writing", async (_label, auditPosture) => {
+    const { app, pool } = orgProjectHarness(memberActor);
+    pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ config: { version: 1, auditPosture } }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid_project_config" });
+    expect(pool.projects.get("project_existing")?.config).toEqual({ version: 1 });
   });
 
   it.each([
@@ -419,7 +456,7 @@ describe("generic project creation deploy guard", () => {
   );
 });
 
-function orgProjectHarness() {
+function orgProjectHarness(boundActor: ActorContext = actor) {
   const pool = new RoutesPool();
   const app = new Hono<ActorContextEnv>();
   app.use(
@@ -429,10 +466,10 @@ function orgProjectHarness() {
         async findApiTokenByRaw() {},
         async loadSession() {},
         async resolveActorContext() {
-          return actor;
+          return boundActor;
         },
       } as never,
-      localDevActor: actor,
+      localDevActor: boundActor,
     }),
   );
   app.route(
