@@ -130,6 +130,27 @@ describe("architecture checker", () => {
     );
   });
 
+  it("detects child_process only in real dependency syntax", async () => {
+    const root = await createFixture({
+      "services/orchestrator/src/bad.ts": [
+        'import { spawn } from "child_process";',
+        'export { spawn } from "node:child_process";',
+        'const dynamic = import("child_process");',
+        'const common = require("node:child_process");',
+        'import process = require("child_process");',
+        '// import { spawn } from "child_process";',
+        'const prose = "require(\\\"child_process\\\")";',
+        'const template = `import("child_process")`;',
+        "const pattern = /child_process/;",
+      ].join("\n"),
+    });
+
+    const diagnostics = await runArchitectureChecks({ root });
+    const processDiagnostics = diagnostics.filter((item) => item.rule === "no-host-process-spawn");
+    expect(processDiagnostics).toHaveLength(5);
+    expect(processDiagnostics.map((item) => item.line)).toEqual([1, 2, 3, 4, 5]);
+  });
+
   it("requires schema drift checking to stay wired into the root check", async () => {
     const root = await createFixture({
       "package.json": '{"type":"module","scripts":{"check":"pnpm run typecheck"}}\n',

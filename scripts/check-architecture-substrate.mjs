@@ -2,7 +2,10 @@
 // to keep both files under the 500-line cap). These guard the v0 invariant that
 // workload execution stays inside the runner over SSH and that Docker
 // socket/API access is confined to the local allocator. Heuristic regex + line
-// scanners in the same style as the sibling check modules.
+// scanners in the same style as the sibling check modules. The process-import
+// rule uses Oxc AST traversal so source-text lookalikes are not imports.
+
+import { parseSync } from "oxc-parser";
 
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
 
@@ -14,9 +17,46 @@ function lineFor(text, index) {
   return text.slice(0, index).split("\n").length;
 }
 
+const dependencySourceNodeTypes = new Set(
+  "ImportDeclaration ExportNamedDeclaration ExportAllDeclaration ImportExpression".split(" "),
+);
+
+function childProcessSpecifiers(file, text) {
+  const sourceFile = parseSync(file, text, { range: true, sourceType: "unambiguous" });
+  const specifiers = [];
+  const add = (node) => {
+    if (node?.type === "Literal" && (node.value === "child_process" || node.value === "node:child_process")) {
+      specifiers.push(node.start);
+    }
+  };
+  const visit = (node) => {
+    if (node === null || typeof node !== "object") return;
+    if (dependencySourceNodeTypes.has(node.type)) add(node.source);
+    else if (node.type === "TSImportEqualsDeclaration" && node.moduleReference?.type === "TSExternalModuleReference")
+      add(node.moduleReference.expression);
+    else if (
+      node.type === "CallExpression" &&
+      node.callee?.type === "Identifier" &&
+      node.callee.name === "require" &&
+      node.arguments.length === 1
+    )
+      add(node.arguments[0]);
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (const child of value) {
+          visit(child);
+        }
+      } else {
+        visit(value);
+      }
+    }
+  };
+  visit(sourceFile.program);
+  return specifiers;
+}
+
 export function checkNoHostProcessSpawn(projectFiles) {
   const diagnostics = [];
-  const importPattern = /(?:from\s+|import\s*\(|require\s*\()\s*["'](?:node:)?child_process["']/gu;
   for (const { file, text } of projectFiles) {
     if (
       invariantDocExclusions.has(file) ||
@@ -58,13 +98,13 @@ export function checkNoHostProcessSpawn(projectFiles) {
     ) {
       continue;
     }
-    for (const match of text.matchAll(importPattern)) {
+    for (const index of childProcessSpecifiers(file, text)) {
       diagnostics.push(
         diagnostic(
           "no-host-process-spawn",
           file,
           "child_process imports are confined to cli-runner",
-          lineFor(text, match.index),
+          lineFor(text, index),
         ),
       );
     }
