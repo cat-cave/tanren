@@ -131,19 +131,22 @@ export function resolveStackRetarget(
 
 /**
  * WS-A PR-5 (walker-jj-local-integration-design.md §3.2/§3.3): the STACKED-PR retarget
- * WALK (flag-on path). On each entry: drop the genuinely-merged heads from the ordered
+ * WALK (unconditional on every speculative run — no feature flag). On each entry: drop
+ * the genuinely-merged heads from the ordered
  * `ancestor_stack`, re-point the PR base to the IMMEDIATE still-unmerged ancestor's
  * PR-head branch (or `default_branch` once the stack empties), and persist the dropped
  * stack. Idempotent — when the live base already equals the walk target, only the
  * (idempotent) stack-drop persists; no `retargetBase` / `merge.retargeted` is emitted.
  * The merge HOLD is the caller's concern and is UNCHANGED; this only walks the BASE.
+ * The walk result (`{toBase, remainingStack}`) is the SOLE canonical retarget output —
+ * computed once by `resolveStackRetarget` and returned to the caller so the held event's
+ * `speculativeBase` reuses it instead of recomputing a second time.
  */
-async function retargetStackWalk(args: SpeculativeRetargetArgs & { defaultBranch: string }): Promise<void> {
-  const { toBase, remainingStack } = resolveStackRetarget(
-    args.speculative.ancestorStack,
-    args.speculative.mergedSpecIds,
-    args.defaultBranch,
-  );
+async function retargetStackWalk(
+  args: SpeculativeRetargetArgs,
+  result: { toBase: string; remainingStack: AncestorStack },
+): Promise<void> {
+  const { toBase, remainingStack } = result;
   // §5h: read the PR's live base off the freshness probe's `readBaseBranch` (the
   // `CodeHost`/projection-backed read), NOT the GitHub `mergeable_state` snapshot. The
   // retarget itself routes through the best-effort `VisibilityProjection` (a forge-UI mirror —
@@ -222,9 +225,21 @@ export interface SpeculativeRetargetArgs {
  * merge (drops merged heads; held OR cleared), landing on `default_branch` once the stack
  * empties. A run with an empty stack is not speculative and never reaches here. The merge
  * HOLD itself stays in the caller and is UNCHANGED.
+ *
+ * Returns the SOLE canonical retarget result (`{toBase, remainingStack}`) computed by
+ * `resolveStackRetarget` — the exact value the caller uses for the held event's
+ * `speculativeBase`, so no second walk/resolver runs for the held payload.
  */
-export async function applySpeculativeRetarget(args: SpeculativeRetargetArgs): Promise<void> {
+export async function applySpeculativeRetarget(
+  args: SpeculativeRetargetArgs,
+): Promise<{ toBase: string; remainingStack: AncestorStack }> {
+  const result = resolveStackRetarget(
+    args.speculative.ancestorStack,
+    args.speculative.mergedSpecIds,
+    args.context.baseBranch,
+  );
   if (args.speculative.ancestorStack.length > 0) {
-    await retargetStackWalk({ ...args, defaultBranch: args.context.baseBranch });
+    await retargetStackWalk(args, result);
   }
+  return result;
 }

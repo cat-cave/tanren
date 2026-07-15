@@ -3,6 +3,7 @@
 // the route (not only a pure helper).
 
 import { Hono } from "hono";
+import type { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
@@ -33,17 +34,30 @@ class StackRetargetPool {
   runOrgId = "org_acme";
   /** When true, the run row is missing (404). */
   missingRun = false;
+  /**
+   * The project's org_id returned by the project-access gate. Default matches the path
+   * org; a mismatch (or `projectMember = null`) denies project access → 403.
+   */
+  projectOrgId = "org_acme";
+  /** A project_members row for the gate; `null` ⇒ no membership (denied). */
+  projectMember: { user_id: string; role: string } | null = { user_id: "user_alice", role: "member" };
+  /**
+   * Counts entry reads from `resolveSpeculativeState` (the resolver's first query). A
+   * denial MUST leave this at 0 — proving the resolver data was never invoked/read.
+   */
+  resolverReads = 0;
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     // project access gate (assertProjectAccess → projects + membership)
     if (sql.includes("FROM projects") && sql.includes("project_id")) {
       return {
-        rows: [{ project_id: "proj_1", org_id: "org_acme", name: "Apex", visibility: "private" }],
+        rows: [{ project_id: "proj_1", org_id: this.projectOrgId, name: "Apex", visibility: "private" }],
         rowCount: 1,
       };
     }
     if (sql.includes("project_members") || sql.includes("FROM project_memberships")) {
-      return { rows: [{ user_id: "user_alice", role: "member" }], rowCount: 1 };
+      if (this.projectMember === null) return { rows: [], rowCount: 0 };
+      return { rows: [this.projectMember], rowCount: 1 };
     }
     if (sql.includes("SELECT r.run_id, r.project_id, r.org_id, p.default_branch")) {
       if (this.missingRun) return { rows: [], rowCount: 0 };
@@ -63,6 +77,9 @@ class StackRetargetPool {
       };
     }
     if (sql.startsWith("SELECT ancestor_stack, spec_id, project_id FROM runs")) {
+      // The resolver (`resolveSpeculativeState`) entry read — counts invocation so a
+      // denial can prove the resolver data was never reached.
+      this.resolverReads += 1;
       if (params[0] !== "run_1") return { rows: [], rowCount: 0 };
       return {
         rows: [{ ancestor_stack: this.ancestorStack, spec_id: "spec_child", project_id: "proj_1" }],
@@ -89,8 +106,8 @@ class StackRetargetPool {
     };
   }
 
-  asPgPool(): import("pg").Pool {
-    return this as unknown as import("pg").Pool;
+  asPgPool(): Pool {
+    return this as unknown as Pool;
   }
 }
 
@@ -138,6 +155,9 @@ describe("GET stack-retarget (gv-4)", () => {
     expect(body.unmergedAncestors).toEqual([]);
     expect(body.toBase).toBe("main");
     expect(body.remainingStack).toEqual([]);
+    // Sanity: the resolver IS reached on the happy path — so a denial asserting
+    // `resolverReads === 0` is a meaningful negative, not a tautology.
+    expect(pool.resolverReads).toBeGreaterThan(0);
   });
 
   it("partial merge: unmerged tip is toBase; transitive merged members flagged", async () => {
@@ -180,5 +200,37 @@ describe("GET stack-retarget (gv-4)", () => {
     const res = await app.request("/orgs/org_acme/projects/proj_1/runs/run_1/stack-retarget");
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "run_not_found" });
+  });
+
+  it("NEGATIVE: denied org access → 403 and the resolver is never invoked", async () => {
+    // alice is a member of org_acme; addressing a different org fails the pure org gate
+    // BEFORE any pool query. The resolver data is never read.
+    const pool = new StackRetargetPool();
+    pool.ancestorStack = [member("spec_a", "tanren/run_a")];
+    const app = buildHarness(pool);
+
+    const res = await app.request("/orgs/org_other/projects/proj_1/runs/run_1/stack-retarget");
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "org_access_denied" });
+    expect(pool.resolverReads).toBe(0);
+  });
+
+  it("NEGATIVE: denied project access → 403 and the resolver is never invoked", async () => {
+    // Org access to org_acme is granted, but the project belongs to a different org
+    // (project/Org mismatch) AND the actor is not a project member → assertProjectAccess
+    // throws ToolAccessDeniedError → 403 before the resolver runs. The existing
+    // org-scoped/RLS route construction (`runWithOrgScope`) is untouched.
+    const pool = new StackRetargetPool();
+    // Project not in the path org; alice isn't a member → project access denied.
+    pool.projectOrgId = "org_other";
+    pool.projectMember = null;
+    pool.ancestorStack = [member("spec_a", "tanren/run_a")];
+    const app = buildHarness(pool);
+
+    const res = await app.request("/orgs/org_acme/projects/proj_1/runs/run_1/stack-retarget");
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body).toMatchObject({ error: "project_access_denied" });
+    expect(pool.resolverReads).toBe(0);
   });
 });

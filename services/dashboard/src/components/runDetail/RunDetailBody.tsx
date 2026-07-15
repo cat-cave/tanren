@@ -486,7 +486,7 @@ export function RunDetailBody(props: RunDetailBodyProps) {
         <StatusChips detail={detail} />
         <FailureDiagnostics detail={detail} />
         <CostBar detail={detail} />
-        {props.stackRetarget !== undefined ? <StackRetargetPanel result={props.stackRetarget} /> : null}
+        {props.stackRetarget === undefined ? null : <StackRetargetPanel result={props.stackRetarget} />}
 
         <div class="page-body" style="padding:0;">
           <div class="split-run">

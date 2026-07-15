@@ -46,7 +46,7 @@ export function registerStackRetargetRoute(app: Hono<ActorContextEnv>, options: 
       );
       const row = runRow.rows[0];
       if (row === undefined) {
-        return undefined;
+        return null;
       }
       const defaultBranch = row.default_branch !== null && row.default_branch !== "" ? row.default_branch : "main";
       // Production construction path: same resolveSpeculativeState the merge stage calls.
@@ -90,7 +90,7 @@ export function registerStackRetargetRoute(app: Hono<ActorContextEnv>, options: 
       });
     });
 
-    if (view === undefined) {
+    if (view === null) {
       return c.json({ error: "run_not_found" }, 404);
     }
     return c.json(view);

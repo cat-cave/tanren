@@ -206,7 +206,8 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     // All six stack members are genuinely merged. Pre-gv-4 code would pass only
     // [spec_f] into the merged query → remaining stack kept a–e → toBase = e, not main.
     const pool = new ReviewMergePool("direct_merge");
-    pool.specDependsOn = ["spec_f"]; // direct-only — must be ignored for membership
+    // direct-only — must be ignored for membership
+    pool.specDependsOn = ["spec_f"];
     pool.mergedAncestors = ["spec_a", "spec_b", "spec_c", "spec_d", "spec_e", "spec_f"];
     pool.ancestorStack = chain6;
     const events = new FakeEventStore();
@@ -241,8 +242,9 @@ describe("stacked-PR retarget walk (merge stage)", () => {
 
   it("gv-4 depth-6 partial: drops five transitive merged ancestors; holds on unmerged tip", async () => {
     const pool = new ReviewMergePool("direct_merge");
-    pool.specDependsOn = ["spec_f"]; // direct-only
-    pool.mergedAncestors = ["spec_a", "spec_b", "spec_c", "spec_d", "spec_e"]; // f unmerged
+    // direct-only; f unmerged
+    pool.specDependsOn = ["spec_f"];
+    pool.mergedAncestors = ["spec_a", "spec_b", "spec_c", "spec_d", "spec_e"];
     pool.ancestorStack = chain6;
     const events = new FakeEventStore();
     const probe = recordingMergeProbe({
@@ -273,6 +275,67 @@ describe("stacked-PR retarget walk (merge stage)", () => {
     expect(events.events.some((e) => e.eventType === "merge.speculative_held")).toBe(true);
   });
 
+  it("gv-4 depth-6 partial-drop: held speculativeBase records the post-walk tip, not the stale merged immediate ancestor", async () => {
+    // Defect shape the old `speculative.ancestorStack.at(-1)` payload had: when the
+    // IMMEDIATE (last) stack ancestor is the one that merged, the pre-drop stack tip is
+    // a MERGED ancestor. The held event must record the post-walk remaining tip (the
+    // next still-unmerged ancestor) via the SAME sole resolver the walk uses — never the
+    // stale merged immediate. Only spec_f (the immediate) is merged here; a–e still hold.
+    const pool = new ReviewMergePool("direct_merge");
+    // direct-only depends_on is irrelevant under gv-4 (membership is the full vector).
+    pool.specDependsOn = ["spec_f"];
+    // Only the immediate (spec_f) is merged; a–e still hold.
+    pool.mergedAncestors = ["spec_f"];
+    pool.ancestorStack = chain6;
+    const events = new FakeEventStore();
+    // Live base is stale at the just-merged immediate (tanren/run_f) so the walk fires.
+    const probe = recordingMergeProbe({
+      mergeability: { state: "clean", behind: false, baseBranch: "tanren/run_f", headBranch: "tanren/run_1" },
+    });
+    const host = authorityHost();
+    const landed: string[] = [];
+
+    const result = await mergeForRun({
+      pool: pool.asPgPool(),
+      eventStore: events,
+      runStateWriter: fakeMergeWriter(pool, events),
+      secrets: new FakeSecretStore(),
+      resolveConflict: noopConflictResolver,
+      githubHttp: unusedHttp(),
+      runId: "run_1",
+      mergeProbe: probe,
+      mergeAuthority: authorityBundle(host, landed, { events }),
+    });
+
+    // Still HELD — a–e are unmerged.
+    expect(result.outcome).toBe("blocked");
+    expect(landed).toEqual([]);
+    // Walk retargets off the stale merged immediate onto the new post-walk tip (spec_e).
+    expect(probe.retargetedBases).toEqual(["tanren/run_e"]);
+    expect(pool.ancestorStackWrites).toEqual([
+      {
+        runId: "run_1",
+        stack: [
+          member("spec_a", "tanren/run_a"),
+          member("spec_b", "tanren/run_b"),
+          member("spec_c", "tanren/run_c"),
+          member("spec_d", "tanren/run_d"),
+          member("spec_e", "tanren/run_e"),
+        ],
+      },
+    ]);
+    const retargeted = events.events.find((e) => e.eventType === "merge.retargeted");
+    expect(retargeted?.payload).toMatchObject({ fromBase: "tanren/run_f", toBase: "tanren/run_e" });
+    // THE assertion that fails under the old `ancestorStack.at(-1)` behavior: the held
+    // base is the post-walk remaining tip (spec_e), NOT the stale merged immediate (spec_f).
+    const held = events.events.find((e) => e.eventType === "merge.speculative_held");
+    expect(held?.payload).toMatchObject({
+      speculativeBase: "tanren/run_e",
+      unmergedAncestors: ["spec_a", "spec_b", "spec_c", "spec_d", "spec_e"],
+    });
+    expect(held?.payload?.speculativeBase).not.toBe("tanren/run_f");
+  });
+
   it("gv-4 diamond/fan-in: merged shared + left drop; right remains base; hold retained", async () => {
     // Fan-in: stack [shared, left, right]; depends_on only lists immediate parents.
     const diamond: AncestorStack = [
@@ -281,7 +344,8 @@ describe("stacked-PR retarget walk (merge stage)", () => {
       member("spec_right", "tanren/run_right"),
     ];
     const pool = new ReviewMergePool("direct_merge");
-    pool.specDependsOn = ["spec_left", "spec_right"]; // no transitive shared in depends_on
+    // no transitive shared in depends_on
+    pool.specDependsOn = ["spec_left", "spec_right"];
     pool.mergedAncestors = ["spec_shared", "spec_left"];
     pool.ancestorStack = diamond;
     const events = new FakeEventStore();
