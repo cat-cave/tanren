@@ -40,10 +40,10 @@ export class NotificationMemoryClient {
     }
     if (trimmed.startsWith("SELECT") && trimmed.includes("FROM notification_routes r")) {
       const orgId = String(params[0]);
-      const eventName = String(params[1]);
+      const eventName = params[1] === undefined ? undefined : String(params[1]);
       const rows: Array<Record<string, unknown>> = [];
       for (const route of this.routes.values()) {
-        if (route.event_name !== eventName) continue;
+        if (eventName !== undefined && route.event_name !== eventName) continue;
         const target = this.targets.get(String(route.target_id));
         if (target === undefined) continue;
         if (target.org_id !== orgId) continue;
