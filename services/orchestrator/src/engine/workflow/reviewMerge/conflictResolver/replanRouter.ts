@@ -44,9 +44,7 @@ import { SpecNotPreparedForRecoveryError } from "../../specNotPreparedForRecover
 import { createLogger } from "../../../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
 import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
-
-/** Terminal / already-parked statuses the atomic park must not clobber. */
-const PARK_NOT_FROM_STATUSES = ["merged", "cancelled", "needs_attention"] as const;
+import { parkOutcomeToRouteResult, parkSpecNeedsAttention } from "../../../merge/parkNeedsAttention.js";
 
 const log = createLogger("replan-router");
 
@@ -213,45 +211,25 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       ? await this.deps.priorReplans.signatures({ specId: input.specId, orgId: this.deps.orgId })
       : [];
     if (await atReplanFixedPoint(priorSignatures, signature)) {
-      const message = await this.escalate(input, priorSignatures.length);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
-        message,
-      };
+      return this.escalate(input, priorSignatures.length);
     }
 
     // Enqueuer atomically prepares (steering + reopen to open) then createQueuedRun.
     // Terminal/missing/unknown specs never receive steering (prepare fails closed).
     const enqueue = await this.enqueueReplan(input);
     if (enqueue.outcome === "no-enqueuer") {
-      const message = await this.escalateEnqueueFailure(input, "no re-plan enqueuer is configured");
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
-        message,
-      };
+      return this.escalateEnqueueFailure(input, "no re-plan enqueuer is configured");
     }
     if (enqueue.outcome === "failed") {
       // NEVER-STRAND (the v35 silent-fallback bug): the enqueue genuinely FAILED and NO run
       // is being driven for the spec. Escalate LOUDLY instead of recording a bare routing.
-      const message = await this.escalateEnqueueFailure(input, enqueue.error);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
-        message,
-      };
+      return this.escalateEnqueueFailure(input, enqueue.error);
     }
     if (enqueue.outcome === "no-live-run") {
-      const message = await this.escalateEnqueueFailure(
+      return this.escalateEnqueueFailure(
         input,
         "SpecNotRunnableError without an independently verified active owner run (queued/running/paused)",
       );
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
-        message,
-      };
     }
 
     // (3) Record the new planning context so the next planner pass re-authors the spec ON
@@ -380,13 +358,16 @@ export class SpecStatusReplanRouter implements ReplanRouter {
    * ESCALATE an enqueue failure: park `needs_attention` + matching event ATOMICALLY.
    * Concurrent terminal/parked specs stay unchanged and emit no park event.
    */
-  private async escalateEnqueueFailure(input: { specId: string; newContext: string }, error: unknown): Promise<string> {
+  private async escalateEnqueueFailure(
+    input: { specId: string; newContext: string },
+    error: unknown,
+  ): Promise<Exclude<ReplanRouteResult, { kind: "owned" }>> {
     const detail = error instanceof Error ? error.message : String(error);
     const message =
       `the autonomous self-heal routed this spec back to the planner but could NOT enqueue the ` +
       `re-plan run (${detail}) — the spec cannot re-drive on its own, so a human must intervene ` +
       `instead of letting it strand. ${input.newContext}`;
-    await this.parkSpecAtomic(input.specId, {
+    return this.parkSpecAtomic(input.specId, message, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -401,19 +382,21 @@ export class SpecStatusReplanRouter implements ReplanRouter {
         message,
       },
     });
-    return message;
   }
 
   /**
    * ESCALATE at a re-plan FIXED POINT — atomic park + event (same authority as gate rework).
    */
-  private async escalate(input: { specId: string; newContext: string }, priorReplans: number): Promise<string> {
+  private async escalate(
+    input: { specId: string; newContext: string },
+    priorReplans: number,
+  ): Promise<Exclude<ReplanRouteResult, { kind: "owned" }>> {
     const message =
       `the autonomous self-heal reached a FIXED POINT re-planning this spec onto the shifted base: it is ` +
       `being re-planned against the SAME conflicting change it already could not absorb (re-planning again ` +
       `would re-conflict identically) — a human must decide how to proceed (re-scope the spec, or accept it ` +
       `cannot land on this base). ${input.newContext}`;
-    await this.parkSpecAtomic(input.specId, {
+    return this.parkSpecAtomic(input.specId, message, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -428,22 +411,24 @@ export class SpecStatusReplanRouter implements ReplanRouter {
         message,
       },
     });
-    return message;
   }
 
   /**
-   * ATOMIC park to `needs_attention` + `dag.spec.needs_attention` via the writer.
-   * Guarded so concurrent merged/cancelled/needs_attention states neither flip nor emit.
+   * Sole atomic park authority (updateSpecWithEvent). Outcome inspects the flip +
+   * durable readback — never fabricates a NeedsAttentionRecoveryReceipt.
    */
-  private async parkSpecAtomic(specId: string, event: AppendEventInput): Promise<void> {
-    await this.deps.runStateWriter.updateSpecWithEvent({
-      spec: {
-        specId,
-        orgId: this.deps.orgId,
-        status: "needs_attention",
-        notFromStatuses: [...PARK_NOT_FROM_STATUSES],
-      },
+  private async parkSpecAtomic(
+    specId: string,
+    message: string,
+    event: AppendEventInput,
+  ): Promise<Exclude<ReplanRouteResult, { kind: "owned" }>> {
+    const outcome = await parkSpecNeedsAttention({
+      writer: this.deps.runStateWriter,
+      pool: this.deps.pool,
+      orgId: this.deps.orgId,
+      specId,
       event,
     });
+    return parkOutcomeToRouteResult(outcome, { specId, source: "planner_replan", message });
   }
 }

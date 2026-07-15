@@ -36,6 +36,7 @@ import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { SpecNotPreparedForRecoveryError } from "../../specNotPreparedForRecoveryError.js";
 import { createLogger } from "../../../observability/logger.js";
 import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
+import { parkOutcomeToRouteResult, parkSpecNeedsAttention } from "../../../merge/parkNeedsAttention.js";
 import { atReplanFixedPoint, gateErrorSignature, type ReplanEnqueuer } from "./replanRouter.js";
 
 const log = createLogger("regate-gate-rework");
@@ -80,23 +81,13 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     // (re-authoring produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
-      const message = await this.escalate(input, priorSignatures.length);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
-        message,
-      };
+      return this.escalate(input, priorSignatures.length);
     }
 
     // Enqueuer atomically prepares (steering + allowlisted reopen); no pre-read mutation.
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     if (this.deps.enqueuer === undefined) {
-      const message = await this.escalateEnqueueFailure(input, "no writer-rework enqueuer is configured");
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
-        message,
-      };
+      return this.escalateEnqueueFailure(input, "no writer-rework enqueuer is configured");
     }
     try {
       const run = await this.deps.enqueuer.enqueue({
@@ -116,12 +107,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       };
     } catch (error) {
       if (error instanceof SpecNotPreparedForRecoveryError) {
-        const message = await this.escalateEnqueueFailure(input, error.message);
-        return {
-          kind: "parked",
-          receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
-          message,
-        };
+        return this.escalateEnqueueFailure(input, error.message);
       }
       // SpecNotRunnableError is NEVER ownership alone — org-scoped active-owner proof.
       if (error instanceof SpecNotRunnableError) {
@@ -147,27 +133,17 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
           { specId: input.specId, reportedStatus: error.status },
           error,
         );
-        const message = await this.escalateEnqueueFailure(
+        return this.escalateEnqueueFailure(
           input,
           "SpecNotRunnableError without an independently verified active owner run (queued/running/paused)",
         );
-        return {
-          kind: "parked",
-          receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
-          message,
-        };
       }
       log.error(
         "re-gate gate-fail rework FAILED to enqueue a run for the spec — escalating (never a silent strand)",
         { specId: input.specId },
         error,
       );
-      const message = await this.escalateEnqueueFailure(input, error);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
-        message,
-      };
+      return this.escalateEnqueueFailure(input, error);
     }
   }
 
@@ -222,7 +198,10 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
    * Task #48 Site J: the aux `merge.regate.gate_rework_routed` event is emitted
    * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
    * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. */
-  private async escalate(input: { specId: string; gateError: string }, priorReworks: number): Promise<string> {
+  private async escalate(
+    input: { specId: string; gateError: string },
+    priorReworks: number,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
     const message =
       `the autonomous self-heal reached a FIXED POINT re-working this spec for a base-shift ` +
       `re-gate GATE failure: the SAME gate error recurs after re-authoring (no change to it), so a ` +
@@ -243,7 +222,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         priorReworks,
       },
     });
-    await this.parkSpecAtomic(input.specId, {
+    return this.parkSpecAtomic(input.specId, message, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -258,13 +237,15 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         message,
       },
     });
-    return message;
   }
 
   /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
    *
    * Task #48 Site J (variant): same aux-then-atomic-pair shape as `escalate`. */
-  private async escalateEnqueueFailure(input: { specId: string; gateError: string }, error: unknown): Promise<string> {
+  private async escalateEnqueueFailure(
+    input: { specId: string; gateError: string },
+    error: unknown,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
     const detail = error instanceof Error ? error.message : String(error);
     const message =
       `the autonomous self-heal routed this spec back to the writer to fix a base-shift re-gate GATE ` +
@@ -285,7 +266,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         priorReworks: 0,
       },
     });
-    await this.parkSpecAtomic(input.specId, {
+    return this.parkSpecAtomic(input.specId, message, {
       runId: this.deps.runId,
       specId: input.specId,
       projectId: this.deps.projectId,
@@ -300,19 +281,21 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         message,
       },
     });
-    return message;
   }
 
-  /** ATOMIC park to `needs_attention` + `dag.spec.needs_attention` via the writer. */
-  private async parkSpecAtomic(specId: string, event: AppendEventInput): Promise<void> {
-    await this.deps.runStateWriter.updateSpecWithEvent({
-      spec: {
-        specId,
-        orgId: this.deps.orgId,
-        status: "needs_attention",
-        notFromStatuses: ["merged", "cancelled", "needs_attention"],
-      },
+  /** Sole atomic park authority — inspects flip + durable readback; never fabricates receipt. */
+  private async parkSpecAtomic(
+    specId: string,
+    message: string,
+    event: AppendEventInput,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
+    const outcome = await parkSpecNeedsAttention({
+      writer: this.deps.runStateWriter,
+      pool: this.deps.pool,
+      orgId: this.deps.orgId,
+      specId,
       event,
     });
+    return parkOutcomeToRouteResult(outcome, { specId, source: "writer_rework", message });
   }
 }

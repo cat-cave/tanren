@@ -17,6 +17,7 @@ import type pg from "pg";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
+import { parkSpecNeedsAttention } from "./parkNeedsAttention.js";
 
 /**
  * The seam both coordinators reuse to escalate a genuinely-irreconcilable spec. ONE
@@ -26,22 +27,17 @@ export interface SpecEscalator {
   /**
    * Park the entry's spec at the terminal `needs_attention` status (freeing its merge
    * slot) + emit the loud `dag.spec.needs_attention` event. Idempotent: an
-   * already-merged/done/needs_attention spec is left untouched (the guarded flip
-   * matches zero rows), so a concurrent settle never double-escalates or un-merges.
+   * already-merged/cancelled/halted/needs_attention spec is left untouched (the
+   * guarded flip matches zero rows), so a concurrent settle never double-escalates
+   * or un-merges. A concurrent terminal yields a no-op (no park event).
    */
   escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void>;
 }
 
 /**
- * The pg-backed escalator. The spec-status flip MIRRORS `markSpecMerged`
- * (coordinatorBuild.ts) — the SAME plane-split guard the strand reconciler's
- * `escalateSpec` uses: route the write through the control-plane `runStateWriter`
- * when wired (the de-privileged data plane can no longer UPDATE `specs` directly),
- * else an org-scoped `UPDATE` on the pool. `notFromStatuses` keeps it an ATOMIC guard
- * — a spec already `merged`/`done`/`needs_attention` is never moved. The org id is
- * resolved system-scoped via `resolveProjectOrg` (the coordinator wakes with no
- * ambient org scope), and the dag event is appended through the same plane-split seam
- * the queue-event emitter uses.
+ * The pg-backed escalator. Spec park uses the shared canonical
+ * {@link parkSpecNeedsAttention} authority (sole `updateSpecWithEvent` path +
+ * PARK_NOT_FROM_STATUSES guard including merged/cancelled/halted/needs_attention).
  */
 export class PgSpecEscalator implements SpecEscalator {
   constructor(
@@ -58,34 +54,27 @@ export class PgSpecEscalator implements SpecEscalator {
       throw new Error(`cannot escalate spec ${input.entry.specId}: project ${input.projectId} has no org`);
     }
 
-    // Task #48 Site H: the spec `needs_attention` flip + the matching
-    // `dag.spec.needs_attention` event are now ATOMIC. The prior split
-    // (`parkSpec(...)` + `withScopedStore.append(...)`) issued two separate
-    // writes; the partial-event landing was a silent strand surface. The
-    // atomic seam (`updateSpecWithEvent` / `applyUpdateSpecWithEvent`)
-    // bundles them into ONE org-scoped transaction. Audit D-R3.2: the writer
-    // is REQUIRED — the in-process `runWithOrgScope` fallback was an unreachable
-    // half-measure since PR #714's `runStateWriterFromEnv` always returns a writer.
-    const event = {
-      runId: input.entry.runId,
-      specId: input.entry.specId,
-      projectId: input.projectId,
+    // Sole atomic park authority — inspects UpdateSpecWithEventOutcome internally;
+    // concurrent terminal/parked is a no-op (no fabricated receipt, no clobber).
+    await parkSpecNeedsAttention({
+      writer: this.runStateWriter,
+      pool: this.pool,
       orgId,
-      eventType: "dag.spec.needs_attention" as const,
-      payload: {
-        source: "merge_conflict",
+      specId: input.entry.specId,
+      event: {
+        runId: input.entry.runId,
         specId: input.entry.specId,
-        prUrl: input.entry.prUrl,
-        prNumber: input.entry.prNumber,
-        message: input.message,
+        projectId: input.projectId,
+        orgId,
+        eventType: "dag.spec.needs_attention",
+        payload: {
+          source: "merge_conflict",
+          specId: input.entry.specId,
+          prUrl: input.entry.prUrl,
+          prNumber: input.entry.prNumber,
+          message: input.message,
+        },
       },
-    };
-    const spec = {
-      specId: input.entry.specId,
-      orgId,
-      status: "needs_attention",
-      notFromStatuses: ["merged", "needs_attention"],
-    };
-    await this.runStateWriter.updateSpecWithEvent({ spec, event });
+    });
   }
 }

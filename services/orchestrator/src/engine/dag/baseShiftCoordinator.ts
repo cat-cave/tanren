@@ -300,7 +300,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
     const rework = await this.routeGateFailToRework(input, result.gateError);
-    const decision: RebaseDecision = rework.kind === "parked" ? "parked" : "writer_rework";
+    // owned → writer_rework; parked / terminal_noop / unowned → parked (slot-free end).
+    const decision: RebaseDecision = rework.kind === "owned" ? "writer_rework" : "parked";
     await this.emit(input, false, decision);
     return { decision, headSha: input.rebase.headSha };
   }
@@ -366,7 +367,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). The
     // rework router is REQUIRED — every construction site wires it (no silent fallback).
     const rework = await this.routeGateFailToRework(input, result.gateError);
-    const decision: RebaseDecision = rework.kind === "parked" ? "parked" : "writer_rework";
+    const decision: RebaseDecision = rework.kind === "owned" ? "writer_rework" : "parked";
     await this.emit(input, true, decision);
     return { decision, headSha: input.rebase.headSha };
   }

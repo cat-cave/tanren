@@ -33,8 +33,7 @@ import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
-import type { EventStore } from "../eventStore.js";
-import type { AppendEventInput } from "../eventStore.js";
+import type { AppendEventInput, EventStore } from "../eventStore.js";
 import {
   atReplanFixedPoint,
   gateErrorSignature,
@@ -47,13 +46,14 @@ import {
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { SpecNotPreparedForRecoveryError } from "../workflow/specNotPreparedForRecoveryError.js";
 import { createLogger } from "../observability/logger.js";
+import { parkOutcomeToRouteResult, parkSpecNeedsAttention } from "./parkNeedsAttention.js";
 import { findActiveOwnerRunForSpec } from "./recoveryOwnership.js";
 
 const log = createLogger("batch-gate-rework");
 
 export interface BatchGateReworkRouterDeps {
   pool: pg.Pool;
-  /** REQUIRED: run-state writer for status / prepare / enqueue under the data plane. */
+  /** REQUIRED: run-state writer — sole atomic park + event append authority. */
   runStateWriter: RunStateWriter;
   /** Enqueues the writer-rework run (re-open + steering + run-create). Production wires `buildReplanEnqueuer`. */
   enqueuer?: ReplanEnqueuer;
@@ -65,12 +65,6 @@ export interface BatchGateReworkRouterDeps {
    * cross-org system pool machinery.
    */
   resolveOrg?: (projectId: string) => Promise<string | null>;
-  /**
-   * TEST SEAM: append a durable event under the resolved org. Production OMITS it → the
-   * plane-split PgEventStore / RunStateWriter under the org scope. A no-DB unit run
-   * injects a recording store so event assertions need no DB or scope globals.
-   */
-  appendEvent?: (orgId: string, event: Parameters<EventStore["append"]>[0]) => Promise<void>;
 }
 
 /**
@@ -114,12 +108,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     // recurs (re-working produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
-      const message = await this.escalate(orgId, input, priorSignatures.length);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
-        message,
-      };
+      return this.escalate(orgId, input, priorSignatures.length);
     }
 
     // Enqueuer atomically prepares (steering + allowlisted reopen); no pre-read mutation.
@@ -146,12 +135,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       };
     } catch (error) {
       if (error instanceof SpecNotPreparedForRecoveryError) {
-        const message = await this.escalateEnqueueFailure(orgId, input, error);
-        return {
-          kind: "parked",
-          receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
-          message,
-        };
+        return this.escalateEnqueueFailure(orgId, input, error);
       }
       // SpecNotRunnableError is NEVER ownership alone — org-scoped active-owner proof.
       if (error instanceof SpecNotRunnableError) {
@@ -177,28 +161,18 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           { specId: input.culprit.specId, reportedStatus: error.status },
           error,
         );
-        const message = await this.escalateEnqueueFailure(
+        return this.escalateEnqueueFailure(
           orgId,
           input,
           new Error("SpecNotRunnableError without an independently verified active owner run (queued/running/paused)"),
         );
-        return {
-          kind: "parked",
-          receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
-          message,
-        };
       }
       log.error(
         "gate-fail rework FAILED to enqueue a run for the culprit spec — escalating (never a silent strand)",
         { specId: input.culprit.specId },
         error,
       );
-      const message = await this.escalateEnqueueFailure(orgId, input, error);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
-        message,
-      };
+      return this.escalateEnqueueFailure(orgId, input, error);
     }
   }
 
@@ -262,7 +236,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
     priorReworks: number,
-  ): Promise<string> {
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
     const message =
       `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
       `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
@@ -286,8 +260,8 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         },
       }),
     );
-    // Load-bearing atomic pair: spec park + the loud `dag.spec.needs_attention` event.
-    await this.parkSpecAtomic(orgId, input.culprit.specId, {
+    // Load-bearing atomic pair: sole updateSpecWithEvent park authority.
+    return this.parkSpecAtomic(orgId, input.culprit.specId, message, {
       runId: input.culprit.runId,
       specId: input.culprit.specId,
       projectId: input.projectId,
@@ -302,7 +276,6 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         message,
       },
     });
-    return message;
   }
 
   /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
@@ -312,7 +285,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     orgId: string,
     input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
     error: unknown,
-  ): Promise<string> {
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
     const detail = error instanceof Error ? error.message : String(error);
     const message =
       `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
@@ -336,7 +309,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         },
       }),
     );
-    await this.parkSpecAtomic(orgId, input.culprit.specId, {
+    return this.parkSpecAtomic(orgId, input.culprit.specId, message, {
       runId: input.culprit.runId,
       specId: input.culprit.specId,
       projectId: input.projectId,
@@ -351,50 +324,33 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         message,
       },
     });
-    return message;
   }
 
-  /** Task #48 Site I: ATOMIC spec park + `dag.spec.needs_attention` event in
-   * ONE org-scoped transaction (control plane when wired, else in-process via
-   * the same shared applier). Replaces the prior `parkSpec()` + separate
-   * append — the load-bearing pair is no longer split.
-   *
-   * TEST SEAM: when `deps.appendEvent` is injected (no-DB unit run), fall back
-   * to the legacy split (a guarded spec UPDATE on the test pool + the
-   * injected event recorder) so test assertions still capture the event
-   * without needing a real Postgres + RLS. The production paths always wire
-   * a real writer OR a real pool, so the seam-bound atomicity is preserved
-   * where it matters; the unit-test fallback is an explicit narrow concession
-   * (the contract is exercised end-to-end in the conformance suite). */
-  private async parkSpecAtomic(orgId: string, specId: string, event: AppendEventInput): Promise<void> {
-    const spec = { specId, orgId, status: "needs_attention", notFromStatuses: ["merged", "needs_attention"] };
-    // Audit D-R3.2: the writer (REQUIRED) is the single-source atomic park; the
-    // test-seam split is kept ONLY for `deps.appendEvent`-injected unit runs (no DB,
-    // no real writer attached on the test pool).
-    if (this.deps.appendEvent !== undefined) {
-      // TEST SEAM split fallback (no DB / no real writer wired on the test pool).
-      await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-        await client.query(
-          `UPDATE specs SET status = 'needs_attention' WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
-          [specId],
-        );
-      });
-      await this.deps.appendEvent(orgId, event);
-      return;
-    }
-    await this.deps.runStateWriter.updateSpecWithEvent({ spec, event });
+  /**
+   * Sole atomic park authority: RunStateWriter.updateSpecWithEvent. No split
+   * UPDATE+append path, no optional parallel seam. Outcome inspects flip +
+   * durable org-scoped readback — never fabricates a parked receipt.
+   */
+  private async parkSpecAtomic(
+    orgId: string,
+    specId: string,
+    message: string,
+    event: AppendEventInput,
+  ): Promise<Exclude<GateReworkRouteResult, { kind: "owned" }>> {
+    const outcome = await parkSpecNeedsAttention({
+      writer: this.deps.runStateWriter,
+      pool: this.deps.pool,
+      orgId,
+      specId,
+      event,
+    });
+    return parkOutcomeToRouteResult(outcome, { specId, source: "writer_rework", message });
   }
 
   private async withScopedStore(orgId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
-    // TEST SEAM: an injected recording append needs no scope machinery — wrap it as an
-    // EventStore so the work body is identical to the production path.
-    if (this.deps.appendEvent !== undefined) {
-      const appendEvent = this.deps.appendEvent;
-      await work({ append: (event) => appendEvent(orgId, event) });
-      return;
-    }
-    const writer = this.deps.runStateWriter;
-    await runWithJobOrgId(orgId, () => work(writer));
+    // Production + tests: the REQUIRED runStateWriter is the sole EventStore append path
+    // (InMemoryRunStateWriter records; Direct/Http writers hit the control plane).
+    await runWithJobOrgId(orgId, () => work(this.deps.runStateWriter));
   }
 }
 

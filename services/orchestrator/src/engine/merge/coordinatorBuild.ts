@@ -97,6 +97,8 @@ export function mapConflictDriveOutcome(
     return { kind: "conflict", message: merge.message ?? "merge conflict", recovery: recovery.receipt };
   }
   const detail = recovery?.message ?? "merge conflict returned without a durable recovery owner";
+  // parking:complete ONLY for a proven needs_attention park — never a terminal_noop /
+  // unowned / missing disposition (those must still escalate or settle truthfully).
   return {
     kind: "needs_attention",
     message: `${merge.message ?? "merge conflict"}; ${detail}`,
@@ -341,6 +343,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         return {
           kind: "needs_attention",
           message: merge.message ?? "merge needs human attention",
+          // terminal_noop / unowned are never parking complete.
           parking: merge.conflictRecovery?.kind === "parked" ? "complete" : "required",
         };
       default:

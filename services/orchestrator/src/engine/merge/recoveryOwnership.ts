@@ -170,6 +170,11 @@ export function baseShiftDecisionFromRecovery(
   recovery: ConflictRecoveryDisposition | undefined,
 ): BaseShiftRecoveryDecision {
   if (recovery === undefined || recovery.kind === "unowned") return "replanned";
-  if (recovery.kind === "parked") return "parked";
-  return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
+  // terminal_noop is NOT parked complete — work already terminal; instrument as parked
+  // only for the slot-free end (never writer_rework / never fake owned replan).
+  if (recovery.kind === "parked" || recovery.kind === "terminal_noop") return "parked";
+  if (recovery.kind === "owned") {
+    return recovery.receipt.kind === "writer_rework" ? "writer_rework" : "replanned";
+  }
+  return "replanned";
 }

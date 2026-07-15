@@ -1,9 +1,8 @@
 // Unit tests for the PgBatchGateReworkRouter (v35 — the batch-gate-fail-strand fix).
 // The router re-authors a GATE-fail bisect culprit on the never-discard
 // re-plan-with-steering mechanism (carrying the batch gate error), bounded by its own
-// rework budget. These tests inject the enqueuer + prior-rework counter + an org resolver
-// + a recording append + a recording pool (for the spec-status park) so the bound + the
-// no-blind-rework steering are verified WITHOUT a DB or any scope globals.
+// rework budget. Tests inject enqueuer + prior-rework signatures + a recording atomic
+// RunStateWriter (sole park/event authority — no appendEvent split seam).
 
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
@@ -38,24 +37,19 @@ interface Appended {
   payload: Record<string, unknown>;
 }
 
-/** Scriptable pool for status park + ownership proof SELECTs. */
+/** Pool for org-scoped active-owner / status readback (no raw status UPDATE path). */
 function makeStatusPool(
-  statusWrites: { specId: string; status: string }[],
   opts: {
     specStatusById?: Map<string, string>;
     liveRunsBySpec?: Map<string, { run_id: string; status: string }>;
+    defaultSpecStatus?: string;
   } = {},
 ): pg.Pool {
   // eslint-disable-next-line @typescript-eslint/require-await
   const query = async (text: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = String(text);
-    if (sql.includes("UPDATE specs SET status")) {
-      const m = /status\s*=\s*'([a-z_]+)'/u.exec(sql);
-      statusWrites.push({ specId: String(params?.[0]), status: m?.[1] ?? "?" });
-      return { rows: [], rowCount: 1 };
-    }
     if (sql.includes("SELECT status FROM specs")) {
-      const status = opts.specStatusById?.get(String(params?.[0])) ?? "open";
+      const status = opts.specStatusById?.get(String(params?.[0])) ?? opts.defaultSpecStatus ?? "open";
       return { rows: [{ status }], rowCount: 1 };
     }
     if (sql.includes("FROM runs") && sql.includes("status IN")) {
@@ -77,29 +71,31 @@ function makeStatusPool(
 
 function makeRouter(opts: {
   enqueuer: ReplanEnqueuer;
-  /** The spec's prior gate-error SIGNATURES (oldest→newest) the convergence detector reads. */
   priorReworks: string[];
   appended: Appended[];
   statusWrites: { specId: string; status: string }[];
   liveRunsBySpec?: Map<string, { run_id: string; status: string }>;
-  specStatusById?: Map<string, string>;
+  /** Current status for atomic park notFromStatuses + durable readback. */
+  specStatus?: string;
 }): PgBatchGateReworkRouter {
+  const writer = new InMemoryRunStateWriter({
+    forwardAppend: (event) => {
+      opts.appended.push({ eventType: event.eventType, payload: event.payload as Record<string, unknown> });
+    },
+    forwardUpdateSpecWithEvent: (input) => {
+      opts.statusWrites.push({ specId: input.spec.specId, status: input.spec.status });
+    },
+  });
+  writer.updateSpecCurrentStatus = opts.specStatus ?? "open";
   return new PgBatchGateReworkRouter({
-    pool: makeStatusPool(opts.statusWrites, {
+    pool: makeStatusPool({
       ...(opts.liveRunsBySpec !== undefined && { liveRunsBySpec: opts.liveRunsBySpec }),
-      ...(opts.specStatusById !== undefined && { specStatusById: opts.specStatusById }),
+      defaultSpecStatus: opts.specStatus ?? "open",
     }),
-    // Audit D-R3.2: runStateWriter is REQUIRED on the type. The test's `appendEvent`
-    // injection still wins (the production routing path is exercised in the conformance
-    // suite), so the in-memory writer here only satisfies the type — it is never invoked.
-    runStateWriter: new InMemoryRunStateWriter(),
+    runStateWriter: writer,
     enqueuer: opts.enqueuer,
     priorReworks: () => Promise.resolve(opts.priorReworks),
     resolveOrg: () => Promise.resolve(ORG),
-    // eslint-disable-next-line @typescript-eslint/require-await
-    appendEvent: async (_orgId, event) => {
-      opts.appended.push({ eventType: event.eventType, payload: event.payload as Record<string, unknown> });
-    },
   });
 }
 
@@ -132,16 +128,12 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
         run: { kind: "enqueued", replanRunId: "run_rework_1", plannerTaskId: "task_1" },
       },
     });
-    // A fresh rework run was enqueued, re-opening the spec to `open` and carrying the ACTUAL
-    // gate error in the steering (no_silent_fallback — never rework blind).
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]?.steeringNote).toContain(gateError);
-    // The observable routing event is recorded as `reworked` + a replan_queued lineage.
     const routed = appended.find((e) => e.eventType === "merge.batch.gate_rework_routed");
     expect(routed?.payload.disposition).toBe("reworked");
     expect(routed?.payload.gateError).toBe(gateError);
     expect(appended.some((e) => e.eventType === "recovery.replan_queued")).toBe(true);
-    // It did NOT park the spec at needs_attention.
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
 
@@ -201,6 +193,8 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     };
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
+    // Spec is open for the park attempt (prepare refused for other reasons in production;
+    // here we still park loud unless concurrent terminal blocks the flip).
     const router = makeRouter({ enqueuer, priorReworks: [], appended, statusWrites });
 
     const recovery = await router.routeGateFailToRework({
@@ -225,9 +219,6 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
     const stuckError = "still failing the integrated gate";
-    // The spec was re-worked against this EXACT gate error REPEATEDLY (a cycle: the identical
-    // error recurring beyond a single transient repeat) — re-working again would reproduce it
-    // identically (a proven fixed point), so the detector escalates (no count).
     const router = makeRouter({
       enqueuer,
       priorReworks: [gateErrorSignature(stuckError), gateErrorSignature(stuckError)],
@@ -245,9 +236,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       kind: "parked",
       receipt: { kind: "needs_attention", specId: "spec_stuck", source: "writer_rework" },
     });
-    // No further rework run was enqueued (fixed point — never a hot-loop).
     expect(enqueueCalls).toBe(0);
-    // The spec was parked at needs_attention (loud, frees the slot).
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
     const routed = appended.find((e) => e.eventType === "merge.batch.gate_rework_routed");
     expect(routed?.payload.disposition).toBe("escalated");
@@ -266,9 +255,6 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     };
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
-    // Five prior reworks, each a DIFFERENT gate error — the writer is fixing one failure and
-    // surfacing the next (progress). The current error is different again ⇒ keep re-working,
-    // far past any old fixed cap of 3.
     const priorReworks = ["err-a", "err-b", "err-c", "err-d", "err-e"].map((e) => gateErrorSignature(e));
     const router = makeRouter({ enqueuer, priorReworks, appended, statusWrites });
 
@@ -306,5 +292,32 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
     const park = appended.find((e) => e.eventType === "dag.spec.needs_attention");
     expect(park?.payload.reason).toBe("persistent_failure");
+  });
+
+  it("CONCURRENT CANCEL: zero status change, zero park event, terminal_noop (not parking complete)", async () => {
+    const enqueuer: ReplanEnqueuer = {
+      enqueue() {
+        return Promise.reject(new Error("planner unavailable"));
+      },
+    };
+    const appended: Appended[] = [];
+    const statusWrites: { specId: string; status: string }[] = [];
+    const router = makeRouter({
+      enqueuer,
+      priorReworks: [],
+      appended,
+      statusWrites,
+      specStatus: "cancelled",
+    });
+
+    const recovery = await router.routeGateFailToRework({
+      projectId: PROJECT,
+      culprit: culprit("spec_cancel_race"),
+      gateError: "gate failed",
+    });
+
+    expect(recovery).toMatchObject({ kind: "terminal_noop", status: "cancelled" });
+    expect(statusWrites).toEqual([]);
+    expect(appended.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
   });
 });

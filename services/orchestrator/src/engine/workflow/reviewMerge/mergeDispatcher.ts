@@ -435,6 +435,8 @@ export class MergeDispatcher implements LandOps {
         message,
       },
     });
+    // owned → conflict (recovery owner); parked / terminal_noop / unowned → needs_attention
+    // (only parked is parking:complete at the coordinator map — terminal_noop is not).
     const outcome = recovery === undefined ? "blocked" : recovery.kind === "owned" ? "conflict" : "needs_attention";
     await this.finalize(outcome, { taskOutcome: "pending", taskStatus: "running" });
     return this.result(outcome, { message, ...(recovery !== undefined && { conflictRecovery: recovery }) });

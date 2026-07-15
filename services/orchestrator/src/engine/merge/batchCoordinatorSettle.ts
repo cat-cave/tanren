@@ -378,11 +378,17 @@ export async function settleWriterOwnedOrPark(
   deps: Pick<BatchSettleDeps, "recoveryEvidence" | "escalator">,
   projectId: string,
   culprit: MergeQueueEntry,
-  recovery: { kind: "owned"; receipt: ConflictRecoveryReceipt } | { kind: "parked"; message: string },
+  recovery:
+    | { kind: "owned"; receipt: ConflictRecoveryReceipt }
+    | { kind: "parked"; message: string }
+    | { kind: "terminal_noop"; status: string; message: string }
+    | { kind: "unowned"; message: string },
   ownedMessage: string,
   contextMessage: string,
 ): Promise<{ reason: "superseded" | "needs_attention"; message: string }> {
-  if (recovery.kind !== "owned") {
+  // parked = proven needs_attention; terminal_noop / unowned retire the stale entry
+  // without claiming a fresh park (no re-escalate on concurrent terminal).
+  if (recovery.kind === "parked" || recovery.kind === "terminal_noop" || recovery.kind === "unowned") {
     return { reason: "needs_attention", message: recovery.message };
   }
   const verified = await verifyRecoveryOwnership({

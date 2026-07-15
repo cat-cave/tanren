@@ -250,20 +250,36 @@ export interface NeedsAttentionRecoveryReceipt {
   source: "planner_replan" | "writer_rework";
 }
 
+/**
+ * Concurrent terminal statuses the needs_attention park must never clobber
+ * (lifecycle terminal ends other than already-parked needs_attention).
+ */
+export type TerminalParkNoopStatus = "merged" | "cancelled" | "halted";
+
 export type ConflictRecoveryReceipt = PlannerRecoveryReceipt | WriterRecoveryReceipt;
 
+/**
+ * Router result after a park attempt. `parked` ONLY when updateSpecWithEvent
+ * flipped the row OR org-scoped readback proves already needs_attention — never
+ * a fabricated receipt on a concurrent terminal no-op.
+ */
 export type ReplanRouteResult =
   | { kind: "owned"; receipt: PlannerRecoveryReceipt }
-  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string };
+  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | { kind: "unowned"; message: string };
 
 export type GateReworkRouteResult =
   | { kind: "owned"; receipt: WriterRecoveryReceipt }
-  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string };
+  | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | { kind: "unowned"; message: string };
 
 /** What an unresolved conflict can prove to its caller after all routing I/O completed. */
 export type ConflictRecoveryDisposition =
   | { kind: "owned"; receipt: ConflictRecoveryReceipt }
   | { kind: "parked"; receipt: NeedsAttentionRecoveryReceipt; message: string }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
   | { kind: "unowned"; message: string };
 
 /**

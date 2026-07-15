@@ -11,6 +11,12 @@ export class RecordingPool {
   readonly scopeOps: string[] = [];
   /** Live active owner runs for org-scoped proof. */
   liveRunsBySpec = new Map<string, { run_id: string; status: string }>();
+  /**
+   * Durable org-scoped status readback for park false-flip paths
+   * (default open). Concurrent terminal/park tests set this to match.
+   */
+  defaultSpecStatus = "open";
+  specStatusById = new Map<string, string>();
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
     if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SET LOCAL")) {
@@ -20,6 +26,11 @@ export class RecordingPool {
     if (text.startsWith("UPDATE specs SET status")) {
       this.statusWrites.push({ specId: String(params?.[0]), status: String(params?.[1]) });
       return { rows: [] };
+    }
+    if (text.includes("SELECT status FROM specs") || text.includes("SELECT status FROM specs WHERE")) {
+      const specId = String(params?.[0]);
+      const status = this.specStatusById.get(specId) ?? this.defaultSpecStatus;
+      return { rows: [{ status }] };
     }
     if (text.includes("FROM runs") && text.includes("status IN")) {
       const live = this.liveRunsBySpec.get(String(params?.[0]));

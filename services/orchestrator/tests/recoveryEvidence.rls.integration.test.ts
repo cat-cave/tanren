@@ -202,6 +202,43 @@ describeDb("RLS recovery evidence — prepare + createQueuedRun + PgRecoveryEvid
     expect(proved).toBeUndefined();
   });
 
+  it("non-plan task on the same run cannot satisfy plannerTaskId", async () => {
+    // Enqueued proof binds task id + run id + kind='plan'. A write task on the
+    // same run must not pass as the planner task.
+    const writer = new DirectRunStateWriter(appPool);
+    await ownerPool.query(`UPDATE specs SET status = 'open' WHERE spec_id = $1`, [SPEC_A]);
+    const run = await writer.createQueuedRun({
+      input: { specId: SPEC_A, trigger: "replan_routed" },
+      actor: ACTOR_A,
+    });
+    const writeTaskId = `task_write_${Date.now()}`;
+    await ownerPool.query(
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+       VALUES ($1, $2, $3, 'write', 'Write', 'queued', 'writer', 'fake', 'm')`,
+      [writeTaskId, run.runId, ORG_A],
+    );
+    const evidence = new PgRecoveryEvidencePort(appPool);
+    const forged = await evidence.verifyOwnedReceipt({
+      expectedSpecId: SPEC_A,
+      receipt: {
+        kind: "planner_replan",
+        specId: SPEC_A,
+        run: { kind: "enqueued", replanRunId: run.runId, plannerTaskId: writeTaskId },
+      },
+    });
+    expect(forged).toBeUndefined();
+    // Positive control: the real plan task still proves.
+    const real = await evidence.verifyOwnedReceipt({
+      expectedSpecId: SPEC_A,
+      receipt: {
+        kind: "planner_replan",
+        specId: SPEC_A,
+        run: { kind: "enqueued", replanRunId: run.runId, plannerTaskId: run.plannerTaskId },
+      },
+    });
+    expect(real?.plannerTaskId).toBe(run.plannerTaskId);
+  });
+
   it("wrong expectedSpecId: evidence port returns undefined", async () => {
     const writer = new DirectRunStateWriter(appPool);
     await ownerPool.query(`UPDATE specs SET status = 'open' WHERE spec_id = $1`, [SPEC_A]);

@@ -21,36 +21,16 @@ const PROJECT = "project_test";
 const RUN = "run_dependent";
 const SPEC = "spec_b";
 
-/** Pool for recovery allowlist + active-owner reads (defaults: open spec, no owner run). */
-// eslint-disable-next-line @typescript-eslint/require-await
-const recoveryPoolQuery = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
-  const sql = String(text);
-  if (sql.includes("SELECT status FROM specs")) {
-    return { rows: [{ status: "open" }], rowCount: 1 };
-  }
-  // Active owner runs / other SELECTs: empty by default.
-  return { rows: [], rowCount: 0 };
-};
-function makeNoopPool(): pg.Pool {
-  return {
-    query: recoveryPoolQuery,
-    // eslint-disable-next-line @typescript-eslint/require-await
-    connect: async () => ({ query: recoveryPoolQuery, release: () => {} }),
-  } as unknown as pg.Pool;
-}
-
 function makeRouter(opts: {
   enqueuer: ReplanEnqueuer;
   /** The spec's prior gate-error SIGNATURES (oldest→newest) the convergence detector reads. */
   priorReworks: string[];
   events: FakeEventStore;
   statusWrites: { specId: string; status: string }[];
+  /** Current status for notFromStatuses + durable park readback (default open). */
+  specStatus?: string;
 }): SpecStatusGateReworkRouter {
-  // Audit D-R3.2: the writer is REQUIRED; the test's writer records both the bare
-  // `setSpecStatus` flips (degenerate path) and the atomic `updateSpecWithEvent` parks
-  // (the spec → `needs_attention` escalation), matching what the prior fake-pool UPDATE
-  // recorder captured. The atomic park's `dag.spec.needs_attention` event ALSO forwards
-  // into the FakeEventStore so the prior `events.events.find(...)` assertions still hold.
+  // Sole atomic park authority: recording RunStateWriter (no pool UPDATE / appendEvent split).
   const writer = new InMemoryRunStateWriter({
     forwardAppend: (event) => {
       opts.events.append(event);
@@ -62,8 +42,23 @@ function makeRouter(opts: {
       opts.statusWrites.push({ specId: input.spec.specId, status: input.spec.status });
     },
   });
+  writer.updateSpecCurrentStatus = opts.specStatus ?? "open";
+  const status = opts.specStatus ?? "open";
+  // eslint-disable-next-line @typescript-eslint/require-await
+  const query = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
+    const sql = String(text);
+    if (sql.includes("SELECT status FROM specs")) {
+      return { rows: [{ status }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  const pool = {
+    query,
+    // eslint-disable-next-line @typescript-eslint/require-await
+    connect: async () => ({ query, release: () => {} }),
+  } as unknown as pg.Pool;
   return new SpecStatusGateReworkRouter({
-    pool: makeNoopPool(),
+    pool,
     runStateWriter: writer,
     orgId: ORG,
     eventStore: opts.events,
@@ -173,5 +168,27 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     expect(routed?.payload.disposition).toBe("escalated");
     const attention = events.events.find((e) => e.eventType === "dag.spec.needs_attention");
     expect(attention?.payload).toMatchObject({ reason: "persistent_failure" });
+  });
+
+  it("CONCURRENT CANCEL: terminal_noop with zero status change and zero park event", async () => {
+    const enqueuer: ReplanEnqueuer = {
+      enqueue() {
+        return Promise.reject(new Error("planner unavailable"));
+      },
+    };
+    const events = new FakeEventStore();
+    const statusWrites: { specId: string; status: string }[] = [];
+    const router = makeRouter({
+      enqueuer,
+      priorReworks: [],
+      events,
+      statusWrites,
+      specStatus: "cancelled",
+    });
+
+    const recovery = await router.routeGateFailToRework({ specId: SPEC, gateError: "gate failed" });
+    expect(recovery).toMatchObject({ kind: "terminal_noop", status: "cancelled" });
+    expect(statusWrites).toEqual([]);
+    expect(events.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
   });
 });

@@ -59,9 +59,13 @@ export class PgRecoveryEvidencePort implements RecoveryEvidencePort {
     return { runId: row.run_id, specId: row.spec_id, runStatus: row.status };
   }
 
+  /**
+   * Enqueued proof binds task id + run id + canonical planner task kind (`plan`).
+   * A write/check/etc. task on the same run must NOT satisfy plannerTaskId.
+   */
   private async taskBelongsToRun(client: pg.PoolClient, plannerTaskId: string, runId: string): Promise<boolean> {
     const result = await client.query<{ task_id: string }>(
-      `SELECT task_id FROM tasks WHERE task_id = $1 AND run_id = $2 LIMIT 1`,
+      `SELECT task_id FROM tasks WHERE task_id = $1 AND run_id = $2 AND kind = 'plan' LIMIT 1`,
       [plannerTaskId, runId],
     );
     return result.rows[0] !== undefined;

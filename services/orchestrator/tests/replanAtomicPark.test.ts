@@ -1,9 +1,14 @@
-// Atomic both-or-neither for SpecStatusReplanRouter park authority:
-// applyUpdateSpecWithEvent does not return flipped:true when the event write fails
-// after a successful status UPDATE (callers must not treat the park as durable).
+// Atomic both-or-neither for SpecStatusReplanRouter park authority + settlement
+// race controls: updateSpecWithEvent outcomes must never fabricate parked receipts;
+// concurrent terminal_noop settles without parking:complete.
 
 import { describe, expect, it } from "vitest";
+import { mapConflictDriveOutcome } from "../src/engine/merge/coordinatorBuild.js";
+import { settleWriterOwnedOrPark } from "../src/engine/merge/batchCoordinatorSettle.js";
+import { parkOutcomeToRouteResult, parkSpecNeedsAttention } from "../src/engine/merge/parkNeedsAttention.js";
 import { applyUpdateSpecWithEvent } from "../src/engine/worker/runStateAtomicSql.js";
+import type { RunStateWriter } from "../src/engine/contracts/runStateWriter.js";
+import type pg from "pg";
 
 const parkEvent = {
   runId: "run_a",
@@ -21,6 +26,29 @@ const parkEvent = {
   },
 };
 
+const CANONICAL_GUARD = ["merged", "cancelled", "halted", "needs_attention"] as const;
+
+function makeParkWriter(flipped: boolean): RunStateWriter {
+  return {
+    updateSpecWithEvent: async () => ({ flipped, alreadyTerminal: false }),
+  } as unknown as RunStateWriter;
+}
+
+function makeParkStatusPool(status: string | undefined): pg.Pool {
+  // eslint-disable-next-line @typescript-eslint/require-await
+  const query = async (text: string): Promise<{ rows: unknown[] }> => {
+    if (String(text).includes("SELECT status FROM specs")) {
+      return status === undefined ? { rows: [] } : { rows: [{ status }] };
+    }
+    return { rows: [] };
+  };
+  return {
+    query,
+    // eslint-disable-next-line @typescript-eslint/require-await
+    connect: async () => ({ query, release: () => {} }),
+  } as unknown as pg.Pool;
+}
+
 describe("applyUpdateSpecWithEvent — both-or-neither park", () => {
   it("throws (does not return flipped) when the post-UPDATE event write fails", async () => {
     const queries: string[] = [];
@@ -35,7 +63,6 @@ describe("applyUpdateSpecWithEvent — both-or-neither park", () => {
           status = String(params?.[1] ?? status);
           return { rows: [{ spec_id: params?.[0] }], rowCount: 1 };
         }
-        // Simulate the event-store write failing after the row moved (txn would roll back).
         throw new Error("event write failed after status flip");
       },
     };
@@ -46,7 +73,7 @@ describe("applyUpdateSpecWithEvent — both-or-neither park", () => {
           specId: "spec_a",
           orgId: "org_a",
           status: "needs_attention",
-          notFromStatuses: ["merged", "cancelled", "needs_attention"],
+          notFromStatuses: [...CANONICAL_GUARD],
         },
         event: parkEvent,
       }),
@@ -71,7 +98,7 @@ describe("applyUpdateSpecWithEvent — both-or-neither park", () => {
         specId: "spec_a",
         orgId: "org_a",
         status: "needs_attention",
-        notFromStatuses: ["merged", "cancelled", "needs_attention"],
+        notFromStatuses: [...CANONICAL_GUARD],
       },
       event: {
         ...parkEvent,
@@ -84,5 +111,126 @@ describe("applyUpdateSpecWithEvent — both-or-neither park", () => {
     });
     expect(outcome).toEqual({ flipped: false, alreadyTerminal: false });
     expect(eventWriteAttempted).toBe(false);
+  });
+});
+
+describe("parkSpecNeedsAttention + settlement race", () => {
+  it("false flip + needs_attention readback → parked (not fabricated without proof)", async () => {
+    const outcome = await parkSpecNeedsAttention({
+      writer: makeParkWriter(false),
+      pool: makeParkStatusPool("needs_attention"),
+      orgId: "org_a",
+      specId: "spec_a",
+      event: parkEvent,
+    });
+    expect(outcome).toEqual({ kind: "parked", newlyFlipped: false });
+    const route = parkOutcomeToRouteResult(outcome, {
+      specId: "spec_a",
+      source: "planner_replan",
+      message: "escalate",
+    });
+    expect(route.kind).toBe("parked");
+  });
+
+  it("false flip + cancelled readback → terminal_noop (never parked receipt)", async () => {
+    const outcome = await parkSpecNeedsAttention({
+      writer: makeParkWriter(false),
+      pool: makeParkStatusPool("cancelled"),
+      orgId: "org_a",
+      specId: "spec_a",
+      event: parkEvent,
+    });
+    expect(outcome).toEqual({ kind: "terminal_noop", status: "cancelled" });
+    const route = parkOutcomeToRouteResult(outcome, {
+      specId: "spec_a",
+      source: "writer_rework",
+      message: "escalate",
+    });
+    expect(route.kind).toBe("terminal_noop");
+  });
+
+  it("mapConflictDriveOutcome: parked → parking complete; terminal_noop → required", () => {
+    const parked = mapConflictDriveOutcome({
+      message: "conflict",
+      conflictRecovery: {
+        kind: "parked",
+        receipt: { kind: "needs_attention", specId: "s", source: "planner_replan" },
+        message: "parked loud",
+      },
+    });
+    expect(parked).toMatchObject({ kind: "needs_attention", parking: "complete" });
+
+    const noop = mapConflictDriveOutcome({
+      message: "conflict",
+      conflictRecovery: {
+        kind: "terminal_noop",
+        status: "cancelled",
+        message: "concurrent cancel",
+      },
+    });
+    expect(noop).toMatchObject({ kind: "needs_attention", parking: "required" });
+  });
+
+  it("settleWriterOwnedOrPark: terminal_noop retires without re-escalating", async () => {
+    let escalations = 0;
+    const settled = await settleWriterOwnedOrPark(
+      {
+        recoveryEvidence: undefined,
+        escalator: {
+          escalate: async () => {
+            escalations += 1;
+          },
+        },
+      },
+      "proj",
+      {
+        queueId: "q1",
+        runId: "run1",
+        specId: "spec1",
+        prUrl: "u",
+        prNumber: 1,
+        dependsOn: [],
+        priority: "tbd",
+        orderKey: 0,
+      },
+      { kind: "terminal_noop", status: "cancelled", message: "concurrent cancel" },
+      "owned msg",
+      "ctx",
+    );
+    expect(settled).toEqual({ reason: "needs_attention", message: "concurrent cancel" });
+    expect(escalations).toBe(0);
+  });
+
+  it("settleWriterOwnedOrPark: parked retires without re-escalating", async () => {
+    let escalations = 0;
+    const settled = await settleWriterOwnedOrPark(
+      {
+        recoveryEvidence: undefined,
+        escalator: {
+          escalate: async () => {
+            escalations += 1;
+          },
+        },
+      },
+      "proj",
+      {
+        queueId: "q1",
+        runId: "run1",
+        specId: "spec1",
+        prUrl: "u",
+        prNumber: 1,
+        dependsOn: [],
+        priority: "tbd",
+        orderKey: 0,
+      },
+      {
+        kind: "parked",
+        message: "parked",
+      },
+      "owned msg",
+      "ctx",
+    );
+    expect(settled).toEqual({ reason: "needs_attention", message: "parked" });
+    expect(escalations).toBe(0);
   });
 });
