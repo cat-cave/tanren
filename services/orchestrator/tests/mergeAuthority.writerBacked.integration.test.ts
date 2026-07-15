@@ -206,6 +206,17 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     expect(signals.reviewVerdict).toBe("approved");
     expect(signals.reviewedHeadSha).toBe("sha-A");
 
+    // gv-2 head rebind: a later approve on replacement head B supersedes A's receipt.
+    await appendReview("review.approved", {
+      headSha: "sha-B",
+      forgeReviewId: "10",
+      forgeReviewState: "approved",
+      forgeReviewUrl: "https://github.com/owner/repo/pull/1#pullrequestreview-10",
+    });
+    signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
+    expect(signals.reviewVerdict).toBe("approved");
+    expect(signals.reviewedHeadSha).toBe("sha-B");
+
     // a re-gate that now FAILS + the review flipped to changes_requested.
     await appendGateVerdict(false, "sha-A");
     await appendReview("review.changes_requested", { headSha: "sha-A" });

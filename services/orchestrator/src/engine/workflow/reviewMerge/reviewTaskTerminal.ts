@@ -64,20 +64,22 @@ export async function markReviewTaskDoneWithEvent(input: {
   // extension — collapses what used to be a separate `writer.append()` call
   // into ONE commit alongside the terminal pair.
   //
-  // Round-3 audit finding H-R3.2: the prior-event entry carries a stable
-  // idempotency key so a retried atomic write deduplicates the verdict event
-  // on (run_id, idempotency_key) instead of double-emitting. Key shape
-  // `${runId}:review:${verdict}` is INTENTIONALLY run+verdict only (first-wins
-  // finalize idempotency). A retry of THIS finalize call dedupes cleanly; a
-  // subsequent flip of the verdict (e.g. an explicit re-review with a
-  // DIFFERENT outcome) carries a distinct key and lands afresh.
+  // Round-3 audit finding H-R3.2 + gv-2 head rebind: the prior-event entry
+  // carries a stable idempotency key so a retried atomic write deduplicates
+  // the verdict event on (run_id, idempotency_key) instead of double-emitting.
   //
-  // The forge review id is NOT part of the key. Under append-if-absent the
-  // first successful commit wins: a contradictory second receipt for the same
-  // run+verdict is suppressed and the durable payload (including any forge
-  // receipt fields) remains that of the first winner. Callers that must
-  // re-publish on a new head emit a different terminal path (re-review /
-  // re-gate), not a second finalize of the same key.
+  // Key shape:
+  //   - no forge receipt (human/auto): `${runId}:review:${verdict}`
+  //     first-wins finalize; retry of THIS finalize dedupes; a verdict flip
+  //     (approve ↔ changes_requested) carries a distinct key and lands afresh.
+  //   - strict simulated forge receipt: `${runId}:review:${verdict}:${headSha}`
+  //     same-head retry remains idempotent; re-review on a replacement head
+  //     (writer push after approval, base-shift restack) lands a NEW durable
+  //     receipt. Land signals take LATEST by ts, so B supersedes A for land
+  //     authorization — A never authorizes B (exact-head bind).
+  //
+  // The forge review id is NOT part of the key (receipt id is observation,
+  // not identity of the terminal). No second receipt store; one event stream.
   const eventType = verdict === "approved" ? "review.approved" : "review.changes_requested";
   const forgeFields =
     forgePublication === undefined
@@ -89,6 +91,11 @@ export async function markReviewTaskDoneWithEvent(input: {
           headSha: forgePublication.headSha,
         };
   const effectiveReviewer = reviewer ?? forgePublication?.reviewerLogin;
+  // Head-bound key only when a forge receipt is present — human/auto omit it.
+  const idempotencyKey =
+    forgePublication === undefined
+      ? `${base.runId}:review:${verdict}`
+      : `${base.runId}:review:${verdict}:${forgePublication.headSha}`;
   const verdictEvent: PriorEventInput =
     verdict === "approved"
       ? {
@@ -100,7 +107,7 @@ export async function markReviewTaskDoneWithEvent(input: {
             ...(effectiveReviewer !== undefined && { reviewer: effectiveReviewer }),
             ...forgeFields,
           } as never,
-          idempotencyKey: `${base.runId}:review:${verdict}`,
+          idempotencyKey,
         }
       : {
           ...base,
@@ -112,7 +119,7 @@ export async function markReviewTaskDoneWithEvent(input: {
             ...(feedback !== undefined && { message: feedback }),
             ...forgeFields,
           } as never,
-          idempotencyKey: `${base.runId}:review:${verdict}`,
+          idempotencyKey,
         };
   await writer.updateTaskWithEvent({
     task: { taskId: base.taskId, transition: "done", outcome: "ok" },

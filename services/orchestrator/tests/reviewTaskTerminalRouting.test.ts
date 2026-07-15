@@ -84,7 +84,7 @@ describe("review task terminal routing (audit findings #6 + D2 — atomic 3-writ
     ]);
   });
 
-  it("approved + forge publication: binds forge id/state/url/head onto the same atomic review.approved", async () => {
+  it("approved + forge publication: binds forge id/state/url/head and head-bound idempotency key", async () => {
     const writer = new RecordingWriter();
     const headSha = "f".repeat(40);
 
@@ -118,7 +118,9 @@ describe("review task terminal routing (audit findings #6 + D2 — atomic 3-writ
           forgeReviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-9001",
           headSha,
         },
-        idempotencyKey: `${BASE.runId}:review:approved`,
+        // gv-2: forge receipt terminals key on run+verdict+head so re-review on a
+        // replacement head can supersede without a second receipt store.
+        idempotencyKey: `${BASE.runId}:review:approved:${headSha}`,
       },
     ]);
   });
