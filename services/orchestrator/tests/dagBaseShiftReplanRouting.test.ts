@@ -53,7 +53,11 @@ class RecordingPool {
     }
     if (text.includes("FROM runs") && text.includes("status IN")) {
       const live = this.liveRunsBySpec.get(String(params?.[0]));
-      return { rows: live === undefined ? [] : [live] };
+      // Mirror ACTIVE_OWNER_RUN_STATUSES (queued/running/paused) — halted never returns.
+      if (live === undefined || !["queued", "running", "paused"].includes(live.status)) {
+        return { rows: [] };
+      }
+      return { rows: [live] };
     }
     throw new Error(`unexpected pool query in replan-routing test: ${text}`);
   }
@@ -388,23 +392,63 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
 
     expect(recovery.kind).toBe("parked");
     expect(enqueuer.calls).toHaveLength(0);
-    expect(String((recovery as { message: string }).message)).toMatch(/terminal \(merged\)/u);
+    expect(String((recovery as { message: string }).message)).toMatch(/not a recoverable recovery source/u);
   });
 
-  it("FAIL-CLOSED: a cancelled spec cannot own recovery", async () => {
+  it("FAIL-CLOSED: halted / needs_attention / missing / unknown specs cannot own recovery", async () => {
+    for (const [specId, status] of [
+      ["spec_halted", "halted"],
+      ["spec_attn", "needs_attention"],
+      ["spec_cancelled", "cancelled"],
+      ["spec_unknown", "weird_status"],
+    ] as const) {
+      const pool = new RecordingPool();
+      pool.specStatusById.set(specId, status);
+      const eventStore = new RecordingEventStore();
+      const enqueuer = new RecordingEnqueuer();
+      const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+      const recovery = await router.routeBackToPlanner({
+        specId,
+        newContext: "re-plan non-recoverable",
+      });
+      expect(recovery.kind, status).toBe("parked");
+      expect(enqueuer.calls).toHaveLength(0);
+    }
+    // Missing row (no status map entry returns "open" by default in RecordingPool —
+    // force empty by overriding query for missing).
     const pool = new RecordingPool();
-    pool.specStatusById.set("spec_cancelled", "cancelled");
+    pool.specStatusById.set("__missing__", ""); // unused; override live path
+    const orig = pool.query.bind(pool);
+    pool.query = async (sql, params) => {
+      if (String(sql).includes("SELECT status FROM specs")) return { rows: [] };
+      return orig(sql, params);
+    };
     const eventStore = new RecordingEventStore();
     const enqueuer = new RecordingEnqueuer();
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+    const recovery = await router.routeBackToPlanner({
+      specId: "spec_absent",
+      newContext: "missing",
+    });
+    expect(recovery.kind).toBe("parked");
+    expect(String((recovery as { message: string }).message)).toMatch(/missing/u);
+  });
+
+  it("FAIL-CLOSED: a halted run is not an active owner for already_running", async () => {
+    const pool = new RecordingPool();
+    // Only a halted run exists — must not mint already_running ownership.
+    pool.liveRunsBySpec.set("spec_b", { run_id: "run_halted", status: "halted" });
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new AlreadyClaimedEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
     const recovery = await router.routeBackToPlanner({
-      specId: "spec_cancelled",
-      newContext: "re-plan a cancelled target",
+      specId: "spec_b",
+      newContext: "re-plan",
+      otherSpecId: "spec_a",
     });
 
     expect(recovery.kind).toBe("parked");
-    expect(enqueuer.calls).toHaveLength(0);
-    expect(String((recovery as { message: string }).message)).toMatch(/terminal \(cancelled\)/u);
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(true);
   });
 });

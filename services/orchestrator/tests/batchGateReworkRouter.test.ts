@@ -59,7 +59,10 @@ function makeStatusPool(
     }
     if (sql.includes("FROM runs") && sql.includes("status IN")) {
       const live = opts.liveRunsBySpec?.get(String(params?.[0]));
-      return { rows: live === undefined ? [] : [live], rowCount: live === undefined ? 0 : 1 };
+      if (live === undefined || !["queued", "running", "paused"].includes(live.status)) {
+        return { rows: [], rowCount: 0 };
+      }
+      return { rows: [live], rowCount: 1 };
     }
     // BEGIN/COMMIT/SET LOCAL no-ops.
     return { rows: [], rowCount: 0 };
@@ -212,7 +215,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
     });
 
     expect(recovery.kind).toBe("parked");
-    expect(String((recovery as { message: string }).message)).toMatch(/terminal \(merged\)/u);
+    expect(String((recovery as { message: string }).message)).toMatch(/not a recoverable recovery source/u);
   });
 
   it("ESCALATES to needs_attention (no further rework) at a FIXED POINT — the SAME gate error recurs", async () => {

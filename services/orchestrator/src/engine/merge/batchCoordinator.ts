@@ -24,6 +24,7 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
+import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
 import {
   driveBaseConflict,
   driveConflictCulprit,
@@ -103,19 +104,16 @@ export interface BatchMergeCoordinatorDeps {
   batchEvents: BatchMergeEventEmitter;
   /** §2c spec-escalator: parks irreconcilable specs at `needs_attention` (shared with native queue). */
   escalator: SpecEscalator;
-  /**
-   * Writer-rework router (v35 strand fix + v54 #56): a GATE-fail bisect culprit + a sustained infra
-   * hold both route to the WRITER (`settleBisectCulprit` / `escalateInfraHoldToWriter`). Prod wires it.
-   */
+  /** Writer-rework router (gate-fail bisect + sustained infra hold). Prod always wires it. */
   gateRework?: BatchGateReworkRouter;
-  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
+  /** ATOMICITY: event append + queue UPDATE in one transaction when wired. */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
-  /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
+  /** Durable hold-ceiling store (survives restart). Absent → in-memory fakes. */
   holdCeilingStore?: HoldCeilingStore;
-  /** Per-project max batch size resolver. Default → `DEFAULT_MAX_BATCH_SIZE`; prod reads `projects.config.maxBatchSize`. */
+  /** Settlement ownership readback. Absent ⇒ conflict parks fail-closed. */
+  recoveryEvidence?: RecoveryEvidencePort;
   resolveMaxBatchSize?: (projectId: string) => Promise<number>;
-  /** Test seam: the sleep between infra-error re-polls. Defaults to a real timer; a test injects a no-op/recording sleep so re-polls run instantly. */
   sleep?: (ms: number) => Promise<void>;
 }
 

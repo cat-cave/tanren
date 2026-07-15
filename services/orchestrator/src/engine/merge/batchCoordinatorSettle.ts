@@ -33,7 +33,7 @@ import {
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
 import { createLogger } from "../observability/logger.js";
-import { isDurableOwnedReceipt } from "./recoveryOwnership.js";
+import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
 
 const log = createLogger("batch-coordinator");
 
@@ -54,6 +54,12 @@ export interface BatchSettleDeps {
   /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs event + UPDATE in one transaction. */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
+  /**
+   * Settlement-time ownership readback. REQUIRED for conflict retirement in production
+   * (PgRecoveryEvidencePort). Absent ⇒ fail closed (park needs_attention) — never accept a
+   * typed receipt without store proof.
+   */
+  recoveryEvidence?: RecoveryEvidencePort;
 }
 
 /**
@@ -213,17 +219,16 @@ export async function settleDriveOutcome(
   }
 
   if (outcome.kind === "conflict") {
-    if (!isDurableOwnedReceipt(outcome.recovery, entry.specId)) {
-      const message =
-        `merge conflict recovery receipt is not durable for queue entry ${entry.specId}: ` + `${outcome.message}`;
-      await deps.escalator.escalate({ projectId, entry, message });
+    const verified = await verifyConflictOwnership(deps, entry, outcome.recovery, outcome.message);
+    if (!verified.ok) {
+      await deps.escalator.escalate({ projectId, entry, message: verified.message });
       await markDequeuedAfterEvent({
         queue: deps.queue,
         events: deps.events,
         projectId,
         entry,
         reason: "needs_attention",
-        message,
+        message: verified.message,
         tx: deps.tx,
       });
       await deps.recoverableDriveHolds?.reset(entry.queueId);
@@ -347,6 +352,36 @@ export async function driveConflictCulprit(
     return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
   }
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
+}
+
+/** Settlement-time ownership proof: port must be wired and must re-read an active owner run. */
+async function verifyConflictOwnership(
+  deps: BatchSettleDeps,
+  entry: MergeQueueEntry,
+  recovery: Extract<MergeDriveOutcome, { kind: "conflict" }>["recovery"],
+  driveMessage: string,
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  if (deps.recoveryEvidence === undefined) {
+    return {
+      ok: false,
+      message:
+        `merge conflict recovery cannot be verified for ${entry.specId}: no RecoveryEvidencePort is wired ` +
+        `(fail closed): ${driveMessage}`,
+    };
+  }
+  const evidence = await deps.recoveryEvidence.verifyOwnedReceipt({
+    expectedSpecId: entry.specId,
+    receipt: recovery,
+  });
+  if (evidence === undefined) {
+    return {
+      ok: false,
+      message:
+        `merge conflict recovery receipt failed settlement-time store readback for ${entry.specId}: ` +
+        `${driveMessage}`,
+    };
+  }
+  return { ok: true };
 }
 
 /** Assign an owner to every failed fresh merge drive before the stale entry retires. Shared with EventEmittingMergeCoordinator. */

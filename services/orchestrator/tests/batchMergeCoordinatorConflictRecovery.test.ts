@@ -15,6 +15,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch_conflict_recovery";
 
@@ -27,9 +28,12 @@ interface Harness {
   batchEvents: RecordingBatchMergeEventEmitter;
   escalator: RecordingSpecEscalator;
   gateRework: RecordingBatchGateReworkRouter;
+  evidence: ScriptedRecoveryEvidencePort;
 }
 
-function makeHarness(wireGateRework = true): Harness {
+function makeHarness(opts: { wireGateRework?: boolean; wireEvidence?: boolean } = {}): Harness {
+  const wireGateRework = opts.wireGateRework !== false;
+  const wireEvidence = opts.wireEvidence !== false;
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
   const checker = new InMemoryBatchChecker();
@@ -37,6 +41,7 @@ function makeHarness(wireGateRework = true): Harness {
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const escalator = new RecordingSpecEscalator();
   const gateRework = new RecordingBatchGateReworkRouter();
+  const evidence = new ScriptedRecoveryEvidencePort();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
@@ -45,10 +50,11 @@ function makeHarness(wireGateRework = true): Harness {
     batchEvents,
     escalator,
     ...(wireGateRework ? { gateRework } : {}),
+    ...(wireEvidence ? { recoveryEvidence: evidence } : {}),
     resolveMaxBatchSize: () => Promise.resolve(8),
     sleep: () => Promise.resolve(),
   });
-  return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework };
+  return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework, evidence };
 }
 
 function seed(h: Harness, specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): void {
@@ -196,7 +202,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
   });
 
   it("parks a failed fresh conflict re-gate at needs_attention when no rework router exists", async () => {
-    const h = makeHarness(false);
+    const h = makeHarness({ wireGateRework: false });
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
@@ -260,11 +266,12 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     ]);
   });
 
-  it("permits conflict retirement only with the resolver's durable planner receipt", async () => {
+  it("permits conflict retirement only after settlement-time store readback of the planner run", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
+    h.evidence.seedEnqueued("spec_b", "run_replan_b", "task_replan_b", "queued");
     h.runner.script(
       "run_spec_b",
       mapConflictDriveOutcome({
@@ -307,7 +314,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
   });
 
   it("parks a failed passing-batch prefix member when the writer router is absent", async () => {
-    const h = makeHarness(false);
+    const h = makeHarness({ wireGateRework: false });
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
@@ -322,7 +329,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
   });
 
   it("parks a bisected gate-fail culprit when the writer router assembly is absent", async () => {
-    const h = makeHarness(false);
+    const h = makeHarness({ wireGateRework: false });
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
@@ -342,6 +349,8 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
+    // Evidence exists only for the OTHER spec — queue entry is still spec_b.
+    h.evidence.seedEnqueued("spec_other_merged", "run_other", "task_other", "queued");
     h.runner.script(
       "run_spec_b",
       mapConflictDriveOutcome({
@@ -399,11 +408,142 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
         message: "forged bare already_running",
         conflictRecovery: {
           kind: "owned",
-          // Cast: the forge pretends an old-shape receipt slipped past typing.
           receipt: {
             kind: "planner_replan",
             specId: "spec_b",
             run: { kind: "already_running", runId: "" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+  });
+
+  it("FAIL-CLOSED: absent RecoveryEvidencePort parks even with a well-formed typed receipt", async () => {
+    const h = makeHarness({ wireEvidence: false });
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "typed receipt without verifier",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_b" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(h.escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
+  });
+
+  it("FAIL-CLOSED: halted run is not active owner evidence at settlement", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.evidence.seed("spec_b", { runId: "run_halted_b", status: "halted" });
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "already_running on halted",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "already_running", runId: "run_halted_b" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+  });
+
+  it("FAIL-CLOSED: run-to-spec mismatch at settlement", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.evidence.seed("spec_b", { runId: "run_x", status: "running", wrongSpecId: "spec_other" });
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "run belongs to another spec",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "already_running", runId: "run_x" },
+          },
+        },
+      }),
+    );
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+  });
+
+  it("FAIL-CLOSED: terminal run after mint-before-settle (evidence expires)", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.evidence.seedEnqueued("spec_b", "run_replan_b", "task_b", "queued");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "was owned at mint",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_b" },
+          },
+        },
+      }),
+    );
+    // Expire between mint and settle: reject all readbacks.
+    h.evidence.rejectAll = true;
+
+    await h.coordinator.coordinate(PROJECT);
+
+    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+  });
+
+  it("FAIL-CLOSED: forged enqueued receipt with wrong plannerTaskId", async () => {
+    const h = makeHarness();
+    seed(h, "spec_a");
+    seed(h, "spec_b");
+    h.checker.baseConflictWhenContains("spec_b");
+    h.evidence.seedEnqueued("spec_b", "run_replan_b", "task_real", "queued");
+    h.runner.script(
+      "run_spec_b",
+      mapConflictDriveOutcome({
+        message: "forged planner task",
+        conflictRecovery: {
+          kind: "owned",
+          receipt: {
+            kind: "planner_replan",
+            specId: "spec_b",
+            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_forged" },
           },
         },
       }),
@@ -421,6 +561,7 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     seed(h, "spec_c");
     seed(h, "spec_d");
     h.checker.conflictWhenContains("spec_c");
+    h.evidence.seedEnqueued("spec_c", "run_replan_c", "task_c", "queued");
     h.runner.script(
       "run_spec_c",
       mapConflictDriveOutcome({

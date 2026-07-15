@@ -26,6 +26,7 @@ import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBu
 import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
 import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
+import { PgRecoveryEvidencePort } from "./recoveryEvidencePg.js";
 
 /**
  * apex v87: local both-or-neither settle (`PgMergeSettleTransaction`) opens
@@ -111,6 +112,9 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
     // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.
     holdCeilingStore: new PgHoldCeilingStore(deps.pool),
+    // Settlement-time ownership readback: prove receipt runId/replanRunId still owns the
+    // exact queue entry's spec in an active status before conflict dequeue.
+    recoveryEvidence: new PgRecoveryEvidencePort(deps.pool),
     resolveMaxBatchSize: (projectId) => resolveMaxBatchSize(deps.pool, projectId),
   });
 }

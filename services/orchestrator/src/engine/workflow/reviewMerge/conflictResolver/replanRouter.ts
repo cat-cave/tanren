@@ -43,8 +43,8 @@ import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
 import {
-  findLiveNonterminalRunForSpec,
-  isRecoveryTerminalSpecStatus,
+  findActiveOwnerRunForSpec,
+  isRecoverableSourceSpecStatus,
   loadSpecStatusForRecovery,
 } from "../../../merge/recoveryOwnership.js";
 
@@ -238,13 +238,14 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     //     re-open must COMMIT before the run-create's separate-connection claim reads it —
     //     the same ordering the recovery `replan_with_steering` action documents). When no
     //     enqueuer is wired, fail closed by parking rather than fabricating a live run.
-    // Fail closed before reopen/enqueue: a merged/cancelled base-side target cannot own recovery.
+    // Fail closed: only open/in_flight/review may own recovery (missing/unknown/terminal park).
     const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.specId);
-    if (existingStatus !== undefined && isRecoveryTerminalSpecStatus(existingStatus)) {
-      const message = await this.escalateEnqueueFailure(
-        input,
-        `spec is terminal (${existingStatus}) and cannot own a recovery re-plan`,
-      );
+    if (existingStatus === undefined || !isRecoverableSourceSpecStatus(existingStatus)) {
+      const detail =
+        existingStatus === undefined
+          ? "spec status is missing"
+          : `spec status '${existingStatus}' is not a recoverable recovery source`;
+      const message = await this.escalateEnqueueFailure(input, detail);
       return {
         kind: "parked",
         receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
@@ -275,7 +276,7 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     if (enqueue.outcome === "no-live-run") {
       const message = await this.escalateEnqueueFailure(
         input,
-        "SpecNotRunnableError without an independently verified live nonterminal run",
+        "SpecNotRunnableError without an independently verified active owner run (queued/running/paused)",
       );
       return {
         kind: "parked",
@@ -376,19 +377,19 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       });
       return { outcome: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId };
     } catch (error) {
-      // SpecNotRunnableError is NEVER ownership by itself — independently prove a live run.
+      // SpecNotRunnableError is NEVER ownership by itself — independently prove an ACTIVE owner run.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findLiveNonterminalRunForSpec(this.deps.pool, input.specId);
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, input.specId);
         if (live !== undefined) {
           log.warn(
-            "re-plan enqueue found the re-opened spec already claimed; verified a live nonterminal run owns it",
+            "re-plan enqueue found the re-opened spec already claimed; verified an active owner run",
             { specId: input.specId, runId: live.runId, status: live.status },
             error,
           );
           return { outcome: "already-running", runId: live.runId };
         }
         log.error(
-          "re-plan enqueue raised SpecNotRunnableError but no live nonterminal run exists — fail closed",
+          "re-plan enqueue raised SpecNotRunnableError but no active owner run exists — fail closed",
           { specId: input.specId, reportedStatus: error.status },
           error,
         );

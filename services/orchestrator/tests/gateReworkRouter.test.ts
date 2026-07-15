@@ -21,16 +21,21 @@ const PROJECT = "project_test";
 const RUN = "run_dependent";
 const SPEC = "spec_b";
 
-/** A no-op pool: the audit-D-R3.2 sweep routes the router's spec-status writes through the
- * REQUIRED writer; the pool is only retained on the interface for the (unused-by-tests)
- * fallback shape. */
+/** Pool for recovery allowlist + active-owner reads (defaults: open spec, no owner run). */
 // eslint-disable-next-line @typescript-eslint/require-await
-const noopPoolQuery = async (): Promise<{ rows: unknown[]; rowCount: number }> => ({ rows: [], rowCount: 0 });
+const recoveryPoolQuery = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
+  const sql = String(text);
+  if (sql.includes("SELECT status FROM specs")) {
+    return { rows: [{ status: "open" }], rowCount: 1 };
+  }
+  // Active owner runs / other SELECTs: empty by default.
+  return { rows: [], rowCount: 0 };
+};
 function makeNoopPool(): pg.Pool {
   return {
-    query: noopPoolQuery,
+    query: recoveryPoolQuery,
     // eslint-disable-next-line @typescript-eslint/require-await
-    connect: async () => ({ query: noopPoolQuery, release: () => {} }),
+    connect: async () => ({ query: recoveryPoolQuery, release: () => {} }),
   } as unknown as pg.Pool;
 }
 

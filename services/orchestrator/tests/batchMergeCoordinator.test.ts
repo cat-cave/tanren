@@ -15,6 +15,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch";
 
@@ -27,6 +28,7 @@ interface Harness {
   batchEvents: RecordingBatchMergeEventEmitter;
   escalator: RecordingSpecEscalator;
   gateRework: RecordingBatchGateReworkRouter;
+  evidence: ScriptedRecoveryEvidencePort;
 }
 
 function makeHarness(maxBatchSize = 5): Harness {
@@ -37,6 +39,7 @@ function makeHarness(maxBatchSize = 5): Harness {
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const escalator = new RecordingSpecEscalator();
   const gateRework = new RecordingBatchGateReworkRouter();
+  const evidence = new ScriptedRecoveryEvidencePort();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
@@ -45,11 +48,12 @@ function makeHarness(maxBatchSize = 5): Harness {
     batchEvents,
     escalator,
     gateRework,
+    recoveryEvidence: evidence,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     // Run the bounded infra-error retries instantly (no real backoff in tests).
     sleep: () => Promise.resolve(),
   });
-  return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework };
+  return { coordinator, queue, runner, checker, events, batchEvents, escalator, gateRework, evidence };
 }
 
 function seed(h: Harness, specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): void {
@@ -480,6 +484,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
     // The resolver owns the work, so retiring this stale entry is safe.
+    h.evidence.seed("spec_b", { runId: "run_live", status: "running" });
     h.runner.script("run_spec_b", {
       kind: "conflict",
       message: "resolver routed a bounded replan",

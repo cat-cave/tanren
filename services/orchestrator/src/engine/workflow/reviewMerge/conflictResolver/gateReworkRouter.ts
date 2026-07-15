@@ -35,8 +35,8 @@ import { buildGateReworkSteering } from "../../../merge/batchGateReworkRouter.js
 import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
 import {
-  findLiveNonterminalRunForSpec,
-  isRecoveryTerminalSpecStatus,
+  findActiveOwnerRunForSpec,
+  isRecoverableSourceSpecStatus,
   loadSpecStatusForRecovery,
 } from "../../../merge/recoveryOwnership.js";
 import { atReplanFixedPoint, gateErrorSignature, type ReplanEnqueuer } from "./replanRouter.js";
@@ -97,11 +97,12 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
     }
 
     const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.specId);
-    if (existingStatus !== undefined && isRecoveryTerminalSpecStatus(existingStatus)) {
-      const message = await this.escalateEnqueueFailure(
-        input,
-        `spec is terminal (${existingStatus}) and cannot own writer rework`,
-      );
+    if (existingStatus === undefined || !isRecoverableSourceSpecStatus(existingStatus)) {
+      const detail =
+        existingStatus === undefined
+          ? "spec status is missing"
+          : `spec status '${existingStatus}' is not a recoverable recovery source`;
+      const message = await this.escalateEnqueueFailure(input, detail);
       return {
         kind: "parked",
         receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
@@ -136,12 +137,12 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         },
       };
     } catch (error) {
-      // SpecNotRunnableError is NEVER ownership alone — independently prove a live run.
+      // SpecNotRunnableError is NEVER ownership alone — independently prove an ACTIVE owner run.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findLiveNonterminalRunForSpec(this.deps.pool, input.specId);
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, input.specId);
         if (live !== undefined) {
           log.warn(
-            "re-gate gate-fail rework found the spec already claimed; verified a live nonterminal run owns it",
+            "re-gate gate-fail rework found the spec already claimed; verified an active owner run",
             { specId: input.specId, runId: live.runId, status: live.status },
             error,
           );
@@ -156,13 +157,13 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
           };
         }
         log.error(
-          "re-gate gate-fail rework SpecNotRunnableError without a live nonterminal run — fail closed",
+          "re-gate gate-fail rework SpecNotRunnableError without an active owner run — fail closed",
           { specId: input.specId, reportedStatus: error.status },
           error,
         );
         const message = await this.escalateEnqueueFailure(
           input,
-          "SpecNotRunnableError without an independently verified live nonterminal run",
+          "SpecNotRunnableError without an independently verified active owner run (queued/running/paused)",
         );
         return {
           kind: "parked",

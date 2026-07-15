@@ -23,8 +23,8 @@ import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { alertRetryAfterMs } from "./retrySchedule.js";
 import { createLogger } from "../observability/logger.js";
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
-import { settleFailedDrive } from "./batchCoordinatorSettle.js";
-import { isDurableOwnedReceipt } from "./recoveryOwnership.js";
+import { settleDriveOutcome, settleFailedDrive } from "./batchCoordinatorSettle.js";
+import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
 
 const log = createLogger("merge-coordinator");
 
@@ -105,6 +105,11 @@ export interface MergeCoordinatorDeps {
    * Absent ⇒ failed drives park at needs_attention (fail closed, never invent ownership).
    */
   gateRework?: BatchGateReworkRouter;
+  /**
+   * Settlement-time ownership readback. Production wires PgRecoveryEvidencePort.
+   * Absent ⇒ conflict parks fail closed (never accept a bare typed receipt).
+   */
+  recoveryEvidence?: RecoveryEvidencePort;
 }
 
 /**
@@ -373,51 +378,24 @@ export class EventEmittingMergeCoordinator implements MergeCoordinator {
       return { holdReason: "merge_retry", retryAfterMs: held.retryAfterMs };
     }
 
-    if (outcome.kind === "failed") {
-      await settleFailedDrive(
-        {
-          queue: this.deps.queue,
-          events: this.deps.events,
-          escalator: this.deps.escalator,
-          ...(this.deps.gateRework !== undefined && { gateRework: this.deps.gateRework }),
-          ...(this.deps.tx !== undefined && { tx: this.deps.tx }),
-          recoverableDriveHolds: this.recoverableDriveHolds,
-        },
-        projectId,
-        entry,
-        outcome.message,
-      );
-      return { dequeuedSpecId: entry.specId };
-    }
-
-    // Remaining kind is `conflict` — retires only with a durable owned receipt for THIS entry.
-    const recovery = outcome.recovery;
-    if (!isDurableOwnedReceipt(recovery, entry.specId)) {
-      const message =
-        `merge conflict recovery receipt is not durable for queue entry ${entry.specId}: ` + `${outcome.message}`;
-      await this.deps.escalator.escalate({ projectId, entry, message });
-      await markDequeuedAfterEvent({
+    // failed / conflict: share batch settle policy (writer rework + evidence readback).
+    if (outcome.kind === "failed" || outcome.kind === "conflict") {
+      const settleDeps = {
         queue: this.deps.queue,
         events: this.deps.events,
-        projectId,
-        entry,
-        reason: "needs_attention",
-        message,
-        tx: this.deps.tx,
-      });
-      await this.recoverableDriveHolds.reset(entry.queueId);
+        escalator: this.deps.escalator,
+        ...(this.deps.gateRework !== undefined && { gateRework: this.deps.gateRework }),
+        ...(this.deps.tx !== undefined && { tx: this.deps.tx }),
+        recoverableDriveHolds: this.recoverableDriveHolds,
+        ...(this.deps.recoveryEvidence !== undefined && { recoveryEvidence: this.deps.recoveryEvidence }),
+      };
+      if (outcome.kind === "failed") {
+        await settleFailedDrive(settleDeps, projectId, entry, outcome.message);
+      } else {
+        await settleDriveOutcome(settleDeps, projectId, entry, outcome);
+      }
       return { dequeuedSpecId: entry.specId };
     }
-    await this.recoverableDriveHolds.reset(entry.queueId);
-    await markDequeuedAfterEvent({
-      queue: this.deps.queue,
-      events: this.deps.events,
-      projectId,
-      entry,
-      reason: "conflict",
-      message: outcome.message,
-      tx: this.deps.tx,
-    });
     return { dequeuedSpecId: entry.specId };
   }
 

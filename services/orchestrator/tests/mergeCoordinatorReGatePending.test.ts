@@ -25,6 +25,7 @@ import {
   RecordingMergeQueueEventEmitter,
   RecordingSpecEscalator,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 /** A runner that returns a SCRIPTED outcome per drive, in order (so a hold-then-merge sequences). */
 class ScriptedMergeRunner implements MergeRunner {
@@ -57,18 +58,21 @@ function harness(): {
   queue: InMemoryMergeQueueModel;
   runner: ScriptedMergeRunner;
   events: RecordingMergeQueueEventEmitter;
+  evidence: ScriptedRecoveryEvidencePort;
   coordinator: EventEmittingMergeCoordinator;
 } {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
   const events = new RecordingMergeQueueEventEmitter();
+  const evidence = new ScriptedRecoveryEvidencePort();
   const coordinator = new EventEmittingMergeCoordinator({
     queue,
     runner,
     events,
     escalator: new RecordingSpecEscalator(),
+    recoveryEvidence: evidence,
   });
-  return { queue, runner, events, coordinator };
+  return { queue, runner, events, evidence, coordinator };
 }
 
 const seed = (queue: InMemoryMergeQueueModel, runId: string, specId: string): void =>
@@ -139,8 +143,9 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
   });
 
   it("a genuine terminal `conflict` still DEQUEUES (it hands off to autonomous re-plan) — only the not-yet-terminal gate is recoverable", async () => {
-    const { queue, runner, coordinator } = harness();
+    const { queue, runner, evidence, coordinator } = harness();
     seed(queue, "run_c", "spec_c");
+    evidence.seedEnqueued("spec_c", "run_replan_c", "task_replan_c", "queued");
     runner.script("run_c", [
       {
         kind: "conflict",

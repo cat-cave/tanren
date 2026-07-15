@@ -135,7 +135,7 @@ describe("buildReplanEnqueuer — v55 #59 plane-split fix", () => {
         specId: "spec_rework",
         orgId: ORG,
         status: "open",
-        notFromStatuses: ["merged"],
+        notFromStatuses: ["merged", "halted", "cancelled", "needs_attention"],
       },
     ]);
     // The run-create was routed through the writer too (not in-process `createQueuedRunFromSpec`).

@@ -45,11 +45,14 @@ export function buildReplanEnqueuer(_pool: pg.Pool, runStateWriter: RunStateWrit
         orgId: input.orgId,
         steeringNote: input.steeringNote,
       });
+      // Fail closed: never resurrect terminal-blocked statuses (walkerPg terminal_blocked).
+      // Allowlist of recoverable sources is enforced at the router; this guard is the
+      // enqueuer's last line so a stray caller cannot reopen merged/halted/cancelled/needs_attention.
       await runStateWriter.setSpecStatus({
         specId: input.specId,
         orgId: input.orgId,
         status: input.reopenStatus,
-        notFromStatuses: ["merged"],
+        notFromStatuses: ["merged", "halted", "cancelled", "needs_attention"],
       });
       // (2) Enqueue the re-plan run — the never-discard re-author on the new base.
       const actor: ActorContext = {

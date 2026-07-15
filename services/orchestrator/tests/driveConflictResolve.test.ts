@@ -188,14 +188,28 @@ function replanRoutingResolver(
 ): DriveConflictResolveDeps["buildResolver"] {
   return () =>
     (async () => {
+      // Recovery allowlist needs open/in_flight/review; empty status would park.
+      const pool = {
+        async query(sql: string) {
+          if (String(sql).includes("SELECT status FROM specs")) {
+            return { rows: [{ status: "in_flight" }] };
+          }
+          return { rows: [] };
+        },
+      } as never;
       const router = new SpecStatusReplanRouter({
-        pool: { query: async () => ({ rows: [] }) } as never,
+        pool,
         orgId: ORG_ID,
         eventStore,
         runId: FACTS.runId,
         projectId: FACTS.projectId,
         enqueuer,
         priorReplans: { signatures: async () => [] },
+        // Required writer for escalate paths; happy-path enqueue uses the enqueuer only.
+        runStateWriter: {
+          setSpecStatus: async () => {},
+          updateSpecWithEvent: async () => {},
+        } as never,
       });
       const recovery = await router.routeBackToPlanner({
         specId: FACTS.specId,

@@ -44,8 +44,8 @@ import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/re
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { createLogger } from "../observability/logger.js";
 import {
-  findLiveNonterminalRunForSpec,
-  isRecoveryTerminalSpecStatus,
+  findActiveOwnerRunForSpec,
+  isRecoverableSourceSpecStatus,
   loadSpecStatusForRecovery,
 } from "./recoveryOwnership.js";
 
@@ -128,12 +128,12 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     }
 
     const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.culprit.specId);
-    if (existingStatus !== undefined && isRecoveryTerminalSpecStatus(existingStatus)) {
-      const message = await this.escalateEnqueueFailure(
-        orgId,
-        input,
-        new Error(`spec is terminal (${existingStatus}) and cannot own writer rework`),
-      );
+    if (existingStatus === undefined || !isRecoverableSourceSpecStatus(existingStatus)) {
+      const detail =
+        existingStatus === undefined
+          ? "spec status is missing"
+          : `spec status '${existingStatus}' is not a recoverable recovery source`;
+      const message = await this.escalateEnqueueFailure(orgId, input, new Error(detail));
       return {
         kind: "parked",
         receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
@@ -164,12 +164,12 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         },
       };
     } catch (error) {
-      // SpecNotRunnableError is NEVER ownership alone — independently prove a live run.
+      // SpecNotRunnableError is NEVER ownership alone — independently prove an ACTIVE owner run.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findLiveNonterminalRunForSpec(this.deps.pool, input.culprit.specId);
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, input.culprit.specId);
         if (live !== undefined) {
           log.warn(
-            "gate-fail rework found the spec already claimed; verified a live nonterminal run owns it",
+            "gate-fail rework found the spec already claimed; verified an active owner run",
             { specId: input.culprit.specId, runId: live.runId, status: live.status },
             error,
           );
@@ -184,14 +184,14 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
           };
         }
         log.error(
-          "gate-fail rework SpecNotRunnableError without a live nonterminal run — fail closed",
+          "gate-fail rework SpecNotRunnableError without an active owner run — fail closed",
           { specId: input.culprit.specId, reportedStatus: error.status },
           error,
         );
         const message = await this.escalateEnqueueFailure(
           orgId,
           input,
-          new Error("SpecNotRunnableError without an independently verified live nonterminal run"),
+          new Error("SpecNotRunnableError without an independently verified active owner run (queued/running/paused)"),
         );
         return {
           kind: "parked",

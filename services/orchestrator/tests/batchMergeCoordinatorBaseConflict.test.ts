@@ -24,6 +24,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch";
 
@@ -35,6 +36,7 @@ interface Harness {
   events: RecordingMergeQueueEventEmitter;
   batchEvents: RecordingBatchMergeEventEmitter;
   escalator: RecordingSpecEscalator;
+  evidence: ScriptedRecoveryEvidencePort;
 }
 
 function makeHarness(maxBatchSize = 5): Harness {
@@ -44,17 +46,19 @@ function makeHarness(maxBatchSize = 5): Harness {
   const events = new RecordingMergeQueueEventEmitter();
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const escalator = new RecordingSpecEscalator();
+  const evidence = new ScriptedRecoveryEvidencePort();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
     checker,
+    recoveryEvidence: evidence,
     events,
     batchEvents,
     escalator,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     sleep: () => Promise.resolve(),
   });
-  return { coordinator, queue, runner, checker, events, batchEvents, escalator };
+  return { coordinator, queue, runner, checker, events, batchEvents, escalator, evidence };
 }
 
 function seed(h: Harness, specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): void {
@@ -113,6 +117,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
     // The drive returns the recoverable `conflict` (the resolver re-readies the run for re-execution).
+    h.evidence.seedEnqueued("spec_b", "run_replan_b1", "task_replan_b1", "queued");
     h.runner.script("run_spec_b", {
       kind: "conflict",
       message: "rebase deferred; re-ready pending",
@@ -266,6 +271,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     // The resolver routed a BOUNDED replan (a fresh run re-authors the work on the new base) →
     // the recoverable `conflict` drive outcome. Retiring the stale entry is now correct BECAUSE
     // the resolver actually ran — unlike the old bare dequeue that had no re-drive owner.
+    h.evidence.seedEnqueued("spec_b", "run_replan_b2", "task_replan_b2", "queued");
     h.runner.script("run_spec_b", {
       kind: "conflict",
       message: "resolver routed a bounded replan",

@@ -19,6 +19,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MergeDriveOutcome, MergeQueueEntry, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
 import { EventEmittingMergeCoordinator, markDequeuedAfterEvent } from "../src/engine/merge/coordinator.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 import {
   MissingGithubCredentialRefError,
   NoGithubCredentialConfiguredError,
@@ -88,18 +89,21 @@ function harness(): {
   queue: InMemoryMergeQueueModel;
   runner: ThrowingMergeRunner;
   events: RecordingMergeQueueEventEmitter;
+  evidence: ScriptedRecoveryEvidencePort;
   coordinator: EventEmittingMergeCoordinator;
 } {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ThrowingMergeRunner();
   const events = new RecordingMergeQueueEventEmitter();
+  const evidence = new ScriptedRecoveryEvidencePort();
   const coordinator = new EventEmittingMergeCoordinator({
     queue,
     runner,
     events,
     escalator: new RecordingSpecEscalator(),
+    recoveryEvidence: evidence,
   });
-  return { queue, runner, events, coordinator };
+  return { queue, runner, events, evidence, coordinator };
 }
 
 describe("EventEmittingMergeCoordinator — transient merge-drive throw → infra-hold (no strand)", () => {
@@ -249,8 +253,9 @@ describe("EventEmittingMergeCoordinator — transient merge-drive throw → infr
   });
 
   it("keeps a conflict claim active when merge.dequeued append fails before settlement", async () => {
-    const { queue, runner, events, coordinator } = harness();
+    const { queue, runner, events, evidence, coordinator } = harness();
     queue.seed({ runId: "run_split", specId: "spec_split", dependsOn: [], priority: "tbd" });
+    evidence.seedEnqueued("spec_split", "run_replan_split", "task_replan_split", "queued");
     runner.returnFor("run_split", {
       kind: "conflict",
       message: "resolver routed replan",
