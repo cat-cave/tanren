@@ -106,6 +106,38 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
     expect(state.message).toBe("fix it");
   });
 
+  it("gv-2: binds complete forge publication from review.approved", () => {
+    const headSha = "a".repeat(40);
+    const state = reviewMergeStateFromEvents([
+      ev("review.approved", {
+        prUrl: "u",
+        prNumber: 7,
+        reviewer: "reviewer-bot",
+        forgeReviewId: "9001",
+        forgeReviewState: "approved",
+        forgeReviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-9001",
+        headSha,
+      }),
+    ]);
+    expect(state.phase).toBe("approved");
+    expect(state.forgePublication?.complete).toBe(true);
+    expect(state.forgePublication?.forgeReviewId).toBe("9001");
+    expect(state.forgePublication?.headSha).toBe(headSha);
+  });
+
+  it("gv-2: incomplete forge fields are never complete (loud UI path)", () => {
+    const state = reviewMergeStateFromEvents([
+      ev("review.approved", {
+        prUrl: "u",
+        prNumber: 7,
+        forgeReviewId: "9001",
+        // missing state/url/head
+      }),
+    ]);
+    expect(state.forgePublication?.complete).toBe(false);
+    expect(state.forgePublication?.forgeReviewId).toBe("9001");
+  });
+
   it("surfaces a merge conflict as a recoverable phase", () => {
     const state = reviewMergeStateFromEvents([
       ev("merge.queued", { prUrl: "u", prNumber: 7, integration: "direct_merge" }),

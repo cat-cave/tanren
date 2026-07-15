@@ -71,11 +71,22 @@ export const ReviewRequestedPayload = z
   })
   .strict();
 
+// gv-2 forge publication fields (strict simulated review): optional so human /
+// auto paths remain valid; when present they are the durable exact-head receipt
+// bound onto the same terminal review.* event (no second audit store).
+const ForgeReviewPublicationFields = {
+  forgeReviewId: z.string().min(1).optional(),
+  forgeReviewState: z.enum(["approved", "changes_requested"]).optional(),
+  forgeReviewUrl: z.string().min(1).optional(),
+  headSha: z.string().min(1).optional(),
+};
+
 export const ReviewApprovedPayload = z
   .object({
     prUrl: z.string(),
     prNumber: z.number().int(),
     reviewer: z.string().optional(),
+    ...ForgeReviewPublicationFields,
   })
   .strict();
 
@@ -85,6 +96,7 @@ export const ReviewChangesRequestedPayload = z
     prNumber: z.number().int(),
     reviewer: z.string().optional(),
     message: z.string().optional(),
+    ...ForgeReviewPublicationFields,
   })
   .strict();
 

@@ -36,6 +36,13 @@ export {
   type SimulatedReviewResult,
 } from "./simulatedReviewer.js";
 export {
+  assertStrictForgeReceipt,
+  resolveDistinctSimulatedReviewerToken,
+  SimulatedReviewPublicationError,
+  strictReviewEventFor,
+  type ForgeReviewPublication,
+} from "./simulatedReviewPublication.js";
+export {
   mergeForRun,
   dispatchedIntegrationFor,
   type MergeAuthorityBundle,

@@ -2,6 +2,7 @@ import type { SensitivityRule } from "./sensitivity.js";
 import { costSensitivityRules } from "./sensitivityRules.cost.js";
 import { integrationProvisioningSensitivityRules } from "./sensitivityRules.integrations.js";
 import { auditBaselineSensitivityRules, auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
+import { reviewSensitivityRules } from "./sensitivityRules.review.js";
 
 // Infrastructure-and-integration sensitivity rules, split out of sensitivityRules.ts for the 500-line
 // cap (role rules stay there). Runtime substrate + cost/usage telemetry + the integration surface.
@@ -192,28 +193,9 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["disposition", "public"],
   ]),
 
-  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts (500-line cap). reviews:
-  ...rulesFor("review.requested", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["reviewers", "public"],
-    ["reviewers[]", "public"],
-  ]),
-  ...rulesFor("review.approved", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["reviewer", "public"],
-  ]),
-  ...rulesFor("review.auto_approved", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-  ]),
-  ...rulesFor("review.changes_requested", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["reviewer", "public"],
-    ["message", "public"],
-  ]),
+  // Flaky detection + quarantine rules live in sensitivityRules.ciIntel.ts (500-line cap).
+  // Review rules (incl. gv-2 forge receipt fields) live in sensitivityRules.review.ts.
+  ...reviewSensitivityRules,
   // merge stage — PR identifiers + integration mode + prose, all public. `merge.scheduled` (v67/v69) shares the merge.queued shape.
   ...["merge.scheduled", "merge.queued"].flatMap((n) =>
     rulesFor(n, [
