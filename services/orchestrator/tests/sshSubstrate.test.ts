@@ -7,6 +7,7 @@ import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import {
   buildSshExecCommand,
+  generateEd25519KeyPair,
   hostKeyFingerprintMatches,
   normalizeHostKeyFingerprint,
   sshSha256Fingerprint,
@@ -118,9 +119,16 @@ describe("SSH substrate contract", () => {
     // Generate a real ed25519 host key, pin its fingerprint, and confirm the
     // substrate's hostVerifier accepts the SHA256 the server would present and
     // rejects a different key's SHA256 — no blind trust.
+    //
+    // Routed through the production `generateEd25519KeyPair` helper (not raw
+    // `utils.generateKeyPairSync`) because ssh2@1.17.0 intermittently (~0.36%)
+    // strips a leading `0x00` byte from the ed25519 point, emitting a malformed
+    // 31-byte OpenSSH public key that breaks the `parseKey`→`getPublicSSH`
+    // round-trip this test exercises. The helper validates that round-trip and
+    // regenerates on failure, so a malformed key never reaches the assertions.
     const { utils } = await import("ssh2");
-    const hostKey = utils.generateKeyPairSync("ed25519");
-    const parsed = utils.parseKey(hostKey.public);
+    const hostKey = generateEd25519KeyPair();
+    const parsed = utils.parseKey(hostKey.publicKey);
     if (parsed instanceof Error) {
       throw parsed;
     }
@@ -128,7 +136,7 @@ describe("SSH substrate contract", () => {
     // With `hostHash: "sha256"`, ssh2 hands the verifier the HEX digest of the
     // server's public-SSH blob (see ssh2 client.js). Reproduce that exact input.
     const presented = createHash("sha256").update(parsed.getPublicSSH()).digest("hex");
-    const otherKey = utils.parseKey(utils.generateKeyPairSync("ed25519").public);
+    const otherKey = utils.parseKey(generateEd25519KeyPair().publicKey);
     if (otherKey instanceof Error) {
       throw otherKey;
     }
