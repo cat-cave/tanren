@@ -1,10 +1,7 @@
 // Scripted RecoveryEvidencePort for unit tests — never fabricates beyond the script.
 
 import type { ConflictRecoveryReceipt } from "../../src/engine/contracts/conflictResolution.js";
-import type {
-  RecoveryEvidencePort,
-  RecoveryRunEvidence,
-} from "../../src/engine/merge/recoveryOwnership.js";
+import type { RecoveryEvidencePort, RecoveryRunEvidence } from "../../src/engine/merge/recoveryOwnership.js";
 import { hasStructuralOwnedReceiptShape, isActiveOwnerRunStatus } from "../../src/engine/merge/recoveryOwnership.js";
 
 export class ScriptedRecoveryEvidencePort implements RecoveryEvidencePort {

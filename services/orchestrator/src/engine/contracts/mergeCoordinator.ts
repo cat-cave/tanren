@@ -286,7 +286,6 @@ export interface MergeQueueModel {
    */
   markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void>;
 
-
   /**
    * SUPERSEDE the active (queued/merging) merge-queue entry of a PRIOR run that a
    * fresh percolation re-execution replaces (autonomy-engine.md §2c). Finds the

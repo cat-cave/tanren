@@ -1,17 +1,5 @@
-// Orchestration tests for the intent-preserving conflict resolver
-// (engine/workflow/reviewMerge/conflictResolver/resolver.ts). Every seam is a
-// fake under tests/ — NO real LLM/runner/DB. They prove the §2b behavior:
-//
-//   - a two-spec conflict → the resolver is invoked with BOTH specs' intent +
-//     the DAG edge → the resolution is applied → the re-gate runs → it PUBLISHES
-//     and returns { resolved: true } (the dispatcher then proceeds to merge);
-//   - the IRRECONCILABLE path routes ONE spec back to the planner with the
-//     other's change as context (NOT dropped, NOT merged) and returns
-//     { resolved: false };
-//   - a resolution whose RE-GATE FAILS does NOT publish/merge — it routes the
-//     merging spec back to the planner (intent stays alive) and emits the
-//     irreconcilable event with fromFailedReGate=true;
-//   - every step emits its inspectable event.
+// Intent-preserving conflict resolver unit tests (engine/workflow/reviewMerge/conflictResolver).
+// Seams are fakes under tests/ — no real LLM/runner/DB.
 
 import { describe, expect, it } from "vitest";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -97,6 +85,16 @@ function fakeReGate(verdict: ReGateVerdict): ResolvedTreeReGate {
   return { reGate: async () => verdict };
 }
 
+const ownedEnqueued = (kind: "planner_replan" | "writer_rework", specId: string) =>
+  ({
+    kind: "owned" as const,
+    receipt: {
+      kind,
+      specId,
+      run: { kind: "enqueued" as const, replanRunId: "run_r", plannerTaskId: "task_r" },
+    },
+  }) as const;
+
 function recordingReplan(): ReplanRouter & {
   calls: Array<{ specId: string; newContext: string; otherSpecId?: string }>;
 } {
@@ -105,6 +103,7 @@ function recordingReplan(): ReplanRouter & {
     calls,
     routeBackToPlanner: async (input) => {
       calls.push(input);
+      return ownedEnqueued("planner_replan", input.specId);
     },
   };
 }
@@ -115,6 +114,7 @@ function recordingGateRework(): GateReworkRouter & { calls: Array<{ specId: stri
     calls,
     routeGateFailToRework: async (input) => {
       calls.push(input);
+      return ownedEnqueued("writer_rework", input.specId);
     },
   };
 }

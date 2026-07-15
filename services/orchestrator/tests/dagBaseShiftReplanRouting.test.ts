@@ -33,16 +33,31 @@ import {
 const ORG = "org_replan";
 const PROJECT = "project_replan";
 
-/** Records the spec-status UPDATEs the router drives through its in-process pool path. */
+/**
+ * Pool-capable double for active-owner proof (findActiveOwnerRunForSpec → runWithOrgScope).
+ * Must expose connect (isPool narrow); scripts active-owner rows for SpecNotRunnableError.
+ */
 class RecordingPool {
   readonly statusWrites: Array<{ specId: string; status: string }> = [];
+  /** When set, SpecNotRunnableError path finds this active owner run. */
+  activeOwner: { runId: string; status: string } | undefined;
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
     if (text.startsWith("UPDATE specs SET status")) {
       this.statusWrites.push({ specId: String(params?.[0]), status: String(params?.[1]) });
       return { rows: [] };
     }
+    if (text.includes("FROM runs") && text.includes("status IN")) {
+      if (this.activeOwner === undefined) return { rows: [] };
+      return { rows: [{ run_id: this.activeOwner.runId, status: this.activeOwner.status }] };
+    }
+    if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SET LOCAL")) {
+      return { rows: [] };
+    }
     throw new Error(`unexpected pool query in replan-routing test: ${text}`);
+  }
+  async connect(): Promise<{ query: RecordingPool["query"]; release: () => void }> {
+    return { query: this.query.bind(this), release: () => {} };
   }
 }
 
@@ -126,6 +141,7 @@ function buildRouter(deps: {
     },
   });
   return new SpecStatusReplanRouter({
+    // RecordingPool is Pool-capable (connect + query); isPool accepts it without cast.
     pool: deps.pool,
     runStateWriter: writer,
     orgId: ORG,
@@ -144,7 +160,7 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     const enqueuer = new RecordingEnqueuer("run_replan_xyz");
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
-    await router.routeBackToPlanner({
+    const result = await router.routeBackToPlanner({
       specId: "spec_b",
       newContext: "re-plan ON TOP OF spec_a (sha-new): the rebase conflict could not be resolved",
       otherSpecId: "spec_a",
@@ -170,6 +186,16 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(queued.plannerTaskId).toBe("task_run_replan_xyz");
     expect(queued.action).toBe("replan_with_steering");
 
+    // (5) Typed owned receipt — never a bare void; settlement verifies this.
+    expect(result).toEqual({
+      kind: "owned",
+      receipt: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_xyz", plannerTaskId: "task_run_replan_xyz" },
+      },
+    });
+
     // The spec was NEVER routed back to `in_flight` (the stall state).
     expect(pool.statusWrites.some((w) => w.status === "in_flight")).toBe(false);
   });
@@ -189,14 +215,15 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(payloadOf(eventStore.events, "recovery.replan_queued").steeringNote).toBe(context);
   });
 
-  it("FIXED POINT: re-planning against the SAME conflict again ESCALATES as needs_attention — no re-plan, no hot-loop, no count", async () => {
+  it("FIXED POINT: re-planning against the SAME conflict again returns parking_required — no re-plan, no hot-loop, no count", async () => {
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new RecordingEnqueuer();
     const sameContext = "the rebase conflict could not be resolved (again)";
     // The spec was re-planned against this EXACT conflict REPEATEDLY (the identical conflict
     // recurring beyond a single transient repeat = a proven cycle) — re-planning again would
-    // re-conflict identically (a fixed point). The detector escalates, regardless of count.
+    // re-conflict identically (a fixed point). One-authority model: router returns
+    // parking_required; settlement (RecoveryParkWriter) owns the park — never self-parks.
     const router = buildRouter({
       pool,
       eventStore,
@@ -207,17 +234,21 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
       ]),
     });
 
-    await router.routeBackToPlanner({ specId: "spec_b", newContext: sameContext, otherSpecId: "spec_a" });
+    const result = await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: sameContext,
+      otherSpecId: "spec_a",
+    });
 
     // It did NOT enqueue yet another doomed re-plan (no hot-loop).
     expect(enqueuer.calls).toHaveLength(0);
     expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
-    // It parked the spec `needs_attention` (frees the slot, blocks only dependents).
-    expect(pool.statusWrites).toContainEqual({ specId: "spec_b", status: "needs_attention" });
-    const escalation = payloadOf(eventStore.events, "dag.spec.needs_attention");
-    expect(escalation.source).toBe("strand");
-    expect(escalation.reason).toBe("human_decision");
+    // One-authority: router does NOT park needs_attention; settlement does.
+    expect(result.kind).toBe("parking_required");
+    expect(result.kind === "parking_required" && result.message).toMatch(/fixed point/u);
+    expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
   });
 
   it("UNBOUNDED while PROGRESSING: re-planning against DIFFERENT conflicts keeps re-planning (far past any old cap)", async () => {
@@ -240,16 +271,15 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
   });
 
   // THE v35 STRAND BUG (fixed): the enqueue could SWALLOW a genuine failure and STILL emit
-  // `merge.conflict.replan_routed` with NO `recovery.replan_queued` and no live run — the
-  // exact `replanned`-strand the live run hit (a spec stuck >1h, no re-plan). A routed replan
-  // that cannot RUN must ESCALATE loudly, never record a bare routing that strands.
-  it("NEVER-STRAND: a GENUINE enqueue failure ESCALATES (needs_attention) — never a bare replan_routed strand", async () => {
+  // `merge.conflict.replan_routed` with NO `recovery.replan_queued` and no live run.
+  // One-authority: enqueue failure → parking_required (settlement parks), never bare replan_routed.
+  it("NEVER-STRAND: a GENUINE enqueue failure returns parking_required — never a bare replan_routed strand", async () => {
     const pool = new RecordingPool();
     const eventStore = new RecordingEventStore();
     const enqueuer = new FailingEnqueuer(new Error("run-create connection refused"));
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
-    await router.routeBackToPlanner({
+    const result = await router.routeBackToPlanner({
       specId: "spec_b",
       newContext: "re-plan ON TOP OF spec_a (sha-new)",
       otherSpecId: "spec_a",
@@ -257,30 +287,28 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
 
     // The enqueue WAS attempted (the never-discard re-author was tried).
     expect(enqueuer.calls).toBe(1);
-    // THE FIX: NO bare `replan_routed` strand — a routing that cannot run is not recorded as a
-    // (cap-counting) routing, and NO `recovery.replan_queued` claims a run that does not exist.
+    // NO bare `replan_routed` strand and NO fabricated `recovery.replan_queued`.
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
     expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
-    // Instead it ESCALATES loudly so a human sees the stuck spec (frees the slot).
-    expect(pool.statusWrites).toContainEqual({ specId: "spec_b", status: "needs_attention" });
-    const escalation = payloadOf(eventStore.events, "dag.spec.needs_attention");
-    expect(escalation.source).toBe("strand");
-    expect(escalation.reason).toBe("persistent_failure");
-    expect(String(escalation.message)).toMatch(/could NOT enqueue the re-plan run/u);
-    expect(String(escalation.message)).toMatch(/connection refused/u);
+    // One-authority: parking_required so settlement parks atomically (router does not self-park).
+    expect(result.kind).toBe("parking_required");
+    expect(result.kind === "parking_required" && result.message).toMatch(/enqueue failed/u);
+    expect(result.kind === "parking_required" && result.message).toMatch(/connection refused/u);
+    expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+    expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
   });
 
-  // The BENIGN race (a concurrent tick already claimed the re-opened spec): the spec IS being
-  // re-driven on that run, so this is NOT a strand — the routing is recorded (observable; the
-  // concurrent tick emitted its own `run.queued`), but it does NOT escalate (no human needed)
-  // and emits NO `recovery.replan_queued` (no NEW run id to name — never a fabricated id).
-  it("BENIGN race: an already-claimed spec records the routing, emits no fake replan_queued, does NOT escalate", async () => {
+  // The BENIGN race (a concurrent tick already claimed the re-opened spec): SpecNotRunnableError
+  // with a verified active owner → owned already_running receipt (never fabricate ownership
+  // from SpecNotRunnableError alone; findActiveOwnerRunForSpec must prove live run).
+  it("BENIGN race: already-claimed with verified active owner → owned already_running, no fake replan_queued", async () => {
     const pool = new RecordingPool();
+    pool.activeOwner = { runId: "run_concurrent", status: "running" };
     const eventStore = new RecordingEventStore();
     const enqueuer = new AlreadyClaimedEnqueuer();
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
 
-    await router.routeBackToPlanner({
+    const result = await router.routeBackToPlanner({
       specId: "spec_b",
       newContext: "re-plan ON TOP OF spec_a (sha-new)",
       otherSpecId: "spec_a",
@@ -291,8 +319,33 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(true);
     // No `recovery.replan_queued` with a fabricated run id (no NEW run was created here).
     expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
-    // It does NOT escalate (the spec is re-driving on the concurrent run, not stuck).
+    expect(result).toEqual({
+      kind: "owned",
+      receipt: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "already_running", runId: "run_concurrent" },
+      },
+    });
     expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
     expect(pool.statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+  });
+
+  it("BENIGN race without active owner → parking_required (SpecNotRunnableError is never ownership)", async () => {
+    const pool = new RecordingPool();
+    // No activeOwner — SpecNotRunnableError alone fails closed.
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new AlreadyClaimedEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+
+    const result = await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "re-plan ON TOP OF spec_a (sha-new)",
+      otherSpecId: "spec_a",
+    });
+
+    expect(result.kind).toBe("parking_required");
+    expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
+    expect(eventStore.events.some((e) => e.eventType === "recovery.replan_queued")).toBe(false);
   });
 });

@@ -1,16 +1,5 @@
-// THE NEVER-DISCARD KEYSTONE PROOF (tanren-owns-the-engine.md §3/§7): the
-// BaseShiftCoordinator REBASES the dependent's existing run/branch in place via the jj
-// `WorkspaceVcsCore` and re-plans ONLY when the resolver + re-gate say the old work no
-// longer fits — it NEVER supersede+regenerates (the deleted `PgPercolationReexecutor`).
-// Driven through in-memory seams (TEST FIXTURES — they live here, never src/). Proves:
-//   (1) rebase-not-regenerate: an ancestor lands → the dependent's run row is the SAME
-//       run_id (the `reexecRunId` IS the dependent's own run id, NOT a new run), its
-//       branch was rebased (`rebaseOnto` invoked on the jj core), NO new run was
-//       created, and re-plan was NOT invoked on a clean rebase + passing re-gate;
-//   (2) a conflicted rebase RECORDS the jj conflict (the work survives) and re-plans
-//       ONLY when the resolver says it no longer fits;
-//   (3) `integration.rebase` / `rebase_vs_rebuild` instrumentation is emitted;
-//   (4) fail-closed: an unresolvable re-gate HOLDS (never merges, never discards).
+// BaseShiftCoordinator unit tests (tanren-owns-the-engine.md §3 never-discard).
+// Scripted seams — no real runner/DB.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -151,6 +140,14 @@ function recordingGateRework(): RecordingGateRework {
     calls,
     async routeGateFailToRework(input) {
       calls.push({ specId: input.specId, runId: input.runId, gateError: input.gateError });
+      return {
+        kind: "owned",
+        receipt: {
+          kind: "writer_rework",
+          specId: input.specId,
+          run: { kind: "enqueued", replanRunId: "run_r", plannerTaskId: "task_r" },
+        },
+      };
     },
   };
 }

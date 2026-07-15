@@ -23,7 +23,7 @@ function makeHarness() {
     events,
     batchEvents,
     escalator: new RecordingSpecEscalator(),
-      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents };

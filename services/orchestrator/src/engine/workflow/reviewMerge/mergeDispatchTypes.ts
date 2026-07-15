@@ -20,7 +20,7 @@ import type { ReviewVerdict } from "../../contracts/dagLifecycle.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "../../merge/mergeAuthorityInputs.js";
 import type { AuthorityLandStore } from "../../merge/mergeAuthorityV2Impl.js";
 import type { LandFinalizeContext } from "../../merge/mergeAuthorityLandFinalizer.js";
-import type { GateReworkRouter } from "../../contracts/conflictResolution.js";
+import type { ConflictRecoveryDisposition, GateReworkRouter } from "../../contracts/conflictResolution.js";
 
 /** The integration modes the merge stage actually dispatches to. */
 export type DispatchedIntegration = "native_queue" | "direct_merge" | "external_reviewer";
@@ -371,4 +371,10 @@ export type ConflictResolverHook = (context: ConflictContext) => Promise<{
    * (the caller routes to replan / emits the recoverable conflict as before).
    */
   routedToRework?: boolean;
+  /**
+   * Typed replan/rework disposition from the router. Present when the resolver delegated
+   * ownership/parking; the drive maps this onto a truthful MergeDriveOutcome (owned
+   * receipt → conflict+recovery; parking_required → needs_attention park; never fabricate).
+   */
+  recovery?: ConflictRecoveryDisposition;
 }>;

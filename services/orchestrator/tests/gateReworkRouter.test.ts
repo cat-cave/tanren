@@ -85,7 +85,11 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     const router = makeRouter({ enqueuer, priorReworks: [], events, statusWrites });
 
     const gateError = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
-    await router.routeGateFailToRework({ specId: SPEC, gateError });
+    const result = await router.routeGateFailToRework({ specId: SPEC, gateError });
+    expect(result).toMatchObject({
+      kind: "owned",
+      receipt: { kind: "writer_rework", run: { kind: "enqueued" } },
+    });
 
     // A fresh rework run was enqueued, re-opening the spec to `open` and carrying the ACTUAL
     // gate error in the steering (no_silent_fallback — never rework blind).
@@ -125,7 +129,7 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     expect(routed?.payload.disposition).toBe("reworked");
   });
 
-  it("ESCALATES to needs_attention (no further rework) at a FIXED POINT — the SAME gate error recurs", async () => {
+  it("FIXED POINT returns parking_required (no further rework) — settlement parks, router does not self-park", async () => {
     let enqueueCalls = 0;
     const enqueuer: ReplanEnqueuer = {
       // eslint-disable-next-line @typescript-eslint/require-await
@@ -138,7 +142,7 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
     const statusWrites: { specId: string; status: string }[] = [];
     const recurring = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
     // The identical error signature RECURS across multiple prior reworks (a cycle, not a single
-    // transient repeat) → a proven fixed point ⇒ escalate.
+    // transient repeat) → a proven fixed point. One-authority: parking_required, not self-park.
     const router = makeRouter({
       enqueuer,
       priorReworks: [gateErrorSignature(recurring), gateErrorSignature(recurring)],
@@ -146,14 +150,14 @@ describe("SpecStatusGateReworkRouter — re-gate gate-fail → writer rework, fi
       statusWrites,
     });
 
-    await router.routeGateFailToRework({ specId: SPEC, gateError: recurring });
+    const result = await router.routeGateFailToRework({ specId: SPEC, gateError: recurring });
 
-    // No new rework run — escalated instead (the detector proved a dead-end fixed point).
+    // No new rework run — fixed point returns parking_required for settlement.
     expect(enqueueCalls).toBe(0);
-    expect(statusWrites).toContainEqual({ specId: SPEC, status: "needs_attention" });
-    const routed = events.events.find((e) => e.eventType === "merge.regate.gate_rework_routed");
-    expect(routed?.payload.disposition).toBe("escalated");
-    const attention = events.events.find((e) => e.eventType === "dag.spec.needs_attention");
-    expect(attention?.payload).toMatchObject({ reason: "persistent_failure" });
+    expect(result.kind).toBe("parking_required");
+    expect(result.kind === "parking_required" && result.message).toMatch(/fixed point/u);
+    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
+    expect(events.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(false);
+    expect(events.events.some((e) => e.eventType === "merge.regate.gate_rework_routed")).toBe(false);
   });
 });

@@ -158,7 +158,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // `in_flight` with no live run. Uniform across BOTH replan routes (this drive/in-loop
     // path + the base-shift coordinator's `recordReplanContext`).
     replan: new SpecStatusReplanRouter({
-      pool: deps.pool as import("pg").Pool,
+      pool: deps.pool,
       runStateWriter: deps.runStateWriter,
       orgId: deps.orgId,
       eventStore: deps.eventStore,
@@ -178,7 +178,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // Uniform across BOTH merge paths (this in-loop `direct_merge` path + the base-shift path,
     // which calls this same factory).
     gateRework: new SpecStatusGateReworkRouter({
-      pool: deps.pool as import("pg").Pool,
+      pool: deps.pool,
       runStateWriter: deps.runStateWriter,
       orgId: deps.orgId,
       eventStore: deps.eventStore,
@@ -194,3 +194,5 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
 
 export { buildIntentPreservingConflictResolver } from "./resolver.js";
 export type { IntentPreservingResolverDeps } from "./resolver.js";
+export type { ConflictResolverHook } from "../mergeDispatchTypes.js";
+export { atReplanFixedPoint, conflictSignatureOf } from "./replanRouter.js";

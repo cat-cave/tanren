@@ -33,6 +33,7 @@ import {
   type ConflictAnswererInvoker,
   type ConflictProvenance,
   type ConflictProvenanceReader,
+  type ConflictRecoveryDisposition,
   type GateReworkRouter,
   type ProductVisionReader,
   type ReGateVerdict,
@@ -324,12 +325,19 @@ async function handleFailedReGate(
   context: ConflictContext,
   provenance: ConflictProvenance,
   verdict: ReGateVerdict,
-): Promise<{ resolved: false; routedToRework?: boolean }> {
+): Promise<{
+  resolved: false;
+  routedToRework?: boolean;
+  recovery?: ConflictRecoveryDisposition;
+}> {
   const reason = `re-gate failed (${verdict.failedStage ?? "unknown"}): ${verdict.reason}`;
   if (verdict.failedStage === "gate" && deps.gateRework !== undefined) {
     await deps.applier.abort();
-    await deps.gateRework.routeGateFailToRework({ specId: deps.mergingSpecIntent.specId, gateError: reason });
-    return { resolved: false, routedToRework: true };
+    const recovery = await deps.gateRework.routeGateFailToRework({
+      specId: deps.mergingSpecIntent.specId,
+      gateError: reason,
+    });
+    return { resolved: false, routedToRework: true, recovery };
   }
   const replan = {
     which: "merging" as const,
@@ -353,15 +361,23 @@ async function routeIrreconcilable(
   reason: string,
   replan: { which: "merging" | "base"; specId: string; newContext: string; otherSpecId?: string } | undefined,
   fromFailedReGate: boolean,
-): Promise<{ resolved: false }> {
-  if (replan !== undefined) {
-    await deps.replan.routeBackToPlanner({
-      specId: replan.specId,
-      newContext: replan.newContext,
-      ...(replan.otherSpecId !== undefined && { otherSpecId: replan.otherSpecId }),
-    });
-  }
+): Promise<{
+  resolved: false;
+  recovery?: ConflictRecoveryDisposition;
+}> {
+  // Capture the typed router disposition — never fabricate ownership when the router
+  // returns parking_required / terminal_noop / parking_failed.
+  const recovery =
+    replan === undefined
+      ? undefined
+      : await deps.replan.routeBackToPlanner({
+          specId: replan.specId,
+          newContext: replan.newContext,
+          ...(replan.otherSpecId !== undefined && { otherSpecId: replan.otherSpecId }),
+        });
   await deps.applier.abort();
+  // Only claim "replanned" on a durable owned receipt — parking_required is NOT ownership.
+  const ownedReplan = recovery?.kind === "owned" ? replan : undefined;
   await deps.eventStore.append({
     runId: context.runId,
     specId: deps.mergingSpecIntent.specId,
@@ -375,12 +391,12 @@ async function routeIrreconcilable(
       baseBranch: context.baseBranch,
       mergingSpecId: deps.mergingSpecIntent.specId,
       ...(provenance.conflictingSpecId !== undefined && { conflictingSpecId: provenance.conflictingSpecId }),
-      ...(replan !== undefined && { replanned: replan.which, replannedSpecId: replan.specId }),
+      ...(ownedReplan !== undefined && { replanned: ownedReplan.which, replannedSpecId: ownedReplan.specId }),
       reason,
       fromFailedReGate,
     },
   });
-  return { resolved: false };
+  return recovery === undefined ? { resolved: false } : { resolved: false, recovery };
 }
 
 /** Build the new planning context for a spec routed back after a conflict. */

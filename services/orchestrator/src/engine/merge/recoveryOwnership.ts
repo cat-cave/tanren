@@ -11,6 +11,7 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ConflictRecoveryDisposition, ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
+import { isPool, type QueryClient } from "../data/orgScopedDb.js";
 
 /**
  * Run statuses that prove an active owner is still driving work.
@@ -72,15 +73,28 @@ export interface RecoveryEvidencePort {
 }
 
 /**
+ * Narrow a QueryClient to a real Pool for runWithOrgScope. No `as pg.Pool` cast —
+ * `isPool` is the honest discriminator (rejects bare query-only clients).
+ */
+function requirePool(client: QueryClient, context: string): pg.Pool {
+  if (!isPool(client)) {
+    throw new Error(`${context} requires a Pool-capable client (connect), not a bare query-only client`);
+  }
+  return client;
+}
+
+/**
  * Active owner run for this exact spec under the tenant org GUC (RLS-visible).
  * Never trusts SpecNotRunnableError alone. Uses a short runWithOrgScope txn.
+ * Accepts QueryClient so workflow seams need no cast — narrows via isPool.
  */
 export async function findActiveOwnerRunForSpec(
-  pool: pg.Pool,
+  pool: QueryClient,
   orgId: string,
   specId: string,
 ): Promise<{ runId: string; status: string } | undefined> {
-  return runWithOrgScope(pool, orgId, async (client): Promise<{ runId: string; status: string } | undefined> => {
+  const realPool = requirePool(pool, "findActiveOwnerRunForSpec");
+  return runWithOrgScope(realPool, orgId, async (client): Promise<{ runId: string; status: string } | undefined> => {
     const result = await client.query<{ run_id: string; status: string }>(
       `SELECT run_id, status FROM runs
          WHERE spec_id = $1 AND status IN ('queued', 'running', 'paused')
@@ -101,11 +115,12 @@ export async function findActiveOwnerRunForSpec(
  * Prefer atomic prepareSpecForRecovery for mutations; this is a scoped read helper.
  */
 export async function loadSpecStatusForRecovery(
-  pool: pg.Pool,
+  pool: QueryClient,
   orgId: string,
   specId: string,
 ): Promise<string | undefined> {
-  return runWithOrgScope(pool, orgId, async (client) => {
+  const realPool = requirePool(pool, "loadSpecStatusForRecovery");
+  return runWithOrgScope(realPool, orgId, async (client) => {
     const result = await client.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1 LIMIT 1", [
       specId,
     ]);

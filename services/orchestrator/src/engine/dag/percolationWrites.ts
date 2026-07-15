@@ -13,6 +13,7 @@
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { PercolationPending } from "../contracts/changePercolation.js";
+import type { ReplanRouteResult } from "../contracts/conflictResolution.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
@@ -288,7 +289,7 @@ export async function recordReplanContext(
   // REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
   // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.
   runStateWriter: RunStateWriter,
-): Promise<void> {
+): Promise<ReplanRouteResult> {
   const newContext = `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`;
   const orgId = await resolveProjectOrg(pool, input.projectId);
   if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation replan`);
@@ -310,7 +311,9 @@ export async function recordReplanContext(
     enqueuer,
     priorReplans,
   });
-  await runWithJobOrgId(orgId, () =>
+  // Propagate the typed disposition so callers can settle/instrument truthfully
+  // (parking_required is NOT silent "replanned").
+  return runWithJobOrgId(orgId, () =>
     router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId }),
   );
 }

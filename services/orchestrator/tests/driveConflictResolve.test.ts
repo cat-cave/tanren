@@ -159,7 +159,26 @@ function makeDeps(
 
 /** A scripted resolver hook (the injected test seam) returning a fixed outcome. */
 function scriptedResolver(resolved: boolean): DriveConflictResolveDeps["buildResolver"] {
-  return () => (async () => ({ resolved })) satisfies ConflictResolverHook;
+  return () =>
+    (async () =>
+      resolved
+        ? { resolved: true }
+        : {
+            resolved: false,
+            // Durable owned receipt — without this the drive fails closed to escalate.
+            recovery: {
+              kind: "owned" as const,
+              receipt: {
+                kind: "planner_replan" as const,
+                specId: FACTS.specId,
+                run: {
+                  kind: "enqueued" as const,
+                  replanRunId: "run_replan_scripted",
+                  plannerTaskId: "task_replan_scripted",
+                },
+              },
+            },
+          }) satisfies ConflictResolverHook;
 }
 
 /** Records the re-plan run enqueue (the never-discard re-author) — returns a fixed run id. */
@@ -193,9 +212,17 @@ function replanRoutingResolver(
         projectId: FACTS.projectId,
         enqueuer,
         priorReplans: { signatures: async () => [] },
+        runStateWriter: {
+          append: async () => {},
+          setSpecStatus: async () => ({ updated: false }),
+        } as never,
       });
-      await router.routeBackToPlanner({ specId: FACTS.specId, newContext: "re-plan on the new base" });
-      return { resolved: false };
+      // Propagate the typed disposition — drive maps owned → replanned, parking_* → escalate.
+      const recovery = await router.routeBackToPlanner({
+        specId: FACTS.specId,
+        newContext: "re-plan on the new base",
+      });
+      return { resolved: false, recovery };
     }) satisfies ConflictResolverHook;
 }
 

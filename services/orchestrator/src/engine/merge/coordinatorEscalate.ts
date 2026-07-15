@@ -9,6 +9,26 @@ import type { RecoveryParkOutcome, RecoveryParkWriter, RunStateWriter } from "..
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
 
+/** Production Direct/Http writers implement RecoveryParkWriter. */
+export type BatchCoordinatorRunStateWriter = RunStateWriter & RecoveryParkWriter;
+
+/** Honest type guard — never a silent cast of an unrelated writer. */
+export function isRecoveryParkWriter(writer: RunStateWriter): writer is BatchCoordinatorRunStateWriter {
+  return (
+    "parkRecoveryAndDequeue" in writer &&
+    typeof (writer as { parkRecoveryAndDequeue?: unknown }).parkRecoveryAndDequeue === "function"
+  );
+}
+
+export function requireRecoveryParkWriter(writer: RunStateWriter): BatchCoordinatorRunStateWriter {
+  if (!isRecoveryParkWriter(writer)) {
+    throw new Error(
+      "buildBatchMergeCoordinator requires a RunStateWriter that implements RecoveryParkWriter.parkRecoveryAndDequeue",
+    );
+  }
+  return writer;
+}
+
 /**
  * Escalator outcome. When `alreadyDequeued` is true (RecoveryParkWriter), settlement
  * must not emit a second dequeue. Recording fakes return alreadyDequeued:false so

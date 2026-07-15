@@ -292,17 +292,16 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     batch: ReadonlyArray<MergeQueueEntry>,
     queueDepth: number,
   ): Promise<CoordinateResult> {
-    if (!("projectId" in result)) {
-      if (result.kind === "infra_terminal") {
-        return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth, result.terminalKind);
-      }
-      const holdBatch = result.entry !== undefined ? [result.entry] : batch;
-      return this.infraHold(projectId, holdBatch, result.message, queueDepth);
-    }
-    if (result.holdReason !== "infra_error" && result.holdReason !== "infra_blocked") {
+    if ("projectId" in result) {
+      if (result.holdReason === "infra_error" || result.holdReason === "infra_blocked") return result;
       await this.infraHolds.reset(projectId);
+      return result;
     }
-    return result;
+    if (result.kind === "infra_terminal") {
+      return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth, result.terminalKind);
+    }
+    const holdBatch = result.entry === undefined ? batch : [result.entry];
+    return this.infraHold(projectId, holdBatch, result.message, queueDepth);
   }
 
   /** Check a formed batch, retrying only typed-retriable infra errors in-pass. */
@@ -354,7 +353,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       batchEvents,
       gateRework,
       escalator: this.deps.escalator,
-      ...(this.deps.recoveryEvidence !== undefined ? { recoveryEvidence: this.deps.recoveryEvidence } : {}),
+      ...(this.deps.recoveryEvidence === undefined ? {} : { recoveryEvidence: this.deps.recoveryEvidence }),
       ceiling,
       projectId,
       batch,

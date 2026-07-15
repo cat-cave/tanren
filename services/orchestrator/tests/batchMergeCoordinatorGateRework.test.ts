@@ -55,7 +55,7 @@ function makeHarness(): Harness {
     events,
     batchEvents,
     escalator: new RecordingSpecEscalator(),
-      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),

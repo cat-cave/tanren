@@ -21,7 +21,7 @@ function makeCoordinator() {
     events: new RecordingMergeQueueEventEmitter(),
     batchEvents: new RecordingBatchMergeEventEmitter(),
     escalator: new RecordingSpecEscalator(),
-      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
   });

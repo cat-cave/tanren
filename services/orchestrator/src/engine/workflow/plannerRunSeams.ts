@@ -148,7 +148,7 @@ export function reGateGateReworkSeam(
   const orgId = context.orgId;
   return {
     reGateGateRework: new SpecStatusGateReworkRouter({
-      pool: input.pool as import("pg").Pool,
+      pool: input.pool,
       runStateWriter: input.runStateWriter,
       orgId,
       eventStore: deps.eventStore,

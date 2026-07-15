@@ -35,8 +35,8 @@
 // otherwise runs the in-process org-scoped UPDATE.
 
 import { createHash } from "node:crypto";
-import type pg from "pg";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
+import type { QueryClient } from "../../../data/orgScopedDb.js";
 import type { EventStore } from "../../../eventStore.js";
 import type { ReplanRouter, ReplanRouteResult } from "../../../contracts/conflictResolution.js";
 import { SpecNotRunnableError } from "../../projectSpecErrors.js";
@@ -45,8 +45,6 @@ import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
 
 const log = createLogger("replan-router");
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * A stable CONFLICT SIGNATURE for a re-plan attempt -- a hash of the conflicting change /
@@ -177,8 +175,12 @@ export interface PriorReplanReader {
 }
 
 export interface SpecStatusReplanRouterDeps {
-  /** Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError. */
-  pool: pg.Pool;
+  /**
+   * Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError.
+   * QueryClient so workflow seams need no `as pg.Pool` cast; findActiveOwnerRunForSpec
+   * narrows via isPool.
+   */
+  pool: QueryClient;
   /**
    * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
    * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
@@ -206,7 +208,11 @@ export interface SpecStatusReplanRouterDeps {
 export class SpecStatusReplanRouter implements ReplanRouter {
   constructor(private readonly deps: SpecStatusReplanRouterDeps) {}
 
-  async routeBackToPlanner(input: { specId: string; newContext: string; otherSpecId?: string }): Promise<ReplanRouteResult> {
+  async routeBackToPlanner(input: {
+    specId: string;
+    newContext: string;
+    otherSpecId?: string;
+  }): Promise<ReplanRouteResult> {
     // FIXED-POINT (no hot-loop, no count): a spec re-planned against the SAME conflict
     // signature again is genuinely stuck -- re-planning would just re-conflict identically.
     // The shared detector decides progress (a different conflict ⇒ keep going, UNBOUNDED) vs
@@ -386,5 +392,4 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       return { outcome: "failed", error };
     }
   }
-
 }

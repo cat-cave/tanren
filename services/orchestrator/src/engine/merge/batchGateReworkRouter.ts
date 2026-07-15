@@ -34,7 +34,6 @@ import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
 import type { EventStore } from "../eventStore.js";
-import type { AppendEventInput } from "../eventStore.js";
 import {
   atReplanFixedPoint,
   gateErrorSignature,

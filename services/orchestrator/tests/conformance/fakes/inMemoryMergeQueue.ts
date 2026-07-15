@@ -220,7 +220,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     await this.markDequeued(queueId, reason);
   }
 
-
   // eslint-disable-next-line @typescript-eslint/require-await
   async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
     // Retire the run's ACTIVE (queued/merging) entry — at most one, mirroring the

@@ -4,10 +4,7 @@
 // retained never emits dequeue.
 
 import type { BatchCheckVerdict, BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
-import type {
-  GateReworkRouteResult,
-  ConflictRecoveryReceipt,
-} from "../contracts/conflictResolution.js";
+import type { GateReworkRouteResult, ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
 import type {
   CoordinateResult,
   DequeueReason,
@@ -27,7 +24,7 @@ import {
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
 import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
-import { settleFromParkOutcome, type SettleParkAction } from "./parkSettle.js";
+import { settleFromParkOutcome } from "./parkSettle.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-coordinator");
@@ -242,9 +239,7 @@ export async function settleDriveOutcome(
 
   if (outcome.kind === "failed") {
     const result = await settleFailedDrive(deps, projectId, entry, outcome.message);
-    return result === "retained"
-      ? { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS }
-      : "dequeued";
+    return result === "retained" ? { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS } : "dequeued";
   }
 
   if (outcome.kind === "conflict") {
@@ -461,7 +456,14 @@ export async function settleFailedDrive(
     return "dequeued";
   }
   const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
-  const settled = await settleWriterOwnedOrPark(deps, projectId, culprit, recovery, `${gateError}; handed to writer rework`, gateError);
+  const settled = await settleWriterOwnedOrPark(
+    deps,
+    projectId,
+    culprit,
+    recovery,
+    `${gateError}; handed to writer rework`,
+    gateError,
+  );
   if (settled.action === "retain") {
     await deps.queue.releaseClaim(culprit.queueId);
     return "retained";

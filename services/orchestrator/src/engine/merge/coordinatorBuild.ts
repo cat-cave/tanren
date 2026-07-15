@@ -292,6 +292,9 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             runId,
             projectId: facts.projectId,
             prNumber: facts.prNumber,
+            // Capture gate-rework ownership into the same cell the conflict resolver uses
+            // so a successful writer rework produces a durable recovery receipt.
+            verdict,
           }),
         }),
       );
@@ -315,13 +318,15 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
-        // CLASSIFY-THEN-ESCALATE from the drive-path resolver disposition + optional
-        // durable recovery receipt. Never fabricate conflict ownership without a receipt.
+        // CLASSIFY-THEN-ESCALATE from the drive-path resolver / gate-rework disposition.
+        // Owned receipt → conflict with recovery. Escalate / missing receipt → park
+        // with the truthful parking token (never fabricate ownership).
         if (verdict.disposition === "escalate" || verdict.recovery === undefined) {
           return {
             kind: "needs_attention",
             message: verdict.message ?? merge.message ?? "specs' intents conflict",
-            parking: "required",
+            parking: verdict.parking ?? "required",
+            ...(verdict.terminalStatus !== undefined && { terminalStatus: verdict.terminalStatus }),
           };
         }
         return {
@@ -346,7 +351,11 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // changes_requested at land time). PARK the spec via the escalator (frees its
         // slot) — NOT a recoverable hold (no re-drive resolves a human decision) and NOT a
         // terminal conflict dequeue.
-        return { kind: "needs_attention", message: merge.message ?? "merge needs human attention", parking: "required" };
+        return {
+          kind: "needs_attention",
+          message: merge.message ?? "merge needs human attention",
+          parking: "required",
+        };
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }

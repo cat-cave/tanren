@@ -4,10 +4,7 @@ import { RECOVERY_PARK_RETRY_AFTER_MS } from "../src/engine/worker/recoveryParkA
 
 describe("settleFromParkOutcome", () => {
   it("parked with alreadyDequeued skips second dequeue responsibility", () => {
-    const s = settleFromParkOutcome(
-      { kind: "parked", newlyParked: true, alreadyDequeued: true },
-      "msg",
-    );
+    const s = settleFromParkOutcome({ kind: "parked", newlyParked: true, alreadyDequeued: true }, "msg");
     expect(s).toEqual({
       action: "dequeue",
       reason: "needs_attention",
@@ -26,10 +23,7 @@ describe("settleFromParkOutcome", () => {
       },
       "msg",
     );
-    expect(s.action).toBe("retain");
-    if (s.action === "retain") {
-      expect(s.retryAfterMs).toBe(RECOVERY_PARK_RETRY_AFTER_MS);
-    }
+    expect(s).toMatchObject({ action: "retain", retryAfterMs: RECOVERY_PARK_RETRY_AFTER_MS });
   });
 
   it("unknown disposition retains for readback/retry", () => {

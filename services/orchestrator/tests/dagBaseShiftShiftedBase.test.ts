@@ -153,7 +153,16 @@ const noopEvents: BaseShiftEventEmitter = {
 // stack/nonSpeculative threading, not the clean-rebase gate-fail arm, so a no-op suffices; the
 // writer-rework routing proofs live in dagBaseShiftCoordinator.test.ts.
 const noopGateRework: BaseShiftGateReworkRouter = {
-  async routeGateFailToRework() {},
+  async routeGateFailToRework(input) {
+    return {
+      kind: "owned",
+      receipt: {
+        kind: "writer_rework",
+        specId: input.specId,
+        run: { kind: "enqueued", replanRunId: "run_rework_noop", plannerTaskId: "task_rework_noop" },
+      },
+    };
+  },
 };
 
 const SPEC_OPENER: BaseShiftWorkspaceOpener = {

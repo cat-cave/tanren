@@ -27,10 +27,10 @@
 // shared `convergenceDetector` detects. ONLY there does it ESCALATE as a LOUD
 // `needs_attention` (`persistent_failure`), never a silent strand, never a count.
 
-import type pg from "pg";
 import type { GateReworkRouter, GateReworkRouteResult } from "../../../contracts/conflictResolution.js";
-import type { AppendEventInput, EventStore } from "../../../eventStore.js";
+import type { EventStore } from "../../../eventStore.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
+import type { QueryClient } from "../../../data/orgScopedDb.js";
 import { buildGateReworkSteering } from "../../../merge/batchGateReworkRouter.js";
 import { SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
@@ -39,10 +39,13 @@ import { atReplanFixedPoint, gateErrorSignature, type ReplanEnqueuer } from "./r
 
 const log = createLogger("regate-gate-rework");
 
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
 export interface SpecStatusGateReworkRouterDeps {
-  pool: pg.Pool;
+  /**
+   * Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError.
+   * QueryClient so workflow seams need no `as pg.Pool` cast; findActiveOwnerRunForSpec
+   * narrows via isPool.
+   */
+  pool: QueryClient;
   /**
    * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
    * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
@@ -208,5 +211,4 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       });
     }
   }
-
 }

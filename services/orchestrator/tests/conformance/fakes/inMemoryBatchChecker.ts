@@ -12,6 +12,7 @@ import type {
   BatchFormation,
   BatchGateReworkRouter,
 } from "../../../src/engine/contracts/batchMergeCoordinator.js";
+import type { GateReworkRouteResult } from "../../../src/engine/contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "../../../src/engine/merge/batchCoordinator.js";
 
@@ -218,7 +219,7 @@ export class RecordingBatchGateReworkRouter implements BatchGateReworkRouter {
     projectId: string;
     culprit: MergeQueueEntry;
     gateError: string;
-  }): Promise<import("../../../src/engine/contracts/conflictResolution.js").GateReworkRouteResult> {
+  }): Promise<GateReworkRouteResult> {
     this.routed.push({ specId: input.culprit.specId, runId: input.culprit.runId, gateError: input.gateError });
     if (this.escalateSpecs.has(input.culprit.specId)) {
       return { kind: "parking_required", message: `recording fake escalated ${input.culprit.specId}` };

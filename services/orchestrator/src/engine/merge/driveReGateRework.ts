@@ -17,6 +17,7 @@ import {
   buildPriorGateReworkReader,
   buildReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
+import { applyRecoveryDispositionToVerdict, type DriveConflictVerdict } from "./driveConflictVerdict.js";
 
 export interface BuildDriveReGateGateReworkDeps {
   pool: pg.Pool;
@@ -27,12 +28,18 @@ export interface BuildDriveReGateGateReworkDeps {
   runId: string;
   projectId: string;
   prNumber: number;
+  /**
+   * Capture cell the drive reads after mergeForRun returns. Gate-rework results are
+   * written here so a successful writer rework produces a durable recovery receipt
+   * (and parking_required escalates truthfully) rather than a silent conflict.
+   */
+  verdict?: DriveConflictVerdict;
 }
 
 /** Build the drive-pass re-gate gate-fail rework router (mirrors `conflictResolver/index.ts`). */
 export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps): GateReworkRouter {
-  return new SpecStatusGateReworkRouter({
-    pool: deps.pool as import("pg").Pool,
+  const inner = new SpecStatusGateReworkRouter({
+    pool: deps.pool,
     runStateWriter: deps.runStateWriter,
     orgId: deps.orgId,
     eventStore: deps.eventStore,
@@ -42,4 +49,13 @@ export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps)
     enqueuer: buildReplanEnqueuer(deps.pool, deps.runStateWriter),
     priorReworks: buildPriorGateReworkReader(deps.pool),
   });
+  if (deps.verdict === undefined) return inner;
+  const verdict = deps.verdict;
+  return {
+    async routeGateFailToRework(input) {
+      const recovery = await inner.routeGateFailToRework(input);
+      applyRecoveryDispositionToVerdict(verdict, recovery);
+      return recovery;
+    },
+  };
 }

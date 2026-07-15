@@ -108,7 +108,15 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
     // The drive returns the recoverable `conflict` (the resolver re-readies the run for re-execution).
-    h.runner.script("run_spec_b", { kind: "conflict", message: "rebase deferred; re-ready pending", recovery: { kind: "planner_replan", specId: "spec_b", run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" } } });
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "rebase deferred; re-ready pending",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" },
+      },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 

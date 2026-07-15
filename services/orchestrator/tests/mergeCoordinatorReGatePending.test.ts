@@ -59,18 +59,18 @@ function harness(): {
   queue: InMemoryMergeQueueModel;
   runner: ScriptedMergeRunner;
   events: RecordingMergeQueueEventEmitter;
-  coordinator: EventEmittingMergeCoordinator;
+  coordinator: BatchMergeCoordinator;
 } {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
   const events = new RecordingMergeQueueEventEmitter();
   const coordinator = new BatchMergeCoordinator({
-      resolveMaxBatchSize: async () => 1,
+    resolveMaxBatchSize: async () => 1,
     queue,
     runner,
-      checker: new InMemoryBatchChecker(),
-      batchEvents: new RecordingBatchMergeEventEmitter(),
-      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
+    checker: new InMemoryBatchChecker(),
+    batchEvents: new RecordingBatchMergeEventEmitter(),
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     events,
     escalator: new RecordingSpecEscalator(),
   });
@@ -80,7 +80,7 @@ function harness(): {
 const seed = (queue: InMemoryMergeQueueModel, runId: string, specId: string): void =>
   queue.seed({ runId, specId, dependsOn: [], priority: "tbd" });
 
-describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → recoverable re-drive (no brick)", () => {
+describe("BatchMergeCoordinator — re_gate_pending native re-gate → recoverable re-drive (no brick)", () => {
   it("a re_gate_pending outcome RELEASES the claim (entry stays queued) + holds, never dequeues (the live brick)", async () => {
     const { queue, runner, events, coordinator } = harness();
     seed(queue, "run_p", "spec_p");
@@ -147,7 +147,17 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
   it("a genuine terminal `conflict` still DEQUEUES (it hands off to autonomous re-plan) — only the not-yet-terminal gate is recoverable", async () => {
     const { queue, runner, coordinator } = harness();
     seed(queue, "run_c", "spec_c");
-    runner.script("run_c", [{ kind: "conflict", message: "merge conflict", recovery: { kind: "planner_replan", specId: "spec_c", run: { kind: "enqueued", replanRunId: "r1", plannerTaskId: "t1" } } }]);
+    runner.script("run_c", [
+      {
+        kind: "conflict",
+        message: "merge conflict",
+        recovery: {
+          kind: "planner_replan",
+          specId: "spec_c",
+          run: { kind: "enqueued", replanRunId: "r1", plannerTaskId: "t1" },
+        },
+      },
+    ]);
 
     const result = await coordinator.coordinate(PROJECT);
 

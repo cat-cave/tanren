@@ -37,10 +37,7 @@ import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("base-shift");
 
-// Re-export the persistence/node/event ports + the `RebaseDecision` instrumentation type +
-// the re-gate verdict/result + the gate-rework router + the fail-closed `BaseShiftHeldError`
-// (split into `baseShiftPorts.ts` for the line cap) so existing import sites keep importing
-// them from `./baseShiftCoordinator.js`.
+// Re-export ports from baseShiftPorts so existing import sites stay stable.
 export {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
@@ -298,9 +295,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // A CLEAN rebase whose re-gate FAILED a GATE TIER: the tree is byte-clean (no conflict), the
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
-    await this.routeGateFailToRework(input, result.gateError);
-    await this.emit(input, false, "replanned");
-    return { decision: "replanned", headSha: input.rebase.headSha };
+    const decision = await this.routeGateFailToRework(input, result.gateError);
+    await this.emit(input, false, decision);
+    return { decision, headSha: input.rebase.headSha };
   }
 
   /**
@@ -365,9 +362,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
     // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). The
     // rework router is REQUIRED — every construction site wires it (no silent fallback).
-    await this.routeGateFailToRework(input, result.gateError);
-    await this.emit(input, true, "replanned");
-    return { decision: "replanned", headSha: input.rebase.headSha };
+    const decision = await this.routeGateFailToRework(input, result.gateError);
+    await this.emit(input, true, decision);
+    return { decision, headSha: input.rebase.headSha };
   }
 
   /**
@@ -408,14 +405,17 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   private async routeGateFailToRework(
     input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
     gateError: string | undefined,
-  ): Promise<void> {
-    await this.deps.gateRework.routeGateFailToRework({
+  ): Promise<RebaseDecision> {
+    const recovery = await this.deps.gateRework.routeGateFailToRework({
       projectId: input.projectId,
       specId: input.dependent.specId,
       runId: input.dependent.runId,
       // no_silent_fallback: carry the REAL gate error; a missing detail is a loud generic note.
       gateError: gateError ?? "the rebased branch failed its re-gate (gate tier) on the shifted base",
     });
+    // Schema-legal mapping: only a durable owned writer receipt is `replanned`;
+    // parking_required / parking_failed / terminal_noop are `held` (never silent ownership).
+    return recovery.kind === "owned" ? "replanned" : "held";
   }
 
   /**
