@@ -20,6 +20,7 @@ import {
   ProjectFeedItem,
   RunCostRecord,
   RunEventRow,
+  RecoverableRunItem,
   RunListItem,
   RunSpecSummary,
   RunSummary,
@@ -390,6 +391,25 @@ export async function fetchRunListItems(pool: QueryClient, args: RunListArgs): P
       costTotalUsd: row.cost_total_usd ?? "0",
       lastEventAt: row.last_event_at ?? null,
       needsReview,
+    });
+  });
+}
+
+/** Org-wide recovery queue; shares the project-list decoder and outcome policy. */
+export async function fetchRecoverableRunListItems(
+  pool: QueryClient,
+  orgId: string,
+): Promise<Array<RecoverableRunItem>> {
+  const rows = await RunStore.selectRecoverableForOrg(pool, orgId, systemActor);
+  return rows.map((row) => {
+    const summary = decodeRunSummary(row);
+    return RecoverableRunItem.parse({
+      ...summary,
+      specTitle: row.spec_title ?? "(spec missing)",
+      costTotalUsd: row.cost_total_usd ?? "0",
+      lastEventAt: row.last_event_at ?? null,
+      needsReview: summary.prUrl !== null && needsReviewFromOutcome(summary.outcome),
+      projectName: row.project_name ?? "(project missing)",
     });
   });
 }

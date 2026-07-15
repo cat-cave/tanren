@@ -203,6 +203,26 @@ export function mockOrchestrator(
     if (url.endsWith("/auth/me"))
       return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
     if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+    if (url.endsWith(`/orgs/${ORG.id}/runs/recoverable`)) {
+      const run = recoverable ? RUN_DETAIL.run : { ...RUN_DETAIL.run, status: "running", outcome: null };
+      return new Response(
+        JSON.stringify({
+          items: recoverable
+            ? [
+                {
+                  ...run,
+                  specTitle: RUN_DETAIL.spec.title,
+                  costTotalUsd: "0.84",
+                  lastEventAt: null,
+                  needsReview: false,
+                  projectName: PROJECT.name,
+                },
+              ]
+            : [],
+        }),
+        { status: 200 },
+      );
+    }
     if (url.endsWith(`/orgs/${ORG.id}/projects`))
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (url.endsWith(`/projects/${PROJECT.projectId}/runs`)) {

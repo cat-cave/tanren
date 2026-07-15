@@ -35,6 +35,7 @@ import {
   fetchRunEventsForSnapshot,
   fetchRunInsights,
   fetchRunListItems,
+  fetchRecoverableRunListItems,
   fetchRunSummary,
   fetchRunSpecSummary,
   fetchRunTasks,
@@ -64,6 +65,14 @@ export function createRunRoutes(options: RunRoutesOptions) {
   // `.connect()` delegates through the org-scoping proxy to the real pool.
   const sseNotifyListener = options.sseNotifyListener ?? new PgNotifyListener(options.pool);
   const app = new Hono<ActorContextEnv>();
+
+  app.get("/:orgId/runs/recoverable", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "org_access_denied" }, 403);
+    const items = await runWithOrgScope(options.pool, orgId, (client) => fetchRecoverableRunListItems(client, orgId));
+    return c.json({ items });
+  });
 
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs

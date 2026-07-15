@@ -21,6 +21,36 @@ export interface ProjectFeedItem {
   ts: string;
 }
 
+/** Generated from `tanren.http.RecoverableRunItem` (contracts/json/http/RecoverableRunItem.json). */
+export interface RecoverableRunItem {
+  branch: string;
+  costTotalUsd: string;
+  endedAt: string | null;
+  lastEventAt: string | null;
+  needsReview: boolean;
+  outcome:
+    | "ok"
+    | "halted"
+    | "escape_hatch_hit"
+    | "retry_budget_exhausted"
+    | "convergence_stalled"
+    | "window_exhausted"
+    | "window_paused"
+    | "awaiting_review"
+    | "cancelled"
+    | "failed"
+    | null;
+  prUrl: string | null;
+  projectId: string;
+  projectName: string;
+  runId: string;
+  specId: string;
+  specTitle: string;
+  startedAt: string;
+  status: "queued" | "running" | "paused" | "halted" | "completed" | "failed" | "cancelled";
+  trigger: string;
+}
+
 /** Generated from `tanren.http.RunCostRecord` (contracts/json/http/RunCostRecord.json). */
 export interface RunCostRecord {
   billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";

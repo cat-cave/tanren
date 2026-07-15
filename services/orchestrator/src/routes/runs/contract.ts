@@ -169,6 +169,10 @@ export const RunListItem = RunSummary.extend({
 }).strict();
 export type RunListItem = z.infer<typeof RunListItem>;
 
+/** Org-wide recovery queue item adds the project label needed by the dashboard. */
+export const RecoverableRunItem = RunListItem.extend({ projectName: z.string() }).strict();
+export type RecoverableRunItem = z.infer<typeof RecoverableRunItem>;
+
 // ---------------------------------------------------------------------------
 // Cursor pagination
 // ---------------------------------------------------------------------------

@@ -39,6 +39,8 @@ import type {
 
 export type { OrchestratorClientDeps } from "./httpClient.js";
 
+type RecoverableRun = RunListItem & { projectName: string };
+
 export class OrchestratorClient extends OrchestratorNotificationsClient {
   /** Resolve the current session via `/auth/me`. `undefined` when unauthenticated. */
   async session(): Promise<DashboardSession | undefined> {
@@ -166,6 +168,15 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
     );
     // Missing/non-array items is a broken contract, not empty success.
+    if (json === undefined || !Array.isArray(json.items)) return undefined;
+    return json.items;
+  }
+
+  /** Org-wide recovery queue; unavailable remains distinct from an empty queue. */
+  async listRecoverableRuns(orgId: string): Promise<RecoverableRun[] | undefined> {
+    const json = await this.getJson<{ items?: RecoverableRun[] }>(
+      `/orgs/${encodeURIComponent(orgId)}/runs/recoverable`,
+    );
     if (json === undefined || !Array.isArray(json.items)) return undefined;
     return json.items;
   }

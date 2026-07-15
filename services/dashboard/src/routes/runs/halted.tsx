@@ -42,19 +42,13 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       projectName: string;
     }> = [];
     for (const org of orgs) {
-      const projects = await client.listProjects(org.id);
-      for (const project of projects) {
-        const runs = await client.listRuns(org.id, project.projectId);
-        for (const run of runs) {
-          if (isRecoverableRun(run)) {
-            halted.push({
-              runId: run.runId,
-              specTitle: run.specTitle,
-              outcome: run.outcome,
-              projectName: project.name,
-            });
-          }
-        }
+      for (const run of (await client.listRecoverableRuns(org.id)) ?? []) {
+        halted.push({
+          runId: run.runId,
+          specTitle: run.specTitle,
+          outcome: run.outcome,
+          projectName: run.projectName,
+        });
       }
     }
     const ctx = await loadShellContext(c, deps, { activeNavId: "failure" });

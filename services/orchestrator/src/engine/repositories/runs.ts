@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { RECOVERABLE_OUTCOMES_LIST } from "@tanren/db";
 import { z } from "zod";
 import type { ActorRef } from "../state/actor.js";
 import { RunOutcome, RunStatus, transitionRun } from "../state/run.js";
@@ -103,6 +104,7 @@ export interface RawRunListRow extends RawRunSummaryRow {
   spec_title: string | null;
   cost_total_usd: string | null;
   last_event_at: Date | null;
+  project_name?: string | null;
 }
 
 export interface RunListProjectionFilter {
@@ -178,13 +180,30 @@ export const RunStore = {
               r.pr_url, r.started_at, r.ended_at,
               s.title AS spec_title,
               (SELECT COALESCE(SUM(cost_usd::numeric), 0)::text
-                 FROM cost_records WHERE cost_records.run_id = r.run_id) AS cost_total_usd,
-              (SELECT MAX(ts) FROM events WHERE events.run_id = r.run_id) AS last_event_at
+                 FROM cost_records WHERE cost_records.run_id = r.run_id AND cost_records.org_id = $2) AS cost_total_usd,
+              (SELECT MAX(ts) FROM events WHERE events.run_id = r.run_id AND events.org_id = $2) AS last_event_at
          FROM runs r
-         LEFT JOIN specs s ON s.spec_id = r.spec_id
+         LEFT JOIN specs s ON s.spec_id = r.spec_id AND s.org_id = $2
         WHERE ${where}
         ORDER BY r.started_at DESC, r.run_id ASC`,
       params,
+    );
+    return result.rows;
+  },
+
+  /** Org-scoped recovery queue projection. Explicit predicates protect every tenant table. */
+  async selectRecoverableForOrg(client: QueryClient, orgId: string, _actor: ActorRef): Promise<RawRunListRow[]> {
+    const result = await client.query<RawRunListRow>(
+      `SELECT r.run_id, r.spec_id, r.project_id, r.trigger, r.branch, r.status, r.outcome,
+              r.pr_url, r.started_at, r.ended_at, s.title AS spec_title, p.name AS project_name,
+              (SELECT COALESCE(SUM(cr.cost_usd::numeric), 0)::text FROM cost_records cr
+                WHERE cr.run_id = r.run_id AND cr.org_id = $1) AS cost_total_usd,
+              (SELECT MAX(e.ts) FROM events e WHERE e.run_id = r.run_id AND e.org_id = $1) AS last_event_at
+         FROM runs r LEFT JOIN specs s ON s.spec_id = r.spec_id AND s.org_id = $1
+         LEFT JOIN projects p ON p.project_id = r.project_id AND p.org_id = $1
+        WHERE r.org_id = $1 AND (r.status = 'halted' OR r.outcome = ANY($2))
+        ORDER BY r.started_at DESC, r.run_id ASC`,
+      [orgId, RECOVERABLE_OUTCOMES_LIST],
     );
     return result.rows;
   },
