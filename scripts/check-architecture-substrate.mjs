@@ -1,13 +1,27 @@
 // Substrate-isolation architecture checks (extracted from check-architecture.mjs
 // to keep both files under the 500-line cap). These guard the v0 invariant that
 // workload execution stays inside the runner over SSH and that Docker
-// socket/API access is confined to the local allocator. Heuristic regex + line
-// scanners in the same style as the sibling check modules. The process-import
-// rule uses Oxc AST traversal so source-text lookalikes are not imports.
+// socket/API access is confined to the local allocator. The docker-exec,
+// host-bind-mount, and Docker-API rules remain heuristic regex + line scanners;
+// the process-import rule (`no-host-process-spawn`) uses Oxc AST traversal so
+// source-text lookalikes (comments/strings/templates/regex/malformed text) are
+// not treated as dependency edges, and fails closed on unparseable code sources.
 
 import { parseSync } from "oxc-parser";
 
 const invariantDocExclusions = new Set(["PROJECT_BRIEF.md", "docs/contracts/architecture-checks.md"]);
+
+// Only code sources carry import syntax; parsing prose/config (.md/.json/.sql/
+// YAML/Dockerfile/justfile) would only manufacture parse noise. Mirrors the
+// sibling structure module's code-source scoping.
+const codeSourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
+
+function isCodeSource(file) {
+  for (const ext of codeSourceExtensions) {
+    if (file.endsWith(ext)) return true;
+  }
+  return false;
+}
 
 function diagnostic(rule, file, message, line = 1) {
   return { rule, file, line, message };
@@ -18,11 +32,30 @@ function lineFor(text, index) {
 }
 
 const dependencySourceNodeTypes = new Set(
-  "ImportDeclaration ExportNamedDeclaration ExportAllDeclaration ImportExpression".split(" "),
+  "ImportDeclaration ExportNamedDeclaration ExportAllDeclaration ImportExpression TSImportType".split(" "),
 );
 
+// Parse literal child_process dependency syntax. Mirrors the fail-closed posture
+// of the sibling structure module's `dependencySpecifiers`: a thrown parseSync or
+// a populated `sourceFile.errors` returns a deterministic parse error so the
+// caller emits a no-host-process-spawn diagnostic instead of silently finding
+// zero specifiers (which would let malformed code bypass the rule).
 function childProcessSpecifiers(file, text) {
-  const sourceFile = parseSync(file, text, { range: true, sourceType: "unambiguous" });
+  let sourceFile;
+  try {
+    sourceFile = parseSync(file, text, { range: true, sourceType: "unambiguous" });
+  } catch (error) {
+    return { parseError: { message: error instanceof Error ? error.message : String(error), line: 1 } };
+  }
+  const firstParseError = sourceFile.errors?.[0];
+  if (firstParseError !== undefined) {
+    return {
+      parseError: {
+        message: firstParseError.message ?? "unknown parse error",
+        line: lineFor(text, firstParseError.labels?.[0]?.start ?? 0),
+      },
+    };
+  }
   const specifiers = [];
   const add = (node) => {
     if (node?.type === "Literal" && (node.value === "child_process" || node.value === "node:child_process")) {
@@ -52,12 +85,13 @@ function childProcessSpecifiers(file, text) {
     }
   };
   visit(sourceFile.program);
-  return specifiers;
+  return { specifiers };
 }
 
 export function checkNoHostProcessSpawn(projectFiles) {
   const diagnostics = [];
   for (const { file, text } of projectFiles) {
+    if (!isCodeSource(file)) continue;
     if (
       invariantDocExclusions.has(file) ||
       file.startsWith("services/orchestrator/src/engine/cli-runner/") ||
@@ -98,7 +132,19 @@ export function checkNoHostProcessSpawn(projectFiles) {
     ) {
       continue;
     }
-    for (const index of childProcessSpecifiers(file, text)) {
+    const { specifiers, parseError } = childProcessSpecifiers(file, text);
+    if (parseError !== undefined) {
+      diagnostics.push(
+        diagnostic(
+          "no-host-process-spawn",
+          file,
+          `could not parse code source; child_process import analysis failed closed: ${parseError.message}`,
+          parseError.line,
+        ),
+      );
+      continue;
+    }
+    for (const index of specifiers) {
       diagnostics.push(
         diagnostic(
           "no-host-process-spawn",
