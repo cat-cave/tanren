@@ -4,6 +4,11 @@
 // `retargetStackWalk` walks the PR base ONE step down the stack on each ancestor merge. See
 // walker-jj-local-integration-design.md §3.2/§3.3. The merge HOLD gating stays in
 // `mergeDispatch.ts` and is UNCHANGED.
+//
+// gv-4: merged membership is resolved over the COMPLETE persisted ancestor member vector
+// (`ancestor_stack[].specId`), never direct-only `specs.depends_on`. Applying an incomplete
+// direct-only set to the full stack leaves already-merged transitive ancestors as a stale
+// PR base after the direct parent lands.
 
 import { type AncestorStack, resolveAncestorStack } from "../../dag/ancestorStack.js";
 import type { EventStore } from "../../eventStore.js";
@@ -25,16 +30,29 @@ export interface SpeculativeState {
 }
 
 /**
+ * Spec ids that form the sole retarget membership vector: every member of the persisted
+ * `ancestor_stack` (transitive truth), in stack order. Direct `depends_on` is intentionally
+ * not a source — a depth-N chain may list only the immediate parent as a dep while the stack
+ * still carries merged grandparents.
+ */
+export function ancestorStackMemberSpecIds(ancestorStack: AncestorStack): string[] {
+  return ancestorStack.map((member) => member.specId);
+}
+
+/**
  * §2c/§2.3: the speculative state of a run at merge time. `undefined` for a NORMAL run (an
  * EMPTY `ancestor_stack`) — it merges against `default_branch` as always. For a SPECULATIVE
  * run, `ancestorStack` is the ordered stack the PR is stacked on and `unmergedAncestors` is
- * the (possibly empty) set of deps not yet genuinely merged. The merge stage uses this to:
+ * the (possibly empty) set of stack members not yet genuinely merged. The merge stage uses
+ * this to:
  *   - HOLD the merge while `unmergedAncestors` is non-empty (no unreviewed ancestor code
  *     reaches `main` early — the dependent's WORK ran on the jj-assembled stack, but its
  *     MERGE waits), and
  *   - retarget the PR base ONE step down the stack as each ancestor merges (the stack walk),
  *     landing on `default_branch` once the stack empties.
  * A `done`/`merged` ancestor is satisfied; anything else is unmerged.
+ *
+ * Membership is the complete persisted member vector (gv-4), not direct `depends_on`.
  */
 export async function resolveSpeculativeState(
   pool: RunStateClient,
@@ -55,16 +73,9 @@ export async function resolveSpeculativeState(
   if (ancestorStack.length === 0) {
     return undefined;
   }
-  const specResult = await pool.query<{ depends_on: string[] | null }>(
-    "SELECT depends_on FROM specs WHERE spec_id = $1",
-    [run.spec_id],
-  );
-  const dependsOn = (specResult.rows[0]?.depends_on ?? []).filter((id): id is string => typeof id === "string");
-  if (dependsOn.length === 0) {
-    // A speculative run with no deps is degenerate — surface it with an empty unmerged set
-    // so the stack walk retargets to default_branch before merging (the stack has emptied).
-    return { unmergedAncestors: [], ancestorStack, mergedSpecIds: new Set() };
-  }
+  // gv-4: sole base authority is the persisted ancestor member vector — never direct-only
+  // `depends_on`. Empty stack is already handled above; a non-empty stack always has members.
+  const ancestorSpecIds = ancestorStackMemberSpecIds(ancestorStack);
   // The ancestors that are genuinely merged; an unresolved speculative merge hold
   // disqualifies the row even if the spec status was advanced incorrectly.
   const mergedResult = await pool.query<{ spec_id: string }>(
@@ -90,10 +101,10 @@ export async function resolveSpeculativeState(
                   AND (done.ts > held.ts OR (done.ts = held.ts AND done.id > held.id))
              )
         )`,
-    [run.project_id, dependsOn],
+    [run.project_id, ancestorSpecIds],
   );
   const merged = new Set(mergedResult.rows.map((row) => row.spec_id));
-  const unmergedAncestors = dependsOn.filter((id) => !merged.has(id));
+  const unmergedAncestors = ancestorSpecIds.filter((id) => !merged.has(id));
   return { unmergedAncestors, ancestorStack, mergedSpecIds: merged };
 }
 
@@ -120,19 +131,22 @@ export function resolveStackRetarget(
 
 /**
  * WS-A PR-5 (walker-jj-local-integration-design.md §3.2/§3.3): the STACKED-PR retarget
- * WALK (flag-on path). On each entry: drop the genuinely-merged heads from the ordered
+ * WALK (unconditional on every speculative run — no feature flag). On each entry: drop
+ * the genuinely-merged heads from the ordered
  * `ancestor_stack`, re-point the PR base to the IMMEDIATE still-unmerged ancestor's
  * PR-head branch (or `default_branch` once the stack empties), and persist the dropped
  * stack. Idempotent — when the live base already equals the walk target, only the
  * (idempotent) stack-drop persists; no `retargetBase` / `merge.retargeted` is emitted.
  * The merge HOLD is the caller's concern and is UNCHANGED; this only walks the BASE.
+ * The walk result (`{toBase, remainingStack}`) is the SOLE canonical retarget output —
+ * computed once by `resolveStackRetarget` and returned to the caller so the held event's
+ * `speculativeBase` reuses it instead of recomputing a second time.
  */
-async function retargetStackWalk(args: SpeculativeRetargetArgs & { defaultBranch: string }): Promise<void> {
-  const { toBase, remainingStack } = resolveStackRetarget(
-    args.speculative.ancestorStack,
-    args.speculative.mergedSpecIds,
-    args.defaultBranch,
-  );
+async function retargetStackWalk(
+  args: SpeculativeRetargetArgs,
+  result: { toBase: string; remainingStack: AncestorStack },
+): Promise<void> {
+  const { toBase, remainingStack } = result;
   // §5h: read the PR's live base off the freshness probe's `readBaseBranch` (the
   // `CodeHost`/projection-backed read), NOT the GitHub `mergeable_state` snapshot. The
   // retarget itself routes through the best-effort `VisibilityProjection` (a forge-UI mirror —
@@ -211,9 +225,21 @@ export interface SpeculativeRetargetArgs {
  * merge (drops merged heads; held OR cleared), landing on `default_branch` once the stack
  * empties. A run with an empty stack is not speculative and never reaches here. The merge
  * HOLD itself stays in the caller and is UNCHANGED.
+ *
+ * Returns the SOLE canonical retarget result (`{toBase, remainingStack}`) computed by
+ * `resolveStackRetarget` — the exact value the caller uses for the held event's
+ * `speculativeBase`, so no second walk/resolver runs for the held payload.
  */
-export async function applySpeculativeRetarget(args: SpeculativeRetargetArgs): Promise<void> {
+export async function applySpeculativeRetarget(
+  args: SpeculativeRetargetArgs,
+): Promise<{ toBase: string; remainingStack: AncestorStack }> {
+  const result = resolveStackRetarget(
+    args.speculative.ancestorStack,
+    args.speculative.mergedSpecIds,
+    args.context.baseBranch,
+  );
   if (args.speculative.ancestorStack.length > 0) {
-    await retargetStackWalk({ ...args, defaultBranch: args.context.baseBranch });
+    await retargetStackWalk(args, result);
   }
+  return result;
 }

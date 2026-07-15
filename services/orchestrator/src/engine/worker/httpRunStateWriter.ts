@@ -30,6 +30,9 @@ import type {
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
+  RecoveryParkInput,
+  RecoveryParkOutcome,
+  RecoveryParkWriter,
   ResumePausedRunAtomicInput,
   ResumePausedRunAtomicOutcome,
   RunStateWriter,
@@ -51,6 +54,7 @@ import type { EventName } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
 import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { parseRecoveryParkInput, parseRecoveryParkOutcome, recoveryParkingFailed } from "./recoveryParkAtomic.js";
 
 /** Thrown when a control-plane write endpoint returns a non-2xx status. */
 export class RunStateWriteTransportError extends Error {
@@ -68,9 +72,11 @@ export class RunStateWriteTransportError extends Error {
  * The remote run-state writer. POSTs each write to the control plane over mTLS.
  * A 401 (untrusted peer) or any non-2xx surfaces as {@link
  * RunStateWriteTransportError}, which the worker treats as an infra fault — the
- * write did NOT land, so the worker never assumes a phantom success.
+ * write did NOT land, so the worker never assumes a phantom success. The one
+ * deliberate exception is `parkRecoveryAndDequeue`: its port requires transport
+ * uncertainty to become typed `parking_failed` + paced idempotent redrive.
  */
-export class HttpRunStateWriter implements RunStateWriter {
+export class HttpRunStateWriter implements RunStateWriter, RecoveryParkWriter {
   constructor(
     private readonly baseUrl: string,
     private readonly mtlsFetch: MtlsFetch,
@@ -248,6 +254,24 @@ export class HttpRunStateWriter implements RunStateWriter {
         return { flipped: true, alreadyTerminal: false };
       },
     );
+  }
+
+  async parkRecoveryAndDequeue(input: RecoveryParkInput): Promise<RecoveryParkOutcome> {
+    const parsed = parseRecoveryParkInput(input);
+    if (parsed === undefined) {
+      return recoveryParkingFailed("invalid_input");
+    }
+    try {
+      const response = await this.post<unknown>("/internal/park-recovery-and-dequeue", parsed);
+      // A malformed 2xx is no more authoritative than a dropped response. Redrive
+      // the idempotent operation; never cast arbitrary transport bytes to `parked`.
+      return parseRecoveryParkOutcome(response) ?? recoveryParkingFailed("transport_failed");
+    } catch {
+      // The request may not have reached the control plane, or its response may
+      // have been lost after COMMIT. The queue row is the idempotency readback on
+      // the paced retry, so transport uncertainty never becomes false success.
+      return recoveryParkingFailed("transport_failed");
+    }
   }
 
   async resumePausedRunAtomic(input: ResumePausedRunAtomicInput): Promise<ResumePausedRunAtomicOutcome> {
