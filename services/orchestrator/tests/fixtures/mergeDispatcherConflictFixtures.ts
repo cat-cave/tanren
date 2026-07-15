@@ -83,6 +83,7 @@ export function noopFinalizeWriter(): RunStateWriter {
     setSpecStatus: noop("setSpecStatus"),
     setSpecMetadata: noop("setSpecMetadata"),
     appendSpecSteering: noop("appendSpecSteering"),
+    prepareSpecForRecovery: async () => ({ prepared: true, fromStatus: "open" }),
     setRunSpeculativeBase: noop("setRunSpeculativeBase"),
     setRunPercolationReexecId: noop("setRunPercolationReexecId"),
     clearRunPercolationPending: noop("clearRunPercolationPending"),

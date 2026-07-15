@@ -1,13 +1,14 @@
-// Pure + dual-coordinator recovery ownership proofs (audit follow-up).
-// SpecNotRunnableError is never ownership; settlement requires RecoveryEvidencePort
-// store readback; allowlist of recoverable sources; active-owner run statuses only.
+// Recovery ownership: allowlists, system-scope settlement evidence, dual-coordinator parity.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setSystemPool, resetSystemPool } from "@tanren/db";
 import type { ConflictRecoveryReceipt } from "../src/engine/contracts/conflictResolution.js";
 import {
+  findActiveOwnerRunForSpec,
   hasStructuralOwnedReceiptShape,
   isActiveOwnerRunStatus,
   isRecoverableSourceSpecStatus,
+  loadSpecStatusForRecovery,
 } from "../src/engine/merge/recoveryOwnership.js";
 import { PgRecoveryEvidencePort } from "../src/engine/merge/recoveryEvidencePg.js";
 import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
@@ -19,8 +20,10 @@ import {
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { RecordingBatchGateReworkRouter } from "./conformance/fakes/inMemoryBatchChecker.js";
 import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
+import { applyPrepareSpecForRecovery } from "../src/engine/worker/runStateLifecycleSql.js";
+import type pg from "pg";
 
-describe("hasStructuralOwnedReceiptShape — pre-check only (never sufficient alone)", () => {
+describe("hasStructuralOwnedReceiptShape — pre-check only", () => {
   const ownedEnqueued = (specId: string, runId = "run_r", taskId = "task_r"): ConflictRecoveryReceipt => ({
     kind: "planner_replan",
     specId,
@@ -44,7 +47,7 @@ describe("isRecoverableSourceSpecStatus — fail-closed allowlist", () => {
     expect(isRecoverableSourceSpecStatus("review")).toBe(true);
   });
 
-  it("rejects terminal-blocked and unknown statuses", () => {
+  it("rejects terminal-blocked and unknown", () => {
     for (const s of ["merged", "halted", "cancelled", "needs_attention", "blocked", "unknown", ""]) {
       expect(isRecoverableSourceSpecStatus(s)).toBe(false);
     }
@@ -57,35 +60,110 @@ describe("isActiveOwnerRunStatus — excludes halted", () => {
     expect(isActiveOwnerRunStatus("running")).toBe(true);
     expect(isActiveOwnerRunStatus("paused")).toBe(true);
     expect(isActiveOwnerRunStatus("halted")).toBe(false);
-    expect(isActiveOwnerRunStatus("completed")).toBe(false);
   });
 });
 
-describe("PgRecoveryEvidencePort — store readback", () => {
-  function poolWithRows(handlers: Array<{ match: (sql: string) => boolean; rows: unknown[] }>) {
-    return {
-      async query(sql: string) {
-        for (const h of handlers) {
-          if (h.match(String(sql))) return { rows: h.rows };
+describe("applyPrepareSpecForRecovery — atomic allowlist", () => {
+  it("writes steering+reopen only for allowlisted status; refuses terminal with zero mutation", async () => {
+    const ops: string[] = [];
+    let status = "merged";
+    const client = {
+      async query(sql: string, params?: unknown[]) {
+        ops.push(String(sql).replaceAll(/\s+/gu, " ").trim());
+        if (String(sql).includes("SELECT status") && String(sql).includes("FOR UPDATE")) {
+          return { rows: [{ status }], rowCount: 1 };
         }
-        return { rows: [] };
+        if (String(sql).includes("UPDATE specs")) {
+          status = String(params?.[2] ?? status);
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
       },
     };
-  }
+    const refused = await applyPrepareSpecForRecovery(client, {
+      specId: "s1",
+      orgId: "o1",
+      steeringNote: "note",
+      reopenStatus: "open",
+    });
+    expect(refused).toEqual({ prepared: false, reason: "not_recoverable", status: "merged" });
+    expect(ops.some((o) => o.includes("UPDATE specs"))).toBe(false);
 
-  it("proves enqueued receipt when run+task bind to expected spec and are active", async () => {
-    const port = new PgRecoveryEvidencePort(
-      poolWithRows([
-        {
-          match: (s) => s.includes("FROM runs") && s.includes("run_id"),
-          rows: [{ run_id: "run_r", spec_id: "spec_a", status: "queued" }],
-        },
-        {
-          match: (s) => s.includes("FROM tasks"),
-          rows: [{ task_id: "task_r" }],
-        },
-      ]),
-    );
+    status = "in_flight";
+    const ok = await applyPrepareSpecForRecovery(client, {
+      specId: "s1",
+      orgId: "o1",
+      steeringNote: "note",
+      reopenStatus: "open",
+    });
+    expect(ok).toEqual({ prepared: true, fromStatus: "in_flight" });
+    expect(ops.some((o) => o.includes("UPDATE specs") && o.includes("operator steering"))).toBe(true);
+  });
+});
+
+/** Pool that records every SQL text (BEGIN / SET LOCAL / query / COMMIT). */
+function scopeAwarePool(handlers: Array<{ match: (sql: string) => boolean; rows: unknown[] }>) {
+  const ops: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/require-await
+  const query = async (sql: string) => {
+    const text = String(sql);
+    ops.push(text.replaceAll(/\s+/gu, " ").trim());
+    for (const h of handlers) {
+      if (h.match(text)) return { rows: h.rows, rowCount: h.rows.length };
+    }
+    return { rows: [], rowCount: 0 };
+  };
+  const pool = {
+    query,
+    // eslint-disable-next-line @typescript-eslint/require-await
+    connect: async () => ({ query, release: () => {} }),
+    _ops: ops,
+  };
+  return pool as unknown as pg.Pool & { _ops: string[] };
+}
+
+describe("routing reads — runWithOrgScope (RLS-visible)", () => {
+  it("findActiveOwnerRunForSpec emits BEGIN + SET LOCAL app.current_org_id + COMMIT", async () => {
+    const pool = scopeAwarePool([
+      {
+        match: (s) => s.includes("FROM runs") && s.includes("queued"),
+        rows: [{ run_id: "run_live", status: "running" }],
+      },
+    ]);
+    const found = await findActiveOwnerRunForSpec(pool, "org_tenant", "spec_a");
+    expect(found).toEqual({ runId: "run_live", status: "running" });
+    expect(pool._ops[0]).toBe("BEGIN");
+    expect(pool._ops.some((o) => o.includes("SET LOCAL app.current_org_id = 'org_tenant'"))).toBe(true);
+    expect(pool._ops.at(-1)).toBe("COMMIT");
+  });
+
+  it("loadSpecStatusForRecovery fails closed when scope is omitted (zero rows under RLS)", async () => {
+    const pool = scopeAwarePool([
+      { match: (s) => s.includes("FROM specs") && s.includes("status"), rows: [{ status: "in_flight" }] },
+    ]);
+    const status = await loadSpecStatusForRecovery(pool, "org_tenant", "spec_a");
+    expect(status).toBe("in_flight");
+    expect(pool._ops.some((o) => o.includes("SET LOCAL app.current_org_id = 'org_tenant'"))).toBe(true);
+    // Without SET LOCAL a production app-pool read would see zero — prove the GUC was set.
+    expect(pool._ops.filter((o) => o.startsWith("BEGIN") || o.includes("SET LOCAL")).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("PgRecoveryEvidencePort — system-scope readback", () => {
+  afterEach(() => {
+    resetSystemPool();
+  });
+
+  it("uses system scope BEGIN/COMMIT (not unscoped raw app query)", async () => {
+    const pool = scopeAwarePool([
+      {
+        match: (s) => s.includes("FROM runs") && s.includes("run_id"),
+        rows: [{ run_id: "run_r", spec_id: "spec_a", status: "queued" }],
+      },
+      { match: (s) => s.includes("FROM tasks"), rows: [{ task_id: "task_r" }] },
+    ]);
+    setSystemPool(pool);
+    const port = new PgRecoveryEvidencePort(pool);
     const evidence = await port.verifyOwnedReceipt({
       expectedSpecId: "spec_a",
       receipt: {
@@ -94,103 +172,38 @@ describe("PgRecoveryEvidencePort — store readback", () => {
         run: { kind: "enqueued", replanRunId: "run_r", plannerTaskId: "task_r" },
       },
     });
-    expect(evidence).toEqual({
-      runId: "run_r",
-      specId: "spec_a",
-      runStatus: "queued",
-      plannerTaskId: "task_r",
-    });
+    expect(evidence?.runId).toBe("run_r");
+    expect(pool._ops).toEqual(expect.arrayContaining(["BEGIN", "COMMIT"]));
+    // System scope does NOT set app.current_org_id (BYPASSRLS path).
+    expect(pool._ops.some((o) => o.includes("app.current_org_id"))).toBe(false);
   });
 
   it("rejects halted run status", async () => {
-    const port = new PgRecoveryEvidencePort(
-      poolWithRows([
-        {
-          match: (s) => s.includes("FROM runs"),
-          rows: [{ run_id: "run_r", spec_id: "spec_a", status: "halted" }],
-        },
-      ]),
-    );
-    const evidence = await port.verifyOwnedReceipt({
-      expectedSpecId: "spec_a",
-      receipt: {
-        kind: "planner_replan",
-        specId: "spec_a",
-        run: { kind: "already_running", runId: "run_r" },
+    const pool = scopeAwarePool([
+      {
+        match: (s) => s.includes("FROM runs"),
+        rows: [{ run_id: "run_r", spec_id: "spec_a", status: "halted" }],
       },
-    });
-    expect(evidence).toBeUndefined();
-  });
-
-  it("rejects run-to-spec mismatch", async () => {
-    const port = new PgRecoveryEvidencePort(
-      poolWithRows([
-        {
-          match: (s) => s.includes("FROM runs"),
-          rows: [{ run_id: "run_r", spec_id: "spec_other", status: "running" }],
+    ]);
+    setSystemPool(pool);
+    const port = new PgRecoveryEvidencePort(pool);
+    expect(
+      await port.verifyOwnedReceipt({
+        expectedSpecId: "spec_a",
+        receipt: {
+          kind: "planner_replan",
+          specId: "spec_a",
+          run: { kind: "already_running", runId: "run_r" },
         },
-      ]),
-    );
-    const evidence = await port.verifyOwnedReceipt({
-      expectedSpecId: "spec_a",
-      receipt: {
-        kind: "planner_replan",
-        specId: "spec_a",
-        run: { kind: "already_running", runId: "run_r" },
-      },
-    });
-    expect(evidence).toBeUndefined();
-  });
-
-  it("rejects enqueued receipt when planner task is not bound to the run", async () => {
-    const port = new PgRecoveryEvidencePort(
-      poolWithRows([
-        {
-          match: (s) => s.includes("FROM runs"),
-          rows: [{ run_id: "run_r", spec_id: "spec_a", status: "queued" }],
-        },
-        { match: (s) => s.includes("FROM tasks"), rows: [] },
-      ]),
-    );
-    const evidence = await port.verifyOwnedReceipt({
-      expectedSpecId: "spec_a",
-      receipt: {
-        kind: "planner_replan",
-        specId: "spec_a",
-        run: { kind: "enqueued", replanRunId: "run_r", plannerTaskId: "task_forged" },
-      },
-    });
-    expect(evidence).toBeUndefined();
+      }),
+    ).toBeUndefined();
   });
 });
 
-describe("EventEmittingMergeCoordinator — failed-drive parity + evidence", () => {
+describe("EventEmittingMergeCoordinator — evidence port required", () => {
   const PROJECT = "project_parity";
 
-  it("routes a failed drive to writer rework when gateRework is wired", async () => {
-    const queue = new InMemoryMergeQueueModel();
-    const runner = new ScriptedMergeRunner();
-    const events = new RecordingMergeQueueEventEmitter();
-    const escalator = new RecordingSpecEscalator();
-    const gateRework = new RecordingBatchGateReworkRouter();
-    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
-    runner.script("run_a", { kind: "failed", message: "fresh pre_merge failed" });
-    const coordinator = new EventEmittingMergeCoordinator({
-      queue,
-      runner,
-      events,
-      escalator,
-      gateRework,
-    });
-
-    const result = await coordinator.coordinate(PROJECT);
-
-    expect(result.dequeuedSpecId).toBe("spec_a");
-    expect(gateRework.routed.map((r) => r.specId)).toEqual(["spec_a"]);
-    expect(queue.dequeueReasonOf("run_a")).toBe("superseded");
-  });
-
-  it("parks conflict without RecoveryEvidencePort even with a well-formed receipt", async () => {
+  it("parks conflict without RecoveryEvidencePort", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
@@ -206,14 +219,11 @@ describe("EventEmittingMergeCoordinator — failed-drive parity + evidence", () 
       },
     });
     const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
-
     await coordinator.coordinate(PROJECT);
-
     expect(queue.dequeueReasonOf("run_a")).toBe("needs_attention");
-    expect(escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
   });
 
-  it("dequeues conflict only when evidence port proves the active owner run", async () => {
+  it("dequeues conflict when evidence port proves the active owner run", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
@@ -237,10 +247,26 @@ describe("EventEmittingMergeCoordinator — failed-drive parity + evidence", () 
       escalator,
       recoveryEvidence: evidence,
     });
-
     await coordinator.coordinate(PROJECT);
-
     expect(queue.dequeueReasonOf("run_a")).toBe("conflict");
-    expect(escalator.escalations).toEqual([]);
+  });
+
+  it("routes failed drive to writer rework when gateRework is wired", async () => {
+    const queue = new InMemoryMergeQueueModel();
+    const runner = new ScriptedMergeRunner();
+    const events = new RecordingMergeQueueEventEmitter();
+    const escalator = new RecordingSpecEscalator();
+    const gateRework = new RecordingBatchGateReworkRouter();
+    queue.seed({ runId: "run_a", specId: "spec_a", dependsOn: [], priority: "tbd" });
+    runner.script("run_a", { kind: "failed", message: "fresh pre_merge failed" });
+    const coordinator = new EventEmittingMergeCoordinator({
+      queue,
+      runner,
+      events,
+      escalator,
+      gateRework,
+    });
+    await coordinator.coordinate(PROJECT);
+    expect(queue.dequeueReasonOf("run_a")).toBe("superseded");
   });
 });

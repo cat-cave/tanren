@@ -20,6 +20,8 @@ import { ForgeThreadStore } from "../forge/index.js";
 import { RecoveryStore } from "../repositories/recovery.js";
 import { systemActor } from "../state/actor.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
+import { SpecNotPreparedForRecoveryError } from "../workflow/projectSpecErrors.js";
+import { applyPrepareSpecForRecovery } from "../worker/runStateLifecycleSql.js";
 
 // Re-export the shared policy set so callers reading recovery from this module
 // keep their existing import site — the shared source-of-truth lives in
@@ -164,24 +166,19 @@ export async function replanWithSteering(
   actor: ActorContext,
 ): Promise<ReplanResult> {
   assertRecoverable(ctx);
-  // RLS R3a: the spec-prep UPDATEs run in their OWN short org-scoped txn so they
-  // COMMIT before `createQueuedRunFromSpec` (which opens its own org-scoped txn
-  // on a separate connection and claims the now-`pending` spec) reads them. This
-  // mirrors the prior autocommit-per-statement ordering — wrapping the whole
-  // action in one outer txn would hide the UPDATE from the nested claim and
-  // break replan. Inert in R1.
-  // v55 #59 plane-split note: this `appendSteeringToSpec` / `reopenSpecForReplan` pair
-  // runs raw `UPDATE specs` on `pool` — which here is the orchestrator's PRIVILEGED
-  // `tanren_app` pool (the dashboard route hands `scopedPool` from `mountFeatureRoutes`,
-  // a scoping proxy over the same role; baseline migration 0000:870 grants
-  // INSERT/UPDATE/DELETE on `specs` to `tanren_app`). Unlike the gate-fail rework router
-  // (which runs from a data-plane worker on the de-privileged `tanren_dataplane` pool —
-  // baseline 0000:919 REVOKEs `specs` writes on that role and is the v55 #59 fix site),
-  // this dashboard-triggered path lands on the right role and needs no writer routing.
-  await runWithOrgScope(pool, orgId, async (client) => {
-    await appendSteeringToSpec(client, ctx.specId, steeringNote);
-    await reopenSpecForReplan(client, ctx.specId);
-  });
+  // Atomic prepare in a short org-scoped txn (steering + allowlisted reopen), then
+  // createQueuedRun on its own connection — prepare must COMMIT first so the claim sees open.
+  const prep = await runWithOrgScope(pool, orgId, (client) =>
+    applyPrepareSpecForRecovery(client, {
+      specId: ctx.specId,
+      orgId,
+      steeringNote,
+      reopenStatus: "open",
+    }),
+  );
+  if (!prep.prepared) {
+    throw new SpecNotPreparedForRecoveryError(ctx.specId, prep.reason, prep.status);
+  }
   const run = await createQueuedRunFromSpec(pool, { specId: ctx.specId, trigger: "dashboard" }, { ...actor, orgId });
   await runWithOrgScope(pool, orgId, async (client) => {
     await new PgEventStore(client).append({
@@ -334,15 +331,9 @@ export async function openInspectionThread(
   };
 }
 
-/** Append the operator's steering note to the spec description (idempotent-ish). */
-async function appendSteeringToSpec(pool: QueryClient, specId: string, steeringNote: string): Promise<void> {
-  await RecoveryStore.appendSteeringToSpec(pool, specId, steeringNote, systemActor);
-}
-
 /**
- * Re-open the spec so `createQueuedRunFromSpec` (which claims a `pending` spec)
- * can queue a fresh run. A halted run leaves the spec in `active`; resetting it
- * to `pending` lets the recovery replan re-claim it.
+ * Re-open the spec so `createQueuedRunFromSpec` can queue a fresh run (rollback path).
+ * Recovery replan uses atomic applyPrepareSpecForRecovery instead.
  */
 async function reopenSpecForReplan(pool: QueryClient, specId: string): Promise<void> {
   await RecoveryStore.reopenSpecForReplan(pool, specId, systemActor);

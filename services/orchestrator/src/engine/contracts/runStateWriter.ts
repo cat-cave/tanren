@@ -25,6 +25,8 @@ import type {
   UpdateSpecWithEventInput,
   UpdateSpecWithEventOutcome,
 } from "./runStateAtomicSeam.js";
+import type { PrepareSpecForRecoveryInput, PrepareSpecForRecoveryResult } from "../merge/recoveryOwnership.js";
+export type { PrepareSpecForRecoveryInput, PrepareSpecForRecoveryResult };
 
 /** A run-finalize transition the worker drives at run end / failure. */
 export interface FinalizeRunInput {
@@ -152,7 +154,7 @@ export interface SetSpecMetadataInput {
   metadataJson: string;
 }
 
-/** Append a steering note to the spec's description (gate-fail rework / recovery replan). */
+/** Append a steering note to the spec description (standalone; recovery uses prepareSpecForRecovery). */
 export interface AppendSpecSteeringInput {
   specId: string;
   orgId: string;
@@ -412,8 +414,11 @@ export interface RunStateWriter extends EventStore {
   /** The `UPDATE specs SET metadata` (the intake's discovery-provenance stamp). */
   setSpecMetadata(input: SetSpecMetadataInput): Promise<void>;
 
-  /** Append a steering note to the spec's description (gate-fail rework + recovery replan; v55 #59). */
+  /** Standalone steering append (recovery uses prepareSpecForRecovery). */
   appendSpecSteering(input: AppendSpecSteeringInput): Promise<void>;
+
+  /** ATOMIC recovery prepare: steering + allowlisted reopen; no writes if not prepared. */
+  prepareSpecForRecovery(input: PrepareSpecForRecoveryInput): Promise<PrepareSpecForRecoveryResult>;
 
   // --- Change-percolation (the DagWalker loop's §2c run-column writes). ---
 

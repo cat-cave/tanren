@@ -26,6 +26,8 @@ import type {
   FinalizeRunWithEventOutcome,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
+  PrepareSpecForRecoveryInput,
+  PrepareSpecForRecoveryResult,
   RecordCostInput,
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
@@ -61,6 +63,7 @@ import {
   applyFinalizeRunWithEvent,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applyPrepareSpecForRecovery,
   applyResumePausedRunAtomic,
   applySetRunAuthRef,
   applySetRunPercolationReexecId,
@@ -187,6 +190,10 @@ export class DirectRunStateWriter implements RunStateWriter {
 
   async appendSpecSteering(input: AppendSpecSteeringInput): Promise<void> {
     await runWithOrgScope(this.pool, input.orgId, (client) => applyAppendSpecSteering(client, input));
+  }
+
+  async prepareSpecForRecovery(input: PrepareSpecForRecoveryInput): Promise<PrepareSpecForRecoveryResult> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => applyPrepareSpecForRecovery(client, input));
   }
 
   async setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void> {

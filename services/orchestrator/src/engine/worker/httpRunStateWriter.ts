@@ -26,6 +26,8 @@ import type {
   FinalizeRunWithEventOutcome,
   InsertTaskInput,
   MergeRunVerifiedAncestorShaInput,
+  PrepareSpecForRecoveryInput,
+  PrepareSpecForRecoveryResult,
   RecordCostInput,
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
@@ -145,6 +147,10 @@ export class HttpRunStateWriter implements RunStateWriter {
 
   async appendSpecSteering(input: AppendSpecSteeringInput): Promise<void> {
     await this.post<void>("/internal/append-spec-steering", input);
+  }
+
+  async prepareSpecForRecovery(input: PrepareSpecForRecoveryInput): Promise<PrepareSpecForRecoveryResult> {
+    return this.post<PrepareSpecForRecoveryResult>("/internal/prepare-spec-for-recovery", input);
   }
 
   async setRunSpeculativeBase(input: SetRunSpeculativeBaseInput): Promise<void> {

@@ -208,6 +208,7 @@ function replanRoutingResolver(
         // Required writer for escalate paths; happy-path enqueue uses the enqueuer only.
         runStateWriter: {
           setSpecStatus: async () => {},
+          prepareSpecForRecovery: async () => ({ prepared: true, fromStatus: "in_flight" }),
           updateSpecWithEvent: async () => {},
         } as never,
       });

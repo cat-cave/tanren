@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import { PgBatchGateReworkRouter } from "../src/engine/merge/batchGateReworkRouter.js";
-import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
 import {
   gateErrorSignature,
   type ReplanEnqueuer,
@@ -196,17 +196,12 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
 
   it("FAIL-CLOSED: a terminal merged culprit cannot own writer rework", async () => {
     const enqueuer: ReplanEnqueuer = {
-      enqueue: () => Promise.resolve({ replanRunId: "x", plannerTaskId: "y" }),
+      enqueue: (input) =>
+        Promise.reject(new SpecNotPreparedForRecoveryError(input.specId, "not_recoverable", "merged")),
     };
     const appended: Appended[] = [];
     const statusWrites: { specId: string; status: string }[] = [];
-    const router = makeRouter({
-      enqueuer,
-      priorReworks: [],
-      appended,
-      statusWrites,
-      specStatusById: new Map([["spec_merged", "merged"]]),
-    });
+    const router = makeRouter({ enqueuer, priorReworks: [], appended, statusWrites });
 
     const recovery = await router.routeGateFailToRework({
       projectId: PROJECT,

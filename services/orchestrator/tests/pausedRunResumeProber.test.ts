@@ -121,6 +121,7 @@ function buildRecordingWriter(rows: RunRow[]): {
     setSpecStatus: async () => {},
     setSpecMetadata: async () => {},
     appendSpecSteering: async () => {},
+    prepareSpecForRecovery: async () => ({ prepared: true, fromStatus: "open" }),
     setRunSpeculativeBase: async () => {},
     setRunPercolationReexecId: async () => {},
     clearRunPercolationPending: async () => {},

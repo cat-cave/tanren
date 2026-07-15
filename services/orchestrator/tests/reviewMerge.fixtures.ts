@@ -471,6 +471,7 @@ export function fakeMergeWriter(pool: ReviewMergePool, events: EventStore): RunS
     setSpecStatus: unsupported("setSpecStatus"),
     setSpecMetadata: unsupported("setSpecMetadata"),
     appendSpecSteering: unsupported("appendSpecSteering"),
+    prepareSpecForRecovery: unsupported("prepareSpecForRecovery"),
     // Audit D-R3.2: the stacked-PR retarget now routes the ancestor_stack drop through
     // the writer seam (the in-process pool UPDATE fallback was unreachable in production
     // after PR #714). Forward the write into the same `ancestorStackWrites` recorder the

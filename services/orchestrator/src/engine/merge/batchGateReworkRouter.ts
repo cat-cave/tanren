@@ -41,13 +41,9 @@ import {
   type ReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
-import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { createLogger } from "../observability/logger.js";
-import {
-  findActiveOwnerRunForSpec,
-  isRecoverableSourceSpecStatus,
-  loadSpecStatusForRecovery,
-} from "./recoveryOwnership.js";
+import { findActiveOwnerRunForSpec } from "./recoveryOwnership.js";
 
 const log = createLogger("batch-gate-rework");
 
@@ -127,20 +123,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       };
     }
 
-    const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.culprit.specId);
-    if (existingStatus === undefined || !isRecoverableSourceSpecStatus(existingStatus)) {
-      const detail =
-        existingStatus === undefined
-          ? "spec status is missing"
-          : `spec status '${existingStatus}' is not a recoverable recovery source`;
-      const message = await this.escalateEnqueueFailure(orgId, input, new Error(detail));
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
-        message,
-      };
-    }
-
+    // Enqueuer atomically prepares (steering + allowlisted reopen); no pre-read mutation.
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     try {
       // The never-discard re-author: re-open the spec to `open` + append the gate error as
@@ -164,9 +147,17 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         },
       };
     } catch (error) {
-      // SpecNotRunnableError is NEVER ownership alone — independently prove an ACTIVE owner run.
+      if (error instanceof SpecNotPreparedForRecoveryError) {
+        const message = await this.escalateEnqueueFailure(orgId, input, error);
+        return {
+          kind: "parked",
+          receipt: { kind: "needs_attention", specId: input.culprit.specId, source: "writer_rework" },
+          message,
+        };
+      }
+      // SpecNotRunnableError is NEVER ownership alone — org-scoped active-owner proof.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(this.deps.pool, input.culprit.specId);
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, orgId, input.culprit.specId);
         if (live !== undefined) {
           log.warn(
             "gate-fail rework found the spec already claimed; verified an active owner run",

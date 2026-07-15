@@ -140,6 +140,21 @@ describe("P2B-0008 replan_with_steering", () => {
     const res = await post(h.app, `${base}/replan`, { steeringNote: "" });
     expect(res.status).toBe(400);
   });
+
+  it("never mutates steering or status on a terminal (merged) spec — no resurrection", async () => {
+    h.pool.specs.set(SPEC, {
+      ...h.pool.specs.get(SPEC)!,
+      status: "merged",
+      description: "final description",
+    });
+    const res = await post(h.app, `${base}/replan`, { steeringNote: "should not stick" });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe("spec_not_prepared_for_recovery");
+    const spec = h.pool.specs.get(SPEC)!;
+    expect(spec.status).toBe("merged");
+    expect(spec.description).toBe("final description");
+    expect(spec.description).not.toContain("should not stick");
+  });
 });
 
 describe("P2B-0008 rollback_to_commit", () => {

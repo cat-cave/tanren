@@ -1,17 +1,3 @@
-// THE NEVER-DISCARD KEYSTONE PROOF (tanren-owns-the-engine.md §3/§7): the
-// BaseShiftCoordinator REBASES the dependent's existing run/branch in place via the jj
-// `WorkspaceVcsCore` and re-plans ONLY when the resolver + re-gate say the old work no
-// longer fits — it NEVER supersede+regenerates (the deleted `PgPercolationReexecutor`).
-// Driven through in-memory seams (TEST FIXTURES — they live here, never src/). Proves:
-//   (1) rebase-not-regenerate: an ancestor lands → the dependent's run row is the SAME
-//       run_id (the `reexecRunId` IS the dependent's own run id, NOT a new run), its
-//       branch was rebased (`rebaseOnto` invoked on the jj core), NO new run was
-//       created, and re-plan was NOT invoked on a clean rebase + passing re-gate;
-//   (2) a conflicted rebase RECORDS the jj conflict (the work survives) and re-plans
-//       ONLY when the resolver says it no longer fits;
-//   (3) `integration.rebase` / `rebase_vs_rebuild` instrumentation is emitted;
-//   (4) fail-closed: an unresolvable re-gate HOLDS (never merges, never discards).
-
 import { describe, expect, it } from "vitest";
 import {
   decideSettle,
@@ -63,8 +49,6 @@ const DECISION: PercolationDecision = {
   immediateSeverity: "P0",
 };
 
-// ---- In-memory seams (fixtures) -------------------------------------------
-
 /** A jj `WorkspaceVcsCore` fake recording `rebaseOnto` + `resolveConflict` invocations. */
 class RecordingWorkspaceCore implements WorkspaceVcsCore {
   readonly rebaseCalls: Array<{ branch: string; baseSha: string }> = [];
@@ -87,7 +71,6 @@ class RecordingWorkspaceCore implements WorkspaceVcsCore {
         between: { specId: branch, otherSpecId: "base" },
         paths: ["src/x.ts"],
       };
-      // jj: a conflicting rebase SUCCEEDS + records the conflict IN the commit.
       return { outcome: "conflicted", headSha: "sha-rebased-conflicted", conflict };
     }
     return { outcome: "clean", headSha: "sha-rebased-clean" };
@@ -109,8 +92,6 @@ class RecordingOpener implements BaseShiftWorkspaceOpener {
   readonly calls: Array<{
     runId: string;
     nonSpeculative: boolean;
-    // §2.2: the re-resolved ancestor stack the coordinator threads to the opener (the value
-    // the live-jj-local opener assembles `main + ordered ancestors` from).
     ancestorStack: AncestorStack | undefined;
   }> = [];
   async open(input: {
@@ -127,8 +108,6 @@ class RecordingOpener implements BaseShiftWorkspaceOpener {
   }
 }
 
-// Counter-bearing seam fakes built as factories (not classes — the file's class budget
-// is reserved for the richer recording fakes below).
 type ScriptedReGate = BaseShiftReGate & { calls: number };
 function scriptedReGate(verdict: ReGateVerdict, gateError?: string): ScriptedReGate {
   const fake: ScriptedReGate = {
@@ -189,8 +168,6 @@ function recordingNodeReader(): RecordingNodeReader {
 
 /** Records EXACTLY which keep-run-row / replan writes ran — the never-discard assertions. */
 class RecordingPersistence implements BaseShiftPersistence {
-  // jj-local: the re-point writes ONLY the re-resolved ancestor stack (the legacy
-  // `speculative_base` column was dropped in WS-B PR-12 — never carried on the port).
   readonly repointStacks: Array<{ runId: string; ancestorStack: AncestorStack }> = [];
   readonly markedInFlight: Array<{ runId: string; ancestorSpecId: string; toSha: string }> = [];
   readonly replanned: Array<{ runId: string; specId: string; reason: string }> = [];
@@ -211,8 +188,6 @@ class RecordingPersistence implements BaseShiftPersistence {
 
 class RecordingEventEmitter implements BaseShiftEventEmitter {
   readonly events: Array<{ runId: string; decision: RebaseDecision; rebaseConflicted: boolean; sameRunId: true }> = [];
-  // The FULL emitted payload (the never-discard `sameRunId: true` mirror the production
-  // `appendIntegrationRebaseEvent` builds) — for asserting contract-validity.
   readonly rawEvents: Array<Record<string, unknown>> = [];
   async emitRebase(input: {
     specId: string;
@@ -268,8 +243,6 @@ function harness(opts: {
   const nodes = recordingNodeReader();
   const events = new RecordingEventEmitter();
   const gateRework = recordingGateRework();
-  // gateRework is REQUIRED on BaseShiftCoordinatorDeps (Codex critic #15) — every construction
-  // site MUST wire it; there is no degenerate-replan fallback to conform against.
   const coord = new BaseShiftCoordinator({
     workspace,
     opener,
@@ -283,8 +256,6 @@ function harness(opts: {
   return { coord, workspace, opener, reGate, resolver, persistence, nodes, events, gateRework };
 }
 
-// The default re-resolved ancestor stack the kick-off threads (one unmerged ancestor,
-// spec_a, at its NEW head — the real PR-head branch + run id the stack resolver supplies).
 const DEFAULT_STACK: AncestorStack = [
   { specId: "spec_a", runId: "run_a", branch: "tanren/spec_a", headSha: "sha-new" },
 ];
@@ -305,18 +276,11 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     const h = harness({ conflictOnRebase: false, reGate: "passed" });
     const result = await reexec(h);
 
-    // (1) NEVER-DISCARD: the re-exec run id IS the dependent's OWN run id — not a new run.
     expect(result.reexecRunId).toBe(DEP_RUN);
-    // (1) the branch was REBASED on the jj core (rebaseOnto invoked) — never a fresh clone.
     expect(h.workspace.rebaseCalls).toEqual([{ branch: DEP_BRANCH, baseSha: "sha-new-base" }]);
-    // (1) the run row was KEPT: re-pointed + marked in-flight pointing at the SAME run. jj-local:
-    // there is NO synthesized integration ref, so `runs.ancestor_stack` (the re-resolved stack)
-    // is the sole base written.
     expect(h.persistence.repointStacks).toEqual([{ runId: DEP_RUN, ancestorStack: DEFAULT_STACK }]);
     expect(h.persistence.markedInFlight).toEqual([{ runId: DEP_RUN, ancestorSpecId: "spec_a", toSha: "sha-new" }]);
-    // (1) re-plan was NOT invoked on a clean rebase + passing re-gate (tokens REUSED).
     expect(h.persistence.replanned).toEqual([]);
-    // S0: the affected integration_nodes were consulted (observe-only).
     expect(h.nodes.calls).toBe(1);
   });
 
@@ -336,10 +300,8 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     });
     const result = await reexec(h);
 
-    // The conflicting rebase SUCCEEDED + recorded the conflict (the work was not discarded).
     expect(h.workspace.rebaseCalls).toHaveLength(1);
     expect(h.resolver.calls).toBe(1);
-    // The resolved tree fit (re-gate passed) ⇒ KEEP the run (same run id), NO re-plan.
     expect(result.reexecRunId).toBe(DEP_RUN);
     expect(h.persistence.repointStacks).toHaveLength(1);
     expect(h.persistence.replanned).toEqual([]);
@@ -352,11 +314,9 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     const h = harness({ conflictOnRebase: true, resolution: { resolved: false, reason: "intents genuinely collide" } });
     const result = await reexec(h);
 
-    // Still the SAME run row — re-plan keeps the work alive on it, never a new run.
     expect(result.reexecRunId).toBe(DEP_RUN);
     expect(h.persistence.replanned).toHaveLength(1);
     expect(h.persistence.replanned[0]?.runId).toBe(DEP_RUN);
-    // Never absorbed/kept-clean on an irreconcilable conflict.
     expect(h.persistence.markedInFlight).toEqual([]);
     expect(h.events.events).toEqual([
       { runId: DEP_RUN, decision: "replanned", rebaseConflicted: true, sameRunId: true },
@@ -364,35 +324,22 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
   });
 
   it("a CLEAN rebase whose re-gate FAILS a GATE TIER ⇒ WRITER REWORK (carrying the gate error), NOT replan/irreconcilable", async () => {
-    // THE FIX: a clean rebase (jj recorded NO conflict) whose fresh re-gate FAILS a GATE TIER
-    // (lint/test/build) on the new base is the WRITER's to fix — route to WRITER REWORK
-    // carrying the real gate error as steering, NEVER to replan (the old, mis-classified
-    // behavior that conflated a clean-rebase gate-fail with an irreconcilable conflict and
-    // stranded the spec). The convergence detector inside the router owns escalation (no count).
     const gateError = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
     const h = harness({ conflictOnRebase: false, reGate: "failed", reGateError: gateError });
     await reexec(h);
-    // Routed to WRITER REWORK with the REAL gate error (no_silent_fallback) — NOT replanned.
     expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
-    // Truthful decision: writer_rework (not laundered as planner replanned).
     const event = h.events.rawEvents[0];
     expect(event).toMatchObject({ decision: "writer_rework", rebaseConflicted: false, sameRunId: true });
     expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
   });
 
   it("Codex critic #15: a clean-rebase gate-fail ALWAYS routes to writer rework, NEVER to replan (no fallback)", async () => {
-    // THE ERADICATED REGRESSION: `gateRework` used to be OPTIONAL; when absent, a clean-rebase
-    // gate failure fell back to `recordReplan`, silently violating the "writer rework, not
-    // replan" doctrine (PR #682 / merge re-gate design). The fix makes gateRework REQUIRED
-    // and drops the fallback branch — the routing is unconditional.
     const gateError = "base-shift re-gate failed at tier tier-3: step 'build' (exit 2)";
     const h = harness({ conflictOnRebase: false, reGate: "failed", reGateError: gateError });
     await reexec(h);
-    // ROUTED to writer rework carrying the real gate error — the doctrine's landing point.
     expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
-    // NEVER falls back to replan (eradicated) and NEVER stamps keep-run (the gate did not pass).
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
     const event = h.events.rawEvents[0];
@@ -427,7 +374,6 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     });
     await reexec(h);
     expect(h.persistence.replanned).toEqual([]);
-    // The coordinator's gate-rework seam stays untouched.
     expect(h.gateRework.calls).toEqual([]);
     expect(h.events.events).toEqual([
       { runId: DEP_RUN, decision: "writer_rework", rebaseConflicted: true, sameRunId: true },
@@ -437,7 +383,6 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
   it("FAIL-CLOSED: a `pending` (inconclusive) re-gate HOLDS — never merges, never discards", async () => {
     const h = harness({ conflictOnRebase: false, reGate: "pending" });
     await expect(reexec(h)).rejects.toBeInstanceOf(BaseShiftHeldError);
-    // The work survives: no replan write, no keep-run write — just a loud hold.
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
   });
@@ -446,14 +391,11 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     const h = harness({ conflictOnRebase: false, reGate: "passed" });
     const result = await reexec(h, { nonSpeculative: true, ancestorStack: [] });
     expect(result.reexecRunId).toBe(DEP_RUN);
-    // jj-local: non-speculative ⇒ the re-resolved stack is EMPTY (a real run against main).
     expect(h.persistence.repointStacks).toEqual([{ runId: DEP_RUN, ancestorStack: [] }]);
   });
 });
 
 describe("§5-P0 settle fix (tanren-owns-the-engine.md §5) — a changes_requested re-exec NEVER absorbs", () => {
-  // The S1-plumbed review verdict is a FIRST-CLASS settle input: a `changes_requested`
-  // re-exec must NOT advance the termination key / unblock the merge, even audited-clean.
   it("an audited-clean re-exec whose review verdict is changes_requested ⇒ REPLANNED (not absorbed)", () => {
     expect(decideSettle("audited", "none", "changes_requested")).toBe("replanned");
     expect(decideSettle("review", "none", "changes_requested")).toBe("replanned");
@@ -468,11 +410,6 @@ describe("§5-P0 settle fix (tanren-owns-the-engine.md §5) — a changes_reques
   });
 });
 
-// walker-jj-local-integration-design.md §2.2 — the never-discard base shift over the LOCAL
-// ancestor stack. Two coupling points vs the deleted synthesized-ref path: (1) the
-// coordinator THREADS the re-resolved ancestor stack to the opener (which assembles it
-// locally); (2) `keepRun` re-points `runs.ancestor_stack` to the re-resolved stack (a run is
-// "speculative" iff the stack is non-empty — the legacy `speculative_base` column is gone).
 describe("base-shift over the re-resolved ancestor stack", () => {
   it("the re-resolved stack is THREADED to the opener (assembled locally, not a synthesized ref)", async () => {
     const h = harness({ conflictOnRebase: false, reGate: "passed" });
@@ -481,13 +418,9 @@ describe("base-shift over the re-resolved ancestor stack", () => {
       {
         runId: DEP_RUN,
         nonSpeculative: false,
-        // The opener got the re-resolved stack (NOT undefined) — so the live opener assembles
-        // it locally (`main + ordered ancestors`), never a synthesized host ref.
         ancestorStack: DEFAULT_STACK,
       },
     ]);
-    // The dependent's branch was rebased onto the opener's assembled head (never-discard:
-    // the SAME branch, rebased in place — not regenerated).
     expect(h.workspace.rebaseCalls).toEqual([{ branch: DEP_BRANCH, baseSha: "sha-new-base" }]);
   });
 
@@ -500,8 +433,6 @@ describe("base-shift over the re-resolved ancestor stack", () => {
   it("every ancestor merged ⇒ the re-resolved stack is EMPTY (a real run against main)", async () => {
     const h = harness({ conflictOnRebase: false, reGate: "passed" });
     await reexec(h, { nonSpeculative: true, ancestorStack: [] });
-    // Non-speculative: the opener gets an empty stack (it takes the plain default_branch
-    // clone, not a local assembly) and keepRun writes an empty stack.
     expect(h.opener.calls).toEqual([{ runId: DEP_RUN, nonSpeculative: true, ancestorStack: [] }]);
     expect(h.persistence.repointStacks).toEqual([{ runId: DEP_RUN, ancestorStack: [] }]);
   });

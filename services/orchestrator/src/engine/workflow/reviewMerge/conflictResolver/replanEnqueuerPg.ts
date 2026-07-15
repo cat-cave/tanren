@@ -1,23 +1,12 @@
-// The PRODUCTION wirings of the replan router's never-discard seams (v35 — the
-// replan-routed-but-never-executed stall fix). The `SpecStatusReplanRouter` is the
-// single chokepoint both the base-shift coordinator and the change-percolation settler
-// reach (via `recordReplanContext`) when an in-place rebase cannot be re-gated onto the
-// shifted base. It used to only flip the spec's status + append an event — so the spec
-// sat `in_flight` with NO live run forever. These seams make a routed replan actually
-// RUN: a fresh re-plan run is ENQUEUED (the spec's work re-authored on the new base),
-// and the prior-replan count is read so the routing is BOUNDED (no hot-loop).
-//
-// Both seams reuse the EXACT mechanisms the recovery `replan_with_steering` action and
-// the DagWalker enqueue already use — re-open the spec to `open`, append the replan
-// context as steering, then `createQueuedRunFromSpec` (in-process) or the control-plane
-// `RunStateWriter.createQueuedRun`. The re-open + steering UPDATEs COMMIT in their own
-// short org-scoped txn BEFORE the run-create (which opens its own connection and claims
-// the now-`open` spec) reads them — the same ordering `replanWithSteering` documents.
+// Production replan enqueuer: atomic prepareSpecForRecovery (steering + allowlisted
+// reopen in ONE org-scoped txn), then createQueuedRun. Terminal/missing/unknown specs
+// receive neither steering nor a run attempt.
 
 import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../../../auth/schemas.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
+import { SpecNotPreparedForRecoveryError } from "../../../workflow/projectSpecErrors.js";
 import {
   conflictSignatureOf,
   gateErrorSignature,
@@ -26,35 +15,21 @@ import {
 } from "./replanRouter.js";
 
 /**
- * The production replan enqueuer: re-open the spec to the re-drivable status + append
- * the replan context as steering (one short org-scoped txn that COMMITS first), then
- * enqueue a fresh re-plan run. Routes the run-create through the control plane when a
- * writer is wired, else `createQueuedRunFromSpec` in-process (the same dual path the
- * DagWalker enqueuer uses). Returns the new run id (the observable `replanRunId`).
+ * Production replan enqueuer: prepare (atomic) then enqueue. Prepare fails closed
+ * for non-allowlisted sources with zero writes; createQueuedRun only runs after prepared.
  */
 export function buildReplanEnqueuer(_pool: pg.Pool, runStateWriter: RunStateWriter): ReplanEnqueuer {
   return {
     async enqueue(input) {
-      // Audit D-R3.2: the writer is REQUIRED — both re-open + steer writes route through
-      // the privileged control-plane pool over mTLS (the de-privileged data plane cannot
-      // write `specs` directly per migration 0000:919). The in-process raw-SQL fallback
-      // was unreachable in production once PR #714's `runStateWriterFromEnv` always
-      // returned a writer.
-      await runStateWriter.appendSpecSteering({
+      const prep = await runStateWriter.prepareSpecForRecovery({
         specId: input.specId,
         orgId: input.orgId,
         steeringNote: input.steeringNote,
+        reopenStatus: input.reopenStatus,
       });
-      // Fail closed: never resurrect terminal-blocked statuses (walkerPg terminal_blocked).
-      // Allowlist of recoverable sources is enforced at the router; this guard is the
-      // enqueuer's last line so a stray caller cannot reopen merged/halted/cancelled/needs_attention.
-      await runStateWriter.setSpecStatus({
-        specId: input.specId,
-        orgId: input.orgId,
-        status: input.reopenStatus,
-        notFromStatuses: ["merged", "halted", "cancelled", "needs_attention"],
-      });
-      // (2) Enqueue the re-plan run — the never-discard re-author on the new base.
+      if (!prep.prepared) {
+        throw new SpecNotPreparedForRecoveryError(input.specId, prep.reason, prep.status);
+      }
       const actor: ActorContext = {
         userId: "replan-router",
         orgId: input.orgId,
@@ -62,21 +37,16 @@ export function buildReplanEnqueuer(_pool: pg.Pool, runStateWriter: RunStateWrit
         scopes: ["platform:admin"],
         source: "local_dev",
       };
-      const createInput = { specId: input.specId, trigger: "replan_routed" };
-      const run = await runStateWriter.createQueuedRun({ input: createInput, actor });
+      const run = await runStateWriter.createQueuedRun({
+        input: { specId: input.specId, trigger: "replan_routed" },
+        actor,
+      });
       return { replanRunId: run.runId, plannerTaskId: run.plannerTaskId };
     },
   };
 }
 
-/**
- * The production prior-replan reader (the convergence-detector input): read the spec's prior
- * `merge.conflict.replan_routed` conflict signatures, oldest→newest. The `events` table is
- * unreadable to the de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS
- * system pool with the org GUC still applied on top (the same hop the drive-path uses). A
- * legacy row without a `conflictSignature` falls back to a hash of its `newContext` so the
- * detector can still tell same-conflict from different-conflict.
- */
+/** Prior replan conflict signatures (system-pool read + org GUC). */
 export function buildPriorReplanReader(pool: pg.Pool): PriorReplanReader {
   return {
     async signatures(input) {
@@ -100,15 +70,7 @@ export function buildPriorReplanReader(pool: pg.Pool): PriorReplanReader {
   };
 }
 
-/**
- * The production prior-gate-rework reader (the convergence-detector input for the re-gate
- * gate-fail rework router): read the spec's prior `merge.regate.gate_rework_routed`
- * (disposition `reworked`) gate-error SIGNATURES, oldest→newest. The `events` table is
- * unreadable to the de-privileged data-plane role (0031 REVOKE), so read on the BYPASSRLS
- * system pool with the org GUC applied on top (the same hop the replan reader uses). A spec
- * whose re-gate error keeps CHANGING is making progress; the SAME signature recurring is the
- * fixed point that escalates.
- */
+/** Prior gate-rework error signatures (system-pool read + org GUC). */
 export function buildPriorGateReworkReader(
   pool: pg.Pool,
 ): (input: { specId: string; orgId: string }) => Promise<string[]> {

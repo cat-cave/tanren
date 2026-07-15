@@ -148,6 +148,22 @@ export class RecoveryMemoryPool {
     const t = sql.trim();
 
     if (t === "BEGIN" || t === "COMMIT" || t === "ROLLBACK") return { rows: [], rowCount: 0 };
+    if (t.startsWith("SET LOCAL")) return { rows: [], rowCount: 0 };
+
+    // atomic prepareSpecForRecovery: lock status
+    if (/SELECT status FROM specs WHERE spec_id = \$1 FOR UPDATE/u.test(t)) {
+      const spec = this.specs.get(String(params[0]));
+      return spec ? { rows: [{ status: spec.status }], rowCount: 1 } : { rows: [], rowCount: 0 };
+    }
+    // atomic prepare: steering + reopen in one UPDATE
+    if (t.startsWith("UPDATE specs") && t.includes("operator steering") && t.includes("status = $3")) {
+      const spec = this.specs.get(String(params[0]));
+      if (spec === undefined) return { rows: [], rowCount: 0 };
+      if (!["open", "in_flight", "review"].includes(spec.status)) return { rows: [], rowCount: 0 };
+      spec.description = `${spec.description}\n\n[operator steering] ${String(params[1])}`;
+      spec.status = String(params[2]);
+      return { rows: [], rowCount: 1 };
+    }
 
     // assertRunAccess: project_id + spec_id from runs
     if (t.startsWith("SELECT project_id, spec_id FROM runs WHERE run_id = $1")) {

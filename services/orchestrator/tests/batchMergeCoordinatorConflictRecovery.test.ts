@@ -32,8 +32,6 @@ interface Harness {
 }
 
 function makeHarness(opts: { wireGateRework?: boolean; wireEvidence?: boolean } = {}): Harness {
-  const wireGateRework = opts.wireGateRework !== false;
-  const wireEvidence = opts.wireEvidence !== false;
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
   const checker = new InMemoryBatchChecker();
@@ -49,8 +47,8 @@ function makeHarness(opts: { wireGateRework?: boolean; wireEvidence?: boolean } 
     events,
     batchEvents,
     escalator,
-    ...(wireGateRework ? { gateRework } : {}),
-    ...(wireEvidence ? { recoveryEvidence: evidence } : {}),
+    ...(opts.wireGateRework !== false ? { gateRework } : {}),
+    ...(opts.wireEvidence !== false ? { recoveryEvidence: evidence } : {}),
     resolveMaxBatchSize: () => Promise.resolve(8),
     sleep: () => Promise.resolve(),
   });
@@ -59,6 +57,20 @@ function makeHarness(opts: { wireGateRework?: boolean; wireEvidence?: boolean } 
 
 function seed(h: Harness, specId: string, dependsOn: string[] = [], priority: SpecPriority = "tbd"): void {
   h.queue.seed({ runId: `run_${specId}`, specId, dependsOn, priority });
+}
+
+function seedPair(h: Harness): void {
+  seed(h, "spec_a");
+  seed(h, "spec_b");
+  h.checker.baseConflictWhenContains("spec_b");
+}
+
+function scriptOwnedConflict(
+  h: Harness,
+  message: string,
+  receipt: import("../src/engine/contracts/conflictResolution.js").ConflictRecoveryReceipt,
+): void {
+  h.runner.script("run_spec_b", mapConflictDriveOutcome({ message, conflictRecovery: { kind: "owned", receipt } }));
 }
 
 describe("BatchMergeCoordinator — conflict recovery ownership and order", () => {
@@ -346,211 +358,105 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
 
   it("rejects a wrong-spec owned receipt (forged cross-spec ownership)", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
-    // Evidence exists only for the OTHER spec — queue entry is still spec_b.
+    seedPair(h);
     h.evidence.seedEnqueued("spec_other_merged", "run_other", "task_other", "queued");
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "resolver minted ownership for the other side",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_other_merged",
-            run: { kind: "enqueued", replanRunId: "run_other", plannerTaskId: "task_other" },
-          },
-        },
-      }),
-    );
-
+    scriptOwnedConflict(h, "resolver minted ownership for the other side", {
+      kind: "planner_replan",
+      specId: "spec_other_merged",
+      run: { kind: "enqueued", replanRunId: "run_other", plannerTaskId: "task_other" },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.escalator.escalations.map((e) => e.specId)).toEqual(["spec_b"]);
   });
 
   it("rejects an owned receipt with empty durable identifiers", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "forged empty enqueued ids",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "enqueued", replanRunId: "", plannerTaskId: "  " },
-          },
-        },
-      }),
-    );
-
+    seedPair(h);
+    scriptOwnedConflict(h, "forged empty enqueued ids", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "enqueued", replanRunId: "", plannerTaskId: "  " },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
 
   it("rejects already_running without a runId (structural forge)", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "forged bare already_running",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "already_running", runId: "" },
-          },
-        },
-      }),
-    );
-
+    seedPair(h);
+    scriptOwnedConflict(h, "forged bare already_running", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "already_running", runId: "" },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
 
   it("FAIL-CLOSED: absent RecoveryEvidencePort parks even with a well-formed typed receipt", async () => {
     const h = makeHarness({ wireEvidence: false });
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "typed receipt without verifier",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_b" },
-          },
-        },
-      }),
-    );
-
+    seedPair(h);
+    scriptOwnedConflict(h, "typed receipt without verifier", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_b" },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
     expect(h.escalator.escalations[0]?.message).toMatch(/no RecoveryEvidencePort/u);
   });
 
   it("FAIL-CLOSED: halted run is not active owner evidence at settlement", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
+    seedPair(h);
     h.evidence.seed("spec_b", { runId: "run_halted_b", status: "halted" });
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "already_running on halted",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "already_running", runId: "run_halted_b" },
-          },
-        },
-      }),
-    );
-
+    scriptOwnedConflict(h, "already_running on halted", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "already_running", runId: "run_halted_b" },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
 
   it("FAIL-CLOSED: run-to-spec mismatch at settlement", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
+    seedPair(h);
     h.evidence.seed("spec_b", { runId: "run_x", status: "running", wrongSpecId: "spec_other" });
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "run belongs to another spec",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "already_running", runId: "run_x" },
-          },
-        },
-      }),
-    );
-
+    scriptOwnedConflict(h, "run belongs to another spec", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "already_running", runId: "run_x" },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
 
   it("FAIL-CLOSED: terminal run after mint-before-settle (evidence expires)", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
+    seedPair(h);
     h.evidence.seedEnqueued("spec_b", "run_replan_b", "task_b", "queued");
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "was owned at mint",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_b" },
-          },
-        },
-      }),
-    );
-    // Expire between mint and settle: reject all readbacks.
+    scriptOwnedConflict(h, "was owned at mint", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_b" },
+    });
     h.evidence.rejectAll = true;
-
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
 
   it("FAIL-CLOSED: forged enqueued receipt with wrong plannerTaskId", async () => {
     const h = makeHarness();
-    seed(h, "spec_a");
-    seed(h, "spec_b");
-    h.checker.baseConflictWhenContains("spec_b");
+    seedPair(h);
     h.evidence.seedEnqueued("spec_b", "run_replan_b", "task_real", "queued");
-    h.runner.script(
-      "run_spec_b",
-      mapConflictDriveOutcome({
-        message: "forged planner task",
-        conflictRecovery: {
-          kind: "owned",
-          receipt: {
-            kind: "planner_replan",
-            specId: "spec_b",
-            run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_forged" },
-          },
-        },
-      }),
-    );
-
+    scriptOwnedConflict(h, "forged planner task", {
+      kind: "planner_replan",
+      specId: "spec_b",
+      run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_forged" },
+    });
     await h.coordinator.coordinate(PROJECT);
-
     expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
   });
 
@@ -582,7 +488,6 @@ describe("BatchMergeCoordinator — conflict recovery ownership and order", () =
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
     expect(h.queue.statusOf("run_spec_b")).toBe("merged");
     expect(h.queue.dequeueReasonOf("run_spec_c")).toBe("conflict");
-    // Suffix D was never driven this pass but remains live/queued for the next coordinate.
     expect(h.queue.statusOf("run_spec_d")).toBe("queued");
     const formation = formBatch(await h.queue.loadSnapshot(PROJECT), 8);
     expect(formation.batch.map((e) => e.specId)).toEqual(["spec_d"]);

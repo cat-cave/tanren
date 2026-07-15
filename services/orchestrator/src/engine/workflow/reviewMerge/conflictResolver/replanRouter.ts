@@ -39,18 +39,12 @@ import type pg from "pg";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import type { EventStore } from "../../../eventStore.js";
 import type { ReplanRouter, ReplanRouteResult } from "../../../contracts/conflictResolution.js";
-import { SpecNotRunnableError } from "../../projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
-import {
-  findActiveOwnerRunForSpec,
-  isRecoverableSourceSpecStatus,
-  loadSpecStatusForRecovery,
-} from "../../../merge/recoveryOwnership.js";
+import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
 
 const log = createLogger("replan-router");
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * A stable CONFLICT SIGNATURE for a re-plan attempt — a hash of the conflicting change /
@@ -181,7 +175,8 @@ export interface PriorReplanReader {
 }
 
 export interface SpecStatusReplanRouterDeps {
-  pool: QueryClient;
+  /** Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError. */
+  pool: pg.Pool;
   /**
    * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
    * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
@@ -230,29 +225,8 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       };
     }
 
-    // (1)+(2) Re-open the spec to the re-drivable `open` status (the status the walker
-    //     enqueues AND the run-create claim can take — `in_flight` is a DEAD END here),
-    //     append the replan context as steering so the next planner pass re-authors the
-    //     work ON the new base (intent stays alive), and ENQUEUE the fresh re-plan run.
-    //     The enqueuer owns the re-open + steering + run-create as ONE ordered unit (the
-    //     re-open must COMMIT before the run-create's separate-connection claim reads it —
-    //     the same ordering the recovery `replan_with_steering` action documents). When no
-    //     enqueuer is wired, fail closed by parking rather than fabricating a live run.
-    // Fail closed: only open/in_flight/review may own recovery (missing/unknown/terminal park).
-    const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.specId);
-    if (existingStatus === undefined || !isRecoverableSourceSpecStatus(existingStatus)) {
-      const detail =
-        existingStatus === undefined
-          ? "spec status is missing"
-          : `spec status '${existingStatus}' is not a recoverable recovery source`;
-      const message = await this.escalateEnqueueFailure(input, detail);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "planner_replan" },
-        message,
-      };
-    }
-
+    // Enqueuer atomically prepares (steering + allowlisted reopen) then createQueuedRun.
+    // Terminal/missing/unknown specs never receive steering (prepare fails closed).
     const status = this.deps.replanStatus ?? "open";
     const enqueue = await this.enqueueReplan(input, status);
     if (enqueue.outcome === "no-enqueuer") {
@@ -377,9 +351,13 @@ export class SpecStatusReplanRouter implements ReplanRouter {
       });
       return { outcome: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId };
     } catch (error) {
-      // SpecNotRunnableError is NEVER ownership by itself — independently prove an ACTIVE owner run.
+      // Prepare refused (missing/terminal) — park with zero run attempt (already no writes).
+      if (error instanceof SpecNotPreparedForRecoveryError) {
+        return { outcome: "failed", error };
+      }
+      // SpecNotRunnableError is NEVER ownership alone — org-scoped active-owner proof.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(this.deps.pool, input.specId);
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, this.deps.orgId, input.specId);
         if (live !== undefined) {
           log.warn(
             "re-plan enqueue found the re-opened spec already claimed; verified an active owner run",

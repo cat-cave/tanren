@@ -32,21 +32,16 @@ import type { GateReworkRouter, GateReworkRouteResult } from "../../../contracts
 import type { AppendEventInput, EventStore } from "../../../eventStore.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
 import { buildGateReworkSteering } from "../../../merge/batchGateReworkRouter.js";
-import { SpecNotRunnableError } from "../../projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../../projectSpecErrors.js";
 import { createLogger } from "../../../observability/logger.js";
-import {
-  findActiveOwnerRunForSpec,
-  isRecoverableSourceSpecStatus,
-  loadSpecStatusForRecovery,
-} from "../../../merge/recoveryOwnership.js";
+import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
 import { atReplanFixedPoint, gateErrorSignature, type ReplanEnqueuer } from "./replanRouter.js";
 
 const log = createLogger("regate-gate-rework");
 
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
 export interface SpecStatusGateReworkRouterDeps {
-  pool: QueryClient;
+  /** Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError. */
+  pool: pg.Pool;
   /**
    * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
    * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
@@ -96,20 +91,7 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
       };
     }
 
-    const existingStatus = await loadSpecStatusForRecovery(this.deps.pool, input.specId);
-    if (existingStatus === undefined || !isRecoverableSourceSpecStatus(existingStatus)) {
-      const detail =
-        existingStatus === undefined
-          ? "spec status is missing"
-          : `spec status '${existingStatus}' is not a recoverable recovery source`;
-      const message = await this.escalateEnqueueFailure(input, detail);
-      return {
-        kind: "parked",
-        receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
-        message,
-      };
-    }
-
+    // Enqueuer atomically prepares (steering + allowlisted reopen); no pre-read mutation.
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
     if (this.deps.enqueuer === undefined) {
       const message = await this.escalateEnqueueFailure(input, "no writer-rework enqueuer is configured");
@@ -137,9 +119,17 @@ export class SpecStatusGateReworkRouter implements GateReworkRouter {
         },
       };
     } catch (error) {
-      // SpecNotRunnableError is NEVER ownership alone — independently prove an ACTIVE owner run.
+      if (error instanceof SpecNotPreparedForRecoveryError) {
+        const message = await this.escalateEnqueueFailure(input, error.message);
+        return {
+          kind: "parked",
+          receipt: { kind: "needs_attention", specId: input.specId, source: "writer_rework" },
+          message,
+        };
+      }
+      // SpecNotRunnableError is NEVER ownership alone — org-scoped active-owner proof.
       if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(this.deps.pool, input.specId);
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, this.deps.orgId, input.specId);
         if (live !== undefined) {
           log.warn(
             "re-gate gate-fail rework found the spec already claimed; verified an active owner run",

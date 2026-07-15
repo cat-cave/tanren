@@ -112,6 +112,10 @@ class RecordingWriter implements RunStateWriter {
   // eslint-disable-next-line @typescript-eslint/require-await
   async appendSpecSteering(_input: AppendSpecSteeringInput): Promise<void> {}
   // eslint-disable-next-line @typescript-eslint/require-await
+  async prepareSpecForRecovery(): Promise<{ prepared: true; fromStatus: string }> {
+    return { prepared: true, fromStatus: "open" };
+  }
+  // eslint-disable-next-line @typescript-eslint/require-await
   async setRunSpeculativeBase(_input: SetRunSpeculativeBaseInput): Promise<void> {}
   // eslint-disable-next-line @typescript-eslint/require-await
   async setRunPercolationReexecId(_input: SetRunPercolationReexecIdInput): Promise<void> {}

@@ -31,6 +31,7 @@ import {
   UnknownCommitError,
   type HaltedRunContext,
 } from "../../engine/recovery/index.js";
+import { SpecNotPreparedForRecoveryError } from "../../engine/workflow/projectSpecErrors.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 
@@ -177,6 +178,12 @@ async function runAction<T>(c: Context<ActorContextEnv>, action: () => Promise<T
     }
     if (error instanceof UnknownCommitError) {
       return c.json({ error: "unknown_commit", message: error.message }, 400);
+    }
+    if (error instanceof SpecNotPreparedForRecoveryError) {
+      return c.json(
+        { error: "spec_not_prepared_for_recovery", reason: error.reason, status: error.status, message: error.message },
+        409,
+      );
     }
     throw error;
   }

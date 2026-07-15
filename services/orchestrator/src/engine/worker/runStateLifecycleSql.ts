@@ -29,6 +29,9 @@ import { PgEventStore } from "../eventStore.js";
 /** Anything that can run a parameterized query — the pool or a checked-out client. */
 type QueryClient = { query: (text: string, params?: unknown[]) => Promise<{ rowCount?: number | null }> };
 
+// Re-export the atomic recovery prepare applier (lives next to recovery ownership allowlist).
+export { applyPrepareSpecForRecovery } from "../merge/recoveryPrepareSql.js";
+
 /**
  * The TASK-LIFECYCLE atomicity client (task #39): a pg-pool/PoolClient compatible
  * shape so the row-UPDATE applier above + `PgEventStore.append` can share the

@@ -27,6 +27,7 @@ import {
   applyClearRunPercolationPending,
   applyInsertTask,
   applyMergeRunVerifiedAncestorSha,
+  applyPrepareSpecForRecovery,
   applySetRunAuthRef,
   applySetRunPercolationReexecId,
   applySetRunPrUrl,
@@ -94,6 +95,13 @@ const appendSpecSteeringSchema = z.object({
   specId: z.string().min(1),
   orgId: z.string().min(1),
   steeringNote: z.string().min(1),
+});
+
+const prepareSpecForRecoverySchema = z.object({
+  specId: z.string().min(1),
+  orgId: z.string().min(1),
+  steeringNote: z.string().min(1),
+  reopenStatus: z.string().min(1),
 });
 
 const setRunSpeculativeBaseSchema = z.object({
@@ -318,6 +326,21 @@ export function registerRunStateLifecycleRoutes(app: Hono, deps: RunStateWriteRo
     }
     await runWithOrgScope(deps.pool, parsed.data.orgId, (client) => applyAppendSpecSteering(client, parsed.data));
     return c.body(null, 204);
+  });
+
+  // Atomic recovery prepare: steering + allowlisted reopen in ONE org-scoped txn.
+  app.post("/internal/prepare-spec-for-recovery", async (c) => {
+    if (!authnPeer(c)) {
+      return c.json({ error: "untrusted_peer" }, 401);
+    }
+    const parsed = prepareSpecForRecoverySchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_prepare_spec_for_recovery", issues: parsed.error.issues }, 400);
+    }
+    const result = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+      applyPrepareSpecForRecovery(client, parsed.data),
+    );
+    return c.json(result);
   });
 
   app.post("/internal/set-run-speculative-base", async (c) => {

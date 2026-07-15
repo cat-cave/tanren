@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
-import { SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
+import { SpecNotPreparedForRecoveryError, SpecNotRunnableError } from "../src/engine/workflow/projectSpecErrors.js";
 import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 import {
   conflictSignatureOf,
@@ -33,33 +33,46 @@ import {
 const ORG = "org_replan";
 const PROJECT = "project_replan";
 
-/** Records the spec-status UPDATEs the router drives through its in-process pool path. */
+/** Pool supporting runWithOrgScope (BEGIN/SET LOCAL/COMMIT) + active-owner SELECTs. */
 class RecordingPool {
   readonly statusWrites: Array<{ specId: string; status: string }> = [];
-  /** Spec status returned by SELECT status FROM specs (default open — re-openable). */
-  specStatusById = new Map<string, string>();
-  /** Live nonterminal runs returned by the ownership proof query. */
+  readonly scopeOps: string[] = [];
+  /** Live active owner runs for org-scoped proof. */
   liveRunsBySpec = new Map<string, { run_id: string; status: string }>();
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[] }> {
     const text = sql.replaceAll(/\s+/gu, " ").trim();
+    if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK" || text.startsWith("SET LOCAL")) {
+      this.scopeOps.push(text);
+      return { rows: [] };
+    }
     if (text.startsWith("UPDATE specs SET status")) {
       this.statusWrites.push({ specId: String(params?.[0]), status: String(params?.[1]) });
       return { rows: [] };
     }
-    if (text.includes("SELECT status FROM specs")) {
-      const specId = String(params?.[0]);
-      const status = this.specStatusById.get(specId) ?? "open";
-      return { rows: [{ status }] };
-    }
     if (text.includes("FROM runs") && text.includes("status IN")) {
       const live = this.liveRunsBySpec.get(String(params?.[0]));
-      // Mirror ACTIVE_OWNER_RUN_STATUSES (queued/running/paused) — halted never returns.
       if (live === undefined || !["queued", "running", "paused"].includes(live.status)) {
         return { rows: [] };
       }
       return { rows: [live] };
     }
     throw new Error(`unexpected pool query in replan-routing test: ${text}`);
+  }
+  async connect() {
+    return { query: this.query.bind(this), release: () => {} };
+  }
+}
+
+/** Enqueuer that refuses prepare for named specs (simulates terminal/missing). */
+class PrepareFailEnqueuer implements ReplanEnqueuer {
+  readonly calls: Array<{ specId: string }> = [];
+  constructor(
+    private readonly reason: "missing" | "not_recoverable" = "not_recoverable",
+    private readonly status = "merged",
+  ) {}
+  async enqueue(input: { specId: string }): Promise<{ replanRunId: string; plannerTaskId: string }> {
+    this.calls.push({ specId: input.specId });
+    throw new SpecNotPreparedForRecoveryError(input.specId, this.reason, this.status);
   }
 }
 
@@ -133,17 +146,13 @@ function buildRouter(deps: {
   enqueuer?: ReplanEnqueuer;
   priorReplans?: PriorReplanReader;
 }): SpecStatusReplanRouter {
-  // Audit D-R3.2: the writer is REQUIRED on `SpecStatusReplanRouter`. Forward the
-  // writer's `setSpecStatus` into the recording pool's `statusWrites` array so the
-  // existing assertions on "the spec was re-opened to `open` / escalated to
-  // `needs_attention`" hold unchanged.
   const writer = new InMemoryRunStateWriter({
     forwardSetSpecStatus: (input) => {
       deps.pool.statusWrites.push({ specId: input.specId, status: input.status });
     },
   });
   return new SpecStatusReplanRouter({
-    pool: deps.pool,
+    pool: deps.pool as unknown as import("pg").Pool,
     runStateWriter: writer,
     orgId: ORG,
     eventStore: deps.eventStore,
@@ -377,54 +386,26 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
   });
 
-  it("FAIL-CLOSED: a merged base-side replan target cannot own recovery", async () => {
-    const pool = new RecordingPool();
-    pool.specStatusById.set("spec_merged_other", "merged");
-    const eventStore = new RecordingEventStore();
-    const enqueuer = new RecordingEnqueuer();
-    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
-
-    const recovery = await router.routeBackToPlanner({
-      specId: "spec_merged_other",
-      newContext: "re-plan the OTHER (already merged) side",
-      otherSpecId: "spec_merging",
-    });
-
-    expect(recovery.kind).toBe("parked");
-    expect(enqueuer.calls).toHaveLength(0);
-    expect(String((recovery as { message: string }).message)).toMatch(/not a recoverable recovery source/u);
-  });
-
-  it("FAIL-CLOSED: halted / needs_attention / missing / unknown specs cannot own recovery", async () => {
-    for (const [specId, status] of [
-      ["spec_halted", "halted"],
-      ["spec_attn", "needs_attention"],
-      ["spec_cancelled", "cancelled"],
-      ["spec_unknown", "weird_status"],
-    ] as const) {
+  it("FAIL-CLOSED: prepare-refused terminal targets park with no createQueuedRun path", async () => {
+    for (const status of ["merged", "halted", "needs_attention", "cancelled", "weird_status"] as const) {
       const pool = new RecordingPool();
-      pool.specStatusById.set(specId, status);
       const eventStore = new RecordingEventStore();
-      const enqueuer = new RecordingEnqueuer();
+      const enqueuer = new PrepareFailEnqueuer("not_recoverable", status);
       const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
       const recovery = await router.routeBackToPlanner({
-        specId,
+        specId: `spec_${status}`,
         newContext: "re-plan non-recoverable",
       });
       expect(recovery.kind, status).toBe("parked");
-      expect(enqueuer.calls).toHaveLength(0);
+      expect(enqueuer.calls).toHaveLength(1); // prepare path invoked, refused
+      expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(false);
     }
-    // Missing row (no status map entry returns "open" by default in RecordingPool —
-    // force empty by overriding query for missing).
+  });
+
+  it("FAIL-CLOSED: missing-spec prepare parks", async () => {
     const pool = new RecordingPool();
-    pool.specStatusById.set("__missing__", ""); // unused; override live path
-    const orig = pool.query.bind(pool);
-    pool.query = async (sql, params) => {
-      if (String(sql).includes("SELECT status FROM specs")) return { rows: [] };
-      return orig(sql, params);
-    };
     const eventStore = new RecordingEventStore();
-    const enqueuer = new RecordingEnqueuer();
+    const enqueuer = new PrepareFailEnqueuer("missing");
     const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
     const recovery = await router.routeBackToPlanner({
       specId: "spec_absent",
@@ -436,7 +417,6 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
 
   it("FAIL-CLOSED: a halted run is not an active owner for already_running", async () => {
     const pool = new RecordingPool();
-    // Only a halted run exists — must not mint already_running ownership.
     pool.liveRunsBySpec.set("spec_b", { run_id: "run_halted", status: "halted" });
     const eventStore = new RecordingEventStore();
     const enqueuer = new AlreadyClaimedEnqueuer();
@@ -449,6 +429,22 @@ describe("base-shift / percolation replan routing (v35 — a routed replan ACTUA
     });
 
     expect(recovery.kind).toBe("parked");
+    // org-scoped read must open a txn with SET LOCAL
+    expect(pool.scopeOps.some((o) => o.startsWith("SET LOCAL"))).toBe(true);
     expect(eventStore.events.some((e) => e.eventType === "dag.spec.needs_attention")).toBe(true);
+  });
+
+  it("org-scopes active-owner proof with BEGIN/SET LOCAL/COMMIT", async () => {
+    const pool = new RecordingPool();
+    pool.liveRunsBySpec.set("spec_b", { run_id: "run_concurrent_b", status: "running" });
+    const eventStore = new RecordingEventStore();
+    const enqueuer = new AlreadyClaimedEnqueuer();
+    const router = buildRouter({ pool, eventStore, enqueuer, priorReplans: noPriorReplans });
+    await router.routeBackToPlanner({
+      specId: "spec_b",
+      newContext: "re-plan",
+      otherSpecId: "spec_a",
+    });
+    expect(pool.scopeOps).toEqual(expect.arrayContaining(["BEGIN", expect.stringMatching(/^SET LOCAL/), "COMMIT"]));
   });
 });

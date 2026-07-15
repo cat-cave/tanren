@@ -30,6 +30,8 @@ import type { RecordedCost, RecordCostInput, ReconcileCostInput } from "../../sr
 import type {
   AppendSpecSteeringInput,
   ClearRunPercolationPendingInput,
+  PrepareSpecForRecoveryInput,
+  PrepareSpecForRecoveryResult,
   CreateQueuedRunInput,
   CreateSpecRemoteInput,
   FinalizeLandInput,
@@ -162,6 +164,10 @@ export class InMemoryRunStateWriter implements RunStateWriter {
        * router now drives through the writer instead of an in-process pool.
        */
       forwardUpdateSpecWithEvent?: (input: UpdateSpecWithEventInput) => Promise<void> | void;
+      /** Optional prepareSpecForRecovery forwarder (atomic steering+reopen). */
+      forwardPrepareSpecForRecovery?: (
+        input: PrepareSpecForRecoveryInput,
+      ) => Promise<PrepareSpecForRecoveryResult> | PrepareSpecForRecoveryResult;
     } = {},
   ) {}
 
@@ -334,6 +340,30 @@ export class InMemoryRunStateWriter implements RunStateWriter {
   async setSpecMetadata(_input: SetSpecMetadataInput): Promise<void> {}
 
   async appendSpecSteering(_input: AppendSpecSteeringInput): Promise<void> {}
+
+  readonly prepareSpecForRecoveryCalls: PrepareSpecForRecoveryInput[] = [];
+  /** Scripted status for prepareSpecForRecovery (default open = prepared). */
+  prepareSpecStatus = "open";
+  async prepareSpecForRecovery(input: PrepareSpecForRecoveryInput): Promise<PrepareSpecForRecoveryResult> {
+    this.prepareSpecForRecoveryCalls.push(input);
+    if (this.options.forwardPrepareSpecForRecovery !== undefined) {
+      return this.options.forwardPrepareSpecForRecovery(input);
+    }
+    if (this.prepareSpecStatus === "") {
+      return { prepared: false, reason: "missing" };
+    }
+    if (!["open", "in_flight", "review"].includes(this.prepareSpecStatus)) {
+      return { prepared: false, reason: "not_recoverable", status: this.prepareSpecStatus };
+    }
+    if (this.options.forwardSetSpecStatus !== undefined) {
+      await this.options.forwardSetSpecStatus({
+        specId: input.specId,
+        orgId: input.orgId,
+        status: input.reopenStatus,
+      });
+    }
+    return { prepared: true, fromStatus: this.prepareSpecStatus };
+  }
 
   async setRunSpeculativeBase(_input: SetRunSpeculativeBaseInput): Promise<void> {}
 
