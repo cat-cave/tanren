@@ -218,8 +218,22 @@ export class RecordingBatchGateReworkRouter implements BatchGateReworkRouter {
     projectId: string;
     culprit: MergeQueueEntry;
     gateError: string;
-  }): Promise<"reworked" | "escalated"> {
+  }): Promise<import("../../../src/engine/contracts/conflictResolution.js").GateReworkRouteResult> {
     this.routed.push({ specId: input.culprit.specId, runId: input.culprit.runId, gateError: input.gateError });
-    return this.escalateSpecs.has(input.culprit.specId) ? "escalated" : "reworked";
+    if (this.escalateSpecs.has(input.culprit.specId)) {
+      return { kind: "parking_required", message: `recording fake escalated ${input.culprit.specId}` };
+    }
+    return {
+      kind: "owned",
+      receipt: {
+        kind: "writer_rework",
+        specId: input.culprit.specId,
+        run: {
+          kind: "enqueued",
+          replanRunId: `run_rework_${input.culprit.specId}`,
+          plannerTaskId: `task_rework_${input.culprit.specId}`,
+        },
+      },
+    };
   }
 }

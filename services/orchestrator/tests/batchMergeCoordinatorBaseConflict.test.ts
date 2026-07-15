@@ -21,6 +21,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch";
 
@@ -48,6 +49,7 @@ function makeHarness(maxBatchSize = 5): Harness {
     events,
     batchEvents,
     escalator,
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     sleep: () => Promise.resolve(),
   });
@@ -106,7 +108,7 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     seed(h, "spec_b");
     h.checker.baseConflictWhenContains("spec_b");
     // The drive returns the recoverable `conflict` (the resolver re-readies the run for re-execution).
-    h.runner.script("run_spec_b", { kind: "conflict", message: "rebase deferred; re-ready pending" });
+    h.runner.script("run_spec_b", { kind: "conflict", message: "rebase deferred; re-ready pending", recovery: { kind: "planner_replan", specId: "spec_b", run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" } } });
 
     await h.coordinator.coordinate(PROJECT);
 
@@ -168,21 +170,33 @@ describe("BatchMergeCoordinator — base-conflict routing (drive, not bisect)", 
     expect(h.runner.drives).toEqual([{ runId: "run_spec_b" }]);
   });
 
-  it("a SPEC-vs-SPEC conflict (conflictsWithBase false) STILL bisects-and-dequeues (unchanged)", async () => {
+  it("a SPEC-vs-SPEC conflict (conflictsWithBase false) bisects, lands prefix, then drives culprit", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     seed(h, "spec_c");
-    // A genuine spec-vs-spec integration conflict — the bisect-and-dequeue path is unchanged.
     h.checker.conflictWhenContains("spec_b");
+    // Prefix A (and C is after culprit so not in innocent prefix of B at index 1) merges;
+    // culprit B is driven through the resolver with a durable owner receipt.
+    h.runner.script("run_spec_a", { kind: "merged" });
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "resolver routed replan",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" },
+      },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
-    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    // It went through bisect (the culprit was named) — NOT the driveMerge resolver path.
     expect(h.batchEvents.events.some((e) => e.type === "bisecting")).toBe(true);
     expect(h.batchEvents.events.find((e) => e.type === "culprit")?.culpritSpecId).toBe("spec_b");
-    expect(h.runner.drives.map((d) => d.runId)).not.toContain("run_spec_b");
+    // Culprit is DRIVEN (never a silent forever-dequeue without resolver).
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_a");
+    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
     const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("conflict");
   });

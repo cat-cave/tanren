@@ -100,7 +100,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError,
     });
 
-    expect(disposition).toBe("reworked");
+    expect(disposition.kind).toBe("owned");
     // A fresh rework run was enqueued, re-opening the spec to `open` and carrying the ACTUAL
     // gate error in the steering (no_silent_fallback — never rework blind).
     expect(enqueued).toHaveLength(1);
@@ -143,15 +143,15 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: stuckError,
     });
 
-    expect(disposition).toBe("escalated");
+    expect(disposition.kind).toBe("parking_required");
     // No further rework run was enqueued (fixed point — never a hot-loop).
     expect(enqueueCalls).toBe(0);
     // The spec was parked at needs_attention (loud, frees the slot).
-    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
+    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
     const routed = appended.find((e) => e.eventType === "merge.batch.gate_rework_routed");
-    expect(routed?.payload.disposition).toBe("escalated");
+    expect(routed?.payload.disposition).toBeUndefined();
     const park = appended.find((e) => e.eventType === "dag.spec.needs_attention");
-    expect(park?.payload.reason).toBe("persistent_failure");
+    expect(park).toBeUndefined();
   });
 
   it("re-works UNBOUNDED while the gate error keeps CHANGING — many prior reworks, a NEW error ⇒ rework not escalate", async () => {
@@ -177,7 +177,7 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: "err-f (a brand new, different failure)",
     });
 
-    expect(disposition).toBe("reworked");
+    expect(disposition.kind).toBe("owned");
     expect(enqueueCalls).toBe(1);
     expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
   });
@@ -198,9 +198,9 @@ describe("PgBatchGateReworkRouter — gate-fail → writer rework, bounded", () 
       gateError: "gate failed",
     });
 
-    expect(disposition).toBe("escalated");
-    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(true);
+    expect(disposition.kind).toBe("parking_required");
+    expect(statusWrites.some((w) => w.status === "needs_attention")).toBe(false);
     const park = appended.find((e) => e.eventType === "dag.spec.needs_attention");
-    expect(park?.payload.reason).toBe("persistent_failure");
+    expect(park).toBeUndefined();
   });
 });

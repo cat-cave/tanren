@@ -8,6 +8,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 function makeHarness() {
   const queue = new InMemoryMergeQueueModel();
@@ -22,6 +23,7 @@ function makeHarness() {
     events,
     batchEvents,
     escalator: new RecordingSpecEscalator(),
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents };

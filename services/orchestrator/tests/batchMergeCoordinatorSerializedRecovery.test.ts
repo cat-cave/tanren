@@ -7,6 +7,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch";
 
@@ -20,6 +21,7 @@ function makeCoordinator() {
     events: new RecordingMergeQueueEventEmitter(),
     batchEvents: new RecordingBatchMergeEventEmitter(),
     escalator: new RecordingSpecEscalator(),
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
   });

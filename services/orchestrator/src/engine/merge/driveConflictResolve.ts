@@ -56,6 +56,7 @@ import { buildAdaptersFromRouting } from "../providers/adapterSelector.js";
 import type { SpecMode } from "../state/spec.js";
 import { buildDefaultConflictResolver } from "../workflow/reviewMerge/conflictResolver/index.js";
 import { atReplanFixedPoint, conflictSignatureOf } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
+import type { ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
 import { driveResolveOverJj } from "./driveConflictResolveJj.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "../workflow/reviewMerge/index.js";
@@ -83,6 +84,8 @@ export interface DriveConflictVerdict {
   disposition?: DriveConflictDisposition;
   /** The decision message surfaced on escalation (a product-decision ask, not an error). */
   message?: string;
+  /** Durable owner receipt when disposition is replanned. */
+  recovery?: ConflictRecoveryReceipt;
 }
 
 /** Thrown when change-percolation owns the spec — the drive yields (recoverable hold). */

@@ -8,7 +8,9 @@
 // lease query). The clock is injectable so the lease boundary is deterministic.
 
 import { describe, expect, it } from "vitest";
-import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
+import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
 import {
   InMemoryMergeQueueModel,
@@ -57,9 +59,13 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
   it("a serialized coordinator pass arms a lease-bound re-drive that later reclaims and merges", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
-    const coordinator = new EventEmittingMergeCoordinator({
+    const coordinator = new BatchMergeCoordinator({
+      resolveMaxBatchSize: async () => 1,
       queue,
       runner,
+      checker: new InMemoryBatchChecker(),
+      batchEvents: new RecordingBatchMergeEventEmitter(),
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
       events: new RecordingMergeQueueEventEmitter(),
       escalator: new RecordingSpecEscalator(),
     });
@@ -87,9 +93,13 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
   it("a lost claim arms a lease-bound re-drive for the winning claim", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
-    const coordinator = new EventEmittingMergeCoordinator({
+    const coordinator = new BatchMergeCoordinator({
+      resolveMaxBatchSize: async () => 1,
       queue,
       runner,
+      checker: new InMemoryBatchChecker(),
+      batchEvents: new RecordingBatchMergeEventEmitter(),
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
       events: new RecordingMergeQueueEventEmitter(),
       escalator: new RecordingSpecEscalator(),
     });

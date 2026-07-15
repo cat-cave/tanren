@@ -29,6 +29,7 @@
 import { getSystemPool, runWithJobOrgId, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
+import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
@@ -42,6 +43,7 @@ import {
 import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
 import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import { createLogger } from "../observability/logger.js";
+import { findActiveOwnerRunForSpec } from "./recoveryOwnership.js";
 
 const log = createLogger("batch-gate-rework");
 
@@ -95,7 +97,7 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     projectId: string;
     culprit: MergeQueueEntry;
     gateError: string;
-  }): Promise<"reworked" | "escalated"> {
+  }): Promise<GateReworkRouteResult> {
     const orgId = await this.resolveOrg(input.projectId);
     // A required-missing org is a LOUD hard failure (no_silent_fallback): without it the
     // spec cannot be re-worked OR escalated, so a gate-fail would silently strand — exactly
@@ -113,8 +115,12 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
     // recurs (re-working produced no change to it) — escalate LOUD instead of re-working
     // identically forever. The shared detector decides.
     if (await atReplanFixedPoint(priorSignatures, currentSignature)) {
-      await this.escalate(orgId, input, priorSignatures.length);
-      return "escalated";
+      return {
+        kind: "parking_required",
+        message:
+          `batch gate-rework fixed point for ${input.culprit.specId}: identical error recurs ` +
+          `(prior ${priorSignatures.length}). Gate: ${input.gateError}`,
+      };
     }
 
     const steeringNote = buildGateReworkSteering(input.gateError, priorSignatures.length);
@@ -131,30 +137,57 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         reopenStatus: "open",
       });
       await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
-      return "reworked";
+      return {
+        kind: "owned",
+        receipt: {
+          kind: "writer_rework",
+          specId: input.culprit.specId,
+          run: { kind: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId },
+        },
+      };
     } catch (error) {
-      // BENIGN RACE: a concurrent tick already claimed the re-opened spec — a run IS being
-      // driven, so this is not a strand. Record the routing observably (no new run id) + treat
-      // as re-worked.
       if (error instanceof SpecNotRunnableError) {
+        const live = await findActiveOwnerRunForSpec(this.deps.pool, orgId, input.culprit.specId);
+        if (live === undefined) {
+          log.error(
+            "gate-fail SpecNotRunnableError without active owner — fail closed",
+            { specId: input.culprit.specId, reportedStatus: error.status },
+            error,
+          );
+          return {
+            kind: "parking_required",
+            message:
+              `SpecNotRunnableError without verified active owner for ${input.culprit.specId}; ` +
+              `settlement must park. Gate: ${input.gateError}`,
+          };
+        }
         log.warn(
-          "gate-fail rework found the spec already claimed by a concurrent tick — it is being re-driven; skipping the duplicate enqueue",
-          { specId: input.culprit.specId },
+          "gate-fail rework verified active owner run",
+          { specId: input.culprit.specId, runId: live.runId, status: live.status },
           error,
         );
-        await this.recordReworked(orgId, input, priorSignatures.length, steeringNote);
-        return "reworked";
+        await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, live.runId);
+        return {
+          kind: "owned",
+          receipt: {
+            kind: "writer_rework",
+            specId: input.culprit.specId,
+            run: { kind: "already_running", runId: live.runId },
+          },
+        };
       }
-      // GENUINE FAILURE: the rework run could not be created AND no concurrent tick owns it.
-      // A routed rework that cannot RUN is not a recoverable re-author; it is a genuine
-      // failure a human must see — escalate LOUD (never swallow into a silent strand).
       log.error(
-        "gate-fail rework FAILED to enqueue a run for the culprit spec — escalating (never a silent strand)",
+        "gate-fail rework FAILED to enqueue a run — parking_required (never silent strand)",
         { specId: input.culprit.specId },
         error,
       );
-      await this.escalateEnqueueFailure(orgId, input, error);
-      return "escalated";
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        kind: "parking_required",
+        message:
+          `batch gate-rework enqueue failed for ${input.culprit.specId} (${detail}); settlement must park. ` +
+          `Gate: ${input.gateError}`,
+      };
     }
   }
 
@@ -204,136 +237,6 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
         });
       }
     });
-  }
-
-  /** ESCALATE: the rework loop is at a FIXED POINT (the same gate error recurs) — park
-   * `needs_attention` (loud, frees the slot). No count — the fixed point IS the trigger.
-   *
-   * Task #48 Site I: the aux `merge.batch.gate_rework_routed` event is emitted
-   * BEFORE the load-bearing atomic pair (spec `needs_attention` flip +
-   * `dag.spec.needs_attention` event) — per Plan §4 trade-off note. The aux
-   * event is observable lineage; the load-bearing pair is the actual park.
-   * Atomicity replaces best-effort on the pair. */
-  private async escalate(
-    orgId: string,
-    input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
-    priorReworks: number,
-  ): Promise<void> {
-    // Aux event first (observable lineage of the routing decision).
-    await this.withScopedStore(orgId, (store) =>
-      store.append({
-        runId: input.culprit.runId,
-        specId: input.culprit.specId,
-        projectId: input.projectId,
-        orgId,
-        eventType: "merge.batch.gate_rework_routed",
-        payload: {
-          integration: "native_queue",
-          specId: input.culprit.specId,
-          runId: input.culprit.runId,
-          prNumber: input.culprit.prNumber,
-          disposition: "escalated",
-          gateError: input.gateError,
-          priorReworks,
-        },
-      }),
-    );
-    // Load-bearing atomic pair: spec park + the loud `dag.spec.needs_attention` event.
-    await this.parkSpecAtomic(orgId, input.culprit.specId, {
-      runId: input.culprit.runId,
-      specId: input.culprit.specId,
-      projectId: input.projectId,
-      orgId,
-      eventType: "dag.spec.needs_attention",
-      payload: {
-        source: "strand",
-        specId: input.culprit.specId,
-        reason: "persistent_failure",
-        terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
-        attempts: priorReworks,
-        message:
-          `the autonomous self-heal reached a FIXED POINT re-working this spec for an integrated-tree gate ` +
-          `failure: the SAME batch-gate error recurs after re-authoring (no change to it), so a human must ` +
-          `intervene. Latest gate error: ${input.gateError}`,
-      },
-    });
-  }
-
-  /** ESCALATE an enqueue failure: a rework whose run could not be created is genuinely stuck.
-   *
-   * Task #48 Site I (variant): same aux-then-atomic-pair shape as `escalate`. */
-  private async escalateEnqueueFailure(
-    orgId: string,
-    input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
-    error: unknown,
-  ): Promise<void> {
-    const detail = error instanceof Error ? error.message : String(error);
-    await this.withScopedStore(orgId, (store) =>
-      store.append({
-        runId: input.culprit.runId,
-        specId: input.culprit.specId,
-        projectId: input.projectId,
-        orgId,
-        eventType: "merge.batch.gate_rework_routed",
-        payload: {
-          integration: "native_queue",
-          specId: input.culprit.specId,
-          runId: input.culprit.runId,
-          prNumber: input.culprit.prNumber,
-          disposition: "escalated",
-          gateError: input.gateError,
-          priorReworks: 0,
-        },
-      }),
-    );
-    await this.parkSpecAtomic(orgId, input.culprit.specId, {
-      runId: input.culprit.runId,
-      specId: input.culprit.specId,
-      projectId: input.projectId,
-      orgId,
-      eventType: "dag.spec.needs_attention",
-      payload: {
-        source: "strand",
-        specId: input.culprit.specId,
-        reason: "persistent_failure",
-        terminalRuns: [{ runId: input.culprit.runId, status: "halted" }],
-        attempts: 0,
-        message:
-          `the autonomous self-heal routed this spec back to the writer to fix an integrated-tree gate ` +
-          `failure but could NOT enqueue the rework run (${detail}) — a human must intervene. Gate error: ${input.gateError}`,
-      },
-    });
-  }
-
-  /** Task #48 Site I: ATOMIC spec park + `dag.spec.needs_attention` event in
-   * ONE org-scoped transaction (control plane when wired, else in-process via
-   * the same shared applier). Replaces the prior `parkSpec()` + separate
-   * append — the load-bearing pair is no longer split.
-   *
-   * TEST SEAM: when `deps.appendEvent` is injected (no-DB unit run), fall back
-   * to the legacy split (a guarded spec UPDATE on the test pool + the
-   * injected event recorder) so test assertions still capture the event
-   * without needing a real Postgres + RLS. The production paths always wire
-   * a real writer OR a real pool, so the seam-bound atomicity is preserved
-   * where it matters; the unit-test fallback is an explicit narrow concession
-   * (the contract is exercised end-to-end in the conformance suite). */
-  private async parkSpecAtomic(orgId: string, specId: string, event: AppendEventInput): Promise<void> {
-    const spec = { specId, orgId, status: "needs_attention", notFromStatuses: ["merged", "needs_attention"] };
-    // Audit D-R3.2: the writer (REQUIRED) is the single-source atomic park; the
-    // test-seam split is kept ONLY for `deps.appendEvent`-injected unit runs (no DB,
-    // no real writer attached on the test pool).
-    if (this.deps.appendEvent !== undefined) {
-      // TEST SEAM split fallback (no DB / no real writer wired on the test pool).
-      await runWithOrgScope(this.deps.pool, orgId, async (client) => {
-        await client.query(
-          `UPDATE specs SET status = 'needs_attention' WHERE spec_id = $1 AND status NOT IN ('merged', 'needs_attention')`,
-          [specId],
-        );
-      });
-      await this.deps.appendEvent(orgId, event);
-      return;
-    }
-    await this.deps.runStateWriter.updateSpecWithEvent({ spec, event });
   }
 
   private async withScopedStore(orgId: string, work: (store: EventStore) => Promise<void>): Promise<void> {

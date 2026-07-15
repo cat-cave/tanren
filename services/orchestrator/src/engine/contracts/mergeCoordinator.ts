@@ -21,6 +21,7 @@
 // `engine/merge/coordinator.ts` + `engine/merge/coordinatorPg.ts`.
 
 import { priorityRank, type SpecPriority } from "../state/spec.js";
+import type { ConflictRecoveryReceipt, TerminalParkNoopStatus } from "./conflictResolution.js";
 
 /**
  * The minimal query surface a caller-supplied, already-scoped transaction client must
@@ -35,35 +36,24 @@ export type SettleQueryClient = { query(sql: string, params?: ReadonlyArray<unkn
 export type MergeDriveOutcome =
   // The merge landed on `default_branch` (terminal-success for the entry).
   | { kind: "merged"; mergeSha?: string }
-  // A real conflict usually means the resolver already routed an autonomous
-  // re-plan, so the old candidate leaves the queue. A blocked posture/speculative
-  // state is recoverable and re-driven with bounded backoff.
-  | { kind: "conflict"; message: string }
+  // Conflict may retire the old candidate only with a durable planner/writer receipt.
+  | { kind: "conflict"; message: string; recovery: ConflictRecoveryReceipt }
   | { kind: "blocked"; message: string }
-  // The post-auto-rebase NATIVE RE-GATE did not reach a TERMINAL verdict within its budget
-  // (the gate is STILL RUNNING / an infra blip) — "not done yet", NOT non-convergence and
-  // NOT a conflict. The entry stays QUEUED and is re-driven on the next tick (the gate just
-  // needs to finish), so when the re-gate reaches a terminal verdict the merge proceeds. It
-  // is NEVER dequeued (the old terminal `conflict` mapping bricked the live run) and is NOT
-  // bounded by a fixed attempt cap (a still-running gate is never "non-convergence" — a human
-  // would say "wait for it"). A genuinely STUCK gate surfaces via the OTHER signals (a thrown
-  // ambiguous/credential infra halt, or a terminal `failed`/`needs_attention` verdict), not a
-  // count on this recoverable hold.
+  // Post-auto-rebase native re-gate not yet terminal — entry stays queued, re-driven.
   | { kind: "re_gate_pending"; message: string }
-  // The merge failed terminally — the entry is removed (NOT re-queued).
+  // Fresh validation failed — settlement assigns writer-rework or parks before retire.
   | { kind: "failed"; message: string }
-  // The LOUD TERMINAL ESCALATION (autonomy-engine.md §2c — the non-bricking conflict
-  // escalation). The intent-preserving conflict resolver (wired in a later PR) judged
-  // this spec GENUINELY irreconcilable against another in-flight spec: re-executing it
-  // blindly would just re-conflict forever. Instead the spec PARKS at the terminal
-  // `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
-  // moving (it blocks ONLY its dependents, never the whole graph), is dequeued with
-  // reason `needs_attention`, and is NEVER re-queued. Distinct from the RECOVERABLE
-  // `conflict` (which routes back through the re-execution path) and the infra
-  // `failed` (a terminal merge-stage failure, not a deliberate ask-for-help). There is
-  // NO producer of this outcome yet — the drive resolver still returns the recoverable
-  // `conflict`; this vocabulary lets the later resolver simply RETURN this kind.
-  | { kind: "needs_attention"; message: string };
+  // Loud terminal escalation. Settlement branches on `parking`:
+  //   required        — RecoveryParkWriter exactly once, then branch on typed park outcome
+  //   complete        — already parked; dequeue needs_attention only if not already retired
+  //   terminal_noop   — concurrent terminal; dequeue superseded (no park)
+  //   parking_failed  — sole park failed; RETAIN entry (never false-dequeue)
+  | {
+      kind: "needs_attention";
+      message: string;
+      parking: "required" | "complete" | "terminal_noop" | "parking_failed";
+      terminalStatus?: TerminalParkNoopStatus;
+    };
 
 /**
  * One ready-to-merge run in the native queue, as the coordinator orders it. DAG
@@ -296,17 +286,6 @@ export interface MergeQueueModel {
    */
   markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void>;
 
-  /**
-   * Native-queue liveness repair: revive old recoverable `dequeued`
-   * (`blocked`/`conflict`) rows for this project when the row still has PR facts
-   * and the latest same-candidate signal is the legacy native
-   * `merge.dequeued` event, with no later clearing, terminal, batch-bisect,
-   * supersede, needs-attention, or re-plan signal. This covers rows produced by
-   * older coordinator versions that settled a clean completed run out of the
-   * active queue; a restarted/subsequent coordinator pass brings the same run/PR
-   * back to `queued` instead of requiring a manual retry endpoint.
-   */
-  recoverDequeuedCandidates(projectId: string): Promise<number>;
 
   /**
    * SUPERSEDE the active (queued/merging) merge-queue entry of a PRIOR run that a

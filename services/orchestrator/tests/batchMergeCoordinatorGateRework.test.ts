@@ -27,6 +27,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch_gate_rework";
 
@@ -54,6 +55,7 @@ function makeHarness(): Harness {
     events,
     batchEvents,
     escalator: new RecordingSpecEscalator(),
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
@@ -106,42 +108,49 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     expect(h.queue.statusOf("run_spec_d")).toBe("merged");
   });
 
-  it("a batch CONFLICT culprit still routes to the conflict resolver / replan (reason `conflict`) — NOT writer rework (no regression on #585/#587)", async () => {
+  it("a batch CONFLICT culprit is driven (resolver path), not writer rework (no regression on #585/#587)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
-    // spec_b is a real spec-vs-spec integration CONFLICT (not a gate failure).
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.checker.conflictWhenContains("spec_b");
+    h.runner.script("run_spec_a", { kind: "merged" });
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "resolver routed replan",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" },
+      },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
-    // The conflict culprit is dequeued RECOVERABLY as `conflict` (the resolver/replan owns
-    // the re-drive) — it is NOT routed through the gate-rework writer path.
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
     const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("conflict");
-    // Never double-handled: a conflict is NOT a gate-rework.
     expect(h.gateRework.routed).toEqual([]);
-    // The innocents still merge.
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
-    expect(h.queue.statusOf("run_spec_c")).toBe("merged");
   });
 
-  it("with NO gateRework router wired, a gate-fail culprit falls back to the recoverable conflict dequeue (degenerate assembly)", async () => {
-    // The no-router fallback (a degenerate assembly) keeps the prior behavior — a gate-fail
-    // dequeues recoverably rather than throwing. Production ALWAYS wires the router.
+  it("with NO gateRework router wired, a gate-fail culprit parks via escalator (degenerate assembly)", async () => {
+    // No-router fallback parks loudly (RecoveryPark / escalator) — never fabricates a
+    // conflict owner. Production ALWAYS wires the router.
     const queue = new InMemoryMergeQueueModel();
     const checker = new InMemoryBatchChecker();
     checker.failWhenContains("spec_b");
+    const escalator = new RecordingSpecEscalator();
+    const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
       queue,
       runner: new ScriptedMergeRunner(),
       checker,
-      events: new RecordingMergeQueueEventEmitter(),
+      events,
       batchEvents: new RecordingBatchMergeEventEmitter(),
-      escalator: new RecordingSpecEscalator(),
-      // gateRework intentionally OMITTED.
+      escalator,
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
       resolveMaxBatchSize: () => Promise.resolve(5),
       sleep: () => Promise.resolve(),
     });
@@ -151,7 +160,8 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     await coordinator.coordinate(PROJECT);
 
     expect(queue.statusOf("run_spec_b")).toBe("dequeued");
-    expect(queue.dequeueReasonOf("run_spec_b")).toBe("conflict");
+    expect(queue.dequeueReasonOf("run_spec_b")).toBe("needs_attention");
+    expect(escalator.escalations.some((e) => e.specId === "spec_b")).toBe(true);
     expect(queue.statusOf("run_spec_a")).toBe("merged");
   });
 });

@@ -19,7 +19,9 @@
 
 import { describe, expect, it } from "vitest";
 import type { MergeDriveOutcome, MergeRunner } from "../src/engine/contracts/mergeCoordinator.js";
-import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
+import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
@@ -62,9 +64,13 @@ function harness(): {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
   const events = new RecordingMergeQueueEventEmitter();
-  const coordinator = new EventEmittingMergeCoordinator({
+  const coordinator = new BatchMergeCoordinator({
+      resolveMaxBatchSize: async () => 1,
     queue,
     runner,
+      checker: new InMemoryBatchChecker(),
+      batchEvents: new RecordingBatchMergeEventEmitter(),
+      recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     events,
     escalator: new RecordingSpecEscalator(),
   });
@@ -83,7 +89,7 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
     const result = await coordinator.coordinate(PROJECT);
 
     // HELD on re_gate_pending with a re-drive delay — NOT dequeued (the brick was a dequeue).
-    expect(result.holdReason).toBe("re_gate_pending");
+    expect(result.holdReason).toBe("merge_retry");
     expect(result.retryAfterMs).toBeGreaterThan(0);
     expect(result.dequeuedSpecId).toBeUndefined();
     // The entry is back in the queue (released claim) — the subscriber re-drive re-picks it.
@@ -103,7 +109,7 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
 
     // First pass: the gate is not yet terminal → hold (entry stays queued).
     const held = await coordinator.coordinate(PROJECT);
-    expect(held.holdReason).toBe("re_gate_pending");
+    expect(held.holdReason).toBe("merge_retry");
     expect(queue.statusOf("run_q")).toBe("queued");
 
     // The subscriber's delayed re-drive: a second pass — the gate finished — merges.
@@ -122,7 +128,7 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
 
     for (let i = 0; i < 12; i += 1) {
       const result = await coordinator.coordinate(PROJECT);
-      expect(result.holdReason).toBe("re_gate_pending");
+      expect(result.holdReason).toBe("merge_retry");
       expect(result.retryAfterMs).toBeGreaterThan(0);
       // NEVER dequeued, NEVER an infra_blocked ceiling alert — a still-running gate is not stuck.
       expect(result.dequeuedSpecId).toBeUndefined();
@@ -141,7 +147,7 @@ describe("EventEmittingMergeCoordinator — re_gate_pending native re-gate → r
   it("a genuine terminal `conflict` still DEQUEUES (it hands off to autonomous re-plan) — only the not-yet-terminal gate is recoverable", async () => {
     const { queue, runner, coordinator } = harness();
     seed(queue, "run_c", "spec_c");
-    runner.script("run_c", [{ kind: "conflict", message: "merge conflict" }]);
+    runner.script("run_c", [{ kind: "conflict", message: "merge conflict", recovery: { kind: "planner_replan", specId: "spec_c", run: { kind: "enqueued", replanRunId: "r1", plannerTaskId: "t1" } } }]);
 
     const result = await coordinator.coordinate(PROJECT);
 

@@ -315,19 +315,20 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
-        // CLASSIFY-THEN-ESCALATE: the merge stage emitted a recoverable `conflict`
-        // (the resolver returned `{resolved:false}`). The drive-path resolver's
-        // disposition decides what the queue does with it:
-        //   - `escalate` — the two intents are GENUINELY incompatible (the bounded
-        //     re-plan budget is exhausted): park the spec at `needs_attention` (PR1's
-        //     escalator), NEVER re-queued. A product decision, not an error.
-        //   - `replanned` (default) — a bounded autonomous re-plan is in flight (the
-        //     resolver routed a spec back to the planner WITH the other change): a
-        //     recoverable `conflict` — the re-planned spec re-runs + re-enters the queue.
-        if (verdict.disposition === "escalate") {
-          return { kind: "needs_attention", message: verdict.message ?? merge.message ?? "specs' intents conflict" };
+        // CLASSIFY-THEN-ESCALATE from the drive-path resolver disposition + optional
+        // durable recovery receipt. Never fabricate conflict ownership without a receipt.
+        if (verdict.disposition === "escalate" || verdict.recovery === undefined) {
+          return {
+            kind: "needs_attention",
+            message: verdict.message ?? merge.message ?? "specs' intents conflict",
+            parking: "required",
+          };
         }
-        return { kind: "conflict", message: merge.message ?? "merge conflict" };
+        return {
+          kind: "conflict",
+          message: merge.message ?? "merge conflict",
+          recovery: verdict.recovery,
+        };
       case "blocked":
         // §3.2: a TRANSIENT authority refusal / benign CAS hold the merge stage surfaced
         // as recoverable `blocked`. Map to the coordinator's recoverable `blocked` — a
@@ -345,7 +346,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // changes_requested at land time). PARK the spec via the escalator (frees its
         // slot) — NOT a recoverable hold (no re-drive resolves a human decision) and NOT a
         // terminal conflict dequeue.
-        return { kind: "needs_attention", message: merge.message ?? "merge needs human attention" };
+        return { kind: "needs_attention", message: merge.message ?? "merge needs human attention", parking: "required" };
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }

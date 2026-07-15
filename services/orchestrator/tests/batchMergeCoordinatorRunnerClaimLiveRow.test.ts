@@ -38,6 +38,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch";
 
@@ -67,6 +68,7 @@ function makeHarness(): Harness {
     events,
     batchEvents,
     escalator,
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),

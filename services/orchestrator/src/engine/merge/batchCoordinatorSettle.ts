@@ -1,21 +1,16 @@
-// The non-merged drive-outcome SETTLE mapping for the BatchMergeCoordinator,
-// split from `batchCoordinator.ts` to keep that file under the 500-line cap. It is the
-// SAME settle policy the EventEmittingMergeCoordinator applies, so the two
-// coordinators can never diverge on how a real-merge outcome leaves the queue:
-//   - `needs_attention` → the NON-BRICKING conflict escalation (§2c): PARK the spec at
-//     `needs_attention` (frees its slot) via the shared `SpecEscalator`, then dequeue
-//     the entry `needs_attention` (NEVER re-queued). NOT the recoverable conflict path.
-//   - `blocked` → bounded recoverable hold: release the claim so the same candidate
-//     re-drives with backoff, then alert and continue on a slower retry at the ceiling.
-//   - `conflict` / `failed` → dequeue with `merge.dequeued`; `conflict` usually means
-//     the resolver already routed autonomous re-plan/re-execution.
-//
-// `merged` is handled inline by the caller (it advances rather than settling out), so
-// this maps only the NON-merged outcomes.
+// Non-merged drive-outcome SETTLE mapping for BatchMergeCoordinator.
+// Owner-aware retirement: conflict/failed/gate-fail only leave the queue after
+// a durable replacement owner or RecoveryParkWriter parked. parking_failed with
+// retained never emits dequeue.
 
 import type { BatchCheckVerdict, BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type {
+  GateReworkRouteResult,
+  ConflictRecoveryReceipt,
+} from "../contracts/conflictResolution.js";
+import type {
   CoordinateResult,
+  DequeueReason,
   MergeDriveOutcome,
   MergeQueueEntry,
   MergeQueueModel,
@@ -31,6 +26,8 @@ import {
   type RecoverableDriveHoldCeiling,
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
+import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
+import { settleFromParkOutcome, type SettleParkAction } from "./parkSettle.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-coordinator");
@@ -39,42 +36,23 @@ const log = createLogger("batch-coordinator");
 export const BATCH_DRIVE_INFRA_RETRY_AFTER_MS = 3000;
 
 export type BatchDriveInfraHold =
-  | { kind: "infra_hold"; message: string; retryAfterMs: number }
+  | { kind: "infra_hold"; message: string; retryAfterMs: number; entry?: MergeQueueEntry }
   | { kind: "infra_terminal"; message: string; entry: MergeQueueEntry; terminalKind: "ambiguous_merge_state" };
 
-/** The slice of the batch coordinator's deps the settle mapping needs. */
 export interface BatchSettleDeps {
   queue: MergeQueueModel;
   events: MergeQueueEventEmitter;
   escalator: SpecEscalator;
-  /** The batch-gate-fail writer-rework router (v35 — the strand fix; see {@link settleBisectCulprit}). */
   gateRework?: BatchGateReworkRouter;
-  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs event + UPDATE in one transaction. */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
+  /** Settlement ownership readback. Absent ⇒ conflict parks fail-closed. */
+  recoveryEvidence?: RecoveryEvidencePort;
 }
 
 /**
- * Settle a bisected culprit by its failure sub-kind (v35 — the gate-fail-strand fix):
- *
- *   - GATE-FAIL (`isGateFail`) — the integrated tree's GATE/CI failed (the culprit's work
- *     passed its OWN branch gates but breaks integrated). Route it to the WRITER for rework
- *     via the {@link BatchGateReworkRouter}, carrying the batch gate's failing output
- *     (`gateError`) as steering so the writer fixes the RIGHT thing (no_silent_fallback —
- *     never rework blind). The router enqueues a fresh re-author run (bounded — it escalates
- *     to `needs_attention` past the rework budget). EITHER way the OLD queue entry is retired
- *     as `superseded` (the re-authored run produces a fresh entry, so the old one is no
- *     longer a live candidate — and `superseded` is NOT routed through
- *     `recoverDequeuedCandidates`, so it cannot resurrect the dead head). This is the path
- *     the old code MISSED: it dequeued a gate-fail culprit with `reason: "conflict"`, which
- *     has NO re-execution consumer (the recovery SQL only re-queues `blocked`), so the spec
- *     sat `in_flight` forever.
- *   - CONFLICT — a spec-vs-spec conflict (a base conflict already short-circuited): dequeue
- *     RECOVERABLY (`reason: "conflict"`) — the conflict resolver / replan owns the re-drive
- *     (#585/#587). UNCHANGED — the gate-fail route never touches it.
- *
- * When no `gateRework` router is wired (a degenerate assembly), a gate-fail falls back to
- * the recoverable `conflict` dequeue (the prior behavior) — production always wires it.
+ * GATE-fail bisect culprit only. Spec-vs-spec CONFLICT culprits are driven via
+ * {@link driveConflictCulprit}, never settled here.
  */
 export async function settleBisectCulprit(
   deps: BatchSettleDeps,
@@ -83,36 +61,68 @@ export async function settleBisectCulprit(
   isGateFail: boolean,
   gateError: string,
   failMessage: string,
-): Promise<void> {
+): Promise<"dequeued" | "retained"> {
+  if (!isGateFail) {
+    // Defensive: conflict culprits must not reach here.
+    log.error("settleBisectCulprit invoked for non-gate-fail culprit — parking", {
+      projectId,
+      specId: culprit.specId,
+    });
+  }
   if (isGateFail && deps.gateRework !== undefined) {
-    // The WRITER rework path: re-author the culprit to fix the integration-only gate
-    // failure, then retire the OLD entry (the re-authored run re-queues a fresh one).
-    await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+    const settled = await settleWriterOwnedOrPark(
+      deps,
+      projectId,
+      culprit,
+      recovery,
+      `integrated-tree gate failure handed to writer rework: ${failMessage}`,
+      failMessage,
+    );
+    if (settled.action === "retain") {
+      await deps.queue.releaseClaim(culprit.queueId);
+      log.error("gate-fail settle retained queue entry after parking_failed", {
+        projectId,
+        specId: culprit.specId,
+        message: settled.message,
+      });
+      return "retained";
+    }
+    if (settled.reason === "needs_attention" && settled.alreadyDequeued) {
+      return "dequeued";
+    }
     await markDequeuedAfterEvent({
       queue: deps.queue,
       events: deps.events,
       projectId,
       entry: culprit,
-      reason: "superseded",
-      message: `routed to writer rework after a failed integrated-tree gate: ${failMessage}`,
+      reason: settled.reason,
+      message: settled.message,
       tx: deps.tx,
     });
-    return;
+    return "dequeued";
   }
-  // The CONFLICT (or no-router fallback) path: a RECOVERABLE conflict dequeue — the
-  // conflict resolver / replan owns the re-drive (#585/#587).
-  await markDequeuedAfterEvent({
-    queue: deps.queue,
-    events: deps.events,
-    projectId,
-    entry: culprit,
-    reason: "conflict",
-    message: `bisected as the offending PR in a failed batch check: ${failMessage}`,
-    tx: deps.tx,
-  });
+  const message = `failed integrated-tree gate has no writer-rework owner: ${failMessage}`;
+  const park = await deps.escalator.escalate({ projectId, entry: culprit, message });
+  const settled = settleFromParkOutcome(park, message);
+  if (settled.action === "retain") {
+    await deps.queue.releaseClaim(culprit.queueId);
+    return "retained";
+  }
+  if (!settled.alreadyDequeued) {
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry: culprit,
+      reason: settled.reason,
+      message: settled.message,
+      tx: deps.tx,
+    });
+  }
+  return "dequeued";
 }
 
-/** The slice of deps the base-conflict drive needs (settle deps + the merge runner). */
 export interface BatchBaseConflictDeps extends BatchSettleDeps {
   runner: MergeRunner;
 }
@@ -137,25 +147,76 @@ export async function holdOnRetriableDriveThrow(
   await deps.queue.releaseClaim(entry.queueId);
   log.warn(
     "merge drive threw a transient infra error; holding + re-driving (entry stays queued)",
-    {
-      projectId,
-      specId: entry.specId,
-    },
+    { projectId, specId: entry.specId },
     error,
   );
   return {
     kind: "infra_hold",
     message: `merge drive threw transient infra error: ${String(error)}`,
     retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS,
+    entry,
   };
 }
 
-/**
- * Settle a NON-merged real-merge outcome for one batch entry. A `needs_attention`
- * outcome parks the spec (frees its slot) + dequeues `needs_attention`; any other
- * outcome follows the same bounded recoverable-hold / terminal conflict-dequeue policy as
- * `EventEmittingMergeCoordinator.driveAndSettle`.
- */
+type WriterSettle =
+  | { action: "dequeue"; reason: DequeueReason; message: string; alreadyDequeued?: boolean }
+  | { action: "retain"; message: string; retryAfterMs: number };
+
+/** Owned writer receipt → superseded dequeue; else RecoveryParkWriter. */
+async function settleWriterOwnedOrPark(
+  deps: BatchSettleDeps,
+  projectId: string,
+  entry: MergeQueueEntry,
+  recovery: GateReworkRouteResult,
+  ownedMessage: string,
+  failMessage: string,
+): Promise<WriterSettle> {
+  if (recovery.kind === "owned") {
+    const verified = await verifyRecoveryOwnership({
+      evidence: deps.recoveryEvidence,
+      expectedSpecId: entry.specId,
+      receipt: recovery.receipt,
+      contextMessage: failMessage,
+    });
+    if (verified.ok) {
+      return { action: "dequeue", reason: "superseded", message: ownedMessage };
+    }
+    const park = await deps.escalator.escalate({ projectId, entry, message: verified.message });
+    const settled = settleFromParkOutcome(park, verified.message);
+    if (settled.action === "retain") return settled;
+    return {
+      action: "dequeue",
+      reason: "needs_attention",
+      message: settled.message,
+      alreadyDequeued: settled.alreadyDequeued === true,
+    };
+  }
+  if (recovery.kind === "terminal_noop") {
+    return {
+      action: "dequeue",
+      reason: "superseded",
+      message: `${failMessage} (concurrent terminal ${recovery.status})`,
+    };
+  }
+  if (recovery.kind === "parking_failed") {
+    return {
+      action: "retain",
+      message: recovery.message,
+      retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS,
+    };
+  }
+  // parking_required
+  const park = await deps.escalator.escalate({ projectId, entry, message: recovery.message });
+  const settled = settleFromParkOutcome(park, recovery.message);
+  if (settled.action === "retain") return settled;
+  return {
+    action: "dequeue",
+    reason: "needs_attention",
+    message: settled.message,
+    alreadyDequeued: settled.alreadyDequeued === true,
+  };
+}
+
 export async function settleDriveOutcome(
   deps: BatchSettleDeps,
   projectId: string,
@@ -163,31 +224,10 @@ export async function settleDriveOutcome(
   outcome: Exclude<MergeDriveOutcome, { kind: "merged" }>,
 ): Promise<"dequeued" | RecoverableDriveHoldResult> {
   if (outcome.kind === "needs_attention") {
-    // The LOUD TERMINAL ESCALATION (§2c — non-bricking): park the spec FIRST (frees its
-    // slot — the rest of the DAG keeps moving), then dequeue `needs_attention` (NEVER
-    // re-queued). The escalator emits `dag.spec.needs_attention`; the dequeue emits
-    // `merge.dequeued`. NOT the recoverable conflict path (it would re-conflict forever).
-    await deps.escalator.escalate({ projectId, entry, message: outcome.message });
-    await markDequeuedAfterEvent({
-      queue: deps.queue,
-      events: deps.events,
-      projectId,
-      entry,
-      reason: "needs_attention",
-      message: outcome.message,
-      tx: deps.tx,
-    });
-    await deps.recoverableDriveHolds?.reset(entry.queueId);
-    return "dequeued";
+    return settleNeedsAttention(deps, projectId, entry, outcome);
   }
 
   if (outcome.kind === "re_gate_pending") {
-    // The post-auto-rebase native re-gate is NOT YET TERMINAL (still running / infra blip):
-    // re-drivable, "not done yet" — RELEASE the claim so the entry STAYS QUEUED + arm a paced
-    // re-drive (the gate just needs to finish). NEVER dequeued (the old `conflict` mapping
-    // bricked the live DAG) and NO fixed attempt cap (a still-running gate is not non-
-    // convergence). A genuinely-stuck gate surfaces via the thrown-infra halts / a terminal
-    // failed/needs_attention verdict, not a count on this hold.
     await deps.recoverableDriveHolds?.reset(entry.queueId);
     await deps.queue.releaseClaim(entry.queueId);
     return { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS };
@@ -200,35 +240,145 @@ export async function settleDriveOutcome(
     }
   }
 
-  const reason = outcome.kind;
+  if (outcome.kind === "failed") {
+    const result = await settleFailedDrive(deps, projectId, entry, outcome.message);
+    return result === "retained"
+      ? { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS }
+      : "dequeued";
+  }
+
+  if (outcome.kind === "conflict") {
+    return settleConflictOwned(deps, projectId, entry, outcome.message, outcome.recovery);
+  }
+
+  // Remaining kinds without a dedicated arm fail closed via park.
+  const message = `unhandled non-merged drive outcome ${(outcome as { kind: string }).kind}`;
+  const park = await deps.escalator.escalate({ projectId, entry, message });
+  const settled = settleFromParkOutcome(park, message);
+  if (settled.action === "retain") {
+    await deps.queue.releaseClaim(entry.queueId);
+    return { kind: "held", retryAfterMs: settled.retryAfterMs };
+  }
+  await deps.recoverableDriveHolds?.reset(entry.queueId);
+  return "dequeued";
+}
+
+async function settleNeedsAttention(
+  deps: BatchSettleDeps,
+  projectId: string,
+  entry: MergeQueueEntry,
+  outcome: Extract<MergeDriveOutcome, { kind: "needs_attention" }>,
+): Promise<"dequeued" | RecoverableDriveHoldResult> {
+  if (outcome.parking === "terminal_noop") {
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: "superseded",
+      message: outcome.message,
+      tx: deps.tx,
+    });
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
+    return "dequeued";
+  }
+  if (outcome.parking === "parking_failed") {
+    await deps.queue.releaseClaim(entry.queueId);
+    return { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS };
+  }
+  if (outcome.parking === "complete") {
+    // Already parked outside RecoveryParkWriter — emit dequeue only.
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: "needs_attention",
+      message: outcome.message,
+      tx: deps.tx,
+    });
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
+    return "dequeued";
+  }
+  // required
+  const park = await deps.escalator.escalate({ projectId, entry, message: outcome.message });
+  const settled = settleFromParkOutcome(park, outcome.message);
+  if (settled.action === "retain") {
+    await deps.queue.releaseClaim(entry.queueId);
+    log.error("needs_attention settle retained queue entry after parking_failed", {
+      projectId,
+      specId: entry.specId,
+      message: settled.message,
+    });
+    return { kind: "held", retryAfterMs: settled.retryAfterMs };
+  }
+  if (!settled.alreadyDequeued) {
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry,
+      reason: settled.reason,
+      message: settled.message,
+      tx: deps.tx,
+    });
+  }
+  await deps.recoverableDriveHolds?.reset(entry.queueId);
+  return "dequeued";
+}
+
+async function settleConflictOwned(
+  deps: BatchSettleDeps,
+  projectId: string,
+  entry: MergeQueueEntry,
+  message: string,
+  recovery: ConflictRecoveryReceipt,
+): Promise<"dequeued" | RecoverableDriveHoldResult> {
+  const verified = await verifyRecoveryOwnership({
+    evidence: deps.recoveryEvidence,
+    expectedSpecId: entry.specId,
+    receipt: recovery,
+    contextMessage: message,
+  });
+  if (!verified.ok) {
+    const park = await deps.escalator.escalate({ projectId, entry, message: verified.message });
+    const settled = settleFromParkOutcome(park, verified.message);
+    if (settled.action === "retain") {
+      await deps.queue.releaseClaim(entry.queueId);
+      log.error("conflict ownership fail retained queue entry after parking_failed", {
+        projectId,
+        specId: entry.specId,
+        message: settled.message,
+      });
+      return { kind: "held", retryAfterMs: settled.retryAfterMs };
+    }
+    if (!settled.alreadyDequeued) {
+      await markDequeuedAfterEvent({
+        queue: deps.queue,
+        events: deps.events,
+        projectId,
+        entry,
+        reason: settled.reason,
+        message: settled.message,
+        tx: deps.tx,
+      });
+    }
+    await deps.recoverableDriveHolds?.reset(entry.queueId);
+    return "dequeued";
+  }
   await deps.recoverableDriveHolds?.reset(entry.queueId);
   await markDequeuedAfterEvent({
     queue: deps.queue,
     events: deps.events,
     projectId,
     entry,
-    reason,
-    message: outcome.message,
+    reason: "conflict",
+    message,
     tx: deps.tx,
   });
   return "dequeued";
 }
 
-/**
- * Drive a BASE-CONFLICT culprit (a single PR dirty against `default_branch`, the verdict
- * carrying `conflictsWithBase: true`) through the EXISTING real per-run merge path — the
- * SAME `runner.driveMerge` the merge step uses. The drive's `ensureUpToDate` rebases the
- * PR onto base, runs the intent-preserving resolver, re-gates, re-pushes, and classifies
- * resolve-vs-replan-vs-escalate. This is the path the batch coordinator previously
- * STARVED by dequeuing the PR first; routing the culprit here is the fix.
- *
- * The culprit is the entry whose spec matches `verdict.conflictBetween.specId`. We CLAIM
- * it first (the SAME serialization lease the merge step takes) so a concurrent pass can't
- * double-drive it, then drive + settle from the outcome via {@link settleDriveOutcome}:
- * `merged` advances (markMerged); recoverable `blocked` holds with backoff;
- * `conflict`/`failed` dequeue; `needs_attention` parks the spec (the resolver's
- * genuine-product-clash verdict — frees its slot, never re-queued).
- */
 export async function driveBaseConflict(
   deps: BatchBaseConflictDeps,
   projectId: string,
@@ -239,9 +389,6 @@ export async function driveBaseConflict(
   const culpritSpecId = verdict.conflictBetween?.specId;
   const culprit = batch.find((e) => e.specId === culpritSpecId);
   if (culprit === undefined) {
-    // The verdict named a base conflict but no batch entry matches the culprit spec — a
-    // logic mismatch we must NOT paper over by bisecting (which would blame a PR). HOLD
-    // loudly (the entries stay queued; the next pass re-forms from fresh state).
     log.warn("base-conflict verdict named a spec not in the formed batch — holding (no dequeue)", {
       projectId,
       culpritSpecId: String(culpritSpecId),
@@ -249,9 +396,19 @@ export async function driveBaseConflict(
     });
     return { projectId, holdReason: "all_blocked", queueDepth };
   }
+  return driveConflictCulprit(deps, projectId, culprit, queueDepth);
+}
 
-  // CLAIM first (the serialization lease — mirror the merge step) so a concurrent pass
-  // can't double-drive. A lost claim means another pass is already driving it — hold.
+/**
+ * Drive an already-identified conflict culprit through runner.driveMerge + settle.
+ * Shared by base-conflict short-circuit and spec-vs-spec bisect tail.
+ */
+export async function driveConflictCulprit(
+  deps: BatchBaseConflictDeps,
+  projectId: string,
+  culprit: MergeQueueEntry,
+  queueDepth: number,
+): Promise<CoordinateResult | BatchDriveInfraHold> {
   const claimed = await deps.queue.claim(culprit.queueId);
   if (!claimed) {
     const refreshed = await deps.queue.loadSnapshot(projectId);
@@ -267,10 +424,6 @@ export async function driveBaseConflict(
     await deps.queue.markMerged(culprit.queueId);
     return { projectId, queueDepth, mergedSpecId: culprit.specId };
   }
-
-  // A non-merged drive outcome: settle via the SAME policy the merge step uses
-  // (recoverable hold / needs_attention park). The resolver already classified
-  // resolve-vs-replan-vs-escalate inside the drive — we never re-decide that here.
   const settled = await settleDriveOutcome(deps, projectId, culprit, outcome);
   if (settled !== "dequeued") {
     return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
@@ -278,7 +431,56 @@ export async function driveBaseConflict(
   return { projectId, queueDepth, dequeuedSpecId: culprit.specId };
 }
 
-/** Drive ONE entry's real merge through the native-queue path; a thrown drive ⇒ recoverable blocked. */
+/** Assign an owner to every failed fresh merge drive before the stale entry retires. */
+export async function settleFailedDrive(
+  deps: BatchSettleDeps,
+  projectId: string,
+  culprit: MergeQueueEntry,
+  failure: string,
+): Promise<"dequeued" | "retained"> {
+  const gateError = `merge drive failed fresh validation: ${failure}`;
+  if (deps.gateRework === undefined) {
+    const message = `${gateError}; no writer-rework router is configured`;
+    const park = await deps.escalator.escalate({ projectId, entry: culprit, message });
+    const settled = settleFromParkOutcome(park, message);
+    if (settled.action === "retain") {
+      await deps.queue.releaseClaim(culprit.queueId);
+      return "retained";
+    }
+    if (!settled.alreadyDequeued) {
+      await markDequeuedAfterEvent({
+        queue: deps.queue,
+        events: deps.events,
+        projectId,
+        entry: culprit,
+        reason: settled.reason,
+        message: settled.message,
+        tx: deps.tx,
+      });
+    }
+    return "dequeued";
+  }
+  const recovery = await deps.gateRework.routeGateFailToRework({ projectId, culprit, gateError });
+  const settled = await settleWriterOwnedOrPark(deps, projectId, culprit, recovery, `${gateError}; handed to writer rework`, gateError);
+  if (settled.action === "retain") {
+    await deps.queue.releaseClaim(culprit.queueId);
+    return "retained";
+  }
+  if (!(settled.reason === "needs_attention" && settled.alreadyDequeued)) {
+    await markDequeuedAfterEvent({
+      queue: deps.queue,
+      events: deps.events,
+      projectId,
+      entry: culprit,
+      reason: settled.reason,
+      message: settled.message,
+      tx: deps.tx,
+    });
+  }
+  await deps.recoverableDriveHolds?.reset(culprit.queueId);
+  return "dequeued";
+}
+
 async function driveOneEntry(
   deps: BatchBaseConflictDeps,
   projectId: string,

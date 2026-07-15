@@ -21,7 +21,9 @@ import { PgBatchChecker } from "./batchChecker.js";
 import { BatchMergeCoordinator } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
+import type { RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgSpecEscalator } from "./coordinatorEscalate.js";
+import { PgRecoveryEvidencePort } from "./recoveryEvidencePg.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
 import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
 import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
@@ -97,7 +99,7 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     batchEvents: new PgBatchMergeEventEmitter(deps.pool, deps.runStateWriter),
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, routes through the writer.
-    escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
+    escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter as RunStateWriter & RecoveryParkWriter),
     // The batch-gate-fail self-heal (v35 — the strand fix): a GATE-fail bisect culprit
     // (code that passed its own branch gates but breaks integrated) is routed back to the
     // WRITER for rework carrying the gate error as steering, REUSING the never-discard

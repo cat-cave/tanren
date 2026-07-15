@@ -341,7 +341,7 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
   }): Promise<void> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.runId);
     const router = new SpecStatusGateReworkRouter({
-      pool: this.deps.scopedPool,
+      pool: this.deps.scopedPool as import("pg").Pool,
       runStateWriter: this.deps.runStateWriter,
       orgId: ctx.orgId,
       eventStore: this.deps.eventStore,

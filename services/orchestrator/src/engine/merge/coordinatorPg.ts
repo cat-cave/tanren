@@ -309,15 +309,6 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
   }
 
-  async recoverDequeuedCandidates(projectId: string): Promise<number> {
-    const orgId = await resolveProjectOrg(this.pool, projectId);
-    if (orgId === null) return 0;
-    return runWithOrgScope(this.pool, orgId, async (client) => {
-      await client.query("LOCK TABLE merge_queue IN SHARE ROW EXCLUSIVE MODE");
-      const result = await client.query(RECOVER_DEQUEUED_CANDIDATES_SQL, [projectId]);
-      return result.rowCount ?? 0;
-    });
-  }
 
   async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
     await this.settle(
@@ -493,7 +484,6 @@ function makeClientScopedSettleQueue(model: PgMergeQueueModel, client: SettleQue
     releaseClaim: (queueId) => model.releaseClaim(queueId),
     markDequeued: (queueId, reason) => model.markDequeuedOnClient(client, queueId, reason),
     markDequeuedOnClient: (c, queueId, reason) => model.markDequeuedOnClient(c, queueId, reason),
-    recoverDequeuedCandidates: (projectId) => model.recoverDequeuedCandidates(projectId),
     supersedePriorRunEntry: (runId) => model.supersedePriorRunEntry(runId),
     recoverStaleClaims: (projectId) => model.recoverStaleClaims(projectId),
   };

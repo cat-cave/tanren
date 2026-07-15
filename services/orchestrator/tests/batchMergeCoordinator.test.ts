@@ -15,6 +15,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const PROJECT = "project_batch";
 
@@ -44,6 +45,7 @@ function makeHarness(maxBatchSize = 5): Harness {
     events,
     batchEvents,
     escalator,
+    recoveryEvidence: new ScriptedRecoveryEvidencePort(),
     gateRework,
     resolveMaxBatchSize: () => Promise.resolve(maxBatchSize),
     // Run the bounded infra-error retries instantly (no real backoff in tests).
@@ -87,7 +89,7 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
     // check could not see). It must PARK at needs_attention, never re-execute.
     seed(h, "spec_a");
     seed(h, "spec_b");
-    h.runner.script("run_spec_b", { kind: "needs_attention", message: "irreconcilable with spec_z" });
+    h.runner.script("run_spec_b", { kind: "needs_attention", message: "irreconcilable with spec_z", parking: "required" });
 
     await h.coordinator.coordinate(PROJECT);
 
@@ -234,16 +236,26 @@ describe("BatchMergeCoordinator — speculative batch-check + bisect", () => {
   it("routes an integration-conflict batch through bisect (the conflicting PR is the culprit)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
-    // spec_b conflicts on the integration ref (an A-vs-B build conflict).
     seed(h, "spec_b");
     seed(h, "spec_c");
     h.checker.conflictWhenContains("spec_b");
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "resolver routed replan",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" },
+      },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
     expect(h.queue.statusOf("run_spec_a")).toBe("merged");
-    expect(h.queue.statusOf("run_spec_c")).toBe("merged");
+    // Post-culprit remainder waits for the next pass (conflict drive ends this pass).
+    expect(h.queue.statusOf("run_spec_c")).toBe("queued");
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
   });
 
   it("holds on an empty queue (nothing to check)", async () => {
@@ -470,17 +482,27 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
   });
 
-  it("a GENUINE conflict STILL bisects → culprit → merge.dequeued(conflict) (no regression)", async () => {
+  it("a GENUINE conflict STILL bisects → culprit drive → merge.dequeued(conflict) (no regression)", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
     h.checker.conflictWhenContains("spec_b");
+    h.runner.script("run_spec_b", {
+      kind: "conflict",
+      message: "resolver routed replan",
+      recovery: {
+        kind: "planner_replan",
+        specId: "spec_b",
+        run: { kind: "enqueued", replanRunId: "run_replan_b", plannerTaskId: "task_replan_b" },
+      },
+    });
 
     await h.coordinator.coordinate(PROJECT);
 
     expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    const dq = h.events.events.find((e) => e.type === "merge.dequeued");
+    const dq = h.events.events.find((e) => e.type === "merge.dequeued" && e.specId === "spec_b");
     expect(dq?.reason).toBe("conflict");
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked")).toBe(false);
+    expect(h.runner.drives.map((d) => d.runId)).toContain("run_spec_b");
   });
 });

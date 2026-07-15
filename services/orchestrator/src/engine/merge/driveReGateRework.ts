@@ -32,7 +32,7 @@ export interface BuildDriveReGateGateReworkDeps {
 /** Build the drive-pass re-gate gate-fail rework router (mirrors `conflictResolver/index.ts`). */
 export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps): GateReworkRouter {
   return new SpecStatusGateReworkRouter({
-    pool: deps.pool,
+    pool: deps.pool as import("pg").Pool,
     runStateWriter: deps.runStateWriter,
     orgId: deps.orgId,
     eventStore: deps.eventStore,

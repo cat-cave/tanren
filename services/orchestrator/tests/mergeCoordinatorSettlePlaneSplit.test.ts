@@ -127,9 +127,6 @@ class RecordingQueueModel {
   async markDequeuedOnClient(): Promise<void> {
     throw new Error("unused");
   }
-  async recoverDequeuedCandidates(): Promise<number> {
-    return 0;
-  }
   async supersedePriorRunEntry(): Promise<undefined> {
     return undefined;
   }

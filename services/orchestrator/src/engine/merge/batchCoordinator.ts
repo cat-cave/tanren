@@ -24,8 +24,10 @@ import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
+import type { RecoveryEvidencePort } from "./recoveryOwnership.js";
 import {
   driveBaseConflict,
+  driveConflictCulprit,
   type BatchDriveInfraHold,
   holdOnRetriableDriveThrow,
   settleBisectCulprit,
@@ -38,24 +40,14 @@ import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { createLogger } from "../observability/logger.js";
 const log = createLogger("batch-coordinator");
-
-// The IN-PASS re-poll spacing (NOT a cap). The in-pass loop is the IMMEDIATE retry of ONE
-// transient: it re-polls the SAME infra condition once (it may clear on a spaced re-read), then
-// hands off any recurrence to the cross-pass sustained-non-recovery hold (which owns recovery
-// across passes). Spin-free — any second infra-error breaks the loop.
+// In-pass re-poll spacing (not a cap): one transient re-poll, then hand off to cross-pass hold.
 const INFRA_RETRY_BACKOFF_MS = 500;
 
 const PENDING_RECHECK_MS = 15_000;
 
 class BatchCheckStillPendingError extends Error {}
 
-/**
- * Thrown by the bisect callback when a sub-batch's check could not be RUN (a transient
- * INFRA error from `checkEntries`). Bisect cannot name a culprit from a sub-check that
- * never ran — so the pass aborts the bisect + HOLDS (it never blames an innocent PR for
- * an infra error). Mirrors {@link BatchCheckStillPendingError}; carries the message +
- * the retriable flag so the outer pass surfaces the loud infra hold.
- */
+/** Bisect sub-check could not RUN (infra) — abort bisect + HOLD; never blame an innocent PR. */
 class BatchCheckInfraError extends Error {
   constructor(
     message: string,
@@ -107,16 +99,13 @@ export interface BatchMergeCoordinatorDeps {
   batchEvents: BatchMergeEventEmitter;
   /** §2c spec-escalator: parks irreconcilable specs at `needs_attention` (shared with native queue). */
   escalator: SpecEscalator;
-  /**
-   * Writer-rework router (v35 strand fix + v54 #56): a GATE-fail bisect culprit AND a
-   * sustained-non-recovering merge-queue infra hold both route to the WRITER carrying the
-   * failure as steering (`settleBisectCulprit` / `escalateInfraHoldToWriter`). Absent ⇒ both
-   * fall back to a dequeue (`conflict` / `blocked`); production always wires it.
-   */
+  /** Writer-rework router for gate-fail bisect + sustained infra hold. Prod always wires it. */
   gateRework?: BatchGateReworkRouter;
   /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
   tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
+  /** Settlement ownership readback. Absent ⇒ conflict parks fail-closed. */
+  recoveryEvidence?: RecoveryEvidencePort;
   /** Audit RC-7: the DURABLE backing store for BOTH runaway-guard ceilings, so the counters survive a restart (absent → in-memory, for fakes). */
   holdCeilingStore?: HoldCeilingStore;
   /** Per-project max batch size resolver. Default → `DEFAULT_MAX_BATCH_SIZE`; prod reads `projects.config.maxBatchSize`. */
@@ -125,15 +114,11 @@ export interface BatchMergeCoordinatorDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/**
- * Production BatchMergeCoordinator: speculative batch-check + bisect over the native queue.
- * Reloads the queue per pass (DAG is the source of truth); REAL merges use the same
- * runner/model so the native queue's ordering + lease/recovery guarantees hold unchanged.
- */
+/** Production BatchMergeCoordinator: speculative batch-check + bisect over the native queue. */
 export class BatchMergeCoordinator implements MergeCoordinator {
   private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
   private readonly sleep: (ms: number) => Promise<void>;
-  /** GAP #1 (runaway guard): the per-project CROSS-PASS consecutive-infra-hold ceiling — bounds a persistent outage to a loud alert (each re-drive is a fresh pass). */
+  /** Cross-pass consecutive-infra-hold ceiling (runaway guard). */
   private readonly infraHolds: BatchInfraHoldCeiling;
 
   constructor(private readonly deps: BatchMergeCoordinatorDeps) {
@@ -147,7 +132,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
   async coordinate(projectId: string): Promise<CoordinateResult> {
     // Crash recovery first; the lease is the same native-queue mechanism.
     await this.deps.queue.recoverStaleClaims(projectId);
-    await this.deps.queue.recoverDequeuedCandidates(projectId);
 
     const maxBatchSize = await this.resolveMaxBatchSize(projectId);
     const snapshot = await this.deps.queue.loadSnapshot(projectId);
@@ -174,13 +158,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     return this.processBatch(projectId, formation, queueDepth, maxBatchSize);
   }
 
-  /**
-   * Speculatively check the formed batch, then either drive every entry's real merge (on
-   * pass) or isolate + dequeue the offending PR and re-check the remainder (on fail).
-   * `formation` is the already-formed batch for THIS attempt; on a fail we re-FORM (reload
-   * the snapshot) without the culprit so a newly-eligible entry can join and the cap is
-   * re-applied. Each fail removes exactly one entry, so the loop runs at most `batch.length`.
-   */
+  /** Check formed batch; on pass merge all; on fail isolate culprit + re-check remainder. */
   private async processBatch(
     projectId: string,
     formation: BatchFormation,
@@ -188,13 +166,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     maxBatchSize: number,
   ): Promise<CoordinateResult> {
     let current = formation;
-    // Specs already bisected-out this pass — excluded from the re-formed batch so a
-    // re-form never re-includes a known culprit (the loop strictly shrinks).
     const excludedSpecIds = new Set<string>();
-
-    // The loop bound: at most one entry is removed per iteration, so it cannot exceed
-    // the initial batch size + 1 (the final all-clear merge). A hard ceiling guards
-    // against any logic error ever spinning.
     const maxIterations = formation.eligibleCount + 1;
     for (let iteration = 0; iteration < maxIterations; iteration += 1) {
       if (current.batch.length === 0) {
@@ -250,9 +222,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
 
       await this.infraHolds.reset(projectId);
 
-      // The bisect culprit's failure sub-kind (NEVER double-handled — routed once; see
-      // `settleBisectCulprit`): a `fail` is a GATE failure → WRITER REWORK (the v35 fix,
-      // `verdict.message` carries the gate output); a `conflict` → the resolver/replan.
       const isGateFail = verdict.result === "fail";
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
@@ -273,9 +242,36 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         return this.infraHold(projectId, current.batch, bisect.message, queueDepth);
       }
 
-      const { culprit, checks } = bisect;
+      const { culprit, innocentPrefix, checks } = bisect;
       await this.deps.batchEvents.emitCulprit({ projectId, culprit, checks, message: failMessage });
-      await settleBisectCulprit(this.deps, projectId, culprit, isGateFail, verdict.message, failMessage);
+
+      if (!isGateFail) {
+        // Prefix first; incomplete prefix stops before culprit drive.
+        let prefixMergedSpecId: string | undefined;
+        if (innocentPrefix.length > 0) {
+          const prefixResult = await this.mergeBatch(projectId, innocentPrefix, queueDepth);
+          if (prefixResult.mergedSpecId !== innocentPrefix.at(-1)?.specId) return prefixResult;
+          prefixMergedSpecId = prefixResult.mergedSpecId;
+        }
+        const result = await driveConflictCulprit(this.deps, projectId, culprit, queueDepth);
+        const settled = await this.settleConflictDriveResult(result, projectId, current.batch, queueDepth);
+        if (prefixMergedSpecId !== undefined && settled.mergedSpecId === undefined) {
+          return { ...settled, mergedSpecId: prefixMergedSpecId };
+        }
+        return settled;
+      }
+
+      const gateSettled = await settleBisectCulprit(
+        this.deps,
+        projectId,
+        culprit,
+        isGateFail,
+        verdict.message,
+        failMessage,
+      );
+      if (gateSettled === "retained") {
+        return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: 3000 };
+      }
       excludedSpecIds.add(culprit.specId);
 
       // RE-FORM without the culprit (reload so it is gone + a newly-eligible entry can join), re-check next loop.
@@ -288,6 +284,25 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     // The loop bound was hit (a logic guard — unreachable since each fail removes one entry). Hold.
     await this.infraHolds.reset(projectId);
     return { projectId, holdReason: "all_blocked", queueDepth };
+  }
+
+  private async settleConflictDriveResult(
+    result: CoordinateResult | BatchDriveInfraHold,
+    projectId: string,
+    batch: ReadonlyArray<MergeQueueEntry>,
+    queueDepth: number,
+  ): Promise<CoordinateResult> {
+    if (!("projectId" in result)) {
+      if (result.kind === "infra_terminal") {
+        return this.terminalInfraBlock(projectId, [result.entry], result.message, queueDepth, result.terminalKind);
+      }
+      const holdBatch = result.entry !== undefined ? [result.entry] : batch;
+      return this.infraHold(projectId, holdBatch, result.message, queueDepth);
+    }
+    if (result.holdReason !== "infra_error" && result.holdReason !== "infra_blocked") {
+      await this.infraHolds.reset(projectId);
+    }
+    return result;
   }
 
   /** Check a formed batch, retrying only typed-retriable infra errors in-pass. */
@@ -338,6 +353,8 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       events,
       batchEvents,
       gateRework,
+      escalator: this.deps.escalator,
+      ...(this.deps.recoveryEvidence !== undefined ? { recoveryEvidence: this.deps.recoveryEvidence } : {}),
       ceiling,
       projectId,
       batch,
@@ -348,15 +365,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     });
   }
 
-  /**
-   * Speculatively integrate + CI-check the given entry set (the BatchChecker assembles
-   * `default_branch + the entries` on an ephemeral integration ref — NEVER touching
-   * default_branch). An empty set checks the base alone (the bisect lower-bound). A THROWN
-   * checker means the check could not be RUN (a transport/ref infra error) — NOT a CI
-   * failure and NEVER a PR's fault, so we return the `infra-error` verdict (NOT `fail`);
-   * the caller re-polls then HOLDS loudly, never dequeuing a clean PR. `retriable` derives
-   * from the typed provider error.
-   */
+  /** Speculative integrate + CI-check. Thrown checker → infra-error (never blame a PR). */
   private async checkEntries(projectId: string, entries: ReadonlyArray<MergeQueueEntry>): Promise<BatchCheckVerdict> {
     try {
       return await this.deps.checker.checkBatch({ projectId, entries });
@@ -370,14 +379,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     }
   }
 
-  /**
-   * Binary-search the failed batch to isolate the single offending PR (the pure
-   * `bisectCulprit` driver over `checkEntries`). Returns the bisect result on a definitive
-   * pass→fail boundary; `"pending"` when a sub-batch's CI was still running (HOLD, never
-   * guess); `{kind:"infra", message}` when a sub-batch check could NOT be RUN — bisect MUST
-   * NOT name a culprit from a check that never ran, so the pass aborts the bisect + HOLDS
-   * loudly. Each sub-batch check is a speculative PREFIX integration + CI-check.
-   */
+  /** Binary-search failed batch for the single culprit (pending/infra hold without blame). */
   private async bisectBatch(
     projectId: string,
     batch: ReadonlyArray<MergeQueueEntry>,

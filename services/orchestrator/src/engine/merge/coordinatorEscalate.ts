@@ -1,91 +1,61 @@
-// The NON-BRICKING conflict-escalation seam for the native merge queue
-// (autonomy-engine.md §2c — the loud, non-bricking conflict escalation). When the
-// intent-preserving conflict resolver (wired in a LATER PR) judges two in-flight
-// specs GENUINELY irreconcilable, the merge drive returns the `needs_attention`
-// outcome and BOTH coordinators (one-at-a-time + batch) route it HERE instead of
-// blindly re-executing it. The escalation PARKS the spec at the terminal
-// `needs_attention` status — which FREES its merge slot so the rest of the DAG keeps
-// moving (it blocks ONLY its dependents, never the whole graph) — and emits the loud
-// `dag.spec.needs_attention` event so the parked state is operator-visible. The
-// `merge.dequeued` (reason `needs_attention`) + the `markDequeued` are the
-// coordinators' job; this seam owns the spec-status escalation + the dag event.
-//
-// There is NO producer of the escalation yet (the drive resolver still returns the
-// recoverable `conflict`) — this is the foundation the later resolver RETURNS into.
+// NON-BRICKING conflict-escalation seam for the native merge queue
+// (autonomy-engine.md §2c). Settlement routes genuine irreconcilables HERE.
+// SpecEscalator.escalate is the SOLE atomic park via RecoveryParkWriter —
+// park + ordered events + dequeue on one org-scoped transaction. Settlement
+// branches on the typed RecoveryParkOutcome and never invents a dequeue.
 
 import type pg from "pg";
-import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type { RecoveryParkOutcome, RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
 
 /**
- * The seam both coordinators reuse to escalate a genuinely-irreconcilable spec. ONE
- * helper, ONE escalation policy — so the one-at-a-time + batch paths can never drift.
+ * Escalator outcome. When `alreadyDequeued` is true (RecoveryParkWriter), settlement
+ * must not emit a second dequeue. Recording fakes return alreadyDequeued:false so
+ * settlement still retires the queue row.
+ */
+export type SpecEscalateOutcome =
+  | { kind: "parked"; newlyParked: boolean; alreadyDequeued: boolean }
+  | Extract<RecoveryParkOutcome, { kind: "parking_failed" }>;
+
+/**
+ * Sole park authority for merge-queue recovery retirement. ONE helper, ONE
+ * policy — batch + any residual one-at-a-time settle path never drift.
  */
 export interface SpecEscalator {
   /**
-   * Park the entry's spec at the terminal `needs_attention` status (freeing its merge
-   * slot) + emit the loud `dag.spec.needs_attention` event. Idempotent: an
-   * already-merged/done/needs_attention spec is left untouched (the guarded flip
-   * matches zero rows), so a concurrent settle never double-escalates or un-merges.
+   * Atomic park of the exact active queue owner at needs_attention + ordered
+   * events + dequeue. Returns RecoveryParkOutcome so callers settle truthfully.
    */
-  escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void>;
+  escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<SpecEscalateOutcome>;
 }
 
 /**
- * The pg-backed escalator. The spec-status flip MIRRORS `markSpecMerged`
- * (coordinatorBuild.ts) — the SAME plane-split guard the strand reconciler's
- * `escalateSpec` uses: route the write through the control-plane `runStateWriter`
- * when wired (the de-privileged data plane can no longer UPDATE `specs` directly),
- * else an org-scoped `UPDATE` on the pool. `notFromStatuses` keeps it an ATOMIC guard
- * — a spec already `merged`/`done`/`needs_attention` is never moved. The org id is
- * resolved system-scoped via `resolveProjectOrg` (the coordinator wakes with no
- * ambient org scope), and the dag event is appended through the same plane-split seam
- * the queue-event emitter uses.
+ * Pg-backed escalator over RecoveryParkWriter (Direct or Http run-state writer).
+ * Resolves project org system-scoped (coordinator has no ambient org).
  */
 export class PgSpecEscalator implements SpecEscalator {
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter: RunStateWriter,
+    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter,
   ) {}
 
-  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
+  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<SpecEscalateOutcome> {
     const orgId = await resolveProjectOrg(this.pool, input.projectId);
-    // A required-missing org is a LOUD hard failure (never a silent skip): without an
-    // org the spec cannot be parked, so a genuine irreconcilable conflict would be
-    // silently dropped — exactly the bricking this escalation exists to prevent.
     if (orgId === null) {
       throw new Error(`cannot escalate spec ${input.entry.specId}: project ${input.projectId} has no org`);
     }
-
-    // Task #48 Site H: the spec `needs_attention` flip + the matching
-    // `dag.spec.needs_attention` event are now ATOMIC. The prior split
-    // (`parkSpec(...)` + `withScopedStore.append(...)`) issued two separate
-    // writes; the partial-event landing was a silent strand surface. The
-    // atomic seam (`updateSpecWithEvent` / `applyUpdateSpecWithEvent`)
-    // bundles them into ONE org-scoped transaction. Audit D-R3.2: the writer
-    // is REQUIRED — the in-process `runWithOrgScope` fallback was an unreachable
-    // half-measure since PR #714's `runStateWriterFromEnv` always returns a writer.
-    const event = {
+    const park = await this.runStateWriter.parkRecoveryAndDequeue({
+      orgId,
+      projectId: input.projectId,
+      queueId: input.entry.queueId,
       runId: input.entry.runId,
       specId: input.entry.specId,
-      projectId: input.projectId,
-      orgId,
-      eventType: "dag.spec.needs_attention" as const,
-      payload: {
-        source: "merge_conflict",
-        specId: input.entry.specId,
-        prUrl: input.entry.prUrl,
-        prNumber: input.entry.prNumber,
-        message: input.message,
-      },
-    };
-    const spec = {
-      specId: input.entry.specId,
-      orgId,
-      status: "needs_attention",
-      notFromStatuses: ["merged", "needs_attention"],
-    };
-    await this.runStateWriter.updateSpecWithEvent({ spec, event });
+      message: input.message,
+    });
+    if (park.kind === "parked") {
+      return { kind: "parked", newlyParked: park.newlyParked, alreadyDequeued: true };
+    }
+    return park;
   }
 }

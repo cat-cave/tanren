@@ -220,25 +220,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     await this.markDequeued(queueId, reason);
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async recoverDequeuedCandidates(_projectId: string): Promise<number> {
-    let recovered = 0;
-    for (const row of this.rows.values()) {
-      if (
-        row.status === "dequeued" &&
-        row.recoverySignal === "legacy_native_dequeued" &&
-        row.dequeueReason === "blocked" &&
-        !this.hasActiveSameRun(row)
-      ) {
-        row.status = "queued";
-        row.dequeueReason = undefined;
-        row.claimedAt = undefined;
-        row.recoverySignal = undefined;
-        recovered += 1;
-      }
-    }
-    return recovered;
-  }
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
@@ -353,8 +334,9 @@ export class RecordingSpecEscalator implements SpecEscalator {
   readonly escalations: { specId: string; message: string }[] = [];
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
+  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }) {
     this.escalations.push({ specId: input.entry.specId, message: input.message });
+    return { kind: "parked" as const, newlyParked: true, alreadyDequeued: false };
   }
 }
 
@@ -412,7 +394,6 @@ export class FakeMergeSettleTransaction implements MergeSettleTransaction {
         stagedQueue.push(() => realQueue.markDequeued(queueId, reason));
       },
       markDequeuedOnClient: (_client, queueId, reason) => queue.markDequeued(queueId, reason),
-      recoverDequeuedCandidates: (pid) => realQueue.recoverDequeuedCandidates(pid),
       supersedePriorRunEntry: (runId) => realQueue.supersedePriorRunEntry(runId),
       recoverStaleClaims: (pid) => realQueue.recoverStaleClaims(pid),
     };
