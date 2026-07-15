@@ -67,16 +67,17 @@ export async function markReviewTaskDoneWithEvent(input: {
   // Round-3 audit finding H-R3.2: the prior-event entry carries a stable
   // idempotency key so a retried atomic write deduplicates the verdict event
   // on (run_id, idempotency_key) instead of double-emitting. Key shape
-  // `${runId}:review:${verdict}` keys the verdict to its run + outcome, so a
-  // retry of THIS finalize call dedupes cleanly; a subsequent flip of the
-  // verdict (e.g. an explicit re-review with a DIFFERENT outcome) would carry
-  // a distinct key and land afresh.
+  // `${runId}:review:${verdict}` is INTENTIONALLY run+verdict only (first-wins
+  // finalize idempotency). A retry of THIS finalize call dedupes cleanly; a
+  // subsequent flip of the verdict (e.g. an explicit re-review with a
+  // DIFFERENT outcome) carries a distinct key and lands afresh.
   //
-  // gv-2: when a forge receipt is present, include its id in the key so a
-  // retry of the same publication reconciles; a contradictory second receipt
-  // for the same verdict still keys to the same terminal outcome (idempotent
-  // finalize) — the receipt fields are those of the first successful commit
-  // that wins under append-if-absent.
+  // The forge review id is NOT part of the key. Under append-if-absent the
+  // first successful commit wins: a contradictory second receipt for the same
+  // run+verdict is suppressed and the durable payload (including any forge
+  // receipt fields) remains that of the first winner. Callers that must
+  // re-publish on a new head emit a different terminal path (re-review /
+  // re-gate), not a second finalize of the same key.
   const eventType = verdict === "approved" ? "review.approved" : "review.changes_requested";
   const forgeFields =
     forgePublication === undefined

@@ -66,6 +66,14 @@ export interface MergeAuthorityBundle {
    * is recorded (the gate already blocks via `gateOutcome === undefined`).
    */
   gatedHeadSha: string | undefined;
+  /**
+   * The sha the latest terminal `review.approved` / `review.changes_requested`
+   * forge receipt was FOR (`payload.headSha`). When present (strict simulated
+   * review), the land requires this EQUALS the head being landed — the
+   * review↔land TOCTOU guard (gv-2). Event existence alone never authorizes a
+   * drifted head. `undefined` for human/auto paths that omit the forge receipt.
+   */
+  reviewedHeadSha: string | undefined;
   /** The auditor's emitted findings + the project posture (the DORA block decision). */
   findings: ReadonlyArray<Finding>;
   auditPosture: AuditPosture;

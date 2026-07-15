@@ -57,6 +57,11 @@ export interface BuildMergeAuthorityBundleInput {
   /** The sha the latest `pre_merge` gate verdict was FOR (the TOCTOU commit-binding). */
   gatedHeadSha: string | undefined;
   /**
+   * The sha the latest terminal review forge receipt was FOR (gv-2 review↔land
+   * TOCTOU). `undefined` when the event is absent or has no forge receipt.
+   */
+  reviewedHeadSha: string | undefined;
+  /**
    * The REAL audit findings the auditor emitted on the run's latest `auditor.verdict`
    * (read fresh at land time; §4). `decideFromFindings(findings, auditPosture)` in the
    * authority is the LIVE audit gate. A MISSING/unreadable audit record is passed as a
@@ -128,6 +133,7 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     policyVersion: String(input.policyVersion),
     gateOutcome: input.gateOutcome,
     gatedHeadSha: input.gatedHeadSha,
+    reviewedHeadSha: input.reviewedHeadSha,
     findings: input.findings,
     auditPosture: resolveAuditPosture(input.projectConfigRaw),
     reviewVerdict: input.reviewVerdict,
@@ -204,6 +210,7 @@ export async function buildBundleForMergeStage(
     policyVersion: context.policyVersion,
     gateOutcome: landSignals.gateOutcome,
     gatedHeadSha: landSignals.gatedHeadSha,
+    reviewedHeadSha: landSignals.reviewedHeadSha,
     findings,
     reviewVerdict: landSignals.reviewVerdict,
     budgetState,

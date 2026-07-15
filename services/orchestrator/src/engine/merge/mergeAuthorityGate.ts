@@ -70,6 +70,13 @@ export interface MergeAuthorityGateInput {
    * `undefined` ⇒ no recorded verdict (the gate input already blocks).
    */
   gatedHeadSha: string | undefined;
+  /**
+   * The sha the latest terminal review forge receipt was FOR (gv-2). When present
+   * (strict simulated review), the land authorizes ONLY when this EQUALS the head
+   * being landed — event existence alone never authorizes a drifted head.
+   * `undefined` for human/auto paths without a forge receipt.
+   */
+  reviewedHeadSha: string | undefined;
   /** The fail-closed signals to authorize against. */
   signals: LiveMergeSignals;
   /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
@@ -152,6 +159,7 @@ export async function runAuthorityLand(input: {
     gateConfigHash: bundle.gateConfigHash,
     policyVersion: bundle.policyVersion,
     gatedHeadSha: bundle.gatedHeadSha,
+    reviewedHeadSha: bundle.reviewedHeadSha,
     signals,
     store,
   });
@@ -235,6 +243,27 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
       reasons: [
         `gateVerdict: gate verdict is for a different commit than the one being landed ` +
           `(gated '${input.gatedHeadSha ?? "unknown"}' != landing '${headSha}') — fail closed (re-gate the current head)`,
+      ],
+    };
+  }
+
+  // COMMIT-BINDING (the review↔land TOCTOU guard, gv-2): when the terminal
+  // review event carries a forge receipt headSha (strict simulated publication),
+  // that receipt must be FOR EXACTLY the commit being landed. Merely observing
+  // `review.approved` is not enough — a head-advance after publication fails
+  // closed until the advanced head is re-reviewed / re-gated. Human/auto paths
+  // omit the receipt (`reviewedHeadSha === undefined`) and skip this bind.
+  const reviewApproved = input.signals.reviewVerdict === "approved";
+  if (
+    reviewApproved &&
+    input.reviewedHeadSha !== undefined &&
+    input.reviewedHeadSha.toLowerCase() !== headSha.toLowerCase()
+  ) {
+    return {
+      kind: "blocked",
+      reasons: [
+        `reviewVerdict: forge review receipt is for a different commit than the one being landed ` +
+          `(reviewed '${input.reviewedHeadSha}' != landing '${headSha}') — fail closed (re-review the current head)`,
       ],
     };
   }

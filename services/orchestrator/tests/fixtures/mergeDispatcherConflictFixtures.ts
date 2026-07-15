@@ -115,6 +115,11 @@ export interface BundleOverrides {
   gateOutcome?: MergeAuthorityBundle["gateOutcome"] | null;
   /** The sha the gate verdict was FOR — defaults to the landed head (`sha-feat`). */
   gatedHeadSha?: string;
+  /**
+   * The sha the review forge receipt was FOR — defaults to undefined (human/auto
+   * path; no exact-head bind). Tests that pin simulated-review land set this.
+   */
+  reviewedHeadSha?: string;
   fail?: boolean;
   landed: string[];
 }
@@ -130,6 +135,7 @@ export function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthori
     gateOutcome,
     // The gate verdict was for the landed head (`sha-feat`) unless overridden (TOCTOU lock).
     gatedHeadSha: o.gatedHeadSha ?? "sha-feat",
+    reviewedHeadSha: o.reviewedHeadSha,
     findings: [],
     auditPosture: POSTURE,
     reviewVerdict: o.reviewVerdict ?? "approved",

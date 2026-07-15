@@ -35,6 +35,7 @@ export function lifecycleAuthorityBundle(input: {
     // The native gate anchored its verdict on the workspace HEAD (`headSha`); the land's
     // authorized commit is the same head, so the §5 commit-binding clears.
     gatedHeadSha: input.headSha,
+    reviewedHeadSha: undefined,
     findings: [],
     auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
     reviewVerdict: "approved",

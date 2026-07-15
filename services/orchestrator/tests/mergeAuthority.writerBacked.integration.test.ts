@@ -199,19 +199,67 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     // a flipped changes_requested review (e.g. emitted DURING conflict resolution). The
     // reader must return the LATEST — the pre-conflict passing values are NOT used.
     await appendGateVerdict(true, "sha-A");
-    await appendReview("review.approved");
+    await appendReview("review.approved", { headSha: "sha-A" });
     let signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
     expect(signals.gateOutcome?.passed).toBe(true);
     expect(signals.gatedHeadSha).toBe("sha-A");
     expect(signals.reviewVerdict).toBe("approved");
+    expect(signals.reviewedHeadSha).toBe("sha-A");
 
     // a re-gate that now FAILS + the review flipped to changes_requested.
     await appendGateVerdict(false, "sha-A");
-    await appendReview("review.changes_requested");
+    await appendReview("review.changes_requested", { headSha: "sha-A" });
     signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
     // The LATEST wins: a failing gate → undefined (blocks); changes_requested review.
     expect(signals.gateOutcome).toBeUndefined();
     expect(signals.reviewVerdict).toBe("changes_requested");
+    expect(signals.reviewedHeadSha).toBe("sha-A");
+  });
+
+  it("TOCTOU LOCK (gv-2 DB): review.approved receipt for sha-A, land head sha-B → BLOCKED", async () => {
+    await appendGateVerdict(true, "sha-B");
+    await appendReview("review.approved", {
+      headSha: "sha-A",
+      forgeReviewId: "9",
+      forgeReviewState: "approved",
+      forgeReviewUrl: "https://github.com/o/r/pull/1#pullrequestreview-9",
+    });
+    const signals = await resolveLandTimeSignals(ownerPool, ORG_ID, RUN_ID);
+    expect(signals.reviewVerdict).toBe("approved");
+    expect(signals.reviewedHeadSha).toBe("sha-A");
+
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-B" });
+    const disposition = await authorizeAndLand({
+      codeHost: host,
+      repo: REPO,
+      intoMain: "main",
+      headBranch: "feat",
+      runId: RUN_ID,
+      specId: SPEC_ID,
+      gateConfigHash: "gc",
+      policyVersion: "pv",
+      gatedHeadSha: signals.gatedHeadSha,
+      reviewedHeadSha: signals.reviewedHeadSha,
+      store: {
+        persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
+        recordLandReceipt: async () => ({ auditId: "a" }),
+      },
+      signals: {
+        gateOutcome: signals.gateOutcome,
+        findings: [],
+        auditPosture: { blockReviewAt: "P1", p2p3Handling: "route-to-dag" },
+        reviewVerdict: signals.reviewVerdict,
+        mergeability: { state: "clean", behind: false, baseBranch: "main", headBranch: "feat" },
+        budget: { ceilingUsd: undefined, spentUsd: 0 },
+        demo: "not_required",
+        hitlSignoff: "not_required",
+        conflictsResolved: true,
+      },
+    });
+    expect(disposition.kind).toBe("blocked");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 
   it("TOCTOU LOCK (DB): a fresh pre_merge gate PASSED for sha A, the head being landed is sha B → BLOCKED (commit-bound)", async () => {
@@ -236,6 +284,7 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
       gateConfigHash: "gc",
       policyVersion: "pv",
       gatedHeadSha: signals.gatedHeadSha,
+      reviewedHeadSha: signals.reviewedHeadSha,
       store: {
         persistAuthorizedDecision: async () => ({ effectIntentId: "intent_1" }),
         recordLandReceipt: async () => ({ auditId: "a" }),
@@ -312,8 +361,27 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
     );
   }
 
-  /** Append a review verdict event through the eventStore. */
-  async function appendReview(eventType: "review.approved" | "review.changes_requested"): Promise<void> {
+  /** Append a review verdict event through the eventStore (optional complete forge receipt). */
+  async function appendReview(
+    eventType: "review.approved" | "review.changes_requested",
+    forge?: {
+      headSha: string;
+      forgeReviewId?: string;
+      forgeReviewState?: "approved" | "changes_requested";
+      forgeReviewUrl?: string;
+    },
+  ): Promise<void> {
+    const forgeState = eventType === "review.approved" ? "approved" : "changes_requested";
+    const receipt =
+      forge === undefined
+        ? {}
+        : {
+            // Schema requires all-or-nothing forge fields; fill defaults for reader-path seeds.
+            forgeReviewId: forge.forgeReviewId ?? "1",
+            forgeReviewState: forge.forgeReviewState ?? forgeState,
+            forgeReviewUrl: forge.forgeReviewUrl ?? "https://github.com/owner/repo/pull/1#pullrequestreview-1",
+            headSha: forge.headSha,
+          };
     await runWithOrgScope(ownerPool, ORG_ID, (client) =>
       new PgEventStore(client).append({
         runId: RUN_ID,
@@ -321,7 +389,7 @@ describeDb("MergeAuthority — writer-backed LandFinalizer over real Postgres", 
         projectId: PROJECT_ID,
         orgId: ORG_ID,
         eventType,
-        payload: { prUrl: "https://github.com/owner/repo/pull/1", prNumber: 1 },
+        payload: { prUrl: "https://github.com/owner/repo/pull/1", prNumber: 1, ...receipt },
       }),
     );
   }

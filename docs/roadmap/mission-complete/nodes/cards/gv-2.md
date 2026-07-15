@@ -21,9 +21,12 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 
 **Downstream consumers**
 
-- `landSignals.resolveLandTimeSignals` — continues to read terminal
-  `review.approved`; because publication failure never emits that event,
-  internal-only approve cannot authorize land.
+- `landSignals.resolveLandTimeSignals` — reads terminal `review.approved` /
+  `review.changes_requested` **and** the forge receipt `payload.headSha` as
+  `reviewedHeadSha`. Publication failure never emits the event (no land).
+  Land authorization (`authorizeAndLand`) requires `reviewedHeadSha ===`
+  the exact head being landed when a receipt is present — head advance after
+  publication fails closed (re-review), not mere event existence.
 - gv-12 (review rules + reviewer identity) builds on this primitive.
 
 ## Exclusive ownership
@@ -39,14 +42,20 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 - `services/orchestrator/src/engine/providers/githubVisibilityProjection.ts`
   (comment-only doc/mirror note)
 - `services/orchestrator/src/engine/events/schemas/integrations.ts` (review
-  payload fields only)
+  payload fields only — all-or-nothing forge receipt union)
 - `services/orchestrator/src/engine/events/sensitivityRules.infra.ts` (review
   payload field tags only — mechanical for schema extension)
+- `services/orchestrator/src/engine/merge/landSignals.ts` (`reviewedHeadSha`)
+- `services/orchestrator/src/engine/merge/mergeAuthorityGate.ts` (exact-head
+  review receipt bind at land)
+- `services/orchestrator/src/engine/merge/mergeAuthorityBundleBuild.ts` +
+  `mergeDispatchTypes.ts` (thread `reviewedHeadSha`)
 - `services/dashboard/src/components/runDetail/ReviewBody.tsx`
 - `services/dashboard/src/components/runDetail/model.ts` (forge publication view)
 - Focused tests: `simulatedReviewer.test.ts`,
   `simulatedReviewPublication.test.ts`, `githubReviewMergeSubmit.test.ts`,
-  `reviewTaskTerminalRouting.test.ts`, `runDetail.model.test.ts`
+  `reviewTaskTerminalRouting.test.ts`, `reviewForgePublicationSchema.test.ts`,
+  `mergeAuthorityGate.test.ts` (review TOCTOU), `runDetail.model.test.ts`
 
 ## Shared-resource leases (not taken)
 
@@ -74,15 +83,21 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 - Durable receipt `{ forgeReviewId, forgeReviewState, forgeReviewUrl, headSha }`
   is bound onto the same atomic `review.approved` /
   `review.changes_requested` event as the internal verdict.
+- Event schema treats forge fields as **all-or-nothing** (union of complete
+  receipt vs absent base) — partial tuples fail at the schema boundary.
+- Land-time signals expose `reviewedHeadSha` from the receipt; `authorizeAndLand`
+  blocks when a present receipt head ≠ the head being landed.
 - Missing credential, same-identity, failed, malformed, COMMENT, or
   head-mismatched publication **throws**
   (`SimulatedReviewPublicationError`) — no terminal review.approved, no land.
 
 ### Named event proof
 
-- `review.approved` / `review.changes_requested` carry forge receipt fields when
-  simulated review terminalizes.
+- `review.approved` / `review.changes_requested` carry complete forge receipt
+  fields when simulated review terminalizes (never a partial tuple).
 - Negative: failed/skipped/mismatched publication leaves those events absent.
+- Negative: partial forge fields rejected by schema; head-advanced land blocked
+  even when `review.approved` exists.
 
 ### HTTP
 
@@ -101,21 +116,29 @@ Positive:
 
 1. Exact-head APPROVE → `review.approved` with complete forge receipt.
 2. Exact-head REQUEST_CHANGES → `review.changes_requested` with receipt + feedback.
+3. Land with matching `reviewedHeadSha` → authorized (commit-binding satisfied).
 
 Former-bug negative:
 
-3. Failed / head-mismatched / state-mismatched / missing-submit publication
+4. Failed / head-mismatched / state-mismatched / missing-submit publication
    cannot emit `review.approved` or complete the review task as authorized.
+5. `review.approved` present with receipt head A, land head B → land **blocked**
+   (does not trust event existence alone).
+6. Partial forge tuples rejected at event schema (all-or-nothing).
 
 Auth / forge:
 
-4. Distinct reviewer via managed secret seam; raw tokens never in events/UI.
-5. Retry of the terminal finalize remains idempotent (`${runId}:review:${verdict}`).
+7. Distinct reviewer via managed secret seam (App writer + static reviewer; App
+   without static fails closed); reviewer never reuses writer token/identity.
+8. Terminal finalize idempotency is first-wins on
+   `${runId}:review:${verdict}` only — forge review id is **not** in the key;
+   a retry dedupes; a contradictory second receipt for the same key is suppressed.
 
 ## Validation
 
 - Focused: `simulatedReviewer.test.ts`, `simulatedReviewPublication.test.ts`,
   `githubReviewMergeSubmit.test.ts`, `reviewTaskTerminalRouting.test.ts`,
+  `reviewForgePublicationSchema.test.ts`, `mergeAuthorityGate.test.ts`,
   `runDetail.model.test.ts`.
 - `just affected-typecheck origin/main`, `just affected-test origin/main`,
   `just fast-check`, `just ci`.

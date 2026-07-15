@@ -71,34 +71,29 @@ export const ReviewRequestedPayload = z
   })
   .strict();
 
-// gv-2 forge publication fields (strict simulated review): optional so human /
-// auto paths remain valid; when present they are the durable exact-head receipt
-// bound onto the same terminal review.* event (no second audit store).
-const ForgeReviewPublicationFields = {
-  forgeReviewId: z.string().min(1).optional(),
-  forgeReviewState: z.enum(["approved", "changes_requested"]).optional(),
-  forgeReviewUrl: z.string().min(1).optional(),
-  headSha: z.string().min(1).optional(),
-};
-
-export const ReviewApprovedPayload = z
+// gv-2: forge receipt is ALL-OR-NOTHING (union of complete receipt vs absent).
+// Partial id/state/url/headSha tuples are rejected at the schema boundary.
+const forgeReceipt = z
   .object({
-    prUrl: z.string(),
-    prNumber: z.number().int(),
-    reviewer: z.string().optional(),
-    ...ForgeReviewPublicationFields,
+    forgeReviewId: z.string().min(1),
+    forgeReviewState: z.enum(["approved", "changes_requested"]),
+    forgeReviewUrl: z.string().min(1),
+    headSha: z.string().min(1),
   })
   .strict();
-
-export const ReviewChangesRequestedPayload = z
+const reviewApprovedBase = z
+  .object({ prUrl: z.string(), prNumber: z.number().int(), reviewer: z.string().optional() })
+  .strict();
+export const ReviewApprovedPayload = z.union([reviewApprovedBase.merge(forgeReceipt), reviewApprovedBase]);
+const reviewChangesBase = z
   .object({
     prUrl: z.string(),
     prNumber: z.number().int(),
     reviewer: z.string().optional(),
     message: z.string().optional(),
-    ...ForgeReviewPublicationFields,
   })
   .strict();
+export const ReviewChangesRequestedPayload = z.union([reviewChangesBase.merge(forgeReceipt), reviewChangesBase]);
 
 // Emitted when a project's reviewPolicy is `auto`: the review stage approved the
 // PR without polling GitHub (the no-review tier). Distinct from `review.approved`
