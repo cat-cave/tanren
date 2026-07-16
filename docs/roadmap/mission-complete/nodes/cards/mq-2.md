@@ -67,6 +67,7 @@ never evidence of member blame.
 - `services/dashboard/src/components/mergeQueue/MultiMemberAuthorityPanel.tsx`
 - `services/orchestrator/tests/multiMemberAuthorityEvaluator.test.ts`
 - `services/orchestrator/tests/mq2BatchAuthorityCutover.test.ts`
+- `services/orchestrator/tests/helpers/mq2BatchAuthority.ts`
 - `services/orchestrator/tests/mergeQueueAuthorityEvaluationsRoutes.test.ts`
 - `services/orchestrator/tests/mergeQueueAuthorityEvaluations.rls.integration.test.ts`
 - `services/dashboard/tests/multiMemberAuthorityPanel.render.test.ts`
