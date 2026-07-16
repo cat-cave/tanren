@@ -41,7 +41,7 @@ const RUNS = [
     projectId: "project_easy",
     branch: "tanren/run_a1",
     trigger: "operator",
-    status: "succeeded",
+    status: "completed",
     outcome: "ok",
     startedAt: "2026-05-28T10:00:00.000Z",
     endedAt: "2026-05-28T10:21:00.000Z",
@@ -70,7 +70,10 @@ const RUNS = [
 ];
 
 // Per-run cost records spanning all THREE pricing models + all real cost bases.
-const COSTS: Record<string, unknown[]> = {
+const COSTS: Record<
+  string,
+  Array<{ id: number; recordedAt: string; costUsd: string | null; [key: string]: unknown }>
+> = {
   run_a1: [
     {
       id: 1,
@@ -166,6 +169,13 @@ function mockOrchestrator(): void {
     if (url.endsWith("/orgs")) {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
+    if (/\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url)) {
+      const costs = Object.values(COSTS)
+        .flat()
+        .map((cost) => ({ ...cost, notionalCostUsd: cost.costUsd ?? "1.00" }))
+        .sort((left, right) => Date.parse(left.recordedAt) - Date.parse(right.recordedAt) || left.id - right.id);
+      return new Response(JSON.stringify({ orgId: ORG.id, costs, runs: RUNS, nextCursor: null }), { status: 200 });
+    }
     // run costs: .../runs/:runId/costs (check before the run-list match)
     const costsMatch = /\/runs\/([^/?]+)\/costs/u.exec(url);
     if (costsMatch !== null) {
@@ -207,6 +217,20 @@ async function build() {
 const FORBIDDEN_PLACEHOLDER = ["legacy", "unknown"].join("_");
 
 describe("costs dashboard (/costs)", () => {
+  it("uses one org-scoped costs request without project/run fan-out", async () => {
+    const calls: string[] = [];
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(typeof input === "string" ? input : input.toString());
+      return original(input, init);
+    });
+    const app = await build();
+    await app.request("/costs?range=all");
+    expect(calls.filter((url) => /\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url))).toHaveLength(1);
+    expect(calls.some((url) => /\/projects\/[^/]+\/runs/u.test(url))).toBe(false);
+    expect(calls.some((url) => /\/runs\/[^/]+\/costs/u.test(url))).toBe(false);
+  });
+
   it("overrides the P2B-0001 placeholder with the real cost screen", async () => {
     const app = await build();
     const html = await (await app.request("/costs")).text();
@@ -296,7 +320,9 @@ describe("costs CSV export (/costs/export.csv)", () => {
     const res = await app.request("/costs/export.csv");
     expect(res.headers.get("content-type")).toContain("text/csv");
     const body = await res.text();
-    expect(body.split("\n")[0]).toBe("cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_usd,share");
+    expect(body.split("\n")[0]).toBe(
+      "cli,model,provider,billing_mode,cost_basis,runs,total_tokens,cost_state,cost_usd,notional_state,notional_cost_usd,share",
+    );
     expect(body).toContain("provider_response");
     expect(body).toContain("ccusage");
     expect(body).toContain("unknown");
@@ -319,12 +345,41 @@ describe("history list (/history)", () => {
     expect(html).toContain("halted");
     // Row links to the run detail.
     expect(html).toContain("/projects/project_easy/runs/run_a1");
+    expect(html).not.toContain("data-runs-unavailable");
   });
 
   it("applies the status filter through the run-list API", async () => {
     const app = await build();
     const html = await (await app.request("/history?status=failed")).text();
     expect(html).toContain("refactor auth");
+    expect(html).not.toContain("add health endpoint");
+  });
+
+  it("renders loud unavailable when the run-list read fails (not empty history)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/auth/me")) {
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith("/orgs")) {
+        return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      }
+      if (url.includes("/projects") && !url.includes("/runs")) {
+        return new Response(JSON.stringify({ projects: PROJECTS }), { status: 200 });
+      }
+      if (/\/runs(\?|$)/u.test(url)) {
+        return new Response("upstream down", { status: 503 });
+      }
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const html = await (await app.request("/history")).text();
+    expect(html).toContain("data-runs-unavailable");
+    expect(html).toContain("Run history unavailable");
+    expect(html).not.toContain("No runs match this filter yet");
     expect(html).not.toContain("add health endpoint");
   });
 });

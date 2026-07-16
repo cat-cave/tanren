@@ -20,10 +20,19 @@ import {
 } from "../../engine/worker/runStateLifecycleSql.js";
 import { applyRecordDraftPrCreated } from "../../engine/merge/draftPrCreatedAtomic.js";
 import {
+  applyRecoveryOwnedSettleAtomic,
   applyRecoveryParkAtomic,
+  recoveryOwnedSettleInputSchema,
+  recoveryOwnedSettlementFailed,
   recoveryParkingFailed,
   recoveryParkInputSchema,
 } from "../../engine/worker/recoveryParkAtomic.js";
+import {
+  applyRecoveryPreparationAtomic,
+  readRecoveryPreparationAtomic,
+  recoveryPreparationFailure,
+  recoveryPreparationInputSchema,
+} from "../../engine/worker/recoveryPreparationAtomic.js";
 import { verifyInternalPeer, type RunStateWriteRouteDeps } from "./internalWriteShared.js";
 
 // apex v86: post-PR-open atomic block (github.pr.created + merge_queue + merge.scheduled).
@@ -106,6 +115,24 @@ const updateSpecWithEventRouteShape = z
 export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRouteDeps): void {
   const authnPeer = (c: Context): boolean => verifyInternalPeer(deps.verifier, c);
 
+  const preparationRoute = (readOnly: boolean) => async (c: Context) => {
+    if (!authnPeer(c)) return c.json({ error: "untrusted_peer" }, 401);
+    const parsed = recoveryPreparationInputSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) return c.json({ error: "invalid_recovery_preparation", issues: parsed.error.issues }, 400);
+    try {
+      const outcome = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+        readOnly
+          ? readRecoveryPreparationAtomic(client, parsed.data)
+          : applyRecoveryPreparationAtomic(client, parsed.data),
+      );
+      return c.json(outcome, 200);
+    } catch (error) {
+      return c.json(recoveryPreparationFailure("write_failed", String(error)), 200);
+    }
+  };
+  app.post("/internal/prepare-recovery", preparationRoute(false));
+  app.post("/internal/read-recovery-preparation", preparationRoute(true));
+
   // Recovery park authority: exact ownership readback + spec park + ordered
   // events + queue dequeue all run on ONE org-scoped transaction. Expected
   // precondition failures and write/commit uncertainty are typed 200 outcomes
@@ -125,6 +152,25 @@ export function registerRunStateAtomicRoutes(app: Hono, deps: RunStateWriteRoute
       return c.json(outcome, 200);
     } catch {
       return c.json(recoveryParkingFailed("write_failed"), 200);
+    }
+  });
+
+  // Successful recovery authority: exact active successor verification, the
+  // canonical dequeue event, and exact old-candidate retirement share one
+  // transaction. A transport retry reads the committed queue row and dedupes.
+  app.post("/internal/settle-owned-recovery-and-dequeue", async (c) => {
+    if (!authnPeer(c)) return c.json({ error: "untrusted_peer" }, 401);
+    const parsed = recoveryOwnedSettleInputSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_owned_recovery_settle", issues: parsed.error.issues }, 400);
+    }
+    try {
+      const outcome = await runWithOrgScope(deps.pool, parsed.data.orgId, (client) =>
+        applyRecoveryOwnedSettleAtomic(client, parsed.data),
+      );
+      return c.json(outcome, 200);
+    } catch {
+      return c.json(recoveryOwnedSettlementFailed("write_failed"), 200);
     }
   });
 

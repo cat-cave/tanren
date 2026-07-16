@@ -187,14 +187,14 @@ describe("buildSpecDetail", () => {
     expect(detail.blocks.map((b) => b.specId)).toEqual(["s_blocked"]);
   });
 
-  it("renders unpriced / zero cost totals as em-dash, never fake $0.00", () => {
+  it("renders unknown cost totals as em-dash, never fake $0.00", () => {
     const queued = allSpecs.find((s) => s.specId === "s_queued")!;
     const detail = buildSpecDetail({
       spec: queued,
       allSpecs,
       runs: [
-        run({ runId: "r1", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: "0" }),
-        run({ runId: "r2", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: "0.00" }),
+        run({ runId: "r1", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: null }),
+        run({ runId: "r2", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: null }),
       ],
       statusBySpecId,
     });
@@ -206,6 +206,20 @@ describe("buildSpecDetail", () => {
     expect(detail.runs.every((r) => r.costLabel === "—")).toBe(true);
   });
 
+  it("preserves a genuine known zero total", () => {
+    const queued = allSpecs.find((s) => s.specId === "s_queued")!;
+    const detail = buildSpecDetail({
+      spec: queued,
+      allSpecs,
+      runs: [run({ runId: "r0", specId: "s_queued", status: "completed", outcome: "ok", costTotalUsd: "0" })],
+      statusBySpecId,
+    });
+    expect(detail.runs[0]?.costLabel).toBe("$0.00");
+    expect(detail.economics.spendUsd).toBe("$0.00");
+    expect(detail.economics.pricedAttempts).toBe(1);
+    expect(detail.economics.unpricedAttempts).toBe(0);
+  });
+
   it("sums only priced attempts and surfaces unpriced coverage (never as $0)", () => {
     const live = allSpecs.find((s) => s.specId === "s_live")!;
     const detail = buildSpecDetail({
@@ -213,7 +227,7 @@ describe("buildSpecDetail", () => {
       allSpecs,
       runs: [
         run({ runId: "r_a", specId: "s_live", costTotalUsd: "10.00" }),
-        run({ runId: "r_b", specId: "s_live", costTotalUsd: "0" }),
+        run({ runId: "r_b", specId: "s_live", costTotalUsd: null }),
         run({ runId: "r_c", specId: "s_live", costTotalUsd: "5.00" }),
       ],
       statusBySpecId,

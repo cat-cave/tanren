@@ -1,12 +1,5 @@
-// (autonomy-engine.md §2c "Change-percolation — NOT discard"): the PURE cores
-// (`decidePercolation` detect + `decideSettle`) + the two-phase PercolatingCoordinator,
-// driven through in-memory seams (TEST FIXTURES — they live here, never src/). Proves
-// the §2c semantics + CRITICAL invariants: SHA-divergence vs. the VERIFIED sha →
-// IMMEDIATE (P0/P1/changes-requested + the new ancestor_merged axis) / DEFERRED (P2/P3);
-// absorption advances the verified SHA ONLY on SETTLE after a CLEAN re-gate (never on a
-// bare re-base); an irreconcilable re-exec → replan (kept alive); a no-op / sticky-
-// absorbed verdict TERMINATES (no re-trigger); an ancestor-vs-ancestor rebuild conflict
-// HOLDS (retried), not dropped.
+// Change-percolation pure cores and two-phase coordinator: absorption follows a
+// clean settle; irreconcilable work replans, sticky verdicts terminate, conflicts hold.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -215,15 +208,17 @@ class RecordingKickOff implements PercolationKickOff {
 class RecordingSettler implements PercolationSettler {
   readonly absorbed: Array<{ specId: string; ancestorSpecId: string; sha: string }> = [];
   readonly replanned: Array<{ specId: string; ancestorSpecId: string }> = [];
-  async absorb(input: { dependent: SpeculativeDependent; pending: PercolationPending }): Promise<void> {
+  async absorb(input: { dependent: SpeculativeDependent; pending: PercolationPending }) {
     this.absorbed.push({
       specId: input.dependent.specId,
       ancestorSpecId: input.pending.ancestorSpecId,
       sha: input.pending.toSha,
     });
+    return { result: "absorbed" as const };
   }
-  async replan(input: { dependent: SpeculativeDependent; pending: PercolationPending }): Promise<void> {
+  async replan(input: { dependent: SpeculativeDependent; pending: PercolationPending }) {
     this.replanned.push({ specId: input.dependent.specId, ancestorSpecId: input.pending.ancestorSpecId });
+    return { result: "replanned" as const, reexecRunId: input.dependent.runId };
   }
 }
 

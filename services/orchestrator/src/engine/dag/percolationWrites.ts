@@ -13,6 +13,7 @@
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { PercolationPending } from "../contracts/changePercolation.js";
+import type { ReplanRouteResult } from "../contracts/conflictResolution.js";
 import type { ReviewVerdict } from "../contracts/dagLifecycle.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
@@ -268,12 +269,10 @@ export async function clearPercolationPending(
  * Route the dependent BACK TO THE PLANNER when a re-execution / base-shift rebase could
  * not reconcile (intent stays alive — NEVER drop, NEVER merge). This shares the SAME
  * router the merge-path conflict replan uses (`SpecStatusReplanRouter`), so it does the
- * real two-step that actually re-enters planner control flow: (1) transition the spec's
- * STATUS back to a status the planner re-plans (`in_flight`, the review-rework re-entry state), and
- * (2) append the durable `merge.conflict.replan_routed` event the next planner pass reads.
- * The prior implementation only appended the event (no status change), so the spec never
- * re-entered the planner — a replan with no control-flow effect. Plane-split: routes the
- * writes through the control plane when a writer is wired, else the in-process org scope.
+ * atomic recovery preparation that actually re-enters planner control flow: steering,
+ * guarded reopen, successor run/task/job, and the durable route events commit together.
+ * The prior implementation only appended the event, so the spec never re-entered the
+ * planner. Direct and HTTP now share the same writer authority and readback contract.
  */
 export async function recordReplanContext(
   pool: pg.Pool,
@@ -288,29 +287,27 @@ export async function recordReplanContext(
   // REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
   // de-privileged data plane. PR #714 made the writer-undefined fallback unreachable.
   runStateWriter: RunStateWriter,
-): Promise<void> {
+): Promise<ReplanRouteResult> {
   const newContext = `Percolation: re-plan ON TOP OF the upstream change from ${input.ancestorSpecId} (${input.ancestorSha}). ${input.reason}`;
   const orgId = await resolveProjectOrg(pool, input.projectId);
   if (orgId === null) throw new Error(`project ${input.projectId} has no org for the change-percolation replan`);
   // v35 NEVER-STALL: the router re-opens the spec to `open`, ENQUEUES a fresh re-plan run
   // (the never-discard re-author on the new base), and emits the OBSERVABLE
   // `recovery.replan_queued` — so a routed replan ACTUALLY RUNS instead of stranding the
-  // spec `in_flight` with no live run. The enqueuer + the bounded-replan counter are built
-  // over the RAW pool (the run-create + the events-count read open their own connections),
-  // independent of the event-append plane below.
+  // spec `in_flight` with no live run. The prior-signature reader remains system-scoped;
+  // every recovery mutation is delegated to the single atomic writer operation.
   const enqueuer = buildReplanEnqueuer(pool, runStateWriter);
   const priorReplans = buildPriorReplanReader(pool);
   const router = new SpecStatusReplanRouter({
-    pool,
-    runStateWriter,
     orgId,
-    eventStore: runStateWriter,
     runId: input.runId,
     projectId: input.projectId,
     enqueuer,
     priorReplans,
   });
-  await runWithJobOrgId(orgId, () =>
+  // Propagate the typed disposition so callers can settle/instrument truthfully
+  // (parking_required is NOT silent "replanned").
+  return runWithJobOrgId(orgId, () =>
     router.routeBackToPlanner({ specId: input.specId, newContext, otherSpecId: input.ancestorSpecId }),
   );
 }

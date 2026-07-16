@@ -199,6 +199,9 @@ function driveDeps(pool: pg.Pool) {
       readBaseBranch: async () => "main",
       retargetBase: async () => {},
     },
+    // This scope test never drives a behind rebase. Keep the production builder from
+    // requiring an unrelated atomic-park fake while preserving the explicit test seam.
+    baseShiftRebaseOverride: async () => ({ outcome: "rebased" as const }),
   };
 }
 

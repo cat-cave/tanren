@@ -7,17 +7,14 @@
 // RUN: a fresh re-plan run is ENQUEUED (the spec's work re-authored on the new base),
 // and the prior-replan count is read so the routing is BOUNDED (no hot-loop).
 //
-// Both seams reuse the EXACT mechanisms the recovery `replan_with_steering` action and
-// the DagWalker enqueue already use — re-open the spec to `open`, append the replan
-// context as steering, then `createQueuedRunFromSpec` (in-process) or the control-plane
-// `RunStateWriter.createQueuedRun`. The re-open + steering UPDATEs COMMIT in their own
-// short org-scoped txn BEFORE the run-create (which opens its own connection and claims
-// the now-`open` spec) reads them — the same ordering `replanWithSteering` documents.
+// Both seams use the recovery-preparation authority: exact old owner lock, steering,
+// guarded reopen, successor run/task/job, and canonical route events commit together.
+// Direct and HTTP writers execute the same operation and durable readback contract.
 
 import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
-import type { ActorContext } from "../../../../auth/schemas.js";
 import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
+import type { RecoveryPreparationWriter } from "../../../contracts/recoveryPreparation.js";
 import { isPool, type QueryClient } from "../../../data/orgScopedDb.js";
 import {
   conflictSignatureOf,
@@ -40,46 +37,36 @@ function resolveEventsReadPool(fallback: QueryClient): pg.Pool {
 }
 
 /**
- * The production replan enqueuer: re-open the spec to the re-drivable status + append
- * the replan context as steering (one short org-scoped txn that COMMITS first), then
- * enqueue a fresh re-plan run. Routes the run-create through the control plane when a
- * writer is wired, else `createQueuedRunFromSpec` in-process (the same dual path the
- * DagWalker enqueuer uses). Returns the new run id (the observable `replanRunId`).
+ * The production replan enqueuer delegates the complete preparation to the writer's
+ * atomic recovery port. The writer locks the old queue owner and either returns the
+ * exact durable successor receipt or an explicit terminal/conflict/failure outcome.
  *
  * The first arg is retained for call-site arity (historical pool threading) but is
- * unused — all writes route through `runStateWriter` (audit D-R3.2). Accepts
- * `QueryClient` so workflow seams need no `as pg.Pool` cast.
+ * unused. Accepts `QueryClient` so workflow seams need no `as pg.Pool` cast.
  */
 export function buildReplanEnqueuer(_pool: QueryClient, runStateWriter: RunStateWriter): ReplanEnqueuer {
   return {
     async enqueue(input) {
-      // Audit D-R3.2: the writer is REQUIRED — both re-open + steer writes route through
-      // the privileged control-plane pool over mTLS (the de-privileged data plane cannot
-      // write `specs` directly per migration 0000:919). The in-process raw-SQL fallback
-      // was unreachable in production once PR #714's `runStateWriterFromEnv` always
-      // returned a writer.
-      await runStateWriter.appendSpecSteering({
-        specId: input.specId,
-        orgId: input.orgId,
-        steeringNote: input.steeringNote,
-      });
-      await runStateWriter.setSpecStatus({
-        specId: input.specId,
-        orgId: input.orgId,
-        status: input.reopenStatus,
-        notFromStatuses: ["merged"],
-      });
-      // (2) Enqueue the re-plan run — the never-discard re-author on the new base.
-      const actor: ActorContext = {
-        userId: "replan-router",
+      if (
+        !("prepareRecovery" in runStateWriter) ||
+        typeof (runStateWriter as { prepareRecovery?: unknown }).prepareRecovery !== "function"
+      ) {
+        throw new Error("replan enqueuer requires the atomic RecoveryPreparationWriter authority");
+      }
+      const preparation = runStateWriter as RunStateWriter & RecoveryPreparationWriter;
+      if (input.reopenStatus !== "open") {
+        return { kind: "conflict", message: `recovery may reopen only to open, got ${input.reopenStatus}` };
+      }
+      return preparation.prepareRecovery({
         orgId: input.orgId,
         projectId: input.projectId,
-        scopes: ["platform:admin"],
-        source: "local_dev",
-      };
-      const createInput = { specId: input.specId, trigger: "replan_routed" };
-      const run = await runStateWriter.createQueuedRun({ input: createInput, actor });
-      return { replanRunId: run.runId, plannerTaskId: run.plannerTaskId };
+        specId: input.specId,
+        oldRunId: input.oldRunId,
+        ...(input.queueId !== undefined && { queueId: input.queueId }),
+        steeringNote: input.steeringNote,
+        reopenStatus: "open",
+        route: input.route,
+      });
     },
   };
 }

@@ -17,9 +17,12 @@
  * fails on divergence.
  */
 
+import type { RunCostRecord as GeneratedCostRecord } from "./http.gen.js";
+
 // Generated-from-JSON-Schema run-detail HTTP types (single source of truth:
 // the orchestrator's Zod contracts → contracts/json/http/** → http.gen.ts).
 export type {
+  OrgCosts,
   RunSummary,
   TaskTimelineEntry,
   RunEventRow,
@@ -94,7 +97,8 @@ export interface PaletteGroup {
  * cost could not be priced, flagged so the budget gate fails closed, never a
  * silent $0). Mirrors `RunCostRecord.billingMode`.
  */
-export type BillingMode = "per_token" | "subscription" | "self_hosted" | "unattributed";
+export type CostRecord = GeneratedCostRecord;
+export type BillingMode = CostRecord["billingMode"];
 
 /**
  * How a dollar figure (if any) was derived. `provider_response` (the provider's
@@ -106,45 +110,7 @@ export type BillingMode = "per_token" | "subscription" | "self_hosted" | "unattr
  * (BUDGET-SAFETY C1: an unrecognized credential ref — NULL-dollar but flagged).
  * Mirrors `RunCostRecord.costBasis`.
  */
-export type CostBasis = "ccusage" | "provider_response" | "credits" | "unknown" | "unattributed";
-
-/**
- * A single cost record (`GET .../runs/:runId/costs` items). Token accounting is
- * first-class and always present; `costUsd` is best-effort and null for
- * subscription / self-hosted / unpriced calls.
- */
-export interface CostRecord {
-  id: number | string;
-  runId: string;
-  taskId: string;
-  projectId: string;
-  cli: string;
-  provider: string;
-  model: string;
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheCreationTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  /**
-   * REAL SPEND (FOCUS BilledCost): fixed-precision dollar string, or null for
-   * subscription within-window / self-hosted / unpriced calls. The budget gate
-   * sums THIS column.
-   */
-  costUsd: string | null;
-  /**
-   * NOTIONAL VALUE (FOCUS ListCost): the tokens' dollar value at provider list
-   * rates, computed for EVERY call whose provider has a rate (including
-   * subscription/self-hosted, where real spend is null). The comparable,
-   * forecastable figure — never summed by the budget gate. Null only when no
-   * provider rate is known (unpriced model / unattributed credential).
-   */
-  notionalCostUsd: string | null;
-  billingMode: BillingMode;
-  costBasis: CostBasis;
-  recordedAt: string;
-}
+export type CostBasis = CostRecord["costBasis"];
 
 // Run-detail read API — narrow mirrors of the orchestrator contract
 // (`services/orchestrator/src/routes/runs/contract.ts`). These are the shapes
@@ -437,12 +403,6 @@ export interface NotificationDelivery {
 
 export interface NotificationDeliveriesResponse {
   deliveries: NotificationDelivery[];
-}
-
-/** A cursor-paginated page wrapper, matching the orchestrator `CursorPage<T>`. */
-export interface CursorPage<T> {
-  items: T[];
-  nextCursor: string | null;
 }
 
 // RunSpecSummary and RunDetail are generated from contracts/json/http/** and

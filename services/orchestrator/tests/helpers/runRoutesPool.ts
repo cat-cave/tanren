@@ -9,12 +9,21 @@
 // (e.g. insights cache lookups) do not crash the test.
 
 import type pg from "pg";
+import { queryOrgCostsReadModel } from "./runRoutesPoolOrgCosts.js";
+import { queryProjectListReadModel } from "./runRoutesPoolProjectList.js";
+import { queryRunDetailSpec } from "./runRoutesPoolSpec.js";
 
 function taskKindOrder(kind: string): number {
   return ({ plan: 1, write: 2, check: 3, audit: 4, ci: 5 } as Record<string, number>)[kind] ?? 99;
 }
 
-interface QueryResult<R = unknown> {
+function completeRealCostTotal(costs: CostRow[]): string | null {
+  if (costs.length === 0) return "0";
+  if (costs.some((cost) => cost.cost_usd === null)) return null;
+  return costs.reduce((sum, cost) => sum + Number(cost.cost_usd), 0).toString();
+}
+
+export interface QueryResult<R = unknown> {
   rows: R[];
   rowCount: number;
 }
@@ -68,7 +77,7 @@ export interface EventRow {
 }
 
 export interface CostRow {
-  id: number;
+  id: number | string;
   task_id: string;
   run_id: string;
   project_id: string;
@@ -83,6 +92,7 @@ export interface CostRow {
   reasoning_output_tokens: number;
   total_tokens: number;
   cost_usd: string | null;
+  notional_cost_usd: string | null;
   billing_mode: string;
   cost_basis: string;
   recorded_at: Date;
@@ -96,7 +106,6 @@ export interface SpecRow {
 }
 
 export class RunRoutesPool {
-  queries: Array<{ sql: string; params: unknown[] }> = [];
   runs: RunRow[] = [];
   tasks: TaskRow[] = [];
   events: EventRow[] = [];
@@ -104,6 +113,9 @@ export class RunRoutesPool {
   specs: SpecRow[] = [];
   specBehaviors = new Map<string, string[]>();
   specMilestones = new Map<string, string>();
+  /** Injected fail-loud proof for behavior/milestone reads. */
+  behaviorReadError: Error | undefined;
+  milestoneReadError: Error | undefined;
   projects = new Map<string, { project_id: string; org_id: string | null }>();
   projectMembers = new Set<string>();
   forgeThreads: Array<{
@@ -127,6 +139,7 @@ export class RunRoutesPool {
     render: unknown;
     created_at: Date;
   }> = [];
+  readonly queries: Array<{ sql: string; params: unknown[] }> = [];
 
   seedProject(input: { project_id: string; org_id: string | null }): void {
     this.projects.set(input.project_id, input);
@@ -194,7 +207,12 @@ export class RunRoutesPool {
     return row;
   }
 
-  seedCost(input: Partial<CostRow> & { id: number; run_id: string; task_id: string; project_id: string }): CostRow {
+  seedCost(
+    input: Partial<CostRow> & { id: number | string; run_id: string; task_id: string; project_id: string },
+  ): CostRow {
+    if (typeof input.id === "number" && !Number.isSafeInteger(input.id)) {
+      throw new TypeError("unsafe numeric cost fixture id; use an exact decimal string");
+    }
     const row: CostRow = {
       id: input.id,
       task_id: input.task_id,
@@ -210,15 +228,18 @@ export class RunRoutesPool {
       output_tokens: input.output_tokens ?? 0,
       reasoning_output_tokens: input.reasoning_output_tokens ?? 0,
       total_tokens: input.total_tokens ?? 0,
-      cost_usd: input.cost_usd ?? "0.001",
+      cost_usd: Object.hasOwn(input, "cost_usd") ? (input.cost_usd ?? null) : "0.001",
+      notional_cost_usd: Object.hasOwn(input, "notional_cost_usd")
+        ? (input.notional_cost_usd ?? null)
+        : (input.cost_usd ?? "0.001"),
       billing_mode: input.billing_mode ?? "per_token",
       cost_basis: input.cost_basis ?? "provider_response",
-      recorded_at: input.recorded_at ?? new Date(2026, 4, 1, 0, 0, input.id),
+      recorded_at:
+        input.recorded_at ?? new Date(2026, 4, 1, 0, 0, typeof input.id === "number" ? input.id : this.costs.length),
     };
     this.costs.push(row);
     return row;
   }
-
   seedSpec(input: Partial<SpecRow> & { spec_id: string; project_id: string }): SpecRow {
     const row: SpecRow = {
       spec_id: input.spec_id,
@@ -229,11 +250,9 @@ export class RunRoutesPool {
     this.specs.push(row);
     return row;
   }
-
   async query(sql: string, params: unknown[] = []): Promise<QueryResult> {
-    this.queries.push({ sql, params });
     const trimmed = sql.trim();
-
+    this.queries.push({ sql: trimmed, params });
     // assertProjectAccess and friends
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
@@ -249,35 +268,15 @@ export class RunRoutesPool {
         ? { rows: [], rowCount: 0 }
         : { rows: [{ project_id: run.project_id, spec_id: run.spec_id }], rowCount: 1 };
     }
-
+    const orgCosts = queryOrgCostsReadModel(trimmed, params, this);
+    if (orgCosts !== undefined) return orgCosts;
     // Run snapshot loaders. org_id is the second predicate (defense-in-depth).
     if (trimmed.startsWith("SELECT") && /FROM runs WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const run = this.runs.find((r) => r.run_id === String(params[0]) && r.org_id === String(params[1]));
       return run === undefined ? { rows: [], rowCount: 0 } : { rows: [run], rowCount: 1 };
     }
-    if (trimmed.startsWith("SELECT") && /FROM runs/u.test(trimmed) && /WHERE/u.test(trimmed)) {
-      // list loader: params are [projectId, orgId, ...status/spec filters].
-      const projectId = String(params[0]);
-      const orgId = String(params[1]);
-      const filtered = this.runs
-        .filter((r) => r.project_id === projectId && r.org_id === orgId)
-        .filter((r) => params[2] === undefined || r.status === params[2] || r.spec_id === params[2])
-        .map((r) => ({
-          ...r,
-          spec_title: this.specs.find((s) => s.spec_id === r.spec_id)?.title ?? null,
-          cost_total_usd: this.costs
-            .filter((c) => c.run_id === r.run_id)
-            .reduce((sum, c) => sum + Number(c.cost_usd), 0)
-            .toString(),
-          last_event_at:
-            this.events
-              .filter((e) => e.run_id === r.run_id)
-              .map((e) => e.ts)
-              .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
-        }));
-      return { rows: filtered, rowCount: filtered.length };
-    }
-
+    const projectList = queryProjectListReadModel(trimmed, params, this, completeRealCostTotal);
+    if (projectList !== undefined) return projectList;
     // Tasks list (run_id = $1 AND org_id = $2)
     if (/FROM tasks\s+WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const rows = this.tasks
@@ -293,23 +292,8 @@ export class RunRoutesPool {
         });
       return { rows, rowCount: rows.length };
     }
-
-    // Spec read
-    if (trimmed.startsWith("SELECT spec_id, title, description FROM specs WHERE spec_id = $1")) {
-      const spec = this.specs.find((s) => s.spec_id === String(params[0]));
-      return spec === undefined ? { rows: [], rowCount: 0 } : { rows: [spec], rowCount: 1 };
-    }
-    if (trimmed.startsWith("SELECT behavior_id FROM spec_behaviors")) {
-      const ids = this.specBehaviors.get(String(params[0])) ?? [];
-      return { rows: ids.map((behavior_id) => ({ behavior_id })), rowCount: ids.length };
-    }
-    if (trimmed.startsWith("SELECT milestone_id FROM spec_milestones")) {
-      const milestoneId = this.specMilestones.get(String(params[0]));
-      return milestoneId === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ milestone_id: milestoneId }], rowCount: 1 };
-    }
-
+    const specRead = queryRunDetailSpec(trimmed, params, this);
+    if (specRead !== undefined) return specRead;
     // Events: snapshot (run_id = $1 AND org_id = $3; params [runId, limit, orgId])
     if (
       /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1 AND org_id = \$3/u.test(
@@ -325,7 +309,6 @@ export class RunRoutesPool {
         .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
       return { rows, rowCount: rows.length };
     }
-
     // Events: paginated (run_id = $1 AND org_id = $2; params [runId, orgId, ...cursor, limit])
     if (
       /FROM events\s+WHERE run_id = \$1 AND org_id = \$2(\s+AND \(ts, id\) >|\s+ORDER)/u.test(trimmed) &&
@@ -351,18 +334,16 @@ export class RunRoutesPool {
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
-
-    // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
+    // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2[::bigint])
     if (/FROM events\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
-      const lastId = Number(params[1]);
+      const lastId = BigInt(String(params[1]));
       const orgId = String(params[2]);
       const rows = this.events
-        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId && e.id > lastId)
-        .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id)
+        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId && BigInt(e.id) > lastId)
+        .sort((a, b) => compareBigintText(a.id, b.id))
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
-
     // Activity feed (project_id = $1 AND org_id = $2 AND run_id IS NOT NULL)
     if (/FROM events\s+WHERE project_id = \$1 AND org_id = \$2 AND run_id IS NOT NULL/u.test(trimmed)) {
       const orgId = String(params[1]);
@@ -385,13 +366,12 @@ export class RunRoutesPool {
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
-
     // Costs: snapshot (run_id = $1 AND org_id = $2)
     if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$2\s+ORDER BY recorded_at ASC/u.test(trimmed)) {
       const orgId = String(params[1]);
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || compareBigintText(a.id, b.id));
       return { rows, rowCount: rows.length };
     }
 
@@ -403,31 +383,31 @@ export class RunRoutesPool {
       const orgId = String(params[1]);
       const limit = Number(params.at(-1));
       let cursorTs: Date | undefined;
-      let cursorId: number | undefined;
+      let cursorId: bigint | undefined;
       if (params.length === 5) {
         cursorTs = params[2] as Date;
-        cursorId = Number(params[3]);
+        cursorId = BigInt(String(params[3]));
       }
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId)
         .filter((c) => {
           if (cursorTs === undefined || cursorId === undefined) return true;
           if (c.recorded_at.getTime() > cursorTs.getTime()) return true;
-          if (c.recorded_at.getTime() === cursorTs.getTime()) return c.id > cursorId;
+          if (c.recorded_at.getTime() === cursorTs.getTime()) return BigInt(c.id) > cursorId;
           return false;
         })
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
+        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || compareBigintText(a.id, b.id))
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
 
-    // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
+    // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2[::bigint])
     if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
-      const lastId = Number(params[1]);
+      const lastId = BigInt(String(params[1]));
       const orgId = String(params[2]);
       const rows = this.costs
-        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && c.id > lastId)
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id)
+        .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && BigInt(c.id) > lastId)
+        .sort((a, b) => compareBigintText(a.id, b.id))
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
@@ -477,4 +457,10 @@ export class RunRoutesPool {
   asPgPool(): pg.Pool {
     return this as unknown as pg.Pool;
   }
+}
+
+function compareBigintText(left: number | string, right: number | string): number {
+  const leftId = BigInt(left);
+  const rightId = BigInt(right);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
 }

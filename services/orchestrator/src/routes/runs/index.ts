@@ -24,7 +24,6 @@ import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import { assertProjectAccess, assertRunAccess, ToolAccessDeniedError } from "../../engine/forge/tools/authz.js";
 import { ForgeThreadStore, ForgeTurnStore } from "../../engine/forge/index.js";
-import { loadInsightsForProject } from "../../engine/insights/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 import { type RunDetail, type RunListItem, type RunLocation, RECENT_EVENT_CAP } from "./contract.js";
@@ -40,6 +39,7 @@ import {
   fetchRunSpecSummary,
   fetchRunTasks,
 } from "./list.js";
+import { registerOrgCostsRoute } from "./orgCostsRoute.js";
 import { registerProjectProgressRoute } from "./progressRoute.js";
 import { registerStackRetargetRoute } from "./stackRetargetRoute.js";
 import { handleSseStream } from "./sse.js";
@@ -133,6 +133,8 @@ export function createRunRoutes(options: RunRoutesOptions) {
     return c.json({ items });
   });
 
+  registerOrgCostsRoute(app, options.pool);
+
   // -------------------------------------------------------------------------
   // GET /orgs/:orgId/projects/:projectId/runs/:runId
   // -------------------------------------------------------------------------
@@ -166,7 +168,11 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const rawView = parseRawViewOptIn(c);
     const [spec, tasks, recentEvents, costs] = await runWithOrgScope(options.pool, orgId, (client) =>
       Promise.all([
-        fetchRunSpecSummary(client, summary.specId),
+        fetchRunSpecSummary(client, {
+          specId: summary.specId,
+          projectId: summary.projectId,
+          orgId,
+        }),
         fetchRunTasks(client, runId, orgId),
         fetchRunEventsForSnapshot(client, { runId, orgId, limit: RECENT_EVENT_CAP, actor, rawView }),
         fetchRunCostsForSnapshot(client, runId, orgId),
@@ -469,6 +475,3 @@ async function fetchForgeBundle(pool: pg.Pool, args: ForgeBundleArgs): Promise<R
 export type { Insight } from "../../engine/insights/index.js";
 // Re-export contract types for downstream test imports.
 export type { RunListItem, RunDetail };
-// Plus the bundle insight loader helper (rarely needed but useful for SSE
-// extension paths). The actual call lives in list.ts.
-export { loadInsightsForProject };

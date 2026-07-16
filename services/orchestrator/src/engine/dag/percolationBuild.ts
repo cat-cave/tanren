@@ -22,8 +22,19 @@
 import type pg from "pg";
 import type { Allocator } from "../contracts/allocator.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import type { PercolationPending, PercolationSettler, SpeculativeDependent } from "../contracts/changePercolation.js";
-import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import type {
+  PercolationAbsorbOutcome,
+  PercolationPending,
+  PercolationRecoveryOutcome,
+  PercolationSettler,
+  SpeculativeDependent,
+} from "../contracts/changePercolation.js";
+import type {
+  ConflictRecoveryDisposition,
+  ConflictRecoverySettlement,
+  ReplanRouteResult,
+} from "../contracts/conflictResolution.js";
+import type { RecoveryOwnedSettlementWriter, RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
@@ -51,6 +62,11 @@ import { type ChangePercolationCoordinator, PercolatingCoordinator } from "./per
 import { PercolatingKickOff } from "./percolationOperation.js";
 import { PgPercolationEventEmitter, PgPercolationReadModel } from "./percolationPg.js";
 import { clearPercolationPending, recordReplanContext, recordVerifiedAncestorSha } from "./percolationWrites.js";
+import {
+  PgRecoveryRouteSettler,
+  requireRecoveryParkWriter,
+  type RecoveryRouteSettler,
+} from "../merge/recoveryRouteSettlement.js";
 
 export interface BuildPercolationCoordinatorDeps {
   pool: pg.Pool;
@@ -87,16 +103,24 @@ export interface BuildPercolationCoordinatorDeps {
  * rebase kept — no new run was ever created).
  */
 export class PgPercolationSettler implements PercolationSettler {
+  private readonly recovery: RecoveryRouteSettler;
+  private readonly routeReplan: typeof recordReplanContext;
+
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter: RunStateWriter,
-  ) {}
+    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter & RecoveryOwnedSettlementWriter,
+    recovery?: RecoveryRouteSettler,
+    routeReplan: typeof recordReplanContext = recordReplanContext,
+  ) {
+    this.recovery = recovery ?? new PgRecoveryRouteSettler(pool, runStateWriter);
+    this.routeReplan = routeReplan;
+  }
 
   async absorb(input: {
     projectId: string;
     dependent: SpeculativeDependent;
     pending: PercolationPending;
-  }): Promise<void> {
+  }): Promise<PercolationAbsorbOutcome> {
     // §5-P0 FAIL-CLOSED (tanren-owns-the-engine.md §5): a `changes_requested` re-exec
     // must NEVER advance the termination key. The S1-plumbed verdict is consumed at the
     // settle decision (`decideSettle` routes a `changes_requested` re-exec to REPLAN, so
@@ -105,24 +129,10 @@ export class PgPercolationSettler implements PercolationSettler {
     // bug), refuse to advance `verified_ancestor_shas` — clear the marker and route to
     // replan instead, never silently unblocking the merge on a reviewer's "changes_requested".
     if (input.pending.reviewVerdict === "changes_requested") {
-      await recordReplanContext(
-        this.pool,
-        {
-          projectId: input.projectId,
-          specId: input.dependent.specId,
-          runId: input.dependent.runId,
-          ancestorSpecId: input.pending.ancestorSpecId,
-          ancestorSha: input.pending.toSha,
-          reason: "absorb refused: the re-exec carried a changes_requested verdict (§5-P0 fail-closed)",
-        },
-        this.runStateWriter,
-      );
-      await clearPercolationPending(
-        this.pool,
-        { projectId: input.projectId, runId: input.dependent.runId },
-        this.runStateWriter,
-      );
-      return;
+      return this.replan({
+        ...input,
+        reason: "absorb refused: the re-exec carried a changes_requested verdict (§5-P0 fail-closed)",
+      });
     }
     await recordVerifiedAncestorSha(
       this.pool,
@@ -140,6 +150,7 @@ export class PgPercolationSettler implements PercolationSettler {
       { projectId: input.projectId, runId: input.dependent.runId },
       this.runStateWriter,
     );
+    return { result: "absorbed" };
   }
 
   async replan(input: {
@@ -147,8 +158,8 @@ export class PgPercolationSettler implements PercolationSettler {
     dependent: SpeculativeDependent;
     pending: PercolationPending;
     reason: string;
-  }): Promise<void> {
-    await recordReplanContext(
+  }): Promise<PercolationRecoveryOutcome> {
+    const routed = await this.routeReplan(
       this.pool,
       {
         projectId: input.projectId,
@@ -160,11 +171,31 @@ export class PgPercolationSettler implements PercolationSettler {
       },
       this.runStateWriter,
     );
+    const settled = await this.recovery.settle({
+      projectId: input.projectId,
+      specId: input.dependent.specId,
+      runId: input.dependent.runId,
+      recovery: routed,
+    });
+    if (settled.kind === "parking_failed") {
+      // Retain the marker: this exact upstream delta remains unsettled and will
+      // be paced/retried. Never clear it or report replanned without an owner.
+      return { result: "held", reason: settled.message };
+    }
     await clearPercolationPending(
       this.pool,
       { projectId: input.projectId, runId: input.dependent.runId },
       this.runStateWriter,
     );
+    if (settled.kind === "owned") {
+      const reexecRunId =
+        settled.receipt.run.kind === "enqueued" ? settled.receipt.run.replanRunId : settled.receipt.run.runId;
+      return { result: "replanned", reexecRunId };
+    }
+    if (settled.kind === "parked") {
+      return { result: "parked" };
+    }
+    return { result: "terminal_noop", terminalStatus: settled.status };
   }
 }
 
@@ -183,7 +214,8 @@ export function buildBaseShiftCoordinator(
   options: { suppressInFlightMarker?: boolean } = {},
 ): BaseShiftCoordinator {
   const seams = selectBaseShiftSeams(deps);
-  const base = new PgBaseShiftPersistence(deps.pool, deps.runStateWriter);
+  const runStateWriter = requireRecoveryParkWriter(deps.runStateWriter);
+  const base = new PgBaseShiftPersistence(deps.pool, runStateWriter);
   // P1 fix: the merge-queue `behind` path is a SYNCHRONOUS merge-dispatcher rebase, NOT a
   // deferred ancestor-percolation — so it must NOT stamp `percolation_pending` (which the
   // percolation read-model selects, and would falsely settle/replan the run as a
@@ -229,8 +261,19 @@ export class MarkerSuppressedBaseShiftPersistence implements BaseShiftPersistenc
     ancestorSpecId: string;
     ancestorSha: string;
     reason: string;
-  }): Promise<void> {
-    await this.inner.recordReplan(input);
+  }): Promise<ReplanRouteResult> {
+    return this.inner.recordReplan(input);
+  }
+  async settleRecovery(input: {
+    projectId: string;
+    specId: string;
+    runId: string;
+    recovery: ConflictRecoveryDisposition;
+  }): Promise<ConflictRecoverySettlement> {
+    return this.inner.settleRecovery(input);
+  }
+  async clearInFlight(input: { projectId: string; runId: string }): Promise<void> {
+    await this.inner.clearInFlight(input);
   }
 }
 
@@ -304,6 +347,7 @@ function liveBaseShiftDeps(deps: BuildPercolationCoordinatorDeps): LiveBaseShift
 /** Assemble the production change-percolation coordinator. */
 export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDeps): ChangePercolationCoordinator {
   const stackResolver = new PgDagAncestorStackResolver(deps.pool);
+  const runStateWriter = requireRecoveryParkWriter(deps.runStateWriter);
   return new PercolatingCoordinator({
     readModel: new PgPercolationReadModel({
       pool: deps.pool,
@@ -324,7 +368,7 @@ export function buildPercolationCoordinator(deps: BuildPercolationCoordinatorDep
       // that SAME run.
       reexecutor: buildBaseShiftCoordinator(deps),
     }),
-    settler: new PgPercolationSettler(deps.pool, deps.runStateWriter),
+    settler: new PgPercolationSettler(deps.pool, runStateWriter),
     events: new PgPercolationEventEmitter({
       pool: deps.pool,
       runStateWriter: deps.runStateWriter,

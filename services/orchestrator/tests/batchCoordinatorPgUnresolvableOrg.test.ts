@@ -88,6 +88,8 @@ function writerAs(writer: RecordingWriter): RunStateWriter {
 
 function entry(overrides: Partial<MergeQueueEntry> = {}): MergeQueueEntry {
   return {
+    orgId: "org_1",
+    projectId: "project_1",
     queueId: "q_1",
     runId: "run_1",
     specId: "spec_1",

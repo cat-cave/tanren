@@ -42,10 +42,17 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       outcome: string | null;
       projectName: string;
     }> = [];
+    // Any constituent listRunsMaybe failure makes the whole aggregate unavailable —
+    // never claim "No halted runs. Everything is moving." from a partial/failed walk.
+    let aggregateAvailable = true;
     for (const org of orgs) {
       const projects = await client.listProjects(org.id);
       for (const project of projects) {
-        const runs = await client.listRuns(org.id, project.projectId);
+        const runs = await client.listRunsMaybe(org.id, project.projectId);
+        if (runs === undefined) {
+          aggregateAvailable = false;
+          continue;
+        }
         for (const run of runs) {
           if (isRecoverableRun(run)) {
             halted.push({
@@ -59,7 +66,12 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
       }
     }
     const ctx = await loadShellContext(c, deps, { activeNavId: "failure" });
-    return renderShell(c, ctx, { title: "tanren · halted runs" }, <HaltedListBody runs={halted} />);
+    return renderShell(
+      c,
+      ctx,
+      { title: "tanren · halted runs" },
+      <HaltedListBody runs={halted} available={aggregateAvailable} />,
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -222,7 +234,10 @@ function renderNotRecoverable(c: Context, deps: ShellDeps, runId: string) {
 
 function HaltedListBody(props: {
   runs: Array<{ runId: string; specTitle: string; outcome: string | null; projectName: string }>;
+  /** False when any project run-list constituent failed. */
+  available?: boolean;
 }) {
+  const available = props.available !== false;
   return (
     <>
       <style>{RECOVERY_CSS}</style>
@@ -232,25 +247,15 @@ function HaltedListBody(props: {
             ▮ halted runs · need a recovery
           </div>
           <div class="page-title">halted runs</div>
-          <div class="sub">{props.runs.length} run(s) waiting on an operator recovery</div>
+          <div class="sub">
+            {available
+              ? `${props.runs.length} run(s) waiting on an operator recovery`
+              : "halted-run aggregate unavailable"}
+          </div>
         </div>
       </div>
       <div class="page-body">
-        {props.runs.length === 0 ? (
-          <section class="placeholder-card">
-            <p>No halted runs. Everything is moving.</p>
-            <p class="placeholder-note">
-              Runs surface here when they halt (
-              {RECOVERABLE_OUTCOMES_LIST.map((outcome, i) => (
-                <>
-                  {i > 0 ? ", " : ""}
-                  <code>{outcome}</code>
-                </>
-              ))}
-              ).
-            </p>
-          </section>
-        ) : (
+        {available && props.runs.length > 0 ? (
           <div class="recovery-rail">
             {props.runs.map((run) => (
               <a class="recovery-card" href={`/runs/${encodeURIComponent(run.runId)}/recover`}>
@@ -265,6 +270,25 @@ function HaltedListBody(props: {
               </a>
             ))}
           </div>
+        ) : available ? (
+          <section class="placeholder-card">
+            <p>No halted runs. Everything is moving.</p>
+            <p class="placeholder-note">
+              Runs surface here when they halt (
+              {RECOVERABLE_OUTCOMES_LIST.map((outcome, i) => (
+                <>
+                  {i > 0 ? ", " : ""}
+                  <code>{outcome}</code>
+                </>
+              ))}
+              ).
+            </p>
+          </section>
+        ) : (
+          <section class="placeholder-card" role="alert" data-halted-unavailable>
+            <p>Halted-run list is incomplete — at least one project run-list read failed. This is not an all-clear.</p>
+            <p class="placeholder-note">Retry shortly; do not assume there are no halted runs.</p>
+          </section>
         )}
       </div>
     </>

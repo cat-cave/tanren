@@ -737,6 +737,12 @@ smoke-rls-operator-flow:
 smoke-rls-http-route-scoping:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/rlsHttpRouteScoping.integration.test.ts
 
+# Production org-cost HTTP route proof (real PG, enforced `tanren_app` role):
+# full auth middleware + production repositories, exact dual int64 cursor,
+# repeatable-read/read-only snapshot, cost truth, and rollback-on-decode failure.
+smoke-rls-org-costs:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/orgCosts.rls.integration.test.ts
+
 # RLS full-run-lifecycle scoping proof: a REAL org-scoped run drives the REAL
 # allocator + runner allocation + the whole plan→write→check→audit→PR→CI→review→
 # merge→finalize loop on the enforced `tanren_app` role, with a DETERMINISTIC fake
@@ -825,11 +831,12 @@ smoke-plane-split-p3:
 # Plane-split P3b (real PG): the DE-PRIVILEGE proof. Migrates a fresh DB (creates
 # the `tanren_dataplane` role + drops event/cost WRITE grants), then proves under
 # that role: direct INSERT INTO events / cost_records is REJECTED for the privilege
-# (42501), org-scoped event/cost READS are kept, queue recovery can read event
-# signals under RLS, and the control-plane `tanren_app` role can still insert the
-# same event (contrast). DATABASE_URL is the owner.
+# (42501), org-scoped event/cost READS are kept, and the control-plane
+# `tanren_app` role can still insert the same event (contrast). The serialized
+# recovery suites additionally prove exact atomic park and tenant-bound successor
+# evidence. DATABASE_URL is the owner.
 smoke-plane-split-p3b:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/mergeQueueDequeuedRecovery.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --maxWorkers=1 services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/recoveryParkAtomic.rls.integration.test.ts services/orchestrator/tests/recoveryEvidencePg.rls.integration.test.ts services/orchestrator/tests/recoveryPreparationAtomic.rls.integration.test.ts services/orchestrator/tests/terminalInfrastructureRecovery.rls.integration.test.ts
 
 # Plane-split P3c (real PG): the run/spec/task LIFECYCLE de-privilege proof.
 # Migrates a fresh DB (0035 drops the data plane's runs/specs/tasks WRITE grants),
@@ -864,7 +871,7 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
 smoke-rls-integration-lifecycle:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-run-lifecycle smoke-rls-integration-lifecycle smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-integration-lifecycle smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor

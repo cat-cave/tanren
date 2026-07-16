@@ -143,7 +143,7 @@ const RUNS = [
     endedAt: "2026-05-26T07:15:00.000Z",
     prUrl: null,
     specTitle: "auth schema",
-    costTotalUsd: "0",
+    costTotalUsd: null,
     lastEventAt: "2026-05-26T07:15:00.000Z",
     needsReview: false,
   },
@@ -407,7 +407,7 @@ describe("spec full page", () => {
     expect(html).toContain("r_done_unpriced");
     expect(html).toContain("economics");
     expect(html).toContain("spend to date");
-    // Unpriced costTotalUsd "0" → "—", not "$0.00".
+    // Unpriced costTotalUsd null → "—", not "$0.00".
     expect(html).toContain("—");
     expect(html).not.toContain("$0.00");
     expect(html).not.toContain("$0.0");

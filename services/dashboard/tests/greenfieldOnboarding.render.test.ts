@@ -111,7 +111,7 @@ function mockOrchestrator(): void {
       return new Response(JSON.stringify({ specs: SPECS }), { status: 200 });
     if (url.endsWith("/milestones") && method === "GET")
       return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
-    if (url.endsWith("/runs") && method === "GET") return new Response(JSON.stringify({ runs: [] }), { status: 200 });
+    if (url.endsWith("/runs") && method === "GET") return new Response(JSON.stringify({ items: [] }), { status: 200 });
     if (url.endsWith("/personas") && method === "GET")
       return new Response(JSON.stringify({ personas: [] }), { status: 200 });
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });

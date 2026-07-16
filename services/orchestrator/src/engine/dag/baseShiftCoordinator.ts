@@ -1,25 +1,12 @@
-// The ONE base-shift handler (tanren-owns-the-engine.md §3 never-discard + §7 "the two divergent
-// base-shift handlers → one"). A base shift is NEW CONTEXT, never a reason to throw work away: an
-// ancestor lands, OR an unrelated spec lands and moves a shared base. Both the percolation kick-off
-// and the merge-path `behind` mergeability route HERE.
-//
-// THE KEYSTONE — never-discard rebase replaces supersede+regenerate (the deleted
-// `PgPercolationReexecutor` cancelled+dequeued the run and re-planned from scratch, discarding every
-// token). This coordinator instead: (a) loads the affected `integration_nodes` (S0); (b) rebases the
-// dependent's EXISTING branch onto the shifted base via `WorkspaceVcsCore.rebaseOnto` (jj) — KEEPING
-// the same run/branch row (the run id returns UNCHANGED as the re-exec id, so the settle pass
-// advances `verified_ancestor_shas` after the re-gate); (c) re-gates the rebased/resolved branch;
-// (d) on a re-gate GATE-tier failure (a CLEAN/byte-clean tree — no conflict — that just fails
-// lint/test/build on the new base) routes to WRITER REWORK, NOT replan/escalate-as-irreconcilable;
-// re-plans ONLY on a genuine irreconcilable conflict (or a checker/auditor re-gate rejection). A
-// clean rebase + passing gate NEVER re-plans.
-//
-// FAIL-CLOSED (§0): a rebase/gate/resolver INFRA failure HOLDS (the work survives, retried next
-// notification) — never silently merges/discards. jj's first-class conflicts make "a conflict must
-// never brick" true by construction: a conflicting rebase SUCCEEDS and records the conflict IN the
-// commit (`rebaseOnto` never throws), so even an irreconcilable shift keeps the work alive.
+// The ONE never-discard base-shift handler (§3/§7): both percolation and merge-behind
+// rebase the existing run/branch in place, re-gate, then preserve exact typed recovery.
+// Conflicts remain recorded in jj; infra and unprovable recovery fail closed.
 
 import type { PercolationDecision, SpeculativeDependent } from "../contracts/changePercolation.js";
+import type {
+  ConflictRecoveryDisposition,
+  DurableConflictRecoverySettlement,
+} from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { RebaseResult, WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
 import type { PercolationReexecutor } from "./percolationOperation.js";
@@ -34,13 +21,11 @@ import {
   type ReGateVerdict,
 } from "./baseShiftPorts.js";
 import { createLogger } from "../observability/logger.js";
+import { rebaseDecisionFromRecovery, settleBaseShiftRecovery } from "./baseShiftRecovery.js";
 
 const log = createLogger("base-shift");
 
-// Re-export the persistence/node/event ports + the `RebaseDecision` instrumentation type +
-// the re-gate verdict/result + the gate-rework router + the fail-closed `BaseShiftHeldError`
-// (split into `baseShiftPorts.ts` for the line cap) so existing import sites keep importing
-// them from `./baseShiftCoordinator.js`.
+// Re-export ports from baseShiftPorts so existing import sites stay stable.
 export {
   BaseShiftHeldError,
   type BaseShiftEventEmitter,
@@ -52,12 +37,7 @@ export {
   type ReGateVerdict,
 };
 
-/**
- * Opens the dependent's runner-local workspace for a base-shift rebase. The production impl
- * allocates a runner, clones the repo via the jj `WorkspaceVcsCore`, and resolves the dependent's
- * branch; a test injects an in-memory opener. Returns the workspace handle + the branch to rebase
- * + the resolved new-base sha the rebase lands on.
- */
+/** Opens the dependent's runner-local jj workspace and resolves its new base. */
 export interface BaseShiftWorkspaceOpener {
   open(input: {
     projectId: string;
@@ -91,13 +71,19 @@ export interface BaseShiftReGate {
 
 /**
  * The intent-preserving resolution of a recorded rebase conflict, or `irreconcilable`.
- * `routedToRework` (only on `resolved: false`) means the re-gate failed a GATE TIER on a
- * cleanly-resolved tree and the resolver ALREADY routed the spec to WRITER REWORK — the
- * coordinator MUST NOT then replan (the spec is already being re-driven).
+ * An unresolved result may carry the resolver's exact typed recovery disposition;
+ * the coordinator consumes it without double-routing or losing parking state.
  */
 export type ConflictResolution =
   | { resolved: true; headSha: string }
-  | { resolved: false; reason: string; routedToRework?: boolean };
+  | { resolved: false; reason: string; recovery?: ConflictRecoveryDisposition };
+
+export interface BaseShiftRebaseOutcome {
+  decision: RebaseDecision;
+  headSha: string;
+  /** Present whenever routing, parking, or a concurrent terminal settled the shift. */
+  recovery?: DurableConflictRecoverySettlement;
+}
 
 /**
  * Resolves a recorded rebase conflict (intent + vision preserving), writing the resolution INTO
@@ -171,12 +157,16 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     decision: PercolationDecision;
     ancestorStack: AncestorStack;
     nonSpeculative: boolean;
-  }): Promise<{ reexecRunId: string }> {
+  }): Promise<{
+    reexecRunId: string;
+    decision: RebaseDecision;
+    recovery?: DurableConflictRecoverySettlement;
+  }> {
     // §2.2: the RE-RESOLVED ordered ancestor stack the kick-off resolved (the still-unmerged
     // ancestors at their new heads, with their real PR-head branches). The live opener
     // assembles `main + ordered ancestors` LOCALLY from it — NO synthesized integration ref.
     // Empty when non-speculative (every ancestor merged ⇒ a real run against `default_branch`).
-    await this.rebaseOnto({
+    const result = await this.rebaseOnto({
       projectId: input.projectId,
       dependent: input.dependent,
       nonSpeculative: input.nonSpeculative,
@@ -189,7 +179,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     });
     // NEVER-DISCARD: the re-exec run id IS the dependent's existing run id. The branch
     // was rebased in place; the run row was KEPT. The settle pass resolves THIS run.
-    return { reexecRunId: input.dependent.runId };
+    return { reexecRunId: input.dependent.runId, ...result };
   }
 
   /**
@@ -216,7 +206,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     ancestorSpecId: string;
     toSha: string;
     reviewVerdict?: "changes_requested";
-  }): Promise<{ decision: RebaseDecision; headSha: string }> {
+  }): Promise<BaseShiftRebaseOutcome> {
     const { projectId, dependent } = input;
     // (a) Load the affected integration_nodes (S0). Observe-only today — it does NOT
     //     branch control flow; it makes the shift's node context inspectable + is the
@@ -288,7 +278,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     toSha: string;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult;
-  }): Promise<{ decision: RebaseDecision; headSha: string }> {
+  }): Promise<BaseShiftRebaseOutcome> {
     const result = await this.reGateOrHold(input.projectId, input.dependent, input.rebase.headSha);
     if (result.verdict === "passed") {
       await this.keepRun(input);
@@ -298,9 +288,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     // A CLEAN rebase whose re-gate FAILED a GATE TIER: the tree is byte-clean (no conflict), the
     // code just fails a deterministic gate on the shifted base — the WRITER's to fix. Route to
     // WRITER REWORK (kept ALIVE), NEVER replan-as-irreconcilable (the detector owns escalation).
-    await this.routeGateFailToRework(input, result.gateError);
-    await this.emit(input, false, "replanned");
-    return { decision: "replanned", headSha: input.rebase.headSha };
+    const routed = await this.routeGateFailToRework(input, result.gateError);
+    await this.emit(input, false, routed.decision);
+    return { ...routed, headSha: input.rebase.headSha };
   }
 
   /**
@@ -319,7 +309,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     toSha: string;
     reviewVerdict?: "changes_requested";
     rebase: RebaseResult & { outcome: "conflicted" };
-  }): Promise<{ decision: RebaseDecision; headSha: string }> {
+  }): Promise<BaseShiftRebaseOutcome> {
     let resolution: ConflictResolution;
     try {
       resolution = await this.deps.resolver.resolve({
@@ -340,16 +330,17 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
 
     if (!resolution.resolved) {
-      // routedToRework: the resolver's INTERNAL re-gate failed a GATE TIER on the cleanly-
-      // resolved tree and it ALREADY routed the spec to WRITER REWORK — do NOT also replan
-      // (double-route). Otherwise IRRECONCILABLE (the Answerer judged the intents irreconcilable
-      // OR a checker/auditor re-gate rejected the resolved tree): replan, kept ALIVE on the
-      // SAME run — NEVER discard, NEVER merge.
-      if (!resolution.routedToRework) {
-        await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`);
-      }
-      await this.emit(input, true, "replanned");
-      return { decision: "replanned", headSha: input.rebase.headSha };
+      // The live resolver may already have routed either planner replan or writer
+      // rework. Consume that exact typed result; never collapse it to a boolean and
+      // never double-route. A seam without a delegated route uses persistence's
+      // canonical planner route, which returns the same typed disposition.
+      const recovery =
+        resolution.recovery === undefined
+          ? await this.replan(input, `the rebase conflict could not be resolved: ${resolution.reason}`)
+          : await settleBaseShiftRecovery(this.deps.persistence, input, resolution.recovery);
+      const decision = rebaseDecisionFromRecovery(recovery);
+      await this.emit(input, true, decision);
+      return { decision, headSha: input.rebase.headSha, recovery };
     }
 
     // Resolved IN the commit — re-gate the resolved tree. A fit ⇒ keep the run (NO re-plan); a
@@ -365,9 +356,9 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
     }
     // A GATE-tier failure on the cleanly-RESOLVED tree → writer rework (not replan). The
     // rework router is REQUIRED — every construction site wires it (no silent fallback).
-    await this.routeGateFailToRework(input, result.gateError);
-    await this.emit(input, true, "replanned");
-    return { decision: "replanned", headSha: input.rebase.headSha };
+    const routed = await this.routeGateFailToRework(input, result.gateError);
+    await this.emit(input, true, routed.decision);
+    return { ...routed, headSha: input.rebase.headSha };
   }
 
   /**
@@ -408,14 +399,16 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   private async routeGateFailToRework(
     input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
     gateError: string | undefined,
-  ): Promise<void> {
-    await this.deps.gateRework.routeGateFailToRework({
+  ): Promise<{ decision: RebaseDecision; recovery: DurableConflictRecoverySettlement }> {
+    const recovery = await this.deps.gateRework.routeGateFailToRework({
       projectId: input.projectId,
       specId: input.dependent.specId,
       runId: input.dependent.runId,
       // no_silent_fallback: carry the REAL gate error; a missing detail is a loud generic note.
       gateError: gateError ?? "the rebased branch failed its re-gate (gate tier) on the shifted base",
     });
+    const settled = await settleBaseShiftRecovery(this.deps.persistence, input, recovery);
+    return { decision: rebaseDecisionFromRecovery(settled), recovery: settled };
   }
 
   /**
@@ -457,8 +450,8 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
   private async replan(
     input: { projectId: string; dependent: SpeculativeDependent; ancestorSpecId: string; toSha: string },
     reason: string,
-  ): Promise<void> {
-    await this.deps.persistence.recordReplan({
+  ): Promise<DurableConflictRecoverySettlement> {
+    const recovery = await this.deps.persistence.recordReplan({
       projectId: input.projectId,
       specId: input.dependent.specId,
       runId: input.dependent.runId,
@@ -466,6 +459,7 @@ export class BaseShiftCoordinator implements PercolationReexecutor {
       ancestorSha: input.toSha,
       reason,
     });
+    return settleBaseShiftRecovery(this.deps.persistence, input, recovery);
   }
 
   /**

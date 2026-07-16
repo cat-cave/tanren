@@ -241,6 +241,10 @@ export type {
   FinalizeRunWithEventOutcome,
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
+  RecoveryOwnedSettleFailureReason,
+  RecoveryOwnedSettleInput,
+  RecoveryOwnedSettleOutcome,
+  RecoveryOwnedSettlementWriter,
   RecoveryParkFailureReason,
   RecoveryParkInput,
   RecoveryParkOutcome,
@@ -368,16 +372,6 @@ export interface CreateSpecRemoteInput {
  * workflow `appendEvent` then routes through the same seam.
  */
 export interface RunStateWriter extends EventStore {
-  /**
-   * apex v87 plane-split marker: true ONLY on {@link DirectRunStateWriter}, where
-   * event appends hit the SAME local pool as `merge_queue` UPDATEs. When set, the
-   * batch coordinator may co-transact dequeue settle via `PgMergeSettleTransaction`
-   * (`PgEventStore` on the worker pool). {@link HttpRunStateWriter} omits this —
-   * the dataplane has REVOKE INSERT on `events`, so settle must be sequential
-   * event-first through the control-plane writer instead.
-   */
-  readonly localMergeSettleCoTx?: true;
-
   /** Append one timeline event (the {@link EventStore} surface). */
   append(input: AppendEventInput): Promise<void>;
 

@@ -1,35 +1,17 @@
 /**
- * mount: the chat-primary project view, the spec creation surface +
- * spec list, and the routing & limits settings — all registered through the
- * append-only screen registry (see `app/screens.ts`). Routes reuse the shell's
- * `loadShellContext` + `renderShell` and never touch the chrome. Backend reads
- * go through the typed `OrchestratorClient` (extended additively); writes are
- * server-side form POSTs that call the product API and redirect back.
- *
- * adds a DAG-primary mode (`?mode=dag` + persisted cookie) and
- * delegates the spec drawer / full-page routes to `./specRoutes`.
- *
- * Routes registered:
- *   GET  /projects/:projectId                          project view (chat | dag)
- *   GET  /projects/:projectId/specs                    spec list
- *   GET  /projects/:projectId/specs/new                spec creation form
- *   POST /projects/:projectId/specs                    create spec
- *   POST /projects/:projectId/insights/act             subopt callout action
- *   GET  /settings/routing                             routing & limits (active project)
- *   GET  /settings/routing/:projectId                  routing & limits (explicit project)
- *   POST /settings/routing/:projectId/add|remove|reorder          routing mutations
- *   POST /settings/routing/:projectId/credentials                 bind codex+github refs
+ * Project view, specs, and routing settings (append-only screen registry).
+ * DAG mode via `?mode=dag`; spec drawer/full-page lives in `./specRoutes`.
  */
 
 import type { Context, Hono } from "hono";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import { getProjectDag } from "../../api/projectDag.js";
+import { getProjectDag, ProjectDagUnavailableError } from "../../api/projectDag.js";
 import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
 import { ProjectViewBody } from "../../components/project/ProjectViewBody.js";
-import { buildProjectViewModel, sumRunCosts } from "../../components/project/projectViewData.js";
+import { buildProjectViewModel, summarizeRunCosts } from "../../components/project/projectViewData.js";
 import { SettingsBody } from "../../components/project/SettingsBody.js";
 import { resolveConfig } from "./projectConfig.js";
 import { SpecCreateBody, SpecListBody } from "../../components/project/SpecCreateBody.js";
@@ -93,35 +75,25 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     // clientDepsFor). Pulse falls back to data-derived copy when undefined.
     const client = clientFor(c, deps);
     const mode = resolveProjectMode(c);
-    const [runs, insights, milestones, feed] = await Promise.all([
-      client.listRuns(orgId, projectId),
+    const [runsMaybe, insights, milestones, feed] = await Promise.all([
+      client.listRunsMaybe(orgId, projectId),
       client.listInsights(orgId, projectId),
       client.listMilestones(orgId, projectId),
       client.listFeed(orgId, projectId),
     ]);
+    const runs = runsMaybe ?? [];
     const model = buildProjectViewModel({
       projectId,
       projectName: ctx.project.name,
       runs,
+      runsAvailable: runsMaybe !== undefined,
       insights,
       milestones,
       feed,
       narration: undefined,
-      weekSpendUsd: sumRunCosts(runs),
+      weekSpend: summarizeRunCosts(runs),
     });
-    if (mode === "dag") {
-      const dag = await getProjectDag(client, orgId, projectId);
-      return renderShell(
-        c,
-        ctx,
-        { title: `tanren · ${ctx.project.name} · dag` },
-        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />,
-      );
-    }
-    return renderShell(
-      c,
-      ctx,
-      { title: `tanren · ${ctx.project.name}` },
+    const view = (
       <ProjectViewBody
         projectId={projectId}
         projectName={ctx.project.name}
@@ -129,8 +101,21 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         model={model}
         insights={insights}
         csrfToken={ctx.csrfToken}
-      />,
+      />
     );
+    if (mode !== "dag") return renderShell(c, ctx, { title: `tanren · ${ctx.project.name}` }, view);
+    try {
+      const dag = await getProjectDag(client, orgId, projectId);
+      return renderShell(
+        c,
+        ctx,
+        { title: `tanren · ${ctx.project.name} · dag` },
+        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />,
+      );
+    } catch (error) {
+      if (!(error instanceof ProjectDagUnavailableError)) throw error;
+      return renderShell(c, ctx, { title: `tanren · ${ctx.project.name} · dag` }, view);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -143,19 +128,25 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · specs" }, notFoundBody(projectId));
     }
     const client = clientFor(c, deps);
-    const [specs, runs] = await Promise.all([
+    const [specs, runsMaybe] = await Promise.all([
       client.listSpecs(ctx.org.id, projectId),
-      client.listRuns(ctx.org.id, projectId),
+      client.listRunsMaybe(ctx.org.id, projectId),
     ]);
     const runBySpec: Record<string, string | undefined> = {};
-    for (const run of runs) {
+    for (const run of runsMaybe ?? []) {
       if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
     }
     return renderShell(
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} specs` },
-      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} csrfToken={ctx.csrfToken} />,
+      <SpecListBody
+        project={ctx.project}
+        specs={specs}
+        runBySpec={runBySpec}
+        runsAvailable={runsMaybe !== undefined}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 

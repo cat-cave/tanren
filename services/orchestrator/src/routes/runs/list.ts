@@ -109,11 +109,19 @@ export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: str
 }
 
 // --- Spec summary (with milestone + behaviors) -----------------------------
-export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Promise<RunSpecSummary | undefined> {
-  const spec = await SpecStore.selectSummaryHeader(pool, specId, systemActor);
+// Constrained by the authorized run's (orgId, projectId, specId). Specs RLS is
+// org-only and does not enforce run/spec project equality — without the project
+// predicate a same-org foreign-project spec id would leak its title/description.
+// Behavior/milestone reads are fail-loud: genuine empty associations are valid;
+// DB/schema/RLS failure must not launder into []/null recovery context.
+export async function fetchRunSpecSummary(
+  pool: QueryClient,
+  args: { specId: string; projectId: string; orgId: string },
+): Promise<RunSpecSummary | undefined> {
+  const spec = await SpecStore.selectSummaryHeader(pool, args, systemActor);
   if (spec === undefined) return undefined;
-  const behaviorIds = await fetchBehaviorIds(pool, specId);
-  const milestoneId = await fetchSpecMilestone(pool, specId);
+  const behaviorIds = await SpecStore.selectBehaviorIds(pool, args, systemActor);
+  const milestoneId = await SpecStore.selectMilestoneId(pool, args, systemActor);
   return RunSpecSummary.parse({
     specId: spec.spec_id,
     title: spec.title,
@@ -121,24 +129,6 @@ export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Pr
     behaviorIds,
     milestoneId,
   });
-}
-
-async function fetchBehaviorIds(pool: QueryClient, specId: string): Promise<string[]> {
-  // spec_behaviors table arrived with; older deployments without
-  // the table degrade to an empty list rather than 500ing.
-  try {
-    return await SpecStore.selectBehaviorIds(pool, specId, systemActor);
-  } catch {
-    return [];
-  }
-}
-
-async function fetchSpecMilestone(pool: QueryClient, specId: string): Promise<string | null> {
-  try {
-    return await SpecStore.selectMilestoneId(pool, specId, systemActor);
-  } catch {
-    return null;
-  }
 }
 
 // --- Events (recent for snapshot + paginated) ------------------------------
@@ -294,6 +284,10 @@ export function decodeCostRow(raw: CostQueryRow): RunCostRecord {
     reasoningOutputTokens: decoded.reasoning_output_tokens,
     totalTokens: decoded.total_tokens,
     costUsd: raw["cost_usd"] === null || raw["cost_usd"] === undefined ? null : scalarText(raw["cost_usd"]),
+    notionalCostUsd:
+      raw["notional_cost_usd"] === null || raw["notional_cost_usd"] === undefined
+        ? null
+        : scalarText(raw["notional_cost_usd"]),
     billingMode: decoded.billing_mode,
     costBasis: decoded.cost_basis,
     recordedAt: decoded.recorded_at,
@@ -381,16 +375,31 @@ export async function fetchRunListItems(pool: QueryClient, args: RunListArgs): P
     { projectId: args.projectId, orgId: args.orgId, status: args.status, specId: args.specId },
     systemActor,
   );
-  return rows.map((row) => {
-    const summary = decodeRunSummary(row);
-    const needsReview = summary.prUrl !== null && needsReviewFromOutcome(summary.outcome);
-    return RunListItem.parse({
-      ...summary,
-      specTitle: row.spec_title ?? "(spec missing)",
-      costTotalUsd: row.cost_total_usd ?? "0",
-      lastEventAt: row.last_event_at ?? null,
-      needsReview,
-    });
+  return rows.map((row) => decodeRunListItem(row));
+}
+
+type RawRunListProjectionRow = RawRunRow & {
+  spec_title?: unknown;
+  cost_total_usd?: unknown;
+  last_event_at?: unknown;
+};
+
+export function decodeRunListItem(row: RawRunListProjectionRow): RunListItem {
+  const summary = decodeRunSummary(row);
+  const needsReview = summary.prUrl !== null && needsReviewFromOutcome(summary.outcome);
+  // Constrained LEFT JOIN can yield null when the run's spec_id does not bind
+  // to a same-project/same-org spec. Fail closed at the decoder — never invent
+  // a placeholder title that would ship a fabricated HTTP 200 row.
+  if (row.spec_title === null || row.spec_title === undefined) {
+    throw new TypeError("decodeRunListItem: missing spec_title from constrained run/spec join");
+  }
+  return RunListItem.parse({
+    ...summary,
+    specTitle: scalarText(row.spec_title),
+    costTotalUsd:
+      row.cost_total_usd === null || row.cost_total_usd === undefined ? null : scalarText(row.cost_total_usd),
+    lastEventAt: row.last_event_at ?? null,
+    needsReview,
   });
 }
 

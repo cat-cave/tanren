@@ -151,14 +151,14 @@ export function describeRunReadConformance(
       });
       const rows = await h.repositories.events.selectNewForRunSince(
         h.clientForOrg(ORG_A),
-        { runId: "run_a", orgId: ORG_A, sinceId: 1 },
+        { runId: "run_a", orgId: ORG_A, sinceId: "1" },
         systemActor,
       );
       // Only event id 2 is newer than the last-seen id.
       expect(rows.map((r) => r.id)).toEqual([2]);
       const off = await h.repositories.events.selectNewForRunSince(
         h.clientForOrg(ORG_B),
-        { runId: "run_a", orgId: ORG_A, sinceId: 0 },
+        { runId: "run_a", orgId: ORG_A, sinceId: "0" },
         systemActor,
       );
       expect(off).toHaveLength(0);
@@ -176,13 +176,13 @@ export function describeRunReadConformance(
       });
       const rows = await h.repositories.costs.selectNewForRunSince(
         h.clientForOrg(ORG_A),
-        { runId: "run_a", orgId: ORG_A, sinceId: 1 },
+        { runId: "run_a", orgId: ORG_A, sinceId: "1" },
         systemActor,
       );
       expect(rows.map((r) => r["id"])).toEqual([2]);
       const off = await h.repositories.costs.selectNewForRunSince(
         h.clientForOrg(ORG_B),
-        { runId: "run_a", orgId: ORG_A, sinceId: 0 },
+        { runId: "run_a", orgId: ORG_A, sinceId: "0" },
         systemActor,
       );
       expect(off).toHaveLength(0);

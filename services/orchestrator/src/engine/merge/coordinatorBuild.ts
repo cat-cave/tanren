@@ -47,6 +47,7 @@ import type { DriveMergeForQueuedRun } from "./coordinator.js";
 import { PgMergeQueueModel } from "./coordinatorPg.js";
 import { buildBaseShiftCoordinator } from "../dag/percolationBuild.js";
 import { buildBaseShiftRebaseHook } from "../dag/baseShiftRebaseHook.js";
+import { driveOutcomeFromRecoverySettlement } from "./driveConflictVerdict.js";
 
 export interface BuildMergeCoordinatorDeps {
   pool: pg.Pool;
@@ -155,25 +156,28 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
   // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
   // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (the live jj seams;
   // the allocator/ssh/identity are the SAME the drive resolver uses) — never a second
-  // server-side update-branch. Built once per drive build.
-  const baseShiftCoordinator = buildBaseShiftCoordinator(
-    {
-      pool: deps.pool,
-      githubHttp: deps.githubHttp,
-      secrets: deps.secrets,
-      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      runStateWriter: deps.runStateWriter,
-      allocator: deps.allocator,
-      ssh: deps.ssh,
-      identitySecretRef: deps.identitySecretRef,
-    },
-    // P1 fix: the merge-queue `behind` rebase is SYNCHRONOUS (this drive re-gates + merges
-    // in the same pass) — suppress the `percolation_pending` marker so the run is NEVER
-    // picked up + mis-settled by the change-percolation poller.
-    { suppressInFlightMarker: true },
-  );
+  // server-side update-branch. A scripted test override is an alternate hook, so do not
+  // construct the production recovery-capable coordinator when that hook was supplied.
   const baseShiftRebase =
-    deps.baseShiftRebaseOverride ?? buildBaseShiftRebaseHook({ pool: deps.pool, coordinator: baseShiftCoordinator });
+    deps.baseShiftRebaseOverride ??
+    buildBaseShiftRebaseHook({
+      pool: deps.pool,
+      coordinator: buildBaseShiftCoordinator(
+        {
+          pool: deps.pool,
+          githubHttp: deps.githubHttp,
+          secrets: deps.secrets,
+          ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+          runStateWriter: deps.runStateWriter,
+          allocator: deps.allocator,
+          ssh: deps.ssh,
+          identitySecretRef: deps.identitySecretRef,
+        },
+        // The merge-queue `behind` rebase is synchronous: suppress its percolation
+        // marker so the poller cannot pick up and mis-settle the same run.
+        { suppressInFlightMarker: true },
+      ),
+    });
   return async ({ runId }): Promise<MergeDriveOutcome> => {
     const facts = await resolveRunFacts(deps.pool, runId);
     // RLS scope for the merge drive's TENANT-TABLE READS. The coordinator subscriber
@@ -288,10 +292,12 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             pool: deps.pool,
             runStateWriter: deps.runStateWriter,
             orgId: facts.orgId,
-            eventStore,
             runId,
             projectId: facts.projectId,
             prNumber: facts.prNumber,
+            // Capture gate-rework ownership into the same cell the conflict resolver uses
+            // so a successful writer rework produces a durable recovery receipt.
+            verdict,
           }),
         }),
       );
@@ -315,19 +321,28 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         await markSpecMerged(deps.pool, facts, deps.runStateWriter);
         return { kind: "merged", ...(merge.mergeSha !== undefined && { mergeSha: merge.mergeSha }) };
       case "conflict":
-        // CLASSIFY-THEN-ESCALATE: the merge stage emitted a recoverable `conflict`
-        // (the resolver returned `{resolved:false}`). The drive-path resolver's
-        // disposition decides what the queue does with it:
-        //   - `escalate` — the two intents are GENUINELY incompatible (the bounded
-        //     re-plan budget is exhausted): park the spec at `needs_attention` (PR1's
-        //     escalator), NEVER re-queued. A product decision, not an error.
-        //   - `replanned` (default) — a bounded autonomous re-plan is in flight (the
-        //     resolver routed a spec back to the planner WITH the other change): a
-        //     recoverable `conflict` — the re-planned spec re-runs + re-enters the queue.
-        if (verdict.disposition === "escalate") {
-          return { kind: "needs_attention", message: verdict.message ?? merge.message ?? "specs' intents conflict" };
+        if (merge.recoverySettlement !== undefined) {
+          return driveOutcomeFromRecoverySettlement(
+            merge.recoverySettlement,
+            merge.message ?? "base-shift recovery held the merge",
+          );
         }
-        return { kind: "conflict", message: merge.message ?? "merge conflict" };
+        // CLASSIFY-THEN-ESCALATE from the drive-path resolver / gate-rework disposition.
+        // Owned receipt → conflict with recovery. Escalate / missing receipt → park
+        // with the truthful parking token (never fabricate ownership).
+        if (verdict.disposition === "escalate" || verdict.recovery === undefined) {
+          return {
+            kind: "needs_attention",
+            message: verdict.message ?? merge.message ?? "specs' intents conflict",
+            parking: verdict.parking ?? "required",
+            ...(verdict.terminalStatus !== undefined && { terminalStatus: verdict.terminalStatus }),
+          };
+        }
+        return {
+          kind: "conflict",
+          message: merge.message ?? "merge conflict",
+          recovery: verdict.recovery,
+        };
       case "blocked":
         // §3.2: a TRANSIENT authority refusal / benign CAS hold the merge stage surfaced
         // as recoverable `blocked`. Map to the coordinator's recoverable `blocked` — a
@@ -345,7 +360,11 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
         // changes_requested at land time). PARK the spec via the escalator (frees its
         // slot) — NOT a recoverable hold (no re-drive resolves a human decision) and NOT a
         // terminal conflict dequeue.
-        return { kind: "needs_attention", message: merge.message ?? "merge needs human attention" };
+        return {
+          kind: "needs_attention",
+          message: merge.message ?? "merge needs human attention",
+          parking: "required",
+        };
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }

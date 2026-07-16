@@ -218,6 +218,81 @@ export interface ResolvedTreeReGate {
   reGate(input: { resolvedFiles: ReadonlyArray<string> }): Promise<ReGateVerdict>;
 }
 
+// ---- Recovery ownership receipts (conflict / gate-rework settlement) -------
+
+/**
+ * Durable evidence that a recovery run exists. `already_running` MUST name an
+ * independently verified live run id — SpecNotRunnableError alone is never ownership.
+ */
+export type RecoveryRunReceipt =
+  | { kind: "enqueued"; replanRunId: string; plannerTaskId: string }
+  | { kind: "already_running"; runId: string };
+
+/** Planner owns the unresolved conflict through a confirmed live re-plan run. */
+export interface PlannerRecoveryReceipt {
+  kind: "planner_replan";
+  specId: string;
+  run: RecoveryRunReceipt;
+}
+
+/** Writer owns a failed fresh gate through a confirmed live re-author run. */
+export interface WriterRecoveryReceipt {
+  kind: "writer_rework";
+  specId: string;
+  run: RecoveryRunReceipt;
+}
+
+export type ConflictRecoveryReceipt = PlannerRecoveryReceipt | WriterRecoveryReceipt;
+
+/** Concurrent terminal statuses the needs_attention park must never clobber. */
+export type TerminalParkNoopStatus = "merged" | "cancelled" | "halted";
+
+/**
+ * Router dispositions — routers do not mutate needs-attention separately from
+ * queue retirement. Settlement owns RecoveryParkWriter when parking is required.
+ *   owned            — durable planner/writer owner receipt
+ *   parking_required — no durable owner; settlement must park atomically
+ *   terminal_noop    — concurrent merged|cancelled|halted; no park event
+ *   parking_failed   — sole park attempt failed (when a caller delegated park)
+ */
+export type ReplanRouteResult =
+  | { kind: "owned"; receipt: PlannerRecoveryReceipt }
+  | { kind: "parking_required"; message: string }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | { kind: "parking_failed"; message: string; observedStatus?: string };
+
+export type GateReworkRouteResult =
+  | { kind: "owned"; receipt: WriterRecoveryReceipt }
+  | { kind: "parking_required"; message: string }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | { kind: "parking_failed"; message: string; observedStatus?: string };
+
+export type ConflictRecoveryDisposition =
+  | { kind: "owned"; receipt: ConflictRecoveryReceipt }
+  | { kind: "parking_required"; message: string }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | { kind: "parking_failed"; message: string; observedStatus?: string };
+
+/**
+ * Settlement result after the sole atomic recovery authority has consumed a
+ * router disposition. `parking_required` can never escape this boundary: it is
+ * either durably `parked`, or becomes a paced `parking_failed` while the exact
+ * queue owner remains retained or unknown. Only these settled results may drive a
+ * base-shift/percolation terminal decision.
+ */
+export type ConflictRecoverySettlement =
+  | { kind: "owned"; receipt: ConflictRecoveryReceipt }
+  | { kind: "parked"; newlyParked: boolean }
+  | { kind: "terminal_noop"; status: TerminalParkNoopStatus; message: string }
+  | {
+      kind: "parking_failed";
+      message: string;
+      queueDisposition: "retained" | "unknown";
+      retryAfterMs: number;
+    };
+
+export type DurableConflictRecoverySettlement = Exclude<ConflictRecoverySettlement, { kind: "parking_failed" }>;
+
 // ---- The replan router (intent stays alive) -------------------------------
 
 /**
@@ -225,6 +300,7 @@ export interface ResolvedTreeReGate {
  * context, so the intent stays ALIVE rather than being silently dropped or
  * merged. Wired to the existing planner/replan path (the spec returns to a
  * status that can be re-planned, carrying the other's change as steering context).
+ * Returns a typed ownership disposition — never fabricates replanned without a receipt.
  */
 export interface ReplanRouter {
   routeBackToPlanner(input: {
@@ -232,7 +308,7 @@ export interface ReplanRouter {
     newContext: string;
     /** The other spec whose change the re-planned spec must build on. */
     otherSpecId?: string;
-  }): Promise<void>;
+  }): Promise<ReplanRouteResult>;
 }
 
 // ---- The gate-rework router (a re-gate GATE-tier failure → writer rework) ----
@@ -258,7 +334,7 @@ export interface GateReworkRouter {
     specId: string;
     /** The re-gate's failing tier/step/output — the steering the writer re-authors against. */
     gateError: string;
-  }): Promise<void>;
+  }): Promise<GateReworkRouteResult>;
 }
 
 // ---- The pure decision core -----------------------------------------------

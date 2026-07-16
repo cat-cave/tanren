@@ -7,11 +7,16 @@
 
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
 import type { RunListItem } from "../../api/types.js";
-import { duration, timestamp, usd } from "./format.js";
+import { duration, nullableUsd, timestamp } from "./format.js";
 import { COSTS_SCREEN_CSS } from "./styles.js";
 
 export interface HistoryBodyProps {
   runs: RunListItem[];
+  /**
+   * False when the run-list read failed (transport/HTTP/decode). Distinct from
+   * a legitimate empty filter result — never render failure as "no runs".
+   */
+  runsAvailable?: boolean;
   /** Active status filter (empty = all). */
   status: string;
   orgId: string;
@@ -26,7 +31,10 @@ export interface HistoryBodyProps {
 const STATUS_FILTERS: { id: string; label: string }[] = [
   { id: "", label: "all" },
   { id: "running", label: "running" },
-  { id: "succeeded", label: "succeeded" },
+  // The id is the REAL API run status (`completed`), never a synonym like
+  // "succeeded" — a value absent from RunStatus matches zero rows and would
+  // manufacture an empty filter result. The label stays user-facing.
+  { id: "completed", label: "succeeded" },
   { id: "failed", label: "failed" },
 ];
 
@@ -49,6 +57,7 @@ function outcomeBadge(run: RunListItem): { cls: string; label: string } {
 
 export function HistoryBody(props: HistoryBodyProps) {
   const { runs, status } = props;
+  const runsAvailable = props.runsAvailable !== false;
   return (
     <>
       <style data-screen="costs" dangerouslySetInnerHTML={{ __html: COSTS_SCREEN_CSS }} />
@@ -56,7 +65,7 @@ export function HistoryBody(props: HistoryBodyProps) {
         <div>
           <div class="eyebrow">▮ run history · {props.noProject ? props.orgLogin || "org" : props.projectName}</div>
           <div class="page-title">prior runs</div>
-          {!props.noProject && <div class="sub">{runs.length} runs · scoped to this project</div>}
+          {!props.noProject && runsAvailable && <div class="sub">{runs.length} runs · scoped to this project</div>}
         </div>
         {!props.noProject && (
           <div class="filters">
@@ -78,44 +87,50 @@ export function HistoryBody(props: HistoryBodyProps) {
               <div class="empty">
                 No projects yet. Onboard a repo to start forging — run history appears here once a project has runs.
               </div>
-            ) : runs.length === 0 ? (
-              <div class="empty">No runs match this filter yet.</div>
+            ) : runsAvailable ? (
+              runs.length === 0 ? (
+                <div class="empty">No runs match this filter yet.</div>
+              ) : (
+                <>
+                  <div class="run-table-head">
+                    <span>spec</span>
+                    <span>status</span>
+                    <span class="num">cost</span>
+                    <span class="num">elapsed</span>
+                    <span class="num">started</span>
+                    <span class="num">pr</span>
+                  </div>
+                  <div>
+                    {runs.map((run) => {
+                      const badge = outcomeBadge(run);
+                      const href = `/orgs/${encodeURIComponent(props.orgId)}/projects/${encodeURIComponent(
+                        run.projectId,
+                      )}/runs/${encodeURIComponent(run.runId)}`;
+                      return (
+                        <a class="run-row" href={href}>
+                          <span>
+                            <div class="spec">{run.specTitle}</div>
+                            <div class="sub">
+                              {run.runId} · {run.trigger}
+                            </div>
+                          </span>
+                          <span>
+                            <span class={`badge ${badge.cls}`}>{badge.label}</span>
+                          </span>
+                          <span class="num">{nullableUsd(run.costTotalUsd)}</span>
+                          <span class="num">{duration(run.startedAt, run.endedAt)}</span>
+                          <span class="num">{timestamp(run.startedAt)}</span>
+                          <span class="num">{run.prUrl === null ? "—" : "open"}</span>
+                        </a>
+                      );
+                    })}
+                  </div>
+                </>
+              )
             ) : (
-              <>
-                <div class="run-table-head">
-                  <span>spec</span>
-                  <span>status</span>
-                  <span class="num">cost</span>
-                  <span class="num">elapsed</span>
-                  <span class="num">started</span>
-                  <span class="num">pr</span>
-                </div>
-                <div>
-                  {runs.map((run) => {
-                    const badge = outcomeBadge(run);
-                    const href = `/orgs/${encodeURIComponent(props.orgId)}/projects/${encodeURIComponent(
-                      run.projectId,
-                    )}/runs/${encodeURIComponent(run.runId)}`;
-                    return (
-                      <a class="run-row" href={href}>
-                        <span>
-                          <div class="spec">{run.specTitle}</div>
-                          <div class="sub">
-                            {run.runId} · {run.trigger}
-                          </div>
-                        </span>
-                        <span>
-                          <span class={`badge ${badge.cls}`}>{badge.label}</span>
-                        </span>
-                        <span class="num">{usd(Number(run.costTotalUsd))}</span>
-                        <span class="num">{duration(run.startedAt, run.endedAt)}</span>
-                        <span class="num">{timestamp(run.startedAt)}</span>
-                        <span class="num">{run.prUrl === null ? "—" : "open"}</span>
-                      </a>
-                    );
-                  })}
-                </div>
-              </>
+              <div class="empty" role="alert" data-runs-unavailable>
+                Run history unavailable — the orchestrator read failed. This is not an empty project; retry shortly.
+              </div>
             )}
           </section>
         </div>

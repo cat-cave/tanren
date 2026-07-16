@@ -1,16 +1,5 @@
-// The REMOTE run-state writer. Routes each of the worker's
-// tenant run-state writes — event-append, cost-record insert, run finalize — to
-// the control plane's `/internal/*` write endpoints over the mTLS {@link
-// MtlsFetch} channel (the SAME mutually-authenticated transport used for the
-// claim endpoint). The control plane then runs the EXACT SAME org-scoped write
-// server-side, under ITS DB access — so the data plane needs no broad tenant
-// write grants. Enabled by `TANREN_DATA_PLANE_REMOTE_WRITES=1`.
-//
-// WHAT GETS WRITTEN IS IDENTICAL to the direct path: the endpoints reuse the
-// worker's own store logic, only server-side. Exactly-once is preserved — the
-// finalize endpoint applies the same `fromStatuses` guard, so a retried finalize
-// matches no row the second time (no duplicate finalize/event); event/cost
-// inserts are the same single INSERT the direct path runs.
+// Remote run-state writer: the control plane performs the same org-scoped writes
+// over mTLS, keeping the data plane free of broad tenant-write grants.
 
 import { getJobOrgId } from "@tanren/db";
 import type { MtlsFetch } from "../contracts/mtlsChannel.js";
@@ -30,6 +19,9 @@ import type {
   RecordDraftPrCreatedInput,
   RecordDraftPrCreatedOutcome,
   ReconcileCostInput,
+  RecoveryOwnedSettleInput,
+  RecoveryOwnedSettleOutcome,
+  RecoveryOwnedSettlementWriter,
   RecoveryParkInput,
   RecoveryParkOutcome,
   RecoveryParkWriter,
@@ -49,12 +41,29 @@ import type {
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
 } from "../contracts/runStateWriter.js";
+import type {
+  RecoveryPreparationInput,
+  RecoveryPreparationOutcome,
+  RecoveryPreparationWriter,
+} from "../contracts/recoveryPreparation.js";
 import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
 import type { AppendEventInput } from "../eventStore.js";
 import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
-import { parseRecoveryParkInput, parseRecoveryParkOutcome, recoveryParkingFailed } from "./recoveryParkAtomic.js";
+import {
+  parseRecoveryOwnedSettleInput,
+  parseRecoveryOwnedSettleOutcome,
+  parseRecoveryParkInput,
+  parseRecoveryParkOutcome,
+  recoveryOwnedSettlementFailed,
+  recoveryParkingFailed,
+} from "./recoveryParkAtomic.js";
+import {
+  parseRecoveryPreparationInput,
+  parseRecoveryPreparationOutcome,
+  recoveryPreparationFailure,
+} from "./recoveryPreparationAtomic.js";
 
 /** Thrown when a control-plane write endpoint returns a non-2xx status. */
 export class RunStateWriteTransportError extends Error {
@@ -72,23 +81,20 @@ export class RunStateWriteTransportError extends Error {
  * The remote run-state writer. POSTs each write to the control plane over mTLS.
  * A 401 (untrusted peer) or any non-2xx surfaces as {@link
  * RunStateWriteTransportError}, which the worker treats as an infra fault — the
- * write did NOT land, so the worker never assumes a phantom success. The one
- * deliberate exception is `parkRecoveryAndDequeue`: its port requires transport
- * uncertainty to become typed `parking_failed` + paced idempotent redrive.
+ * write did NOT land, so the worker never assumes a phantom success. Recovery
+ * operations are the deliberate exception: their typed results preserve transport
+ * uncertainty for exact readback or paced idempotent redrive.
  */
-export class HttpRunStateWriter implements RunStateWriter, RecoveryParkWriter {
+export class HttpRunStateWriter
+  implements RunStateWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter, RecoveryPreparationWriter
+{
   constructor(
     private readonly baseUrl: string,
     private readonly mtlsFetch: MtlsFetch,
   ) {}
 
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    // The server scopes the INSERT to the event's org (`runWithOrgScope`), so the
-    // body carries it — the per-job org-id the caller set (`runWithJobOrgId`), the
-    // same scope the in-process write used. A PROJECT-scoped event (the DagWalker's
-    // dag.drained / dag.budget.paused / dag.concurrency.saturated) carries no
-    // runId/specId; those keys are simply absent from `input`, so the server inserts
-    // NULL run_id/spec_id — identical to the direct `PgEventStore.append`.
+    // The body carries the explicit tenant identity used by the server-side scope.
     await this.post<void>("/internal/append-event", { ...input, orgId: this.requireOrgId() });
   }
 
@@ -271,6 +277,46 @@ export class HttpRunStateWriter implements RunStateWriter, RecoveryParkWriter {
       // have been lost after COMMIT. The queue row is the idempotency readback on
       // the paced retry, so transport uncertainty never becomes false success.
       return recoveryParkingFailed("transport_failed");
+    }
+  }
+
+  async settleOwnedRecoveryAndDequeue(input: RecoveryOwnedSettleInput): Promise<RecoveryOwnedSettleOutcome> {
+    const parsed = parseRecoveryOwnedSettleInput(input);
+    if (parsed === undefined) return recoveryOwnedSettlementFailed("invalid_input");
+    try {
+      const response = await this.post<unknown>("/internal/settle-owned-recovery-and-dequeue", parsed);
+      return parseRecoveryOwnedSettleOutcome(response) ?? recoveryOwnedSettlementFailed("transport_failed");
+    } catch {
+      // The request may have committed before its acknowledgement was lost. Only
+      // the idempotent queue-row readback on redrive may turn this into success.
+      return recoveryOwnedSettlementFailed("transport_failed");
+    }
+  }
+
+  async prepareRecovery(input: RecoveryPreparationInput): Promise<RecoveryPreparationOutcome> {
+    const parsed = parseRecoveryPreparationInput(input);
+    if (parsed === undefined) return recoveryPreparationFailure("invalid_input", "invalid recovery preparation");
+    try {
+      const body = await this.post<unknown>("/internal/prepare-recovery", parsed);
+      const outcome = parseRecoveryPreparationOutcome(body);
+      if (outcome !== undefined) return outcome;
+    } catch {
+      // Commit-response loss is resolved by the exact durable operation receipt below.
+    }
+    return this.readRecoveryPreparation(parsed);
+  }
+
+  async readRecoveryPreparation(input: RecoveryPreparationInput): Promise<RecoveryPreparationOutcome> {
+    const parsed = parseRecoveryPreparationInput(input);
+    if (parsed === undefined) return recoveryPreparationFailure("invalid_input", "invalid recovery preparation");
+    try {
+      const body = await this.post<unknown>("/internal/read-recovery-preparation", parsed);
+      return (
+        parseRecoveryPreparationOutcome(body) ??
+        recoveryPreparationFailure("transport_failed", "malformed recovery preparation readback")
+      );
+    } catch (error) {
+      return recoveryPreparationFailure("transport_failed", String(error));
     }
   }
 

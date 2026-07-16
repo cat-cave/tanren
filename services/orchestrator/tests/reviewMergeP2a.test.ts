@@ -172,6 +172,14 @@ describe("P2a up-to-date enforcement (merge stage)", () => {
       reGateGateRework: {
         routeGateFailToRework: async (input) => {
           reworked.push(input);
+          return {
+            kind: "owned",
+            receipt: {
+              kind: "writer_rework",
+              specId: input.specId,
+              run: { kind: "enqueued", replanRunId: "run_rework", plannerTaskId: "task_rework" },
+            },
+          };
         },
       },
     });

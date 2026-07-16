@@ -8,7 +8,8 @@
 // lease query). The clock is injectable so the lease boundary is deterministic.
 
 import { describe, expect, it } from "vitest";
-import { EventEmittingMergeCoordinator } from "../src/engine/merge/coordinator.js";
+import { BatchMergeCoordinator } from "../src/engine/merge/batchCoordinator.js";
+import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./conformance/fakes/inMemoryBatchChecker.js";
 import { MERGE_CLAIM_LEASE_MS } from "../src/engine/merge/mergeClaimLease.js";
 import {
   InMemoryMergeQueueModel,
@@ -16,6 +17,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 const LEASE_MS = MERGE_CLAIM_LEASE_MS;
 
@@ -57,10 +59,15 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
   it("a serialized coordinator pass arms a lease-bound re-drive that later reclaims and merges", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
-    const coordinator = new EventEmittingMergeCoordinator({
+    const events = new RecordingMergeQueueEventEmitter();
+    const coordinator = new BatchMergeCoordinator({
+      resolveMaxBatchSize: async () => 1,
       queue,
       runner,
-      events: new RecordingMergeQueueEventEmitter(),
+      checker: new InMemoryBatchChecker(),
+      batchEvents: new RecordingBatchMergeEventEmitter(),
+      recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
+      events,
       escalator: new RecordingSpecEscalator(),
     });
     let now = 1_000_000;
@@ -87,10 +94,15 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
   it("a lost claim arms a lease-bound re-drive for the winning claim", async () => {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
-    const coordinator = new EventEmittingMergeCoordinator({
+    const events = new RecordingMergeQueueEventEmitter();
+    const coordinator = new BatchMergeCoordinator({
+      resolveMaxBatchSize: async () => 1,
       queue,
       runner,
-      events: new RecordingMergeQueueEventEmitter(),
+      checker: new InMemoryBatchChecker(),
+      batchEvents: new RecordingBatchMergeEventEmitter(),
+      recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
+      events,
       escalator: new RecordingSpecEscalator(),
     });
     let now = 1_000_000;

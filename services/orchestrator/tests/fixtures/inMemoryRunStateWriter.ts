@@ -57,6 +57,12 @@ import type {
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
 } from "../../src/engine/contracts/runStateWriter.js";
+import type {
+  RecoveryPreparationInput,
+  RecoveryPreparationOutcome,
+  RecoveryPreparationWriter,
+} from "../../src/engine/contracts/recoveryPreparation.js";
+import type { RecoveryOwnedSettlementWriter, RecoveryParkWriter } from "../../src/engine/contracts/runStateWriter.js";
 import type { SpecContract, SpecRunContract } from "../../src/engine/workflow/projectSpec.js";
 
 /**
@@ -86,7 +92,9 @@ export interface TaskRow {
  * fixture invokes it after recording, mirroring what the prior
  * `appendEventFallback` did, but without the writer-undefined fallback arm.
  */
-export class InMemoryRunStateWriter implements RunStateWriter {
+export class InMemoryRunStateWriter
+  implements RunStateWriter, RecoveryPreparationWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter
+{
   readonly appends: AppendEventInput[] = [];
   readonly atomic: AtomicTerminalRecord[] = [];
   readonly inserts: InsertTaskInput[] = [];
@@ -247,6 +255,36 @@ export class InMemoryRunStateWriter implements RunStateWriter {
    * partial unique index `events_prior_idempotency_unique`).
    */
   private readonly priorIdempotencyKeys = new Set<string>();
+
+  async prepareRecovery(input: RecoveryPreparationInput): Promise<RecoveryPreparationOutcome> {
+    return {
+      kind: "owned",
+      newlyPrepared: true,
+      receipt: {
+        kind: input.route.kind === "planner_replan" ? "planner_replan" : "writer_rework",
+        specId: input.specId,
+        run: {
+          kind: "enqueued",
+          replanRunId: `run_recovery_${input.specId}`,
+          plannerTaskId: `task_recovery_${input.specId}`,
+        },
+      },
+    };
+  }
+
+  readRecoveryPreparation(input: RecoveryPreparationInput): Promise<RecoveryPreparationOutcome> {
+    return this.prepareRecovery(input).then((outcome) =>
+      outcome.kind === "owned" ? { ...outcome, newlyPrepared: false } : outcome,
+    );
+  }
+
+  async parkRecoveryAndDequeue() {
+    return { kind: "parked" as const, newlyParked: true };
+  }
+
+  async settleOwnedRecoveryAndDequeue() {
+    return { kind: "settled" as const, newlySettled: true };
+  }
 
   // --- methods workflow stages drive but unit tests usually don't assert on. ---
   // The defaults are RECORD-OR-NOOP-and-succeed so a test wiring this fixture

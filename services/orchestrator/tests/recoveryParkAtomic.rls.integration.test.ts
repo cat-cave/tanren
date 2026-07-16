@@ -4,8 +4,15 @@
 // wrong-org failure, rollback after a partial attempt, and lost-response retry.
 
 import type { Pool, PoolClient } from "pg";
+import { resetSystemPool, setSystemPool } from "@tanren/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { AllowAllPeerVerifier, type MtlsFetch, type RecoveryParkInput } from "../src/engine/contracts/index.js";
+import {
+  AllowAllPeerVerifier,
+  type MtlsFetch,
+  type RecoveryOwnedSettleInput,
+  type RecoveryParkInput,
+} from "../src/engine/contracts/index.js";
+import { readOwnedReceiptEvidence } from "../src/engine/merge/recoveryEvidencePg.js";
 import { DirectRunStateWriter, HttpRunStateWriter } from "../src/engine/worker/index.js";
 import { applyRecoveryParkAtomic } from "../src/engine/worker/recoveryParkAtomic.js";
 import { createInternalRunStateWriteRoutes } from "../src/routes/internal/runStateWrites.js";
@@ -29,6 +36,19 @@ function inputFor(runId: string, queueId: string, orgId = ORG): RecoveryParkInpu
     runId,
     specId: SPEC,
     message: `irreconcilable recovery for ${runId}`,
+  };
+}
+
+function ownedInput(runId: string, queueId: string, ownerRunId: string): RecoveryOwnedSettleInput {
+  return {
+    orgId: ORG,
+    projectId: PROJECT,
+    queueId,
+    runId,
+    specId: SPEC,
+    receipt: { kind: "planner_replan", specId: SPEC, run: { kind: "already_running", runId: ownerRunId } },
+    reason: "conflict",
+    message: `successor ${ownerRunId} owns recovery`,
   };
 }
 
@@ -75,8 +95,14 @@ describeDb("atomic recovery park — real PG and enforced RLS", () => {
   const owner = () => harness.ownerPool();
   const runtime = () => harness.runtimePool();
 
-  beforeAll(() => harness.setUp(), 60_000);
-  afterAll(() => harness.tearDown(), 30_000);
+  beforeAll(async () => {
+    await harness.setUp();
+    setSystemPool(owner());
+  }, 60_000);
+  afterAll(async () => {
+    resetSystemPool();
+    await harness.tearDown();
+  }, 30_000);
 
   it("Direct and HTTP paths commit the same park, ordered events, and dequeue", async () => {
     const directRun = "run_recovery_park_direct";
@@ -266,5 +292,176 @@ describeDb("atomic recovery park — real PG and enforced RLS", () => {
       queue: { status: "dequeued", dequeue_reason: "needs_attention" },
       events: ["dag.spec.needs_attention", "merge.dequeued"],
     });
+  });
+
+  it("atomically verifies an exact active successor, appends once, and retires once across replay", async () => {
+    const runId = "run_recovery_owned_old";
+    const queueId = "queue_recovery_owned_old";
+    const ownerRunId = "run_recovery_owned_new";
+    await seedQueue(owner(), runId, queueId);
+    await seedRun(owner(), ownerRunId, "running");
+    const writer = new DirectRunStateWriter(runtime());
+    const input = ownedInput(runId, queueId, ownerRunId);
+
+    await expect(writer.settleOwnedRecoveryAndDequeue(input)).resolves.toEqual({
+      kind: "settled",
+      newlySettled: true,
+    });
+    const committed = await owner().query<{ xmin: string; status: string; dequeue_reason: string | null }>(
+      "SELECT xmin::text, status, dequeue_reason FROM merge_queue WHERE queue_id = $1",
+      [queueId],
+    );
+    // Replay is receipt-bound, not successor-liveness-bound: the exact committed
+    // fingerprint remains valid after the successor later terminates.
+    await owner().query("UPDATE runs SET status = 'halted' WHERE run_id = $1", [ownerRunId]);
+    await expect(writer.settleOwnedRecoveryAndDequeue(input)).resolves.toEqual({
+      kind: "settled",
+      newlySettled: false,
+    });
+    await expect(
+      writer.settleOwnedRecoveryAndDequeue({
+        ...input,
+        receipt: {
+          kind: "planner_replan",
+          specId: SPEC,
+          run: { kind: "already_running", runId: "run_wrong_same_reason" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      kind: "settlement_failed",
+      reason: "receipt_mismatch",
+      queueDisposition: "unknown",
+    });
+    const replayed = await owner().query<{ xmin: string }>("SELECT xmin::text FROM merge_queue WHERE queue_id = $1", [
+      queueId,
+    ]);
+    const events = await owner().query<{ event_type: string }>(
+      "SELECT event_type FROM events WHERE run_id = $1 ORDER BY id",
+      [runId],
+    );
+    expect(committed.rows[0]).toMatchObject({ status: "dequeued", dequeue_reason: "conflict" });
+    expect(replayed.rows[0]?.xmin).toBe(committed.rows[0]?.xmin);
+    expect(events.rows.map((row) => row.event_type)).toEqual(["merge.dequeued"]);
+  });
+
+  it("rechecks freshness in the retirement transaction after an earlier active lookup", async () => {
+    const runId = "run_recovery_owned_stale_old";
+    const queueId = "queue_recovery_owned_stale_old";
+    const ownerRunId = "run_recovery_owned_stale_new";
+    await seedQueue(owner(), runId, queueId);
+    await seedRun(owner(), ownerRunId, "running");
+    const input = ownedInput(runId, queueId, ownerRunId);
+    await expect(
+      readOwnedReceiptEvidence(owner(), {
+        expectedOrgId: ORG,
+        expectedProjectId: PROJECT,
+        expectedSpecId: SPEC,
+        receipt: input.receipt,
+      }),
+    ).resolves.toMatchObject({ runId: ownerRunId, runStatus: "running" });
+
+    await owner().query("UPDATE runs SET status = 'halted' WHERE run_id = $1", [ownerRunId]);
+    await expect(new DirectRunStateWriter(runtime()).settleOwnedRecoveryAndDequeue(input)).resolves.toMatchObject({
+      kind: "settlement_failed",
+      reason: "evidence_invalid",
+      queueDisposition: "retained",
+    });
+    expect(await durableState(owner(), runId, queueId)).toEqual({
+      specStatus: "in_flight",
+      queue: { status: "merging", dequeue_reason: null },
+      events: [],
+    });
+  });
+
+  it("rejects wrong old tuple, successor run/spec/task/kind/status before any event or retirement", async () => {
+    const runId = "run_recovery_owned_negative_old";
+    const queueId = "queue_recovery_owned_negative_old";
+    const ownerRunId = "run_recovery_owned_negative_new";
+    const haltedRunId = "run_recovery_owned_negative_halted";
+    const taskId = "task_recovery_owned_wrong_kind";
+    await seedQueue(owner(), runId, queueId);
+    await seedRun(owner(), ownerRunId, "running");
+    await seedRun(owner(), haltedRunId, "halted");
+    await owner().query(
+      `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+       VALUES ($1, $2, $3, 'write', 'write', 'running', 'writer', 'fake', 'm')`,
+      [taskId, ownerRunId, ORG],
+    );
+    const base = ownedInput(runId, queueId, ownerRunId);
+    const attempts: RecoveryOwnedSettleInput[] = [
+      { ...base, orgId: "org_wrong" },
+      { ...base, projectId: "project_wrong" },
+      { ...base, runId: "run_wrong" },
+      { ...base, specId: "spec_wrong" },
+      { ...base, receipt: { ...base.receipt, specId: "spec_wrong" } },
+      {
+        ...base,
+        receipt: { kind: "planner_replan", specId: SPEC, run: { kind: "already_running", runId: "run_missing" } },
+      },
+      {
+        ...base,
+        receipt: { kind: "planner_replan", specId: SPEC, run: { kind: "already_running", runId } },
+      },
+      {
+        ...base,
+        receipt: {
+          kind: "planner_replan",
+          specId: SPEC,
+          run: { kind: "enqueued", replanRunId: ownerRunId, plannerTaskId: "task_missing" },
+        },
+      },
+      {
+        ...base,
+        receipt: {
+          kind: "planner_replan",
+          specId: SPEC,
+          run: { kind: "enqueued", replanRunId: ownerRunId, plannerTaskId: taskId },
+        },
+      },
+      {
+        ...base,
+        receipt: { kind: "planner_replan", specId: SPEC, run: { kind: "already_running", runId: haltedRunId } },
+      },
+    ];
+    for (const attempt of attempts) {
+      await expect(new DirectRunStateWriter(runtime()).settleOwnedRecoveryAndDequeue(attempt)).resolves.toMatchObject({
+        kind: "settlement_failed",
+      });
+    }
+    expect(await durableState(owner(), runId, queueId)).toEqual({
+      specStatus: "in_flight",
+      queue: { status: "merging", dequeue_reason: null },
+      events: [],
+    });
+  });
+
+  it("lost owned-settle acknowledgement redrives to the committed queue receipt", async () => {
+    const runId = "run_recovery_owned_response_loss_old";
+    const queueId = "queue_recovery_owned_response_loss_old";
+    const ownerRunId = "run_recovery_owned_response_loss_new";
+    await seedQueue(owner(), runId, queueId);
+    await seedRun(owner(), ownerRunId, "running");
+    const app = createInternalRunStateWriteRoutes({ pool: runtime(), verifier: new AllowAllPeerVerifier() });
+    const intoApp = fetchInto(app);
+    let drop = true;
+    const lossy: MtlsFetch = async (url, init) => {
+      const response = await intoApp(url, init);
+      if (drop) {
+        drop = false;
+        throw new Error("response lost after commit");
+      }
+      return response;
+    };
+    const writer = new HttpRunStateWriter("https://control.internal", lossy);
+    const input = ownedInput(runId, queueId, ownerRunId);
+    await expect(writer.settleOwnedRecoveryAndDequeue(input)).resolves.toMatchObject({
+      kind: "settlement_failed",
+      reason: "transport_failed",
+    });
+    await expect(writer.settleOwnedRecoveryAndDequeue(input)).resolves.toEqual({
+      kind: "settled",
+      newlySettled: false,
+    });
+    expect((await durableState(owner(), runId, queueId)).events).toEqual(["merge.dequeued"]);
   });
 });

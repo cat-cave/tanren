@@ -13,9 +13,12 @@
           "id": {
             "anyOf": [
               {
-                "type": "number"
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
               },
               {
+                "pattern": "^\\d+$",
                 "type": "string"
               }
             ]

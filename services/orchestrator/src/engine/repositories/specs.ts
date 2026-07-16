@@ -85,39 +85,60 @@ export const SpecStore = {
   },
 
   /**
-   * Run-detail spec header: just the title + description for the spec card.
-   * Returns undefined when the spec row is gone (the route renders a fallback).
+   * Run-detail spec header constrained by the authorized run's
+   * `(orgId, projectId, specId)`. Specs RLS is org-only, so the project
+   * predicate is mandatory to prevent same-org cross-project title leaks.
+   * Returns undefined when the triple does not bind (gone, wrong project, or
+   * RLS-denied) — the route fails non-200 rather than inventing a card.
    */
   async selectSummaryHeader(
     client: QueryClient,
-    specId: string,
+    args: { specId: string; projectId: string; orgId: string },
     _actor: ActorRef,
   ): Promise<{ spec_id: string; title: string; description: string } | undefined> {
     const result = await client.query<{ spec_id: string; title: string; description: string }>(
-      "SELECT spec_id, title, description FROM specs WHERE spec_id = $1",
-      [specId],
+      "SELECT spec_id, title, description FROM specs WHERE spec_id = $1 AND project_id = $2 AND org_id = $3",
+      [args.specId, args.projectId, args.orgId],
     );
     return result.rows[0];
   },
 
   /**
-   * Behavior ids attached to a spec. The `spec_behaviors` table may
-   * be absent on older deployments; the route degrades to an empty list, so this
-   * read surfaces the raw rows and lets the caller own that fallback.
+   * Behavior ids attached to a same-org/same-project spec. Genuine empty is
+   * valid; relation/DB failure must surface to the caller (no soft fallback).
    */
-  async selectBehaviorIds(client: QueryClient, specId: string, _actor: ActorRef): Promise<string[]> {
+  async selectBehaviorIds(
+    client: QueryClient,
+    args: { specId: string; projectId: string; orgId: string },
+    _actor: ActorRef,
+  ): Promise<string[]> {
     const result = await client.query<{ behavior_id: string }>(
-      "SELECT behavior_id FROM spec_behaviors WHERE spec_id = $1 ORDER BY behavior_id",
-      [specId],
+      `SELECT sb.behavior_id
+         FROM spec_behaviors sb
+         INNER JOIN specs s ON s.spec_id = sb.spec_id
+        WHERE sb.spec_id = $1 AND s.project_id = $2 AND s.org_id = $3
+        ORDER BY sb.behavior_id`,
+      [args.specId, args.projectId, args.orgId],
     );
     return result.rows.map((row) => row.behavior_id);
   },
 
-  /** The spec's milestone id, if any (`spec_milestones`); same fallback caveat. */
-  async selectMilestoneId(client: QueryClient, specId: string, _actor: ActorRef): Promise<string | null> {
+  /**
+   * The spec's milestone id when the triple binds. Empty association is null;
+   * relation/DB failure surfaces to the caller.
+   */
+  async selectMilestoneId(
+    client: QueryClient,
+    args: { specId: string; projectId: string; orgId: string },
+    _actor: ActorRef,
+  ): Promise<string | null> {
     const result = await client.query<{ milestone_id: string }>(
-      "SELECT milestone_id FROM spec_milestones WHERE spec_id = $1 LIMIT 1",
-      [specId],
+      `SELECT sm.milestone_id
+         FROM spec_milestones sm
+         INNER JOIN specs s ON s.spec_id = sm.spec_id
+        WHERE sm.spec_id = $1 AND s.project_id = $2 AND s.org_id = $3
+        LIMIT 1`,
+      [args.specId, args.projectId, args.orgId],
     );
     return result.rows[0]?.milestone_id ?? null;
   },

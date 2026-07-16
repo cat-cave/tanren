@@ -61,8 +61,12 @@ class NoopEmitter implements PercolationEventEmitter {
 }
 
 class NoopSettler implements PercolationSettler {
-  async absorb(): Promise<void> {}
-  async replan(): Promise<void> {}
+  async absorb() {
+    return { result: "absorbed" as const };
+  }
+  async replan() {
+    return { result: "replanned" as const, reexecRunId: "run_replan" };
+  }
 }
 
 /** A kick-off whose per-dependent outcome (or throw) the test controls. */
@@ -161,7 +165,9 @@ describe("PercolatingCoordinator — kick-off tolerance (terminal-between-load-a
         async absorb() {
           throw new Error("transient DB fault writing the absorbed sha");
         },
-        async replan() {},
+        async replan() {
+          return { result: "replanned", reexecRunId: "run_replan" };
+        },
       };
       const kickOff = new KickOff((_, decision) => ({
         result: "reexecuting",

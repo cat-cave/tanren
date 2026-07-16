@@ -38,7 +38,7 @@
     "costUsd": {
       "anyOf": [
         {
-          "minLength": 1,
+          "pattern": "^\\d+(?:\\.\\d+)?$",
           "type": "string"
         },
         {
@@ -49,9 +49,12 @@
     "id": {
       "anyOf": [
         {
-          "type": "number"
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
         },
         {
+          "pattern": "^\\d+$",
           "type": "string"
         }
       ]
@@ -64,6 +67,17 @@
     "model": {
       "minLength": 1,
       "type": "string"
+    },
+    "notionalCostUsd": {
+      "anyOf": [
+        {
+          "pattern": "^\\d+(?:\\.\\d+)?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "outputTokens": {
       "maximum": 9007199254740991,
@@ -116,6 +130,7 @@
     "reasoningOutputTokens",
     "totalTokens",
     "costUsd",
+    "notionalCostUsd",
     "billingMode",
     "costBasis",
     "recordedAt"
