@@ -17,10 +17,10 @@
 // invariant (all six key components match exactly, passing-only) — a reuse can NEVER let
 // unproven code merge.
 
-import type { BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
+import type { BatchAuthorityBinding, BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
 import type { CiConfigV1 } from "../ci/index.js";
-import type { IntegrationNode, IntegrationNodeMember } from "../contracts/integrationNodes.js";
-import { memberKey } from "../contracts/integrationNodes.js";
+import type { IntegrationNode, IntegrationNodeMember, ProofReuseKeyInput } from "../contracts/integrationNodes.js";
+import { memberKey, proofReuseKey } from "../contracts/integrationNodes.js";
 import type { EventStore } from "../eventStore.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
 import type { ProofStorePort } from "../dag/integrationProofReuse.js";
@@ -30,9 +30,10 @@ import {
   type JjLocalIntegrationResult,
   withJjLocalIntegration,
 } from "../dag/jjLocalIntegration.js";
-import { resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
-import { decideProofReuse, recordProofVerdict } from "../dag/integrationProofReuse.js";
+import { hashGateConfig, resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
+import { decideProofReuse, type LiveProofKeyComponents, recordProofVerdict } from "../dag/integrationProofReuse.js";
 import type { CoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
+import { buildBatchGateProofEvidence } from "./multiMemberAuthorityEvidence.js";
 
 /** The local bookmark name the prospective merged state materializes as (NEVER pushed). */
 export function batchLocalIntegrationRef(tailSpecId: string): string {
@@ -49,7 +50,7 @@ export interface BatchNodeDriveFacts {
   runnerImage: string;
   tailSpecId: string;
   /** The ordered members (DAG order) merged into the base. */
-  members: ReadonlyArray<JjIntegrationMember>;
+  members: ReadonlyArray<JjIntegrationMember & { readonly runId: string }>;
   /** The governance/config version the verdict is judged under (the policy version). */
   policyVersion: string | undefined;
   /** The quarantine (flaky-skip) set version in effect. */
@@ -153,9 +154,15 @@ async function verdictForIntegrated(
     };
   }
 
+  // Resolve the gate config from this exact open workspace before persistence, so the ready
+  // node row and its proof carry one identical policy/config identity (the MQ-2 binding).
+  const config = await deps.resolveConfig(live);
+
   const members = membersForIntegratedNode(facts, integrated);
   // 2. Materialize ready through the sole authority producer. It derives base→head targets
-  // from THIS still-open workspace and atomically stamps the canonical coverage graph.
+  // from THIS still-open workspace and atomically stamps the canonical coverage graph. The
+  // gate-config/policy identity is stamped here so the read-back node carries the exact
+  // binding the MQ-2 authority evaluator consumes.
   await deps.materializeReadyNode({
     projectId: facts.projectId,
     orgId: facts.orgId,
@@ -164,6 +171,8 @@ async function verdictForIntegrated(
     ref: integrated.localRef,
     purpose: "merge_batch",
     members,
+    ...(config !== undefined && { gateConfigHash: hashGateConfig(config) }),
+    ...(facts.policyVersion !== undefined && { policyVersion: facts.policyVersion }),
     headSha: integrated.headSha,
     treeHash: integrated.treeHash,
     workspace: {
@@ -174,9 +183,6 @@ async function verdictForIntegrated(
   });
   const node = await deps.nodes.findByMemberKey(facts.orgId, memberKeyForNode(integrated.baseSha, members));
 
-  // 3. Resolve the gate config from the workspace (the gateConfigHash key component).
-  const config = await deps.resolveConfig(live);
-
   // Fail-closed: an unreadable node OR an unreadable config ⇒ RECOMPUTE (run the gate),
   // never reuse on uncertainty. With no config there is no sound key either, so the gate
   // result is NOT recorded as a proof (a recompute with no key records nothing).
@@ -185,16 +191,17 @@ async function verdictForIntegrated(
   }
 
   // 4. PROOF REUSE (3a) — resolve the six live key components + decide (fail-closed).
+  const components = resolveLiveKeyComponents({
+    config,
+    runnerImage: facts.runnerImage,
+    policyVersion: facts.policyVersion,
+    ...(facts.appEnv !== undefined && { appEnv: facts.appEnv }),
+    quarantineVersion: facts.quarantineVersion,
+  });
   const decision = await decideProofReuse({
     orgId: facts.orgId,
     node,
-    components: resolveLiveKeyComponents({
-      config,
-      runnerImage: facts.runnerImage,
-      policyVersion: facts.policyVersion,
-      ...(facts.appEnv !== undefined && { appEnv: facts.appEnv }),
-      quarantineVersion: facts.quarantineVersion,
-    }),
+    components,
     store: deps.nodes,
     emit: async (payload) => {
       await deps.eventStore.append({
@@ -210,7 +217,8 @@ async function verdictForIntegrated(
   if (decision.kind === "reuse") {
     // SKIP the re-gate — the recorded passing proof short-circuits the gate. The node is
     // proven; the batch passes WITHOUT re-running the gate.
-    return { result: "pass", integrationBranch: integrated.localRef };
+    const keyInput = resolvedKeyInput(node.memberKey, components);
+    return passWithBinding({ result: "pass", integrationBranch: integrated.localRef }, node, integrated, keyInput);
   }
 
   // RECOMPUTE — run the real gate on the workspace, then record the proof under the key.
@@ -222,8 +230,68 @@ async function verdictForIntegrated(
     projectId: facts.projectId,
     node,
     passed: gated.passed,
+    ...(decision.keyInput === undefined
+      ? {}
+      : {
+          evidence: buildBatchGateProofEvidence({
+            nodeId: node.nodeId,
+            headSha: integrated.headSha,
+            treeHash: integrated.treeHash,
+            memberSetHash: node.memberKey,
+            keyInput: decision.keyInput,
+            passed: gated.passed,
+            ...(gated.verdict.result === "fail" ? { message: gated.verdict.message } : {}),
+          }),
+        }),
   });
-  return gated.verdict;
+  return passWithBinding(gated.verdict, node, integrated, decision.keyInput);
+}
+
+/** Add the exact node/proof identity only to a genuinely passing, fully-keyed verdict. */
+function passWithBinding(
+  verdict: BatchCheckVerdict,
+  node: IntegrationNode,
+  integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
+  keyInput: ProofReuseKeyInput | undefined,
+): BatchCheckVerdict {
+  if (verdict.result !== "pass" || keyInput === undefined) return verdict;
+  const authorityBinding: BatchAuthorityBinding = {
+    nodeId: node.nodeId,
+    baseBranch: node.baseBranch,
+    baseSha: node.baseSha,
+    headSha: integrated.headSha,
+    treeHash: integrated.treeHash,
+    members: node.members,
+    memberSetHash: node.memberKey,
+    policyVersion: node.policyVersion,
+    proof: {
+      verdict: "passed",
+      proofReuseKey: proofReuseKey(keyInput),
+      keyInput,
+    },
+  };
+  return { ...verdict, authorityBinding };
+}
+
+/** Mirror the frozen six-component guard without inventing defaults. */
+function resolvedKeyInput(nodeMemberKey: string, components: LiveProofKeyComponents): ProofReuseKeyInput | undefined {
+  if (
+    !components.gateConfigHash.resolved ||
+    !components.policyVersion.resolved ||
+    !components.runnerImage.resolved ||
+    !components.appEnvHash.resolved ||
+    !components.quarantineVersion.resolved
+  ) {
+    return undefined;
+  }
+  return {
+    memberKey: nodeMemberKey,
+    gateConfigHash: components.gateConfigHash.value,
+    policyVersion: components.policyVersion.value,
+    runnerImage: components.runnerImage.value,
+    appEnvHash: components.appEnvHash.value,
+    quarantineVersion: components.quarantineVersion.value,
+  };
 }
 
 /** Map a jj-local spec-vs-spec conflict to the batch verdict the coordinator routes. */

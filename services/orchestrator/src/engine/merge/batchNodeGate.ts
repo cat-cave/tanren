@@ -39,6 +39,10 @@ export interface BatchNodeGateClosureDeps {
   orgId: string;
   projectId: string;
   tailSpecId: string;
+  /** Exact active quarantine actuated by this integrated gate. */
+  quarantinedStepNames?: ReadonlySet<string>;
+  /** Exact test-filter environment covered by the proof's app-env hash. */
+  appEnv?: Record<string, string>;
 }
 
 /**
@@ -127,6 +131,8 @@ export function batchNodeGate(deps: BatchNodeGateClosureDeps): GateBatchWorkspac
         });
       },
       advisoryStepNames: advisoryStepNamesForPosture(deps.governancePosture),
+      ...(deps.quarantinedStepNames === undefined ? {} : { quarantinedStepNames: deps.quarantinedStepNames }),
+      ...(deps.appEnv === undefined ? {} : { appEnv: deps.appEnv }),
     });
     if (outcome.passed) {
       return { verdict: { result: "pass", integrationBranch: deps.integrationRef }, passed: true };

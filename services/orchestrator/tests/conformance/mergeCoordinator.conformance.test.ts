@@ -19,6 +19,7 @@ import {
   describeMergeCoordinatorConformance,
   type MergeCoordinatorConformanceHarness,
 } from "./mergeCoordinatorConformance.js";
+import { allowExactBatchAuthority } from "../helpers/mq2BatchAuthority.js";
 
 describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
   make(): MergeCoordinatorConformanceHarness {
@@ -27,6 +28,7 @@ describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
     const events = new RecordingMergeQueueEventEmitter();
     const escalator = new RecordingSpecEscalator();
     const coordinator = new BatchMergeCoordinator({
+      authorityEvaluator: allowExactBatchAuthority(),
       queue,
       runner,
       checker: new InMemoryBatchChecker(),

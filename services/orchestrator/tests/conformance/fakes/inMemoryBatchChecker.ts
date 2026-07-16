@@ -15,6 +15,9 @@ import type {
 import type { GateReworkRouteResult } from "../../../src/engine/contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../../../src/engine/contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "../../../src/engine/merge/batchCoordinator.js";
+import { fakeBatchAuthorityBinding } from "../../helpers/mq2BatchAuthority.js";
+
+export { allowExactBatchAuthority } from "../../helpers/mq2BatchAuthority.js";
 
 /**
  * An in-memory batch checker. By default every entry-set PASSES. A test marks a spec
@@ -128,7 +131,11 @@ export class InMemoryBatchChecker implements BatchChecker {
     if (bad !== undefined) {
       return { result: "fail", message: `bad interaction with ${bad}` };
     }
-    return { result: "pass", integrationBranch: `tanren/batch/${specIds.at(-1) ?? "base"}` };
+    return {
+      result: "pass",
+      integrationBranch: `tanren/batch/${specIds.at(-1) ?? "base"}`,
+      authorityBinding: fakeBatchAuthorityBinding(input.entries),
+    };
   }
 }
 

@@ -12,6 +12,7 @@ import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createDoraRoutes } from "../dora/index.js";
 import { createCiInsightRoutes } from "../ciInsights/index.js";
 import { createIntegrationMetricsRoutes } from "../integrationMetrics/index.js";
+import { createMergeQueueAuthorityEvaluationRoutes } from "../mergeQueue/authorityEvaluations.js";
 import { createMergeQueueAuthoritySignalRoutes } from "../mergeQueue/authoritySignals.js";
 import { createExperimentRoutes } from "./index.js";
 
@@ -38,6 +39,8 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   app.route("/orgs", createIntegrationMetricsRoutes({ pool: deps.pool }));
   // mq-1 durable authority-signal projection (list + evaluation).
   app.route("/orgs", createMergeQueueAuthoritySignalRoutes({ pool: deps.pool }));
+  // mq-2 durable seven-way evaluation projection (never process-memory state).
+  app.route("/orgs", createMergeQueueAuthorityEvaluationRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

@@ -13,9 +13,11 @@
  */
 
 import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
+import type { MergeQueueAuthorityEvaluationsListResponse } from "../../api/mergeQueueAuthorityEvaluations.js";
 import type { MergeQueueAuthoritySignalsListResponse } from "../../api/mergeQueueAuthoritySignals.js";
 import { AuthoritySignalPanel } from "./AuthoritySignalPanel.js";
 import { mqDuration, mqInt, mqPercent, mqTokens } from "./format.js";
+import { MultiMemberAuthorityPanel } from "./MultiMemberAuthorityPanel.js";
 import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 
 export interface MergeQueueBodyProps {
@@ -25,6 +27,8 @@ export interface MergeQueueBodyProps {
   stats: QueueStats | undefined;
   /** mq-1 authority-signal projection (undefined when read failed / no project). */
   authoritySignals: MergeQueueAuthoritySignalsListResponse | undefined;
+  /** mq-2 durable exact-node authority projection (undefined when read failed / no project). */
+  authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
   /** Active window pill (7d / 30d / 90d). */
   windowDays: number;
   /** Project name for the eyebrow scope line. */
@@ -147,7 +151,7 @@ function StatGrid(props: { cards: StatCard[] }) {
 }
 
 export function MergeQueueBody(props: MergeQueueBodyProps) {
-  const { metrics, stats, authoritySignals, windowDays, projectName, noProject } = props;
+  const { metrics, stats, authoritySignals, authorityEvaluations, windowDays, projectName, noProject } = props;
   const v = verdict(metrics);
   return (
     <>
@@ -177,6 +181,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
             </section>
           ) : (
             <>
+              <MultiMemberAuthorityPanel projection={authorityEvaluations} />
               <AuthoritySignalPanel projection={authoritySignals} />
               <section class="panel">
                 <div class="panel-pad">

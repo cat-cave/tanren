@@ -28,6 +28,7 @@ import {
 } from "../src/engine/merge/batchIntegrationNodeDrive.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
 import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
+import { BatchGateProofEvidenceV1 } from "../src/engine/merge/multiMemberAuthorityEvidence.js";
 
 /** The gate spy signature (a recompute-only gate over the open workspace). */
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
@@ -35,7 +36,7 @@ type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
 /** An in-memory node + proof store (the PgIntegrationNodeModel, behavior-equivalent). */
 class FakeNodeStore implements BatchNodeStore {
   readonly nodes = new Map<string, IntegrationNode>();
-  readonly proofs = new Map<string, { nodeId: string; verdict: string }>();
+  readonly proofs = new Map<string, { nodeId: string; verdict: string; evidence?: unknown }>();
   // Stays EMPTY — the jj-local path writes no host ref.
   hostRefsWritten: string[] = [];
 
@@ -77,9 +78,14 @@ class FakeNodeStore implements BatchNodeStore {
     nodeId: string;
     keyInput: ProofReuseKeyInput;
     verdict: string;
+    evidence?: unknown;
   }): Promise<string> {
     const key = proofReuseKey(input.keyInput);
-    this.proofs.set(key, { nodeId: input.nodeId, verdict: input.verdict });
+    this.proofs.set(key, {
+      nodeId: input.nodeId,
+      verdict: input.verdict,
+      ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
+    });
     return key;
   }
 }
@@ -101,8 +107,8 @@ const FACTS: BatchNodeDriveFacts = {
   runnerImage: "ghcr.io/tanren/runner:latest",
   tailSpecId: "spec_tail",
   members: [
-    { specId: "spec_a", branch: "tanren/spec_a" },
-    { specId: "spec_b", branch: "tanren/spec_b" },
+    { specId: "spec_a", runId: "run_a", branch: "tanren/spec_a" },
+    { specId: "spec_b", runId: "run_b", branch: "tanren/spec_b" },
   ],
   policyVersion: "1",
   quarantineVersion: "1",
@@ -176,6 +182,29 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     // First check: cache miss → the gate RUNS.
     const first = await driveBatchThroughNode(FACTS, deps(store, events, gate));
     expect(first.result).toBe("pass");
+    if (first.result !== "pass") throw new Error("expected a passing exact-node verdict");
+    const authorityBinding = first.authorityBinding;
+    expect(authorityBinding).toBeDefined();
+    if (authorityBinding === undefined) throw new Error("passing node verdict omitted its proof binding");
+    expect(authorityBinding).toMatchObject({
+      baseSha: FACTS.baseSha,
+      headSha: INTEGRATED_HEAD,
+      members: [
+        { specId: "spec_a", runId: "run_a", headSha: MEMBER_HEAD_SHAS.spec_a },
+        { specId: "spec_b", runId: "run_b", headSha: MEMBER_HEAD_SHAS.spec_b },
+      ],
+      proof: { verdict: "passed" },
+    });
+    expect(authorityBinding.proof.proofReuseKey).toBe(proofReuseKey(authorityBinding.proof.keyInput));
+    expect(
+      BatchGateProofEvidenceV1.parse(store.proofs.get(authorityBinding.proof.proofReuseKey)?.evidence),
+    ).toMatchObject({
+      nodeId: authorityBinding.nodeId,
+      headSha: INTEGRATED_HEAD,
+      treeHash: "tree-deadbeef",
+      memberSetHash: authorityBinding.memberSetHash,
+      verdict: "passed",
+    });
     expect(gate).toHaveBeenCalledTimes(1);
 
     // The node's memberKey is `hash(baseSha + ordered member HEAD shas)` — the SAME the
@@ -234,6 +263,8 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const first = await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), failGate));
     expect(first.result).toBe("fail");
     expect(failGate).toHaveBeenCalledTimes(1);
+    const failedEvidence = BatchGateProofEvidenceV1.parse([...store.proofs.values()][0]?.evidence);
+    expect(failedEvidence).toMatchObject({ verdict: "failed", message: "boom", headSha: INTEGRATED_HEAD });
 
     // The SAME key now finds a FAILED proof → recompute (the gate RUNS again, never a
     // reuse). OBSERVABLE OUTCOME: the recompute's fresh PASS verdict flows back (a reuse

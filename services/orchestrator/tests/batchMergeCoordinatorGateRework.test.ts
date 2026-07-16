@@ -28,6 +28,7 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 
 const PROJECT = "project_batch_gate_rework";
 
@@ -49,6 +50,7 @@ function makeHarness(): Harness {
   const batchEvents = new RecordingBatchMergeEventEmitter();
   const gateRework = new RecordingBatchGateReworkRouter();
   const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,
     checker,
@@ -159,6 +161,7 @@ describe("BatchMergeCoordinator — batch-gate-fail → writer rework (v35 stran
     const escalator = new RecordingSpecEscalator();
     const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
+      authorityEvaluator: allowExactBatchAuthority(),
       queue,
       runner: new ScriptedMergeRunner(),
       checker,

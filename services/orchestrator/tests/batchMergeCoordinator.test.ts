@@ -13,6 +13,7 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 
 const PROJECT = "project_batch";
 
@@ -36,6 +37,7 @@ function makeHarness(maxBatchSize = 5): Harness {
   const escalator = new RecordingSpecEscalator();
   const gateRework = new RecordingBatchGateReworkRouter();
   const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,
     checker,

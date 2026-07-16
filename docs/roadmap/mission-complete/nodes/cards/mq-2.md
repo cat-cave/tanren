@@ -52,6 +52,41 @@ attribution with non-empty finding IDs; an unattributed multi-member policy
 block remains `unknown_fail_closed` / `unattributed_policy`. Batch order is
 never evidence of member blame.
 
+## Durable evidence adjudication
+
+- The native integrated gate remains the sole proof writer. Its existing
+  `integration_proofs.evidence` JSONB now carries strict `batch_gate.v1`
+  evidence bound to node, head, tree, ordered member-set hash, verdict, and all
+  six proof-key inputs. Missing, partial, stale, or mismatched evidence is
+  `unknown_fail_closed`; a verdict label alone proves nothing.
+- The active quarantine epoch is the content hash of the exact active check/test
+  exclusions. The batch gate actuates that same set and app-env. Flake projection
+  additionally requires canonical `quarantined_tests.evidence` naming the exact
+  proven head; a changed epoch or malformed row assigns no flake state.
+- A failed exact multi-member proof is durably visible as a no-blame
+  `interaction_failure` while the existing coordinator performs its typed
+  bisect. The post-pass evaluator still accepts only an exact proof-derived
+  pass/clean/resolved state; a proof race fails closed instead of inheriting
+  hard-coded green inputs.
+- W0 policy rows recover ordered members, independent survivors, and transitive
+  dependency holds only when the stable group ID matches one exact persisted
+  node and every member's persisted spec-DAG row decodes. W0 does not bind a
+  proof epoch, so this projection deliberately leaves `proofReuseKey` null.
+
+### `authorized_subset` reachability
+
+`MergeAuthorityV2.authorizeLand` is deliberately read-only and persists no
+decision. The current real land path persists only after a fresh sequential
+per-member authorization, whose subject is not the multi-member batch node.
+Therefore MQ-2 cannot honestly create an exact durable multi-member
+`authorized_subset` footprint without inventing a second writer or changing the
+frozen land protocol. The strict read-side accepts such a footprint if a future
+MQ-5 group land persists it, but today it remains empty/unknown. MQ-2 completion
+instead requires the real pre-embark SP-4 call to authorize the exact full set,
+an all-`admit` engine disposition, and the proven embark filter/effect. An empty
+HTTP `authorized_subset` projection is complete honesty and does not block MQ-2
+credit; MQ-3 owns subset selection and MQ-5 owns durable group-land liveness.
+
 ## Exact ownership
 
 ### Exclusive / new
@@ -61,8 +96,14 @@ never evidence of member blame.
 - `services/orchestrator/src/engine/merge/multiMemberAuthorityEvaluator.ts`
 - `services/orchestrator/src/engine/merge/multiMemberAuthorityEmbark.ts`
 - `services/orchestrator/src/engine/merge/multiMemberAuthorityGatherPg.ts`
+- `services/orchestrator/src/engine/merge/multiMemberAuthorityPgAuthority.ts`
+- `services/orchestrator/src/engine/merge/multiMemberAuthorityPgHost.ts`
+- `services/orchestrator/src/engine/merge/multiMemberAuthorityPgState.ts`
+- `services/orchestrator/src/engine/merge/multiMemberAuthorityEvidence.ts`
+- `services/orchestrator/src/engine/merge/multiMemberAuthorityEvidencePg.ts`
 - `services/orchestrator/src/engine/merge/authoritySignalIdentity.ts`
 - `services/orchestrator/src/routes/mergeQueue/authorityEvaluations.ts`
+- `services/orchestrator/src/routes/mergeQueue/authorityEvaluationEvidence.ts`
 - `services/dashboard/src/api/mergeQueueAuthorityEvaluations.ts`
 - `services/dashboard/src/components/mergeQueue/MultiMemberAuthorityPanel.tsx`
 - `services/orchestrator/tests/multiMemberAuthorityEvaluator.test.ts`
@@ -77,7 +118,10 @@ never evidence of member blame.
 - `engine/contracts/batchMergeCoordinator.ts`: carry exact persisted-node
   binding on integrated pass verdicts; no solver API.
 - `engine/merge/batchIntegrationNodeDrive.ts`: attach the node identity/head and
-  proof binding produced by the existing gate path.
+  proof binding produced by the existing gate path, and persist the gate result in
+  the existing `integration_proofs.evidence` JSONB (no second store).
+- `engine/merge/batchNodeGate.ts`: actuate the exact active quarantine set while
+  running the integrated gate. No new gate/event vocabulary.
 - `engine/merge/batchChecker.ts`: only propagate each queue entry's real `runId`
   through the ordered-member/build-facts seam. IN-1 owns the adjacent org
   credential/static-ref resolution lines; its merge/rebase is a serialized
@@ -91,6 +135,8 @@ never evidence of member blame.
 - Dashboard merge-queue route/body: fetch and compose one panel only.
 - Existing focused batch/classifier tests only where their seam changes require
   fixture updates.
+- `tests/batchNodeGate.test.ts`: pin exact quarantine actuation at the shared gate
+  seam.
 
 ### Hard exclusions
 
@@ -159,7 +205,7 @@ never evidence of member blame.
    - `interaction_failure` and `flake_observation` project only from complete
      durable batch/gate/quarantine evidence; incomplete evidence becomes
      `unknown_fail_closed`.
-   Cross-org detail returns an indistinguishable 404.
+     Cross-org detail returns an indistinguishable 404.
 9. The existing merge-queue screen renders the seven-way state and ordered
    member outcomes; unavailable/empty state is explicitly unknown, never green.
 10. Mutation-sensitive proofs pin:
@@ -181,15 +227,15 @@ never evidence of member blame.
 
 ## Anti-cosplay rules
 
-| Consumer kind | Embark rule | Land rule |
-| --- | --- | --- |
-| `authorized_subset` | exact admitted full set may enter sequential fresh re-auth | only sole SP-4 `land` |
-| `member_failure` | proven survivors only; attributed failures withheld | only sole SP-4 `land` |
-| `interaction_failure` | no embark; typed stop without MQ-3 search | none |
-| `flake_observation` | no policy embark, blame, or infra cosplay | none |
-| `transient_infrastructure` | existing retry/settle only | none |
-| `needs_product_decision` | no embark | none |
-| `unknown_fail_closed` | no embark | none |
+| Consumer kind              | Embark rule                                                | Land rule             |
+| -------------------------- | ---------------------------------------------------------- | --------------------- |
+| `authorized_subset`        | exact admitted full set may enter sequential fresh re-auth | only sole SP-4 `land` |
+| `member_failure`           | proven survivors only; attributed failures withheld        | only sole SP-4 `land` |
+| `interaction_failure`      | no embark; typed stop without MQ-3 search                  | none                  |
+| `flake_observation`        | no policy embark, blame, or infra cosplay                  | none                  |
+| `transient_infrastructure` | existing retry/settle only                                 | none                  |
+| `needs_product_decision`   | no embark                                                  | none                  |
+| `unknown_fail_closed`      | no embark                                                  | none                  |
 
 - No second enum masquerading as SP-4 `LandDecision`; the seven-way type is a
   consumer evaluation mapped onto the unchanged authority.

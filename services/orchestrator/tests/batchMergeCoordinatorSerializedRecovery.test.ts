@@ -8,6 +8,7 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 
 const PROJECT = "project_batch";
 
@@ -19,6 +20,7 @@ function makeCoordinator() {
     queue,
     runner,
     checker: new InMemoryBatchChecker(),
+    authorityEvaluator: allowExactBatchAuthority(),
     events,
     batchEvents: new RecordingBatchMergeEventEmitter(),
     escalator: new RecordingSpecEscalator(),
