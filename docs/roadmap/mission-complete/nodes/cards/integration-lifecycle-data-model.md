@@ -38,6 +38,7 @@ Leased redrive paths (all already present in the exhaustive final-fold manifest)
 
 - `db/migrations/0043_integration_lifecycle.sql`
 - `db/src/schemaSpineReferences.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnections.ts`
 - `services/orchestrator/src/routes/integrations/authorityWrites.ts`
 - `services/orchestrator/tests/integrationLifecycleModel.test.ts`
 - `services/orchestrator/tests/integrationRoutes.contract.test.ts`
