@@ -6,7 +6,6 @@ import type { EventStore } from "../eventStore.js";
 import type { EventPayload } from "../events/index.js";
 import {
   AFFECTED_TARGET_KINDS,
-  boundCoverageSnapshotsEqual,
   canonicalCoverageSnapshot,
   COVERAGE_EDGE_KINDS,
   selectAffectedBehaviorRevisions,
@@ -64,6 +63,13 @@ const IntegrationBindingSchema = z
     preparedHeadSha: z.string().regex(/^[0-9a-f]{40}$/u),
     treeHash: z.string().min(1),
     memberKey: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+const BoundBehaviorCoverageSnapshotSchema = z
+  .object({
+    binding: IntegrationBindingSchema,
+    snapshot: CoverageSnapshotSchema,
+    authorityFingerprint: z.string().max(1_000),
   })
   .strict();
 
@@ -144,6 +150,30 @@ function canonicalBody(value: unknown): CanonicalBody {
     return result;
   }
   throw new AffectedSelectionFactCorruptError(`unsupported canonical value: ${typeof value}`);
+}
+
+function parseCanonicalBoundSnapshot(value: unknown): BoundBehaviorCoverageSnapshot | undefined {
+  try {
+    const parsed = BoundBehaviorCoverageSnapshotSchema.safeParse(value);
+    if (!parsed.success) return undefined;
+    const canonicalSnapshot = canonicalCoverageSnapshot(parsed.data.snapshot);
+    if (canonicalJson(canonicalBody(parsed.data.snapshot)) !== canonicalJson(canonicalBody(canonicalSnapshot))) {
+      return undefined;
+    }
+    return parsed.data;
+  } catch {
+    return undefined;
+  }
+}
+
+export function boundCoverageSnapshotsEqual(left: unknown, right: unknown): boolean {
+  const parsedLeft = parseCanonicalBoundSnapshot(left);
+  const parsedRight = parseCanonicalBoundSnapshot(right);
+  return (
+    parsedLeft !== undefined &&
+    parsedRight !== undefined &&
+    canonicalJson(canonicalBody(parsedLeft)) === canonicalJson(canonicalBody(parsedRight))
+  );
 }
 
 function assertFactConsistent(fact: AffectedSelectionFactV1): AffectedSelectionFactV1 {

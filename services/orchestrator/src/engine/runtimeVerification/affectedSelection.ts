@@ -485,10 +485,3 @@ export function selectAffectedBehaviorRevisions(input: {
     excluded: buildExcluded(behaviors, selected),
   };
 }
-
-export function boundCoverageSnapshotsEqual(
-  left: BoundBehaviorCoverageSnapshot,
-  right: BoundBehaviorCoverageSnapshot,
-): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}

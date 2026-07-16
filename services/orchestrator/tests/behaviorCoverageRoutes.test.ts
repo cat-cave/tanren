@@ -76,13 +76,11 @@ function bound(): BoundBehaviorCoverageSnapshot {
       ],
     },
   };
-  return {
+  const authorityFingerprint = buildCoverageAuthorityFingerprint({
     ...input,
-    authorityFingerprint: buildCoverageAuthorityFingerprint({
-      ...input,
-      changedTargets: [{ kind: "source", targetRef: "src/a.ts" }],
-    }),
-  };
+    changedTargets: [{ kind: "source", targetRef: "src/a.ts" }],
+  });
+  return { binding: input.binding, authorityFingerprint, snapshot: input.snapshot };
 }
 
 function completeBound(
@@ -387,8 +385,9 @@ describe("behavior coverage HTTP surface", () => {
     expect(harness.append).not.toHaveBeenCalled();
   });
 
-  it("retrieves the exact CAS fact and reports node/head mutations stale", async () => {
+  it("keeps repository-shaped unchanged replay current and reports authority/data drift stale", async () => {
     const harness = buildHarness();
+    expect(Object.keys(bound())).toEqual(["binding", "authorityFingerprint", "snapshot"]);
     const created = (await (await analyze(harness)).json()) as { selection: { analysisId: Digest } };
     const id = encodeURIComponent(created.selection.analysisId);
     const exact = await harness.app.request(
@@ -401,13 +400,29 @@ describe("behavior coverage HTTP surface", () => {
       { method: "POST" },
     );
     expect(current.status).toBe(200);
-    harness.setLocked({ ...bound(), binding: { ...bound().binding, treeHash: "tree-mutated" } });
-    const stale = await harness.app.request(
-      `/orgs/org-a/projects/project-a/behavior-coverage/affected-selections/${id}/verify`,
-      { method: "POST" },
-    );
-    expect(stale.status).toBe(409);
-    await expect(stale.json()).resolves.toMatchObject({ verification: { status: "stale" } });
+    const original = bound();
+    for (const changed of [
+      { ...original, binding: { ...original.binding, treeHash: "tree-mutated" } },
+      { ...original, authorityFingerprint: "" },
+      {
+        ...original,
+        snapshot: {
+          ...original.snapshot,
+          behaviors: [
+            { ...original.snapshot.behaviors[0]!, title: "behavior a changed" },
+            original.snapshot.behaviors[1]!,
+          ],
+        },
+      },
+    ]) {
+      harness.setLocked(changed);
+      const stale = await harness.app.request(
+        `/orgs/org-a/projects/project-a/behavior-coverage/affected-selections/${id}/verify`,
+        { method: "POST" },
+      );
+      expect(stale.status).toBe(409);
+      await expect(stale.json()).resolves.toMatchObject({ verification: { status: "stale" } });
+    }
 
     harness.makeBindingUnavailable();
     const missingNode = await harness.app.request(

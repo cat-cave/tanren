@@ -21,12 +21,12 @@ import {
 } from "../../engine/repositories/behaviorCoverageEdges.js";
 import {
   AFFECTED_TARGET_KINDS,
-  boundCoverageSnapshotsEqual,
   COVERAGE_EDGE_KINDS,
   selectAffectedBehaviorRevisions,
 } from "../../engine/runtimeVerification/affectedSelection.js";
 import {
   appendAffectedSelectionEvent,
+  boundCoverageSnapshotsEqual,
   buildAffectedSelectionFact,
   persistAffectedSelectionFact,
 } from "../../engine/runtimeVerification/affectedSelectionFacts.js";

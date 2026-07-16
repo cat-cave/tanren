@@ -18,7 +18,6 @@ import {
   AffectedSelectionFactsStore,
 } from "../src/engine/repositories/affectedSelectionFacts.js";
 import {
-  boundCoverageSnapshotsEqual,
   buildCoverageAuthorityFingerprint,
   selectAffectedBehaviorRevisions,
   type BoundBehaviorCoverageSnapshot,
@@ -27,6 +26,7 @@ import {
   AFFECTED_SELECTION_FACT_MEDIA_TYPE,
   affectedSelectionEventPayload,
   appendAffectedSelectionEvent,
+  boundCoverageSnapshotsEqual,
   buildAffectedSelectionFact,
   decodeAffectedSelectionFact,
   encodeAffectedSelectionFact,
@@ -181,31 +181,78 @@ describe("immutable affected-selection CAS/event fact", () => {
     expect(decodeAffectedSelectionFact(bytes)).toEqual(unicodeFact);
   });
 
-  it("makes base, head, tree, member, authority, edge, and revision mutations stale", () => {
-    const original = bound();
+  it("compares strict bound values independent of object key insertion order and fails closed", () => {
+    const factShaped = bound();
+    const repositoryShaped: BoundBehaviorCoverageSnapshot = {
+      binding: factShaped.binding,
+      authorityFingerprint: factShaped.authorityFingerprint,
+      snapshot: factShaped.snapshot,
+    };
+    expect(Object.keys(factShaped)).toEqual(["binding", "snapshot", "authorityFingerprint"]);
+    expect(Object.keys(repositoryShaped)).toEqual(["binding", "authorityFingerprint", "snapshot"]);
+    expect(boundCoverageSnapshotsEqual(factShaped, repositoryShaped)).toBe(true);
+
     const mutations: BoundBehaviorCoverageSnapshot[] = [
-      { ...original, binding: { ...original.binding, baseSha: "9".repeat(40) } },
-      { ...original, binding: { ...original.binding, preparedHeadSha: "d".repeat(40) } },
-      { ...original, binding: { ...original.binding, treeHash: "tree-mutated" } },
-      { ...original, binding: { ...original.binding, memberKey: "e".repeat(64) } },
+      { ...factShaped, binding: { ...factShaped.binding, baseSha: "9".repeat(40) } },
+      { ...factShaped, binding: { ...factShaped.binding, preparedHeadSha: "d".repeat(40) } },
+      { ...factShaped, binding: { ...factShaped.binding, treeHash: "tree-mutated" } },
+      { ...factShaped, binding: { ...factShaped.binding, memberKey: "e".repeat(64) } },
       {
-        ...original,
+        ...factShaped,
         snapshot: {
-          ...original.snapshot,
-          behaviors: [{ ...original.snapshot.behaviors[0]!, contentDigest: parseDigest(`sha256:${"f".repeat(64)}`) }],
+          ...factShaped.snapshot,
+          behaviors: [{ ...factShaped.snapshot.behaviors[0]!, contentDigest: parseDigest(`sha256:${"f".repeat(64)}`) }],
         },
       },
       {
-        ...original,
+        ...factShaped,
         snapshot: {
-          ...original.snapshot,
-          behaviors: [{ ...original.snapshot.behaviors[0]!, edges: [] }],
+          ...factShaped.snapshot,
+          behaviors: [{ ...factShaped.snapshot.behaviors[0]!, edges: [] }],
         },
       },
-      { ...original, snapshot: { ...original.snapshot, behaviors: [] } },
-      { ...original, authorityFingerprint: "" },
+      { ...factShaped, snapshot: { ...factShaped.snapshot, behaviors: [] } },
+      { ...factShaped, authorityFingerprint: "" },
     ];
-    for (const mutation of mutations) expect(boundCoverageSnapshotsEqual(original, mutation)).toBe(false);
+    for (const mutation of mutations) expect(boundCoverageSnapshotsEqual(repositoryShaped, mutation)).toBe(false);
+
+    const malformed: unknown[] = [
+      { binding: factShaped.binding, snapshot: factShaped.snapshot },
+      {
+        ...factShaped,
+        binding: {
+          integrationNodeId: factShaped.binding.integrationNodeId,
+          baseSha: factShaped.binding.baseSha,
+          preparedHeadSha: factShaped.binding.preparedHeadSha,
+          treeHash: factShaped.binding.treeHash,
+        },
+      },
+      { ...factShaped, authorityFingerprint: 1 },
+      {
+        ...factShaped,
+        snapshot: {
+          ...factShaped.snapshot,
+          behaviors: [{ ...factShaped.snapshot.behaviors[0]!, contentDigest: "not-a-digest" }],
+        },
+      },
+    ];
+    for (const value of malformed) expect(boundCoverageSnapshotsEqual(repositoryShaped, value)).toBe(false);
+
+    const extra = { ...repositoryShaped, unexpected: true };
+    expect(boundCoverageSnapshotsEqual(extra, extra)).toBe(false);
+    const nestedExtra = {
+      ...repositoryShaped,
+      snapshot: {
+        ...repositoryShaped.snapshot,
+        behaviors: [
+          {
+            ...repositoryShaped.snapshot.behaviors[0]!,
+            edges: [{ ...repositoryShaped.snapshot.behaviors[0]!.edges[0]!, unexpected: true }],
+          },
+        ],
+      },
+    };
+    expect(boundCoverageSnapshotsEqual(nestedExtra, nestedExtra)).toBe(false);
   });
 
   it("requires an exact-scope event before CAS resolution and rejects event/body drift", async () => {
