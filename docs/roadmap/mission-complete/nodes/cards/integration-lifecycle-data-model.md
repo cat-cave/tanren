@@ -39,13 +39,17 @@ Leased redrive paths (all already present in the exhaustive final-fold manifest)
 - `db/migrations/0043_integration_lifecycle.sql`
 - `db/src/schemaSpineReferences.ts`
 - `services/orchestrator/src/engine/repositories/integrationConnections.ts`
+- `services/orchestrator/src/routes/integrations/publicLinkOpStatus.ts` (new)
 - `services/orchestrator/src/routes/integrations/authorityWrites.ts`
 - `services/orchestrator/tests/integrationLifecycleModel.test.ts`
 - `services/orchestrator/tests/integrationRoutes.contract.test.ts`
+- `services/orchestrator/tests/integrationRoutes.linkOutcomes.contract.test.ts` (new)
+- `services/dashboard/src/api/integrations.ts`
 - `services/dashboard/src/api/integrationsClient.ts`
 - `services/dashboard/src/components/integrations/IntegrationsBody.tsx`
 - `services/dashboard/src/routes/integrations/index.tsx`
 - `services/dashboard/tests/integrations.render.test.ts`
+- `services/dashboard/tests/integrations.linkOutcomes.render.test.ts` (new)
 - this card
 
 The correction removes every data-conversion `UPDATE` from `0043` and makes the
@@ -76,7 +80,7 @@ changed patch context). This is not a repair delta layered on an undeclared bran
 publish only the lineage rooted at the exact base above.
 
 The manifest below is exhaustive relative to the exact publication target through
-the converged candidate: **370 paths = 96 added + 263 modified + 11 deleted**. Each
+the converged candidate: **373 paths = 99 added + 263 modified + 11 deleted**. Each
 whitespace-delimited token is `STATUS:path`, where `STATUS` is `A`, `M`, or `D`.
 No changed or untracked path may sit outside it. This remains a bounded P1 Slice 1
 foundation: binding workers, rotation UI, the complete lifecycle event surface,
@@ -93,6 +97,7 @@ A:db/migrations/0043_integration_lifecycle.sql A:db/migrations/meta/0043_snapsho
 A:db/src/schemaIntegrationConnections.ts A:db/src/schemaIntegrationEnvironment.ts A:db/src/schemaIntegrationOperations.ts
 A:db/src/schemaIntegrationPolicy.ts A:db/src/schemaIntegrationRequirements.ts A:db/src/schemaIntegrationSelection.ts
 A:db/src/schemaProjectDerivations.ts A:db/src/schemaSpineReferences.ts A:docs/roadmap/mission-complete/nodes/cards/integration-lifecycle-data-model.md
+A:services/dashboard/tests/integrations.linkOutcomes.render.test.ts
 A:services/orchestrator/src/engine/contracts/integrationAuthority.ts A:services/orchestrator/src/engine/contracts/integrationCatalog.ts A:services/orchestrator/src/engine/contracts/integrationSecretStore.ts
 A:services/orchestrator/src/engine/forge/intake/sourceTerminalization.ts A:services/orchestrator/src/engine/forge/intake/sourceValidation.ts A:services/orchestrator/src/engine/forge/interview/deployIneligibleError.ts
 A:services/orchestrator/src/engine/forge/interview/deriveProductGraph.ts A:services/orchestrator/src/engine/integrations/integrationAuthorityEligibility.ts A:services/orchestrator/src/engine/integrations/integrationAuthorityImpl.ts
@@ -106,6 +111,7 @@ A:services/orchestrator/src/engine/repositories/integrationConnections.ts A:serv
 A:services/orchestrator/src/engine/repositories/integrationProjectAccess.ts A:services/orchestrator/src/engine/repositories/integrationQuery.ts A:services/orchestrator/src/engine/repositories/projectDerivationReceipts.ts
 A:services/orchestrator/src/engine/repositories/projectDerivations.ts A:services/orchestrator/src/engine/workflow/projectCreate.ts A:services/orchestrator/src/engine/workflow/projectDerivationShell.ts
 A:services/orchestrator/src/routes/inbox/sourceRecovery.ts A:services/orchestrator/src/routes/integrations/authorityPayloads.ts A:services/orchestrator/src/routes/integrations/authorityWrites.ts
+A:services/orchestrator/src/routes/integrations/publicLinkOpStatus.ts
 A:services/orchestrator/src/routes/integrations/linkSaga.ts A:services/orchestrator/src/routes/integrations/principalSelectionRoute.ts A:services/orchestrator/src/routes/integrations/selectedPrincipalSaga.ts
 A:services/orchestrator/src/routes/integrations/verifierTransition.ts A:services/orchestrator/src/routes/projects/greenfieldCreateStateMachine.ts A:services/orchestrator/src/routes/projects/greenfieldDeployAuthority.ts
 A:services/orchestrator/src/routes/projects/greenfieldDeployPrepare.ts A:services/orchestrator/tests/conformance/appEnvironment.conformance.test.ts A:services/orchestrator/tests/conformance/buildDeployAdapter.conformance.test.ts
@@ -119,6 +125,7 @@ A:services/orchestrator/tests/integrationAuthority.exactOperation.test.ts A:serv
 A:services/orchestrator/tests/integrationAuthorityRaces.test.ts A:services/orchestrator/tests/integrationConnectionSaga.integration.test.ts A:services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts
 A:services/orchestrator/tests/integrationFinalizationAuthority.test.ts A:services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts A:services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts
 A:services/orchestrator/tests/integrationLifecycleModel.test.ts A:services/orchestrator/tests/integrationLifecycleRls.integration.test.ts A:services/orchestrator/tests/integrationOperationDurability.integration.test.ts
+A:services/orchestrator/tests/integrationRoutes.linkOutcomes.contract.test.ts
 A:services/orchestrator/tests/integrationVaultCas.integration.test.ts A:services/orchestrator/tests/materializeTemplateReconcile.test.ts A:services/orchestrator/tests/projectDerivationActivationEvidence.rls.integration.test.ts
 A:services/orchestrator/tests/projectDerivationLifecycle.rls.integration.test.ts A:services/orchestrator/tests/projectDerivationResponseLoss.test.ts A:services/orchestrator/tests/rlsRunLifecycleCredentials.fixtures.ts
 D:db/src/schemaIntegrations.ts
