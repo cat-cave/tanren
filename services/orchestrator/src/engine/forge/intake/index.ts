@@ -35,3 +35,10 @@ export {
   sweepStuckCandidates,
   type WebhookProcessorDeps,
 } from "./webhookProcessor.js";
+export { terminalizeInboxSource, deferInboxSourceRetry, type PermanentSourceFailure } from "./sourceTerminalization.js";
+export {
+  loadRunnableInboxSource,
+  isInboxSourceBoundaryError,
+  InboxSourceNotFoundError,
+  InboxSourceDecodeError,
+} from "./sourceValidation.js";

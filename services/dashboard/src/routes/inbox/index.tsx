@@ -9,6 +9,7 @@
  *   POST /inbox/candidates/:id/fold            fold into a live run
  *   POST /inbox/candidates/:id/dismiss         dismiss
  *   POST /inbox/candidates/:id/close-duplicate close as duplicate
+ *   POST /inbox/sources/:id/recover             retry a repaired terminal source
  *
  * The inbox client is its OWN api module (`api/inboxClient.ts`) per the screen-isolation
  * integration lesson; the route instantiates it with the forwarded cookie.
@@ -65,4 +66,16 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
       return c.redirect("/inbox");
     });
   }
+
+  app.post("/inbox/sources/:id/recover", async (c) => {
+    const ctx = await loadShellContext(c, deps, { activeNavId: "inbox" });
+    if (ctx.org !== undefined) {
+      const body = await c.req.parseBody();
+      const expectedObservedAt = body["expectedObservedAt"];
+      if (typeof expectedObservedAt === "string") {
+        await (await writeClient(c, deps)).recover(ctx.org.id, c.req.param("id"), expectedObservedAt);
+      }
+    }
+    return c.redirect("/inbox");
+  });
 }

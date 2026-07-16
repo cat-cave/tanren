@@ -45,10 +45,9 @@ export async function ensureIssuesInboxSource(input: EnsureIssuesSourceInput): P
       kind: "issues",
       name: `github · ${repo.owner}/${repo.name}`,
       detail: "auto-created on repo link",
-      // The one GitHub issues connector config (kind is the discriminator). The
-      // webhook-provision endpoint later adds a `webhookSecretRef` here; until then
-      // the poller pulls issues on its interval.
-      config: { owner: repo.owner, repo: repo.name },
+      // The one provider-only GitHub config. Webhook authority is internal source
+      // metadata, never part of this reusable HTTP/UI config shape.
+      config: { owner: repo.owner, repo: repo.name, labels: [] },
       enabled: true,
       autoRoute: false,
     });

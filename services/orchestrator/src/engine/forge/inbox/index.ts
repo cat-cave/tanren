@@ -3,6 +3,7 @@
 
 export {
   SourceKind,
+  InboxSourceState,
   InboxSource,
   InboxSourceAttention,
   ActiveGitHubIssuesConfig,
@@ -11,7 +12,6 @@ export {
   SentryConfig,
   parseInboxSourceCreateConfig,
   parsePersistedInboxSourceConfig,
-  terminalInboxSourceConfig,
   TriageVerdict,
   TriageRoutableSpec,
   TriageEntityAnchor,
@@ -31,6 +31,8 @@ export {
   IntakeSourceAuthError,
   IntakeSourceAuthorityError,
   IntakeSourceFetchError,
+  IntakeSourceRateLimitError,
+  IntakeSourceResourceError,
   UnsupportedInboxProviderError,
   assertIntakeResponseOk,
   assertNoSourceCredentialOverride,

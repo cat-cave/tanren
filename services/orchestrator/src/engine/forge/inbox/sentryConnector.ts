@@ -37,6 +37,7 @@ export interface SentryHttpRequest {
 export interface SentryHttpResponse {
   status: number;
   body: unknown;
+  headers?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface SentryHttpClient {
@@ -62,8 +63,26 @@ export class FetchSentryHttpClient implements SentryHttpClient {
       },
     });
     const text = await response.text();
-    return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
+    let body: unknown;
+    try {
+      body = text === "" ? undefined : JSON.parse(text);
+    } catch {
+      body = text;
+    }
+    return {
+      status: response.status,
+      body,
+      headers: { "retry-after": response.headers.get("retry-after") ?? undefined },
+    };
   }
+}
+
+function retryAfterMs(value: string | undefined, now = Date.now()): number | undefined {
+  if (value === undefined) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const deadline = Date.parse(value);
+  return Number.isNaN(deadline) ? undefined : Math.max(0, deadline - now);
 }
 
 export interface SentryConnectorDeps {
@@ -214,7 +233,12 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
       // transient), NEVER an empty list. Only a genuine 200-with-an-array is "no
       // unresolved issues". A 200 whose body is not the expected array is a failed
       // read (shape changed / error envelope) — also LOUD.
-      assertIntakeResponseOk("sentry", response.status);
+      assertIntakeResponseOk(
+        "sentry",
+        response.status,
+        "provider response",
+        retryAfterMs(response.headers?.["retry-after"]),
+      );
       if (!Array.isArray(response.body)) {
         throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
       }

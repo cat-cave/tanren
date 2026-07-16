@@ -886,3 +886,112 @@ ALTER TABLE "project_app_env" FORCE ROW LEVEL SECURITY
 ALTER TABLE "project_integration_grant_selections" FORCE ROW LEVEL SECURITY
 --> statement-breakpoint
 ALTER TABLE "project_derivations" FORCE ROW LEVEL SECURITY
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD COLUMN "state" text DEFAULT 'active' NOT NULL
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD COLUMN "attention_code" text
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD COLUMN "attention_message" text
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD COLUMN "attention_observed_at" timestamp with time zone
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD COLUMN "webhook_secret_ref" text
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD COLUMN "retry_not_before" timestamp with time zone
+--> statement-breakpoint
+UPDATE "inbox_sources"
+   SET "state" = 'needs_attention',
+       "enabled" = 'false',
+       "attention_code" = "config" #>> '{attention,code}',
+       "attention_message" = "config" #>> '{attention,message}',
+       "attention_observed_at" = ("config" #>> '{attention,observedAt}')::timestamptz
+ WHERE "config"->>'state' = 'needs_attention'
+--> statement-breakpoint
+UPDATE "inbox_sources"
+   SET "webhook_secret_ref" = "config"->>'webhookSecretRef',
+       "config" = jsonb_strip_nulls(jsonb_build_object(
+         'owner', "config"->'owner',
+         'repo', "config"->'repo',
+         'labels', COALESCE("config"->'labels', '[]'::jsonb),
+         'pollIntervalMs', "config"->'pollIntervalMs'
+       ))
+ WHERE "kind" = 'issues'
+--> statement-breakpoint
+UPDATE "inbox_sources"
+   SET "config" = jsonb_strip_nulls(jsonb_build_object(
+         'org', "config"->'org',
+         'project', "config"->'project',
+         'baseUrl', COALESCE("config"->'baseUrl', '"https://sentry.io"'::jsonb),
+         'query', "config"->'query',
+         'level', "config"->'level',
+         'pollIntervalMs', "config"->'pollIntervalMs',
+         'managedBy', "config"->'managedBy'
+       ))
+ WHERE "kind" = 'errors'
+--> statement-breakpoint
+UPDATE "inbox_sources" SET "config" = '{}'::jsonb WHERE "kind" IN ('manual','scheduled_audit')
+--> statement-breakpoint
+UPDATE "inbox_sources"
+   SET "config" = CASE WHEN "config"->>'ciInsights' = 'true'
+                       THEN '{"ciInsights":true}'::jsonb ELSE '{}'::jsonb END
+ WHERE "kind" = 'system'
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD CONSTRAINT "inbox_sources_state_check" CHECK ("inbox_sources"."state" IN ('active','needs_attention'))
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD CONSTRAINT "inbox_sources_attention_check" CHECK ((
+  "inbox_sources"."state" = 'active'
+  AND "inbox_sources"."attention_code" IS NULL
+  AND "inbox_sources"."attention_message" IS NULL
+  AND "inbox_sources"."attention_observed_at" IS NULL
+) OR (
+  "inbox_sources"."state" = 'needs_attention'
+  AND "inbox_sources"."enabled" = 'false'
+  AND "inbox_sources"."attention_code" IN ('unsupported_provider','invalid_config','credential_unavailable','authority_unavailable','resource_unavailable')
+  AND "inbox_sources"."attention_message" IS NOT NULL
+  AND "inbox_sources"."attention_observed_at" IS NOT NULL
+))
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" DROP CONSTRAINT "inbox_sources_project_id_projects_project_id_fk"
+--> statement-breakpoint
+ALTER TABLE "candidates" DROP CONSTRAINT "candidates_source_id_inbox_sources_id_fk"
+--> statement-breakpoint
+ALTER TABLE "candidates" DROP CONSTRAINT "candidates_project_id_projects_project_id_fk"
+--> statement-breakpoint
+ALTER TABLE "candidates" DROP CONSTRAINT "candidates_resolved_spec_id_specs_spec_id_fk"
+--> statement-breakpoint
+ALTER TABLE "webhook_events" DROP CONSTRAINT "webhook_events_source_id_inbox_sources_id_fk"
+--> statement-breakpoint
+CREATE UNIQUE INDEX "inbox_sources_org_source_unique" ON "inbox_sources" USING btree ("org_id","id")
+--> statement-breakpoint
+DROP INDEX "candidates_source_external_unique"
+--> statement-breakpoint
+CREATE UNIQUE INDEX "candidates_source_external_unique" ON "candidates" USING btree ("org_id","source_id","external_id")
+--> statement-breakpoint
+CREATE INDEX "inbox_sources_retry_not_before" ON "inbox_sources" USING btree ("org_id","retry_not_before")
+--> statement-breakpoint
+ALTER TABLE "inbox_sources" ADD CONSTRAINT "inbox_sources_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action
+--> statement-breakpoint
+ALTER TABLE "candidates" ADD CONSTRAINT "candidates_source_org_fk" FOREIGN KEY ("org_id","source_id") REFERENCES "public"."inbox_sources"("org_id","id") ON DELETE no action ON UPDATE no action
+--> statement-breakpoint
+ALTER TABLE "candidates" ADD CONSTRAINT "candidates_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action
+--> statement-breakpoint
+ALTER TABLE "candidates" ADD CONSTRAINT "candidates_resolved_spec_fk" FOREIGN KEY ("org_id","resolved_spec_id") REFERENCES "public"."specs"("org_id","spec_id") ON DELETE no action ON UPDATE no action
+--> statement-breakpoint
+ALTER TABLE "webhook_events" ADD CONSTRAINT "webhook_events_source_org_fk" FOREIGN KEY ("org_id","source_id") REFERENCES "public"."inbox_sources"("org_id","id") ON DELETE no action ON UPDATE no action
+--> statement-breakpoint
+CREATE FUNCTION "enforce_candidate_source_project_lineage"() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE source_project text;
+BEGIN
+  SELECT project_id INTO source_project
+    FROM inbox_sources
+   WHERE id = NEW.source_id AND org_id = NEW.org_id;
+  IF source_project IS NOT NULL AND NEW.project_id IS DISTINCT FROM source_project THEN
+    RAISE EXCEPTION 'candidate project does not match pinned inbox source';
+  END IF;
+  RETURN NEW;
+END;
+$$
+--> statement-breakpoint
+CREATE TRIGGER "candidates_source_project_lineage"
+BEFORE INSERT OR UPDATE OF source_id, org_id, project_id ON "candidates"
+FOR EACH ROW EXECUTE FUNCTION "enforce_candidate_source_project_lineage"()

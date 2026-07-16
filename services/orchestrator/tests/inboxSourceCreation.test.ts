@@ -23,6 +23,14 @@ const ACTOR: ActorContext = {
   source: "session",
 };
 
+const MEMBER: ActorContext = {
+  userId: "user_member",
+  orgId: "org_a",
+  projectId: null,
+  scopes: ["org:member"],
+  source: "session",
+};
+
 const noopAnswerer: TriageAnswerer = {
   async triage() {
     throw new Error("triage should not run for a source-creation test");
@@ -65,7 +73,7 @@ function stubPool(): { pool: pg.Pool; sourceInserts: Array<Record<string, unknow
 
 function app(
   pool: pg.Pool,
-  options: { secrets?: FakeSecretStore; providerCalls?: unknown[] } = {},
+  options: { secrets?: FakeSecretStore; providerCalls?: unknown[]; actor?: ActorContext } = {},
 ): Hono<ActorContextEnv> {
   const inbox = createInboxRoutes({
     pool,
@@ -80,7 +88,7 @@ function app(
   });
   const root = new Hono<ActorContextEnv>();
   root.use("*", async (c, next) => {
-    c.set("actor", ACTOR);
+    c.set("actor", options.actor ?? ACTOR);
     await next();
   });
   root.route("/orgs", inbox);
@@ -112,9 +120,23 @@ function storedIssuesPool(config: Record<string, unknown>): pg.Pool {
     if (sql.includes("FROM inbox_sources WHERE id = $1")) {
       return { rows: [row], rowCount: 1 };
     }
+    if (sql.startsWith("UPDATE inbox_sources SET state = 'needs_attention'")) {
+      return { rows: [{ id: row.id }], rowCount: 1 };
+    }
+    if (sql.startsWith("INSERT INTO events")) return { rows: [{ id: "1" }], rowCount: 1 };
+    if (
+      sql === "BEGIN" ||
+      sql === "COMMIT" ||
+      sql === "ROLLBACK" ||
+      sql.startsWith("SET LOCAL") ||
+      sql.startsWith("SELECT pg_notify") ||
+      sql.startsWith("NOTIFY tanren_notify")
+    ) {
+      return { rows: [], rowCount: 0 };
+    }
     throw new Error(`unexpected query after unsupported provider boundary: ${sql}`);
   };
-  return { query } as unknown as pg.Pool;
+  return { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool;
 }
 
 describe("inbox source creation — auto-route requires a project (Loop 6)", () => {
@@ -133,6 +155,7 @@ describe("inbox source creation — auto-route requires a project (Loop 6)", () 
       kind: "system",
       name: "project intake",
       projectId: "project_a",
+      config: { ciInsights: true },
       autoRoute: true,
     });
     expect(res.status).toBe(201);
@@ -161,6 +184,32 @@ describe("inbox source creation — auto-route requires a project (Loop 6)", () 
 });
 
 describe("inbox issues source boundary — removed providers never reach authority or transport", () => {
+  it("denies an ordinary member's manual ingest before DB, secret, provider, or candidate effects", async () => {
+    let dbCalls = 0;
+    const pool = {
+      query: async () => {
+        dbCalls += 1;
+        throw new Error("authorization must precede DB access");
+      },
+    } as unknown as pg.Pool;
+    const secrets = new FakeSecretStore();
+    const secretRead = vi.spyOn(secrets, "get");
+    const providerCalls: unknown[] = [];
+
+    const res = await app(pool, { secrets, providerCalls, actor: MEMBER }).request(
+      "/orgs/org_a/inbox/sources/source_a/ingest",
+      { method: "POST" },
+    );
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: "org_admin_required" });
+    expect({ dbCalls, secretReads: secretRead.mock.calls.length, providerCalls: providerCalls.length }).toEqual({
+      dbCalls: 0,
+      secretReads: 0,
+      providerCalls: 0,
+    });
+  });
+
   it.each([
     ["linear", { provider: "linear", team: "ENG", tokenRef: "credential/linear/old" }],
     ["jira", { provider: "jira", baseUrl: "https://jira.example", projectKey: "ENG" }],
@@ -184,7 +233,6 @@ describe("inbox issues source boundary — removed providers never reach authori
     expect(res.status).toBe(201);
     expect(sourceInserts).toHaveLength(1);
     expect(sourceInserts[0]!.config).toEqual({
-      state: "active",
       owner: "cat-cave",
       repo: "app",
       labels: [],
@@ -241,7 +289,7 @@ describe("inbox issues source boundary — removed providers never reach authori
     ["jira", { provider: "jira", baseUrl: "https://jira.example", projectKey: "ENG" }],
     ["raw tokenRef", { provider: "github", owner: "cat-cave", repo: "app", tokenRef: "credential/old" }],
     ["foreign staticRef", { owner: "cat-cave", repo: "app", staticRef: "credential/github/org/org_b/default" }],
-  ])("returns a stable 400 for a persisted %s source before secret/provider I/O", async (_label, config) => {
+  ])("parks a persisted %s source before secret/provider I/O", async (_label, config) => {
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "credential/github/org/org_b/default", value: "org-b-token" });
     const secretRead = vi.spyOn(secrets, "get");
@@ -250,8 +298,8 @@ describe("inbox issues source boundary — removed providers never reach authori
       "/orgs/org_a/inbox/sources/source_removed_provider/ingest",
       { method: "POST" },
     );
-    expect(res.status).toBe(400);
-    expect((await res.json()) as unknown).toMatchObject({ error: "unsupported_inbox_provider" });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as unknown).toMatchObject({ error: "inbox_source_needs_attention" });
     expect(secretRead).not.toHaveBeenCalled();
     expect(providerCalls).toEqual([]);
   });

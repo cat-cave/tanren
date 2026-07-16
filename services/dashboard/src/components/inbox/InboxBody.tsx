@@ -13,13 +13,7 @@
  * to the discovery surface scoped to the candidate's project.
  */
 
-import type {
-  Candidate,
-  InboxSnapshot,
-  InboxSource,
-  InboxSourceAttention,
-  TriageVerdict,
-} from "../../api/inboxTypes.js";
+import type { Candidate, InboxSnapshot, InboxSource, TriageVerdict } from "../../api/inboxTypes.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { KpiStrip, PageHead } from "../project/shared.js";
@@ -51,27 +45,12 @@ function isResolved(c: Candidate): boolean {
   return ["auto_routed", "accepted", "folded", "dismissed", "closed_duplicate"].includes(c.status);
 }
 
-function sourceAttention(source: InboxSource): InboxSourceAttention | undefined {
-  const raw = source.config["attention"];
-  if (source.config["state"] !== "needs_attention" || typeof raw !== "object" || raw === null) return undefined;
-  const candidate = raw as Partial<InboxSourceAttention>;
-  if (
-    candidate.state !== "needs_attention" ||
-    typeof candidate.code !== "string" ||
-    typeof candidate.message !== "string" ||
-    typeof candidate.observedAt !== "string"
-  ) {
-    return undefined;
-  }
-  return candidate as InboxSourceAttention;
-}
-
-function SourceRow(props: { source: InboxSource }) {
+function SourceRow(props: { source: InboxSource; csrfToken: string | undefined }) {
   const { source } = props;
-  const attention = sourceAttention(source);
+  const attention = source.attention;
   return (
     <div
-      class={`source-row${source.enabled ? " on" : ""}${attention === undefined ? "" : " needs-attention"}`}
+      class={`source-row${source.enabled ? " on" : ""}${attention === null ? "" : " needs-attention"}`}
       data-source-id={source.id}
       data-source-attention={attention?.code}
     >
@@ -82,11 +61,20 @@ function SourceRow(props: { source: InboxSource }) {
           {source.autoRoute && <span class="auto-tag">auto</span>}
         </div>
         <div class="sd">{source.detail}</div>
-        {attention !== undefined && <div class="sd">needs attention · {attention.message}</div>}
+        {attention !== null && <div class="sd">needs attention · {attention.message}</div>}
       </div>
       <div class={`toggle${source.enabled ? " on" : ""}`}>
-        {attention === undefined ? (source.enabled ? "on" : "off") : "attention"}
+        {attention === null ? (source.enabled ? "on" : "off") : "attention"}
       </div>
+      {attention !== null && (
+        <form method="post" action={`/inbox/sources/${source.id}/recover`}>
+          <CsrfField token={props.csrfToken} />
+          <input type="hidden" name="expectedObservedAt" value={attention.observedAt} />
+          <button class="btn ghost" type="submit">
+            retry after repair
+          </button>
+        </form>
+      )}
     </div>
   );
 }
@@ -279,18 +267,18 @@ export function InboxBody(props: InboxBodyProps) {
                 <div class="source-note">
                   <div class="nlabel">no sources yet</div>
                   <div class="nbody">
-                    Connect a GitHub Issues feed (or any polled endpoint) to start ingesting candidates.
+                    Connect GitHub Issues or Sentry, or file a manual report, to start ingesting candidates.
                   </div>
                 </div>
               )}
               {sources.map((source) => (
-                <SourceRow source={source} />
+                <SourceRow source={source} csrfToken={csrfToken} />
               ))}
               <div class="source-note">
                 <div class="nlabel">no hardcoded sources</div>
                 <div class="nbody">
-                  Any webhook or polled endpoint can feed candidates. System sources like scheduled audits auto-route
-                  their findings; external issues wait for your call.
+                  GitHub and Sentry feed external work. Scheduled audits and CI insights auto-route their findings;
+                  external issues wait for your call.
                 </div>
               </div>
             </div>

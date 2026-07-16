@@ -17,7 +17,7 @@
 // by its stable `name` + a `config.ciInsights` marker — no migration, the source
 // is just a row in the existing table (the PR3 constraint).
 
-import type { InboxSource } from "./types.js";
+import { SystemSourceConfig, type InboxSource } from "./types.js";
 
 /** The stable display name of the org-wide CI-insights system source (one per org). */
 export const CI_INSIGHTS_SOURCE_NAME = "ci insights";
@@ -41,5 +41,5 @@ export function slowExternalId(suite: string): string {
  * source carrying the CI-insights `config` marker (the find-or-create stamps it).
  */
 export function isCiInsightSource(source: Pick<InboxSource, "kind" | "config">): boolean {
-  return source.kind === "system" && source.config[CI_INSIGHTS_CONFIG_MARKER] === true;
+  return source.kind === "system" && SystemSourceConfig.safeParse(source.config).success;
 }

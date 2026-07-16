@@ -117,14 +117,18 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     if (snapshot === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    return c.json({
-      id: row.id,
-      kind: row.kind,
-      login: row.login,
-      displayName: row.display_name,
-      config: migrateOrgConfig(row.config),
-      revision: snapshot.revision,
-    });
+    try {
+      return c.json({
+        id: row.id,
+        kind: row.kind,
+        login: row.login,
+        displayName: row.display_name,
+        config: bindOrgGithubCredentialRefs(migrateOrgConfig(snapshot.config), orgId),
+        revision: snapshot.revision,
+      });
+    } catch {
+      return c.json({ error: "invalid_org_config" }, 409);
+    }
   });
 
   app.patch("/:orgId", async (c) => {

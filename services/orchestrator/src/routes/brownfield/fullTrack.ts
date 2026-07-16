@@ -348,6 +348,10 @@ async function fetchIssuesFor(
     config: { owner: repo.owner, repo: repo.name, labels: [] },
     enabled: true,
     autoRoute: false,
+    state: "active",
+    attention: null,
+    retryNotBefore: null,
+    webhookConfigured: false,
   });
 }
 

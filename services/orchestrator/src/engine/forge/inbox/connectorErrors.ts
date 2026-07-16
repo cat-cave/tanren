@@ -142,6 +142,34 @@ export class IntakeSourceFetchError extends Error {
   }
 }
 
+/** A provider-directed transient delay. Pollers persist the deadline and move on. */
+export class IntakeSourceRateLimitError extends Error {
+  readonly retriable = true as const;
+  readonly status = 429 as const;
+
+  constructor(
+    readonly provider: IntakeSourceProvider,
+    readonly retryAfterMs: number,
+  ) {
+    super(`${provider} intake source is rate limited; retry after ${retryAfterMs}ms`);
+    this.name = "IntakeSourceRateLimitError";
+  }
+}
+
+/** A stable provider resource/configuration 4xx that cannot self-heal by retry. */
+export class IntakeSourceResourceError extends Error {
+  readonly retriable = false as const;
+
+  constructor(
+    readonly provider: IntakeSourceProvider,
+    readonly status: number,
+    detail: string,
+  ) {
+    super(`${provider} intake resource unavailable (HTTP ${status}) — ${detail}`);
+    this.name = "IntakeSourceResourceError";
+  }
+}
+
 /**
  * Classify an intake-source HTTP response. A 200 with an array (or, for the
  * GraphQL/REST shapes, a parseable body) is the caller's to map. A 401/403 is a
@@ -149,10 +177,21 @@ export class IntakeSourceFetchError extends Error {
  * {@link IntakeSourceFetchError}. The caller checks the body shape AFTER this for
  * the 200 case and throws {@link IntakeSourceFetchError} on an unparseable 200.
  */
-export function assertIntakeResponseOk(provider: IntakeSourceProvider, status: number, detail = ""): void {
+export function assertIntakeResponseOk(
+  provider: IntakeSourceProvider,
+  status: number,
+  detail = "",
+  retryAfterMs?: number,
+): void {
   if (status === 200) return;
   if (status === 401 || status === 403) {
     throw new IntakeSourceAuthError(provider, status, detail === "" ? "credential rejected" : detail);
+  }
+  if (status === 429) {
+    throw new IntakeSourceRateLimitError(provider, retryAfterMs ?? 60_000);
+  }
+  if (status >= 400 && status < 500 && ![408, 409, 425].includes(status)) {
+    throw new IntakeSourceResourceError(provider, status, detail === "" ? "resource rejected" : detail);
   }
   throw new IntakeSourceFetchError(provider, status, detail === "" ? "unexpected response" : detail);
 }

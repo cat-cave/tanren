@@ -31,6 +31,7 @@ import { CredentialRefOwnershipError } from "../../credentials/refNamespace.js";
 import {
   IntakeSourceAuthError,
   IntakeSourceAuthorityError,
+  IntakeSourceResourceError,
   UnsupportedInboxProviderError,
   assertSupportedIssuesProvider,
 } from "../inbox/connectorErrors.js";
@@ -86,7 +87,12 @@ export class IntakeGithubCredentialMissingError extends Error {
  * Genuinely transient errors (network, 5xx, rate-limit) return undefined.
  */
 export interface PermanentInboxSourceFailure {
-  code: "unsupported_provider" | "invalid_config" | "credential_unavailable" | "authority_unavailable";
+  code:
+    | "unsupported_provider"
+    | "invalid_config"
+    | "credential_unavailable"
+    | "authority_unavailable"
+    | "resource_unavailable";
   message: string;
 }
 
@@ -119,6 +125,12 @@ export function classifyPermanentInboxSourceError(error: unknown): PermanentInbo
     return {
       code: "authority_unavailable",
       message: "The selected integration grant is unavailable. Repair the project selection or grant.",
+    };
+  }
+  if (error instanceof IntakeSourceResourceError) {
+    return {
+      code: "resource_unavailable",
+      message: "The configured provider resource is missing or rejected. Repair the source coordinates.",
     };
   }
   return undefined;

@@ -25,7 +25,7 @@
 // the LLM/Forge call is mockable and nothing here couples to a provider.
 
 import { sql } from "drizzle-orm";
-import { check, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { check, foreignKey, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
 
 export const inboxSources = pgTable(
@@ -37,12 +37,12 @@ export const inboxSources = pgTable(
       .references(() => organizations.id),
     // A source may be org-wide (e.g. a manual paste inbox) or pinned to one
     // project (e.g. a repo's GitHub Issues feed). Null = org-wide.
-    projectId: text("project_id").references(() => projects.projectId),
+    projectId: text("project_id"),
     kind: text("kind").notNull(),
     name: text("name").notNull(),
     detail: text("detail").notNull().default(""),
-    // Strict per-kind persisted config (GitHub repo/labels or Sentry query) or
-    // sanitized needs-attention state. Credential authority never lives here.
+    // Strict per-kind provider-only config (GitHub repo/labels or Sentry query).
+    // Credential authority and lifecycle metadata never live in this JSON.
     config: jsonb("config")
       .notNull()
       .default(sql`'{}'::jsonb`),
@@ -50,6 +50,15 @@ export const inboxSources = pgTable(
     // findings skip manual triage (verdict auto-routable → accepted).
     enabled: text("enabled").notNull().default("true"),
     autoRoute: text("auto_route").notNull().default("false"),
+    state: text("state").notNull().default("active"),
+    attentionCode: text("attention_code"),
+    attentionMessage: text("attention_message"),
+    attentionObservedAt: timestamp("attention_observed_at", { withTimezone: true }),
+    // Internal-only reusable coordinate. It is never included in source config,
+    // HTTP DTOs, or UI models; consumers read it through a narrow repository seam.
+    webhookSecretRef: text("webhook_secret_ref"),
+    // Provider-directed delay (not an in-process sleep), shared by all pollers.
+    retryNotBefore: timestamp("retry_not_before", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -57,8 +66,31 @@ export const inboxSources = pgTable(
     check("inbox_sources_kind_check", sql`${table.kind} IN ('issues','errors','system','manual','scheduled_audit')`),
     check("inbox_sources_enabled_check", sql`${table.enabled} IN ('true','false')`),
     check("inbox_sources_auto_route_check", sql`${table.autoRoute} IN ('true','false')`),
+    check("inbox_sources_state_check", sql`${table.state} IN ('active','needs_attention')`),
+    check(
+      "inbox_sources_attention_check",
+      sql`(
+        ${table.state} = 'active'
+        AND ${table.attentionCode} IS NULL
+        AND ${table.attentionMessage} IS NULL
+        AND ${table.attentionObservedAt} IS NULL
+      ) OR (
+        ${table.state} = 'needs_attention'
+        AND ${table.enabled} = 'false'
+        AND ${table.attentionCode} IN ('unsupported_provider','invalid_config','credential_unavailable','authority_unavailable','resource_unavailable')
+        AND ${table.attentionMessage} IS NOT NULL
+        AND ${table.attentionObservedAt} IS NOT NULL
+      )`,
+    ),
     index("inbox_sources_org_id").on(table.orgId),
     index("inbox_sources_project_id").on(table.projectId),
+    index("inbox_sources_retry_not_before").on(table.orgId, table.retryNotBefore),
+    uniqueIndex("inbox_sources_org_source_unique").on(table.orgId, table.id),
+    foreignKey({
+      name: "inbox_sources_project_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+    }),
     // P-INT-2 onboarding-provisioner idempotency backstop: at most ONE
     // provisioner-managed source per (org, project, kind). PARTIAL — scoped to the
     // `managedBy` marker the provisioning engine writes — so operator-created
@@ -74,13 +106,11 @@ export const candidates = pgTable(
   "candidates",
   {
     id: text("id").primaryKey(),
-    sourceId: text("source_id")
-      .notNull()
-      .references(() => inboxSources.id),
+    sourceId: text("source_id").notNull(),
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
-    projectId: text("project_id").references(() => projects.projectId),
+    projectId: text("project_id"),
     // The connector's own id for this item (issue number, sentry group, audit
     // finding key, manual nonce) — unique per source so re-polling is idempotent.
     externalId: text("external_id").notNull(),
@@ -93,7 +123,7 @@ export const candidates = pgTable(
       .notNull()
       .default(sql`'{}'::jsonb`),
     // Set when accept→discovery created a spec, so the inbox links to the node.
-    resolvedSpecId: text("resolved_spec_id").references(() => specs.specId),
+    resolvedSpecId: text("resolved_spec_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -103,10 +133,25 @@ export const candidates = pgTable(
       "candidates_status_check",
       sql`${table.status} IN ('new','triaged','auto_routed','accepted','folded','dismissed','closed_duplicate')`,
     ),
-    uniqueIndex("candidates_source_external_unique").on(table.sourceId, table.externalId),
+    uniqueIndex("candidates_source_external_unique").on(table.orgId, table.sourceId, table.externalId),
     index("candidates_org_id").on(table.orgId),
     index("candidates_project_id").on(table.projectId),
     index("candidates_status").on(table.status),
+    foreignKey({
+      name: "candidates_source_org_fk",
+      columns: [table.orgId, table.sourceId],
+      foreignColumns: [inboxSources.orgId, inboxSources.id],
+    }),
+    foreignKey({
+      name: "candidates_project_fk",
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+    }),
+    foreignKey({
+      name: "candidates_resolved_spec_fk",
+      columns: [table.orgId, table.resolvedSpecId],
+      foreignColumns: [specs.orgId, specs.specId],
+    }),
   ],
 );
 
@@ -123,9 +168,7 @@ export const webhookEvents = pgTable(
   "webhook_events",
   {
     id: text("id").primaryKey(),
-    sourceId: text("source_id")
-      .notNull()
-      .references(() => inboxSources.id),
+    sourceId: text("source_id").notNull(),
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
@@ -154,5 +197,10 @@ export const webhookEvents = pgTable(
     index("webhook_events_source_id").on(table.sourceId),
     // The sweeper's hot read: pull undriven (`received`/`failed`) rows oldest-first.
     index("webhook_events_status").on(table.status),
+    foreignKey({
+      name: "webhook_events_source_org_fk",
+      columns: [table.orgId, table.sourceId],
+      foreignColumns: [inboxSources.orgId, inboxSources.id],
+    }),
   ],
 );

@@ -11,17 +11,13 @@
 // source is pollable when it has a connector kind and is enabled.
 
 import type pg from "pg";
-import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
-import { z } from "zod";
+import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import {
   ingestSource,
-  ActiveGitHubIssuesConfig,
-  ActiveSentryConfig,
-  InboxSourceAttention,
   InboxStore,
   type AutoRouteDeps,
   type Candidate,
@@ -31,35 +27,13 @@ import {
   type TriageAnswerer,
 } from "../inbox/index.js";
 import { buildIntakeConnectorMapForOrg, classifyPermanentInboxSourceError } from "./issueSourceSeam.js";
+import { IntakeSourceRateLimitError } from "../inbox/connectorErrors.js";
+import { deferInboxSourceRetry, terminalizeInboxSource } from "./sourceTerminalization.js";
+import { loadRunnableInboxSource } from "./sourceValidation.js";
 import { sweepStuckCandidates, sweepWebhookEvents, type WebhookProcessorDeps } from "./webhookProcessor.js";
 import { createLogger } from "../../observability/logger.js";
-import { PgEventStore } from "../../eventStore.js";
 
 const log = createLogger("intake-poller");
-
-// The poll knobs a source carries on its `config` (alongside the connector's own
-// config). `pollIntervalMs` is the per-source cadence; absence ⇒ the org default.
-// `webhookSecretRef` (when set) marks the source webhook-driven — the poller
-// skips it (push is authoritative). Parsed leniently so connector config coexists.
-const PollConfig = z
-  .object({
-    pollIntervalMs: z.number().int().positive().optional(),
-    webhookSecretRef: z.string().min(1).optional(),
-  })
-  .passthrough();
-
-function pollConfigFor(source: InboxSource): z.infer<typeof PollConfig> | undefined {
-  if (source.kind === "issues") {
-    const parsed = ActiveGitHubIssuesConfig.safeParse(source.config);
-    return parsed.success ? parsed.data : undefined;
-  }
-  if (source.kind === "errors") {
-    const parsed = ActiveSentryConfig.safeParse(source.config);
-    return parsed.success ? parsed.data : undefined;
-  }
-  const parsed = PollConfig.safeParse(source.config);
-  return parsed.success ? parsed.data : undefined;
-}
 
 /** The default per-source poll interval when the source pins none (5 minutes). */
 export const DEFAULT_POLL_INTERVAL_MS = 5 * 60_000;
@@ -107,17 +81,17 @@ const POLLABLE_KINDS: ReadonlySet<string> = new Set(["issues", "errors"]);
  * still recognized as pollable.
  */
 export function isPollableSource(source: InboxSource, connectors?: ReadonlyMap<string, SourceConnector>): boolean {
-  if (!source.enabled) return false;
+  if (!source.enabled || source.state !== "active") return false;
   const known = connectors === undefined ? POLLABLE_KINDS.has(source.kind) : connectors.has(source.kind);
   if (!known) return false;
-  const config = pollConfigFor(source);
   // A webhook-driven source (a configured secret) is served by push — skip it.
-  if (config?.webhookSecretRef !== undefined) return false;
-  return true;
+  return !source.webhookConfigured;
 }
 
 function pollIntervalFor(source: InboxSource): number {
-  return pollConfigFor(source)?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  return source.kind === "issues" || source.kind === "errors"
+    ? (source.config?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS)
+    : DEFAULT_POLL_INTERVAL_MS;
 }
 
 export interface PollSourceResult {
@@ -132,6 +106,9 @@ export interface PollSourceResult {
  * source-scoped triage answerer first.
  */
 export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource): Promise<PollSourceResult> {
+  const freshSource = await runWithSystemScope(deps.pool, (client) =>
+    loadRunnableInboxSource(client, { sourceId: source.id, orgId: source.orgId }),
+  );
   // `ingestSource` does tenant reads/writes (existing-spec read, candidate upsert,
   // and — on auto-route — the discovery accept + DAG insert) directly on its pool.
   // The poller wakes cross-org with NO ambient scope, so on the bare pool those run
@@ -148,17 +125,19 @@ export async function pollSourceOnce(deps: IntakePollerDeps, source: InboxSource
   // the seam raises a LOUD `IntakeGithubCredentialMissingError` (fail-closed),
   // never a silent no-connector. A test may pin a fixed `connectors` map (used
   // verbatim); production omits it and we rebuild per-org.
-  const connectors = deps.connectors ?? (await buildOrgConnectorMap(deps, source));
+  const connectors = deps.connectors ?? (await buildOrgConnectorMap(deps, freshSource));
   const engineDeps: InboxEngineDeps = {
     pool: orgScopingPool(deps.pool),
     connectors,
     answerer: deps.answererFactory({
-      orgId: source.orgId,
-      ...(source.projectId === null ? {} : { projectId: source.projectId }),
+      orgId: freshSource.orgId,
+      ...(freshSource.projectId === null ? {} : { projectId: freshSource.projectId }),
     }),
   };
-  const { candidates } = await runWithJobOrgId(source.orgId, () => ingestSource(engineDeps, source, deps.autoRoute));
-  return { source, candidates };
+  const { candidates } = await runWithJobOrgId(freshSource.orgId, () =>
+    ingestSource(engineDeps, freshSource, deps.autoRoute),
+  );
+  return { source: freshSource, candidates };
 }
 
 /**
@@ -251,7 +230,7 @@ export class IntakePoller {
             // append the proof in one org-scoped transaction, then continue with
             // independent sources and both maintenance sweepers.
             try {
-              await this.parkSourceNeedsAttention(source, permanent);
+              await terminalizeInboxSource(this.deps.pool, source, permanent, new Date(this.now()));
             } catch (terminalError) {
               log.error(
                 "failed to persist source needs-attention state (will retry next tick)",
@@ -260,6 +239,11 @@ export class IntakePoller {
               );
               this.lastPolledAt.set(source.id, this.now());
             }
+            continue;
+          }
+          if (error instanceof IntakeSourceRateLimitError) {
+            await deferInboxSourceRetry(this.deps.pool, source, new Date(this.now() + error.retryAfterMs));
+            this.lastPolledAt.set(source.id, this.now());
             continue;
           }
           // Any OTHER source failure (rate limit, transient connector error) never
@@ -300,30 +284,6 @@ export class IntakePoller {
     };
   }
 
-  private async parkSourceNeedsAttention(
-    source: InboxSource,
-    failure: { code: InboxSourceAttention["code"]; message: string },
-  ): Promise<void> {
-    const attention = InboxSourceAttention.parse({
-      state: "needs_attention",
-      code: failure.code,
-      message: failure.message,
-      observedAt: new Date(this.now()).toISOString(),
-    });
-    await runWithOrgScope(this.deps.pool, source.orgId, async (client) => {
-      const parked = await InboxStore.markSourceNeedsAttention(client, source, attention);
-      if (parked === undefined) return;
-      await new PgEventStore(client).append({
-        orgId: source.orgId,
-        ...(source.projectId === null ? {} : { projectId: source.projectId }),
-        eventType: "credential.failed",
-        payload: {
-          message: `inbox source ${source.id} needs attention (${failure.code})`,
-        },
-      });
-    });
-  }
-
   /** List every org's pollable, due-now source (cross-org, system-scoped). */
   private async listDuePollableSources(): Promise<InboxSource[]> {
     const orgIds = await runWithSystemScope(this.deps.pool, (client) =>
@@ -332,9 +292,23 @@ export class IntakePoller {
     const due: InboxSource[] = [];
     const now = this.now();
     for (const orgId of orgIds) {
-      const sources = await runWithSystemScope(this.deps.pool, (client) => InboxStore.listSources(client, orgId));
-      for (const source of sources) {
+      const decoded = await runWithSystemScope(this.deps.pool, (client) =>
+        InboxStore.listSourcesForIntake(client, orgId),
+      );
+      for (const invalid of decoded.invalid) {
+        await terminalizeInboxSource(
+          this.deps.pool,
+          invalid,
+          {
+            code: "invalid_config",
+            message: "This source configuration is invalid. Recreate it with required fields.",
+          },
+          new Date(now),
+        );
+      }
+      for (const source of decoded.sources) {
         if (!isPollableSource(source, this.deps.connectors)) continue;
+        if (source.retryNotBefore !== null && Date.parse(source.retryNotBefore) > now) continue;
         const last = this.lastPolledAt.get(source.id);
         if (last !== undefined && now - last < pollIntervalFor(source)) continue;
         due.push(source);

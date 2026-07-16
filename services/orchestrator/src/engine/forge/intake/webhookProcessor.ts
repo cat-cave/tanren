@@ -37,6 +37,7 @@ import { PersistentlyInvalidSpecError } from "../specQuality/index.js";
 import { intakeItem } from "./pipeline.js";
 import { mapGithubIssueWebhook } from "./webhookMapping.js";
 import { WebhookEventStore, type WebhookEvent } from "../../repositories/webhookEvents.js";
+import { loadRunnableInboxSource } from "./sourceValidation.js";
 
 // How many undriven rows / stuck candidates a single sweep tick re-drives per org
 // (bounds the work + the LLM spend per tick; the rest carry to the next tick).
@@ -68,10 +69,15 @@ function mapEvent(event: WebhookEvent, source: InboxSource) {
  * row `failed`/`dead_lettered` and DO NOT throw (the sweeper continues to others).
  */
 export async function processWebhookEvent(deps: WebhookProcessorDeps, event: WebhookEvent): Promise<boolean> {
-  const source = await runWithSystemScope(deps.pool, (client) => InboxStore.getSource(client, event.sourceId));
-  if (source === undefined) {
-    // The source vanished — there is nothing to re-drive to. POISON: dead-letter loud.
-    await markFailure(deps, event, "source_not_found", true);
+  let source: InboxSource;
+  try {
+    // Event org is authority: an old hostile (org B, source A) tuple must fail
+    // before mapping, answerer, candidate, or source-org effects.
+    source = await runWithSystemScope(deps.pool, (client) =>
+      loadRunnableInboxSource(client, { sourceId: event.sourceId, orgId: event.orgId }),
+    );
+  } catch {
+    await markFailure(deps, event, "source_lineage_or_state_invalid", true);
     return false;
   }
 
