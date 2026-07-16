@@ -29,6 +29,42 @@ workers remain schema-only for later slices.
 
 ### Publication P1 child redrive (bounded, zero credit)
 
+#### Run-lineage authority P1 redrive lease (bounded, zero credit)
+
+The final convergence candidate is blocked until tenant, project, spec, and run
+coordinates form one database-enforced lineage and every system-scope post-merge
+reader rejects malformed historical rows before config, authority, secret, env,
+credential, or provider access. This is a correction to unpublished `0043`, not a
+new migration, compatibility path, backfill, or consumer-node completion claim.
+
+Owned schema/migration paths: `db/migrations/0043_integration_lifecycle.sql`,
+`db/migrations/meta/0043_snapshot.json`, `db/src/schemaCore.ts`,
+`db/src/schema.ts`, `db/src/schemaSpineReferences.ts`, and new split modules
+`db/src/schemaIntegrationNodes.ts` / `db/src/schemaEvents.ts` if required by the
+500-line cap. Protected `0041`/`0042` SQL and snapshots remain byte-frozen.
+
+Owned reader/repository paths: `deployOnMerge.ts`, `deployOnMergeReads.ts`,
+`deployOnMergeAuthority.ts`, `deployTargetResolution.ts`, `demoOnDeploy.ts`,
+`demoOnDeployReads.ts`, `watcher.ts`, `issueClaimStore.ts`,
+`workflow/reviewMerge/context.ts`, `integrationConnectionResolve.ts`, and
+`integrationConnections.ts` under `services/orchestrator/src/engine/`. A new
+`postMerge/runLineage.ts` split is leased if needed to keep readers below cap.
+
+Owned proof paths: `integrationLifecycleModel.test.ts`,
+`integrationLifecycleMigrationOrder.integration.test.ts`,
+`integrationLifecycleLineageFk.integration.test.ts`, `deployOnMerge.test.ts`,
+`demoOnDeploy.test.ts`, `postMergeWatcher.test.ts`, `reviewMergeContext.test.ts`,
+`conformance/integrationConnections.conformance.test.ts`, plus new
+`runLineageTenantAuthority.rls.integration.test.ts`,
+`deployOnMergeCrossTenantSeam.test.ts`, and `issueClaimStore.test.ts` if split.
+
+Required negatives use real `tanren_app` PostgreSQL constraints/RLS and a
+production post-merge seam. Removing either composite FK/equality defense must
+fail; malformed lineage must produce zero downstream authority, secret, config,
+credential, environment, or provider activity. Org-level selection decodes
+`selected_for_project` as false, non-deploy grants are clean no-ops, `0043`
+remains DML-free/fail-loud, and node credit remains **0**.
+
 Pre-redrive executable head before the path-lease children was
 `01ec423621d5e45b7e2f67052d37621851746df5`. This bounded redrive is limited to
 the native convergence audit's two publication blockers and truthful evidence
