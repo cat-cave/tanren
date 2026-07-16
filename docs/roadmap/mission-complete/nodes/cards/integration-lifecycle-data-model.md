@@ -31,14 +31,17 @@ The final fold is one cumulative clean-replacement candidate, originally built
 from the authorized base `67d9363fe220e1f280ed706a0b80af2b16724362` and now
 replayed as a 19-commit sequence onto the exact publication base
 `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897` (post-GV-1). The exact replayed
-code/test head is `7ec09766ef16a5c267a32e8532e8e065a3cbb942`; the following
-card-only child refreshes this publication metadata without changing executable
-behavior. GV-1 intersected exactly five paths, which were deliberately unioned to
-preserve its `auditPosture` reservation/CAS-event authority and IN-1's lifecycle
-and org-owned credential semantics. The other 18 commit payloads remain
-patch-equivalent (two require zero-context patch IDs because the inherited GV-1
-event-helper import changed patch context). This is not a repair delta layered on
-an undeclared branch; publish only the lineage rooted at the exact base above.
+19-commit head is `7ec09766ef16a5c267a32e8532e8e065a3cbb942`. After the first
+card metadata child, exact test-only union convergence head
+`7bf2ad5875a92cd160667537d3adb4bb27e2c9a6` replaces one legacy ownerless
+credential fixture with supported shorthand and asserts its canonical org-owned
+persisted ref; it changes no production behavior. This final card-only child
+records that lineage. GV-1 intersected exactly five paths, which were deliberately
+unioned to preserve its `auditPosture` reservation/CAS-event authority and IN-1's
+lifecycle and org-owned credential semantics. The other 18 replay commit payloads
+remain patch-equivalent (two require zero-context patch IDs because the inherited
+GV-1 event-helper import changed patch context). This is not a repair delta layered
+on an undeclared branch; publish only the lineage rooted at the exact base above.
 
 The manifest below is exhaustive relative to the exact publication target through
 the converged candidate: **370 paths = 96 added + 263 modified + 11 deleted**. Each
@@ -340,6 +343,9 @@ completion until Slice 2/3 land binding activation and remaining cutover.
 
 ### Candidate validation (2026-07-16)
 
+- Post-GV focused union proof passed 41/41: governance CAS/event behavior 14/14
+  and project create/PATCH guards 27/27, including canonical owner binding,
+  foreign-owner rejection, `auditPosture` reservation, and structural no-op.
 - Affected typecheck passed; affected tests passed 491 files / 4,786 tests, with
   56 files / 304 live-gated tests skipped.
 - Schema drift reported no changes. Protected `0041`/`0042` migration and snapshot
