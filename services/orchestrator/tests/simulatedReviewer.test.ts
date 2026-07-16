@@ -49,7 +49,6 @@ function simulatedProbe(
   captured: { diff: string; submitted: SubmittedReview[]; fetchedDiff: boolean; headSha: string },
   opts: {
     failSubmit?: boolean;
-    returnCommentState?: boolean;
     receiptHead?: string;
     skipReceipt?: boolean;
   } = {},
@@ -71,14 +70,6 @@ function simulatedProbe(
       }
       if (opts.skipReceipt) {
         throw new Error("no receipt");
-      }
-      if (opts.returnCommentState) {
-        return {
-          forgeReviewId: "1",
-          forgeReviewState: "approved",
-          forgeReviewUrl: "https://example.com/r/1",
-          headSha,
-        };
       }
       return receiptFor(event, opts.receiptHead ?? headSha);
     },

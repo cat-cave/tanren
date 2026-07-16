@@ -331,7 +331,9 @@ export interface ReviewMergeState {
   integration?: string;
   /**
    * gv-2 forge publication bound onto the latest terminal review.* event.
-   * Absent / partial fields must never be painted as success (loud UI).
+   * Tri-state: `undefined` = no receipt fields at all (neutral unpublished),
+   * partial = a strict subset of receipt fields (loud incomplete/danger),
+   * complete = the full valid receipt tuple (published/success).
    */
   forgePublication?: ForgeReviewPublicationView;
 }
@@ -349,15 +351,31 @@ export interface ForgeReviewPublicationView {
 
 /**
  * Extract the forge publication receipt from a terminal review event payload.
- * Never infers success from missing fields — `complete` is false unless id,
- * state, url, and headSha are all present and non-empty.
+ * Honest tri-state — never infers success from missing fields:
+ *   - ZERO receipt fields (no id/state/url/headSha) → `undefined`: the event is
+ *     a human/auto terminal review with no forge receipt and renders the neutral
+ *     unpublished state, never the loud "partial forge fields present" danger.
+ *   - a STRICT SUBSET of receipt fields → `{ complete: false }`: a malformed /
+ *     partial simulated receipt stays loud (danger).
+ *   - the FULL valid tuple (id + state + url + headSha, all non-empty) →
+ *     `{ complete: true }`: published / success.
  */
-export function forgePublicationFromPayload(payload: Record<string, unknown>): ForgeReviewPublicationView {
+export function forgePublicationFromPayload(payload: Record<string, unknown>): ForgeReviewPublicationView | undefined {
   const forgeReviewId = asString(payload["forgeReviewId"]);
   const forgeReviewState = asString(payload["forgeReviewState"]);
   const forgeReviewUrl = asString(payload["forgeReviewUrl"]);
   const headSha = asString(payload["headSha"]);
   const reviewer = asString(payload["reviewer"]);
+  // Zero receipt fields → no publication at all (neutral unpublished). A lone
+  // `reviewer` (or other non-receipt field) does NOT count as a partial receipt.
+  if (
+    forgeReviewId === undefined &&
+    forgeReviewState === undefined &&
+    forgeReviewUrl === undefined &&
+    headSha === undefined
+  ) {
+    return undefined;
+  }
   const complete =
     forgeReviewId !== undefined &&
     forgeReviewId !== "" &&
