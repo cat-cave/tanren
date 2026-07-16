@@ -1,8 +1,13 @@
 // RV4-BEHAVIOR-COVERAGE-RLS — real-Postgres proof for the canonical 0037 table
 // and rv-4 repository. The restricted runtime role must deny cross-org and
 // unscoped reads/writes, while repository reads preserve exact project and
-// integration-node bindings within one org. The 0044 composite project FK is
-// added to this proof only after the serialized migration lease is released.
+// integration-node bindings within one org. Migration 0044's composite
+// (org_id, project_id) project-lineage foreign key is proven here: a
+// same-org cross-project (mismatched-lineage) coverage-edge insert is
+// structurally rejected (SQLSTATE 23503, constraint
+// behavior_coverage_edges_project_lineage_fk) even on the owner connection that
+// bypasses RLS, while a correctly-lineaged insert succeeds. This isolates the
+// FK guarantee from the RLS WITH CHECK guarantee proved separately above.
 
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
@@ -165,6 +170,38 @@ describeDb("RV4-BEHAVIOR-COVERAGE-RLS — org and project isolation", () => {
     ).rejects.toThrow(/row-level security|policy/iu);
     const rows = await ownerPool.query("SELECT id FROM behavior_coverage_edges WHERE id = 'coverage_edge_cross_org'");
     expect(rows.rowCount).toBe(0);
+  });
+
+  it("enforces the 0044 composite (org_id, project_id) project-lineage foreign key", async () => {
+    // NEGATIVE: (ORG_A, PROJECT_B) is not a real projects lineage row — PROJECT_B
+    // belongs to ORG_B. The behavior_revision FK is satisfied (BEHAVIOR_A exists
+    // for ORG_A) and the org FK is satisfied (ORG_A exists), so the ONLY failing
+    // constraint is the composite project-lineage FK 0044 added. Using ownerPool
+    // bypasses RLS, isolating the FK guarantee from the RLS WITH CHECK guarantee:
+    // the mismatched same-org cross-project binding is structurally unrepresentable.
+    await expect(
+      ownerPool.query(
+        `INSERT INTO behavior_coverage_edges
+           (org_id, id, project_id, behavior_revision_id, edge_kind, target_ref)
+         VALUES ($1, 'coverage_edge_bad_lineage', $2, $3, 'source', 'src/leak.ts')`,
+        [ORG_A, PROJECT_B, BEHAVIOR_A],
+      ),
+    ).rejects.toMatchObject({ code: "23503", constraint: "behavior_coverage_edges_project_lineage_fk" });
+    const absent = await ownerPool.query(
+      "SELECT id FROM behavior_coverage_edges WHERE id = 'coverage_edge_bad_lineage'",
+    );
+    expect(absent.rowCount).toBe(0);
+
+    // POSITIVE: (ORG_A, PROJECT_A) is a real projects lineage row and BEHAVIOR_A
+    // belongs to it, so the correctly-lineaged insert is accepted by the same FK.
+    const ok = await ownerPool.query(
+      `INSERT INTO behavior_coverage_edges
+         (org_id, id, project_id, behavior_revision_id, edge_kind, target_ref)
+       VALUES ($1, 'coverage_edge_ok_lineage', $2, $3, 'source', 'src/login.ts')
+       RETURNING id`,
+      [ORG_A, PROJECT_A, BEHAVIOR_A],
+    );
+    expect(ok.rows.map((row) => row.id)).toEqual(["coverage_edge_ok_lineage"]);
   });
 });
 

@@ -3,7 +3,11 @@
 **Bucket**: runtime verification
 **Phase**: MVP / Wave 2 consumer
 **State**: production-authority P1 correction implemented and locally validated;
-serialized tail remains blocked by IN-1; no node credit until merged
+serialized tail LANDED on this branch (core rebased onto merged IN-1 clean, no
+conflicts; migration `0044` composite project-lineage FK + `mountFeatureRoutes`
+mount + `screens.ts` registration in place); pending final merge gates and a
+live-Postgres smoke run for the gated integration suites; no node credit until
+those pass on the final merge candidate
 **Base**: `origin/main` / `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
 **Exclusive core**: `63000a1a70ce2e276af51f0143b0d82a7f1ec1f1`
 **Binary delta**: `f569e4c96aefa1bc70b54d5d1e87956b98d2ff1c37734a5dbc410d9eac44bf57`
@@ -269,19 +273,35 @@ During exclusive authoring:
 4. format, architecture/line cap, event drift, and `git diff --check`.
 
 Current retained-core correction proof: 45 focused tests pass across six active
-suites; the five real-Postgres cases remain intentionally gated for the
-serialized tail. `just affected-typecheck`, `just affected-test`, format,
+suites. `just affected-typecheck`, `just affected-test`, format,
 architecture/line-cap, and event-drift checks pass. The Unicode CAS golden fact
 is fixed at `sha256:d138439ef071f4c934a9a603c5ab6bd4bbd48bee470353a7dc1d6587a4b175ae`.
 
-Production-authority P1 redrive proof: 40 focused always-on/real-jj assertions
-pass; 19/19 live RLS-Postgres assertions pass across the production batch and
-eager producers, exact target derivation, fingerprint preservation/clearing,
-cross-project collision, HTTP → sole Pg CAS → default PgEventStore → replay,
-concurrent graph mutation, and repeat materialization. `just affected-test` passes
-1,336 assertions with 158 environment-gated skips. Affected typecheck, format,
-architecture/line cap, ordinary lint, type-aware lint, and `git diff --check`
-pass. The isolated Postgres service was removed after the proof.
+Production-authority P1 redrive proof (historical, pre-tail ephemeral-Postgres
+session, migration `0044` not yet present): 40 focused always-on/real-jj
+assertions passed, plus a then-19-assertion live RLS-Postgres pass across the
+production batch and eager producers, exact target derivation, fingerprint
+preservation/clearing, HTTP → sole Pg CAS → default PgEventStore → replay,
+concurrent graph mutation, and repeat materialization, on a disposable Postgres
+service since removed. That session did NOT cover the `0044` composite
+project-lineage FK (it did not exist yet).
+
+Current serialized-tail branch state — what is ACTUALLY asserted now (no live
+Postgres in this environment): the always-on unit/selector/CAS-event/repository/
+route/client/render suites pass (34 orchestrator + 14 dashboard rv-4 focused
+tests; full `just affected-test` = 1663 pass / 177 Postgres-gated skips / 0 fail;
+full dashboard suite 489 pass), and `just affected-typecheck`, `just
+affected-build`, `check:schema-drift`, architecture/line-cap, format-check, and
+`git diff --check` are green. The `0044` composite `(org_id, project_id)`
+project-lineage FK proof (negative: same-org cross-project insert rejected with
+SQLSTATE `23503` on `behavior_coverage_edges_project_lineage_fk`; positive:
+correctly-lineaged insert succeeds) is WRITTEN in
+`behaviorCoverageRls.integration.test.ts`, alongside the RLS isolation and the
+production HTTP → CAS → `PgEventStore` → replay integration suites — all are
+Postgres-gated (`TANREN_RLS_DB_TEST=1` / live PG) and therefore SKIP in this
+environment. They are validated by root's full-smoke re-run against a real
+Postgres before rv-4 earns node credit; this card does not claim they pass
+in-branch.
 
 After IN-1 and the serialized tail land:
 
