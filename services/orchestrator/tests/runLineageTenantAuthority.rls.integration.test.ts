@@ -15,7 +15,7 @@ const SPEC_A = "spec_run_lineage_a";
 const SPEC_B = "spec_run_lineage_b";
 const RUN_A = "run_lineage_control_a";
 const RUN_B = "run_lineage_control_b";
-const EVENTS_TABLE = ["ev", "ents"].join("");
+const EVENTS_TABLE = ["events"].join("");
 
 function dbName(): string {
   return `tanren_run_lineage_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
