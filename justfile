@@ -871,12 +871,18 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
 smoke-rls-integration-lifecycle:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts services/orchestrator/tests/integrationConnectionSaga.integration.test.ts services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts services/orchestrator/tests/integrationOperationDurability.integration.test.ts
 
+# RV-4: behavior-coverage affected-selection live proofs — the 0044 composite
+# (org_id, project_id) project-lineage FK rejection + the production
+# HTTP -> PgCasByteStore -> PgEventStore -> replay path against real Postgres.
+smoke-rls-behavior-coverage:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/behaviorCoverageRls.integration.test.ts services/orchestrator/tests/behaviorCoverageProduction.integration.test.ts
+
 # IN-1: real Vault 1.18 KV v2 CAS=0 wire proof. The compose dev Vault exposes
 # its dev listener on TANREN_VAULT_HOST_PORT (default 18200).
 smoke-integration-vault-cas:
   TANREN_VAULT_TEST=1 VAULT_ADDR="http://127.0.0.1:${TANREN_VAULT_HOST_PORT:-18200}" VAULT_TOKEN="${VAULT_TOKEN:-dev-root-token}" corepack pnpm exec vitest run services/orchestrator/tests/integrationVaultCas.integration.test.ts
 
-smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-integration-lifecycle smoke-integration-vault-cas smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority
+smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-integration-lifecycle smoke-rls-behavior-coverage smoke-integration-vault-cas smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority
 
 # P3-0001: the Phase 2A direct-execution acceptance gate (`just acceptance`,
 # scripts/acceptance/easy.ts + medium.ts) was removed once the run executor
