@@ -26,7 +26,26 @@ The whole design below exists to make **each node land in one audit pass against
 stable base**, and to **front-load all serialized work** so consumer lanes are truly
 disjoint.
 
-## 1. The four rules
+## 1. The rules
+
+### Rule 0 — Keep each node light (≤ ~1000 lines); chain, don't bloat
+
+A node is a **PR-sized** unit of work: target **≤ ~1000 changed lines**. If a node
+wants more, either **break it into a chain of smaller PRs** (each independently
+reviewable + auditable, stacked so they flow through the gate fast) or **justify the
+size explicitly** in the card (why it can't be split — e.g. an irreducible foundation
+that establishes shared vocabulary). Big entangled PRs are the enemy of throughput:
+they take a slow, high-risk single audit and they block everything stacked behind
+them. Prefer many small green PRs landing back-to-back over one 400-file slab.
+
+> **Precedent:** in-1 (the integrations foundation) landed at ~382 files / +45k —
+> the **justified exception**, because it establishes the whole `integration_*`
+> vocabulary + RLS backbone that in-2..22 consume. It also, tellingly, bundled
+> *global spine-lineage FKs* that broke an out-of-card smoke test — exactly the
+> cross-cutting blast radius a light node avoids. Going forward: a node that needs a
+> cross-cutting spine change (a shared FK, a global invariant) **splits that change
+> into its own serialized migration/prep PR** rather than folding it into a feature
+> node. Chain PRs flow; slabs stall.
 
 ### Rule 1 — Barrier pre-flight (one serialized prep PR per wave)
 
