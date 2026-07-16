@@ -1,0 +1,308 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "const": "deterministic_policy",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "member_repair",
+          "type": "string"
+        },
+        "evaluationId": {
+          "pattern": "^mqeval_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "findingIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "groupId": {
+          "pattern": "^mqgrp_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "memberIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "missionNodeId": {
+          "const": "mq-1",
+          "type": "string"
+        },
+        "reasonCode": {
+          "const": "audit_policy",
+          "type": "string"
+        },
+        "retryability": {
+          "const": "non_retryable",
+          "type": "string"
+        },
+        "signalVersion": {
+          "const": "merge_signal.v1",
+          "type": "string"
+        },
+        "wakeKey": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "missionNodeId",
+        "evaluationId",
+        "groupId",
+        "signalVersion",
+        "memberIds",
+        "findingIds",
+        "classification",
+        "reasonCode",
+        "retryability",
+        "wakeKey",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "const": "transient_infrastructure",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "retry_when_ready",
+          "type": "string"
+        },
+        "evaluationId": {
+          "pattern": "^mqeval_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "findingIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "groupId": {
+          "pattern": "^mqgrp_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "memberIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "missionNodeId": {
+          "const": "mq-1",
+          "type": "string"
+        },
+        "reasonCode": {
+          "enum": [
+            "provider_timeout",
+            "provider_rate_limit",
+            "runner_unavailable",
+            "runner_transport",
+            "code_host_unavailable",
+            "gate_infrastructure"
+          ],
+          "type": "string"
+        },
+        "retryability": {
+          "const": "retryable",
+          "type": "string"
+        },
+        "signalVersion": {
+          "const": "merge_signal.v1",
+          "type": "string"
+        },
+        "wakeKey": {
+          "pattern": "^mqwake_[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "missionNodeId",
+        "evaluationId",
+        "groupId",
+        "signalVersion",
+        "memberIds",
+        "findingIds",
+        "classification",
+        "reasonCode",
+        "retryability",
+        "wakeKey",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "const": "needs_product_decision",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "await_product_decision",
+          "type": "string"
+        },
+        "evaluationId": {
+          "pattern": "^mqeval_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "findingIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "groupId": {
+          "pattern": "^mqgrp_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "memberIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "missionNodeId": {
+          "const": "mq-1",
+          "type": "string"
+        },
+        "reasonCode": {
+          "enum": [
+            "review_changes_requested",
+            "hitl_pending"
+          ],
+          "type": "string"
+        },
+        "retryability": {
+          "const": "non_retryable",
+          "type": "string"
+        },
+        "signalVersion": {
+          "const": "merge_signal.v1",
+          "type": "string"
+        },
+        "wakeKey": {
+          "pattern": "^mqwake_[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "missionNodeId",
+        "evaluationId",
+        "groupId",
+        "signalVersion",
+        "memberIds",
+        "findingIds",
+        "classification",
+        "reasonCode",
+        "retryability",
+        "wakeKey",
+        "disposition"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "const": "unknown_fail_closed",
+          "type": "string"
+        },
+        "disposition": {
+          "const": "hold_fail_closed",
+          "type": "string"
+        },
+        "evaluationId": {
+          "pattern": "^mqeval_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "findingIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "groupId": {
+          "pattern": "^mqgrp_[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "memberIds": {
+          "items": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 0,
+          "minItems": 0,
+          "type": "array"
+        },
+        "missionNodeId": {
+          "const": "mq-1",
+          "type": "string"
+        },
+        "reasonCode": {
+          "enum": [
+            "untyped_evidence",
+            "unattributed_policy",
+            "contradictory_evidence",
+            "invalid_binding",
+            "unclassified_authority_block"
+          ],
+          "type": "string"
+        },
+        "retryability": {
+          "const": "unknown",
+          "type": "string"
+        },
+        "signalVersion": {
+          "const": "merge_signal.v1",
+          "type": "string"
+        },
+        "wakeKey": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "missionNodeId",
+        "evaluationId",
+        "groupId",
+        "signalVersion",
+        "memberIds",
+        "findingIds",
+        "classification",
+        "reasonCode",
+        "retryability",
+        "wakeKey",
+        "disposition"
+      ],
+      "type": "object"
+    }
+  ],
+  "x-tanren-schema-id": "tanren.event.merge.signal.classified"
+}

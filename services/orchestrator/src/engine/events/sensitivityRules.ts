@@ -12,6 +12,7 @@ import {
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
+import { benchmarkSensitivityRules, eventVocabularyW0SensitivityRules } from "./sensitivityRules.eventVocabularyW0.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints / credential refs / SSH host:port are redacted; secrets / raw tokens / command stdout/stderr are secret. A "[]" path suffix applies to every array element.
 
@@ -301,36 +302,8 @@ export const sensitivityRules: SensitivityRule[] = [
     ["threadId", "public"],
   ]),
 
-  // Tanren-method benchmark accept tier (§2.1). Cell/trial/tier ids + the content-addressed
-  // accept-tier hash + exit codes are public; the captured command output tails are secret
-  // (may surface env values or paths), exactly as the gate.* steps do.
-  ...rulesFor("benchmark.accept.passed", [
-    ["cellId", "public"],
-    ["trialIndex", "public"],
-    ["tier", "public"],
-    ["acceptTierHash", "public"],
-    ["steps[].name", "public"],
-    ["steps[].run", "public"],
-    ["steps[].exitCode", "public"],
-    ["steps[].passed", "public"],
-    ["steps[].timedOut", "public"],
-    ["steps[].outputTail", "secret"],
-  ]),
-  ...rulesFor("benchmark.accept.failed", [
-    ["cellId", "public"],
-    ["trialIndex", "public"],
-    ["tier", "public"],
-    ["acceptTierHash", "public"],
-    ["failedStep", "public"],
-    ["exitCode", "public"],
-    ["reason", "public"],
-    ["steps[].name", "public"],
-    ["steps[].run", "public"],
-    ["steps[].exitCode", "public"],
-    ["steps[].passed", "public"],
-    ["steps[].timedOut", "public"],
-    ["steps[].outputTail", "secret"],
-  ]),
+  // Tanren-method benchmark accept tier (§2.1), extracted for line-cap headroom.
+  ...benchmarkSensitivityRules,
 
   // DagWalker (autonomy-engine.md §1a) scheduling events — spec/run ids + non-sensitive counts, public.
   ...rulesFor("dag.spec.enqueued", [
@@ -480,6 +453,8 @@ export const sensitivityRules: SensitivityRule[] = [
   // task #82 window-pause auto-resume (run.paused/resumed/window.refreshed) + Codex critic #18 (usage.accounting_failed).
   ...windowPauseSensitivityRules,
   ...usageAccountingFailedSensitivityRules,
+  // Mission-complete W0 event vocabulary; every frozen payload path is public.
+  ...eventVocabularyW0SensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {
