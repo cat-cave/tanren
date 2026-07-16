@@ -1,12 +1,13 @@
 # ev-sub-w0 — SPEC-FREEZE-W0 event vocabulary (docs-only)
 
-**Phase**: Mission-complete event substrate (SP-8 protocol)  
-**Node credit**: **0** (SPEC-FREEZE + later EV-SUB earn zero node credit)  
-**State**: docs freeze only — no migration, no emit, no consumer completion  
-**Base**: `origin/main` / `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee`  
-**Branch**: `mission/spec-freeze-w0-events`  
-**Purpose**: freeze exact W0 named-event strings, severities, minimal strict
-payload field obligations, sensitivity classes, and apex correlation so
+**Phase**: Mission-complete event substrate (SP-8 protocol)
+**Node credit**: **0** (SPEC-FREEZE + later EV-SUB earn zero node credit)
+**State**: docs freeze only — no migration, no emit, no consumer completion
+**Base**: `origin/main` / `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee`
+**Branch**: `mission/spec-freeze-w0-events`
+**Authority**: [`event-vocabulary-waves.md`](../../event-vocabulary-waves.md)
+**Purpose**: freeze exact W0 named-event strings, severities, complete strict
+payload schemas, sensitivity paths, and apex correlation so
 **EV-SUB-W0** can install catalog rows and W0 consumers can emit without
 per-node event-migration ownership.
 
@@ -22,13 +23,15 @@ Land a durable freeze authority that:
    strings: `behavior.coverage.selection_analyzed`,
    `governance.audit_posture.updated`, `review.simulated_intent`,
    `merge.signal.classified`, `merge.member.policy_blocked`.
-3. Publishes the post-freeze migration map:
-   `0041 CAS-SUB → 0042 EV-SUB-W0 → 0043 IN-1 → 0044 RV-4 non-event schema →
-0045 GV-3 identity`.
+3. Publishes the post-freeze migration map: `0041 CAS-SUB` → `0042 EV-SUB-W0`
+   → `0043 IN-1` → `0044 RV-4 non-event schema` → `0045 GV-3 identity`.
 4. Cancels exclusive event-catalog migration ownership for GV-1 / GV-2 / MQ-1;
    those nodes consume W0 catalog rows. Product dependency order among
    governance/merge-queue writers may still serialize where authorities
    overlap. IN-2 emit lands only after EV-SUB-W0.
+5. Closes every payload decision in the durable authority: exact literals,
+   regexes, union arms, field limits, cross-field invariants, and every
+   sensitivity path. EV-SUB-W0 needs no prep branch and may invent no value.
 
 This card is **not** EV-SUB-W0 (registry + seed + migration). That is a
 separate zero-credit substrate PR after this freeze lands.
@@ -79,16 +82,16 @@ events as named proof.
 
 ## Proof gates (this PR)
 
-| #   | Gate                                                                                                                          |
-| --- | ----------------------------------------------------------------------------------------------------------------------------- |
-| F1  | Every W0 name has exact string, severity, payload fields + type hints, sensitivity class, apex correlation, source citation   |
-| F2  | Zero `blocked_collision` rows for names entering W0                                                                           |
-| F3  | Alternatives (`derived`, `review.simulated.started`/`.verdict`) marked deferred/non-synonymous — not frozen as synonyms       |
-| F4  | No invented names absent from freeze authority sources                                                                        |
-| P1  | Changed path set equals the two owned paths only                                                                              |
-| P2  | Both files &lt; 500 lines                                                                                                     |
-| P3  | `just fast-check` + `just ci` green (docs-only); root-serialized `just smoke` **pending** (sibling work owns hardcoded ports) |
-| P4  | Local commit only; no push / no PR                                                                                            |
+| #   | Gate                                                                                                                                        |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | Every W0 name has exact string, severity, complete strict schema/constraints, every sensitivity path, apex correlation, and source citation |
+| F2  | Zero `blocked_collision` rows for names entering W0                                                                                         |
+| F3  | Alternatives (`derived`, `review.simulated.started`/`.verdict`) marked deferred/non-synonymous — not frozen as synonyms                     |
+| F4  | No invented names absent from freeze authority sources; no unresolved payload decision or prep-dependent definition                         |
+| P1  | Changed path set equals the two owned paths only                                                                                            |
+| P2  | Both files &lt; 500 lines                                                                                                                   |
+| P3  | `just fast-check` + `just ci` green (docs-only); root-serialized `just smoke` **pending** (sibling work owns hardcoded ports)               |
+| P4  | Local commit only; no push / no PR                                                                                                          |
 
 ## Authority sources inspected (read-only)
 
@@ -98,9 +101,11 @@ events as named proof.
   `/home/trevor/projects/tanren/.codex/orchestration-prompts/consumer-event-vocabulary-fanout-grok-report.md`
 - IN-2 convergence:
   `/home/trevor/projects/tanren/.codex/orchestration-prompts/in2-b5edc573-grok-convergence-report.md`
-  - branch `mission/in-2-integration-requirement-contracts` @ `b5edc573…`
-- Prep cards/schemas: `redrive/rv-4-post943`, `node/gv-1-audit-posture-write-guard`,
-  `node/gv-2-simulated-review-publication`, `redrive/mq1-post928-prep`
+  - branch `mission/in-2-integration-requirement-contracts` @ `b5edc57318245d778a52e3f63cb8e4a579a7da2b`
+- Prep schemas/sensitivity: `redrive/rv-4-post943` @ `c601cae77419a1ef16f805f1a5fe7b708c394b6b`,
+  `node/gv-1-audit-posture-write-guard` @ `b8099d6a85f806954192f925a21385fd9fba9922`,
+  `node/gv-2-simulated-review-publication` @ `ef2893f774acd9b778f888f9e2e807150d71f040`,
+  and `redrive/mq1-post928-prep` @ `336ce4fbee9caf3b02aa9aab37ce77c74a5276f3`
 - Main SP-8: `EventRegistry` / `eventDefaultSeverity` / `Sensitivity`
   (`public` \| `redacted` \| `secret`) / `PgEventStore` envelope
   (`orgId` required; `projectId` optional; payload Zod-strict)
