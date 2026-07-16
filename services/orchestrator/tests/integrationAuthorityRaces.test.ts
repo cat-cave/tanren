@@ -28,9 +28,9 @@ class RaceDatabase implements IntegrationRouteDatabase {
   }
 }
 
-function raceHarness(fetchImpl: typeof fetch) {
-  const database = new RaceDatabase();
-  const base = new InMemorySecretStore();
+function raceHarness(fetchImpl: typeof fetch, persisted?: { database: RaceDatabase; base: InMemorySecretStore }) {
+  const database = persisted?.database ?? new RaceDatabase();
+  const base = persisted?.base ?? new InMemorySecretStore();
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (context, next) => {
     context.set("actor", admin);
@@ -108,7 +108,9 @@ describe("integration authority verifier races", () => {
     expect(await base.get(pending.staged_secret_handle!)).toBeDefined();
 
     available = true;
-    const resumed = await link(app, "retryable");
+    const restarted = raceHarness(fetchImpl, { database, base });
+    expect(restarted.app).not.toBe(app);
+    const resumed = await link(restarted.app, "retryable");
     expect(await resumed.json()).toMatchObject({ status: "completed", providerPrincipalId: "team-race" });
     expect(database.memory.operations[0]).toMatchObject({ stage: "completed", status: "completed" });
     expect(database.memory.connections).toHaveLength(1);

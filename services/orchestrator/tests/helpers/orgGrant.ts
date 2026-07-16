@@ -134,8 +134,9 @@ export async function testPrincipalVerificationPermit(input: {
         rows: [
           {
             id: operationId,
+            org_id: input.orgId ?? "org-1",
             provider_kind: input.providerKind,
-            stage: "staged",
+            stage: "credential_staged",
             status: "in_progress",
             staged_secret_handle: integrationStagedSecretRef(operationId),
             actor_id: input.actorId ?? "admin",

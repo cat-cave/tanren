@@ -20,6 +20,9 @@ const PROJECT = {
 
 let linkBody: unknown;
 let operationBody: Record<string, unknown>;
+let selectionBody: unknown;
+let selectionStatus: number;
+let selectionTransportFailure: boolean;
 
 function stubPool(): Pool {
   const pool = new Pool();
@@ -38,6 +41,10 @@ function mockOrchestrator(): void {
     if (path.endsWith("/orgs")) return Response.json({ orgs: [ORG] });
     if (path.endsWith("/integrations/operations/op_public") && method === "GET") {
       return Response.json(operationBody);
+    }
+    if (path.endsWith("/integrations/operations/op_public/principal") && method === "POST") {
+      if (selectionTransportFailure) throw new Error("selection transport unavailable");
+      return Response.json(selectionBody, { status: selectionStatus });
     }
     if (path.endsWith("/orgs/org_acme/integrations/sentry") && method === "POST") {
       return Response.json(linkBody, { status: 202 });
@@ -75,6 +82,9 @@ beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
   linkBody = { status: "completed", operationId: "op_public" };
   operationBody = durableOperation("completed");
+  selectionBody = { status: "completed", operationId: "op_public" };
+  selectionStatus = 202;
+  selectionTransportFailure = false;
   mockOrchestrator();
 });
 
@@ -93,6 +103,27 @@ const outcomes = [
   { wire: undefined, expected: "malformed" },
   { wire: "future_unrecognized_state", expected: "unknown" },
 ] as const;
+
+const selectionOutcomes = [
+  { wire: "completed", expected: "completed", success: true },
+  { wire: "awaiting_principal_selection", expected: "awaiting_principal_selection", success: false },
+  { wire: "provider_unavailable", expected: "provider_unavailable", success: false },
+  { wire: "verification_in_progress", expected: "verification_in_progress", success: false },
+  { wire: "finalize_pending", expected: "finalize_pending", success: false },
+  { wire: "activate_pending", expected: "activate_pending", success: false },
+  { wire: "failed", expected: "failed", success: false },
+  { wire: "compensated", expected: "failed", success: false },
+  { wire: undefined, expected: "malformed", success: false },
+  { wire: "future_unrecognized_state", expected: "unknown", success: false },
+] as const;
+
+async function selectPrincipal() {
+  return (await build()).request("/integrations/select-principal", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "operationId=op_public&providerPrincipalId=principal_exact",
+  });
+}
 
 describe("integration link outcome route and render contract", () => {
   it("uses completed as the sole linked success branch", async () => {
@@ -158,5 +189,63 @@ describe("integration link outcome route and render contract", () => {
     expect(html).toContain("provider verification unavailable");
     expect(html).not.toContain("provider body");
     expect(html).not.toContain("javascript:alert");
+  });
+
+  it.each(selectionOutcomes)(
+    "continues selected-principal $wire as $expected without false success",
+    async ({ wire, expected, success }) => {
+      selectionBody = {
+        ...(wire === undefined ? {} : { status: wire }),
+        operationId: "op_public",
+        operationUrl: "javascript:alert(1)",
+        token: "response-secret",
+      };
+      operationBody = durableOperation(["malformed", "unknown", "failed"].includes(expected) ? "completed" : expected);
+      const response = await selectPrincipal();
+      const location = response.headers.get("location") ?? "";
+      expect(response.status).toBe(303);
+      expect(location).toContain("principalOp=op_public");
+      expect(location).toContain(`principalStatus=${expected}`);
+      expect(location.includes("principal%20selected")).toBe(success);
+      expect(location).not.toContain("response-secret");
+      expect(location).not.toContain("javascript");
+
+      const html = await (await (await build()).request(location)).text();
+      expect(html).toContain(`data-principal-status="${expected}"`);
+      expect(html).not.toContain("response-secret");
+      expect(html).not.toContain("javascript:alert");
+    },
+  );
+
+  it("fails mismatched and missing operation identity closed on the submitted durable coordinate", async () => {
+    for (const hostileBody of [
+      { status: "completed", operationId: "javascript:alert(1)", token: "response-secret" },
+      { status: "completed", token: "response-secret" },
+    ]) {
+      selectionBody = hostileBody;
+      const response = await selectPrincipal();
+      const location = response.headers.get("location") ?? "";
+      expect(location).toContain("principalOp=op_public");
+      expect(location).toContain("principalStatus=" + ("operationId" in hostileBody ? "invalidated" : "malformed"));
+      expect(location).not.toContain("principal%20selected");
+      expect(location).not.toContain("javascript");
+      expect(location).not.toContain("response-secret");
+    }
+  });
+
+  it.each([
+    { kind: "conflict", expected: "invalidated", status: 409, transport: false },
+    { kind: "http failure", expected: "failed", status: 503, transport: false },
+    { kind: "transport failure", expected: "unavailable", status: 202, transport: true },
+  ])("keeps the operation resumable after $kind", async ({ expected, status, transport }) => {
+    selectionStatus = status;
+    selectionTransportFailure = transport;
+    selectionBody = { error: "hostile <script>", operationId: "other-operation" };
+    const location = (await selectPrincipal()).headers.get("location") ?? "";
+    expect(location).toContain("principalOp=op_public");
+    expect(location).toContain(`principalStatus=${expected}`);
+    expect(location).not.toContain("other-operation");
+    expect(location).not.toContain("script");
+    expect(location).not.toContain("principal%20selected");
   });
 });

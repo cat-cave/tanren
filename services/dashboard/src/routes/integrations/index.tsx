@@ -146,6 +146,31 @@ function linkPostOutcome(body: unknown): { status: PublicLinkOpStatus; operation
   return { status, ...(operationId === undefined ? {} : { operationId }) };
 }
 
+type PrincipalContinuationStatus = PublicLinkOpStatus | "invalidated" | "unavailable";
+
+function principalSelectionPostOutcome(body: unknown, operationId: string): PrincipalContinuationStatus {
+  if (body === null || typeof body !== "object") return "malformed";
+  const record = body as Record<string, unknown>;
+  const returnedOperationId = record["operationId"];
+  if (typeof returnedOperationId !== "string" || returnedOperationId === "") return "malformed";
+  if (returnedOperationId !== operationId) return "invalidated";
+  if (record["status"] === "compensated") return "failed";
+  if (typeof record["status"] !== "string") return "malformed";
+  return (PUBLIC_LINK_OP_STATUSES as readonly string[]).includes(record["status"])
+    ? (record["status"] as PublicLinkOpStatus)
+    : "unknown";
+}
+
+function principalContinuation(
+  c: Context,
+  operationId: string,
+  status: PrincipalContinuationStatus,
+  notice?: string,
+): Response {
+  const qs = new URLSearchParams({ principalOp: operationId, principalProvider: "unknown", principalStatus: status });
+  return redirectTo(c, `/integrations?${qs.toString()}`, notice);
+}
+
 function publicFailureClassification(value: unknown): string | undefined {
   return typeof value === "string" && /^[a-z][a-z0-9_]{0,127}$/u.test(value) ? value : undefined;
 }
@@ -169,6 +194,11 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const principalOp = c.req.query("principalOp");
     const principalProvider = c.req.query("principalProvider");
     const principalStatus = c.req.query("principalStatus");
+    const continuationStatus = (
+      [...PUBLIC_LINK_OP_STATUSES, "invalidated", "unavailable"] as readonly string[]
+    ).includes(principalStatus ?? "")
+      ? (principalStatus as PrincipalContinuationStatus)
+      : undefined;
 
     let integrations: OrgIntegrationSummary[] | undefined;
     let lifecycle: IntegrationLifecycleInventory | undefined;
@@ -201,7 +231,9 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
           providerKind: principalProvider ?? "unknown",
           operationId: principalOp,
           candidates: [],
-          status: "unavailable",
+          // Query continuation may preserve a loud non-success result while
+          // durable reload is unavailable. Never trust query text as success.
+          status: continuationStatus === "completed" ? "unavailable" : (continuationStatus ?? "unavailable"),
         };
       } else {
         const negativeOverride = ["invalidated", "malformed", "unknown", "failed"].includes(principalStatus ?? "")
@@ -344,22 +376,13 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const client = await writeClient(c, deps);
     const result = await client.selectPrincipal(orgId, operationId, { providerPrincipalId });
     if (result.status === 409) {
-      const qs = new URLSearchParams({
-        principalOp: operationId,
-        principalProvider: "unknown",
-        principalStatus: "invalidated",
-      });
-      return c.redirect(`/integrations?${qs.toString()}`, 303);
+      return principalContinuation(c, operationId, "invalidated");
     }
     if (!result.ok) {
-      const qs = new URLSearchParams({
-        principalOp: operationId,
-        principalProvider: "unknown",
-        principalStatus: "failed",
-      });
-      return c.redirect(`/integrations?${qs.toString()}`, 303);
+      return principalContinuation(c, operationId, result.status === 0 ? "unavailable" : "failed");
     }
-    return redirectTo(c, "/integrations", "principal selected");
+    const outcome = principalSelectionPostOutcome(result.body, operationId);
+    return principalContinuation(c, operationId, outcome, outcome === "completed" ? "principal selected" : undefined);
   });
 
   // ── enable capability (Plane B write) ───────────────────────────────────

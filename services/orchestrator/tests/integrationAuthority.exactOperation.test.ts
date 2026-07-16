@@ -74,7 +74,118 @@ function clientFor(row: IntegrationEligibilityRow): IntegrationQueryClient {
   };
 }
 
+interface PrincipalOperationRow {
+  org_id: string;
+  id: string;
+  provider_kind: string;
+  actor_id: string;
+  staged_secret_handle: string;
+  stage: string;
+  status: string;
+}
+
+function principalOperationRow(overrides: Partial<PrincipalOperationRow> = {}): PrincipalOperationRow {
+  return {
+    org_id: "org-test",
+    id: "op-resume",
+    provider_kind: "slack",
+    actor_id: "admin-test",
+    staged_secret_handle: "secret://org/org-test/integration/staged/op-resume",
+    stage: "credential_staged",
+    status: "in_progress",
+    ...overrides,
+  };
+}
+
+function principalOperationClient(row?: PrincipalOperationRow): IntegrationQueryClient {
+  return {
+    async query() {
+      return { rows: row === undefined ? [] : [row], rowCount: row === undefined ? 0 : 1 };
+    },
+  };
+}
+
 describe("exact integration operation authority", () => {
+  it("rehydrates only the exact resumable stages from migration 0043", async () => {
+    const migration = readFileSync(
+      resolve(import.meta.dirname, "../../../db/migrations/0043_integration_lifecycle.sql"),
+      "utf8",
+    );
+    const constraint = /org_integration_connection_operations_stage_check[^\n]+stage[^\n]+IN \(([^)]+)\)/u.exec(
+      migration,
+    );
+    expect(constraint).not.toBeNull();
+    const schemaStages = [...(constraint?.[1] ?? "").matchAll(/'([^']+)'/gu)].map((match) => match[1]);
+    expect(schemaStages).toEqual([
+      "created",
+      "credential_staged",
+      "verifying",
+      "awaiting_principal_selection",
+      "finalizing",
+      "activate_pending",
+      "completed",
+      "failed",
+      "compensated",
+    ]);
+
+    const resumable = [
+      "credential_staged",
+      "verifying",
+      "awaiting_principal_selection",
+      "finalizing",
+      "activate_pending",
+      "completed",
+    ];
+    for (const stage of resumable) {
+      const status = stage === "completed" ? "completed" : "in_progress";
+      const permit = await new PgIntegrationAuthority().resumePrincipalVerification(
+        principalOperationClient(principalOperationRow({ stage, status })),
+        { orgId: "org-test", operationId: "op-resume" },
+      );
+      expect(permit).toMatchObject({ orgId: "org-test", operationId: "op-resume", providerKind: "slack" });
+    }
+  });
+
+  it("rejects schema-impossible, created, failed, compensated, and unknown resume rows", async () => {
+    const rejected = [
+      { stage: "staged", status: "in_progress" },
+      { stage: "created", status: "pending" },
+      { stage: "failed", status: "failed" },
+      { stage: "compensated", status: "compensated" },
+      { stage: "future_stage", status: "in_progress" },
+    ];
+    for (const row of rejected) {
+      await expect(
+        new PgIntegrationAuthority().resumePrincipalVerification(principalOperationClient(principalOperationRow(row)), {
+          orgId: "org-test",
+          operationId: "op-resume",
+        }),
+      ).rejects.toThrow(/terminal|stage/u);
+    }
+  });
+
+  it("fails missing, cross-org, mismatched-id, and unknown-provider resume rows closed", async () => {
+    const authority = new PgIntegrationAuthority();
+    await expect(
+      authority.resumePrincipalVerification(principalOperationClient(), {
+        orgId: "org-test",
+        operationId: "op-resume",
+      }),
+    ).rejects.toThrow(/not found/u);
+    for (const row of [
+      principalOperationRow({ org_id: "org-other" }),
+      principalOperationRow({ id: "op-other" }),
+      principalOperationRow({ provider_kind: "provider.future" }),
+    ]) {
+      await expect(
+        authority.resumePrincipalVerification(principalOperationClient(row), {
+          orgId: "org-test",
+          operationId: "op-resume",
+        }),
+      ).rejects.toThrow(/identity mismatch|provider is unknown/u);
+    }
+  });
+
   it("rejects every mismatched binding before any secret/provider coordinate is read", async () => {
     const base = new InMemorySecretStore();
     const secrets = new GenerationAddressedIntegrationSecretStore(base);

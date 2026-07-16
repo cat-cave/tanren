@@ -296,13 +296,14 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     input: ResumePrincipalVerificationInput,
   ): Promise<PrincipalVerificationPermit> {
     const result = await client.query(
-      `SELECT id, provider_kind, actor_id, staged_secret_handle, stage, status
+      `SELECT org_id, id, provider_kind, actor_id, staged_secret_handle, stage, status
        FROM org_integration_connection_operations
        WHERE org_id = $1 AND id = $2`,
       [input.orgId, input.operationId],
     );
     const row = result.rows[0] as
       | {
+          org_id: string;
           id: string;
           provider_kind: string;
           actor_id: string;
@@ -312,14 +313,22 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
         }
       | undefined;
     if (row === undefined) throw new Error("integration operation not found");
+    if (row.org_id !== input.orgId || row.id !== input.operationId) {
+      throw new Error("integration operation identity mismatch");
+    }
     if (!isKnownProviderKind(row.provider_kind)) throw new Error("integration operation provider is unknown");
     if (["failed", "compensated"].includes(row.status)) {
       throw new Error("integration operation is terminal and cannot resume verification");
     }
     if (
-      !["staged", "verifying", "awaiting_principal_selection", "finalizing", "activate_pending", "completed"].includes(
-        row.stage,
-      )
+      ![
+        "credential_staged",
+        "verifying",
+        "awaiting_principal_selection",
+        "finalizing",
+        "activate_pending",
+        "completed",
+      ].includes(row.stage)
     ) {
       throw new Error("integration operation stage cannot resume verification");
     }

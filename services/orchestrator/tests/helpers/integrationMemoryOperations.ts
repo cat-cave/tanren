@@ -41,13 +41,14 @@ export function dispatchOperationSql(
     const op = operations.find((row) => row.org_id === orgId && row.id === operationId);
     return rowsOf(op ? [{ ...op }] : []);
   }
-  if (sql.startsWith("SELECT id, provider_kind, actor_id, staged_secret_handle, stage, status")) {
+  if (sql.startsWith("SELECT org_id, id, provider_kind, actor_id, staged_secret_handle, stage, status")) {
     const [orgId, operationId] = params as [string, string];
     const op = operations.find((row) => row.org_id === orgId && row.id === operationId);
     return rowsOf(
       op
         ? [
             {
+              org_id: op.org_id,
               id: op.id,
               provider_kind: op.provider_kind,
               actor_id: op.actor_id,
