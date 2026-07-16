@@ -1,10 +1,10 @@
 // Drives the MergeCoordinator conformance suite against the REAL
-// EventEmittingMergeCoordinator wired to in-memory queue/runner/event fakes (TEST
+// BatchMergeCoordinator wired to in-memory queue/runner/event fakes (TEST
 // FIXTURES, tests/ only). Proves the production coordinator satisfies the §2d
 // contract — DAG-order + priority + serialization + recoverable dequeue + liveness
 // + idempotency — with no DB or VCS.
 
-import { EventEmittingMergeCoordinator } from "../../src/engine/merge/coordinator.js";
+import { BatchMergeCoordinator } from "../../src/engine/merge/batchCoordinator.js";
 import type { MergeDriveOutcome } from "../../src/engine/contracts/mergeCoordinator.js";
 import type { SpecPriority } from "../../src/engine/state/spec.js";
 import {
@@ -13,18 +13,30 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { InMemoryBatchChecker, RecordingBatchMergeEventEmitter } from "./fakes/inMemoryBatchChecker.js";
 import {
   describeMergeCoordinatorConformance,
   type MergeCoordinatorConformanceHarness,
 } from "./mergeCoordinatorConformance.js";
 
-describeMergeCoordinatorConformance("EventEmittingMergeCoordinator (in-memory)", {
+describeMergeCoordinatorConformance("BatchMergeCoordinator (in-memory)", {
   make(): MergeCoordinatorConformanceHarness {
     const queue = new InMemoryMergeQueueModel();
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
     const escalator = new RecordingSpecEscalator();
-    const coordinator = new EventEmittingMergeCoordinator({ queue, runner, events, escalator });
+    const coordinator = new BatchMergeCoordinator({
+      queue,
+      runner,
+      checker: new InMemoryBatchChecker(),
+      events,
+      batchEvents: new RecordingBatchMergeEventEmitter(),
+      escalator,
+      recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
+      // Conformance suite asserts one-at-a-time selection; batch size 1 preserves that.
+      resolveMaxBatchSize: async () => 1,
+    });
     return {
       coordinator,
       projectId: "project_conf",

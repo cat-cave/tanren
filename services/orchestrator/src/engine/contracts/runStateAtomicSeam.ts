@@ -15,6 +15,7 @@
 // NO partial unique index + no `appendIfAbsent` dedupe on the spec side.
 
 import type { AppendEventInput } from "../eventStore.js";
+import type { ConflictRecoveryReceipt } from "./conflictResolution.js";
 import type { FinalizeRunInput, SetSpecStatusInput } from "./runStateWriter.js";
 
 /** Exact, tenant-bound identity of the merge candidate that recovery must park. */
@@ -68,6 +69,52 @@ export type RecoveryParkOutcome =
  */
 export interface RecoveryParkWriter {
   parkRecoveryAndDequeue(input: RecoveryParkInput): Promise<RecoveryParkOutcome>;
+}
+
+/** Exact old-candidate identity plus the claimed successor ownership receipt. */
+export interface RecoveryOwnedSettleInput {
+  orgId: string;
+  projectId: string;
+  queueId: string;
+  runId: string;
+  specId: string;
+  receipt: ConflictRecoveryReceipt;
+  reason: "conflict" | "superseded";
+  message: string;
+}
+
+export type RecoveryOwnedSettleFailureReason =
+  | "invalid_input"
+  | "ownership_missing"
+  | "queue_not_active"
+  | "evidence_invalid"
+  | "receipt_mismatch"
+  | "write_failed"
+  | "transport_failed";
+
+/**
+ * Result of the atomic active-successor proof + dequeue event + exact queue
+ * retirement. A committed queue row is the replay anchor, so a lost response
+ * redrives to `newlySettled:false` without duplicating the event or update.
+ */
+export type RecoveryOwnedSettleOutcome =
+  | { kind: "settled"; newlySettled: boolean }
+  | {
+      kind: "settlement_failed";
+      reason: "evidence_invalid";
+      queueDisposition: "retained";
+      retryAfterMs: number;
+    }
+  | {
+      kind: "settlement_failed";
+      reason: Exclude<RecoveryOwnedSettleFailureReason, "evidence_invalid">;
+      queueDisposition: "unknown";
+      retryAfterMs: number;
+    };
+
+/** Interface-segregated authority for successful owned recovery retirement. */
+export interface RecoveryOwnedSettlementWriter {
+  settleOwnedRecoveryAndDequeue(input: RecoveryOwnedSettleInput): Promise<RecoveryOwnedSettleOutcome>;
 }
 
 /**

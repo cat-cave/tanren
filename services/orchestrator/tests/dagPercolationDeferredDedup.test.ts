@@ -78,8 +78,12 @@ class RecordingEmitter implements PercolationEventEmitter {
 }
 
 const noopSettler: PercolationSettler = {
-  async absorb(): Promise<void> {},
-  async replan(): Promise<void> {},
+  async absorb() {
+    return { result: "absorbed" };
+  },
+  async replan() {
+    return { result: "replanned", reexecRunId: "run_replan" };
+  },
 };
 
 // A kick-off that should NEVER be called on the lazy path (a lazy change defers, it does not

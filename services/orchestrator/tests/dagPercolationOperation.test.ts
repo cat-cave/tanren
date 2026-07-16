@@ -46,13 +46,13 @@ class RecordingReexecutor implements PercolationReexecutor {
     dependent: SpeculativeDependent;
     ancestorStack: AncestorStack;
     nonSpeculative: boolean;
-  }): Promise<{ reexecRunId: string }> {
+  }): Promise<{ reexecRunId: string; decision: "rebased_clean" }> {
     this.calls.push({
       specId: input.dependent.specId,
       ancestorStack: input.ancestorStack,
       nonSpeculative: input.nonSpeculative,
     });
-    return { reexecRunId: `reexec_${input.dependent.specId}` };
+    return { reexecRunId: `reexec_${input.dependent.specId}`, decision: "rebased_clean" };
   }
 }
 

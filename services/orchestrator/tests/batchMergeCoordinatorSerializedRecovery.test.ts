@@ -7,19 +7,22 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 const PROJECT = "project_batch";
 
 function makeCoordinator() {
   const queue = new InMemoryMergeQueueModel();
   const runner = new ScriptedMergeRunner();
+  const events = new RecordingMergeQueueEventEmitter();
   const coordinator = new BatchMergeCoordinator({
     queue,
     runner,
     checker: new InMemoryBatchChecker(),
-    events: new RecordingMergeQueueEventEmitter(),
+    events,
     batchEvents: new RecordingBatchMergeEventEmitter(),
     escalator: new RecordingSpecEscalator(),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     resolveMaxBatchSize: () => Promise.resolve(5),
     sleep: () => Promise.resolve(),
   });

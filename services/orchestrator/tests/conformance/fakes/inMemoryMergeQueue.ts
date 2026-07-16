@@ -2,7 +2,7 @@
 // conformance + unit tests (TEST FIXTURE — tests/ only, never production). The
 // queue model holds entries in a Map and supports the full enqueue / loadSnapshot /
 // atomic claim / settle / crash-recovery surface; the runner returns scripted
-// outcomes + records each drive. Together they let the REAL EventEmittingMergeCoordinator
+// outcomes + records each drive. Together they let the production batch coordinator
 // run against a controllable queue with no DB or VCS.
 
 import { randomUUID } from "node:crypto";
@@ -13,9 +13,8 @@ import type {
   MergeQueueModel,
   MergeQueueSnapshot,
   MergeRunner,
-  SupersededEntry,
 } from "../../../src/engine/contracts/mergeCoordinator.js";
-import type { MergeQueueEventEmitter, MergeSettleTransaction } from "../../../src/engine/merge/coordinator.js";
+import type { MergeQueueEventEmitter } from "../../../src/engine/merge/coordinator.js";
 import type { SpecEscalator } from "../../../src/engine/merge/coordinatorEscalate.js";
 import { MERGE_CLAIM_LEASE_MS } from "../../../src/engine/merge/mergeClaimLease.js";
 import type { SpecPriority } from "../../../src/engine/state/spec.js";
@@ -32,8 +31,6 @@ interface QueueRow {
   status: "queued" | "merging" | "merged" | "dequeued";
   /** The reason recorded when status → dequeued (mirrors the pg `dequeue_reason`). */
   dequeueReason?: DequeueReason;
-  /** Test-only model of the latest same-candidate signal used by pg dequeued recovery. */
-  recoverySignal?: "legacy_native_dequeued" | "settled";
   /** When the entry was claimed (status → merging) — the lease anchor (ms epoch). */
   claimedAt?: number;
 }
@@ -91,7 +88,6 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       orderKey: this.order,
       status: "dequeued",
       dequeueReason: input.reason,
-      recoverySignal: "legacy_native_dequeued",
     });
   }
 
@@ -119,6 +115,25 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       if (row.runId === runId) return row.dequeueReason;
     }
     return undefined;
+  }
+
+  /** Test helper: exact queue identity/status for the in-memory atomic settler. */
+  entryForQueueId(projectId: string, queueId: string): (MergeQueueEntry & { status: QueueRow["status"] }) | undefined {
+    const row = this.rows.get(queueId);
+    if (row === undefined) return undefined;
+    return {
+      orgId: "org_test",
+      projectId,
+      queueId: row.queueId,
+      runId: row.runId,
+      specId: row.specId,
+      prUrl: row.prUrl,
+      prNumber: row.prNumber,
+      dependsOn: row.dependsOn,
+      priority: row.priority,
+      orderKey: row.orderKey,
+      status: row.status,
+    };
   }
 
   async enqueue(input: {
@@ -165,6 +180,8 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
       }
       if (row.status !== "queued") continue;
       entries.push({
+        orgId: "org_test",
+        projectId,
         queueId: row.queueId,
         runId: row.runId,
         specId: row.specId,
@@ -209,50 +226,7 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
     if (row !== undefined) {
       row.status = "dequeued";
       row.dequeueReason = reason;
-      row.recoverySignal = "settled";
     }
-  }
-
-  // ATOMICITY (audit RC-4 #3): the in-memory queue has no real client; the
-  // both-or-neither semantics are modeled by FakeMergeSettleTransaction (which only
-  // commits the staged mutations if `work` resolves), so the client is ignored here.
-  async markDequeuedOnClient(_client: unknown, queueId: string, reason: DequeueReason): Promise<void> {
-    await this.markDequeued(queueId, reason);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async recoverDequeuedCandidates(_projectId: string): Promise<number> {
-    let recovered = 0;
-    for (const row of this.rows.values()) {
-      if (
-        row.status === "dequeued" &&
-        row.recoverySignal === "legacy_native_dequeued" &&
-        row.dequeueReason === "blocked" &&
-        !this.hasActiveSameRun(row)
-      ) {
-        row.status = "queued";
-        row.dequeueReason = undefined;
-        row.claimedAt = undefined;
-        row.recoverySignal = undefined;
-        recovered += 1;
-      }
-    }
-    return recovered;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/require-await
-  async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
-    // Retire the run's ACTIVE (queued/merging) entry — at most one, mirroring the
-    // partial unique index. Idempotent: no active entry ⇒ undefined.
-    for (const row of this.rows.values()) {
-      if (row.runId === runId && (row.status === "queued" || row.status === "merging")) {
-        row.status = "dequeued";
-        row.dequeueReason = "superseded";
-        row.recoverySignal = "settled";
-        return { queueId: row.queueId, runId, specId: row.specId, prUrl: row.prUrl, prNumber: row.prNumber };
-      }
-    }
-    return undefined;
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -351,77 +325,15 @@ export class RecordingMergeQueueEventEmitter implements MergeQueueEventEmitter {
  */
 export class RecordingSpecEscalator implements SpecEscalator {
   readonly escalations: { specId: string; message: string }[] = [];
+  constructor(private readonly queue?: InMemoryMergeQueueModel) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }): Promise<void> {
+  async escalate(input: { projectId: string; entry: MergeQueueEntry; message: string }) {
     this.escalations.push({ specId: input.entry.specId, message: input.message });
-  }
-}
-
-/**
- * ATOMICITY SEAM (audit RC-4 #3) — in-memory both-or-neither settle transaction (TEST
- * FIXTURE). Models the pg `runWithOrgScope` BEGIN/COMMIT/ROLLBACK: the event append +
- * the queue dequeue are STAGED into buffers and applied to the real emitter/queue ONLY
- * if `work` resolves. If `work` (or the queue UPDATE) throws, NOTHING is applied — so a
- * failing dequeue UPDATE leaves the event un-emitted (both-or-neither), exactly as a
- * real transaction rollback would. The wrapped `queue` may be configured to throw on
- * the staged `markDequeued` to exercise the rollback.
- */
-export class FakeMergeSettleTransaction implements MergeSettleTransaction {
-  constructor(
-    private readonly realEvents: RecordingMergeQueueEventEmitter,
-    private readonly realQueue: InMemoryMergeQueueModel,
-    /** When set, the staged queue UPDATE throws this — simulating the row write failing mid-transaction. */
-    private readonly queueUpdateError?: Error,
-  ) {}
-
-  async run(
-    projectId: string,
-    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
-  ): Promise<void> {
-    // Staged effects — flushed to the real emitter/queue only on a clean commit.
-    const stagedEvents: Array<() => Promise<void>> = [];
-    const stagedQueue: Array<() => Promise<void>> = [];
-    const queueUpdateError = this.queueUpdateError;
-    const realEvents = this.realEvents;
-    const realQueue = this.realQueue;
-
-    const events: MergeQueueEventEmitter = {
-      async emitAdvanced(input) {
-        stagedEvents.push(() => realEvents.emitAdvanced(input));
-      },
-      async emitDequeued(input) {
-        stagedEvents.push(() => realEvents.emitDequeued(input));
-      },
-      async emitInfraBlocked(input) {
-        stagedEvents.push(() => realEvents.emitInfraBlocked(input));
-      },
-    };
-    const queue: MergeQueueModel = {
-      ...realQueue,
-      enqueue: (input) => realQueue.enqueue(input),
-      loadSnapshot: (pid) => realQueue.loadSnapshot(pid),
-      claim: (queueId) => realQueue.claim(queueId),
-      markMerged: (queueId) => realQueue.markMerged(queueId),
-      releaseClaim: (queueId) => realQueue.releaseClaim(queueId),
-      // The staged dequeue UPDATE: if configured to fail, throw HERE (inside `work`) so
-      // the whole unit rolls back — neither the event nor the row mutation is applied.
-      // eslint-disable-next-line @typescript-eslint/require-await
-      async markDequeued(queueId, reason) {
-        if (queueUpdateError !== undefined) throw queueUpdateError;
-        stagedQueue.push(() => realQueue.markDequeued(queueId, reason));
-      },
-      markDequeuedOnClient: (_client, queueId, reason) => queue.markDequeued(queueId, reason),
-      recoverDequeuedCandidates: (pid) => realQueue.recoverDequeuedCandidates(pid),
-      supersedePriorRunEntry: (runId) => realQueue.supersedePriorRunEntry(runId),
-      recoverStaleClaims: (pid) => realQueue.recoverStaleClaims(pid),
-    };
-
-    // Run the unit. A throw (e.g. the failing queue UPDATE) propagates WITHOUT flushing
-    // any staged effect — the rollback. Both-or-neither.
-    await work({ events, queue });
-    // Clean commit: flush events first (event-first ordering), then the queue mutation.
-    for (const apply of stagedEvents) await apply();
-    for (const apply of stagedQueue) await apply();
+    if (this.queue !== undefined) {
+      await this.queue.markDequeued(input.entry.queueId, "needs_attention");
+      return { kind: "parked" as const, newlyParked: true, alreadyDequeued: true };
+    }
+    return { kind: "parked" as const, newlyParked: true, alreadyDequeued: false };
   }
 }

@@ -1,10 +1,5 @@
-// the MergeDispatcher — the per-run merge driver, split out of
-// mergeDispatch.ts to keep each file under the 500-line architecture cap.
-// `mergeForRun` builds the dispatcher and calls one of its mode methods
-// (handOff / enqueueNative / directMerge / blockByPosture). directMerge runs
-// the up-to-date enforcement (ensureUpToDate) BEFORE the merge: a behind
-// branch is rebased + re-gated, a dirty/422 branch is routed to the
-// conflict-resolver hook — never merged stale, never merged broken.
+// Per-run merge driver. `mergeForRun` dispatches through this class; a behind
+// branch is rebased + re-gated and a real conflict goes to the resolver.
 
 import { routeTaskUpdate } from "../taskWriteRouting.js";
 import { serviceAuditActor, type AuditEnvelope } from "../../events/schemas/audit.js";
@@ -57,16 +52,7 @@ export class MergeDispatcher implements LandOps {
     return { prUrl: context.prUrl, prNumber: pr.pullNumber };
   }
 
-  /**
-   * AUDIT-EVIDENCE BASELINE: the audit envelope stamped onto the terminal
-   * `merge.completed` event. The merge is driven by the autonomous engine, so the
-   * INITIATING actor is the service. The APPROVING actor is recorded ONLY when a
-   * HUMAN review tier actually gated the merge (`reviewPolicy === "human"`) — a
-   * generic `human` approver, the honest "a human verdict was required and given".
-   * On the autonomous tiers (`auto`/`simulated`) there is no separate approver, so
-   * the field is absent (a true empty state, never a placeholder actor). The policy
-   * version is the run's governance config revision.
-   */
+  /** Terminal merge audit evidence; an approver exists only for a human review tier. */
   auditEnvelope(): AuditEnvelope {
     const humanApproved = this.deps.context.reviewPolicy === "human";
     return {
@@ -76,22 +62,12 @@ export class MergeDispatcher implements LandOps {
     };
   }
 
-  /**
-   * The integration label the directMerge path stamps on its events. `direct_merge` for the
-   * immediate-merge mode; `native_queue` when the coordinator DRIVES the SAME path for a queued
-   * head — so the events read `native_queue` without a second merge impl. Only these reach here.
-   */
+  /** Label the same direct merge path for immediate or native-queue drive. */
   mergeLabel(): "direct_merge" | "native_queue" {
     return this.deps.integration === "native_queue" ? "native_queue" : "direct_merge";
   }
 
-  /**
-   * a governance posture blocked the merge. Emits the typed
-   * `merge.blocked` event with the posture, mode, and external logins, then
-   * leaves the task `running` so the operator-approval / audit recovery surface
-   * can pick it up (the block is recoverable, not a hard failure — analogous to
-   * the conflict branch). No merge call is made.
-   */
+  /** Emit a recoverable governance block; no merge call is made. */
   async blockByPosture(decision: PostureDecision): Promise<MergeForRunResult> {
     const { eventStore, integration } = this.deps;
     const mode = decision.kind === "block" ? "operator_approval" : "audit_only";
@@ -260,7 +236,10 @@ export class MergeDispatcher implements LandOps {
     if (updated.outcome === "held") {
       // Fail-closed: the rebase could not settle — hold (recoverable), never merge.
       const msg = updated.message ?? "base-shift rebase held";
-      return { kind: "halt", result: await this.emitConflict(msg, mergeability.headBranch || undefined) };
+      return {
+        kind: "halt",
+        result: await this.emitConflict(msg, mergeability.headBranch || undefined, undefined, updated.recovery),
+      };
     }
     if (updated.outcome === "up_to_date") {
       // A benign race: it became current between the read and the update.
@@ -324,22 +303,19 @@ export class MergeDispatcher implements LandOps {
     return { kind: "proceed" };
   }
 
-  /**
-   * A re-gate FAILED a GATE tier on a cleanly-rebased/advanced branch. Route the spec to WRITER
-   * REWORK with the gate error as steering (the #594 never-discard re-author), then emit the
-   * RECOVERABLE `conflict` outcome so the entry leaves its slot WHILE the reworked spec re-runs
-   * and re-enters the queue — NOT a terminal `merge.failed` that stranded a fixable spec. Absent
-   * a rework router (an out-of-band/test caller) ⇒ the recoverable-conflict hold (never a silent
-   * merge, never a terminal failure).
-   */
+  /** Route a failed post-rebase gate to typed writer recovery, never terminal failure. */
   async handlePostRebaseGateFail(gateError: string | undefined): Promise<MergeForRunResult> {
     const { input, context, eventStore } = this.deps;
     const error = gateError ?? "post-rebase pre_merge gate failed (no gate detail reported)";
     if (input.reGateGateRework !== undefined) {
-      await input.reGateGateRework.routeGateFailToRework({ specId: context.specId, gateError: error });
-      // The spec is now being re-authored on the new base (re-opened + enqueued, OR — at a
-      // convergence fixed point — escalated). Emit the recoverable `conflict` so this stale entry
-      // leaves the merge slot; the reworked run re-enters the queue (a REAL in-flight recovery).
+      const recovery = await input.reGateGateRework.routeGateFailToRework({
+        specId: context.specId,
+        gateError: error,
+      });
+      const message =
+        recovery.kind === "owned"
+          ? `post-rebase gate failed — routed to writer rework: ${error}`
+          : `post-rebase gate failed — ${recovery.kind}: ${recovery.message}`;
       await eventStore.append({
         ...this.base(),
         eventType: "merge.conflict",
@@ -347,11 +323,11 @@ export class MergeDispatcher implements LandOps {
           ...this.prFields(),
           integration: this.mergeLabel(),
           baseBranch: context.baseBranch,
-          message: `post-rebase gate failed — routed to writer rework: ${error}`,
+          message,
         },
       });
       await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
-      return this.result("conflict", { message: `post-rebase gate failed — routed to writer rework: ${error}` });
+      return this.result("conflict", { message, recovery });
     }
     // No rework router wired (out-of-band/test caller): hold recoverably so the recovery surface
     // can re-drive (never a silent merge, never the old terminal failure).
@@ -404,18 +380,11 @@ export class MergeDispatcher implements LandOps {
       // `merge.completed` + spec flip transactionally.
       return this.driveLand();
     }
-    return this.emitConflict(message, mergeability.headBranch || undefined);
+    return this.emitConflict(message, mergeability.headBranch || undefined, resolution.recovery);
   }
 
-  /**
-   * Invoke the intent-preserving conflict-resolution hook. The hook is a
-   * REQUIRED merge-stage input — production wires the real
-   * `intentPreservingConflictResolver` (built from the run's merge-stage
-   * context), tests inject a fake under tests/. There is no noop default: a
-   * conflict is always routed to a real resolver that preserves both intents +
-   * re-gates, never silently dropped.
-   */
-  private async runConflictResolver(message: string): Promise<{ resolved: boolean }> {
+  /** Invoke the required intent-preserving resolver; there is no noop default. */
+  private async runConflictResolver(message: string): ReturnType<MergeForRunInput["resolveConflict"]> {
     const { input, context, pr } = this.deps;
     return input.resolveConflict({
       runId: context.runId,
@@ -427,7 +396,12 @@ export class MergeDispatcher implements LandOps {
   }
 
   /** Emit the recoverable conflict outcome (the resolver-scaffolding hook). */
-  async emitConflict(message: string, headBranch?: string): Promise<MergeForRunResult> {
+  async emitConflict(
+    message: string,
+    headBranch?: string,
+    recovery?: MergeForRunResult["recovery"],
+    recoverySettlement?: MergeForRunResult["recoverySettlement"],
+  ): Promise<MergeForRunResult> {
     const { eventStore, context } = this.deps;
     await eventStore.append({
       ...this.base(),
@@ -443,7 +417,11 @@ export class MergeDispatcher implements LandOps {
     // A conflict is recoverable, not a hard failure: leave the task running so
     // the recovery surface can pick it up.
     await this.finalize("conflict", { taskOutcome: "pending", taskStatus: "running" });
-    return this.result("conflict", { message });
+    return this.result("conflict", {
+      message,
+      ...(recovery !== undefined && { recovery }),
+      ...(recoverySettlement !== undefined && { recoverySettlement }),
+    });
   }
 
   async finalize(
@@ -484,7 +462,15 @@ export class MergeDispatcher implements LandOps {
     );
   }
 
-  result(outcome: MergeOutcomeKind, extra: { mergeSha?: string; message?: string } = {}): MergeForRunResult {
+  result(
+    outcome: MergeOutcomeKind,
+    extra: {
+      mergeSha?: string;
+      message?: string;
+      recovery?: MergeForRunResult["recovery"];
+      recoverySettlement?: MergeForRunResult["recoverySettlement"];
+    } = {},
+  ): MergeForRunResult {
     const { context, taskId, integration, pr } = this.deps;
     return {
       runId: context.runId,
@@ -495,6 +481,8 @@ export class MergeDispatcher implements LandOps {
       prNumber: pr.pullNumber,
       mergeSha: extra.mergeSha,
       message: extra.message,
+      ...(extra.recovery !== undefined && { recovery: extra.recovery }),
+      ...(extra.recoverySettlement !== undefined && { recoverySettlement: extra.recoverySettlement }),
     };
   }
 }

@@ -28,6 +28,7 @@ import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { SpeculativeDependent } from "../contracts/changePercolation.js";
+import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
 import {
@@ -338,13 +339,10 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
     specId: string;
     runId: string;
     gateError: string;
-  }): Promise<void> {
+  }): Promise<GateReworkRouteResult> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.runId);
     const router = new SpecStatusGateReworkRouter({
-      pool: this.deps.scopedPool,
-      runStateWriter: this.deps.runStateWriter,
       orgId: ctx.orgId,
-      eventStore: this.deps.eventStore,
       runId: input.runId,
       projectId: input.projectId,
       // The base-shift dependent has no real PR handle (the rebase is over a runner-local
@@ -353,7 +351,9 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
       enqueuer: buildReplanEnqueuer(this.deps.scopedPool, this.deps.runStateWriter),
       priorReworks: buildPriorGateReworkReader(this.deps.scopedPool),
     });
-    await router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });
+    // Propagate the typed disposition — coordinator settles and instruments truthfully
+    // (never discards parking_required as silent "replanned").
+    return router.routeGateFailToRework({ specId: input.specId, gateError: input.gateError });
   }
 }
 

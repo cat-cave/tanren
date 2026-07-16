@@ -9,6 +9,8 @@ import type { SpecPriority } from "../src/engine/state/spec.js";
 
 function entry(specId: string, dependsOn: string[], orderKey: number, priority: SpecPriority = "tbd"): MergeQueueEntry {
   return {
+    orgId: "org_test",
+    projectId: "p",
     queueId: `mq_${specId}`,
     runId: `run_${specId}`,
     specId,

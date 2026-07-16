@@ -30,6 +30,7 @@
 
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
+import type { SpecEscalator } from "./coordinatorEscalate.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
 import { isSustainedInfraNonRecovery } from "./infraNonRecovery.js";
 import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";
@@ -109,44 +110,47 @@ export async function holdOnInfra(args: {
 export async function terminalInfraBlock(args: {
   queue: MergeQueueModel;
   events: BatchMergeEventEmitter;
+  escalator: SpecEscalator;
   projectId: string;
   batch: ReadonlyArray<MergeQueueEntry>;
   message: string;
   queueDepth: number;
   kind?: "missing_required_credential" | "ambiguous_merge_state";
 }): Promise<CoordinateResult> {
-  await markBatchInfraBlockedAfterEvent({ ...args, attempts: 1, terminal: true, consecutiveHolds: 1 });
-  log.error("batch drive HALTED; operator attention required", { projectId: args.projectId, message: args.message });
-  return { projectId: args.projectId, holdReason: "infra_blocked", queueDepth: args.queueDepth };
-}
-
-async function markBatchInfraBlockedAfterEvent(input: {
-  queue: MergeQueueModel;
-  events: BatchMergeEventEmitter;
-  projectId: string;
-  batch: ReadonlyArray<MergeQueueEntry>;
-  message: string;
-  attempts: number;
-  terminal: true;
-  consecutiveHolds: number;
-  kind?: "missing_required_credential" | "ambiguous_merge_state";
-}): Promise<void> {
   const event = {
-    projectId: input.projectId,
-    batch: input.batch,
-    message: input.message,
-    attempts: input.attempts,
-    terminal: input.terminal,
-    consecutiveHolds: input.consecutiveHolds,
+    projectId: args.projectId,
+    batch: args.batch,
+    message: args.message,
+    attempts: 1,
+    terminal: true,
+    consecutiveHolds: 1,
   };
-  if (input.kind === undefined) {
-    await input.events.emitInfraBlocked(event);
+  if (args.kind === undefined) {
+    await args.events.emitInfraBlocked(event);
   } else {
-    await input.events.emitInfraBlocked({ ...event, kind: input.kind });
+    await args.events.emitInfraBlocked({ ...event, kind: args.kind });
   }
-  for (const entry of input.batch) {
-    await input.queue.markDequeued(entry.queueId, "blocked");
+
+  if (args.kind === "missing_required_credential") {
+    for (const entry of args.batch) await args.queue.releaseClaim(entry.queueId);
+    return {
+      projectId: args.projectId,
+      holdReason: "infra_error",
+      retryAfterMs: recoverableRetryDelayMs(1),
+      queueDepth: args.queueDepth,
+    };
   }
+
+  let retryAfterMs: number | undefined;
+  for (const entry of args.batch) {
+    const parked = await args.escalator.escalate({ projectId: args.projectId, entry, message: args.message });
+    if (parked.kind === "parking_failed") retryAfterMs = parked.retryAfterMs;
+  }
+  if (retryAfterMs !== undefined) {
+    return { projectId: args.projectId, holdReason: "infra_error", retryAfterMs, queueDepth: args.queueDepth };
+  }
+  log.error("batch drive parked at needs_attention", { projectId: args.projectId, message: args.message });
+  return { projectId: args.projectId, holdReason: "infra_blocked", queueDepth: args.queueDepth };
 }
 
 /**

@@ -62,7 +62,7 @@ export interface DriveJjResolveDeps {
 export async function driveResolveOverJj(
   deps: DriveJjResolveDeps,
   conflictContext: Parameters<ConflictResolverHook>[0],
-): Promise<{ resolved: boolean }> {
+): Promise<Awaited<ReturnType<ConflictResolverHook>>> {
   const { facts } = deps;
   const live = await buildLiveJjWorkspace({
     facts: {

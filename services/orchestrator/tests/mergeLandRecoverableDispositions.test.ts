@@ -145,9 +145,8 @@ describe("§3.2 recoverable land dispositions", () => {
     });
     const result = await dispatcher.directMerge();
 
-    // RECOVERABLE: the outcome is `blocked` (NOT `conflict`), so the coordinator holds it
-    // for re-drive rather than terminally dequeuing it (`recoverDequeuedCandidates` only
-    // recovers `blocked`, never `conflict`).
+    // RECOVERABLE: the outcome is `blocked` (NOT `conflict`), so the coordinator retains
+    // it for re-drive rather than terminally dequeuing and stranding it.
     expect(result.outcome).toBe("blocked");
     // The recovery surface sees `merge.blocked`, never a terminal `merge.conflict`.
     expect(events.events).toContain("merge.blocked");

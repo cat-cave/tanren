@@ -10,36 +10,47 @@
 
 import type pg from "pg";
 import type { GateReworkRouter } from "../contracts/conflictResolution.js";
-import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { SpecStatusGateReworkRouter } from "../workflow/reviewMerge/conflictResolver/gateReworkRouter.js";
 import {
   buildPriorGateReworkReader,
   buildReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
+import { applyRecoveryDispositionToVerdict, type DriveConflictVerdict } from "./driveConflictVerdict.js";
 
 export interface BuildDriveReGateGateReworkDeps {
   pool: pg.Pool;
   /** REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the de-privileged data plane. */
   runStateWriter: RunStateWriter;
-  eventStore: EventStore;
   orgId: string;
   runId: string;
   projectId: string;
   prNumber: number;
+  /**
+   * Capture cell the drive reads after mergeForRun returns. Gate-rework results are
+   * written here so a successful writer rework produces a durable recovery receipt
+   * (and parking_required escalates truthfully) rather than a silent conflict.
+   */
+  verdict?: DriveConflictVerdict;
 }
 
 /** Build the drive-pass re-gate gate-fail rework router (mirrors `conflictResolver/index.ts`). */
 export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps): GateReworkRouter {
-  return new SpecStatusGateReworkRouter({
-    pool: deps.pool,
-    runStateWriter: deps.runStateWriter,
+  const inner = new SpecStatusGateReworkRouter({
     orgId: deps.orgId,
-    eventStore: deps.eventStore,
     runId: deps.runId,
     projectId: deps.projectId,
     prNumber: deps.prNumber,
     enqueuer: buildReplanEnqueuer(deps.pool, deps.runStateWriter),
     priorReworks: buildPriorGateReworkReader(deps.pool),
   });
+  if (deps.verdict === undefined) return inner;
+  const verdict = deps.verdict;
+  return {
+    async routeGateFailToRework(input) {
+      const recovery = await inner.routeGateFailToRework(input);
+      applyRecoveryDispositionToVerdict(verdict, recovery);
+      return recovery;
+    },
+  };
 }

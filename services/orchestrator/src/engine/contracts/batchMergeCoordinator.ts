@@ -26,6 +26,7 @@
 
 import { DEFAULT_MAX_BATCH_SIZE } from "../config/shared.js";
 import { compareEntries, type MergeQueueEntry, type MergeQueueSnapshot } from "./mergeCoordinator.js";
+import type { GateReworkRouteResult } from "./conflictResolution.js";
 
 // Re-export the config default so call sites that already import the batch contract
 // (the coordinator) get the knob from one place; the schema default lives in
@@ -243,11 +244,12 @@ export async function bisectCulprit(
 export interface BatchGateReworkRouter {
   /**
    * Re-author the culprit spec to fix the integrated-tree GATE failure, carrying the
-   * batch gate's failing tier/step/output as steering. Returns the disposition so the
-   * coordinator settles the OLD queue entry correctly:
-   *   - `reworked`  — a fresh writer-rework run was enqueued (the spec re-drives + re-queues);
-   *   - `escalated` — the bounded rework budget is exhausted → parked `needs_attention`.
-   * Either way the old queue entry is retired (the re-authored run produces a fresh one).
+   * batch gate's failing tier/step/output as steering. Returns a typed ownership
+   * disposition — never mutates needs-attention separately from queue retirement:
+   *   - `owned`            — durable writer-rework receipt (settlement retires superseded)
+   *   - `parking_required` — fixed point / enqueue failure; settlement parks atomically
+   *   - `terminal_noop`    — concurrent terminal status; settlement retires superseded
+   *   - `parking_failed`   — sole delegated park failed (retain)
    */
   routeGateFailToRework(input: {
     projectId: string;
@@ -255,7 +257,7 @@ export interface BatchGateReworkRouter {
     culprit: MergeQueueEntry;
     /** The batch gate's failure detail (tier/step/output) — the steering the writer fixes against. */
     gateError: string;
-  }): Promise<"reworked" | "escalated">;
+  }): Promise<GateReworkRouteResult>;
 }
 
 // ---- Seams ----------------------------------------------------------------

@@ -21,24 +21,11 @@ import { PgBatchChecker } from "./batchChecker.js";
 import { BatchMergeCoordinator } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
-import { PgSpecEscalator } from "./coordinatorEscalate.js";
+import { PgSpecEscalator, requireRecoveryParkWriter } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
-import { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
-import { PgMergeQueueModel, PgMergeRunner, PgMergeSettleTransaction } from "./coordinatorPg.js";
+import { PgMergeQueueEventEmitter, PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
-
-/**
- * apex v87: local both-or-neither settle (`PgMergeSettleTransaction`) opens
- * `PgEventStore` on the worker pool — only legal when the writer declares
- * `localMergeSettleCoTx` (Direct; pool can INSERT `events`). HttpRunStateWriter
- * omits the flag; wiring the local settle would throw
- * `permission denied for table events` on every dequeue (bisect / gate rework /
- * needs_attention / infra escalate) and fail the coordinate pass every ~15s.
- * Remote writers use sequential event-first through the writer-backed emitters.
- */
-export function canCoTransactMergeSettle(writer: BuildMergeCoordinatorDeps["runStateWriter"]): boolean {
-  return writer.localMergeSettleCoTx === true;
-}
+import { requireRecoveryOwnedSettlementWriter } from "./recoveryOwnership.js";
 
 /**
  * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
@@ -64,22 +51,20 @@ export async function resolveMaxBatchSize(pool: pg.Pool, projectId: string): Pro
   return migrateProjectConfig(config).maxBatchSize;
 }
 
-/** Assemble the production BatchMergeCoordinator (the native-queue driver). */
+/**
+ * Assemble the production BatchMergeCoordinator (the native-queue driver).
+ * `runStateWriter` must implement RecoveryParkWriter — production Direct/Http always do;
+ * {@link requireRecoveryParkWriter} fails loud if a stub lacks park authority.
+ */
 export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): MergeCoordinator {
+  const runStateWriter = requireRecoveryParkWriter(deps.runStateWriter);
+  const recoverySettlement = requireRecoveryOwnedSettlementWriter(runStateWriter);
   const queueModel = new PgMergeQueueModel(deps.pool);
-  // ATOMICITY (audit RC-4 #3) + plane-split (apex v87): co-transact event+queue UPDATE
-  // ONLY when the writer is Direct (local pool can INSERT events). HttpRunStateWriter
-  // omits `tx` → markDequeuedAfterEvent / markInfraBlockedAfterEvent use sequential
-  // event-first through the writer-backed emitters (control plane owns the INSERT).
-  const settleTx = canCoTransactMergeSettle(deps.runStateWriter)
-    ? new PgMergeSettleTransaction(deps.pool, queueModel)
-    : undefined;
   return new BatchMergeCoordinator({
     queue: queueModel,
-    ...(settleTx !== undefined && { tx: settleTx }),
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
     // stage + the spec-status finalize + the conflict re-execution.
-    runner: new PgMergeRunner(buildDriveMerge(deps)),
+    runner: new PgMergeRunner(buildDriveMerge({ ...deps, runStateWriter })),
     checker: new PgBatchChecker({
       pool: deps.pool,
       githubHttp: deps.githubHttp,
@@ -89,15 +74,15 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       ssh: deps.ssh,
       identitySecretRef: deps.identitySecretRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-      runStateWriter: deps.runStateWriter,
+      runStateWriter,
     }),
     // Audit finding D3/H3 sweep: writer ALWAYS wired (Direct or HTTP); the queue
     // event emitters route every event through it.
-    events: new PgMergeQueueEventEmitter(deps.pool, deps.runStateWriter),
-    batchEvents: new PgBatchMergeEventEmitter(deps.pool, deps.runStateWriter),
+    events: new PgMergeQueueEventEmitter(deps.pool, runStateWriter),
+    batchEvents: new PgBatchMergeEventEmitter(deps.pool, runStateWriter),
     // The §2c non-bricking conflict escalator (parks an irreconcilable spec at
     // needs_attention) — REUSED verbatim from the native queue, routes through the writer.
-    escalator: new PgSpecEscalator(deps.pool, deps.runStateWriter),
+    escalator: new PgSpecEscalator(deps.pool, runStateWriter),
     // The batch-gate-fail self-heal (v35 — the strand fix): a GATE-fail bisect culprit
     // (code that passed its own branch gates but breaks integrated) is routed back to the
     // WRITER for rework carrying the gate error as steering, REUSING the never-discard
@@ -105,8 +90,9 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
     // conflict-replan route. Always uses the writer.
     gateRework: new PgBatchGateReworkRouter({
       pool: deps.pool,
-      runStateWriter: deps.runStateWriter,
+      runStateWriter,
     }),
+    recoverySettlement,
     // Audit RC-7: the DURABLE backing store for both runaway-guard ceilings (per-project
     // consecutive-infra-hold streak + per-entry recoverable-drive attempts), so the counters
     // survive a rolling deploy / crash-loop instead of resetting in a process-local Map.

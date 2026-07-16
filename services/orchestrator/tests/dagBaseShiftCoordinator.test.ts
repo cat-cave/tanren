@@ -1,16 +1,4 @@
-// THE NEVER-DISCARD KEYSTONE PROOF (tanren-owns-the-engine.md §3/§7): the
-// BaseShiftCoordinator REBASES the dependent's existing run/branch in place via the jj
-// `WorkspaceVcsCore` and re-plans ONLY when the resolver + re-gate say the old work no
-// longer fits — it NEVER supersede+regenerates (the deleted `PgPercolationReexecutor`).
-// Driven through in-memory seams (TEST FIXTURES — they live here, never src/). Proves:
-//   (1) rebase-not-regenerate: an ancestor lands → the dependent's run row is the SAME
-//       run_id (the `reexecRunId` IS the dependent's own run id, NOT a new run), its
-//       branch was rebased (`rebaseOnto` invoked on the jj core), NO new run was
-//       created, and re-plan was NOT invoked on a clean rebase + passing re-gate;
-//   (2) a conflicted rebase RECORDS the jj conflict (the work survives) and re-plans
-//       ONLY when the resolver says it no longer fits;
-//   (3) `integration.rebase` / `rebase_vs_rebuild` instrumentation is emitted;
-//   (4) fail-closed: an unresolvable re-gate HOLDS (never merges, never discards).
+// BaseShiftCoordinator never-discard unit tests; scripted seams, no runner/DB.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -37,6 +25,7 @@ import {
   type ReGateResult,
   type ReGateVerdict,
 } from "../src/engine/dag/baseShiftCoordinator.js";
+import { ownedPlannerRecovery, settleRecoveryForTest } from "./fixtures/scriptedRecoverySettlement.js";
 
 const PROJECT = "project_base_shift";
 const DEP_RUN = "run_dependent_keep_me";
@@ -65,7 +54,6 @@ const DECISION: PercolationDecision = {
 
 // ---- In-memory seams (fixtures) -------------------------------------------
 
-/** A jj `WorkspaceVcsCore` fake recording `rebaseOnto` + `resolveConflict` invocations. */
 class RecordingWorkspaceCore implements WorkspaceVcsCore {
   readonly rebaseCalls: Array<{ branch: string; baseSha: string }> = [];
   readonly resolveCalls: Array<{ branch: string; conflictId: string }> = [];
@@ -127,8 +115,6 @@ class RecordingOpener implements BaseShiftWorkspaceOpener {
   }
 }
 
-// Counter-bearing seam fakes built as factories (not classes — the file's class budget
-// is reserved for the richer recording fakes below).
 type ScriptedReGate = BaseShiftReGate & { calls: number };
 function scriptedReGate(verdict: ReGateVerdict, gateError?: string): ScriptedReGate {
   const fake: ScriptedReGate = {
@@ -141,7 +127,6 @@ function scriptedReGate(verdict: ReGateVerdict, gateError?: string): ScriptedReG
   return fake;
 }
 
-/** Records EXACTLY which clean-rebase GATE-tier failures routed to WRITER REWORK (the fix). */
 type RecordingGateRework = BaseShiftGateReworkRouter & {
   calls: Array<{ specId: string; runId: string; gateError: string }>;
 };
@@ -151,6 +136,14 @@ function recordingGateRework(): RecordingGateRework {
     calls,
     async routeGateFailToRework(input) {
       calls.push({ specId: input.specId, runId: input.runId, gateError: input.gateError });
+      return {
+        kind: "owned",
+        receipt: {
+          kind: "writer_rework",
+          specId: input.specId,
+          run: { kind: "enqueued", replanRunId: "run_r", plannerTaskId: "task_r" },
+        },
+      };
     },
   };
 }
@@ -179,10 +172,7 @@ function recordingNodeReader(): RecordingNodeReader {
   return fake;
 }
 
-/** Records EXACTLY which keep-run-row / replan writes ran — the never-discard assertions. */
 class RecordingPersistence implements BaseShiftPersistence {
-  // jj-local: the re-point writes ONLY the re-resolved ancestor stack (the legacy
-  // `speculative_base` column was dropped in WS-B PR-12 — never carried on the port).
   readonly repointStacks: Array<{ runId: string; ancestorStack: AncestorStack }> = [];
   readonly markedInFlight: Array<{ runId: string; ancestorSpecId: string; toSha: string }> = [];
   readonly replanned: Array<{ runId: string; specId: string; reason: string }> = [];
@@ -196,9 +186,14 @@ class RecordingPersistence implements BaseShiftPersistence {
       toSha: input.pending.toSha,
     });
   }
-  async recordReplan(input: { runId: string; specId: string; reason: string }): Promise<void> {
+  async recordReplan(input: { runId: string; specId: string; reason: string }) {
     this.replanned.push({ runId: input.runId, specId: input.specId, reason: input.reason });
+    return ownedPlannerRecovery(input.specId);
   }
+  async settleRecovery(input: Parameters<BaseShiftPersistence["settleRecovery"]>[0]) {
+    return settleRecoveryForTest(input.recovery);
+  }
+  async clearInFlight(): Promise<void> {}
 }
 
 class RecordingEventEmitter implements BaseShiftEventEmitter {
@@ -356,35 +351,22 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
   });
 
   it("a CLEAN rebase whose re-gate FAILS a GATE TIER ⇒ WRITER REWORK (carrying the gate error), NOT replan/irreconcilable", async () => {
-    // THE FIX: a clean rebase (jj recorded NO conflict) whose fresh re-gate FAILS a GATE TIER
-    // (lint/test/build) on the new base is the WRITER's to fix — route to WRITER REWORK
-    // carrying the real gate error as steering, NEVER to replan (the old, mis-classified
-    // behavior that conflated a clean-rebase gate-fail with an irreconcilable conflict and
-    // stranded the spec). The convergence detector inside the router owns escalation (no count).
     const gateError = "base-shift re-gate failed at tier tier-2: step 'test' (exit 1)";
     const h = harness({ conflictOnRebase: false, reGate: "failed", reGateError: gateError });
     await reexec(h);
-    // Routed to WRITER REWORK with the REAL gate error (no_silent_fallback) — NOT replanned.
     expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
-    // The categorical decision is still emitted (the rebase WAS clean — rebaseConflicted:false).
     const event = h.events.rawEvents[0];
     expect(event).toMatchObject({ decision: "replanned", rebaseConflicted: false, sameRunId: true });
     expect(() => IntegrationRebasePayload.parse(event)).not.toThrow();
   });
 
   it("Codex critic #15: a clean-rebase gate-fail ALWAYS routes to writer rework, NEVER to replan (no fallback)", async () => {
-    // THE ERADICATED REGRESSION: `gateRework` used to be OPTIONAL; when absent, a clean-rebase
-    // gate failure fell back to `recordReplan`, silently violating the "writer rework, not
-    // replan" doctrine (PR #682 / merge re-gate design). The fix makes gateRework REQUIRED
-    // and drops the fallback branch — the routing is unconditional.
     const gateError = "base-shift re-gate failed at tier tier-3: step 'build' (exit 2)";
     const h = harness({ conflictOnRebase: false, reGate: "failed", reGateError: gateError });
     await reexec(h);
-    // ROUTED to writer rework carrying the real gate error — the doctrine's landing point.
     expect(h.gateRework.calls).toEqual([{ specId: "spec_b", runId: DEP_RUN, gateError }]);
-    // NEVER falls back to replan (eradicated) and NEVER stamps keep-run (the gate did not pass).
     expect(h.persistence.replanned).toEqual([]);
     expect(h.persistence.repointStacks).toEqual([]);
     const event = h.events.rawEvents[0];
@@ -408,13 +390,23 @@ describe("BaseShiftCoordinator — never-discard rebase (NOT supersede+regenerat
     expect(h.persistence.replanned).toEqual([]);
   });
 
-  it("a CONFLICTED rebase whose resolver routed-to-rework (its own GATE re-gate failed) ⇒ NO double-route (no replan)", async () => {
-    // The LIVE resolver's INTERNAL re-gate failed a GATE TIER and it ALREADY routed the spec
-    // to writer rework (re-opened + enqueued a re-author run) — signalled via routedToRework.
+  it("a CONFLICTED rebase whose resolver returned owned rework ⇒ NO double-route (no replan)", async () => {
+    // The live resolver already routed writer rework and returns its exact owner receipt.
     // The coordinator MUST NOT also replan (that would double-route the spec).
     const h = harness({
       conflictOnRebase: true,
-      resolution: { resolved: false, routedToRework: true, reason: "re-gate gate-tier fail — routed to rework" },
+      resolution: {
+        resolved: false,
+        reason: "re-gate gate-tier fail — routed to rework",
+        recovery: {
+          kind: "owned",
+          receipt: {
+            kind: "writer_rework",
+            specId: "spec_b",
+            run: { kind: "enqueued", replanRunId: "run_rework", plannerTaskId: "task_rework" },
+          },
+        },
+      },
     });
     await reexec(h);
     expect(h.persistence.replanned).toEqual([]);

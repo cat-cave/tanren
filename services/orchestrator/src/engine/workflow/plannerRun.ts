@@ -480,7 +480,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
       }),
       // After an auto-rebase the prior verdict is stale → re-run the native `pre_merge` gate.
       reGateCi: buildReGateCi(input, mergeGateCtx),
-      ...reGateGateReworkSeam(input, { eventStore, prNumber: pullRequest.prNumber }),
+      ...reGateGateReworkSeam(input, { prNumber: pullRequest.prNumber }),
       // THE ONE BASE-SHIFT HANDLER (§7 / §5h): the unified jj rebase, no server update-branch.
       baseShiftRebase: baseShiftRebaseSeam(context, input),
       ...nativeQueueSeam(input),

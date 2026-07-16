@@ -12,13 +12,42 @@ import type { EventStore } from "../eventStore.js";
 import type { DequeueReason, MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 
+type DequeuedEventEntry = Pick<MergeQueueEntry, "runId" | "specId" | "prUrl" | "prNumber">;
+
+/** Canonical `merge.dequeued` append shared by sequential and atomic settlement. */
+export async function appendMergeDequeuedEvent(
+  store: EventStore,
+  orgId: string,
+  input: {
+    projectId: string;
+    entry: DequeuedEventEntry;
+    reason: DequeueReason;
+    message: string;
+  },
+): Promise<void> {
+  await store.append({
+    runId: input.entry.runId,
+    specId: input.entry.specId,
+    projectId: input.projectId,
+    orgId,
+    eventType: "merge.dequeued",
+    payload: {
+      prUrl: input.entry.prUrl,
+      prNumber: input.entry.prNumber,
+      integration: "native_queue",
+      specId: input.entry.specId,
+      reason: input.reason,
+      message: input.message,
+    },
+  });
+}
+
 /**
  * A queue-event emitter bound to a SINGLE already-resolved {@link EventStore} (an
  * org-scoped `PgEventStore`, an in-transaction one, or the plane-split writer). It
  * owns ONLY the event payload shapes — no org resolution, no scope opening — so the
- * SAME payloads are emitted whether the append runs standalone (`PgMergeQueueEventEmitter`)
- * or inside the both-or-neither settle transaction (`PgMergeSettleTransaction`,
- * audit RC-4 #3). Single-sourcing the payloads keeps the two paths from drifting.
+ * SAME payloads are emitted through the writer-backed queue surface. Recovery
+ * settlement itself uses the writer's atomic queue authority.
  */
 export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter {
   /**
@@ -54,21 +83,7 @@ export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter
     reason: DequeueReason;
     message: string;
   }): Promise<void> {
-    await this.store.append({
-      runId: input.entry.runId,
-      specId: input.entry.specId,
-      projectId: input.projectId,
-      orgId: this.orgId,
-      eventType: "merge.dequeued",
-      payload: {
-        prUrl: input.entry.prUrl,
-        prNumber: input.entry.prNumber,
-        integration: "native_queue",
-        specId: input.entry.specId,
-        reason: input.reason,
-        message: input.message,
-      },
-    });
+    await appendMergeDequeuedEvent(this.store, this.orgId, input);
   }
 
   async emitInfraBlocked(input: {
