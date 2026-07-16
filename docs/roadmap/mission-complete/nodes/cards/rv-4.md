@@ -2,8 +2,11 @@
 
 **Bucket**: runtime verification
 **Phase**: MVP / Wave 2 consumer
-**State**: authoring on `mission/rv-4-final`; no node credit until merged
-**Base**: `origin/main` / `98457ad02c1550aec8f24e6d965df804d160c5aa`
+**State**: exclusive core audited and held; serialized tail blocked by IN-1;
+no node credit until merged
+**Base**: `origin/main` / `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
+**Exclusive core**: `63000a1a70ce2e276af51f0143b0d82a7f1ec1f1`
+**Binary delta**: `f569e4c96aefa1bc70b54d5d1e87956b98d2ff1c37734a5dbc410d9eac44bf57`
 **Gate proof**: `RV4-AFFECTED-SELECTION-FAIL-CLOSED`
 
 ## Outcome
@@ -96,6 +99,34 @@ lease:
 W0 already seeded the event in `0042`. No nav or `routes.ts` edit is required:
 the dashboard is directly callable at its project-scoped URL.
 
+## Post-IN-1 serialized-tail execution
+
+The tail starts only after IN-1 is merged and root grants the reserved paths.
+Execute it in this order; stop on any conflict or contract discrepancy:
+
+1. Fetch the exact merged `origin/main`, verify IN-1's migration and composite
+   project key, amend this card to activate each granted path, then rebase the
+   held core. Record the pre/post binary-delta digest; do not resolve a semantic
+   conflict by guessing.
+2. Write `0044` against the actual IN-1 constraint names. Drop the scalar
+   `behavior_coverage_edges(project_id)` foreign key and add the composite
+   `(org_id, project_id)` foreign key to the canonical project key. Add no
+   compatibility column, backfill, event seed, or second authority.
+3. Generate the `0044` snapshot and journal entry mechanically, then prove
+   schema/migration drift is clean.
+4. Mount the routes through the production feature router using the application
+   pool, the sole `PgCasByteStore`, and the default `PgEventStore` path. A fake
+   recorder, in-memory CAS, or test-only mount is not acceptable.
+5. Register the dashboard screen at the direct project-scoped route. Preserve
+   unavailable, empty, stale, and current as distinct rendered states; do not
+   fabricate navigation or an empty success response.
+6. Extend the real-Postgres suite through the production mount: migrate, seed,
+   POST an analysis, assert the CAS bytes and catalogued event, GET the exact
+   fact, and replay it. Add cross-org composite-FK and replay negatives.
+7. Run affected gates, the matrix below, convergence audit, full local gates,
+   hosted CI, merge, and post-merge reproof. RV-4 receives no node credit until
+   every row is proved on the final merge candidate.
+
 ## Authority and storage protocol
 
 1. Authorize both the path org and path project before reading the graph.
@@ -186,3 +217,17 @@ After IN-1 and the serialized tail land:
 3. root convergence audit;
 4. `just fast-check`, `just ci`, `just smoke`, hosted CI, merge, and
    post-merge reproof before rv-4 earns one node credit.
+
+### Final proof matrix
+
+| Seam             | Positive proof                                                                                   | Mutation / negative                                                 | Required result                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------- |
+| Tenant FK        | Same-org edge references the canonical project key                                               | Reuse a colliding foreign-org project ID                            | Database rejects the row                                |
+| Production mount | Analyze through the mounted HTTP router                                                          | Omit auth, use foreign project, or request an unready node          | Non-2xx; no event                                       |
+| Publication      | HTTP POST writes exact canonical bytes to `PgCasByteStore` and appends W0 through `PgEventStore` | Fail CAS or event append                                            | Non-2xx; no authoritative selection                     |
+| Exact replay     | Event resolves the same digest and CAS fact in the same org/project                              | Alter CAS bytes, event payload, or scope                            | Unavailable or conflict, never current                  |
+| Freshness        | Unchanged graph and node replay current                                                          | Change edge, revision digest/set, head, tree, member, or node state | `409 stale`                                             |
+| Isolation        | Own-org graph/fact/event are readable                                                            | Query a colliding ID or digest from another org/project             | Not found/forbidden; no leak                            |
+| UI visibility    | Registered direct route renders real graph, bindings, reasons, and digest                        | Graph fetch fails or bound fact is stale                            | Distinct unavailable/stale state; durable fact retained |
+| Gate proof       | Named focused, RLS, migration, route, render, and mutation suites pass                           | Reintroduce scalar FK, fake store/writer, or permissive omission    | At least one named suite fails                          |
+| Convergence      | `just fast-check`, `just ci`, `just smoke`, hosted CI, and final audit pass on rebased head      | Base moves or any gate changes state                                | Rebase and rerun; no merge                              |
