@@ -33,6 +33,7 @@ import {
 } from "../dag/jjLocalIntegration.js";
 import { resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
 import { decideProofReuse, recordProofVerdict } from "../dag/integrationProofReuse.js";
+import { isCanonicalContentIdentity } from "../governance/policyGateIdentity.js";
 
 /** The local bookmark name the prospective merged state materializes as (NEVER pushed). */
 export function batchLocalIntegrationRef(tailSpecId: string): string {
@@ -108,8 +109,8 @@ export interface BatchNodeDriveDeps {
  *   1. JJ-LOCAL INTEGRATION (3b): stack the ordered members on the base LOCALLY. A
  *      spec-vs-spec conflict short-circuits to the SAME `conflict` verdict the server
  *      build returned (no host ref written).
- *   2. UPSERT the node (the memberKey identity + the materialized head/tree/status).
- *   3. RESOLVE the gate config from the same workspace → the gateConfigHash component.
+ *   2. RESOLVE the gate config + canonical policy identity from the same live inputs.
+ *   3. UPSERT the node with those exact proof-key identities in the same statement.
  *   4. PROOF REUSE (3a): resolve the six live key components + decide. On REUSE: a
  *      synthetic pass (the gate is NOT run). On RECOMPUTE: run the gate on the workspace +
  *      record the proof under the (sound) key. An unreadable config OR an unreadable
@@ -143,7 +144,27 @@ async function verdictForIntegrated(
   live: LiveJjWorkspace,
   integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
 ): Promise<BatchCheckVerdict> {
-  // 2. UPSERT the node — its memberKey is the integrated-content identity the proof keys on.
+  // 2. Resolve the proof-key identities BEFORE persistence. An unreadable config or
+  // non-canonical policy identity still runs the gate (fail closed on reuse), but no
+  // identity-less node is persisted.
+  const config = await deps.resolveConfig(live);
+  if (config === undefined || facts.policyVersion === undefined || !isCanonicalContentIdentity(facts.policyVersion)) {
+    return (await deps.gate(live)).verdict;
+  }
+  const components = resolveLiveKeyComponents({
+    config,
+    runnerImage: facts.runnerImage,
+    policyVersion: facts.policyVersion,
+    ...(facts.appEnv !== undefined && { appEnv: facts.appEnv }),
+    quarantineVersion: facts.quarantineVersion,
+  });
+  // `config` always yields a resolved canonical sha256 gate hash; keep the guard
+  // explicit so a future resolver shape cannot persist an unresolved component.
+  if (!components.gateConfigHash.resolved || !components.policyVersion.resolved) {
+    return (await deps.gate(live)).verdict;
+  }
+
+  // 3. UPSERT the node — member identity + exact proof identities are atomic.
   await deps.nodes.upsertNode({
     projectId: facts.projectId,
     orgId: facts.orgId,
@@ -157,19 +178,16 @@ async function verdictForIntegrated(
       branch: m.branch,
       headSha: integrated.memberHeadShas[m.specId] ?? "",
     })),
+    gateConfigHash: components.gateConfigHash.value,
+    policyVersion: components.policyVersion.value,
     headSha: integrated.headSha,
     treeHash: integrated.treeHash,
     status: "ready",
   });
   const node = await deps.nodes.findByMemberKey(facts.orgId, memberKeyForNode(facts, integrated));
 
-  // 3. Resolve the gate config from the workspace (the gateConfigHash key component).
-  const config = await deps.resolveConfig(live);
-
-  // Fail-closed: an unreadable node OR an unreadable config ⇒ RECOMPUTE (run the gate),
-  // never reuse on uncertainty. With no config there is no sound key either, so the gate
-  // result is NOT recorded as a proof (a recompute with no key records nothing).
-  if (node === undefined || config === undefined) {
+  // Fail-closed: an unreadable node ⇒ RECOMPUTE (run the gate), never reuse.
+  if (node === undefined) {
     return (await deps.gate(live)).verdict;
   }
 
@@ -177,13 +195,7 @@ async function verdictForIntegrated(
   const decision = await decideProofReuse({
     orgId: facts.orgId,
     node,
-    components: resolveLiveKeyComponents({
-      config,
-      runnerImage: facts.runnerImage,
-      policyVersion: facts.policyVersion,
-      ...(facts.appEnv !== undefined && { appEnv: facts.appEnv }),
-      quarantineVersion: facts.quarantineVersion,
-    }),
+    components,
     store: deps.nodes,
     emit: async (payload) => {
       await deps.eventStore.append({

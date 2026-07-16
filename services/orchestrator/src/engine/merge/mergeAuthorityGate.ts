@@ -30,6 +30,7 @@ import type { LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthori
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { MergeAuthorityBundle } from "../workflow/reviewMerge/mergeDispatchTypes.js";
+import { landIdentityValidationReason } from "../governance/policyGateIdentity.js";
 
 /**
  * The fail-closed signals the dispatcher gathers for ONE land authorization, in
@@ -214,6 +215,30 @@ function buildEnvelope(
  * kept distinct from `merge_state_unknown` (the land succeeded but the record failed).
  */
 export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<MergeAuthorityDisposition> {
+  // gv-3: both identities are canonical lowercase sha256 values. Empty values,
+  // schema literals (`"1"`), whitespace padding, malformed lengths, and uppercase
+  // encodings all BLOCK before any host reads or authority side effects.
+  const identityIssue = landIdentityValidationReason({
+    gateConfigHash: input.gateConfigHash,
+    policyVersion: input.policyVersion,
+  });
+  if (identityIssue !== undefined) {
+    const reasonByIssue: Record<typeof identityIssue, string> = {
+      blank_gate_config_hash:
+        "gateConfigHash: blank — land requires the canonical lowercase 64-hex hash of the gated .tanren/ci.yml",
+      invalid_gate_config_hash:
+        "gateConfigHash: invalid — land requires a canonical lowercase 64-hex gate-config content identity",
+      blank_policy_version:
+        "policyVersion: blank — land requires the canonical lowercase 64-hex governance policy content identity",
+      invalid_policy_version:
+        "policyVersion: invalid — land requires a canonical lowercase 64-hex governance policy content identity",
+    };
+    return {
+      kind: "blocked",
+      reasons: [reasonByIssue[identityIssue]],
+    };
+  }
+
   const { codeHost, repo } = input;
   const baseSha = await requireBranchSha(codeHost, repo, input.intoMain);
   const headSha = await requireBranchSha(codeHost, repo, input.headBranch);

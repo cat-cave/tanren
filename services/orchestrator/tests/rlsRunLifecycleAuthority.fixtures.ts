@@ -29,8 +29,8 @@ export function lifecycleAuthorityBundle(input: {
     codeHost: host,
     orgId: input.orgId,
     landStoreFor: (context) => buildAuthorityLandStore(input.pool, context, writer),
-    gateConfigHash: "gc",
-    policyVersion: "pv",
+    gateConfigHash: "a".repeat(64),
+    policyVersion: "b".repeat(64),
     gateOutcome: { passed: true, results: [] },
     // The native gate anchored its verdict on the workspace HEAD (`headSha`); the land's
     // authorized commit is the same head, so the §5 commit-binding clears.

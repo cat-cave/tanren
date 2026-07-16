@@ -19,6 +19,7 @@ import { loadDesignContextBlock } from "../design/designWriterContext.js";
 import { materializeContractFiles } from "../forge/scaffold/index.js";
 import { resolveAncestorStack } from "../dag/ancestorStack.js";
 import { resolveProjectEnv } from "../environments/index.js";
+import { hashProjectPolicy } from "../governance/policyGateIdentity.js";
 // The P4 JIT env-image refinement step (env-management.md §4 + §7) is the "second half"
 // of env resolution — the no-match router that must run OUTSIDE this read txn (it builds
 // + validates an image). Re-exported here (env resolution's home) so the run executor
@@ -297,6 +298,9 @@ export async function loadRunExecutionContext(
     // AUDIT-EVIDENCE BASELINE: the governance policy version (the project config
     // version), threaded onto the gate.verdict roll-up the run emits.
     policyVersion: projectConfig.version,
+    // gv-3: the proof/storage identity is the governance content hash, distinct
+    // from the numeric AuditEnvelope schema version above.
+    policyIdentity: hashProjectPolicy(projectConfig),
     // GREENFIELD MARKER from the resolved project config. Drives the in-loop
     // deps-ensure install MODE: greenfield ⇒ non-frozen install (a writer-added
     // devDep installs even without a regenerated lockfile); brownfield (false) ⇒

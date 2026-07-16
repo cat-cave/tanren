@@ -33,6 +33,7 @@ import {
 import { bootstrapLocalIntegrationRef } from "../src/engine/dag/jjLocalBootstrap.js";
 import { memberKey } from "../src/engine/contracts/integrationNodes.js";
 import { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
+import { resolveGateConfigHashFromYaml } from "../src/engine/governance/policyGateIdentity.js";
 import {
   ADMIN_URL,
   APP_PASSWORD,
@@ -42,6 +43,7 @@ import {
   DispatchingSsh,
   makeContext,
   makeInput,
+  POLICY_IDENTITY,
   RLS_DB_ENABLED,
   RUN_BRANCH,
   STACK,
@@ -96,6 +98,8 @@ describe("eager_base node bootstrap UPSERT (wiring)", () => {
     // The assembled head/tree the node materializes as.
     expect(facts.headSha).toBe(ASSEMBLED_HEAD);
     expect(facts.treeHash).toBe(TREE_HASH);
+    expect(facts.gateConfigHash).toBe(resolveGateConfigHashFromYaml());
+    expect(facts.policyVersion).toBe(POLICY_IDENTITY);
     // The members are the ORDERED ancestor stack (DAG order is load-bearing for the
     // memberKey), each `{specId, runId, branch, headSha}` with the assembly-captured sha.
     expect(facts.members).toEqual([
@@ -219,6 +223,8 @@ describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () =>
       members: MEMBERS,
       headSha: ASSEMBLED_HEAD,
       treeHash: TREE_HASH,
+      gateConfigHash: resolveGateConfigHashFromYaml(),
+      policyVersion: POLICY_IDENTITY,
     });
 
     const found = await model.findByMemberKey(ORG, EXPECTED_KEY);
@@ -226,6 +232,8 @@ describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () =>
     expect(found?.ref).toBe(LOCAL_REF);
     expect(found?.headSha).toBe(ASSEMBLED_HEAD);
     expect(found?.treeHash).toBe(TREE_HASH);
+    expect(found?.gateConfigHash).toBe(resolveGateConfigHashFromYaml());
+    expect(found?.policyVersion).toBe(POLICY_IDENTITY);
     expect(found?.members.map((m) => m.specId)).toEqual(["spec-a", "spec-b"]);
     expect(found?.members.map((m) => m.headSha)).toEqual([MEMBERS[0]!.headSha, MEMBERS[1]!.headSha]);
 
@@ -245,6 +253,8 @@ describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () =>
       members: MEMBERS,
       headSha: ASSEMBLED_HEAD,
       treeHash: TREE_HASH,
+      gateConfigHash: resolveGateConfigHashFromYaml(),
+      policyVersion: POLICY_IDENTITY,
     });
     const count = await runWithOrgScope(appPool, ORG, async (client) => {
       const r = await client.query("SELECT count(*)::int AS c FROM integration_nodes WHERE member_key = $1", [

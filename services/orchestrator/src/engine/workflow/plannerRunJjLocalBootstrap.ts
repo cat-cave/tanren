@@ -26,6 +26,7 @@ import type { AncestorSpecPhase } from "../dag/jjLocalIntegration.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
+import { resolveGateConfigHash } from "../governance/policyGateIdentity.js";
 import {
   autoSnapshotWorkingEdit,
   identityJjRefResolver,
@@ -36,6 +37,7 @@ import {
 import { createLogger } from "../observability/logger.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
 import type { ResolvedCloneCredential } from "./plannerRunWorkspace.js";
+import { resolveGateConfig } from "./gate/index.js";
 
 const log = createLogger("jj-local-bootstrap");
 
@@ -70,6 +72,10 @@ export interface EagerBaseNodeUpsertFacts {
   headSha: string;
   /** The assembled head's git tree hash (the content identity proof reuse keys on). */
   treeHash: string;
+  /** Exact gate-config content identity resolved from this assembled workspace. */
+  gateConfigHash: string;
+  /** Exact governance-policy content identity resolved for this run. */
+  policyVersion: string;
 }
 
 /**
@@ -78,10 +84,8 @@ export interface EagerBaseNodeUpsertFacts {
  * batch path's `merge_batch` node uses (`integration_nodes`), so the host-meaningful
  * identity (`members[].branch` + `headSha`) + the `memberKey` participate in proof reuse.
  *
- * It NEVER gates the run: a failure is loud-logged (the §6-style observability write
- * pattern, mirroring `observeRunAsIntegrationNode`) and swallowed — the proof-reuse
- * substrate is NOT the merge authority. Org-scoped (RLS) — the write carries the org key.
- * Injected as a port so the bootstrap unit/conformance paths drive it without a live DB.
+ * It NEVER gates the run: a failure is loud-logged and swallowed. Org-scoped (RLS);
+ * injected as a port so unit/conformance paths need no live DB.
  */
 export type EagerBaseNodeUpsert = (facts: EagerBaseNodeUpsertFacts) => Promise<void>;
 
@@ -99,9 +103,7 @@ export function buildEagerBaseNodeUpsert(pool: pg.Pool): EagerBaseNodeUpsert {
       orgId: facts.orgId,
       baseBranch: facts.baseBranch,
       // The bootstrap materializes the assembled head, not the pristine `main` sha; the
-      // base branch name is the honest base identity (the same convenience
-      // `observeRunAsIntegrationNode` records — the assembly carries the head, not the
-      // `main` SHA). The `memberKey` keys on this + the ordered member shas.
+      // base branch name is the honest base identity; the assembly carries the head.
       baseSha: facts.baseBranch,
       ref: facts.ref,
       // FORK F4: reuse `eager_base` (a valid CHECK value — no migration); the label only
@@ -113,6 +115,8 @@ export function buildEagerBaseNodeUpsert(pool: pg.Pool): EagerBaseNodeUpsert {
         branch: m.branch,
         headSha: m.headSha,
       })),
+      gateConfigHash: facts.gateConfigHash,
+      policyVersion: facts.policyVersion,
       headSha: facts.headSha,
       treeHash: facts.treeHash,
       // The dependent's base is assembled + ready for the writer to commit onto.
@@ -234,6 +238,8 @@ async function recordBootstrapStackHeadShas(
 async function recordEagerBaseNode(
   upsert: EagerBaseNodeUpsert,
   input: RunPlannerLoopInput,
+  target: RunnerHandle,
+  workspacePath: string,
   stack: AncestorStack,
   bootstrapped: BootstrapDependentBaseSuccess,
 ): Promise<void> {
@@ -243,6 +249,11 @@ async function recordEagerBaseNode(
     return;
   }
   try {
+    const policyVersion = input.context.policyIdentity;
+    if (policyVersion === undefined) {
+      throw new Error("run context has no canonical governance policy identity");
+    }
+    const gateConfigHash = resolveGateConfigHash(await resolveGateConfig({ ssh: input.ssh, target, workspacePath }));
     await upsert({
       orgId,
       projectId: input.context.projectId,
@@ -259,6 +270,8 @@ async function recordEagerBaseNode(
       })),
       headSha: bootstrapped.headSha,
       treeHash: bootstrapped.treeHash,
+      gateConfigHash,
+      policyVersion,
     });
   } catch (error) {
     // OBSERVE-ONLY: the proof-reuse substrate is NOT the merge authority — a node-write
@@ -463,7 +476,7 @@ export async function bootstrapDependentWorkspace(
   // swallowed inside `recordEagerBaseNode` (the substrate is not the merge authority). The
   // port is absent on unit paths that do not exercise the node write.
   if (input.eagerBaseNodeUpsert !== undefined) {
-    await recordEagerBaseNode(input.eagerBaseNodeUpsert, input, stack, result);
+    await recordEagerBaseNode(input.eagerBaseNodeUpsert, input, target, workspacePath, stack, result);
   }
   // WS-A PR-8c (§2.3): fold the assembly-captured per-ancestor head shas BACK into
   // `runs.ancestor_stack[].headSha` (additive — at enqueue the stack entries carry an

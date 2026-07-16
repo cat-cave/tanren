@@ -102,7 +102,7 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
   }
 }
 
-/** Reads the affected `integration_nodes` for a base shift (S0 compatibility read-model). */
+/** Reads the affected canonical persisted `integration_nodes` for a base shift. */
 export class PgBaseShiftNodeReader implements BaseShiftNodeReader {
   private readonly model: PgIntegrationNodeModel;
   constructor(pool: pg.Pool) {
@@ -110,10 +110,9 @@ export class PgBaseShiftNodeReader implements BaseShiftNodeReader {
   }
 
   async nodesForDependent(input: { projectId: string; dependent: SpeculativeDependent }): Promise<IntegrationNode[]> {
-    // The S0 compatibility read-model projects the project's in-flight speculative run
-    // rows as integration nodes; filter to the dependent's own node (its run id labels
-    // the integration). Observe-only — it does not branch control flow.
-    const nodes = await this.model.projectSpeculativeRunsAsNodes(input.projectId);
+    // Read the one integration-node store directly; no legacy run-row projection may
+    // manufacture an identity-less node. Filter to the dependent's own member vector.
+    const nodes = await this.model.findEagerBaseNodes(input.projectId);
     return nodes.filter((n) => n.members.some((m) => m.runId === input.dependent.runId));
   }
 }

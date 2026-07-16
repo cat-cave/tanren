@@ -57,8 +57,8 @@ const NODE: IntegrationNode = {
   purpose: "merge_batch",
   members: [],
   memberKey: "MK",
-  gateConfigHash: "",
-  policyVersion: "",
+  gateConfigHash: "a".repeat(64),
+  policyVersion: "b".repeat(64),
   affectedFingerprint: "",
   status: "ready",
 };

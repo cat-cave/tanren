@@ -24,7 +24,11 @@ import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from ".
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
-import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
+import {
+  checkFullProjectConfigPatch,
+  checkGenericProjectCreateConfig,
+  handlePolicyIdentityGet,
+} from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
 import { handleProjectArchive, handleProjectUnarchive, handleProjectUpgrade } from "./lifecycle.js";
@@ -180,6 +184,17 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json({ error: "invalid_budget", issues: parsed.error.issues }, 400);
     }
     return handleBudgetPut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
+  });
+
+  // gv-3: callable receipt of the REAL governance policy content hash (never the
+  // schema literal `version: 1`). Org-member read; org-scoped ownership check.
+  app.get("/:orgId/projects/:projectId/policy-identity", async (c) => {
+    const actor = requireActor(c);
+    const orgId = c.req.param("orgId");
+    if (!actorCanAccessOrg(actor, orgId)) {
+      return c.json({ error: "org_access_denied" }, 403);
+    }
+    return handlePolicyIdentityGet(c, options.pool, orgId, c.req.param("projectId"));
   });
 
   // The dedicated GOVERNANCE surface (apex.md "missing endpoint → add it"): a

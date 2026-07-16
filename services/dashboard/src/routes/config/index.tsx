@@ -17,7 +17,8 @@ import type { Context, Hono } from "hono";
 import { clientDepsFor } from "../../api/clientDeps.js";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import type { OrgConfig } from "../../api/types.js";
+import { PolicyIdentityClient } from "../../api/policyIdentityClient.js";
+import type { OrgConfig, ProjectSummary } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ConfigView, type ConfigDiffLine, type ConfigHistoryEntry } from "../../components/config/ConfigView.js";
 
@@ -82,6 +83,16 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
           }
         : undefined;
 
+    // gv-3: surface the active project's real policy identity receipt.
+    const project = resolveActiveProject(ctx.projects, c.req.query("projectId"));
+    const policyIdentity =
+      ctx.org !== undefined && project !== undefined
+        ? await new PolicyIdentityClient({
+            orchestratorUrl: deps.orchestratorUrl,
+            cookieHeader: c.req.header("cookie"),
+          }).get(ctx.org.id, project.projectId)
+        : undefined;
+
     return renderShell(
       c,
       ctx,
@@ -101,6 +112,9 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
           { l: "source of truth", v: "the db", k: "pr is the write gate" },
         ]}
         history={PLACEHOLDER_HISTORY}
+        policyProjectId={project?.projectId}
+        policyProjectName={project?.name}
+        policyIdentity={policyIdentity}
       />,
     );
   });
@@ -138,6 +152,15 @@ export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
     }
     return c.redirect("/settings/config");
   });
+}
+
+/** Resolve `?projectId=` against org-visible projects; default to the first. */
+function resolveActiveProject(projects: ProjectSummary[], projectId: string | undefined): ProjectSummary | undefined {
+  if (projectId !== undefined && projectId !== "") {
+    const match = projects.find((p) => p.projectId === projectId);
+    if (match !== undefined) return match;
+  }
+  return projects[0];
 }
 
 function decodeDiff(raw: string | undefined): ConfigDiffLine[] {

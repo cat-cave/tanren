@@ -6,11 +6,8 @@
 // passed in its ABSENT (blocking) form — the fail-closed boundary in
 // `mergeAuthorityInputs` never invents a passing value.
 //
-// WHY here (not in the dispatcher): the bundle needs the real `pg.Pool` (for the
-// org-scoped durable finalize) + the token plumbing — both owned by the call site (the
-// run loop / the coordinator drive). The dispatcher stays pool-agnostic: it is handed
-// the `finalizerFor` closure + the built `CodeHost`, and resolves only mergeability +
-// conflict state itself.
+// gv-3: policy/gate identity is REAL content hashes, never the schema literal
+// `projectConfig.version === 1` and never an empty `gateConfigHash`.
 
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/projectConfig.js";
@@ -19,6 +16,12 @@ import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.j
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
+import { parsePullRequestRef } from "../providers/githubRepoRef.js";
+import {
+  requireCanonicalContentIdentity,
+  resolveGateConfigHashFromYaml,
+  resolveProjectPolicyIdentity,
+} from "../governance/policyGateIdentity.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import type { AuditPosture } from "../contracts/auditPosture.js";
@@ -31,6 +34,9 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { MergeAuthorityBundle, MergeForRunInput } from "../workflow/reviewMerge/mergeDispatchTypes.js";
 import type { ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
+
+/** The repo contract file that defines the native gate (sole CI config path). */
+const CI_CONFIG_PATH = ".tanren/ci.yml";
 
 /** Everything the call site holds to build the bundle for one run's land. */
 export interface BuildMergeAuthorityBundleInput {
@@ -48,10 +54,14 @@ export interface BuildMergeAuthorityBundleInput {
   /** Resolve the active GitHub token (the SAME closure the merge probe resolves with). */
   resolveToken: () => Promise<ResolvedVcsToken>;
   orgId: string;
-  /** The project config jsonb (→ auditPosture). */
+  /** The project config jsonb (→ auditPosture + gv-3 policy identity). */
   projectConfigRaw: unknown;
-  /** The project config version (the policy identity stamped on the node's proof key). */
-  policyVersion: number;
+  /**
+   * Real gate-config hash (gv-3). Empty string is fail-closed at land — never a
+   * sound proof identity. Callers that already resolved `CiConfigV1` pass
+   * `hashGateConfig(config)`; the merge-stage builder resolves it from the gated head.
+   */
+  gateConfigHash: string;
   /** The native gate outcome the run loop produced (absent → blocks). */
   gateOutcome: GateOutcome | undefined;
   /** The sha the latest `pre_merge` gate verdict was FOR (the TOCTOU commit-binding). */
@@ -120,12 +130,15 @@ function codeHostFor(githubHttp: GitHubHttpClient, resolveToken: () => Promise<R
 }
 
 export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput): MergeAuthorityBundle {
+  // gv-3: policy identity is the content hash of governance-sensitive fields — NEVER
+  // the schema literal `version: 1`. Unparseable config throws (fail-closed).
+  const { policyHash } = resolveProjectPolicyIdentity(input.projectConfigRaw);
   return {
     codeHost: codeHostFor(input.githubHttp, input.resolveToken),
     orgId: input.orgId,
     landStoreFor: (context) => buildAuthorityLandStore(input.pool, context, input.runStateWriter),
-    gateConfigHash: "",
-    policyVersion: String(input.policyVersion),
+    gateConfigHash: requireCanonicalContentIdentity(input.gateConfigHash, "gateConfigHash"),
+    policyVersion: policyHash,
     gateOutcome: input.gateOutcome,
     gatedHeadSha: input.gatedHeadSha,
     findings: input.findings,
@@ -135,6 +148,33 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     demo: input.demo,
     hitlSignoff: input.hitlSignoff,
   };
+}
+
+/**
+ * Re-read `.tanren/ci.yml` at the gated head and hash it. A genuine missing file is
+ * `undefined` per the CodeHost contract and therefore hashes the canonical default
+ * config (the same config execution uses). A missing head, malformed PR URL,
+ * unreadable provider response, or invalid YAML throws and aborts bundle construction;
+ * none can masquerade as an absent file or fabricate an empty identity.
+ */
+export async function resolveLandGateConfigHash(
+  codeHost: CodeHost,
+  prUrl: string,
+  gatedHeadSha: string | undefined,
+): Promise<string> {
+  if (gatedHeadSha === undefined || gatedHeadSha.trim() === "") {
+    throw new Error("merge authority bundle: gated head sha is absent; cannot bind the gate config");
+  }
+  const repo = parsePullRequestRef(prUrl).repo;
+  try {
+    const yaml = await codeHost.readFile({ repo, ref: gatedHeadSha, path: CI_CONFIG_PATH });
+    return resolveGateConfigHashFromYaml(yaml);
+  } catch (error) {
+    throw new Error(
+      `merge authority bundle: could not resolve ${CI_CONFIG_PATH} at gated head ${gatedHeadSha}; refusing land`,
+      { cause: error },
+    );
+  }
 }
 
 /**
@@ -154,6 +194,9 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
  * resolution therefore BLOCKS — the SAME freshness the native DRIVE pass already
  * applies. Both paths build from land-time signals; neither authorizes against
  * pre-conflict state.
+ *
+ * gv-3: also resolves the REAL gate-config hash from `.tanren/ci.yml` at the gated
+ * head (via CodeHost.readFile) and the REAL policy identity from project config.
  *
  * THE AUDIT GATE (§4): `findings` are read via `resolveLandTimeFindings` — the REAL
  * auditor findings, decided by `decideFromFindings` against the project `auditPosture`
@@ -186,22 +229,27 @@ export async function buildBundleForMergeStage(
   // The REAL audit findings (§4) — the live audit gate at merge time. Fail-closed: a
   // missing/unreadable audit record resolves to a synthetic P0 (blocks any posture).
   const findings = await resolveLandTimeFindings(pool, row.org_id, context.runId);
+
+  const resolveToken = () =>
+    resolveVcsToken(input.githubHttp, {
+      secrets: input.secrets,
+      installation: context.installation,
+      staticRef: context.staticCredentialRef,
+      minter: input.githubAppMinter,
+    });
+  const codeHost = codeHostFor(input.githubHttp, resolveToken);
+  const gateConfigHash = await resolveLandGateConfigHash(codeHost, context.prUrl, landSignals.gatedHeadSha);
+
   return buildMergeAuthorityBundle({
     pool,
     // PLANE-SPLIT (REQUIRED — audit D-R3.2): the durable land finalize routes through the
     // control plane; the in-process fallback was unreachable after PR #714.
     runStateWriter: input.runStateWriter,
     githubHttp: input.githubHttp,
-    resolveToken: () =>
-      resolveVcsToken(input.githubHttp, {
-        secrets: input.secrets,
-        installation: context.installation,
-        staticRef: context.staticCredentialRef,
-        minter: input.githubAppMinter,
-      }),
+    resolveToken,
     orgId: row.org_id,
     projectConfigRaw: row.project_config,
-    policyVersion: context.policyVersion,
+    gateConfigHash,
     gateOutcome: landSignals.gateOutcome,
     gatedHeadSha: landSignals.gatedHeadSha,
     findings,

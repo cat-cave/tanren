@@ -142,8 +142,9 @@ export interface PlannerRunContext {
   // SPEC-LOOP REDESIGN: per-project audit posture + convergence policy.
   auditPosture?: AuditPostureConfig;
   convergencePolicy?: ConvergencePolicyConfig;
-  // AUDIT-EVIDENCE BASELINE: governance policy version, stamped onto `gate.verdict` roll-up.
+  // Audit schema version for gate.verdict; canonical identity for node/proof persistence.
   policyVersion?: number;
+  policyIdentity?: string;
   greenfield?: boolean;
   creditUsdRate?: number;
   // DETERMINISTIC CONTRACT FILES (v27 fix): workspace-prep materializes `.tanren/ci.yml` +
@@ -152,7 +153,6 @@ export interface PlannerRunContext {
   // WS-A PR-4: ancestor stack for jj-local base assembly (from `runs.ancestor_stack`).
   ancestorStack?: AncestorStack;
 }
-
 export interface PlannerRunAdapterContext {
   runId: string;
   target: RunnerHandle;

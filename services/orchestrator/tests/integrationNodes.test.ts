@@ -33,8 +33,8 @@ describe("memberKey", () => {
 describe("proofReuseKey", () => {
   const base: ProofReuseKeyInput = {
     memberKey: "mk",
-    gateConfigHash: "gc",
-    policyVersion: "pv",
+    gateConfigHash: "a".repeat(64),
+    policyVersion: "b".repeat(64),
     runnerImage: "ri",
     appEnvHash: "ae",
     quarantineVersion: "qv",

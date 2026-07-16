@@ -214,8 +214,8 @@ export function authorityBundle(
         return { auditId: "audit_1" };
       },
     }),
-    gateConfigHash: "gc",
-    policyVersion: "pv",
+    gateConfigHash: "a".repeat(64),
+    policyVersion: "b".repeat(64),
     gateOutcome: { passed: true, results: [] },
     // The gate verdict was for the landed head (the host's PR-head-branch sha).
     gatedHeadSha: AUTHORITY_HEAD_SHA,

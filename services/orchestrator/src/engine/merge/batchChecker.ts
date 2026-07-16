@@ -26,6 +26,7 @@ import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMer
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import { installationFromOrgConfig, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
+import { resolveProjectPolicyIdentity } from "../governance/policyGateIdentity.js";
 import { CANONICAL_RUNNER_IMAGE, type GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -329,14 +330,14 @@ export function resolveGovernancePosture(projectConfig: unknown): GovernancePost
 }
 
 /**
- * Resolve the project's policy version (the config version) — the posture the verdict is
- * judged under, a proof-reuse key component. FAIL-CLOSED: a config that cannot be read
- * returns `undefined` (the proof-reuse decider forces a recompute on an unresolvable
- * policyVersion, never a stale reuse). Stringified so it keys the proof uniformly.
+ * Resolve the project's policy identity (gv-3) — the content hash of governance-
+ * sensitive fields, a proof-reuse key component. FAIL-CLOSED: a config that cannot be
+ * read returns `undefined` (the proof-reuse decider forces a recompute on an
+ * unresolvable policyVersion, never a stale reuse). NEVER the schema literal `1`.
  */
 function resolvePolicyVersion(projectConfig: unknown): string | undefined {
   try {
-    return String(migrateProjectConfig(projectConfig).version);
+    return resolveProjectPolicyIdentity(projectConfig).policyHash;
   } catch {
     return undefined;
   }

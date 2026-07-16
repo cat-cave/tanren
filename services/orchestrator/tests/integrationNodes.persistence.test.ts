@@ -1,26 +1,23 @@
 // Behavior tests for the `integration_nodes` persistence model (tanren-owns-the-
 // engine.md §3, Wave 2 / Slice S0 — OBSERVE-ONLY). Two layers:
 //
-//   PURE layer (always-on, runs in `just fast-check`): the load-bearing identity +
-//   projection logic WITHOUT a DB — the member-key an eager dependent derives, the
-//   proof-reuse cache hit/miss, and the §8 compatibility read-model projecting an
-//   old speculative run row into the FROZEN `IntegrationNode` shape.
+//   PURE layer (always-on, runs in `just fast-check`): load-bearing member/proof
+//   identity plus the canonical policy/gate persistence boundary.
 //
 //   DB layer (gated behind TANREN_RLS_DB_TEST=1 + an owner DATABASE_URL, like the
 //   other RLS-cohort tests): the REAL pg UPSERT + lookup + proof record/reuse +
-//   compat read-model against an ephemeral migrated DB on the ENFORCED `tanren_app`
+//   canonical eager-node read against an ephemeral migrated DB on the ENFORCED `tanren_app`
 //   role, proving the writes/reads land under fail-closed RLS. No jj/git process is
 //   touched (this is pure DB), so there is no host-repo-cwd hazard to isolate.
 
 import { Pool } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getSystemPool, migrate, runWithJobOrgId, runWithOrgScope, setSystemPool } from "@tanren/db";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { getSystemPool, migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { memberKey, proofReuseKey, type ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
-import {
-  observeRunAsIntegrationNode,
-  PgIntegrationNodeModel,
-  speculativeRunToNode,
-} from "../src/engine/dag/integrationNodesPg.js";
+import { PgIntegrationNodeModel, upsertIntegrationNodeOnClient } from "../src/engine/dag/integrationNodesPg.js";
+
+const GATE_HASH = "a".repeat(64);
+const POLICY_HASH = "b".repeat(64);
 
 const SYSTEM_ROLE = "tanren_system";
 const SYSTEM_PASSWORD = process.env["TANREN_SYSTEM_DB_PASSWORD"] ?? "tanren_system";
@@ -30,23 +27,10 @@ const SYSTEM_PASSWORD = process.env["TANREN_SYSTEM_DB_PASSWORD"] ?? "tanren_syst
 // ===========================================================================
 
 describe("integration-nodes persistence (pure logic)", () => {
-  // (a) an eager dependent vs `main + ancestor` derives a node whose member_key
-  //     === memberKey(baseSha, [ancestorHeadSha]). The compat projection IS the
-  //     same derivation the observe-only hook + the DB UPSERT compute, so projecting
-  //     a one-ancestor speculative run and re-deriving the key must agree.
-  it("(a) an eager dependent's node member_key === memberKey(immediateAncestorBranch, [ancestorHeadSha])", () => {
-    // jj-local: the immediate-ancestor PR-head branch is the base identity (the stacked base).
-    const ancestorBranch = "tanren/spec_ancestor";
-    const ancestorHeadSha = "f".repeat(40);
-    const node = speculativeRunToNode({
-      runId: "run_dep",
-      branch: "tanren/dep",
-      ancestorStack: [{ specId: "spec_ancestor", runId: "run_anc", branch: ancestorBranch, headSha: ancestorHeadSha }],
-    });
-    expect(node.members).toHaveLength(1);
-    expect(node.members[0]?.headSha).toBe(ancestorHeadSha);
-    expect(node.memberKey).toBe(memberKey(ancestorBranch, [ancestorHeadSha]));
-    expect(node.purpose).toBe("eager_base");
+  it("(a) an eager dependent's member key binds base plus ordered ancestor heads", () => {
+    const base = "tanren/spec_ancestor";
+    const head = "f".repeat(40);
+    expect(memberKey(base, [head])).not.toBe(memberKey(base, ["e".repeat(40)]));
   });
 
   // (b) PROOF-REUSE: the same base + ordered members → identical proofReuseKey (a
@@ -57,8 +41,8 @@ describe("integration-nodes persistence (pure logic)", () => {
     const memberShas = ["b".repeat(40), "c".repeat(40)];
     const proofInputFor = (shas: string[]): ProofReuseKeyInput => ({
       memberKey: memberKey(baseSha, shas),
-      gateConfigHash: "gc",
-      policyVersion: "pv",
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
       runnerImage: "ri",
       appEnvHash: "ae",
       quarantineVersion: "qv",
@@ -75,26 +59,71 @@ describe("integration-nodes persistence (pure logic)", () => {
     expect(drifted).not.toBe(recorded);
   });
 
-  // (c) the §8 compatibility read-model projects an old speculative run row into the
-  //     right IntegrationNode shape (ordered, total, deterministic key).
-  it("(c) compat read-model projects a speculative run into the right IntegrationNode", () => {
-    // The ordered ancestor_stack is the member source (DAG order is load-bearing); the
-    // immediate-ancestor (LAST) branch is the node base.
-    const node = speculativeRunToNode({
-      runId: "run_dep2",
-      branch: "tanren/dep2",
-      ancestorStack: [
-        { specId: "spec_a", runId: "run_a", branch: "tanren/run_a", headSha: "1".repeat(40) },
-        { specId: "spec_b", runId: "run_b", branch: "tanren/run_b", headSha: "2".repeat(40) },
-      ],
-    });
-    expect(node.members.map((m) => m.specId)).toEqual(["spec_a", "spec_b"]);
-    expect(node.members.map((m) => m.headSha)).toEqual(["1".repeat(40), "2".repeat(40)]);
-    // The base is the immediate (last) ancestor's PR-head branch.
-    expect(node.baseBranch).toBe("tanren/run_b");
-    expect(node.memberKey).toBe(memberKey("tanren/run_b", ["1".repeat(40), "2".repeat(40)]));
-    // A reordering of the SAME members is a DIFFERENT key (order is load-bearing).
-    expect(node.memberKey).not.toBe(memberKey("tanren/run_b", ["2".repeat(40), "1".repeat(40)]));
+  it("(c) persists exact canonical hashes atomically and rejects former defaults before SQL", async () => {
+    const query = vi.fn<
+      (statement: string, params?: readonly unknown[]) => Promise<{ rows: Array<{ node_id: string }> }>
+    >(async () => ({ rows: [{ node_id: "inode_exact" }] }));
+    const input = {
+      projectId: "project_1",
+      orgId: "org_1",
+      baseBranch: "main",
+      baseSha: "0".repeat(40),
+      ref: "tanren/local",
+      purpose: "merge_batch" as const,
+      members: [{ specId: "spec_1", runId: "run_1", branch: "tanren/spec_1", headSha: "1".repeat(40) }],
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
+    };
+
+    await expect(upsertIntegrationNodeOnClient({ query } as never, input)).resolves.toBe("inode_exact");
+    const params = query.mock.calls[0]?.[1] as unknown[];
+    expect(params[9]).toBe(GATE_HASH);
+    expect(params[10]).toBe(POLICY_HASH);
+
+    await expect(upsertIntegrationNodeOnClient({ query } as never, { ...input, policyVersion: "1" })).rejects.toThrow(
+      /policyVersion.*canonical lowercase 64-hex/iu,
+    );
+    await expect(upsertIntegrationNodeOnClient({ query } as never, { ...input, gateConfigHash: "" })).rejects.toThrow(
+      /gateConfigHash.*canonical lowercase 64-hex/iu,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("(d) fails closed when a legacy persisted row carries an empty identity", async () => {
+    const row = {
+      node_id: "inode_legacy",
+      base_branch: "main",
+      base_sha: "0".repeat(40),
+      ref: "tanren/legacy",
+      purpose: "merge_batch",
+      members: [],
+      member_key: "legacy-key",
+      gate_config_hash: GATE_HASH,
+      policy_version: POLICY_HASH,
+      affected_fingerprint: "",
+      head_sha: null,
+      tree_hash: null,
+      status: "ready",
+    };
+
+    for (const invalidRow of [
+      { ...row, gate_config_hash: "" },
+      { ...row, policy_version: "" },
+    ]) {
+      const query = vi.fn<(statement: string) => Promise<{ rows: (typeof invalidRow)[] }>>(async (statement) => ({
+        rows: statement.includes("SELECT node_id") ? [invalidRow] : [],
+      }));
+      const release = vi.fn<() => void>();
+      const model = new PgIntegrationNodeModel({
+        connect: async () => ({ query, release }),
+      } as never);
+
+      await expect(model.findByMemberKey("org_1", "legacy-key")).rejects.toThrow(
+        /integration_nodes\.(?:gate_config_hash|policy_version).*canonical lowercase 64-hex/iu,
+      );
+      expect(query).toHaveBeenCalledWith("ROLLBACK");
+      expect(release).toHaveBeenCalledOnce();
+    }
   });
 });
 
@@ -133,22 +162,6 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
-// A query-intercepting wrapper: forces the observe write's `INSERT INTO
-// integration_nodes` to error MID-STATEMENT (a real Postgres error that poisons the
-// tx), while every other statement passes through untouched. Used to prove the
-// SAVEPOINT un-poisons the run-create tx.
-function failingNodeWriteClient(real: { query: (...args: never[]) => Promise<unknown> }) {
-  return {
-    async query(text: unknown, ...rest: never[]): Promise<unknown> {
-      if (typeof text === "string" && text.includes("INSERT INTO integration_nodes")) {
-        // A guaranteed mid-tx statement error (undefined column) — the poisoning trigger.
-        return real.query("INSERT INTO integration_nodes (no_such_column) VALUES (1)" as never);
-      }
-      return real.query(text as never, ...rest);
-    },
-  };
-}
-
 describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -164,16 +177,14 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
     // The real migration enables RLS + the policies + creates the roles.
     await migrate(ownerPool);
     appPool = new Pool({ connectionString: withRole(ADMIN_URL, APP_ROLE, APP_PASSWORD, database) });
-    // The compat read-model resolves a project's org cross-tenant via the BYPASSRLS
+    // The canonical node reader resolves a project's org cross-tenant via the BYPASSRLS
     // system pool (mirrors prod `resolveProjectOrg`); set it to the `tanren_system`
     // role so the org resolve succeeds while every org-scoped node/proof write/read
     // still runs on the enforced NOBYPASSRLS app role under fail-closed RLS.
     setSystemPool(new Pool({ connectionString: withRole(ADMIN_URL, SYSTEM_ROLE, SYSTEM_PASSWORD, database) }));
     model = new PgIntegrationNodeModel(appPool);
 
-    // Seed org/project/specs/run (the dependent speculative run carries a base +
-    // ancestor head sha — the OLD model the compat read-model projects).
-    const ANCESTOR_HEAD = "f".repeat(40);
+    // Seed org/project/specs/run; integration nodes are persisted explicitly below.
     await ownerPool.query(
       `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
        VALUES ($1, 'oidc', $1, $1, $1, '{"version":1}'::jsonb)`,
@@ -199,7 +210,9 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
         SPEC_DEP,
         PROJECT,
         ORG,
-        JSON.stringify([{ specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: ANCESTOR_HEAD }]),
+        JSON.stringify([
+          { specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: "f".repeat(40) },
+        ]),
       ],
     );
   }, 60_000);
@@ -229,6 +242,8 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       ref: "tanren/integration-dep",
       purpose: "eager_base",
       members: [{ specId: SPEC_ANCESTOR, runId: RUN_DEP, branch: "tanren/ancestor", headSha: ancestorHeadSha }],
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
     });
     expect(nodeId).toMatch(/^inode_/u);
 
@@ -254,6 +269,8 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       ref: "tanren/integration-dep",
       purpose: "eager_base",
       members: [{ specId: SPEC_ANCESTOR, runId: RUN_DEP, branch: "tanren/ancestor", headSha: ancestorHeadSha }],
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
       status: "ready",
     });
     const count = await runWithOrgScope(appPool, ORG, async (client) => {
@@ -276,11 +293,13 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       ref: "tanren/batch",
       purpose: "merge_batch",
       members: memberShas.map((s, i) => ({ specId: `m${i}`, runId: RUN_DEP, branch: `b${i}`, headSha: s })),
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
     });
     const keyInput = (shas: string[]): ProofReuseKeyInput => ({
       memberKey: memberKey(baseSha, shas),
-      gateConfigHash: "gc",
-      policyVersion: "pv",
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
       runnerImage: "ri",
       appEnvHash: "ae",
       quarantineVersion: "qv",
@@ -303,96 +322,25 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
     expect(miss).toBeUndefined();
   });
 
-  it("(c) the compat read-model projects the fixture speculative run into the right IntegrationNode", async () => {
-    const nodes = await model.projectSpeculativeRunsAsNodes(PROJECT);
-    const dep = nodes.find((n) => n.members.some((m) => m.specId === SPEC_ANCESTOR));
-    expect(dep).toBeDefined();
-    // jj-local: the base is the immediate-ancestor PR-head branch from the ancestor_stack.
-    expect(dep?.baseBranch).toBe("tanren/run_anc");
-    expect(dep?.members.map((m) => m.headSha)).toEqual(["f".repeat(40)]);
-    expect(dep?.memberKey).toBe(memberKey("tanren/run_anc", ["f".repeat(40)]));
-  });
-
-  it("the observe-only hook UPSERTs a node ALONGSIDE a run insert and never throws", async () => {
-    // Drive the hook directly on an org-scoped client (the run-create path's shape).
-    await runWithJobOrgId(ORG, async () => {
-      await runWithOrgScope(appPool, ORG, async (client) => {
-        await observeRunAsIntegrationNode(
-          client,
-          {
-            runId: RUN_DEP,
-            specId: SPEC_DEP,
-            branch: "tanren/dep",
-            projectId: PROJECT,
-            project: { defaultBranch: "main" },
-          },
-          {
-            ancestorStack: [
-              { specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: "f".repeat(40) },
-            ],
-          },
-        );
-      });
-    });
-    // The observe-at-create node bases on `default_branch` (the assembly's real history root).
-    const key = memberKey("main", ["f".repeat(40)]);
-    const found = await model.findByMemberKey(ORG, key);
-    expect(found).toBeDefined();
-    expect(found?.purpose).toBe("eager_base");
-  });
-
-  it("a FAILING observe write is SAVEPOINT-isolated: surrounding writes in the same tx still COMMIT (no poisoning)", async () => {
-    // Reproduce the exact run-create flow: a real write BEFORE the observe hook, a
-    // FORCED node-write failure inside it, then a real write AFTER — all in ONE tx.
-    // The SAVEPOINT must un-poison the tx so the after-write succeeds and the tx
-    // commits. WITHOUT the savepoint, the forced error aborts the tx and the
-    // after-write (and the whole run) fails — this test would then throw.
-    const RUN_BEFORE = `run_savepoint_before_${ORG}`;
-    const RUN_AFTER = `run_savepoint_after_${ORG}`;
-
-    await runWithJobOrgId(ORG, async () => {
-      await runWithOrgScope(appPool, ORG, async (client) => {
-        // BEFORE: a real tenant write in this tx.
-        await client.query(
-          `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
-           VALUES ($1, $2, $3, $4, 'cli', 'tanren/before', 'queued')`,
-          [RUN_BEFORE, SPEC_DEP, PROJECT, ORG],
-        );
-        // The observe write FORCED to fail mid-statement (poisons the tx unless the
-        // savepoint rolls it back). The hook must swallow it without throwing.
-        await observeRunAsIntegrationNode(
-          failingNodeWriteClient(client) as never,
-          {
-            runId: RUN_DEP,
-            specId: SPEC_DEP,
-            branch: "tanren/dep",
-            projectId: PROJECT,
-            project: { defaultBranch: "main" },
-          },
-          {
-            ancestorStack: [
-              { specId: SPEC_ANCESTOR, runId: "run_anc", branch: "tanren/run_anc", headSha: "a".repeat(40) },
-            ],
-          },
-        );
-        // AFTER: another real tenant write. WITHOUT the savepoint fix this throws
-        // "current transaction is aborted"; WITH it, it succeeds and the tx commits.
-        await client.query(
-          `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
-           VALUES ($1, $2, $3, $4, 'cli', 'tanren/after', 'queued')`,
-          [RUN_AFTER, SPEC_DEP, PROJECT, ORG],
-        );
-      });
+  it("(c) reads only real persisted eager nodes with their exact identities", async () => {
+    const headSha = "9".repeat(40);
+    await model.upsertNode({
+      projectId: PROJECT,
+      orgId: ORG,
+      baseBranch: "main",
+      baseSha: "8".repeat(40),
+      ref: "tanren/eager-canonical",
+      purpose: "eager_base",
+      members: [{ specId: SPEC_ANCESTOR, runId: RUN_DEP, branch: "tanren/run_anc", headSha }],
+      gateConfigHash: GATE_HASH,
+      policyVersion: POLICY_HASH,
+      status: "ready",
     });
 
-    // Both surrounding writes COMMITTED (the tx was not poisoned).
-    const committed = await runWithOrgScope(appPool, ORG, async (client) => {
-      const r = await client.query<{ run_id: string }>(
-        "SELECT run_id FROM runs WHERE run_id = ANY($1::text[]) ORDER BY run_id",
-        [[RUN_BEFORE, RUN_AFTER]],
-      );
-      return r.rows.map((row) => row.run_id);
-    });
-    expect(committed).toEqual([RUN_AFTER, RUN_BEFORE]);
+    const nodes = await model.findEagerBaseNodes(PROJECT);
+    const dep = nodes.find((node) => node.ref === "tanren/eager-canonical");
+    expect(dep?.gateConfigHash).toBe(GATE_HASH);
+    expect(dep?.policyVersion).toBe(POLICY_HASH);
+    expect(dep?.members.map((member) => member.headSha)).toEqual([headSha]);
   });
 });

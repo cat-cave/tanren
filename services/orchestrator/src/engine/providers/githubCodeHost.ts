@@ -397,10 +397,13 @@ export class GitHubCodeHost implements CodeHost {
       throw new Error(`GitHub contents fetch failed: HTTP ${response.status}`);
     }
     const body = response.body as { content?: unknown; encoding?: unknown };
-    if (typeof body.content !== "string") {
-      return undefined;
+    // The CodeHost contract reserves `undefined` EXCLUSIVELY for a genuine 404.
+    // A malformed 200 must throw: treating it as "file absent" would make land hash
+    // the canonical default gate even though the provider never proved absence.
+    if (typeof body.content !== "string" || body.encoding !== "base64") {
+      throw new Error("GitHub contents fetch returned a malformed file response");
     }
-    return body.encoding === "base64" ? decodeBase64Content(body.content) : body.content;
+    return decodeBase64Content(body.content);
   }
 
   /**

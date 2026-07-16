@@ -14,7 +14,6 @@ import {
   SpecNotRunnableError,
 } from "./projectSpecErrors.js";
 import { loadProjectOrgId, loadSpecWithProject } from "./projectSpecRowSchema.js";
-import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
@@ -387,8 +386,6 @@ export async function createQueuedRunFromSpecOnClient(
       jsonbOrNull(spec?.ancestorStack),
     ],
   );
-  // OBSERVE-ONLY: UPSERT the `integration_nodes` row mirroring this run (see the hook header). NEVER fails a run.
-  await observeRunAsIntegrationNode(client, run, spec);
   await claimPendingSpec(client, loaded.spec);
   await client.query(
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)

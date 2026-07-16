@@ -71,8 +71,8 @@ function gateInput(host: InMemoryCodeHost) {
     headBranch: "feat",
     runId: "run",
     specId: "s",
-    gateConfigHash: "gc",
-    policyVersion: "pv",
+    gateConfigHash: "a".repeat(64),
+    policyVersion: "b".repeat(64),
     // The gate verdict was for the EXACT commit being landed (the `feat` head, sha-feat).
     gatedHeadSha: "sha-feat",
     store: STORE,

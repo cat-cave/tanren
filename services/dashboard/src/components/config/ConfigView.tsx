@@ -13,6 +13,8 @@
  * reads the gate state + the open config PR (if any) the route resolved.
  */
 
+import type { PolicyIdentityReadResult } from "../../api/policyIdentityClient.js";
+import { PolicyIdentityPanel } from "./PolicyIdentityPanel.js";
 import { CONFIG_SCREEN_CSS } from "./styles.js";
 
 /** One rendered `tanren.yaml` diff line (mirrors orchestrator `ConfigYamlDiffLine`). */
@@ -48,6 +50,10 @@ export interface ConfigViewProps {
   checks: string[];
   impact: { l: string; v: string; k: string }[];
   history: ConfigHistoryEntry[];
+  /** gv-3: active project for the policy-identity receipt (optional when none). */
+  policyProjectId?: string;
+  policyProjectName?: string;
+  policyIdentity?: PolicyIdentityReadResult;
 }
 
 const DIFF_CLASS: Record<ConfigDiffLine["t"], string> = {
@@ -245,6 +251,11 @@ export function ConfigView(props: ConfigViewProps) {
     <div class="p2b">
       <style data-screen="config">{CONFIG_SCREEN_CSS}</style>
       {props.gateEnabled ? <GateOn {...props} /> : <GateOff {...props} />}
+      <PolicyIdentityPanel
+        projectId={props.policyProjectId}
+        projectName={props.policyProjectName}
+        result={props.policyIdentity}
+      />
     </div>
   );
 }

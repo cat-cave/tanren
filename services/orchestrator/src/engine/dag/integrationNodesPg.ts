@@ -1,18 +1,11 @@
 // The pg-backed `integration_nodes` persistence model (tanren-owns-the-engine.md
-// §3 — the ONE unified run model). Wave 2 / Slice S0 is OBSERVE-ONLY: this model is
-// written and drives NO control flow. It exists so the never-discard rebase + the
-// proof-reuse cache (Wave 3) have a durable substrate, and so the §8 guardrail holds
-// — the old speculative/percolation state migrates through an EXPLICIT compatibility
-// read-model (`projectRunRowToNode` below), never silent abandonment.
+// §3 — the ONE unified run model). Nodes are persisted only when their exact gate and
+// policy content identities are known. Legacy run-row projections and empty identity
+// defaults are deliberately absent: a consumer reads a real persisted node or none.
 //
 // Three responsibilities:
 //   1. UPSERT a node + record/lookup a proof (insert/update + lookup by memberKey).
-//   2. The compatibility READ-MODEL: project an existing run row into the FROZEN
-//      `IntegrationNode` shape — so a reader can see the OLD run model AS the new
-//      one without a backfill, the explicit-read-model half of the §8 guardrail.
-//   3. The OBSERVE-ONLY hook (`observeRunAsIntegrationNode`): an additive,
-//      try/catch-wrapped UPSERT the run-create path calls so a node-write bug can
-//      NEVER fail a run (no reads drive behavior).
+//   2. Read persisted eager-base nodes for the one base-shift consumer.
 //
 // Every tenant query is org-scoped (the run-create hook reuses the caller's already
 // org-scoped client; the pool-based helpers open their OWN `runWithOrgScope`). RLS
@@ -34,15 +27,12 @@ import {
   proofReuseKey,
 } from "../contracts/integrationNodes.js";
 import { oneOf } from "../data/pgRows.js";
-import { type AncestorStack, resolveAncestorStack } from "./ancestorStack.js";
-import { createLogger } from "../observability/logger.js";
-
-const log = createLogger("integration-nodes");
+import { requireCanonicalContentIdentity } from "../governance/policyGateIdentity.js";
 
 /** Anything that can run a query — a pool or an already-checked-out scoped client. */
 export type QueryRunner = Pick<pg.PoolClient, "query">;
 
-/** The fields the run-create hook supplies to UPSERT a node (observe-only). */
+/** The complete fields required to persist a proof-bindable integration node. */
 export interface IntegrationNodeUpsert {
   projectId: string;
   orgId: string;
@@ -52,8 +42,10 @@ export interface IntegrationNodeUpsert {
   purpose: IntegrationNodePurpose;
   /** The ordered members merged into the base (DAG order is LOAD-BEARING). */
   members: ReadonlyArray<IntegrationNodeMember>;
-  gateConfigHash?: string;
-  policyVersion?: string;
+  /** Exact canonical hash used by this node's proof-reuse key. */
+  gateConfigHash: string;
+  /** Exact canonical governance-policy hash used by this node's proof-reuse key. */
+  policyVersion: string;
   affectedFingerprint?: string;
   headSha?: string;
   treeHash?: string;
@@ -112,8 +104,8 @@ function rowToNode(row: IntegrationNodeRow): IntegrationNode {
     purpose: oneOf(row.purpose, INTEGRATION_NODE_PURPOSES, "integration_nodes.purpose"),
     members: decodeMembers(row.members),
     memberKey: row.member_key,
-    gateConfigHash: row.gate_config_hash,
-    policyVersion: row.policy_version,
+    gateConfigHash: requireCanonicalContentIdentity(row.gate_config_hash, "integration_nodes.gate_config_hash"),
+    policyVersion: requireCanonicalContentIdentity(row.policy_version, "integration_nodes.policy_version"),
     affectedFingerprint: row.affected_fingerprint,
     ...(row.head_sha !== null && { headSha: row.head_sha }),
     ...(row.tree_hash !== null && { treeHash: row.tree_hash }),
@@ -133,6 +125,11 @@ export async function upsertIntegrationNodeOnClient(
   client: QueryRunner,
   input: IntegrationNodeUpsert,
 ): Promise<string> {
+  // Validate before issuing SQL so no direct caller can reach the database with a
+  // blank/schema-era/non-canonical identity. Both exact values are then written in
+  // the SAME statement as the node (no display/proof-key split).
+  const gateConfigHash = requireCanonicalContentIdentity(input.gateConfigHash, "gateConfigHash");
+  const policyVersion = requireCanonicalContentIdentity(input.policyVersion, "policyVersion");
   const orderedShas = input.members.map((m) => m.headSha);
   const key = memberKey(input.baseSha, orderedShas);
   const nodeId = `inode_${randomUUID()}`;
@@ -165,8 +162,8 @@ export async function upsertIntegrationNodeOnClient(
       input.purpose,
       JSON.stringify(input.members),
       key,
-      input.gateConfigHash ?? "",
-      input.policyVersion ?? "",
+      gateConfigHash,
+      policyVersion,
       input.affectedFingerprint ?? "",
       input.headSha ?? null,
       input.treeHash ?? null,
@@ -255,41 +252,24 @@ export class PgIntegrationNodeModel {
   }
 
   /**
-   * The COMPATIBILITY READ-MODEL (§8 guardrail). Project a project's in-flight SPECULATIVE /
-   * percolation run rows (the jj-native `runs.ancestor_stack` model) into the FROZEN
-   * `IntegrationNode` shape — so the S0 base-shift node read sees the run model AS the node
-   * model. READ-ONLY: it derives nodes, it does NOT persist them. A run is speculative iff
-   * its `ancestor_stack` is non-empty.
-   *
-   * A speculative run row maps to a node:
-   *   - `members`          = the ordered `ancestor_stack` (each `{specId, runId, branch, headSha}`).
-   *   - `baseBranch`/`ref` = the immediate-ancestor PR-head branch (the stacked base), or the
-   *                          dependent's own run branch when the stack carries no branch.
-   *   - `purpose`          = `eager_base` (a speculative dependent's dynamic base).
-   * Org-scoped under RLS; missing-org is a LOUD throw.
+   * Read the project's REAL persisted eager-base nodes. This deliberately does not
+   * project legacy `runs.ancestor_stack` rows: a base-shift consumer sees the canonical
+   * node store, including the exact gate/policy identities, or no node at all.
    */
-  async projectSpeculativeRunsAsNodes(projectId: string): Promise<IntegrationNode[]> {
+  async findEagerBaseNodes(projectId: string): Promise<IntegrationNode[]> {
     const orgId = await this.resolveOrgOrThrow(projectId);
-    const rows = await runWithOrgScope(this.pool, orgId, async (client) => {
-      const result = await client.query<{ run_id: string; spec_id: string; branch: string; ancestor_stack: unknown }>(
-        `SELECT DISTINCT ON (r.spec_id)
-                r.run_id, r.spec_id, r.branch, r.ancestor_stack
-           FROM runs r
-          WHERE r.project_id = $1
-            AND jsonb_typeof(r.ancestor_stack) = 'array' AND jsonb_array_length(r.ancestor_stack) > 0
-            AND r.status NOT IN ('halted','cancelled','failed','merged')
-          ORDER BY r.spec_id, r.started_at DESC`,
+    return runWithOrgScope(this.pool, orgId, async (client) => {
+      const result = await client.query<IntegrationNodeRow>(
+        `SELECT node_id, base_branch, base_sha, ref, purpose, members, member_key,
+                gate_config_hash, policy_version, affected_fingerprint, head_sha,
+                tree_hash, status
+           FROM integration_nodes
+          WHERE project_id = $1 AND purpose = 'eager_base'
+          ORDER BY updated_at DESC, node_id`,
         [projectId],
       );
-      return result.rows;
+      return result.rows.map((row) => rowToNode(row));
     });
-    return rows.map((row) =>
-      speculativeRunToNode({
-        runId: row.run_id,
-        branch: row.branch,
-        ancestorStack: resolveAncestorStack({ ancestorStack: row.ancestor_stack }),
-      }),
-    );
   }
 
   /** Resolve a project's org via the system scope; throw LOUDLY if it has none. */
@@ -302,131 +282,8 @@ export class PgIntegrationNodeModel {
       return result.rows[0]?.org_id ?? null;
     });
     if (orgId === null) {
-      throw new Error(`project ${projectId} has no org for the integration-node read model`);
+      throw new Error(`project ${projectId} has no org for the integration-node store`);
     }
     return orgId;
   }
-}
-
-/**
- * The OBSERVE-ONLY write hook the run-create path calls. Given the run being
- * inserted (on its already org-scoped, in-tx client), ADDITIVELY UPSERT the
- * `integration_nodes` row that mirrors it — derived from the SAME speculative base
- * + ancestor head SHAs the run row records, via the pure `memberKey`. A
- * non-speculative run (no base, no ancestors) is a node with ZERO members — still a
- * node (the unified model: one run, base may shift), so it is recorded too.
- *
- * SAVEPOINT-ISOLATED so it can NEVER fail a run. This runs INSIDE the run-create
- * transaction, and in Postgres ANY statement error POISONS the whole tx ("current
- * transaction is aborted") — a bare try/catch does NOT save the subsequent
- * spec/task/job/event writes, which would then fail and FAIL THE RUN. So the observe
- * write is wrapped in a SAVEPOINT: on ANY error we `ROLLBACK TO SAVEPOINT` (which
- * un-poisons the tx back to the savepoint) and swallow it, leaving the outer tx
- * clean to commit the real run. No reads drive behavior; this is pure observation.
- *
- * The org is read back from the just-inserted run row on the SAME scoped client
- * (the INSERT derived `org_id` from the project) so the UPSERT carries the exact
- * tenant key. A null-org (CLI) run is SKIPPED (nothing to scope a tenant write to).
- */
-export async function observeRunAsIntegrationNode(
-  client: QueryRunner,
-  // The structural shape of the run being inserted (a SpecRunContract — kept
-  // structural to avoid coupling this dag module to the workflow types).
-  run: { runId: string; specId: string; branch: string; projectId: string; project: { defaultBranch: string } },
-  // The speculative block (`undefined` ⇒ a non-speculative run against `main`). Under
-  // the jj-local model the eager dependent's base is `main + ordered ancestor_stack`
-  // (no synthesized host ref), so the node is derived from the ordered `ancestorStack`.
-  spec: { ancestorStack?: AncestorStack } | undefined,
-): Promise<void> {
-  // The SAVEPOINT is the un-poison boundary: any error inside the observe write
-  // rolls the tx back to HERE, so the outer run-create tx stays committable.
-  await client.query("SAVEPOINT obs_node");
-  try {
-    const orgResult = await client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [
-      run.runId,
-    ]);
-    const orgId = orgResult.rows[0]?.org_id ?? null;
-    // A null-org (CLI) run has no tenant key to scope a write to — skip it (but still
-    // RELEASE the savepoint below so the tx has no dangling savepoint).
-    if (orgId !== null) {
-      const baseBranch = run.project.defaultBranch;
-      // jj-local: the dependent assembles `main + ordered ancestors` LOCALLY; the run
-      // row never persists the assembled `main` SHA, so the base identity is the default
-      // branch name. The bootstrap's `eager_base` UPSERT (PR-8) records the materialized
-      // head + the full member shas; this observe-at-create node is the placeholder.
-      const baseSha = baseBranch;
-      const members = (spec?.ancestorStack ?? []).map((member) => ({
-        specId: member.specId,
-        runId: member.runId === "" ? run.runId : member.runId,
-        branch: member.branch === "" ? member.specId : member.branch,
-        headSha: member.headSha,
-      }));
-      await upsertIntegrationNodeOnClient(client, {
-        projectId: run.projectId,
-        orgId,
-        baseBranch,
-        baseSha,
-        // The dependent's own run branch is the local assembly ref placeholder (the
-        // bootstrap `eager_base` UPSERT records the real LOCAL assembly bookmark).
-        ref: run.branch,
-        // eager dependent's dynamic base when speculative; else a (zero-member) node
-        // against `main`. The purpose only LABELS intent — it never branches control.
-        purpose: "eager_base",
-        members,
-        status: "building",
-      });
-    }
-    // Success (or a benign null-org skip): RELEASE the savepoint, keeping the node
-    // write part of the outer tx's commit.
-    await client.query("RELEASE SAVEPOINT obs_node");
-  } catch (error) {
-    // OBSERVE-ONLY: a node-write failure must NEVER fail a run. ROLLBACK TO the
-    // savepoint FIRST — this un-poisons the aborted tx so the run-create's remaining
-    // writes succeed — then RELEASE it and swallow the error. The ROLLBACK is the
-    // load-bearing fix; the log is for visibility.
-    await client.query("ROLLBACK TO SAVEPOINT obs_node").catch(() => {});
-    await client.query("RELEASE SAVEPOINT obs_node").catch(() => {});
-    log.warn("observe-only node UPSERT failed (non-fatal)", { runId: run.runId }, error);
-  }
-}
-
-/**
- * PURE: project ONE speculative run row into the FROZEN `IntegrationNode` shape (the §8
- * compatibility read-model, factored out so it is unit-testable WITHOUT a DB). The members
- * are the ordered `ancestor_stack` (already DAG-ordered → a stable, deterministic `memberKey`).
- * jj-local: there is no synthesized base ref; the base identity is the immediate-ancestor
- * PR-head branch (the stacked base), or the dependent's own run branch as the fallback.
- */
-export function speculativeRunToNode(input: {
-  runId: string;
-  branch: string;
-  ancestorStack: AncestorStack;
-}): IntegrationNode {
-  const members: IntegrationNodeMember[] = input.ancestorStack.map((m) => ({
-    specId: m.specId,
-    // A stack member's run id/branch may be empty (a placeholder) before the bootstrap
-    // write-back; fall back to the dependent's own labels so the projection is total.
-    runId: m.runId === "" ? input.runId : m.runId,
-    branch: m.branch === "" ? m.specId : m.branch,
-    headSha: m.headSha,
-  }));
-  const immediateAncestorBranch = input.ancestorStack.at(-1)?.branch;
-  const base =
-    immediateAncestorBranch !== undefined && immediateAncestorBranch !== "" ? immediateAncestorBranch : input.branch;
-  return {
-    nodeId: `inode_compat_${input.runId}`,
-    baseBranch: base,
-    baseSha: base,
-    ref: base,
-    purpose: "eager_base",
-    members,
-    memberKey: memberKey(
-      base,
-      members.map((m) => m.headSha),
-    ),
-    gateConfigHash: "",
-    policyVersion: "",
-    affectedFingerprint: "",
-    status: "building",
-  };
 }

@@ -28,6 +28,7 @@ import {
   driveBatchThroughNode,
 } from "../src/engine/merge/batchIntegrationNodeDrive.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
+import { hashGateConfig } from "../src/engine/dag/integrationProofKey.js";
 
 /** The gate spy signature (a recompute-only gate over the open workspace). */
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
@@ -53,8 +54,8 @@ class FakeNodeStore implements BatchNodeStore {
       purpose: input.purpose,
       members: input.members,
       memberKey: key,
-      gateConfigHash: input.gateConfigHash ?? "",
-      policyVersion: input.policyVersion ?? "",
+      gateConfigHash: input.gateConfigHash,
+      policyVersion: input.policyVersion,
       affectedFingerprint: input.affectedFingerprint ?? "",
       ...(input.headSha !== undefined && { headSha: input.headSha }),
       ...(input.treeHash !== undefined && { treeHash: input.treeHash }),
@@ -104,8 +105,14 @@ const FACTS: BatchNodeDriveFacts = {
     { specId: "spec_a", branch: "tanren/spec_a" },
     { specId: "spec_b", branch: "tanren/spec_b" },
   ],
-  policyVersion: "1",
-  quarantineVersion: "1",
+  policyVersion: "e".repeat(64),
+  quarantineVersion: "e".repeat(64),
+};
+
+const CI_CONFIG = {
+  version: 1 as const,
+  tiers: { fast: [{ name: "t", run: "x" }], slow: [{ name: "s", run: "y" }] },
+  when: { fast: ["pre_merge"], slow: ["pre_merge"] },
 };
 
 /** The member head SHAs the fake jj integration "captured" — the divergence key. */
@@ -151,12 +158,7 @@ function deps(
     eventStore: events as never,
     jjWorkspaceDeps: {} as never,
     integrate: fakeIntegratePort(store),
-    resolveConfig: async () =>
-      ({
-        version: 1,
-        tiers: { fast: [{ name: "t", run: "x" }], slow: [{ name: "s", run: "y" }] },
-        when: { fast: ["pre_merge"], slow: ["pre_merge"] },
-      }) as never,
+    resolveConfig: async () => CI_CONFIG as never,
     gate: gateSpy as never,
     timeoutMs: 1000,
   };
@@ -181,6 +183,10 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const expectedKey = memberKey(FACTS.baseSha, [MEMBER_HEAD_SHAS.spec_a, MEMBER_HEAD_SHAS.spec_b]);
     expect(store.nodes.has(expectedKey)).toBe(true);
     expect(store.nodes.get(expectedKey)?.headSha).toBe(INTEGRATED_HEAD);
+    // The row carries the EXACT identities used by the proof key, atomically — no
+    // former empty persistence defaults and no schema-literal policy version.
+    expect(store.nodes.get(expectedKey)?.gateConfigHash).toBe(hashGateConfig(CI_CONFIG as never));
+    expect(store.nodes.get(expectedKey)?.policyVersion).toBe(FACTS.policyVersion);
     // NO host ref was written by the jj-local integration.
     expect(store.hostRefsWritten).toEqual([]);
 
@@ -243,5 +249,23 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const second = await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), gate2));
     expect(second.result).toBe("pass");
     expect(gate2).toHaveBeenCalledTimes(1);
+  });
+
+  it("a schema-literal policy identity gates but persists no integration node", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>(async () => ({
+      verdict: { result: "pass" as const, integrationBranch: "x" },
+      passed: true,
+    }));
+
+    const result = await driveBatchThroughNode(
+      { ...FACTS, policyVersion: "1", quarantineVersion: "1" },
+      deps(store, new RecordingEventStore(), gate),
+    );
+
+    expect(result.result).toBe("pass");
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(store.nodes.size).toBe(0);
+    expect(store.proofs.size).toBe(0);
   });
 });

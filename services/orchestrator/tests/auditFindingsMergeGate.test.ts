@@ -44,8 +44,8 @@ function landInput(host: InMemoryCodeHost, findings: ReadonlyArray<Finding>, pos
     headBranch: "feat",
     runId: "run",
     specId: "s",
-    gateConfigHash: "gc",
-    policyVersion: "pv",
+    gateConfigHash: "a".repeat(64),
+    policyVersion: "b".repeat(64),
     gatedHeadSha: "sha-feat",
     store: STORE,
     signals: {

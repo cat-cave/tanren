@@ -125,8 +125,8 @@ export function bundle(host: InMemoryCodeHost, o: BundleOverrides): MergeAuthori
     codeHost: host,
     orgId: "org_1",
     landStoreFor: () => fakeLandStore({ fail: o.fail ?? false, landed: o.landed }),
-    gateConfigHash: "gc",
-    policyVersion: "pv",
+    gateConfigHash: "a".repeat(64),
+    policyVersion: "b".repeat(64),
     gateOutcome,
     // The gate verdict was for the landed head (`sha-feat`) unless overridden (TOCTOU lock).
     gatedHeadSha: o.gatedHeadSha ?? "sha-feat",

@@ -34,6 +34,7 @@ export const TREE_HASH = "d".repeat(40);
 export const CLONE_HEAD = "c".repeat(40);
 export const WORKSPACE_PATH = "/workspace/runs/run_dep/repo";
 export const RUN_BRANCH = "tanren/run_dep";
+export const POLICY_IDENTITY = "e".repeat(64);
 
 function unusedHttp(): GitHubHttpClient {
   return {
@@ -80,6 +81,7 @@ export function makeContext(overrides: Partial<PlannerRunContext> = {}): Planner
     runnerImage: "image",
     identitySecretRef: "runner/test/identity",
     githubCredentialRef: "",
+    policyIdentity: POLICY_IDENTITY,
     ...overrides,
   };
 }
