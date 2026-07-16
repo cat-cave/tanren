@@ -63,14 +63,27 @@ export function describeRepositoriesConformance(
       const h = await makeHarness();
       await h.seed({ projects: [projectA()] });
       const client = h.clientForOrg(ORG_A);
-      await h.repositories.projects.updateConfig(
+      const snapshot = await h.repositories.projects.getConfigSnapshot(client, "project_a", systemActor);
+      expect(snapshot).toBeDefined();
+      const updated = await h.repositories.projects.updateConfigIfCurrent(
         client,
         "project_a",
+        snapshot!,
         { version: 1, governancePosture: "x" },
         systemActor,
       );
+      expect(updated).toBe(true);
+      const stale = await h.repositories.projects.updateConfigIfCurrent(
+        client,
+        "project_a",
+        snapshot!,
+        { version: 1, budget: { ceilingUsd: 10, period: "monthly" } },
+        systemActor,
+      );
+      expect(stale).toBe(false);
       const config = await h.repositories.projects.getConfig(client, "project_a", systemActor);
       expect(config).toMatchObject({ governancePosture: "x" });
+      expect(config).not.toHaveProperty("budget");
     });
 
     it("updates a project's repo url on the caller's client", async () => {

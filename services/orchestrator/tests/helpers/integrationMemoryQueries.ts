@@ -50,7 +50,7 @@ export function listInventory(state: MemoryQueryState, params: unknown[]): Integ
         (row) =>
           row.org_id === c.org_id &&
           row.provider_kind === c.provider_kind &&
-          (row.connection_id === c.id || row.connection_id === null) &&
+          (row.connection_id === c.id || row.reserved_connection_id === c.id) &&
           ["pending", "in_progress", "awaiting_principal_selection"].includes(row.status),
       );
       return {

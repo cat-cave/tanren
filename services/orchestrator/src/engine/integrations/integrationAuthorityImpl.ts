@@ -6,9 +6,11 @@ import {
   type AuthorizeOperationInput,
   type AuthorizeOperationResult,
   type AuthorizePrincipalVerificationInput,
+  IntegrationIdempotencyConflictError,
   type IntegrationAuthority,
   type SanitizedConnectionCandidate,
 } from "../contracts/integrationAuthority.js";
+import { integrationStagedSecretRef } from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 
 function actorId(actor: { id?: string; label?: string; kind: string }): string {
@@ -142,10 +144,13 @@ function ineligibilityReasons(row: EligibilityRow, capability: string, operation
   return reasons;
 }
 
-function isSelected(row: EligibilityRow): boolean {
+function isSelectionTarget(row: EligibilityRow): boolean {
+  return row.selected_connection_id === row.connection_id && row.selected_grant_id === row.grant_id;
+}
+
+function isExactSelection(row: EligibilityRow): boolean {
   return (
-    row.selected_connection_id === row.connection_id &&
-    row.selected_grant_id === row.grant_id &&
+    isSelectionTarget(row) &&
     row.selected_auth_generation === row.current_auth_generation &&
     row.selected_grant_generation === row.grant_current_generation
   );
@@ -173,14 +178,16 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     if (input.operationKind === "rotate" && (input.connectionId === undefined || input.connectionId === "")) {
       throw new Error("rotate requires connectionId");
     }
+    if (!/^sha256:[0-9a-f]{64}$/u.test(input.requestFingerprint)) {
+      throw new TypeError("integration request fingerprint must be sha256");
+    }
     const operationId = randomUUID();
-    const result = await client.query(
+    await client.query(
       `INSERT INTO org_integration_connection_operations
          (org_id, id, provider_kind, connection_id, operation_kind, stage, status,
-          idempotency_key, actor_id, updated_at)
-       VALUES ($1, $2, $3, $4, $5, 'created', 'pending', $6, $7, now())
-       ON CONFLICT (org_id, idempotency_key) DO UPDATE SET updated_at = org_integration_connection_operations.updated_at
-       RETURNING id, stage, status, staged_secret_handle, connection_id, operation_kind`,
+          idempotency_key, actor_id, request_fingerprint, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'created', 'pending', $6, $7, $8, now())
+       ON CONFLICT (org_id, idempotency_key) DO NOTHING`,
       [
         input.orgId,
         operationId,
@@ -189,27 +196,50 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
         input.operationKind,
         input.idempotencyKey,
         actorId(input.actor),
+        input.requestFingerprint,
       ],
+    );
+    const result = await client.query(
+      `SELECT id, provider_kind, connection_id, operation_kind, stage, status,
+              staged_secret_handle, actor_id, request_fingerprint
+       FROM org_integration_connection_operations
+       WHERE org_id = $1 AND idempotency_key = $2`,
+      [input.orgId, input.idempotencyKey],
     );
     const row = result.rows[0] as
       | {
           id: string;
+          provider_kind: string;
           stage: string;
           status: string;
           staged_secret_handle: string | null;
           connection_id: string | null;
           operation_kind: string;
+          actor_id: string;
+          request_fingerprint: string;
         }
       | undefined;
     if (row === undefined) {
       throw new Error("failed to create integration connection operation");
+    }
+    const expectedConnectionId = input.connectionId ?? null;
+    if (
+      row.provider_kind !== input.providerKind ||
+      row.operation_kind !== input.operationKind ||
+      (input.operationKind === "rotate" && row.connection_id !== expectedConnectionId) ||
+      row.actor_id !== actorId(input.actor) ||
+      row.request_fingerprint !== input.requestFingerprint
+    ) {
+      throw new IntegrationIdempotencyConflictError(
+        "integration idempotency key is already bound to a different immutable request",
+      );
     }
     return issuePrincipalVerificationPermit({
       orgId: input.orgId,
       providerKind: input.providerKind,
       operationId: row.id,
       actorId: actorId(input.actor),
-      stagedSecretHandle: row.staged_secret_handle ?? `secret://integration-stage/${encodeURIComponent(row.id)}`,
+      stagedSecretHandle: row.staged_secret_handle ?? integrationStagedSecretRef(row.id),
     });
   }
 
@@ -230,13 +260,31 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     const now = new Date();
     const evaluated = rows.map((row) => {
       const reasons = ineligibilityReasons(row, input.capability, input.operation, now);
-      return { row, reasons, selected: isSelected(row), eligible: reasons.length === 0 };
+      return { row, reasons, selected: isSelectionTarget(row), eligible: reasons.length === 0 };
     });
 
     const selected = evaluated.find((item) => item.selected);
+    const selectionExists = evaluated.some((item) => item.row.selected_connection_id !== null);
+    if (selectionExists && selected === undefined) {
+      return {
+        status: "selection_required",
+        reason: "selected_grant_unavailable",
+        candidates: evaluated.map((item) => toCandidate(item.row, [...item.reasons, "selected_grant_missing"])),
+      };
+    }
     if (selected !== undefined) {
-      if (!selected.eligible) {
-        return { status: "ineligible", reasons: selected.reasons };
+      const staleGeneration = !isExactSelection(selected.row);
+      if (!selected.eligible || staleGeneration) {
+        return {
+          status: "selection_required",
+          reason: "selected_grant_unavailable",
+          candidates: [
+            toCandidate(
+              selected.row,
+              staleGeneration ? [...selected.reasons, "selected_generation_stale"] : selected.reasons,
+            ),
+          ],
+        };
       }
       return {
         status: "eligible",
@@ -262,9 +310,8 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     const eligible = evaluated.filter((item) => item.eligible);
     if (eligible.length === 0) {
       return {
-        status: "selection_required",
-        reason: "selected_grant_unavailable",
-        candidates: evaluated.map((item) => toCandidate(item.row, item.reasons)),
+        status: "ineligible",
+        reasons: [...new Set(evaluated.flatMap((item) => item.reasons))],
       };
     }
     if (eligible.length > 1) {

@@ -40,8 +40,11 @@ export interface MemoryGrantGeneration {
   capabilities: string[];
   operations: string[];
   provider_scopes: string[];
+  resource_constraints?: Record<string, unknown>;
   policy_revision: string;
   consent_revision: string;
+  consent_actor_id?: string;
+  consented_at?: string;
   status: string;
   expires_at: string | null;
 }
@@ -55,12 +58,28 @@ export interface MemoryOperation {
   status: string;
   idempotency_key: string;
   actor_id: string;
+  request_fingerprint: string;
+  verification_fingerprint: string | null;
+  verified_principal: unknown | null;
+  verified_auth_kind: string | null;
+  verified_scopes: string[] | null;
+  verified_expires_at: string | null;
+  reserved_connection_id: string | null;
+  reserved_credential_ref: string | null;
   staged_secret_handle: string | null;
   candidate_principals: unknown[];
   selected_principal_id: string | null;
   target_auth_generation: number | null;
+  target_grant_id: string | null;
+  target_grant_generation: number | null;
+  reserved_capabilities: string[] | null;
+  reserved_operations: string[] | null;
+  reserved_policy_revision: string | null;
+  reserved_consent_revision: string | null;
+  reserved_consented_at: string | null;
   failure_classification: string | null;
   compensation_state: Record<string, unknown>;
+  created_at: string;
 }
 export interface MemorySelection {
   org_id: string;

@@ -93,6 +93,78 @@ Integration-specific cutover paths (preserve P0 callers while replacing authorit
 - `services/orchestrator/src/engine/worker/runExecutor.ts`
 - related tests for the cutover paths above
 
+### Final P1 Slice 1 freeze manifest
+
+This is the exhaustive 63-path convergence tree authorized for the local freeze
+commit. Paths outside this manifest are not part of the unit.
+
+<!-- final-freeze-manifest:start -->
+
+- `db/migrations/0041_integration_lifecycle.sql`
+- `db/migrations/meta/0041_snapshot.json`
+- `db/src/schemaIntegrationConnections.ts`
+- `docs/roadmap/mission-complete/nodes/cards/integration-lifecycle-data-model.md`
+- `justfile`
+- `services/orchestrator/src/engine/contracts/awsSecretsManager.ts`
+- `services/orchestrator/src/engine/contracts/gcpSecretManager.ts`
+- `services/orchestrator/src/engine/contracts/integrationAuthority.ts`
+- `services/orchestrator/src/engine/contracts/integrationSecretStore.ts`
+- `services/orchestrator/src/engine/contracts/onePassword.ts`
+- `services/orchestrator/src/engine/contracts/secretStore.ts`
+- `services/orchestrator/src/engine/forge/interview/derive.ts`
+- `services/orchestrator/src/engine/integrations/integrationAuthorityImpl.ts`
+- `services/orchestrator/src/engine/integrations/integrationOperationFingerprint.ts`
+- `services/orchestrator/src/engine/integrations/integrationSecretCleanupReaper.ts`
+- `services/orchestrator/src/engine/integrations/integrationSecretStoreImpl.ts`
+- `services/orchestrator/src/engine/integrations/principalVerifierSupport.ts`
+- `services/orchestrator/src/engine/integrations/principalVerifiers.ts`
+- `services/orchestrator/src/engine/integrations/provisioningEngine.ts`
+- `services/orchestrator/src/engine/repositories/index.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnectionActivate.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnectionCleanup.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnectionFinalize.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnectionFinalizeAssert.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnections.ts`
+- `services/orchestrator/src/engine/repositories/integrationOperationTransitions.ts`
+- `services/orchestrator/src/engine/repositories/projects.ts`
+- `services/orchestrator/src/engine/worker/boot.ts`
+- `services/orchestrator/src/routes/brownfield/fullTrack.ts`
+- `services/orchestrator/src/routes/integrations/authorityPayloads.ts`
+- `services/orchestrator/src/routes/integrations/authorityWrites.ts`
+- `services/orchestrator/src/routes/integrations/index.ts`
+- `services/orchestrator/src/routes/integrations/linkSaga.ts`
+- `services/orchestrator/src/routes/integrations/principalSelectionRoute.ts`
+- `services/orchestrator/src/routes/integrations/selectedPrincipalSaga.ts`
+- `services/orchestrator/src/routes/integrations/verifierTransition.ts`
+- `services/orchestrator/src/routes/projects/budget.ts`
+- `services/orchestrator/src/routes/projects/governance.ts`
+- `services/orchestrator/src/routes/projects/greenfield.ts`
+- `services/orchestrator/src/routes/projects/index.ts`
+- `services/orchestrator/tests/awsSecretsManager.test.ts`
+- `services/orchestrator/tests/conformance/fakes/awsSecretsManagerFetch.ts`
+- `services/orchestrator/tests/conformance/repositories.conformance.test.ts`
+- `services/orchestrator/tests/conformance/repositoriesConformance.ts`
+- `services/orchestrator/tests/fixtures/forge/interviewDeriveStub.ts`
+- `services/orchestrator/tests/gcpSecretManager.test.ts`
+- `services/orchestrator/tests/helpers/integrationMemoryActivate.ts`
+- `services/orchestrator/tests/helpers/integrationMemoryDb.ts`
+- `services/orchestrator/tests/helpers/integrationMemoryOperations.ts`
+- `services/orchestrator/tests/helpers/integrationMemoryQueries.ts`
+- `services/orchestrator/tests/helpers/integrationMemoryTables.ts`
+- `services/orchestrator/tests/helpers/routesPool.ts`
+- `services/orchestrator/tests/integrationAuthority.p0.convergence.test.ts`
+- `services/orchestrator/tests/integrationAuthorityRaces.test.ts`
+- `services/orchestrator/tests/integrationConnectionSaga.integration.test.ts`
+- `services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts`
+- `services/orchestrator/tests/integrationLifecycleRls.integration.test.ts`
+- `services/orchestrator/tests/integrationOperationDurability.integration.test.ts`
+- `services/orchestrator/tests/integrationProvisioningEngine.test.ts`
+- `services/orchestrator/tests/integrationRoutes.contract.test.ts`
+- `services/orchestrator/tests/integrationVaultCas.integration.test.ts`
+- `services/orchestrator/tests/onePassword.test.ts`
+- `services/orchestrator/tests/workerBoot.test.ts`
+<!-- final-freeze-manifest:end -->
+
 Deleted (do not reintroduce):
 
 - `db/src/schemaIntegrationLifecycle.ts` (split; no compatibility re-export)
@@ -207,11 +279,11 @@ closes the following with production cutover (still not full IN-1 completion):
 | Eligibility bypasses     | Production provider I/O uses only `authorizeOperation` after exact project selection. Deleted `resolveExactControlGrant` + sole-candidate `candidates[0]` + fabricated leases. Greenfield/demo/destroy reordered behind project+selection. |
 | Verified scopes          | Slack scopes from `x-oauth-scopes`; Sentry from capability probes; principal-select persists verified scopes (never `[]` hardcode). Unproven scopes fail before finalize.                                                                  |
 | Exact generation secrets | Sentry/Slack/deploy provisioners + deploy adapters read via `secretValueForLease` / `getExact` only.                                                                                                                                       |
-| Secret finalization saga | Reserve (short TX) → Vault `putCreateOnly`/`cas=0` outside SQL → activate (short TX, op ownership). Auth/grant generation rows are create-only inserts (identical conflict continues; different fails hard).                                                             |
-| Sentry provision scopes  | Catalog provision requires only `project:write` (official create-project/key). Verifier persists proven access scopes; never invents `project:admin`. Full-capability link authorizes provision.                                                                           |
-| Multi-principal UI       | Redirect carries operation id only; GET reloads durable candidates from operation endpoint. Visible chrome: displayName + kind only (hidden principal id in CSRF form). Awaiting/refresh/invalidated/unavailable/completed pinned.                                    |
-| Fly multi-org            | GraphQL `organizations(first, after)` + `pageInfo` cursor advance/duplicate fail-loud; never sole-principal collapse.                                                                                                                                                    |
-| PG/RLS proof             | Live-gated tests seed real 0041 rows (connection→auth gen→grant→grant gen→selection). Memory fake is unit-contract only, not SQL/RLS proof. Opt-in: `TANREN_RLS_DB_TEST=1`.                                                                                             |
+| Secret finalization saga | Reserve (short TX) → Vault `putCreateOnly`/`cas=0` outside SQL → activate (short TX, op ownership). Auth/grant generation rows are create-only inserts (identical conflict continues; different fails hard).                               |
+| Sentry provision scopes  | Catalog provision requires only `project:write` (official create-project/key). Verifier persists proven access scopes; never invents `project:admin`. Full-capability link authorizes provision.                                           |
+| Multi-principal UI       | Redirect carries operation id only; GET reloads durable candidates from operation endpoint. Visible chrome: displayName + kind only (hidden principal id in CSRF form). Awaiting/refresh/invalidated/unavailable/completed pinned.         |
+| Fly multi-org            | GraphQL `organizations(first, after)` + `pageInfo` cursor advance/duplicate fail-loud; never sole-principal collapse.                                                                                                                      |
+| PG/RLS proof             | Live-gated tests seed real 0041 rows (connection→auth gen→grant→grant gen→selection). Memory fake is unit-contract only, not SQL/RLS proof. Opt-in: `TANREN_RLS_DB_TEST=1`.                                                                |
 
 **Not claimed:** full IN-1 node completion, binding workers, 0042, shared smoke.
 

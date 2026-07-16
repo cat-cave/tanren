@@ -1,4 +1,4 @@
-import type { PutCreateOnlyResult, SecretStore, SecretValue } from "./secretStore.js";
+import { SecretStoreWriteError, type PutCreateOnlyResult, type SecretStore, type SecretValue } from "./secretStore.js";
 
 /**
  * Backend-agnostic credential refs look like
@@ -88,6 +88,7 @@ function decodeRefLabels(labels: Record<string, string> | undefined): string | u
  * logged.
  */
 export class GcpSecretManagerStore implements SecretStore {
+  readonly createOnlyAtomicity = "unsupported" as const;
   private readonly fetchImpl: typeof fetch;
   private readonly apiBase: string;
 
@@ -109,14 +110,10 @@ export class GcpSecretManagerStore implements SecretStore {
   }
 
   async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
-    const existing = await this.get(secret.ref);
-    if (existing !== undefined) {
-      return existing.value === secret.value
-        ? { status: "already_exists_identical" }
-        : { status: "conflict_different_value" };
-    }
-    await this.put(secret);
-    return { status: "created" };
+    throw new SecretStoreWriteError(
+      `GCP Secret Manager cannot atomically create immutable coordinate ${secret.ref}`,
+      "definitely_unwritten",
+    );
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {

@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { EligibleOperationLease, PrincipalCandidate } from "../contracts/integrationAuthority.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
-import type { IntegrationSecretStore } from "../contracts/integrationSecretStore.js";
 import type {
   FinalizeVerifiedLinkInput,
   FinalizeVerifiedLinkResult,
@@ -9,10 +8,24 @@ import type {
 } from "./integrationConnectionFinalize.js";
 export type { FinalizeVerifiedLinkInput, FinalizeVerifiedLinkResult, LinkReservation };
 import type { ActorRef } from "../state/actor.js";
+import {
+  listTerminalStagedCleanupCandidates,
+  markTerminalStagedCleanupComplete,
+  type TerminalStagedCleanupCandidate,
+} from "./integrationConnectionCleanup.js";
 import { listExactControlGrants, orgGrantFromLease, secretValueForLease } from "./integrationConnectionResolve.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
+import {
+  markAwaitingPrincipalSelection,
+  markOperationActivationFailed,
+  markOperationFailed,
+  markOperationRetryable,
+  markOperationStaged,
+  recordNonterminalFailure,
+} from "./integrationOperationTransitions.js";
 
 export { listExactControlGrants, orgGrantFromLease, secretValueForLease };
+export type { TerminalStagedCleanupCandidate };
 
 export const INTEGRATION_CONNECTION_HEALTH = ["unknown", "healthy", "degraded", "invalid"] as const;
 export type IntegrationConnectionHealth = (typeof INTEGRATION_CONNECTION_HEALTH)[number];
@@ -96,60 +109,14 @@ function mapInventory(value: unknown): IntegrationConnectionInventoryRow {
 }
 
 export const IntegrationConnectionsStore = {
-  async markOperationStaged(
-    client: IntegrationQueryClient,
-    orgId: string,
-    operationId: string,
-    stagedHandle: string,
-  ): Promise<void> {
-    await client.query(
-      `UPDATE org_integration_connection_operations
-       SET stage = 'credential_staged', status = 'in_progress',
-           staged_secret_handle = $3, updated_at = now()
-       WHERE org_id = $1 AND id = $2`,
-      [orgId, operationId, stagedHandle],
-    );
-  },
-
-  async markAwaitingPrincipalSelection(
-    client: IntegrationQueryClient,
-    orgId: string,
-    operationId: string,
-    candidates: PrincipalCandidate[],
-    verified?: { authKind: string; scopes: string[] },
-  ): Promise<void> {
-    await client.query(
-      `UPDATE org_integration_connection_operations
-       SET stage = 'awaiting_principal_selection', status = 'awaiting_principal_selection',
-           candidate_principals = $3::jsonb,
-           compensation_state = COALESCE(compensation_state, '{}'::jsonb) || $4::jsonb,
-           updated_at = now()
-       WHERE org_id = $1 AND id = $2`,
-      [
-        orgId,
-        operationId,
-        JSON.stringify(candidates),
-        JSON.stringify({
-          verifiedAuthKind: verified?.authKind ?? "api_key",
-          verifiedScopes: verified?.scopes ?? [],
-        }),
-      ],
-    );
-  },
-
-  async markOperationFailed(
-    client: IntegrationQueryClient,
-    orgId: string,
-    operationId: string,
-    classification: string,
-  ): Promise<void> {
-    await client.query(
-      `UPDATE org_integration_connection_operations
-       SET stage = 'failed', status = 'failed', failure_classification = $3, updated_at = now()
-       WHERE org_id = $1 AND id = $2`,
-      [orgId, operationId, classification],
-    );
-  },
+  markOperationStaged,
+  markAwaitingPrincipalSelection,
+  markOperationFailed,
+  markOperationRetryable,
+  markOperationActivationFailed,
+  recordNonterminalFailure,
+  listTerminalStagedCleanupCandidates,
+  markTerminalStagedCleanupComplete,
 
   async getOperation(
     client: IntegrationQueryClient,
@@ -168,12 +135,17 @@ export const IntegrationConnectionsStore = {
         actorId: string;
         verifiedAuthKind: string | undefined;
         verifiedScopes: string[];
+        verifiedExpiresAt: string | undefined;
+        failureClassification: string | undefined;
+        selectedPrincipalId: string | undefined;
       }
     | undefined
   > {
     const result = await client.query(
       `SELECT id, provider_kind, connection_id, operation_kind, stage, status,
-              staged_secret_handle, candidate_principals, actor_id, compensation_state
+              staged_secret_handle, candidate_principals, actor_id,
+              verified_auth_kind, verified_scopes, verified_expires_at, failure_classification,
+              selected_principal_id
        FROM org_integration_connection_operations
        WHERE org_id = $1 AND id = $2`,
       [orgId, operationId],
@@ -189,12 +161,14 @@ export const IntegrationConnectionsStore = {
           staged_secret_handle: string | null;
           candidate_principals: PrincipalCandidate[];
           actor_id: string;
-          compensation_state: Record<string, unknown> | null;
+          verified_auth_kind: string | null;
+          verified_scopes: string[] | null;
+          verified_expires_at: Date | string | null;
+          failure_classification: string | null;
+          selected_principal_id: string | null;
         }
       | undefined;
     if (row === undefined) return undefined;
-    const compensation = row.compensation_state ?? {};
-    const scopes = compensation["verifiedScopes"];
     return {
       id: row.id,
       providerKind: row.provider_kind,
@@ -205,29 +179,36 @@ export const IntegrationConnectionsStore = {
       stagedSecretHandle: row.staged_secret_handle ?? undefined,
       candidatePrincipals: Array.isArray(row.candidate_principals) ? row.candidate_principals : [],
       actorId: row.actor_id,
-      verifiedAuthKind:
-        typeof compensation["verifiedAuthKind"] === "string" ? compensation["verifiedAuthKind"] : undefined,
-      verifiedScopes: Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === "string") : [],
+      verifiedAuthKind: row.verified_auth_kind ?? undefined,
+      verifiedScopes: row.verified_scopes ?? [],
+      verifiedExpiresAt:
+        row.verified_expires_at === null
+          ? undefined
+          : row.verified_expires_at instanceof Date
+            ? row.verified_expires_at.toISOString()
+            : row.verified_expires_at,
+      failureClassification: row.failure_classification ?? undefined,
+      selectedPrincipalId: row.selected_principal_id ?? undefined,
     };
-  },
-
-  /**
-   * Unit-fake convenience: reserve + secret + activate on one client.
-   * Production HTTP must use reserve / finalizeReservedSecret / activate so Vault
-   * never runs under BEGIN (see authorityWrites).
-   */
-  async finalizeVerifiedLink(
-    client: IntegrationQueryClient,
-    input: FinalizeVerifiedLinkInput,
-    secrets: IntegrationSecretStore,
-  ): Promise<FinalizeVerifiedLinkResult> {
-    const { finalizeVerifiedLinkSql } = await import("./integrationConnectionFinalize.js");
-    return finalizeVerifiedLinkSql(client, input, secrets);
   },
 
   async reserveVerifiedLink(client: IntegrationQueryClient, input: FinalizeVerifiedLinkInput) {
     const { reserveVerifiedLinkSql } = await import("./integrationConnectionFinalize.js");
     return reserveVerifiedLinkSql(client, input);
+  },
+
+  async loadDurableLinkState(client: IntegrationQueryClient, permit: FinalizeVerifiedLinkInput["permit"]) {
+    const { loadDurableLinkStateSql } = await import("./integrationConnectionFinalize.js");
+    return loadDurableLinkStateSql(client, permit);
+  },
+
+  async markReservationActivatePending(
+    client: IntegrationQueryClient,
+    reservation: LinkReservation,
+    credentialRef: string,
+  ): Promise<void> {
+    const { markReservationActivatePendingSql } = await import("./integrationConnectionFinalize.js");
+    return markReservationActivatePendingSql(client, reservation, credentialRef);
   },
 
   async activateReservedLink(
@@ -237,6 +218,14 @@ export const IntegrationConnectionsStore = {
   ): Promise<FinalizeVerifiedLinkResult> {
     const { activateReservedLinkSql } = await import("./integrationConnectionFinalize.js");
     return activateReservedLinkSql(client, reservation, credentialRef);
+  },
+
+  async markStagedCleanupComplete(
+    client: IntegrationQueryClient,
+    permit: FinalizeVerifiedLinkInput["permit"],
+  ): Promise<void> {
+    const { markStagedCleanupCompleteSql } = await import("./integrationConnectionFinalize.js");
+    return markStagedCleanupCompleteSql(client, permit);
   },
 
   async listInventory(
@@ -267,7 +256,7 @@ export const IntegrationConnectionsStore = {
          SELECT o.id, o.stage, o.status
          FROM org_integration_connection_operations o
          WHERE o.org_id = c.org_id AND o.provider_kind = c.provider_kind
-           AND (o.connection_id = c.id OR o.connection_id IS NULL)
+           AND (o.connection_id = c.id OR o.reserved_connection_id = c.id)
            AND o.status IN ('pending','in_progress','awaiting_principal_selection')
          ORDER BY o.created_at DESC
          LIMIT 1

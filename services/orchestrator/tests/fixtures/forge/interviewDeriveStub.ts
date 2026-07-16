@@ -88,9 +88,17 @@ export function stubPool(): {
       return { rows: [], rowCount: 1 };
     }
     // Post-deploy config merge (project shell created first, deploy fields applied after).
+    if (sql.startsWith("SELECT config FROM projects")) {
+      const projectId = String(params[0]);
+      return configs.has(projectId)
+        ? { rows: [{ config: configs.get(projectId) }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
     if (sql.startsWith("UPDATE projects SET config")) {
       const rawConfig = params[0];
       const projectId = String(params[1]);
+      const expected = JSON.parse(String(params[2])) as Record<string, unknown>;
+      if (JSON.stringify(configs.get(projectId)) !== JSON.stringify(expected)) return { rows: [], rowCount: 0 };
       if (typeof rawConfig === "string") {
         // Production updateConfig overwrites the config blob entirely with the
         // caller's merged object (base + vision + lifecycle + deploy).

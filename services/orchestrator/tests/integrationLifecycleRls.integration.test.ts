@@ -356,7 +356,7 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
           `INSERT INTO integration_bindings
              (org_id, id, project_id, requirement_id, environment,
               provider_kind, connection_id, current_generation, status)
-           VALUES ($1, 'binding-cross-org', $2, 'requirement-a', 'production',
+           VALUES ($1, 'binding-cross-org', $2, 'requirement-a', 'preview',
                    'sentry', $3, 1, 'ready')`,
           [ORG_A, PROJECT_A, connectionB],
         ),

@@ -4,6 +4,7 @@ import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { migrateProjectConfig } from "../../engine/config/index.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
   GreenfieldRepoNotEmptyError,
@@ -26,7 +27,7 @@ import {
 } from "../../engine/forge/interview/index.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { githubHttpsRemote } from "../../engine/providers/github.js";
-import { ProjectStore } from "../../engine/repositories/projects.js";
+import { mutateProjectConfig, ProjectStore } from "../../engine/repositories/projects.js";
 import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../engine/workflow/projectSpec.js";
@@ -284,11 +285,8 @@ export async function handleGreenfieldCreate(
     );
   }
 
-  await ProjectStore.updateConfig(
-    pool,
-    project.projectId,
-    { version: 1, greenfield: true, ...preparedDeploy.projectConfig },
-    { kind: "operator", id: actor.userId },
+  await mutateProjectConfig(pool, project.projectId, { kind: "operator", id: actor.userId }, (raw) =>
+    migrateProjectConfig({ ...migrateProjectConfig(raw), greenfield: true, ...preparedDeploy.projectConfig }),
   );
 
   // SHARED bootstrap (Codex round-4): seed the COMPLETE autonomous-project set —

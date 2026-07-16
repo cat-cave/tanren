@@ -11,6 +11,10 @@ function notFound(): Response {
   return new Response(JSON.stringify({ __type: "ResourceNotFoundException" }), { status: 400 });
 }
 
+function alreadyExists(): Response {
+  return new Response(JSON.stringify({ __type: "ResourceExistsException" }), { status: 400 });
+}
+
 export function awsSecretsManagerFetch(): typeof fetch {
   const store = new Map<string, string>();
 
@@ -34,6 +38,9 @@ export function awsSecretsManagerFetch(): typeof fetch {
       }
       case "CreateSecret": {
         const id = payload.Name ?? "";
+        if (store.has(id)) {
+          return alreadyExists();
+        }
         store.set(id, payload.SecretString ?? "");
         return new Response(JSON.stringify({ Name: id }), { status: 200 });
       }

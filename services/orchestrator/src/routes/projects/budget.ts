@@ -32,7 +32,7 @@ import {
   type BudgetPauseObservation,
   PgBudgetPauseObservationReader,
 } from "../../engine/dag/budgetPauseObservation.js";
-import { ProjectStore } from "../../engine/repositories/index.js";
+import { mutateProjectConfig, ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import { createLogger } from "../../engine/observability/logger.js";
 
@@ -140,21 +140,19 @@ export async function handleBudgetPut(
   // project can fire the re-walk wake below (audit §3.7e).
   const before = await new PgBudgetGate(pool).resolveBudget(projectId);
 
-  const rawConfig = await ProjectStore.getConfig(pool, projectId, systemActor);
-  const current = migrateProjectConfig(rawConfig);
-  const nextConfig = {
-    ...current,
-    budget:
-      body.ceilingUsd === null
-        ? undefined
-        : {
-            ceilingUsd: body.ceilingUsd,
-            period: body.period ?? DEFAULT_BUDGET_PERIOD,
-          },
-  };
-  // Round-trip through the versioned parser so the persisted blob is always a valid
-  // ProjectConfigV1 (drops the `budget` key entirely when cleared — `.strict()`).
-  await ProjectStore.updateConfig(pool, projectId, migrateProjectConfig(nextConfig), systemActor);
+  await mutateProjectConfig(pool, projectId, systemActor, (raw) => {
+    const current = migrateProjectConfig(raw);
+    return migrateProjectConfig({
+      ...current,
+      budget:
+        body.ceilingUsd === null
+          ? undefined
+          : {
+              ceilingUsd: body.ceilingUsd,
+              period: body.period ?? DEFAULT_BUDGET_PERIOD,
+            },
+    });
+  });
 
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
   const pauseObservation = await pauseObservationFor(pool, orgId, projectId, state);

@@ -8,7 +8,8 @@ import type {
   ProjectContext,
   ProvisionedArtifact,
 } from "../src/engine/contracts/integrationProvisioner.js";
-import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import { GcpSecretManagerStore } from "../src/engine/contracts/gcpSecretManager.js";
+import { InMemorySecretStore, type SecretStore } from "../src/engine/contracts/secretStore.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../src/engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
@@ -116,7 +117,7 @@ class RecordingProvisioner implements IntegrationProvisioner {
 function harness(input: {
   actor: ActorContext;
   database?: RouteDatabase;
-  secrets?: InMemorySecretStore;
+  secrets?: SecretStore;
   provisioner?: RecordingProvisioner;
   fetchImpl?: typeof fetch;
 }) {
@@ -182,6 +183,54 @@ describe("integration routes auth + sanitization", () => {
     });
     expect(response.status).toBe(400);
   });
+
+  it("rejects catalog providers without a verifier before operation, staging, or provider I/O", async () => {
+    const database = new RouteDatabase();
+    const secrets = new InMemorySecretStore();
+    const fetchImpl = vi.fn<typeof fetch>();
+    const { app } = harness({ actor: admin, database, secrets, fetchImpl });
+    const response = await app.request("/orgs/org_acme/integrations/deploy.manual_external", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "must-not-stage", idempotencyKey: "unsupported" }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "principal_verifier_unavailable" });
+    expect(database.memory.operations).toHaveLength(0);
+    expect(await secrets.list("secret://")).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails integration writes closed on a non-atomic secret backend before any I/O", async () => {
+    const database = new RouteDatabase();
+    const backendFetch = vi.fn<typeof fetch>();
+    const providerFetch = vi.fn<typeof fetch>();
+    const secrets = new GcpSecretManagerStore({ project: "p", accessToken: "t", fetchImpl: backendFetch });
+    const { app } = harness({ actor: admin, database, secrets, fetchImpl: providerFetch });
+    const response = await app.request("/orgs/org_acme/integrations/slack", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "must-not-stage", idempotencyKey: "unsupported-backend" }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "atomic_secret_finalization_unavailable" });
+    expect(database.memory.operations).toHaveLength(0);
+    expect(backendFetch).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
+  });
+
+  it("fails Slack enable closed before provisioner/provider I/O", async () => {
+    const provisioner = new RecordingProvisioner();
+    const { app } = harness({ actor: admin, provisioner });
+    const response = await app.request(provisionPath, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capability: "notify", mode: "greenfield" }),
+    });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: "slack_bot_delivery_adapter_unavailable" });
+    expect(provisioner.calls).toBe(0);
+  });
 });
 
 describe("verified principal link + multi-principal selection", () => {
@@ -201,10 +250,13 @@ describe("verified principal link + multi-principal selection", () => {
     });
     expect(response.status).toBe(202);
     const body = await response.json();
-    expect(body).toMatchObject({
-      status: "completed",
-      providerPrincipalId: "team_a",
+    expect(body).toMatchObject({ status: "awaiting_principal_selection" });
+    const selected = await app.request(`/orgs/org_acme/integrations/operations/${body.operationId}/principal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerPrincipalId: "team_a" }),
     });
+    expect(await selected.json()).toMatchObject({ status: "completed", providerPrincipalId: "team_a" });
     expect(JSON.stringify(body)).not.toContain("token_team_a");
     expect(database.memory.connections[0]?.provider_principal_id).toBe("team_a");
   });
@@ -232,8 +284,91 @@ describe("verified principal link + multi-principal selection", () => {
     expect(response.status).toBe(202);
     const body = await response.json();
     expect(body).toMatchObject({ status: "awaiting_principal_selection" });
-    expect(body.candidates).toHaveLength(2);
+    expect(body.candidates).toHaveLength(3);
+    expect(body.candidates).toEqual(
+      expect.arrayContaining([expect.objectContaining({ providerPrincipalId: "user_1", principalKind: "user" })]),
+    );
     expect(database.memory.connections).toHaveLength(0);
+  });
+
+  it("re-probes and persists scopes for the selected Sentry organization only", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/api/0/organizations/?per_page=100")) {
+        return Response.json([
+          { id: "org-a", slug: "a", name: "A" },
+          { id: "org-b", slug: "b", name: "B" },
+        ]);
+      }
+      if (href.endsWith("/organizations/b/")) {
+        return Response.json({ access: ["project:read", "project:write"] });
+      }
+      if (href.includes("/organizations/b/projects/")) return Response.json([{ slug: "b-project" }]);
+      if (href.endsWith("/organizations/a/")) return Response.json({ access: ["project:read"] });
+      if (href.includes("/organizations/a/projects/")) return Response.json([{ slug: "a-project" }]);
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    const { app, database } = harness({ actor: admin, fetchImpl });
+    const link = await app.request("/orgs/org_acme/integrations/sentry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "sentry-multi", idempotencyKey: "sentry-multi" }),
+    });
+    const pending = (await link.json()) as { operationId: string; status: string };
+    expect(pending.status).toBe("awaiting_principal_selection");
+
+    const selected = await app.request(`/orgs/org_acme/integrations/operations/${pending.operationId}/principal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerPrincipalId: "org-b" }),
+    });
+    expect(selected.status).toBe(202);
+    expect(await selected.json()).toMatchObject({ status: "completed", providerPrincipalId: "org-b" });
+    expect(database.memory.grantGenerations[0]?.provider_scopes).toEqual(["project:read", "project:write"]);
+    expect(fetchImpl.mock.calls.some(([url]) => String(url).endsWith("/organizations/a/"))).toBe(false);
+  });
+
+  it("retains the awaiting Sentry operation when the selected-org scope probe is unavailable", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.endsWith("/api/0/organizations/?per_page=100")) {
+        return Response.json([
+          { id: "org-a", slug: "a", name: "A" },
+          { id: "org-b", slug: "b", name: "B" },
+        ]);
+      }
+      if (href.endsWith("/organizations/b/")) {
+        return new Response("maintenance", { status: 503, headers: { "retry-after": "29" } });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    const { app, database, secrets } = harness({ actor: admin, fetchImpl });
+    const link = await app.request("/orgs/org_acme/integrations/sentry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "sentry-retry", idempotencyKey: "sentry-retry" }),
+    });
+    const pending = (await link.json()) as { operationId: string };
+    const selected = await app.request(`/orgs/org_acme/integrations/operations/${pending.operationId}/principal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerPrincipalId: "org-b" }),
+    });
+
+    expect(selected.status).toBe(202);
+    expect(await selected.json()).toMatchObject({
+      status: "provider_unavailable",
+      reason: "sentry_scope_http_503",
+      retryAfter: "29",
+    });
+    const operation = database.memory.operations[0]!;
+    expect(operation).toMatchObject({
+      stage: "awaiting_principal_selection",
+      status: "awaiting_principal_selection",
+      failure_classification: "sentry_scope_http_503",
+      compensation_state: { retryAfter: "29" },
+    });
+    expect(await secrets.get(operation.staged_secret_handle!)).toMatchObject({ value: "sentry-retry" });
   });
 
   it("requires project selection before provider I/O and never returns credential refs", async () => {
@@ -253,7 +388,13 @@ describe("verified principal link + multi-principal selection", () => {
       body: JSON.stringify({ token: "t", idempotencyKey: "one" }),
     });
     expect(linked.status).toBe(202);
-    const linkedBody = (await linked.json()) as {
+    const pending = (await linked.json()) as { operationId: string };
+    const completed = await app.request(`/orgs/org_acme/integrations/operations/${pending.operationId}/principal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerPrincipalId: "team_only" }),
+    });
+    const linkedBody = (await completed.json()) as {
       connectionId: string;
       grantId: string;
       authGeneration: number;

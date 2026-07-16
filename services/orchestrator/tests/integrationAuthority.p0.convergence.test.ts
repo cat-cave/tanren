@@ -30,15 +30,19 @@ function readSrc(rel: string): string {
 describe("IN-1 P0 convergence — former-bug proofs", () => {
   it("authorityWrites splits reserve → Vault → activate (no secrets under withOrgScope finalize)", () => {
     const writes = readSrc("routes/integrations/authorityWrites.ts");
-    expect(writes).toContain("runSplitLinkFinalize");
-    expect(writes).toContain("finalizeReservedSecret");
-    expect(writes).toContain("reserveVerifiedLink");
-    expect(writes).toContain("activateReservedLink");
+    const saga = readSrc("routes/integrations/linkSaga.ts");
+    expect(writes).toContain("runDurableLinkSaga");
+    expect(saga).toContain("finalizeReservedSecret");
+    expect(saga).toContain("reserveVerifiedLink");
+    expect(saga).toContain("activateReservedLink");
     // Must not call finalizeVerifiedLink inside a single withOrgScope (Vault-in-TX bug).
-    expect(writes).not.toMatch(/withOrgScope\([^)]*finalizeVerifiedLink/u);
+    expect(`${writes}\n${saga}`).not.toMatch(/withOrgScope\([^)]*finalizeVerifiedLink/u);
     const finalize = readSrc("engine/repositories/integrationConnectionFinalize.ts");
-    expect(finalize).toContain("ON CONFLICT (org_id, provider_kind, connection_id, generation) DO NOTHING");
-    expect(finalize).not.toMatch(/ON CONFLICT \(org_id, provider_kind, connection_id, generation\) DO UPDATE/u);
+    const activate = readSrc("engine/repositories/integrationConnectionActivate.ts");
+    expect(activate).toContain("ON CONFLICT (org_id, provider_kind, connection_id, generation) DO NOTHING");
+    expect(`${finalize}\n${activate}`).not.toMatch(
+      /ON CONFLICT \(org_id, provider_kind, connection_id, generation\) DO UPDATE/u,
+    );
   });
 
   it("production provider paths do not bypass authorizeOperation with naked grant resolve", () => {
@@ -142,6 +146,96 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     expect(result.candidates).toHaveLength(1);
   });
 
+  it("zero eligible is ineligible; selected-but-ineligible alone is selected_grant_unavailable", async () => {
+    const db = new IntegrationMemoryDb();
+    db.seedProject("proj-1", "org-1");
+    db.connections.push({
+      id: "c-bad",
+      org_id: "org-1",
+      provider_kind: "slack",
+      provider_principal_id: "T-bad",
+      principal_kind: "team",
+      display_name: "Degraded Team",
+      principal_metadata: {},
+      health: "degraded",
+      status: "active",
+      current_auth_generation: 1,
+      owner_id: "admin",
+    });
+    db.authGenerations.push({
+      org_id: "org-1",
+      provider_kind: "slack",
+      connection_id: "c-bad",
+      generation: 1,
+      credential_ref: "secret://org/org-1/integration/slack/connection/c-bad/token/g/1",
+      auth_kind: "bot_token",
+      expires_at: null,
+      status: "active",
+    });
+    db.grants.push({
+      id: "g-bad",
+      org_id: "org-1",
+      provider_kind: "slack",
+      connection_id: "c-bad",
+      plane: "control",
+      environment: "control",
+      current_generation: 1,
+      status: "active",
+    });
+    db.grantGenerations.push({
+      org_id: "org-1",
+      provider_kind: "slack",
+      connection_id: "c-bad",
+      grant_id: "g-bad",
+      generation: 1,
+      capabilities: ["notify"],
+      operations: ["provision"],
+      provider_scopes: [],
+      policy_revision: integrationCatalogRevision(),
+      consent_revision: "consent.test",
+      status: "active",
+      expires_at: null,
+    });
+    const authority = new PgIntegrationAuthority();
+    const input = {
+      orgId: "org-1",
+      projectId: "proj-1",
+      providerKind: "slack",
+      capability: "notify",
+      operation: "provision",
+      actor: { kind: "operator" as const, id: "admin" },
+    };
+    const unselected = await authority.authorizeOperation(db.clientForOrg("org-1"), input);
+    expect(unselected).toMatchObject({
+      status: "ineligible",
+      reasons: expect.arrayContaining(["connection_health_degraded", "missing_scope:channels:manage"]),
+    });
+
+    db.selections.push({
+      org_id: "org-1",
+      project_id: "proj-1",
+      provider_kind: "slack",
+      connection_id: "c-bad",
+      auth_generation: 1,
+      grant_id: "g-bad",
+      grant_generation: 1,
+      selected_by: "admin",
+    });
+    const selected = await authority.authorizeOperation(db.clientForOrg("org-1"), input);
+    expect(selected).toMatchObject({
+      status: "selection_required",
+      reason: "selected_grant_unavailable",
+      candidates: [{ connectionId: "c-bad" }],
+    });
+    db.selections[0]!.auth_generation = 99;
+    const stale = await authority.authorizeOperation(db.clientForOrg("org-1"), input);
+    expect(stale).toMatchObject({
+      status: "selection_required",
+      reason: "selected_grant_unavailable",
+      candidates: [{ ineligibilityReasons: expect.arrayContaining(["selected_generation_stale"]) }],
+    });
+  });
+
   it("Slack verified scopes make notify operations eligible; empty scopes fail", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-slack", "xoxb-token");
@@ -192,7 +286,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     expect(bad).toEqual({ status: "invalid", reason: "slack_scopes_unproven" });
   });
 
-  it("Sentry multi-principal never guesses; scopes come from capability probes", async () => {
+  it("Sentry multi-principal never guesses or borrows scopes before selection", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-sentry", "token");
     const permit = issuePrincipalVerificationPermit({
@@ -223,8 +317,8 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     expect(result.status).toBe("multi_principal");
     if (result.status !== "multi_principal") return;
     expect(result.candidates).toHaveLength(2);
-    expect(result.scopes).toEqual(expect.arrayContaining(["project:read", "project:write"]));
-    expect(result.scopes).not.toContain("project:admin");
+    expect(result.scopes).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("Sentry full-capability link scopes satisfy catalog provision (project:write only)", async () => {
@@ -253,7 +347,10 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
         };
         if (parsed.options?.cas === 0) {
           if (values.has(path)) {
-            return new Response("check-and-set failed", { status: 412 });
+            return Response.json(
+              { errors: ["check-and-set parameter did not match the current version"] },
+              { status: 400 },
+            );
           }
           values.set(path, parsed.data?.value ?? "");
           return new Response(null, { status: 204 });
@@ -275,6 +372,16 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     const conflict = await vault.putCreateOnly({ ref: "secret://g/1", value: "other" });
     expect(conflict).toEqual({ status: "conflict_different_value" });
     expect(calls.some((c) => c.body?.includes('"cas":0'))).toBe(true);
+
+    const malformed = new VaultSecretStore({
+      addr: "http://vault:8200",
+      token: "t",
+      fetchImpl: vi.fn<typeof fetch>(async () => Response.json({ errors: ["permission denied"] }, { status: 400 })),
+    });
+    await expect(malformed.putCreateOnly({ ref: "secret://g/2", value: "value" })).rejects.toMatchObject({
+      name: "SecretStoreWriteError",
+      writeState: "definitely_unwritten",
+    });
   });
 
   it("Fly multi-org paginates via pageInfo and never sole-principal collapses", async () => {

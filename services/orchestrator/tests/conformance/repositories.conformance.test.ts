@@ -56,10 +56,13 @@ class ScopedClient {
 
     // --- projects ---
     if (/UPDATE projects SET config/u.test(sql)) {
-      const [config, projectId] = params as [string, string];
+      const [config, projectId, expected] = params as [string, string, string];
       const row = projects().find((p) => p.project_id === projectId);
+      if (row === undefined || JSON.stringify(row.config) !== JSON.stringify(JSON.parse(expected))) {
+        return { rows: [], rowCount: 0 };
+      }
       if (row !== undefined) row.config = JSON.parse(config);
-      return { rows: [], rowCount: row ? 1 : 0 };
+      return { rows: [{ project_id: projectId }], rowCount: 1 };
     }
     if (/UPDATE projects SET repo_url/u.test(sql)) {
       const [repoUrl, projectId] = params as [string, string];

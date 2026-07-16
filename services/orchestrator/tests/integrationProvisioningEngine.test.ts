@@ -42,6 +42,7 @@ interface StubState {
   inboxSources: Array<{ id: string; org_id: string; project_id: string; kind: string; name: string; config: string }>;
   notificationTargets: Array<{ id: string; org_id: string; channel_kind: string; destination: string; label: string }>;
   projectConfig: Record<string, unknown> | null;
+  configCasInterleave?: Record<string, unknown>;
 }
 
 function stubClient(state: StubState): IntegrationQueryClient {
@@ -100,8 +101,14 @@ function stubClient(state: StubState): IntegrationQueryClient {
       return { rows: [{ config: state.projectConfig }], rowCount: state.projectConfig === null ? 1 : 1 };
     }
     if (text.startsWith("UPDATE projects SET config")) {
+      if (state.configCasInterleave !== undefined) {
+        state.projectConfig = { ...state.projectConfig, ...state.configCasInterleave };
+        state.configCasInterleave = undefined;
+      }
+      const expected = JSON.parse(String(params[2])) as Record<string, unknown> | null;
+      if (JSON.stringify(expected) !== JSON.stringify(state.projectConfig)) return { rows: [], rowCount: 0 };
       state.projectConfig = JSON.parse(String(params[0])) as Record<string, unknown>;
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ project_id: PROJECT }], rowCount: 1 };
     }
     // inbox source: INSERT ... ON CONFLICT (org_id, project_id, kind) DO UPDATE.
     // The stub MIRRORS the real DB constraints so a bad kind can't pass silently:
@@ -301,6 +308,21 @@ describe("provisionCapability — greenfield enable sentry", () => {
     expect(ev.projectId).toBe(PROJECT);
     expect(JSON.stringify(ev.payload)).not.toContain(stored!.value);
     expect((ev.payload as { secretRefNames: string[] }).secretRefNames).toEqual([dsnRef]);
+  });
+
+  it("re-reads after a config CAS loss and preserves the concurrent governance write", async () => {
+    const state = freshState(true);
+    state.configCasInterleave = { governancePosture: "warn" };
+    const { deps } = depsFor(state);
+    const outcome = await provisionCapability(deps, {
+      orgId: ORG,
+      projectId: PROJECT,
+      capability: "errors",
+      mode: "greenfield",
+      name: "acme-web",
+    });
+    expect(outcome.status).toBe("provisioned");
+    expect(state.projectConfig).toMatchObject({ governancePosture: "warn", sentryProjectSlug: "acme-web" });
   });
 });
 

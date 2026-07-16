@@ -148,12 +148,21 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    const currentConfig = migrateProjectConfig(await ProjectStore.getConfig(options.pool, projectId, systemActor));
+    const snapshot = await ProjectStore.getConfigSnapshot(options.pool, projectId, systemActor);
+    if (snapshot === undefined) return c.json({ error: "project_not_found" }, 404);
+    const currentConfig = migrateProjectConfig(snapshot.config);
     const configCheck = checkFullProjectConfigPatch(parsed.data.config, currentConfig);
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }
-    await ProjectStore.updateConfig(options.pool, projectId, configCheck.config, systemActor);
+    const updated = await ProjectStore.updateConfigIfCurrent(
+      options.pool,
+      projectId,
+      snapshot,
+      configCheck.config,
+      systemActor,
+    );
+    if (!updated) return c.json({ error: "project_config_concurrent_update" }, 409);
     return c.json({ projectId, config: configCheck.config });
   });
 

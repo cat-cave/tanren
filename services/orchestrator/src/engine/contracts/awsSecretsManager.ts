@@ -55,6 +55,7 @@ interface ListSecretsResponse {
  * backend with no live credentials.
  */
 export class AwsSecretsManagerStore implements SecretStore {
+  readonly createOnlyAtomicity = "atomic" as const;
   private readonly fetchImpl: typeof fetch;
   private readonly host: string;
   private readonly endpoint: string;

@@ -7451,9 +7451,99 @@
           "primaryKey": false,
           "notNull": true
         },
+        "request_fingerprint": {
+          "name": "request_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "verification_fingerprint": {
+          "name": "verification_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_principal": {
+          "name": "verified_principal",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_auth_kind": {
+          "name": "verified_auth_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_scopes": {
+          "name": "verified_scopes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_expires_at": {
+          "name": "verified_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_connection_id": {
+          "name": "reserved_connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_credential_ref": {
+          "name": "reserved_credential_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "target_auth_generation": {
           "name": "target_auth_generation",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target_grant_id": {
+          "name": "target_grant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "target_grant_generation": {
+          "name": "target_grant_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_capabilities": {
+          "name": "reserved_capabilities",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_operations": {
+          "name": "reserved_operations",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_policy_revision": {
+          "name": "reserved_policy_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_consent_revision": {
+          "name": "reserved_consent_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reserved_consented_at": {
+          "name": "reserved_consented_at",
+          "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
         },
@@ -7636,7 +7726,7 @@
         },
         "org_integration_connection_operations_stage_check": {
           "name": "org_integration_connection_operations_stage_check",
-          "value": "\"org_integration_connection_operations\".\"stage\" IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','completed','failed','compensated')"
+          "value": "\"org_integration_connection_operations\".\"stage\" IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','activate_pending','completed','failed','compensated')"
         },
         "org_integration_connection_operations_status_check": {
           "name": "org_integration_connection_operations_status_check",
@@ -7645,6 +7735,22 @@
         "org_integration_connection_operations_target_generation_check": {
           "name": "org_integration_connection_operations_target_generation_check",
           "value": "\"org_integration_connection_operations\".\"target_auth_generation\" IS NULL OR \"org_integration_connection_operations\".\"target_auth_generation\" >= 1"
+        },
+        "org_integration_connection_operations_target_grant_generation_check": {
+          "name": "org_integration_connection_operations_target_grant_generation_check",
+          "value": "\"org_integration_connection_operations\".\"target_grant_generation\" IS NULL OR \"org_integration_connection_operations\".\"target_grant_generation\" >= 1"
+        },
+        "org_integration_connection_operations_request_fingerprint_check": {
+          "name": "org_integration_connection_operations_request_fingerprint_check",
+          "value": "\"org_integration_connection_operations\".\"request_fingerprint\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "org_integration_connection_operations_verification_fingerprint_check": {
+          "name": "org_integration_connection_operations_verification_fingerprint_check",
+          "value": "\"org_integration_connection_operations\".\"verification_fingerprint\" IS NULL OR \"org_integration_connection_operations\".\"verification_fingerprint\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "org_integration_connection_operations_reservation_check": {
+          "name": "org_integration_connection_operations_reservation_check",
+          "value": "\"org_integration_connection_operations\".\"stage\" NOT IN ('finalizing','activate_pending','completed') OR (\"org_integration_connection_operations\".\"verification_fingerprint\" IS NOT NULL AND \"org_integration_connection_operations\".\"verified_principal\" IS NOT NULL AND \"org_integration_connection_operations\".\"verified_auth_kind\" IS NOT NULL AND \"org_integration_connection_operations\".\"verified_scopes\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_connection_id\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_credential_ref\" IS NOT NULL AND \"org_integration_connection_operations\".\"target_auth_generation\" IS NOT NULL AND \"org_integration_connection_operations\".\"target_grant_id\" IS NOT NULL AND \"org_integration_connection_operations\".\"target_grant_generation\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_capabilities\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_operations\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_policy_revision\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_consent_revision\" IS NOT NULL AND \"org_integration_connection_operations\".\"reserved_consented_at\" IS NOT NULL)"
         }
       },
       "isRLSEnabled": true

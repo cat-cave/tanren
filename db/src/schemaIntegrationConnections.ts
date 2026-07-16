@@ -119,7 +119,22 @@ export const orgIntegrationConnectionOperations = pgTable(
     status: text("status").notNull().default("pending"),
     idempotencyKey: text("idempotency_key").notNull(),
     actorId: text("actor_id").notNull(),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    verificationFingerprint: text("verification_fingerprint"),
+    verifiedPrincipal: jsonb("verified_principal"),
+    verifiedAuthKind: text("verified_auth_kind"),
+    verifiedScopes: text("verified_scopes").array(),
+    verifiedExpiresAt: timestamp("verified_expires_at", { withTimezone: true }),
+    reservedConnectionId: text("reserved_connection_id"),
+    reservedCredentialRef: text("reserved_credential_ref"),
     targetAuthGeneration: integer("target_auth_generation"),
+    targetGrantId: text("target_grant_id"),
+    targetGrantGeneration: integer("target_grant_generation"),
+    reservedCapabilities: text("reserved_capabilities").array(),
+    reservedOperations: text("reserved_operations").array(),
+    reservedPolicyRevision: text("reserved_policy_revision"),
+    reservedConsentRevision: text("reserved_consent_revision"),
+    reservedConsentedAt: timestamp("reserved_consented_at", { withTimezone: true }),
     stagedSecretHandle: text("staged_secret_handle"),
     candidatePrincipals: jsonb("candidate_principals")
       .notNull()
@@ -153,7 +168,7 @@ export const orgIntegrationConnectionOperations = pgTable(
     ),
     check(
       "org_integration_connection_operations_stage_check",
-      sql`${table.stage} IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','completed','failed','compensated')`,
+      sql`${table.stage} IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','activate_pending','completed','failed','compensated')`,
     ),
     check(
       "org_integration_connection_operations_status_check",
@@ -162,6 +177,22 @@ export const orgIntegrationConnectionOperations = pgTable(
     check(
       "org_integration_connection_operations_target_generation_check",
       sql`${table.targetAuthGeneration} IS NULL OR ${table.targetAuthGeneration} >= 1`,
+    ),
+    check(
+      "org_integration_connection_operations_target_grant_generation_check",
+      sql`${table.targetGrantGeneration} IS NULL OR ${table.targetGrantGeneration} >= 1`,
+    ),
+    check(
+      "org_integration_connection_operations_request_fingerprint_check",
+      sql`${table.requestFingerprint} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      "org_integration_connection_operations_verification_fingerprint_check",
+      sql`${table.verificationFingerprint} IS NULL OR ${table.verificationFingerprint} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
+    check(
+      "org_integration_connection_operations_reservation_check",
+      sql`${table.stage} NOT IN ('finalizing','activate_pending','completed') OR (${table.verificationFingerprint} IS NOT NULL AND ${table.verifiedPrincipal} IS NOT NULL AND ${table.verifiedAuthKind} IS NOT NULL AND ${table.verifiedScopes} IS NOT NULL AND ${table.reservedConnectionId} IS NOT NULL AND ${table.reservedCredentialRef} IS NOT NULL AND ${table.targetAuthGeneration} IS NOT NULL AND ${table.targetGrantId} IS NOT NULL AND ${table.targetGrantGeneration} IS NOT NULL AND ${table.reservedCapabilities} IS NOT NULL AND ${table.reservedOperations} IS NOT NULL AND ${table.reservedPolicyRevision} IS NOT NULL AND ${table.reservedConsentRevision} IS NOT NULL AND ${table.reservedConsentedAt} IS NOT NULL)`,
     ),
     integrationOrgIsolationPolicy(table.orgId),
   ],

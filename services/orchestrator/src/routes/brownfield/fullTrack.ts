@@ -61,7 +61,7 @@ import type { IngestedItem } from "../../engine/forge/inbox/types.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { parseGitHubRepository } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
-import { ProjectStore } from "../../engine/repositories/index.js";
+import { mutateProjectConfig, ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
@@ -352,11 +352,10 @@ async function fetchIssuesFor(
 }
 
 async function persistPosture(pool: pg.Pool, projectId: string, posture: GovernancePostureType): Promise<unknown> {
-  const config = await ProjectStore.getConfig(pool, projectId, systemActor);
-  const current = migrateProjectConfig(config);
-  const next = { ...current, governancePosture: posture };
-  await ProjectStore.updateConfig(pool, projectId, next, systemActor);
-  return next;
+  return mutateProjectConfig(pool, projectId, systemActor, (raw) => ({
+    ...migrateProjectConfig(raw),
+    governancePosture: posture,
+  }));
 }
 
 function externalPushPolicy(posture: GovernancePostureType): string {

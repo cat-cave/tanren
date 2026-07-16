@@ -71,10 +71,7 @@ export function dispatchActivateSql(
     });
     return rowsOf([{ generation, credential_ref: credentialRef, auth_kind: authKind, status: "active" }]);
   }
-  if (
-    sql.includes("FROM org_integration_connection_auth_generations") &&
-    sql.includes("credential_ref, auth_kind, status")
-  ) {
+  if (sql.includes("FROM org_integration_connection_auth_generations") && sql.includes("credential_ref, auth_kind")) {
     const [orgId, providerKind, connectionId, generation] = params as [string, string, string, number];
     const ag = state.authGenerations.find(
       (row) =>
@@ -83,19 +80,29 @@ export function dispatchActivateSql(
         row.connection_id === connectionId &&
         row.generation === generation,
     );
-    return rowsOf(ag ? [{ credential_ref: ag.credential_ref, auth_kind: ag.auth_kind, status: ag.status }] : []);
+    return rowsOf(
+      ag
+        ? [
+            {
+              credential_ref: ag.credential_ref,
+              auth_kind: ag.auth_kind,
+              expires_at: ag.expires_at,
+              status: ag.status,
+            },
+          ]
+        : [],
+    );
   }
   if (sql.startsWith("UPDATE org_integration_connections") && sql.includes("current_auth_generation")) {
-    const [orgId, connectionId, displayName, metadataJson, generation, actorId] = params as [
-      string,
-      string,
-      string,
-      string,
-      number,
-      string,
-    ];
-    const conn = state.connections.find((row) => row.org_id === orgId && row.id === connectionId);
-    if (conn !== undefined) {
+    const [orgId, providerKind, connectionId, displayName, metadataJson, generation, actorId, priorGeneration] =
+      params as [string, string, string, string, string, number, string, number | null];
+    const conn = state.connections.find(
+      (row) => row.org_id === orgId && row.provider_kind === providerKind && row.id === connectionId,
+    );
+    if (
+      conn !== undefined &&
+      (conn.current_auth_generation === priorGeneration || conn.current_auth_generation === generation)
+    ) {
       conn.display_name = displayName;
       conn.principal_metadata = JSON.parse(metadataJson) as Record<string, unknown>;
       conn.health = "healthy";
@@ -103,22 +110,12 @@ export function dispatchActivateSql(
       conn.current_auth_generation = generation;
       conn.owner_id = actorId;
     }
-    return rowsOf([]);
+    return rowsOf(conn ? [{ id: conn.id }] : []);
   }
   if (sql.startsWith("INSERT INTO org_integration_grants")) {
     const [orgId, grantId, providerKind, connectionId] = params as [string, string, string, string];
-    const existing = state.grants.find(
-      (g) =>
-        g.org_id === orgId &&
-        g.connection_id === connectionId &&
-        g.plane === "control" &&
-        g.environment === "control" &&
-        g.status === "active",
-    );
-    if (existing !== undefined) {
-      existing.current_generation = (existing.current_generation ?? 0) + 1;
-      return rowsOf([{ id: existing.id, current_generation: existing.current_generation }]);
-    }
+    const existing = state.grants.find((g) => g.org_id === orgId && g.id === grantId);
+    if (existing !== undefined) return rowsOf([]);
     state.grants.push({
       id: grantId,
       org_id: orgId,
@@ -126,10 +123,36 @@ export function dispatchActivateSql(
       connection_id: connectionId,
       plane: "control",
       environment: "control",
-      current_generation: 1,
-      status: "active",
+      current_generation: null,
+      status: "pending",
     });
-    return rowsOf([{ id: grantId, current_generation: 1 }]);
+    return rowsOf([]);
+  }
+  if (sql.startsWith("UPDATE org_integration_grants") && sql.includes("current_generation")) {
+    const [orgId, providerKind, connectionId, grantId, generation, priorGeneration] = params as [
+      string,
+      string,
+      string,
+      string,
+      number,
+      number | null,
+    ];
+    const grant = state.grants.find(
+      (row) =>
+        row.org_id === orgId &&
+        row.provider_kind === providerKind &&
+        row.connection_id === connectionId &&
+        row.id === grantId,
+    );
+    if (
+      grant !== undefined &&
+      (grant.current_generation === priorGeneration || grant.current_generation === generation)
+    ) {
+      grant.current_generation = generation;
+      grant.status = "active";
+      return rowsOf([{ id: grant.id }]);
+    }
+    return rowsOf([]);
   }
   if (
     sql.includes("UPDATE org_integration_grant_generations") &&
@@ -163,8 +186,8 @@ export function dispatchActivateSql(
       scopes,
       policyRevision,
       consentRevision,
-      _actorId,
-      _consentedAt,
+      actorId,
+      consentedAt,
       expiresAt,
     ] = params as [
       string,
@@ -199,8 +222,11 @@ export function dispatchActivateSql(
       capabilities,
       operations,
       provider_scopes: scopes,
+      resource_constraints: {},
       policy_revision: policyRevision,
       consent_revision: consentRevision,
+      consent_actor_id: actorId,
+      consented_at: consentedAt,
       status: "active",
       expires_at: expiresAt,
     });
@@ -226,8 +252,12 @@ export function dispatchActivateSql(
               capabilities: gg.capabilities,
               operations: gg.operations,
               provider_scopes: gg.provider_scopes,
+              resource_constraints: gg.resource_constraints ?? {},
               policy_revision: gg.policy_revision,
               consent_revision: gg.consent_revision,
+              consent_actor_id: gg.consent_actor_id,
+              consented_at: gg.consented_at,
+              expires_at: gg.expires_at,
               status: gg.status,
             },
           ]

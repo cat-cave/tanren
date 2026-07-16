@@ -13,7 +13,7 @@ import {
   type CreateRepositoryInput,
 } from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
-import { ProjectStore } from "../../repositories/projects.js";
+import { mutateProjectConfig, ProjectStore } from "../../repositories/projects.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../workflow/projectSpec.js";
 import {
@@ -464,17 +464,15 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     // Run through migrateProjectConfig so zod defaults (reviewPolicy, mergeIntegration,
     // …) remain on the stored blob — same as createProject's assert path.
     const { migrateProjectConfig } = await import("../../config/index.js");
-    await ProjectStore.updateConfig(
-      pool,
-      projectId,
+    await mutateProjectConfig(pool, projectId, { kind: "operator", id: input.actor.userId }, (raw) =>
       migrateProjectConfig({
+        ...migrateProjectConfig(raw),
         ...baseConfig,
         ...productVisionConfig(capture),
         lifecycle: capture.lifecycle,
         ...templateRefConfig(seed),
         ...preparedDeploy.projectConfig,
       }),
-      { kind: "operator", id: input.actor.userId },
     );
     const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
     return await buildEntityGraph(pool, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs);

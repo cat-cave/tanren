@@ -5,14 +5,12 @@ import {
 import type { SecretStore } from "../contracts/secretStore.js";
 import {
   generationSecretRef,
+  integrationStagedSecretRef,
   type ExactSecretCoordinate,
+  IntegrationSecretConflictError,
   type IntegrationSecretStore,
   type StagedSecretHandle,
 } from "../contracts/integrationSecretStore.js";
-
-function stagedPath(operationId: string): string {
-  return `secret://integration-stage/${encodeURIComponent(operationId)}`;
-}
 
 function isStaged(handle: StagedSecretHandle | ExactSecretCoordinate): handle is StagedSecretHandle {
   return "handle" in handle && "operationId" in handle;
@@ -28,6 +26,10 @@ export class GenerationAddressedIntegrationSecretStore implements IntegrationSec
 
   constructor(private readonly secrets: SecretStore) {}
 
+  supportsAtomicFinalization(): boolean {
+    return this.secrets.createOnlyAtomicity === "atomic";
+  }
+
   /** Test/observability: count of exact generation reads. */
   getExactCallCount(): number {
     return this.getExactCalls;
@@ -36,13 +38,16 @@ export class GenerationAddressedIntegrationSecretStore implements IntegrationSec
   async stage(operationId: string, value: string): Promise<StagedSecretHandle> {
     if (operationId.trim() === "") throw new Error("operationId required to stage integration secret");
     if (value.trim() === "") throw new Error("credential value required to stage");
-    const handle = stagedPath(operationId);
+    const handle = integrationStagedSecretRef(operationId);
     await this.secrets.put({ ref: handle, value });
     return { handle, operationId };
   }
 
   async finalize(staged: StagedSecretHandle, ref: string, generation: number): Promise<ExactSecretCoordinate> {
-    if (staged.handle !== stagedPath(staged.operationId)) {
+    if (!this.supportsAtomicFinalization()) {
+      throw new Error("integration_secret_atomic_finalization_unavailable");
+    }
+    if (staged.handle !== integrationStagedSecretRef(staged.operationId)) {
       throw new Error("staged secret handle does not match operation");
     }
     const stagedValue = await this.secrets.get(staged.handle);
@@ -57,10 +62,10 @@ export class GenerationAddressedIntegrationSecretStore implements IntegrationSec
     // True create-only — no get→put race, never overwrite an occupied generation.
     const result = await this.secrets.putCreateOnly({ ref: coordinate.ref, value: stagedValue.value });
     if (result.status === "conflict_different_value") {
-      throw new Error(`integration secret generation already exists: ${coordinate.ref}`);
+      throw new IntegrationSecretConflictError(`integration secret generation already exists: ${coordinate.ref}`);
     }
-    // created | already_exists_identical — both are success; never delete ambiguous.
-    await this.secrets.delete(staged.handle);
+    // created | already_exists_identical — both are success. The saga retains
+    // staged bytes until the database activation transaction has committed.
     return coordinate;
   }
 
@@ -70,6 +75,13 @@ export class GenerationAddressedIntegrationSecretStore implements IntegrationSec
     const ref = generationSecretRef(baseRef, coordinate.generation);
     const secret = await this.secrets.get(ref);
     return secret?.value;
+  }
+
+  async completeStaged(staged: StagedSecretHandle): Promise<void> {
+    if (staged.handle !== integrationStagedSecretRef(staged.operationId)) {
+      throw new Error("staged secret handle does not match operation");
+    }
+    await this.secrets.delete(staged.handle);
   }
 
   async compensate(handle: StagedSecretHandle | ExactSecretCoordinate): Promise<void> {

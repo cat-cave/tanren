@@ -34,7 +34,22 @@ CREATE TABLE "org_integration_connection_operations" (
 	"status" text DEFAULT 'pending' NOT NULL,
 	"idempotency_key" text NOT NULL,
 	"actor_id" text NOT NULL,
+	"request_fingerprint" text NOT NULL,
+	"verification_fingerprint" text,
+	"verified_principal" jsonb,
+	"verified_auth_kind" text,
+	"verified_scopes" text[],
+	"verified_expires_at" timestamp with time zone,
+	"reserved_connection_id" text,
+	"reserved_credential_ref" text,
 	"target_auth_generation" integer,
+	"target_grant_id" text,
+	"target_grant_generation" integer,
+	"reserved_capabilities" text[],
+	"reserved_operations" text[],
+	"reserved_policy_revision" text,
+	"reserved_consent_revision" text,
+	"reserved_consented_at" timestamp with time zone,
 	"staged_secret_handle" text,
 	"candidate_principals" jsonb DEFAULT '[]'::jsonb NOT NULL,
 	"selected_principal_id" text,
@@ -45,9 +60,13 @@ CREATE TABLE "org_integration_connection_operations" (
 	"completed_at" timestamp with time zone,
 	CONSTRAINT "org_integration_connection_operations_org_id_id_pk" PRIMARY KEY("org_id","id"),
 	CONSTRAINT "org_integration_connection_operations_kind_check" CHECK ("org_integration_connection_operations"."operation_kind" IN ('link','rotate','select_principal')),
-	CONSTRAINT "org_integration_connection_operations_stage_check" CHECK ("org_integration_connection_operations"."stage" IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','completed','failed','compensated')),
+	CONSTRAINT "org_integration_connection_operations_stage_check" CHECK ("org_integration_connection_operations"."stage" IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','activate_pending','completed','failed','compensated')),
 	CONSTRAINT "org_integration_connection_operations_status_check" CHECK ("org_integration_connection_operations"."status" IN ('pending','in_progress','awaiting_principal_selection','completed','failed','compensated')),
-	CONSTRAINT "org_integration_connection_operations_target_generation_check" CHECK ("org_integration_connection_operations"."target_auth_generation" IS NULL OR "org_integration_connection_operations"."target_auth_generation" >= 1)
+	CONSTRAINT "org_integration_connection_operations_target_generation_check" CHECK ("org_integration_connection_operations"."target_auth_generation" IS NULL OR "org_integration_connection_operations"."target_auth_generation" >= 1),
+	CONSTRAINT "org_integration_connection_operations_target_grant_generation_check" CHECK ("org_integration_connection_operations"."target_grant_generation" IS NULL OR "org_integration_connection_operations"."target_grant_generation" >= 1),
+	CONSTRAINT "org_integration_connection_operations_request_fingerprint_check" CHECK ("org_integration_connection_operations"."request_fingerprint" ~ '^sha256:[0-9a-f]{64}$'),
+	CONSTRAINT "org_integration_connection_operations_verification_fingerprint_check" CHECK ("org_integration_connection_operations"."verification_fingerprint" IS NULL OR "org_integration_connection_operations"."verification_fingerprint" ~ '^sha256:[0-9a-f]{64}$'),
+	CONSTRAINT "org_integration_connection_operations_reservation_check" CHECK ("org_integration_connection_operations"."stage" NOT IN ('finalizing','activate_pending','completed') OR ("org_integration_connection_operations"."verification_fingerprint" IS NOT NULL AND "org_integration_connection_operations"."verified_principal" IS NOT NULL AND "org_integration_connection_operations"."verified_auth_kind" IS NOT NULL AND "org_integration_connection_operations"."verified_scopes" IS NOT NULL AND "org_integration_connection_operations"."reserved_connection_id" IS NOT NULL AND "org_integration_connection_operations"."reserved_credential_ref" IS NOT NULL AND "org_integration_connection_operations"."target_auth_generation" IS NOT NULL AND "org_integration_connection_operations"."target_grant_id" IS NOT NULL AND "org_integration_connection_operations"."target_grant_generation" IS NOT NULL AND "org_integration_connection_operations"."reserved_capabilities" IS NOT NULL AND "org_integration_connection_operations"."reserved_operations" IS NOT NULL AND "org_integration_connection_operations"."reserved_policy_revision" IS NOT NULL AND "org_integration_connection_operations"."reserved_consent_revision" IS NOT NULL AND "org_integration_connection_operations"."reserved_consented_at" IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE TABLE "org_integration_connections" (

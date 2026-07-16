@@ -49,8 +49,14 @@ export type AuthorizePrincipalVerificationInput = {
   operationKind: "link" | "rotate";
   idempotencyKey: string;
   connectionId?: string;
+  /** Digest binding the idempotency key to actor, target, and credential bytes. */
+  requestFingerprint: string;
   actor: ActorRef;
 };
+
+export class IntegrationIdempotencyConflictError extends Error {
+  public override readonly name = "IntegrationIdempotencyConflictError";
+}
 
 export type AuthorizeOperationInput = {
   orgId: string;

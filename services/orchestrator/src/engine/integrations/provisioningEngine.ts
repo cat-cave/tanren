@@ -7,13 +7,12 @@
 // Provisioners write DSNs/tokens into the SecretStore and surface only `secretRefs`
 // (the manager ref NAMES); this engine persists/echoes those names alone. The
 // returned `ProvisionOutcome` and the emitted event carry ref NAMES, never values.
-//
-// Provider find-or-create plus keyed local upserts make retries idempotent.
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { IntegrationAuthority } from "../contracts/integrationAuthority.js";
 import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
+import { mutateProjectConfig } from "../repositories/projects.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { EventStore } from "../eventStore.js";
@@ -46,6 +45,10 @@ const CAPABILITY_DEFAULT_PROVIDER: Readonly<Record<string, string>> = {
 
 /** The deploy provider kinds a `deploy` capability may resolve to. */
 const DEPLOY_PROVIDER_KINDS = new Set(["deploy.vercel", "deploy.flyio"]);
+
+export class SlackDeliveryAdapterUnavailableError extends Error {
+  public override readonly name = "SlackDeliveryAdapterUnavailableError";
+}
 
 /**
  * Resolve the provider kind for a (capability, optional explicit provider). An
@@ -198,6 +201,12 @@ export async function provisionCapability(
   request: ProvisionRequest,
 ): Promise<ProvisionOutcome> {
   const providerKind = resolveProviderKind(request.capability, request.providerKind);
+  if (providerKind === "slack") {
+    // The current Slack notification channel accepts incoming-webhook refs; a
+    // linked bot token + channel id is a different credential model. Fail before
+    // authority/provider I/O until chat.postMessage is the real delivery adapter.
+    throw new SlackDeliveryAdapterUnavailableError("slack_bot_delivery_adapter_unavailable");
+  }
 
   // Complete all authority reads in a short transaction, then release it before
   // any provider network I/O. A foreign/missing project cannot reach a provider.
@@ -261,7 +270,6 @@ export async function provisionCapability(
   }
   const grant = IntegrationConnectionsStore.orgGrantFromLease(resolution.lease);
 
-  // 2. Build the provisioner with PRODUCTION deps (or the test override).
   const provisioner =
     deps.buildProvisioner === undefined
       ? buildIntegrationProvisioner(providerKind, productionProvisionerDeps(deps.secrets))
@@ -294,12 +302,11 @@ export async function provisionCapability(
     }
   }
 
-  // 4. Persist the artifact over the existing surfaces (org-scoped under RLS).
   const secretRefNames = Object.values(artifact.secretRefs ?? {});
   // Commit Tanren state and its event atomically in a fresh short transaction,
   // after the idempotent provider operation has returned.
   const surfaces = await deps.database.withOrgScope(request.orgId, async (client) => {
-    const persisted = await persistArtifact(client, request, artifact);
+    const persisted = await persistArtifact(client, request, artifact, deps.actor);
     await deps.events.append({
       projectId: request.projectId,
       orgId: request.orgId,
@@ -359,22 +366,17 @@ async function persistArtifact(
   client: IntegrationQueryClient,
   request: ProvisionRequest,
   artifact: ProvisionedArtifact,
+  actor: ActorRef,
 ): Promise<PersistedSurfaces> {
   const result: PersistedSurfaces = { projectConfigKeys: [] };
 
-  if (artifact.projectConfig !== undefined && Object.keys(artifact.projectConfig).length > 0) {
-    const currentRow = await client.query("SELECT config FROM projects WHERE org_id = $1 AND project_id = $2", [
-      request.orgId,
-      request.projectId,
-    ]);
-    const current = asRecord(z.object({ config: z.unknown() }).parse(currentRow.rows[0]).config);
-    const next = { ...current, ...artifact.projectConfig };
-    await client.query("UPDATE projects SET config = $1::jsonb WHERE org_id = $2 AND project_id = $3", [
-      JSON.stringify(next),
-      request.orgId,
-      request.projectId,
-    ]);
-    result.projectConfigKeys = Object.keys(artifact.projectConfig);
+  const projectConfig = artifact.projectConfig;
+  if (projectConfig !== undefined && Object.keys(projectConfig).length > 0) {
+    await mutateProjectConfig(client, request.projectId, actor, (rawCurrent) => ({
+      ...asRecord(rawCurrent),
+      ...projectConfig,
+    }));
+    result.projectConfigKeys = Object.keys(projectConfig);
   }
 
   if (artifact.inboxSource !== undefined) {
