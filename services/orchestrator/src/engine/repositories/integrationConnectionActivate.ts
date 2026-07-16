@@ -4,6 +4,7 @@ import {
   assertIdenticalAuthGeneration,
   assertIdenticalGrantGeneration,
 } from "./integrationConnectionFinalizeAssert.js";
+import { defaultIntegrationResourceConstraints } from "../contracts/integrationAuthority.js";
 
 function isReactivation(reservation: LinkReservation): boolean {
   return reservation.operationKind === "link" && reservation.nextGeneration > 1;
@@ -115,13 +116,14 @@ async function ensureGrant(client: IntegrationQueryClient, reservation: LinkRese
 }
 
 async function ensureGrantGeneration(client: IntegrationQueryClient, reservation: LinkReservation): Promise<void> {
+  const resourceConstraints = defaultIntegrationResourceConstraints();
   const inserted = await client.query(
     `INSERT INTO org_integration_grant_generations
        (org_id, provider_kind, connection_id, grant_id, generation, capabilities, operations,
         provider_scopes, resource_constraints, policy_revision, consent_revision,
         consent_actor_id, consented_at, expires_at, status)
-     VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8::text[], '{}'::jsonb,
-             $9, $10, $11, $12::timestamptz, $13::timestamptz, 'active')
+     VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8::text[], $9::jsonb,
+             $10, $11, $12, $13::timestamptz, $14::timestamptz, 'active')
      ON CONFLICT (org_id, provider_kind, connection_id, grant_id, generation) DO NOTHING
      RETURNING generation`,
     [
@@ -133,6 +135,7 @@ async function ensureGrantGeneration(client: IntegrationQueryClient, reservation
       reservation.capabilities,
       reservation.operations,
       reservation.scopes,
+      JSON.stringify(resourceConstraints),
       reservation.policyRevision,
       reservation.consentRevision,
       reservation.permit.actorId,
@@ -150,6 +153,7 @@ async function ensureGrantGeneration(client: IntegrationQueryClient, reservation
       capabilities: reservation.capabilities,
       operations: reservation.operations,
       scopes: reservation.scopes,
+      resourceConstraints,
       policyRevision: reservation.policyRevision,
       consentRevision: reservation.consentRevision,
       consentActorId: reservation.permit.actorId,

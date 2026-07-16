@@ -1,11 +1,11 @@
 import type { Hono } from "hono";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import { issuePrincipalVerificationPermit } from "../../engine/contracts/integrationAuthority.js";
 import {
   integrationStagedSecretRef,
   type IntegrationSecretStore,
 } from "../../engine/contracts/integrationSecretStore.js";
+import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import { PrincipalProviderUnavailableError } from "../../engine/integrations/principalVerifierSupport.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -60,15 +60,15 @@ export function mountPrincipalSelectionRoute(
       IntegrationConnectionsStore.getOperation(client, orgId, operationId),
     );
     if (op === undefined) return c.json({ error: "operation_not_found" }, 404);
+    if (op.status === "failed" || op.status === "compensated") {
+      return c.json({ status: "failed", operationId: op.id }, 202);
+    }
     const handle = op.stagedSecretHandle ?? integrationStagedSecretRef(op.id);
     const staged = { handle, operationId: op.id };
-    const permit = issuePrincipalVerificationPermit({
-      orgId,
-      providerKind: op.providerKind,
-      operationId: op.id,
-      actorId: op.actorId,
-      stagedSecretHandle: handle,
-    });
+    const authority = new PgIntegrationAuthority();
+    const permit = await database.withOrgScope(orgId, (client) =>
+      authority.resumePrincipalVerification(client, { orgId, operationId: op.id }),
+    );
 
     if (["finalizing", "activate_pending", "completed"].includes(op.stage)) {
       if (op.selectedPrincipalId !== parsed.data.providerPrincipalId) {
@@ -78,9 +78,6 @@ export function mountPrincipalSelectionRoute(
       return resumed.status === "completed"
         ? c.json(completedPayload(op.id, resumed), 202)
         : c.json(transitionPendingPayload(resumed, orgId, op.id), 202);
-    }
-    if (op.status === "failed" || op.status === "compensated") {
-      return c.json({ status: "failed", operationId: op.id }, 202);
     }
     if (op.status !== "awaiting_principal_selection") {
       return c.json({ error: "operation_not_awaiting_principal" }, 409);

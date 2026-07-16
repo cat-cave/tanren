@@ -11,6 +11,7 @@ import type {
   MemorySelection,
 } from "./integrationMemoryTables.js";
 import type { IntegrationQueryResult } from "../../src/engine/repositories/integrationQuery.js";
+import { defaultIntegrationResourceConstraints } from "../../src/engine/contracts/integrationAuthority.js";
 
 export interface MemoryQueryState {
   connections: MemoryConnection[];
@@ -153,7 +154,7 @@ export function eligibilityQuery(state: MemoryQueryState, params: unknown[]): In
         capabilities: gg?.capabilities ?? null,
         operations: gg?.operations ?? null,
         provider_scopes: gg?.provider_scopes ?? null,
-        resource_constraints: {},
+        resource_constraints: gg?.resource_constraints ?? defaultIntegrationResourceConstraints(),
         policy_revision: gg?.policy_revision ?? null,
         consent_revision: gg?.consent_revision ?? null,
         grant_expires_at: gg?.expires_at ?? null,

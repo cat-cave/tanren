@@ -39,12 +39,18 @@ import type {
   VerifyPollPolicy,
 } from "../contracts/deployAdapter.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../contracts/integrationAuthority.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { Digest } from "../contracts/cas.js";
 import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
 import { pollUntilTerminal } from "./pollUntilTerminal.js";
+import { secretValueForDeployOperation } from "../provisioners/deployOperationAuthority.js";
 
 /** The adapter-class kind this impl registers under. */
 export const PULUMI_ADAPTER_KIND = "pulumi";
@@ -208,22 +214,12 @@ export class PulumiDeployAdapter implements DeployAdapter {
     );
   }
 
-  private async token(grant: OrgGrant): Promise<string> {
-    const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
-    const { secretValueForLease } = await import("../repositories/integrationConnectionResolve.js");
-    const token = await secretValueForLease(
-      new GenerationAddressedIntegrationSecretStore(this.deps.secrets),
-      grant.eligibleOperation,
-    );
-    const secret = { value: token };
-    if (secret === undefined) {
-      throw new DeployAdapterConfigError(
-        PULUMI_ADAPTER_KIND,
-        "credentialRef",
-        `the org grant credentialRef '${grant.eligibleOperation.credentialRef}' is not present in the secret store (the Pulumi access token)`,
-      );
-    }
-    return secret.value;
+  private async token(
+    grant: OrgGrant,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): Promise<string> {
+    return secretValueForDeployOperation(this.deps.secrets, PULUMI_PROVIDER_KIND, grant, operation, target);
   }
 
   /** The stack name for a project: its stable, sanitized name (the find-or-bind key). */
@@ -243,7 +239,11 @@ export class PulumiDeployAdapter implements DeployAdapter {
   ): Promise<ProvisionedArtifact> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(
+      grant,
+      input.mode === "bind" ? "bind" : "provision",
+      projectIntegrationOperationTarget(projectCtx, input.mode === "bind" ? input.existingResourceId : undefined),
+    );
     // bind links an already-discovered stack by its name; provision select-or-inits
     // the project-named one. Both go through `ensureStack` (idempotent select-or-init).
     const stack = input.mode === "bind" ? input.existingResourceId : this.stackName(projectCtx);
@@ -263,7 +263,11 @@ export class PulumiDeployAdapter implements DeployAdapter {
   async deploy(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<DeployResult> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: source.repo,
+      sourceRef: source.ref,
+    });
     const result = await this.deps.runner.up({ backend, project, stack: ref.appId, token, source });
     // The `up` returns the update id + endpoint; the deploymentId is the update id
     // (the handle verify/status poll against). State is "in-progress" at trigger time.
@@ -271,15 +275,36 @@ export class PulumiDeployAdapter implements DeployAdapter {
   }
 
   async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const deployed = await this.deploy(grant, ref, source);
-    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
-    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
+    const backend = this.backend(grant);
+    const project = this.project(grant);
+    const token = await this.token(grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: source.repo,
+      sourceRef: source.ref,
+    });
+    const deployed = await this.deps.runner.up({ backend, project, stack: ref.appId, token, source });
+    const raw = await this.deps.runner.resolveArtifactIdentity({
+      backend,
+      project,
+      stack: ref.appId,
+      token,
+      updateId: deployed.updateId,
+    });
+    return {
+      artifactDigest: parseDigest(raw.artifactDigest),
+      providerChecksum: raw.providerChecksum === null ? null : parseProviderChecksum(raw.providerChecksum),
+      deploymentId: deployed.updateId,
+      state: "built",
+    };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "resolve_artifact_identity", {
+      resourceId: ref.appId,
+      deploymentId,
+    });
     const raw = await this.deps.runner.resolveArtifactIdentity({
       backend,
       project,
@@ -296,7 +321,11 @@ export class PulumiDeployAdapter implements DeployAdapter {
   async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: input.source.repo,
+      sourceRef: input.source.ref,
+    });
     const result = await this.deps.runner.previewUp({
       backend,
       project,
@@ -317,7 +346,7 @@ export class PulumiDeployAdapter implements DeployAdapter {
   async promote(grant: OrgGrant, ref: DeployRef, input: PromoteInput): Promise<ReleaseTransition> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "promote", { resourceId: ref.appId, deploymentId: input.deploymentId });
     const result = await this.deps.runner.promote({
       backend,
       project,
@@ -339,7 +368,10 @@ export class PulumiDeployAdapter implements DeployAdapter {
   async rollback(grant: OrgGrant, ref: DeployRef, input: RollbackInput): Promise<ReleaseTransition> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "rollback", {
+      resourceId: ref.appId,
+      deploymentId: input.targetReleaseInstanceId,
+    });
     const result = await this.deps.runner.rollback({
       backend,
       project,
@@ -360,17 +392,17 @@ export class PulumiDeployAdapter implements DeployAdapter {
   async teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "teardown_deployment", { resourceId: ref.appId, deploymentId: previewId });
     await this.deps.runner.teardownStack({ backend, project, stack: ref.appId, token, previewId });
   }
 
   async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {
-    const read = await this.read(grant, ref, deploymentId);
+    const read = await this.read(grant, ref, deploymentId, "verify");
     return { state: read.result, ready: read.succeeded, failed: read.failed, url: read.endpointUrl };
   }
 
   async demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface> {
-    const read = await this.read(grant, ref, deploymentId);
+    const read = await this.read(grant, ref, deploymentId, "resolve_demo_surface");
     if (read.endpointUrl === "") {
       throw new DeployAdapterOperationError(
         PULUMI_ADAPTER_KIND,
@@ -381,9 +413,10 @@ export class PulumiDeployAdapter implements DeployAdapter {
   }
 
   async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
+    const readStatus = await this.statusReader(grant, ref, deploymentId, "verify");
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await this.read(grant, ref, deploymentId);
+        const read = await readStatus();
         return { state: read.result, ready: read.succeeded, failed: read.failed, endpointUrl: read.endpointUrl };
       },
       onFailureTerminal: (state) =>
@@ -402,11 +435,25 @@ export class PulumiDeployAdapter implements DeployAdapter {
     return this.smokeCheck(ref, deploymentId, poll.state, poll.endpointUrl, pollCount);
   }
 
-  private async read(grant: OrgGrant, ref: DeployRef, updateId: string): Promise<PulumiUpdateStatus> {
+  private async read(
+    grant: OrgGrant,
+    ref: DeployRef,
+    updateId: string,
+    operation: "verify" | "resolve_demo_surface",
+  ): Promise<PulumiUpdateStatus> {
+    return (await this.statusReader(grant, ref, updateId, operation))();
+  }
+
+  private async statusReader(
+    grant: OrgGrant,
+    ref: DeployRef,
+    updateId: string,
+    operation: "verify" | "resolve_demo_surface",
+  ): Promise<() => Promise<PulumiUpdateStatus>> {
     const backend = this.backend(grant);
     const project = this.project(grant);
-    const token = await this.token(grant);
-    return this.deps.runner.updateStatus({ backend, project, stack: ref.appId, token, updateId });
+    const token = await this.token(grant, operation, { resourceId: ref.appId, deploymentId: updateId });
+    return () => this.deps.runner.updateStatus({ backend, project, stack: ref.appId, token, updateId });
   }
 
   private async smokeCheck(

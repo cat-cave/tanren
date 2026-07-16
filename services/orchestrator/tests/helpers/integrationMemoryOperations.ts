@@ -41,6 +41,24 @@ export function dispatchOperationSql(
     const op = operations.find((row) => row.org_id === orgId && row.id === operationId);
     return rowsOf(op ? [{ ...op }] : []);
   }
+  if (sql.startsWith("SELECT id, provider_kind, actor_id, staged_secret_handle, stage, status")) {
+    const [orgId, operationId] = params as [string, string];
+    const op = operations.find((row) => row.org_id === orgId && row.id === operationId);
+    return rowsOf(
+      op
+        ? [
+            {
+              id: op.id,
+              provider_kind: op.provider_kind,
+              actor_id: op.actor_id,
+              staged_secret_handle: op.staged_secret_handle,
+              stage: op.stage,
+              status: op.status,
+            },
+          ]
+        : [],
+    );
+  }
   if (sql.startsWith("SELECT stage, status, staged_secret_handle, candidate_principals,")) {
     const [orgId, operationId] = params as [string, string];
     const op = operations.find((row) => row.org_id === orgId && row.id === operationId);

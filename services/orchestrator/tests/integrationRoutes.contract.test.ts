@@ -45,6 +45,11 @@ class RouteClient implements IntegrationQueryClient {
       const found = projectId === "proj_1" && this.projectMembers.has(userId);
       return { rows: found ? [{ role: "member" }] : [], rowCount: found ? 1 : 0 };
     }
+    if (sql === "SELECT login FROM organizations WHERE id = $1") {
+      const [orgId] = params as [string];
+      const found = orgId === this.orgId;
+      return { rows: found ? [{ login: "acme" }] : [], rowCount: found ? 1 : 0 };
+    }
     if (sql.startsWith("SELECT p.project_id, o.login AS org_slug")) {
       const [orgId, projectId] = params as [string, string];
       const found = orgId === this.orgId && projectId === "proj_1";

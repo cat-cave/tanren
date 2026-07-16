@@ -334,7 +334,7 @@ export class LinkedDeployRoutesPool extends RoutesPool {
             auth_expires_at: null,
             auth_status: "active",
             capabilities: ["deploy"],
-            operations: ["discover", "provision", "bind", "teardown"],
+            operations: ["discover", "provision", "bind"],
             provider_scopes: [],
             resource_constraints: {},
             policy_revision: "integration-catalog.v1",

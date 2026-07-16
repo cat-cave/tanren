@@ -5,6 +5,7 @@ import {
   integrationCatalogRevision,
 } from "../contracts/integrationCatalog.js";
 import type { PrincipalCandidate, PrincipalVerificationPermit } from "../contracts/integrationAuthority.js";
+import { assertPrincipalVerificationPermit } from "../integrations/integrationAuthorityImpl.js";
 import {
   connectionCredentialBaseRef,
   generationSecretRef,
@@ -161,6 +162,10 @@ async function operationForUpdate(
   client: IntegrationQueryClient,
   permit: PrincipalVerificationPermit,
 ): Promise<OperationRow> {
+  // Authenticate the opaque permit before its coordinates can influence even a
+  // database read. Callers cannot reach finalization with a structurally similar
+  // object that merely happens to name a real operation.
+  assertPrincipalVerificationPermit(permit);
   const result = await client.query(
     `SELECT ${OPERATION_COLUMNS}
      FROM org_integration_connection_operations

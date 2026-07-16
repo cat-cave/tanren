@@ -1,13 +1,14 @@
 /**
- * IntegrationAuthority — sole entry before normal integration secret reads or
- * provider construction. Opaque branded permits prevent naked grant/secret use.
+ * IntegrationAuthority is the only issuer of provider/credential authority.
+ * The brands below are deliberately type-only and module-private: consumers can
+ * hold a permit or lease, but cannot import a symbol or constructor to mint one.
  */
 
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import type { ActorRef } from "../state/actor.js";
 
-export const PRINCIPAL_VERIFICATION_PERMIT = Symbol("PrincipalVerificationPermit");
-export const ELIGIBLE_OPERATION_LEASE = Symbol("EligibleOperationLease");
+declare const principalVerificationPermitBrand: unique symbol;
+declare const eligibleOperationLeaseBrand: unique symbol;
 
 export interface PrincipalCandidate {
   providerPrincipalId: string;
@@ -17,7 +18,7 @@ export interface PrincipalCandidate {
 }
 
 export interface PrincipalVerificationPermit {
-  readonly [PRINCIPAL_VERIFICATION_PERMIT]: true;
+  readonly [principalVerificationPermitBrand]: true;
   readonly orgId: string;
   readonly providerKind: string;
   readonly operationId: string;
@@ -25,8 +26,71 @@ export interface PrincipalVerificationPermit {
   readonly stagedSecretHandle: string;
 }
 
+export type IntegrationPrivilegedOperation =
+  | "discover"
+  | "provision"
+  | "bind"
+  | "attach_runtime_env"
+  | "deploy"
+  | "verify"
+  | "resolve_demo_surface"
+  | "resolve_artifact_identity"
+  | "promote"
+  | "rollback"
+  | "teardown_deployment";
+
+/**
+ * The complete, supported target vocabulary for privileged integration calls.
+ * Every field is intentionally scalar so equality is unambiguous at provider
+ * boundaries and no caller-controlled object is silently ignored.
+ */
+export interface IntegrationOperationTarget {
+  readonly resourceId?: string;
+  readonly deploymentId?: string;
+  readonly environment?: "production";
+  readonly sourceRepo?: string;
+  readonly sourceRef?: string;
+  readonly projectName?: string;
+  readonly orgSlug?: string;
+  readonly stack?: string;
+}
+
+/** Canonical target for project-scoped provision/bind calls. */
+export function projectIntegrationOperationTarget(
+  projectCtx: { projectId: string; orgSlug: string; name?: string; stack?: string },
+  resourceId?: string,
+): IntegrationOperationTarget {
+  return {
+    projectName: projectCtx.name ?? projectCtx.projectId,
+    orgSlug: projectCtx.orgSlug,
+    ...(projectCtx.stack === undefined ? {} : { stack: projectCtx.stack }),
+    ...(resourceId === undefined ? {} : { resourceId }),
+  };
+}
+
+/** The only resource-constraint shape Tanren currently claims to enforce. */
+export interface IntegrationResourceConstraintsV1 {
+  readonly version: 1;
+  /** Every provider operation must use the project's exact persisted selection. */
+  readonly projectBinding: "selected";
+  readonly resourceIds: "*" | readonly string[];
+  readonly environments: "*" | readonly "production"[];
+}
+
+export type IntegrationResourceConstraints = IntegrationResourceConstraintsV1;
+
+/** Deterministic constraints persisted for every newly activated control grant. */
+export function defaultIntegrationResourceConstraints(): IntegrationResourceConstraints {
+  return {
+    version: 1,
+    projectBinding: "selected",
+    resourceIds: "*",
+    environments: ["production"],
+  };
+}
+
 export interface EligibleOperationLease {
-  readonly [ELIGIBLE_OPERATION_LEASE]: true;
+  readonly [eligibleOperationLeaseBrand]: true;
   readonly orgId: string;
   readonly projectId: string;
   readonly providerKind: string;
@@ -36,11 +100,24 @@ export interface EligibleOperationLease {
   readonly grantGeneration: number;
   readonly credentialRef: string;
   readonly capability: string;
-  readonly operation: string;
+  readonly operation: IntegrationPrivilegedOperation;
+  readonly target: Readonly<IntegrationOperationTarget>;
+  readonly resourceConstraints: IntegrationResourceConstraints;
+  readonly authorizedAt: string;
+  readonly expiresAt: string;
   readonly providerPrincipalId: string;
   readonly principalMetadata: Record<string, unknown>;
   readonly policyRevision: string;
   readonly consentRevision: string;
+}
+
+export interface EligibleOperationExpectation {
+  readonly orgId: string;
+  readonly projectId: string;
+  readonly providerKind: string;
+  readonly capability: string;
+  readonly operation: IntegrationPrivilegedOperation;
+  readonly target: Readonly<IntegrationOperationTarget>;
 }
 
 export type AuthorizePrincipalVerificationInput = {
@@ -54,16 +131,16 @@ export type AuthorizePrincipalVerificationInput = {
   actor: ActorRef;
 };
 
+export type ResumePrincipalVerificationInput = {
+  orgId: string;
+  operationId: string;
+};
+
 export class IntegrationIdempotencyConflictError extends Error {
   public override readonly name = "IntegrationIdempotencyConflictError";
 }
 
-export type AuthorizeOperationInput = {
-  orgId: string;
-  projectId: string;
-  providerKind: string;
-  capability: string;
-  operation: string;
+export type AuthorizeOperationInput = EligibleOperationExpectation & {
   actor: ActorRef;
 };
 
@@ -98,31 +175,11 @@ export interface IntegrationAuthority {
     input: AuthorizePrincipalVerificationInput,
   ): Promise<PrincipalVerificationPermit>;
 
+  /** Rehydrate an existing durable link operation without consumer-side minting. */
+  resumePrincipalVerification(
+    client: IntegrationQueryClient,
+    input: ResumePrincipalVerificationInput,
+  ): Promise<PrincipalVerificationPermit>;
+
   authorizeOperation(client: IntegrationQueryClient, input: AuthorizeOperationInput): Promise<AuthorizeOperationResult>;
-}
-
-export function issuePrincipalVerificationPermit(
-  fields: Omit<PrincipalVerificationPermit, typeof PRINCIPAL_VERIFICATION_PERMIT>,
-): PrincipalVerificationPermit {
-  return { [PRINCIPAL_VERIFICATION_PERMIT]: true, ...fields };
-}
-
-export function issueEligibleOperationLease(
-  fields: Omit<EligibleOperationLease, typeof ELIGIBLE_OPERATION_LEASE>,
-): EligibleOperationLease {
-  return { [ELIGIBLE_OPERATION_LEASE]: true, ...fields };
-}
-
-export function assertPrincipalVerificationPermit(
-  value: PrincipalVerificationPermit,
-): asserts value is PrincipalVerificationPermit {
-  if (!value?.[PRINCIPAL_VERIFICATION_PERMIT]) {
-    throw new Error("invalid principal verification permit");
-  }
-}
-
-export function assertEligibleOperationLease(value: EligibleOperationLease): asserts value is EligibleOperationLease {
-  if (!value?.[ELIGIBLE_OPERATION_LEASE]) {
-    throw new Error("invalid eligible operation lease");
-  }
 }

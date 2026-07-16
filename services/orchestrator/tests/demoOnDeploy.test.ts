@@ -6,6 +6,7 @@
 // probe — no Postgres, no real provider, no live HTTP.
 
 import { describe, expect, it } from "vitest";
+import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
 import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
@@ -110,9 +111,9 @@ function fakePool(state: PoolState): pg.Pool {
               auth_expires_at: null,
               auth_status: "active",
               capabilities: ["deploy"],
-              operations: ["discover", "provision", "bind", "teardown"],
+              operations: ["resolve_demo_surface"],
               provider_scopes: [],
-              resource_constraints: {},
+              resource_constraints: defaultIntegrationResourceConstraints(),
               policy_revision: "integration-catalog.v1",
               consent_revision: "consent.test",
               grant_expires_at: null,

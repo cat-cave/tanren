@@ -1,24 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import {
-  issueEligibleOperationLease,
-  issuePrincipalVerificationPermit,
-} from "../src/engine/contracts/integrationAuthority.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
 import { SlackPrincipalVerifier } from "../src/engine/integrations/principalVerifiers.js";
 import { integrationCatalogRevision } from "../src/engine/contracts/integrationCatalog.js";
+import { testOrgGrant, testPrincipalVerificationPermit } from "./helpers/orgGrant.js";
 
 describe("IN-1 P1 authority former-bug proofs", () => {
   it("caller-labelled identity cannot be stored — provider response is authoritative", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-1", "xoxb-token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "slack",
-      operationId: "op-1",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "slack", operationId: "op-1" });
     const fetchImpl = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ ok: true, team_id: "T_PROVIDER", team: "Provider Team", user_id: "U1" }), {
@@ -43,13 +34,7 @@ describe("IN-1 P1 authority former-bug proofs", () => {
   it("invalid credentials activate nothing", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-bad", "bad-token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "slack",
-      operationId: "op-bad",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "slack", operationId: "op-bad" });
     const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: false, error: "invalid_auth" }));
     const result = await new SlackPrincipalVerifier(fetchImpl as unknown as typeof fetch).verify(
       permit,
@@ -63,13 +48,7 @@ describe("IN-1 P1 authority former-bug proofs", () => {
   it("multi-principal credentials are never guessed", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-multi", "token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "sentry",
-      operationId: "op-multi",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "sentry", operationId: "op-multi" });
     const { SentryPrincipalVerifier } = await import("../src/engine/integrations/principalVerifiers.js");
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -116,8 +95,8 @@ describe("IN-1 P1 authority former-bug proofs", () => {
     expect(secrets.getExactCallCount()).toBe(1);
   });
 
-  it("eligible operation lease is opaque and carries catalog policy revision", () => {
-    const lease = issueEligibleOperationLease({
+  it("eligible operation lease is opaque and carries catalog policy revision", async () => {
+    const grant = await testOrgGrant({
       orgId: "o",
       projectId: "p",
       providerKind: "slack",
@@ -128,11 +107,10 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       credentialRef: "secret://x/g/1",
       capability: "notify",
       operation: "discover",
+      target: {},
       providerPrincipalId: "T1",
-      principalMetadata: {},
-      policyRevision: integrationCatalogRevision(),
-      consentRevision: "consent.admin.1",
     });
+    const lease = grant.eligibleOperation;
     expect(lease.policyRevision).toBe(integrationCatalogRevision());
     expect(lease.policyRevision).not.toBe("manual-link.v1");
   });

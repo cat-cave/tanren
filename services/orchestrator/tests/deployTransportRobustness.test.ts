@@ -11,6 +11,7 @@ import { fetchDeployTransport, DEFAULT_DEPLOY_REQUEST_ABORT_MS } from "../src/en
 import { fetchUrlReachabilityProbe } from "../src/engine/deploy/buildDeployAdapter.js";
 import { VercelDeployProvisioner } from "../src/engine/provisioners/vercelDeployProvisioner.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import type { ProjectContext } from "../src/engine/contracts/integrationProvisioner.js";
 
 // A fetch that NEVER resolves on its own — it only rejects when its AbortSignal fires.
 // This proves the transport/probe bounds the request itself (rather than hanging forever).
@@ -50,7 +51,21 @@ describe("Vercel listApps pagination (§3.9e)", () => {
     const TOKEN_REF = "secret://org/deploy-token/g/1";
     const store = new InMemorySecretStore();
     void store.put({ ref: TOKEN_REF, value: "vercel_token" });
-    const grant = testOrgGrant({ providerKind: "deploy.vercel", credentialRef: TOKEN_REF, capability: "deploy" });
+    const projectCtx: ProjectContext = {
+      orgId: "org_1",
+      projectId: "project_1",
+      orgSlug: "tanren",
+      name: "pagination",
+    };
+    const grant = await testOrgGrant({
+      providerKind: "deploy.vercel",
+      credentialRef: TOKEN_REF,
+      capability: "deploy",
+      operation: "discover",
+      target: {},
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+    });
 
     // Page 1 returns one project + a `next` token; page 2 (fetched via `from=tok2`)
     // returns the TARGET project and terminates pagination (`next: null`).
@@ -68,7 +83,7 @@ describe("Vercel listApps pagination (§3.9e)", () => {
 
     const prov = new VercelDeployProvisioner({ transport: fetchDeployTransport(pagedFetch), secrets: store });
     // `discover` lists all apps via the paginated listApps; the target on page 2 must appear.
-    const discovered = await prov.discover(grant);
+    const discovered = await prov.discover(grant, projectCtx);
     expect(discovered.map((r) => r.label)).toContain("target-app");
     // Two pages were fetched (the second via the continuation token).
     expect(urls.some((u) => u.includes("from=tok2"))).toBe(true);

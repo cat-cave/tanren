@@ -2,8 +2,10 @@ import type pg from "pg";
 import {
   buildIntegrationProvisioner,
   resolveSmartDefault,
+  type OrgGrant,
   type ProvisionedArtifact,
 } from "../../engine/contracts/integrationProvisioner.js";
+import { projectIntegrationOperationTarget } from "../../engine/contracts/integrationAuthority.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { PreparedGreenfieldDeploy } from "../../engine/forge/interview/index.js";
 import {
@@ -65,18 +67,6 @@ export async function prepareGreenfieldDeploy(input: {
     },
     input.actorId,
   );
-  // Sole lease authority after selection.
-  const resolved = await authorizeGreenfieldDeploy({
-    client: input.pool,
-    orgId: input.orgId,
-    projectId: input.projectId,
-    providerKind,
-    actorId: input.actorId,
-    operation: "provision",
-  });
-  if ("status" in resolved) return resolved;
-  const grant = resolved;
-  const provisioner = buildIntegrationProvisioner(providerKind, productionProvisionerDeps(input.secrets));
   const orgSlug = await greenfieldOrgLogin(input.pool, input.orgId, input.actorId);
   const projectCtx = {
     projectId: input.projectId,
@@ -85,20 +75,49 @@ export async function prepareGreenfieldDeploy(input: {
     ...(input.deploy.stack === undefined ? {} : { stack: input.deploy.stack }),
     name: input.deploy.name ?? input.projectName,
   };
+  const authorize = (
+    operation: "discover" | "provision" | "bind",
+    target: Parameters<typeof authorizeGreenfieldDeploy>[0]["target"],
+  ) =>
+    authorizeGreenfieldDeploy({
+      client: input.pool,
+      orgId: input.orgId,
+      projectId: input.projectId,
+      providerKind,
+      actorId: input.actorId,
+      operation,
+      target,
+    });
+  const provisioner = buildIntegrationProvisioner(providerKind, productionProvisionerDeps(input.secrets));
   let action: "provision" | "bind";
   let artifact: ProvisionedArtifact;
+  let grant: OrgGrant;
   try {
     if (input.deploy.chosenResourceId !== undefined && input.deploy.chosenResourceId !== "") {
       action = "bind";
+      const resolved = await authorize(
+        "bind",
+        projectIntegrationOperationTarget(projectCtx, input.deploy.chosenResourceId),
+      );
+      if ("status" in resolved) return resolved;
+      grant = resolved;
       artifact = await provisioner.bind(grant, input.deploy.chosenResourceId, projectCtx);
     } else {
-      const discovered = await provisioner.discover(grant);
+      const discovery = await authorize("discover", {});
+      if ("status" in discovery) return discovery;
+      const discovered = await provisioner.discover(discovery, projectCtx);
       const smart = resolveSmartDefault(discovered, input.deploy.mode, { name: projectCtx.name });
       if (smart.action === "bind") {
         action = "bind";
+        const resolved = await authorize("bind", projectIntegrationOperationTarget(projectCtx, smart.resourceId));
+        if ("status" in resolved) return resolved;
+        grant = resolved;
         artifact = await provisioner.bind(grant, smart.resourceId, projectCtx);
       } else {
         action = "provision";
+        const resolved = await authorize("provision", projectIntegrationOperationTarget(projectCtx));
+        if ("status" in resolved) return resolved;
+        grant = resolved;
         artifact = await provisioner.provision(grant, projectCtx);
       }
     }

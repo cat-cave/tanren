@@ -1,4 +1,8 @@
 import type { OrgGrant } from "../../engine/contracts/integrationProvisioner.js";
+import type {
+  IntegrationOperationTarget,
+  IntegrationPrivilegedOperation,
+} from "../../engine/contracts/integrationAuthority.js";
 import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
 import type {
   IneligibleResult,
@@ -27,7 +31,8 @@ interface GreenfieldAuthorizeInput {
   projectId: string;
   providerKind: DeployProviderKind;
   actorId: string;
-  operation: "provision" | "teardown";
+  operation: IntegrationPrivilegedOperation;
+  target: IntegrationOperationTarget;
 }
 
 function notLinked(orgId: string, providerKind: DeployProviderKind): NotLinkedResult {
@@ -147,6 +152,7 @@ export async function authorizeGreenfieldDeploy(
     providerKind: input.providerKind,
     capability: "deploy",
     operation: input.operation,
+    target: input.target,
     actor: input.actorId === "system" ? systemActor : { kind: "operator", id: input.actorId },
   });
   if (resolution.status === "not_linked") return notLinked(input.orgId, input.providerKind);

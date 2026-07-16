@@ -1,4 +1,5 @@
-import { assertEligibleOperationLease, type EligibleOperationLease } from "../contracts/integrationAuthority.js";
+import type { EligibleOperationExpectation, EligibleOperationLease } from "../contracts/integrationAuthority.js";
+import { assertEligibleOperationLease } from "../integrations/integrationAuthorityImpl.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import { generationSecretRef, type IntegrationSecretStore } from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
@@ -75,8 +76,17 @@ export async function listExactControlGrants(
 }
 
 export function orgGrantFromLease(lease: EligibleOperationLease): OrgGrant {
-  assertEligibleOperationLease(lease);
-  return {
+  assertEligibleOperationLease(lease, {
+    orgId: lease.orgId,
+    projectId: lease.projectId,
+    providerKind: lease.providerKind,
+    capability: lease.capability,
+    operation: lease.operation,
+    target: lease.target,
+  });
+  return Object.freeze({
+    orgId: lease.orgId,
+    projectId: lease.projectId,
     connectionId: lease.connectionId,
     grantId: lease.grantId,
     providerKind: lease.providerKind,
@@ -85,14 +95,41 @@ export function orgGrantFromLease(lease: EligibleOperationLease): OrgGrant {
     grantGeneration: lease.grantGeneration,
     metadata: lease.principalMetadata,
     eligibleOperation: lease,
-  };
+  });
+}
+
+/** Reject consumer-constructed or mutated grant wrappers around an authentic lease. */
+export function assertOrgGrantMatchesLease(grant: OrgGrant): void {
+  const lease = grant.eligibleOperation;
+  assertEligibleOperationLease(lease, {
+    orgId: lease.orgId,
+    projectId: lease.projectId,
+    providerKind: lease.providerKind,
+    capability: lease.capability,
+    operation: lease.operation,
+    target: lease.target,
+  });
+  if (
+    grant.orgId !== lease.orgId ||
+    grant.projectId !== lease.projectId ||
+    grant.connectionId !== lease.connectionId ||
+    grant.grantId !== lease.grantId ||
+    grant.providerKind !== lease.providerKind ||
+    grant.providerPrincipalId !== lease.providerPrincipalId ||
+    grant.authGeneration !== lease.authGeneration ||
+    grant.grantGeneration !== lease.grantGeneration ||
+    grant.metadata !== lease.principalMetadata
+  ) {
+    throw new Error("org grant does not match eligible operation lease");
+  }
 }
 
 export async function secretValueForLease(
   secrets: IntegrationSecretStore,
   lease: EligibleOperationLease,
+  expected: EligibleOperationExpectation,
 ): Promise<string> {
-  assertEligibleOperationLease(lease);
+  assertEligibleOperationLease(lease, expected);
   const value = await secrets.getExact({
     ref: lease.credentialRef.includes("/g/")
       ? lease.credentialRef

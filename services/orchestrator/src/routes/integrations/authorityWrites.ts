@@ -146,7 +146,7 @@ export function mountIntegrationAuthorityWrites(
         database,
         orgId,
         secrets: integrationSecrets,
-        permit: { ...permit, stagedSecretHandle: staged.handle },
+        permit,
         staged,
         credential: parsed.data.token,
       };
@@ -157,11 +157,7 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(
-        { ...permit, stagedSecretHandle: staged.handle },
-        staged,
-        integrationSecrets,
-      );
+      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(permit, staged, integrationSecrets);
       if (verified.status === "invalid") {
         const terminal = await terminalizeVerifierFailure(transitionContext, verified.reason);
         if (terminal.status === "completed") {
@@ -287,7 +283,7 @@ export function mountIntegrationAuthorityWrites(
         database,
         orgId,
         secrets: integrationSecrets,
-        permit: { ...permit, stagedSecretHandle: staged.handle },
+        permit,
         staged,
         credential: parsed.data.token,
       };
@@ -298,11 +294,7 @@ export function mountIntegrationAuthorityWrites(
         }
         return c.json(transitionPendingPayload(converged, orgId, permit.operationId), 202);
       }
-      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(
-        { ...permit, stagedSecretHandle: staged.handle },
-        staged,
-        integrationSecrets,
-      );
+      const verified = await principalVerifierFor(providerKind, fetchImpl).verify(permit, staged, integrationSecrets);
       if (verified.status === "unavailable") {
         const unavailable = await recordVerifierUnavailable(transitionContext, verified.reason, verified.retryAfter);
         if (unavailable.status === "completed") {

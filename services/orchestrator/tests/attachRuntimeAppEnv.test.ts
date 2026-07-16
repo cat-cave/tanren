@@ -200,14 +200,18 @@ async function seedAppEnv(db: AttachDb): Promise<void> {
   );
 }
 
-async function seedGrant(_db: AttachDb, providerKind: string, metadata: Record<string, unknown>): Promise<OrgGrant> {
+async function seedGrant(providerKind: string, metadata: Record<string, unknown>, appId: string): Promise<OrgGrant> {
   const { testOrgGrant } = await import("./helpers/orgGrant.js");
-  return testOrgGrant({
+  return await testOrgGrant({
     providerKind,
     providerPrincipalId: "account-1",
     credentialRef: "secret://org/deploy-token/g/1",
     metadata,
     capability: "deploy",
+    operation: "attach_runtime_env",
+    target: { resourceId: appId, environment: "production" },
+    orgId: "org_1",
+    projectId: "proj",
   });
 }
 
@@ -222,7 +226,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
   it("attaches only runtime-scoped entries to the Vercel app; values reach the transport", async () => {
     const db = new AttachDb();
     await seedAppEnv(db);
-    const grant = await seedGrant(db, "deploy.vercel", { teamId: "team_abc", slug: "acme" });
+    const grant = await seedGrant("deploy.vercel", { teamId: "team_abc", slug: "acme" }, "prj_live");
     const transport = scriptedDeployTransport("vercel");
     const events = new FakeEventStore();
 
@@ -249,7 +253,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
   it("attaches runtime env to a Fly app in one secrets call", async () => {
     const db = new AttachDb();
     await seedAppEnv(db);
-    const grant = await seedGrant(db, "deploy.flyio", { orgSlug: "acme" });
+    const grant = await seedGrant("deploy.flyio", { orgSlug: "acme" }, "acme-web");
     const transport = scriptedDeployTransport("fly");
 
     await attachRuntimeAppEnv({
@@ -272,7 +276,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
   it("the runtime VALUE never appears in the emitted event or the result", async () => {
     const db = new AttachDb();
     await seedAppEnv(db);
-    const grant = await seedGrant(db, "deploy.vercel", { teamId: "team_abc" });
+    const grant = await seedGrant("deploy.vercel", { teamId: "team_abc" }, "prj_live");
     const events = new FakeEventStore();
 
     const result = await attachRuntimeAppEnv({
@@ -318,7 +322,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
       },
       systemActor,
     );
-    const grant = await seedGrant(db, "deploy.vercel", {});
+    const grant = await seedGrant("deploy.vercel", {}, "prj_live");
     const transport = scriptedDeployTransport("vercel");
     const events = new FakeEventStore();
 
@@ -342,7 +346,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
   it("fails loud when the supplied exact grant does not match the deployRef provider", async () => {
     const db = new AttachDb();
     await seedAppEnv(db);
-    const grant = await seedGrant(db, "deploy.flyio", {});
+    const grant = await seedGrant("deploy.flyio", {}, "prj_live");
     await expect(
       attachRuntimeAppEnv({
         client: db,
@@ -358,15 +362,16 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
     ).rejects.toThrow(/does not match deployRef provider/u);
   });
 
-  it("fails loud on an unknown deployRef provider (never a silent skip)", async () => {
+  it("fails loud on an unknown deployRef provider before provider I/O (never a silent skip)", async () => {
     const db = new AttachDb();
     await seedAppEnv(db);
-    const grant = await seedGrant(db, "deploy.render", {});
+    const grant = await seedGrant("deploy.vercel", {}, "x");
+    const transport = scriptedDeployTransport("vercel");
     await expect(
       attachRuntimeAppEnv({
         client: db,
         secrets: secrets(),
-        transport: scriptedDeployTransport("vercel"),
+        transport,
         events: new FakeEventStore(),
         projectId: "proj",
         orgId: "org_1",
@@ -374,6 +379,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
         grant,
         actor: systemActor,
       }),
-    ).rejects.toThrow(/is not a deploy provisioner/u);
+    ).rejects.toThrow(/does not match deployRef provider/u);
+    expect(transport.bearersSeen).toEqual([]);
   });
 });

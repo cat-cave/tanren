@@ -18,6 +18,7 @@ import {
   type OrgGrant,
   type ProjectContext,
 } from "../../src/engine/contracts/integrationProvisioner.js";
+import { projectIntegrationOperationTarget } from "../../src/engine/contracts/integrationAuthority.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { SentryProvisioner } from "../../src/engine/providers/sentryProvisioner.js";
 import { FlyDeployProvisioner } from "../../src/engine/provisioners/flyDeployProvisioner.js";
@@ -28,13 +29,25 @@ import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { SlackProvisioner } from "../../src/engine/integrations/slack/slackProvisioner.js";
 import { ScriptedSlackTransport } from "./fakes/scriptedSlackTransport.js";
 import { describeIntegrationProvisionerConformance } from "./integrationProvisionerConformance.js";
+import type {
+  IntegrationOperationTarget,
+  IntegrationPrivilegedOperation,
+} from "../../src/engine/contracts/integrationAuthority.js";
 
-const grant = (): OrgGrant =>
+const grant = (
+  operation: IntegrationPrivilegedOperation,
+  ctx: ProjectContext,
+  target: IntegrationOperationTarget,
+): Promise<OrgGrant> =>
   testOrgGrant({
     providerKind: "sentry",
     credentialRef: "secret://org/sentry-token/g/1",
     metadata: { orgSlug: "acme" },
     capability: "errors",
+    operation,
+    target,
+    orgId: ctx.orgId,
+    projectId: ctx.projectId,
   });
 
 const projectCtx = (projectId: string): ProjectContext => ({
@@ -62,12 +75,20 @@ describeIntegrationProvisionerConformance("InMemoryIntegrationProvisioner", {
 const SENTRY_TOKEN_REF = "secret://org/sentry-token";
 const SENTRY_SEEDED_SLUG = "acme-web";
 
-function sentryGrant(): OrgGrant {
+function sentryGrant(
+  operation: IntegrationPrivilegedOperation,
+  ctx: ProjectContext,
+  target: IntegrationOperationTarget,
+): Promise<OrgGrant> {
   return testOrgGrant({
     providerKind: "sentry",
     credentialRef: SENTRY_TOKEN_REF.includes("/g/") ? SENTRY_TOKEN_REF : `${SENTRY_TOKEN_REF}/g/1`,
     metadata: { orgSlug: "acme", team: "platform" },
     capability: "errors",
+    operation,
+    target,
+    orgId: ctx.orgId,
+    projectId: ctx.projectId,
   });
 }
 
@@ -90,7 +111,8 @@ describeIntegrationProvisionerConformance("SentryProvisioner (scripted transport
 
 describe("SentryProvisioner — Sentry-specific behavior", () => {
   it("discover() lists org projects as ExistingResource (slug → id, name → label)", async () => {
-    const resources = await makeSentry().discover(sentryGrant());
+    const ctx = projectCtx("discover");
+    const resources = await makeSentry().discover(await sentryGrant("discover", ctx, {}), ctx);
     expect(resources).toContainEqual(expect.objectContaining({ id: SENTRY_SEEDED_SLUG, label: "acme-web" }));
   });
 
@@ -101,8 +123,14 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
     const provisioner = new SentryProvisioner(transport, secrets);
     const ctx = projectCtx("billing");
 
-    const first = await provisioner.provision(sentryGrant(), ctx);
-    const second = await provisioner.provision(sentryGrant(), ctx);
+    const first = await provisioner.provision(
+      await sentryGrant("provision", ctx, projectIntegrationOperationTarget(ctx)),
+      ctx,
+    );
+    const second = await provisioner.provision(
+      await sentryGrant("provision", ctx, projectIntegrationOperationTarget(ctx)),
+      ctx,
+    );
 
     // Exactly ONE project-create POST landed across both provisions.
     expect(transport.projectCreates).toBe(1);
@@ -116,7 +144,11 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
     const transport = new ScriptedSentryTransport();
     const provisioner = new SentryProvisioner(transport, secrets);
 
-    const artifact = await provisioner.provision(sentryGrant(), projectCtx("billing"));
+    const ctx = projectCtx("billing");
+    const artifact = await provisioner.provision(
+      await sentryGrant("provision", ctx, projectIntegrationOperationTarget(ctx)),
+      ctx,
+    );
     const ref = artifact.secretRefs?.["SENTRY_DSN"];
     expect(ref).toBeDefined();
 
@@ -130,7 +162,11 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
   });
 
   it("provision() emits an errors-kind inbox_source referencing the project slug + the org token ref (no token value)", async () => {
-    const artifact = await makeSentry().provision(sentryGrant(), projectCtx("billing"));
+    const ctx = projectCtx("billing");
+    const artifact = await makeSentry().provision(
+      await sentryGrant("provision", ctx, projectIntegrationOperationTarget(ctx)),
+      ctx,
+    );
     // `errors` is the DB-allowed (inbox_sources_kind_check) + connector-registered
     // (connectorMap.ts) kind for Sentry intake; "sentry" would violate both.
     expect(artifact.inboxSource?.kind).toBe("errors");
@@ -145,10 +181,22 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
 
   it("bind() links an existing project + ensures a DSN; binding an unknown slug rejects", async () => {
     const provisioner = makeSentry();
-    const artifact = await provisioner.bind(sentryGrant(), SENTRY_SEEDED_SLUG, projectCtx("billing"));
+    const ctx = projectCtx("billing");
+    const artifact = await provisioner.bind(
+      await sentryGrant("bind", ctx, projectIntegrationOperationTarget(ctx, SENTRY_SEEDED_SLUG)),
+      SENTRY_SEEDED_SLUG,
+      ctx,
+    );
     expect((artifact.projectConfig as { sentryProjectSlug: string }).sentryProjectSlug).toBe(SENTRY_SEEDED_SLUG);
     expect(artifact.secretRefs?.["SENTRY_DSN"]).toBeDefined();
-    await expect(provisioner.bind(sentryGrant(), "ghost-project", projectCtx("p"))).rejects.toThrow(/unknown project/u);
+    const missingCtx = projectCtx("p");
+    await expect(
+      provisioner.bind(
+        await sentryGrant("bind", missingCtx, projectIntegrationOperationTarget(missingCtx, "ghost-project")),
+        "ghost-project",
+        missingCtx,
+      ),
+    ).rejects.toThrow(/unknown project/u);
   });
 
   it("registry: buildIntegrationProvisioner('sentry', { sentry }) constructs the real SentryProvisioner", () => {
@@ -171,12 +219,22 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
 const DEPLOY_TOKEN_REF = "secret://org/deploy-token";
 const SEEDED_DEPLOY_APP = "seeded-app";
 
-const deployGrant = (kind: string, metadata: Record<string, unknown>): OrgGrant =>
+const deployGrant = (
+  kind: string,
+  metadata: Record<string, unknown>,
+  operation: IntegrationPrivilegedOperation,
+  ctx: ProjectContext,
+  target: IntegrationOperationTarget,
+): Promise<OrgGrant> =>
   testOrgGrant({
     providerKind: kind,
     credentialRef: `${DEPLOY_TOKEN_REF}/g/1`,
     metadata,
     capability: "deploy",
+    operation,
+    target,
+    orgId: ctx.orgId,
+    projectId: ctx.projectId,
   });
 
 function deploySecrets(): InMemorySecretStore {
@@ -191,7 +249,8 @@ describeIntegrationProvisionerConformance("VercelDeployProvisioner", {
       transport: scriptedDeployTransport("vercel", [SEEDED_DEPLOY_APP]),
       secrets: deploySecrets(),
     }),
-  grant: () => deployGrant("deploy.vercel", { teamId: "team_abc", slug: "acme" }),
+  grant: (operation, ctx, target) =>
+    deployGrant("deploy.vercel", { teamId: "team_abc", slug: "acme" }, operation, ctx, target),
   projectCtx,
   seededResourceId: "vercel_app_1",
 });
@@ -202,7 +261,7 @@ describeIntegrationProvisionerConformance("FlyDeployProvisioner", {
       transport: scriptedDeployTransport("fly", [SEEDED_DEPLOY_APP]),
       secrets: deploySecrets(),
     }),
-  grant: () => deployGrant("deploy.flyio", { orgSlug: "acme" }),
+  grant: (operation, ctx, target) => deployGrant("deploy.flyio", { orgSlug: "acme" }, operation, ctx, target),
   projectCtx,
   seededResourceId: "fly_app_1",
 });
@@ -211,12 +270,20 @@ describeIntegrationProvisionerConformance("FlyDeployProvisioner", {
 // Driven against the scripted Slack transport (no real Slack call in CI). Seeded
 // with one brownfield channel so the bind spec has a target. Each make() gets its
 // own transport so the per-instance state (provision → discover) is isolated.
-const slackGrant = (): OrgGrant =>
+const slackGrant = (
+  operation: IntegrationPrivilegedOperation,
+  ctx: ProjectContext,
+  target: IntegrationOperationTarget,
+): Promise<OrgGrant> =>
   testOrgGrant({
     providerKind: "slack",
     credentialRef: "secret://org/slack-bot-token/g/1",
     metadata: { workspaceId: "T123" },
     capability: "notify",
+    operation,
+    target,
+    orgId: ctx.orgId,
+    projectId: ctx.projectId,
   });
 
 const SLACK_SEEDED_ID = "C_existing-team";
@@ -266,9 +333,14 @@ describe("buildIntegrationProvisioner registry (Codex H3 #25 unified registry)",
   it("every operation on the unconfigured provisioner throws loudly (never a silent no-op)", async () => {
     const provisioner = buildIntegrationProvisioner("jira");
     expect(() => provisioner.capability()).toThrow(/not registered/u);
-    await expect(provisioner.discover(grant())).rejects.toThrow(/not registered/u);
-    await expect(provisioner.provision(grant(), projectCtx("p"))).rejects.toThrow(/not registered/u);
-    await expect(provisioner.bind(grant(), "x", projectCtx("p"))).rejects.toThrow(/not registered/u);
+    const ctx = projectCtx("p");
+    await expect(provisioner.discover(await grant("discover", ctx, {}), ctx)).rejects.toThrow(/not registered/u);
+    await expect(
+      provisioner.provision(await grant("provision", ctx, projectIntegrationOperationTarget(ctx)), ctx),
+    ).rejects.toThrow(/not registered/u);
+    await expect(
+      provisioner.bind(await grant("bind", ctx, projectIntegrationOperationTarget(ctx, "x")), "x", ctx),
+    ).rejects.toThrow(/not registered/u);
   });
 
   it("registers the deploy.vercel + deploy.flyio provisioners (capability ['deploy'])", () => {
