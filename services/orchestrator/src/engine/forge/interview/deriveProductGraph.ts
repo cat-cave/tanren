@@ -1,27 +1,23 @@
 /* eslint-disable import/max-dependencies -- durable derive composes the canonical seams */
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
-import {
-  RepositoryAlreadyExistsError,
-  type CreatedRepository,
-  type CreateRepositoryInput,
-} from "../../contracts/codeHostTypes.js";
+import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
 import {
   mutateProjectConfig,
   ProjectDerivationConflictError,
   ProjectDerivationStore,
+  explicitRepositoryMarker,
   projectDerivationFingerprint,
-  ProjectStore,
+  repositoryOwnershipMarker,
   withProjectDerivationLock,
-  type ProjectDerivationRow,
 } from "../../repositories/projects.js";
 import {
   provisionAutonomousProject,
   type ProvisionAutonomousProjectResult,
 } from "../../workflow/provisionAutonomousProject.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../workflow/projectConfigWriteGuards.js";
-import { createProject } from "../../workflow/projectSpec.js";
+import { createDerivationShell, loadExactDerivationShell } from "../../workflow/projectDerivationShell.js";
 import {
   FragmentAuthoringFailedError,
   loadFragmentLibrary,
@@ -37,15 +33,13 @@ import {
   buildProductContextFromCapture,
   productVisionConfig,
 } from "./deriveBehaviorSpec.js";
-import { buildEntityGraph } from "./deriveEntityGraph.js";
-import { DeriveRollbackError, resolveGreenfieldReattach } from "./deriveCompensation.js";
+import { buildEntityGraphWithReceipt } from "./deriveEntityGraph.js";
 import {
   DeployNotLinkedError,
   DeploySelectionRequiredError,
   isDeployUnavailable,
   missingDeployProvisionerError,
   resolveGreenfieldDeployDependency,
-  type PreparedGreenfieldDeploy,
   type ResolvedGreenfieldDeployDependency,
 } from "./deployDependency.js";
 import { DeployIneligibleError } from "./deployIneligibleError.js";
@@ -54,20 +48,12 @@ import { MissingDesignContractError } from "./deriveDesignContract.js";
 import { InterviewCapture, safeProjectSlug, type CaptureLifecycle } from "./types.js";
 import type { DeriveInput, DeriveResult } from "./derive.js";
 
-interface DeriveReceipts {
-  template_intent?: EffectIntent;
-  deploy_intent?: EffectIntent;
-  deploy?: PreparedGreenfieldDeploy;
-  graph?: DeriveResult;
-  bootstrap?: ProvisionAutonomousProjectResult;
-}
-
-interface EffectIntent {
-  effect: "template" | "deploy";
+interface EffectIntent<E extends "template" | "deploy"> {
+  effect: E;
   idempotencyKey: string;
 }
 
-function effectIntent(fingerprint: string, effect: EffectIntent["effect"]): EffectIntent {
+function effectIntent<E extends "template" | "deploy">(fingerprint: string, effect: E): EffectIntent<E> {
   return { effect, idempotencyKey: `${fingerprint}:${effect}` };
 }
 
@@ -77,10 +63,6 @@ export class ProjectBootstrapIncompleteError extends Error {
   constructor(readonly bootstrap: ProvisionAutonomousProjectResult) {
     super(`autonomous bootstrap incomplete: ${bootstrap.errors.map((item) => item.seed).join(", ")}`);
   }
-}
-
-function receipts(operation: ProjectDerivationRow): DeriveReceipts {
-  return operation.resultReceipt as DeriveReceipts;
 }
 
 async function resolveFragmentConfig(
@@ -134,41 +116,18 @@ async function materialize(
   });
 }
 
-async function createRepository(
-  input: DeriveInput,
-  slug: string,
-): Promise<{ repository: CreatedRepository; created: boolean }> {
+async function createRepository(input: DeriveInput, slug: string, ownershipMarker: string): Promise<CreatedRepository> {
   if (input.owner === undefined || input.createRepository === undefined) {
     throw new Error("greenfield repository owner and creator are required");
   }
-  let created: CreatedRepository | undefined;
-  try {
-    created = await input.createRepository({
-      owner: input.owner,
-      name: slug,
-      private: input.private ?? true,
-      autoInit: true,
-      ...(input.description === undefined ? {} : { description: input.description }),
-    });
-  } catch (error) {
-    if (!(error instanceof RepositoryAlreadyExistsError)) throw error;
-  }
-  if (created !== undefined) return { repository: created, created: true };
-  const repoUrl = githubHttpsRemote({ owner: input.owner, name: slug });
-  return {
-    repository: await resolveGreenfieldReattach(input.owner, slug, repoUrl, input.probeRepoBareAutoInit),
-    created: false,
-  };
-}
-
-async function compensateRepoCreate(input: DeriveInput, repository: CreatedRepository, cause: unknown): Promise<never> {
-  if (input.owner === undefined || input.deleteRepository === undefined) throw cause;
-  try {
-    await input.deleteRepository({ owner: input.owner, name: repository.fullName.split("/").at(-1)! });
-  } catch (error) {
-    throw new DeriveRollbackError(cause, [{ kind: "github.repo", label: repository.fullName, error }]);
-  }
-  throw cause;
+  return input.createRepository({
+    owner: input.owner,
+    name: slug,
+    private: input.private ?? true,
+    autoInit: true,
+    ownershipMarker,
+    ...(input.description === undefined ? {} : { description: input.description }),
+  });
 }
 
 async function preflight(input: DeriveInput, deploy: ResolvedGreenfieldDeployDependency): Promise<void> {
@@ -184,21 +143,11 @@ async function preflight(input: DeriveInput, deploy: ResolvedGreenfieldDeployDep
   if (unavailable?.status === "ineligible") throw new DeployIneligibleError(unavailable);
 }
 
-function repositoryForExisting(
-  input: DeriveInput,
-  slug: string,
-  project: { repoUrl: string; defaultBranch: string },
-): CreatedRepository {
-  if (input.owner === undefined) throw new Error("greenfield derive requires a repository owner");
-  return { fullName: `${input.owner}/${slug}`, repoUrl: project.repoUrl, defaultBranch: project.defaultBranch };
-}
-
-function completed(operation: ProjectDerivationRow): DeriveResult {
-  const stored = receipts(operation);
-  if (stored.graph === undefined || stored.bootstrap === undefined) {
-    throw new ProjectDerivationConflictError(operation.projectId, "incomplete_receipts");
+function completed(derivation: ReturnType<typeof ProjectDerivationStore.requireComplete>): DeriveResult {
+  if (derivation.kind !== "interview") {
+    throw new ProjectDerivationConflictError(derivation.ownership.projectId, "binding_mismatch");
   }
-  return { ...stored.graph, bootstrap: stored.bootstrap };
+  return { ...derivation.results.graph, bootstrap: derivation.results.bootstrap };
 }
 
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
@@ -225,87 +174,72 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       input.autonomy === "auto" || input.autonomy === "simulated"
         ? autonomousConfig(input.autonomy)
         : { version: 1, greenfield: true };
-    let project = await ProjectStore.findByRepoUrl(pool, input.orgId, repoUrl, { kind: "operator" });
-    let operation =
-      project === undefined
-        ? undefined
-        : await ProjectDerivationStore.findForProject(pool, input.orgId, project.projectId);
-    if (project?.lifecycle === "active") {
-      if (operation?.status !== "succeeded") {
-        throw new ProjectDerivationConflictError(project.projectId, "invalid_lifecycle");
-      }
-      if (operation.idempotencyFingerprint !== fingerprint) {
-        throw new ProjectDerivationConflictError(project.projectId, "fingerprint_mismatch");
-      }
-      return completed(operation);
-    }
-    if (project?.lifecycle === "archived") {
-      throw new ProjectDerivationConflictError(project.projectId, "invalid_lifecycle");
-    }
-    if (operation !== undefined && operation.idempotencyFingerprint !== fingerprint) {
-      throw new ProjectDerivationConflictError(operation.projectId, "fingerprint_mismatch");
-    }
-
+    if (input.owner === undefined) throw new Error("greenfield derive requires a repository owner");
+    const managed = input.repoUrl === undefined;
+    const ownershipMarker = managed ? repositoryOwnershipMarker(fingerprint) : explicitRepositoryMarker(fingerprint);
+    const identity = {
+      kind: "interview" as const,
+      orgId: input.orgId,
+      projectName: slug,
+      repoUrl,
+      idempotencyFingerprint: fingerprint,
+    };
+    let shell = await loadExactDerivationShell(pool, identity);
     let resolvedTemplate: { config: TemplateConfig; library: FragmentLibrary } | undefined;
-    let repository: CreatedRepository;
-    if (project === undefined) {
+    if (shell === undefined) {
       await preflight(input, deploy);
       resolvedTemplate = await resolveFragmentConfig(input.orgId, input, lifecycle, capture);
-      if (input.repoUrl === undefined) {
-        const resolvedRepo = await createRepository(input, slug);
-        repository = resolvedRepo.repository;
-        try {
-          project = await createProject(
-            pool,
-            {
-              name: slug,
-              repoUrl: repository.repoUrl,
-              defaultBranch: repository.defaultBranch,
-              config: { ...baseConfig, ...productVisionConfig(capture), lifecycle },
-            },
-            { ...input.actor, orgId: input.orgId },
-            { configWriteProof: provisionedGreenfieldProjectConfigProof, initialLifecycle: "deriving" },
-          );
-        } catch (error) {
-          if (resolvedRepo.created) return compensateRepoCreate(input, repository, error);
-          throw error;
-        }
-      } else {
-        if (input.owner === undefined) throw new Error("greenfield derive requires owner with an explicit repo URL");
-        repository = { fullName: `${input.owner}/${slug}`, repoUrl: input.repoUrl, defaultBranch: "main" };
+      shell = await createDerivationShell(pool, {
+        identity,
+        actor: { ...input.actor, orgId: input.orgId },
+        configWriteProof: provisionedGreenfieldProjectConfigProof,
+        repository: {
+          mode: managed ? "managed" : "explicit",
+          fullName: `${input.owner}/${slug}`,
+          repoUrl,
+          requestedDefaultBranch: "main",
+          ownershipMarker,
+        },
+        sanitizedInput: { kind: "interview", slug, deploy },
+        project: {
+          name: slug,
+          repoUrl,
+          defaultBranch: "main",
+          config: { ...baseConfig, ...productVisionConfig(capture), lifecycle },
+        },
+      });
+    }
+    const project = shell.project;
+    let operation = shell.operation;
+    if (project.lifecycle === "active") {
+      if (operation.status !== "succeeded") {
+        throw new ProjectDerivationConflictError(project.projectId, "invalid_lifecycle");
       }
-      if (project === undefined) {
-        project = await createProject(
-          pool,
-          {
-            name: slug,
-            repoUrl: repository.repoUrl,
-            defaultBranch: repository.defaultBranch,
-            config: { ...baseConfig, ...productVisionConfig(capture), lifecycle },
-          },
-          { ...input.actor, orgId: input.orgId },
-          { configWriteProof: provisionedGreenfieldProjectConfigProof, initialLifecycle: "deriving" },
-        );
-      }
-    } else {
-      repository = repositoryForExisting(input, slug, project);
+      return completed(ProjectDerivationStore.requireComplete(operation));
     }
 
-    operation ??= await ProjectDerivationStore.begin(pool, {
-      orgId: input.orgId,
-      projectId: project.projectId,
-      idempotencyFingerprint: fingerprint,
-      sanitizedInput: { kind: "interview", slug, deploy },
-      ownershipReceipt: { repository },
-    });
-
     try {
-      let seed = operation.templateReceipt as SeededTemplate | null;
-      if (seed === null) {
+      let state = ProjectDerivationStore.decode(operation, {
+        kind: "interview",
+        orgId: input.orgId,
+        projectId: project.projectId,
+        repoUrl,
+        idempotencyFingerprint: fingerprint,
+      });
+      if (state.results.repository === undefined) {
+        const repository = managed
+          ? await createRepository(input, slug, state.ownership.ownershipMarker)
+          : { fullName: `${input.owner}/${slug}`, repoUrl, defaultBranch: project.defaultBranch };
+        operation = await ProjectDerivationStore.recordReceipt(pool, operation, "repository", repository, "shell");
+        state = ProjectDerivationStore.decode(operation);
+      }
+      const repository = state.results.repository!;
+
+      let seed = state.template;
+      if (seed === undefined) {
         resolvedTemplate ??= await resolveFragmentConfig(input.orgId, input, lifecycle, capture);
-        const stored = receipts(operation);
-        const intent = stored.template_intent ?? effectIntent(fingerprint, "template");
-        if (stored.template_intent === undefined) {
+        const intent = state.results.template_intent ?? effectIntent(fingerprint, "template");
+        if (state.results.template_intent === undefined) {
           operation = await ProjectDerivationStore.recordReceipt(
             pool,
             operation,
@@ -326,13 +260,13 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
           }),
         );
         operation = await ProjectDerivationStore.recordTemplate(pool, operation, seed);
+        state = ProjectDerivationStore.decode(operation);
       }
 
-      let stored = receipts(operation);
-      if (stored.deploy === undefined) {
+      if (state.results.deploy === undefined) {
         await preflight(input, deploy);
-        const intent = stored.deploy_intent ?? effectIntent(fingerprint, "deploy");
-        if (stored.deploy_intent === undefined) {
+        const intent = state.results.deploy_intent ?? effectIntent(fingerprint, "deploy");
+        if (state.results.deploy_intent === undefined) {
           operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy_intent", intent, "graph");
         }
         const prepared = await input.prepareDeploy!({
@@ -360,12 +294,12 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
           migrateProjectConfig({ ...migrateProjectConfig(raw), ...prepared.projectConfig }),
         );
         operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", prepared, "graph");
-        stored = receipts(operation);
+        state = ProjectDerivationStore.decode(operation);
       }
 
-      if (stored.graph === undefined) {
+      if (state.results.graph === undefined) {
         const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId: project.projectId };
-        const graph = await buildEntityGraph(
+        const graphWrite = await buildEntityGraphWithReceipt(
           pool,
           input,
           capture,
@@ -375,12 +309,13 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
           project.projectId,
           actor,
           scaffoldSpecsFor(lifecycle, seed),
+          operation,
         );
-        operation = await ProjectDerivationStore.recordReceipt(pool, operation, "graph", graph, "graph");
-        stored = receipts(operation);
+        operation = graphWrite.operation;
+        state = ProjectDerivationStore.decode(operation);
       }
 
-      if (stored.bootstrap === undefined) {
+      if (state.results.bootstrap === undefined) {
         const bootstrap = await (input.bootstrapProject ?? provisionAutonomousProject)({
           pool,
           orgId: input.orgId,
@@ -391,7 +326,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
         operation = await ProjectDerivationStore.recordReceipt(pool, operation, "bootstrap", bootstrap, "activate");
       }
       operation = await ProjectDerivationStore.activate(pool, operation);
-      return completed(operation);
+      return completed(ProjectDerivationStore.requireComplete(operation));
     } catch (error) {
       await ProjectDerivationStore.recordFailure(pool, operation, error);
       throw error;

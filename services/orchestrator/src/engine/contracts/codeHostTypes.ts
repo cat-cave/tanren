@@ -56,6 +56,8 @@ export interface CreateRepositoryInput {
   private: boolean;
   description?: string;
   autoInit: boolean;
+  /** Durable derivation identity stored atomically with repo creation for response-loss reconciliation. */
+  ownershipMarker?: string;
 }
 
 /**

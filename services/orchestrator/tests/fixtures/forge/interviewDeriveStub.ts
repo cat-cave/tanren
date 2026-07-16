@@ -106,9 +106,13 @@ export function stubPool(): {
     if (sql.includes("FROM project_derivations")) {
       const row = sql.includes("AND id = $2")
         ? derivations.get(String(params[1]))
-        : [...derivations.values()].find(
-            (candidate) => candidate["org_id"] === params[0] && candidate["project_id"] === params[1],
-          );
+        : sql.includes("idempotency_fingerprint = $2")
+          ? [...derivations.values()].find(
+              (candidate) => candidate["org_id"] === params[0] && candidate["idempotency_fingerprint"] === params[1],
+            )
+          : [...derivations.values()].find(
+              (candidate) => candidate["org_id"] === params[0] && candidate["project_id"] === params[1],
+            );
       return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO project_derivations")) {
@@ -160,10 +164,14 @@ export function stubPool(): {
     }
     if (sql.startsWith("SELECT project_id, name, repo_url") && sql.includes("regexp_replace(repo_url")) {
       const canonical = String(params[0]).replace(/\.git$/u, "");
-      const row = [...projects.values()].find(
+      const rows = [...projects.values()].filter(
         (item) => item.repo_url.replace(/\.git$/u, "") === canonical && item.org_id === String(params[1]),
       );
-      return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
+      return sql.includes("LIMIT 1")
+        ? rows[0] === undefined
+          ? { rows: [], rowCount: 0 }
+          : { rows: [rows[0]], rowCount: 1 }
+        : { rows, rowCount: rows.length };
     }
     if (sql.startsWith("INSERT INTO projects")) {
       state.projects.add(String(params[0]));
@@ -213,11 +221,11 @@ export function stubPool(): {
       project.lifecycle = "active";
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
     }
-    if (sql.startsWith("SELECT lifecycle FROM projects WHERE org_id = $1")) {
+    if (sql.startsWith("SELECT lifecycle") && sql.includes("FROM projects") && sql.includes("org_id = $1")) {
       const project = projects.get(String(params[1]));
       return project === undefined
         ? { rows: [], rowCount: 0 }
-        : { rows: [{ lifecycle: project.lifecycle }], rowCount: 1 };
+        : { rows: [{ lifecycle: project.lifecycle, repo_url: project.repo_url }], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO project_members")) return { rows: [], rowCount: 1 };
     if (sql.startsWith("SELECT project_id FROM projects")) {

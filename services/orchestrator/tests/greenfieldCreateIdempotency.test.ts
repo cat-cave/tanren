@@ -58,6 +58,92 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     expect(operation).toMatchObject({ status: "succeeded", phase: "activate" });
   });
 
+  it("never grafts a fingerprint retry onto a different project bound to the canonical repo", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let deployAttempts = 0;
+    const { app, githubHttp } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployAttempts += 1;
+        throw new Error("hold derivation after repository receipt");
+      },
+    });
+    const body = JSON.stringify({
+      name: "binding-guard",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel" },
+    });
+    const first = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(first.status).toBe(502);
+    const original = [...pool.projects.values()][0]!;
+    const canonicalRepoUrl = original.repo_url;
+    original.repo_url = "https://github.com/cat-cave/moved-binding";
+    pool.seedProject({
+      project_id: "project_other_binding",
+      org_id: "org_acme",
+      name: "binding-guard",
+      repo_url: canonicalRepoUrl,
+      config: { version: 1, greenfield: true },
+      lifecycle: "deriving",
+    });
+
+    const retry = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toMatchObject({
+      error: "greenfield_derivation_conflict",
+      reason: "repo_bound_without_derivation",
+    });
+    expect(deployAttempts).toBe(1);
+    expect(githubHttp.createdRepositories).toHaveLength(1);
+    expect([...pool.projectDerivations.values()][0]?.project_id).toBe(original.project_id);
+  });
+
+  it("reconciles a lost GitHub create response only through the exact ownership marker", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const githubHttp = new FakeRepoCreateHttp("response_lost");
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: "lost-create-response",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(githubHttp.createdRepositories).toEqual([
+      expect.objectContaining({
+        owner: "cat-cave",
+        name: "lost-create-response",
+        ownershipMarker: expect.stringMatching(/^https:\/\/tanren\.dev\/derivations\/[0-9a-f]{64}$/u),
+      }),
+    ]);
+    expect([...pool.projects.values()][0]?.lifecycle).toBe("active");
+  });
+
   it("does not activate until bootstrap is complete and reuses the deploy receipt on retry", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
@@ -111,12 +197,12 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     expect(githubHttp.createdRepositories).toHaveLength(1);
   });
 
-  it("rejects a no-shell reattach when the same-name repository contains real history", async () => {
+  it("rejects an unrelated same-name repo even when it is bare and never reaches deploy", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
     let deployEffects = 0;
-    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp("exists", false), {
+    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp("exists", true), {
       async preflightDeploy() {},
       async prepareDeploy() {
         deployEffects += 1;
@@ -136,8 +222,8 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     });
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: "greenfield_repo_not_empty" });
-    expect(pool.projects.size).toBe(0);
+    expect(await response.json()).toMatchObject({ error: "repository_already_exists" });
+    expect([...pool.projects.values()][0]?.lifecycle).toBe("deriving");
     expect(deployEffects).toBe(0);
   });
 
@@ -257,7 +343,14 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     });
     expect(res.status).toBe(201);
     // The repo was created under the NORMALIZED slug (no spaces/uppercase/punctuation).
-    expect(githubHttp.createdRepositories).toEqual([{ owner: "cat-cave", name: "my-cool-app", private: true }]);
+    expect(githubHttp.createdRepositories).toEqual([
+      {
+        owner: "cat-cave",
+        name: "my-cool-app",
+        private: true,
+        ownershipMarker: expect.stringMatching(/^https:\/\/tanren\.dev\/derivations\/[0-9a-f]{64}$/u),
+      },
+    ]);
   });
 
   it("REJECTS a slug with no hostname-safe content (never ships an empty/invalid repo name)", async () => {

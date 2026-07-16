@@ -115,6 +115,19 @@ export const ProjectStore = {
     return decodeProjectRow(row);
   },
 
+  /** All canonical repo matches. Derivation resume requires exactly one matching operation-owned shell. */
+  async listByRepoUrl(client: QueryClient, orgId: string, repoUrl: string, _actor: ActorRef): Promise<ProjectRow[]> {
+    const canonical = repoUrl.replace(/\.git$/u, "");
+    const result = await client.query<RawProjectRow>(
+      `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
+         FROM projects
+        WHERE regexp_replace(repo_url, '\\.git$', '') = $1 AND org_id = $2
+        ORDER BY project_id`,
+      [canonical, orgId],
+    );
+    return result.rows.map((row) => decodeProjectRow(row));
+  },
+
   /**
    * A single project by id, selecting `org_id` too so the caller can compare it
    * against the path org. `undefined` when no row exists.
@@ -261,7 +274,17 @@ export {
   ProjectDerivationConflictError,
   ProjectDerivationRow,
   ProjectDerivationStore,
+  buildDerivationOwnership,
+  explicitRepositoryMarker,
   projectDerivationFingerprint,
+  repositoryOwnershipMarker,
   withProjectDerivationLock,
 } from "./projectDerivations.js";
-export type { DerivationKind, DerivationPhase, DerivationStatus } from "./projectDerivations.js";
+export type {
+  CompleteDirectDerivation,
+  CompleteInterviewDerivation,
+  DerivationKind,
+  DerivationOwnershipReceipt,
+  DerivationPhase,
+  DerivationStatus,
+} from "./projectDerivations.js";

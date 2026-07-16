@@ -1,9 +1,6 @@
-// Before a durable project shell exists, a newly-created GitHub repository has no
-// replay anchor. That one pre-shell effect is compensated if shell creation fails.
-// Once the shell exists, every external effect is owned by the durable derivation
-// state machine and is resumed rather than destroyed on failure.
-
-import { GreenfieldRepoNotEmptyError, type CreatedRepository } from "../../contracts/codeHostTypes.js";
+// Legacy compatibility surfaces for callers that still normalize rollback errors.
+// Lifecycle state machines now persist the project shell before provider effects,
+// so they never invoke this pre-shell repository compensation path.
 
 /** Idempotent delete for the only external create that can precede the durable shell. */
 export type DeleteRepositoryCallback = (target: { owner: string; name: string }) => Promise<void>;
@@ -39,23 +36,4 @@ export class DeriveRollbackError extends Error {
     if (originalError instanceof Error) this.cause = originalError;
     this.compensationFailures = compensationFailures;
   }
-}
-
-/**
- * Re-attach only to the deterministic, bare auto-init repository left by a
- * previous attempt. A non-empty repository is operator data and is never reset.
- */
-export async function resolveGreenfieldReattach(
-  owner: string,
-  slug: string,
-  deterministicRepoUrl: string,
-  probeRepoBareAutoInit: ((target: { owner: string; name: string }) => Promise<boolean>) | undefined,
-): Promise<CreatedRepository> {
-  if (probeRepoBareAutoInit === undefined) {
-    throw new Error("greenfield re-attach requires a repo-emptiness probe (probeRepoBareAutoInit) but none was wired");
-  }
-  if (!(await probeRepoBareAutoInit({ owner, name: slug }))) {
-    throw new GreenfieldRepoNotEmptyError(owner, slug);
-  }
-  return { fullName: `${owner}/${slug}`, repoUrl: deterministicRepoUrl, defaultBranch: "main" };
 }

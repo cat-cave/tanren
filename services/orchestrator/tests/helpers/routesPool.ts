@@ -228,14 +228,12 @@ export class RoutesPool {
         const row = this.projects.get(String(params[0]));
         return single(row);
       }
-      // ProjectStore.findByRepoUrl (the idempotent greenfield-create probe). Matches on
-      // the canonical repo URL ignoring a trailing `.git` on either side.
       if (sql.includes("regexp_replace(repo_url")) {
         const canonical = String(params[0]).replace(/\.git$/u, "");
-        const row = [...this.projects.values()].find(
+        const rows = [...this.projects.values()].filter(
           (p) => p.repo_url.replace(/\.git$/u, "") === canonical && p.org_id === String(params[1]),
         );
-        return single(row);
+        return sql.includes("LIMIT 1") ? single(rows[0]) : { rows, rowCount: rows.length };
       }
     }
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
@@ -312,10 +310,12 @@ export class RoutesPool {
       project.lifecycle = "active";
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
     }
-    if (trimmed.startsWith("SELECT lifecycle FROM projects WHERE org_id = $1")) {
+    if (trimmed.startsWith("SELECT lifecycle") && trimmed.includes("FROM projects") && sql.includes("org_id = $1")) {
       const project = this.projects.get(String(params[1]));
       return single(
-        project === undefined || project.org_id !== String(params[0]) ? undefined : { lifecycle: project.lifecycle },
+        project === undefined || project.org_id !== String(params[0])
+          ? undefined
+          : { lifecycle: project.lifecycle, repo_url: project.repo_url },
       );
     }
     if (trimmed.startsWith("UPDATE projects SET repo_url")) {

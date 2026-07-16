@@ -1,16 +1,12 @@
 // cspell:ignore nobypassrls plpgsql
-/**
- * Real-Postgres proof for the deriving -> active boundary. Opt in with
- * TANREN_RLS_DB_TEST=1. This deliberately uses the NOBYPASSRLS runtime role for
- * every tenant read/write and a separate system pool only for walker discovery.
- */
+// Opt-in real-Postgres proof for lifecycle, receipt, replay, and NOBYPASSRLS boundaries.
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgDagReadModel } from "../src/engine/dag/walkerPg.js";
-import { buildEntityGraph } from "../src/engine/forge/interview/deriveEntityGraph.js";
+import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import { buildEntityGraphWithReceipt } from "../src/engine/forge/interview/deriveEntityGraph.js";
 import { scaffoldSpecsFor } from "../src/engine/forge/interview/deriveScaffoldSpecs.js";
-import { InterviewCapture } from "../src/engine/forge/interview/types.js";
 import {
   ProjectDerivationStore,
   projectDerivationFingerprint,
@@ -19,7 +15,19 @@ import {
 } from "../src/engine/repositories/projects.js";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { DeriveInput } from "../src/engine/forge/interview/derive.js";
-import type { SeededTemplate } from "../src/engine/templates/index.js";
+import { runDirectGreenfieldDerivation } from "../src/routes/projects/greenfieldCreateStateMachine.js";
+import { FakeRepoCreateHttp } from "./conformance/fakes/fakeRepoCreateHttp.js";
+import { preparedDeploy } from "./fixtures/forge/interviewDeriveStub.js";
+import {
+  activationTuple,
+  corruptReceipt,
+  directSanitizedInput,
+  GRAPH_CAPTURE,
+  graphCounts,
+  ownership as buildOwnership,
+  repository,
+  SEED,
+} from "./fixtures/projectDerivationLifecycle.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -39,49 +47,8 @@ const ACTOR: ActorContext = {
   scopes: ["platform:admin"],
   source: "local_dev",
 };
-const SEED: SeededTemplate = {
-  templateRef: "tanren://composed/proof@1234567890ab",
-  validatedAt: "2026-07-16T00:00:00.000Z",
-};
-/* eslint-disable unicorn/no-thenable -- Given/When/Then is the persisted behavior vocabulary. */
-const GRAPH_CAPTURE = InterviewCapture.parse({
-  identity: { slug: "atomic-graph", pitch: "Atomic graph proof", repoHint: "" },
-  personas: [{ name: "Operator", description: "Runs the product", surface: "console" }],
-  behaviors: [
-    {
-      persona: "Operator",
-      title: "inspect status",
-      given: "a running product",
-      when: "the operator opens status",
-      then: "the current status is visible",
-    },
-  ],
-  interfaces: [{ name: "console", note: "operator surface" }],
-  designContract: {
-    domain: "operations-console",
-    identity: "a clear operations console",
-    intent: "make status legible",
-    principles: [],
-    constraints: [],
-    personas: ["Operator"],
-    behaviors: ["operator::inspect status"],
-    dimensions: [],
-  },
-  architecture: [],
-  lifecycle: {
-    stack: "proof/toolchain",
-    bootstrap: "just bootstrap",
-    tier1: "just tier-1",
-    tier2: "just tier-2",
-    tier3: "just tier-3",
-    build: "just build",
-    deploy: "just deploy",
-    toolchain: [],
-  },
-  lifecycleConfirmed: true,
-  rulesets: [],
-});
-/* eslint-enable unicorn/no-thenable */
+const ownership = (projectId: string, repoUrl: string, fingerprint: string) =>
+  buildOwnership(ORG_A, projectId, repoUrl, fingerprint);
 
 function withDatabase(url: string, database: string): string {
   const parsed = new URL(url);
@@ -155,11 +122,11 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
     await admin.end();
   }, 30_000);
 
-  it("fails closed on missing receipts and keeps failed work dormant and tenant-isolated", async () => {
+  it("rejects incomplete, foreign, and malformed receipts while work stays dormant and tenant-isolated", async () => {
     const pool = runtimePool();
     const repoUrl = "https://github.com/cat-cave/derivation-failed";
     const fingerprint = projectDerivationFingerprint({
-      kind: "interview",
+      kind: "direct_greenfield",
       orgId: ORG_A,
       repoUrl,
       request: { capture: "failure-proof" },
@@ -168,8 +135,8 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       orgId: ORG_A,
       projectId: PROJECT_FAILED,
       idempotencyFingerprint: fingerprint,
-      sanitizedInput: { kind: "interview" },
-      ownershipReceipt: { repository: { repoUrl } },
+      sanitizedInput: directSanitizedInput(),
+      ownershipReceipt: ownership(PROJECT_FAILED, repoUrl, fingerprint),
     });
 
     const dormant = await new PgDagReadModel(pool).loadSnapshot(PROJECT_FAILED);
@@ -178,25 +145,38 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       reason: "incomplete_receipts",
     } satisfies Partial<ProjectDerivationConflictError>);
 
-    operation = await ProjectDerivationStore.recordTemplate(pool, operation, { templateRef: "tanren://proof" });
-    operation = await ProjectDerivationStore.recordReceipt(
-      pool,
-      operation,
-      "template_intent",
-      { idempotencyKey: `${fingerprint}:template` },
-      "template",
-    );
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "repository", repository(repoUrl), "shell");
     operation = await ProjectDerivationStore.recordReceipt(
       pool,
       operation,
       "deploy_intent",
-      { idempotencyKey: `${fingerprint}:deploy` },
+      { effect: "deploy", idempotencyKey: `${fingerprint}:deploy` },
       "graph",
     );
-    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", { appId: "app_failed" }, "graph");
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", preparedDeploy(), "graph");
     operation = await ProjectDerivationStore.recordReceipt(pool, operation, "bootstrap", { errors: [] }, "activate");
+
+    await corruptReceipt(ownerPool(), PROJECT_FAILED, "{repository,binding,projectId}", "project_foreign");
     await expect(ProjectDerivationStore.activate(pool, operation)).rejects.toMatchObject({
-      reason: "incomplete_receipts",
+      reason: "binding_mismatch",
+    } satisfies Partial<ProjectDerivationConflictError>);
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "repository", repository(repoUrl), "shell");
+    await corruptReceipt(ownerPool(), PROJECT_FAILED, "{repository,value,repoUrl}", "https://github.com/other/repo");
+    await expect(ProjectDerivationStore.activate(pool, operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    } satisfies Partial<ProjectDerivationConflictError>);
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "repository", repository(repoUrl), "shell");
+    await corruptReceipt(ownerPool(), PROJECT_FAILED, "{deploy,value,outcome,providerKind}", "deploy.flyio");
+    await expect(ProjectDerivationStore.activate(pool, operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    } satisfies Partial<ProjectDerivationConflictError>);
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", preparedDeploy(), "graph");
+    await ownerPool().query(
+      "UPDATE project_derivations SET result_receipt = jsonb_set(result_receipt, '{bootstrap}', 'null'::jsonb) WHERE project_id = $1",
+      [PROJECT_FAILED],
+    );
+    await expect(ProjectDerivationStore.activate(pool, operation)).rejects.toMatchObject({
+      reason: "invalid_receipt",
     } satisfies Partial<ProjectDerivationConflictError>);
     await ProjectDerivationStore.recordFailure(pool, operation, new Error("permanent graph failure"));
 
@@ -214,6 +194,75 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
     expect((await new PgDagReadModel(pool).loadSnapshot(PROJECT_FAILED)).projectLifecycle).toBe("deriving");
   });
 
+  it("rejects the A/fingerprint -> moved A -> repo-bound B retry before provider effects", async () => {
+    const pool = runtimePool();
+    const repoUrl = "https://github.com/cat-cave/binding-target";
+    const input = {
+      name: "binding-target",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel" },
+    } as const;
+    const fingerprint = projectDerivationFingerprint({
+      kind: "direct_greenfield",
+      orgId: ORG_A,
+      repoUrl,
+      request: input,
+    });
+    await runWithOrgScope(pool, ORG_A, async (client) => {
+      await client.query(
+        "INSERT INTO projects (project_id, name, repo_url, org_id, lifecycle) VALUES ($1, $2, $3, $4, 'deriving')",
+        ["project_binding_a", input.name, repoUrl, ORG_A],
+      );
+    });
+    await ProjectDerivationStore.begin(pool, {
+      orgId: ORG_A,
+      projectId: "project_binding_a",
+      idempotencyFingerprint: fingerprint,
+      sanitizedInput: { kind: "direct_greenfield", input },
+      ownershipReceipt: ownership("project_binding_a", repoUrl, fingerprint),
+    });
+    await runWithOrgScope(pool, ORG_A, async (client) => {
+      await client.query("UPDATE projects SET repo_url = $1 WHERE project_id = 'project_binding_a'", [
+        "https://github.com/cat-cave/binding-moved",
+      ]);
+      await client.query(
+        "INSERT INTO projects (project_id, name, repo_url, org_id, lifecycle) VALUES ('project_binding_b', $1, $2, $3, 'deriving')",
+        [input.name, repoUrl, ORG_A],
+      );
+    });
+    let downstreamEffects = 0;
+    const githubHttp = new FakeRepoCreateHttp();
+    const result = await runDirectGreenfieldDerivation(
+      {
+        pool,
+        secrets: new InMemorySecretStore(),
+        githubHttp,
+        orgId: ORG_A,
+        actor: ACTOR,
+        input,
+        async preflightDeploy() {
+          downstreamEffects += 1;
+        },
+        async prepareDeploy() {
+          downstreamEffects += 1;
+          return preparedDeploy();
+        },
+        async bootstrapProject() {
+          downstreamEffects += 1;
+          return { errors: [] };
+        },
+      },
+      repoUrl,
+    );
+    expect(result).toEqual({ kind: "conflict", reason: "repo_bound_without_derivation" });
+    expect(downstreamEffects).toBe(0);
+    expect(githubHttp.createdRepositories).toEqual([]);
+    expect((await ProjectDerivationStore.findByFingerprint(pool, ORG_A, fingerprint))?.projectId).toBe(
+      "project_binding_a",
+    );
+  });
+
   it("serializes duplicate retries, records each external effect once, and activates exactly once", async () => {
     const pool = runtimePool();
     const repoUrl = "https://github.com/cat-cave/derivation-concurrent";
@@ -223,13 +272,14 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       repoUrl,
       request: { name: "derivation-concurrent", owner: "cat-cave" },
     });
-    await ProjectDerivationStore.begin(pool, {
+    const initial = await ProjectDerivationStore.begin(pool, {
       orgId: ORG_A,
       projectId: PROJECT_CONCURRENT,
       idempotencyFingerprint: fingerprint,
-      sanitizedInput: { kind: "direct_greenfield" },
-      ownershipReceipt: { repository: { repoUrl } },
+      sanitizedInput: directSanitizedInput(),
+      ownershipReceipt: ownership(PROJECT_CONCURRENT, repoUrl, fingerprint),
     });
+    await ProjectDerivationStore.recordReceipt(pool, initial, "repository", repository(repoUrl), "shell");
     let deployEffects = 0;
     let bootstrapEffects = 0;
 
@@ -243,7 +293,7 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
               pool,
               current,
               "deploy_intent",
-              { idempotencyKey: `${fingerprint}:deploy` },
+              { effect: "deploy", idempotencyKey: `${fingerprint}:deploy` },
               "graph",
             );
           }
@@ -251,17 +301,11 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 40);
           });
-          current = await ProjectDerivationStore.recordReceipt(pool, current, "deploy", { appId: "app_once" }, "graph");
+          current = await ProjectDerivationStore.recordReceipt(pool, current, "deploy", preparedDeploy(), "graph");
         }
         if (current.resultReceipt["bootstrap"] === undefined) {
           bootstrapEffects += 1;
-          current = await ProjectDerivationStore.recordReceipt(
-            pool,
-            current,
-            "bootstrap",
-            { errors: [], sourceId: "source_once" },
-            "activate",
-          );
+          current = await ProjectDerivationStore.recordReceipt(pool, current, "bootstrap", { errors: [] }, "activate");
         }
         return ProjectDerivationStore.activate(pool, current);
       });
@@ -300,17 +344,18 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       orgId: ORG_A,
       projectId: PROJECT_ACTIVATION,
       idempotencyFingerprint: fingerprint,
-      sanitizedInput: { kind: "direct_greenfield" },
-      ownershipReceipt: { repository: { repoUrl } },
+      sanitizedInput: directSanitizedInput(),
+      ownershipReceipt: ownership(PROJECT_ACTIVATION, repoUrl, fingerprint),
     });
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "repository", repository(repoUrl), "shell");
     operation = await ProjectDerivationStore.recordReceipt(
       pool,
       operation,
       "deploy_intent",
-      { idempotencyKey: `${fingerprint}:deploy` },
+      { effect: "deploy", idempotencyKey: `${fingerprint}:deploy` },
       "graph",
     );
-    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", { appId: "app_once" }, "graph");
+    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", preparedDeploy(), "graph");
     operation = await ProjectDerivationStore.recordReceipt(pool, operation, "bootstrap", { errors: [] }, "activate");
 
     await ownerPool().query(`
@@ -327,32 +372,57 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
         FOR EACH ROW EXECUTE FUNCTION fail_derivation_activation_receipt();
     `);
     await expect(ProjectDerivationStore.activate(pool, operation)).rejects.toThrow(/activation receipt failure/iu);
-    expect(await activationTuple(pool)).toEqual({ lifecycle: "deriving", status: "in_progress" });
+    expect(await activationTuple(pool, ORG_A, PROJECT_ACTIVATION)).toEqual({
+      lifecycle: "deriving",
+      status: "in_progress",
+    });
 
     await ownerPool().query("DROP TRIGGER fail_derivation_activation_receipt ON project_derivations");
     await ownerPool().query("DROP FUNCTION fail_derivation_activation_receipt() ");
     const completed = await ProjectDerivationStore.activate(pool, operation);
     expect(completed.status).toBe("succeeded");
-    expect(await activationTuple(pool)).toEqual({ lifecycle: "active", status: "succeeded" });
+    expect(await activationTuple(pool, ORG_A, PROJECT_ACTIVATION)).toEqual({
+      lifecycle: "active",
+      status: "succeeded",
+    });
   });
 
-  it("rolls an interrupted entity graph back atomically before a clean retry", async () => {
+  it("commits graph rows and the graph receipt as one retry boundary", async () => {
     const pool = runtimePool();
+    const repoUrl = "https://github.com/cat-cave/derivation-graph";
     const baseInput: DeriveInput = { orgId: ORG_A, capture: GRAPH_CAPTURE, actor: ACTOR };
     const lifecycle = GRAPH_CAPTURE.lifecycle;
     if (lifecycle === null) throw new Error("graph lifecycle fixture missing");
     const scaffold = scaffoldSpecsFor(lifecycle, SEED);
+    const fingerprint = projectDerivationFingerprint({
+      kind: "interview",
+      orgId: ORG_A,
+      repoUrl,
+      request: { capture: "graph-receipt-proof" },
+    });
+    const operation = await ProjectDerivationStore.begin(pool, {
+      orgId: ORG_A,
+      projectId: PROJECT_GRAPH,
+      idempotencyFingerprint: fingerprint,
+      sanitizedInput: { kind: "interview", deploy: { providerKind: "deploy.vercel" } },
+      ownershipReceipt: ownership(PROJECT_GRAPH, repoUrl, fingerprint),
+    });
+    await ownerPool().query(`
+      CREATE FUNCTION fail_graph_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.project_id = '${PROJECT_GRAPH}' AND NEW.result_receipt ? 'graph' THEN
+          RAISE EXCEPTION 'injected graph receipt failure';
+        END IF;
+        RETURN NEW;
+      END
+      $$;
+      CREATE TRIGGER fail_graph_receipt BEFORE UPDATE ON project_derivations
+        FOR EACH ROW EXECUTE FUNCTION fail_graph_receipt();
+    `);
     await expect(
-      buildEntityGraph(
+      buildEntityGraphWithReceipt(
         pool,
-        {
-          ...baseInput,
-          designAgent: {
-            async elaborate() {
-              throw new Error("injected final graph phase failure");
-            },
-          },
-        },
+        baseInput,
         GRAPH_CAPTURE,
         "atomic-graph",
         SEED,
@@ -360,13 +430,19 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
         PROJECT_GRAPH,
         ACTOR,
         scaffold,
+        operation,
       ),
-    ).rejects.toThrow(/final graph phase failure/iu);
+    ).rejects.toThrow(/graph receipt failure/iu);
 
     const empty = await graphCounts(ownerPool(), PROJECT_GRAPH);
     expect(empty).toEqual({ personas: 0, milestones: 0, specs: 0, behaviors: 0, designContracts: 0 });
+    expect(
+      (await ProjectDerivationStore.findForProject(pool, ORG_A, PROJECT_GRAPH))?.resultReceipt["graph"],
+    ).toBeUndefined();
 
-    const result = await buildEntityGraph(
+    await ownerPool().query("DROP TRIGGER fail_graph_receipt ON project_derivations");
+    await ownerPool().query("DROP FUNCTION fail_graph_receipt()");
+    const { graph, operation: completed } = await buildEntityGraphWithReceipt(
       pool,
       baseInput,
       GRAPH_CAPTURE,
@@ -376,59 +452,18 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       PROJECT_GRAPH,
       ACTOR,
       scaffold,
+      operation,
     );
     const persisted = await graphCounts(ownerPool(), PROJECT_GRAPH);
     expect(persisted).toEqual({
-      personas: result.personaIds.length,
-      milestones: result.milestoneIds.length,
-      specs: result.specIds.length,
-      behaviors: result.behaviorIds.length,
+      personas: graph.personaIds.length,
+      milestones: graph.milestoneIds.length,
+      specs: graph.specIds.length,
+      behaviors: graph.behaviorIds.length,
       designContracts: 1,
     });
+    expect(completed.resultReceipt["graph"]).toBeDefined();
     expect(persisted.personas).toBeGreaterThan(0);
     expect(persisted.specs).toBeGreaterThan(0);
   });
 });
-
-async function activationTuple(pool: Pool): Promise<{ lifecycle: string; status: string }> {
-  return runWithOrgScope(pool, ORG_A, async (client) => {
-    const result = await client.query<{ lifecycle: string; status: string }>(
-      `SELECT p.lifecycle, d.status
-         FROM projects p
-         JOIN project_derivations d ON d.project_id = p.project_id AND d.org_id = p.org_id
-        WHERE p.org_id = $1 AND p.project_id = $2`,
-      [ORG_A, PROJECT_ACTIVATION],
-    );
-    const row = result.rows[0];
-    if (row === undefined) throw new Error("activation tuple missing");
-    return row;
-  });
-}
-
-async function graphCounts(pool: Pool, projectId: string): Promise<Record<string, number>> {
-  const result = await pool.query<{
-    personas: number;
-    milestones: number;
-    specs: number;
-    behaviors: number;
-    design_contracts: number;
-  }>(
-    `SELECT
-       (SELECT count(*)::int FROM personas WHERE project_id = $1) AS personas,
-       (SELECT count(*)::int FROM milestones WHERE project_id = $1) AS milestones,
-       (SELECT count(*)::int FROM specs WHERE project_id = $1) AS specs,
-       (SELECT count(*)::int FROM behaviors b JOIN personas p ON p.id = b.persona_id WHERE p.project_id = $1)
-         AS behaviors,
-       (SELECT count(*)::int FROM design_contracts WHERE project_id = $1) AS design_contracts`,
-    [projectId],
-  );
-  const row = result.rows[0];
-  if (row === undefined) throw new Error("graph count query returned no row");
-  return {
-    personas: row.personas,
-    milestones: row.milestones,
-    specs: row.specs,
-    behaviors: row.behaviors,
-    designContracts: row.design_contracts,
-  };
-}

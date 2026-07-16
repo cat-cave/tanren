@@ -1,33 +1,11 @@
-// DERIVE TRANSACTIONAL ROLLBACK — task #78. Proves the greenfield derive is
-// ATOMIC across its external-resource creates (the project repo + the
-// provisioned deploy app). When a step LATER in the derive throws, every
-// external resource created so far in the same call is rolled back BEFORE the
-// original error re-raises — so the operator's next retry never collides on
-// an orphan.
-//
-// PR-G (task #77) collapsed the intermediate `tanren-tmpl-<slug>` template
-// seed repo: the composed VFS is pushed DIRECTLY into the project repo as its
-// initial content. So there are now TWO external resources to rollback (the
-// project repo + the deploy app), not three (no separate seed repo).
-//
-// The doctrine:
-//   1. resolveOrCreateGreenfieldRepo succeeds → project repo created → register.
-//   2. Compose+materialize pushes the VFS into the project repo (no separate
-//      compensation — a failure here is covered by the project-repo rollback).
-//   3. prepareDeploy succeeds → deploy app provisioned → register.
-//   4. If ANYTHING after a successful compensation registration throws (deploy
-//      provisioning fails, createProject DB constraint, etc.), the compensation
-//      stack walks LIFO + every resource is deleted before re-raising.
-//
-// The only compensation boundary is now pre-shell repo persistence. Once the
-// deriving shell exists, later phases retain their receipts and resume instead
-// of deleting successful external effects.
+// The durable deriving shell and operation are committed before any provider
+// effect. Later failures retain typed receipts so a retry resumes instead of
+// deleting successful external resources.
 
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import {
   deriveFromCapture,
-  DeriveRollbackError,
   emptyCapture,
   type CaptureLifecycle,
   type InterviewCapture,
@@ -336,7 +314,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     expect(replayProvisioned).toBe(false);
   });
 
-  it("DeriveRollbackError still surfaces a pre-shell repo compensation gap", async () => {
+  it("persists the derivation shell before repository provider I/O", async () => {
     const { pool } = stubPool();
     const originalQuery = pool.query.bind(pool);
     const failedQuery = async (text: string, params: unknown[] = []) => {
@@ -349,9 +327,8 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     (pool as unknown as { connect: () => Promise<{ query: typeof failedQuery; release: () => void }> }).connect =
       async () => ({ query: failedQuery, release() {} });
     const rec = newRecorder();
-    let caught: unknown;
-    try {
-      await deriveFromCapture(
+    await expect(
+      deriveFromCapture(
         {
           pool,
           async prepareDeploy() {
@@ -374,25 +351,12 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
               defaultBranch: "main",
             };
           },
-          deleteRepository: async () => {
-            throw new Error("simulated: delete forbidden — credential lacks administration:write");
-          },
         },
-      );
-    } catch (error) {
-      caught = error;
-    }
-    // The thrown error is a DeriveRollbackError carrying the rollback gap.
-    expect(caught).toBeInstanceOf(DeriveRollbackError);
-    const rb = caught as DeriveRollbackError;
-    // The ORIGINAL failure rides on `cause` — the operator sees both.
-    expect(rb.cause).toBeInstanceOf(Error);
-    expect((rb.cause as Error).message).toMatch(/project shell persistence failed/iu);
-    // The rollback gap names the orphaned PROJECT repo specifically (no
-    // `tanren-tmpl-*` because the intermediate template repo doesn't exist).
-    expect(rb.compensationFailures).toHaveLength(1);
-    expect(rb.compensationFailures[0]?.kind).toBe("github.repo");
-    expect(rb.compensationFailures[0]?.label).toBe("cat-cave/linkly");
+      ),
+    ).rejects.toThrow(/project shell persistence failed/iu);
+    expect(rec.reposCreated).toEqual([]);
+    expect(rec.pushedRepos).toEqual([]);
+    expect(rec.deploysProvisioned).toEqual([]);
   });
 
   it("NO ROLLBACK ON SUCCESS: external resources stay intact when derive lands the project row", async () => {

@@ -3,9 +3,22 @@ import { getOrgScope, notifyDagChanged, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ProjectLifecycle } from "./projects.js";
-
-const DerivationKind = z.enum(["direct_greenfield", "interview"]);
-export type DerivationKind = z.infer<typeof DerivationKind>;
+import {
+  completeDerivationReceipts,
+  decodeDerivationReceipts,
+  DerivationKindSchema,
+  DerivationReceiptValidationError,
+  DerivationOwnershipReceiptSchema,
+  encodeResultReceipt,
+  encodeTemplateReceipt,
+  type CompleteProjectDerivation,
+  type DecodedDerivationReceipts,
+  type DerivationKind,
+  type DerivationOwnershipReceipt,
+  type DerivationReceiptKey,
+  type DerivationReceiptValueByKey,
+  type ExpectedDerivationIdentity,
+} from "./projectDerivationReceipts.js";
 
 const DerivationPhase = z.enum(["shell", "template", "graph", "activate", "compensate"]);
 export type DerivationPhase = z.infer<typeof DerivationPhase>;
@@ -89,6 +102,71 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
+}
+
+function conflictFromReceipt(
+  error: DerivationReceiptValidationError,
+  projectId: string,
+): ProjectDerivationConflictError {
+  return new ProjectDerivationConflictError(projectId, error.code);
+}
+
+function decodeReceipts(
+  operation: ProjectDerivationRow,
+  expected?: ExpectedDerivationIdentity,
+): DecodedDerivationReceipts {
+  try {
+    return decodeDerivationReceipts({
+      orgId: operation.orgId,
+      projectId: operation.projectId,
+      idempotencyFingerprint: operation.idempotencyFingerprint,
+      sanitizedInput: operation.sanitizedInput,
+      ownershipReceipt: operation.ownershipReceipt,
+      templateReceipt: operation.templateReceipt,
+      resultReceipt: operation.resultReceipt,
+      ...(expected === undefined ? {} : { expected }),
+    });
+  } catch (error) {
+    if (error instanceof DerivationReceiptValidationError) throw conflictFromReceipt(error, operation.projectId);
+    throw error;
+  }
+}
+
+function requireComplete(operation: ProjectDerivationRow): CompleteProjectDerivation {
+  const complete = completeDerivationReceipts(decodeReceipts(operation));
+  if (complete === undefined) throw new ProjectDerivationConflictError(operation.projectId, "incomplete_receipts");
+  return complete;
+}
+
+function assertBeginIdentity(
+  operation: ProjectDerivationRow,
+  input: {
+    projectId: string;
+    idempotencyFingerprint: string;
+    sanitizedInput: Record<string, unknown>;
+    ownershipReceipt: DerivationOwnershipReceipt;
+  },
+): void {
+  if (
+    operation.projectId !== input.projectId ||
+    operation.idempotencyFingerprint !== input.idempotencyFingerprint ||
+    canonicalJson(operation.sanitizedInput) !== canonicalJson(input.sanitizedInput) ||
+    canonicalJson(operation.ownershipReceipt) !== canonicalJson(input.ownershipReceipt)
+  ) {
+    throw new ProjectDerivationConflictError(input.projectId, "binding_mismatch");
+  }
+  const kind = DerivationKindSchema.parse(input.sanitizedInput["kind"]);
+  decodeReceipts(operation, {
+    kind,
+    orgId: operation.orgId,
+    projectId: input.projectId,
+    repoUrl: input.ownershipReceipt.repoUrl,
+    idempotencyFingerprint: input.idempotencyFingerprint,
+  });
+}
+
 async function inOrgScope<T>(pool: pg.Pool, orgId: string, work: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const ambient = getOrgScope();
   if (ambient?.orgId === orgId) return work(ambient.client);
@@ -117,17 +195,18 @@ export class ProjectDerivationConflictError extends Error {
 
   constructor(
     readonly projectId: string,
-    readonly reason: "fingerprint_mismatch" | "invalid_lifecycle" | "incomplete_receipts",
+    readonly reason:
+      | "fingerprint_mismatch"
+      | "invalid_lifecycle"
+      | "incomplete_receipts"
+      | "binding_mismatch"
+      | "invalid_receipt",
   ) {
     super(`project derivation ${projectId} cannot resume: ${reason}`);
   }
 }
 
-/**
- * Serialize all retries for a repo/project without holding an RLS transaction or
- * tenant-table connection across provider I/O. The dedicated connection owns only
- * the advisory lock; each receipt mutation remains its own short org-scoped tx.
- */
+/** Serialize retries without holding an RLS transaction across provider I/O. */
 export async function withProjectDerivationLock<T>(
   pool: pg.Pool,
   orgId: string,
@@ -144,7 +223,79 @@ export async function withProjectDerivationLock<T>(
   }
 }
 
+interface BeginDerivationInput {
+  orgId: string;
+  projectId: string;
+  idempotencyFingerprint: string;
+  sanitizedInput: Record<string, unknown>;
+  ownershipReceipt: DerivationOwnershipReceipt;
+}
+
+async function beginOnClientQuery(
+  client: Pick<pg.PoolClient, "query">,
+  input: BeginDerivationInput,
+): Promise<ProjectDerivationRow> {
+  const ownership = DerivationOwnershipReceiptSchema.parse(input.ownershipReceipt);
+  const result = await client.query<RawDerivationRow>(
+    `INSERT INTO project_derivations
+       (org_id, id, project_id, idempotency_fingerprint, phase, status,
+        sanitized_input, ownership_receipt, template_receipt, result_receipt, updated_at)
+     VALUES ($1, $2, $3, $4, 'shell', 'in_progress', $5::jsonb, $6::jsonb, $7::jsonb, '{}'::jsonb, now())
+     ON CONFLICT (org_id, idempotency_fingerprint) DO UPDATE
+       SET updated_at = now()
+     RETURNING ${SELECT_DERIVATION_COLUMNS}`,
+    [
+      input.orgId,
+      `derivation_${randomUUID()}`,
+      input.projectId,
+      input.idempotencyFingerprint,
+      json(input.sanitizedInput),
+      json(ownership),
+      null,
+    ],
+  );
+  const operation = decode(result.rows[0]!);
+  assertBeginIdentity(operation, { ...input, ownershipReceipt: ownership });
+  return operation;
+}
+
+async function recordReceiptOnClientQuery<K extends DerivationReceiptKey>(
+  client: Pick<pg.PoolClient, "query">,
+  operation: ProjectDerivationRow,
+  key: K,
+  receipt: DerivationReceiptValueByKey[K],
+  phase: DerivationPhase,
+): Promise<ProjectDerivationRow> {
+  const ownership = decodeReceipts(operation).ownership;
+  const encoded = encodeResultReceipt(ownership, key, receipt);
+  const result = await client.query<RawDerivationRow>(
+    `UPDATE project_derivations
+        SET result_receipt = jsonb_set(COALESCE(result_receipt, '{}'::jsonb), ARRAY[$3]::text[], $4::jsonb, true),
+            phase = $5,
+            sanitized_error = NULL,
+            status = 'in_progress',
+            updated_at = now()
+      WHERE org_id = $1 AND id = $2 AND status = 'in_progress'
+      RETURNING ${SELECT_DERIVATION_COLUMNS}`,
+    [operation.orgId, operation.id, key, json(encoded), phase],
+  );
+  if (result.rows[0] === undefined) {
+    throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
+  }
+  const updated = decode(result.rows[0]);
+  decodeReceipts(updated);
+  return updated;
+}
+
 export const ProjectDerivationStore = {
+  decode(operation: ProjectDerivationRow, expected?: ExpectedDerivationIdentity): DecodedDerivationReceipts {
+    return decodeReceipts(operation, expected);
+  },
+
+  requireComplete(operation: ProjectDerivationRow): CompleteProjectDerivation {
+    return requireComplete(operation);
+  },
+
   async findForProject(pool: pg.Pool, orgId: string, projectId: string): Promise<ProjectDerivationRow | undefined> {
     return inOrgScope(pool, orgId, async (client) => {
       const result = await client.query<RawDerivationRow>(
@@ -159,71 +310,64 @@ export const ProjectDerivationStore = {
     });
   },
 
-  async begin(
+  async findByFingerprint(
     pool: pg.Pool,
-    input: {
-      orgId: string;
-      projectId: string;
-      idempotencyFingerprint: string;
-      sanitizedInput: Record<string, unknown>;
-      ownershipReceipt: Record<string, unknown>;
-      templateReceipt?: Record<string, unknown>;
-    },
-  ): Promise<ProjectDerivationRow> {
-    return inOrgScope(pool, input.orgId, async (client) => {
+    orgId: string,
+    idempotencyFingerprint: string,
+  ): Promise<ProjectDerivationRow | undefined> {
+    return inOrgScope(pool, orgId, async (client) => {
       const result = await client.query<RawDerivationRow>(
-        `INSERT INTO project_derivations
-           (org_id, id, project_id, idempotency_fingerprint, phase, status,
-            sanitized_input, ownership_receipt, template_receipt, result_receipt, updated_at)
-         VALUES ($1, $2, $3, $4, 'shell', 'in_progress', $5::jsonb, $6::jsonb, $7::jsonb, '{}'::jsonb, now())
-         ON CONFLICT (org_id, idempotency_fingerprint) DO UPDATE
-           SET updated_at = now()
-         RETURNING ${SELECT_DERIVATION_COLUMNS}`,
-        [
-          input.orgId,
-          `derivation_${randomUUID()}`,
-          input.projectId,
-          input.idempotencyFingerprint,
-          json(input.sanitizedInput),
-          json(input.ownershipReceipt),
-          input.templateReceipt === undefined ? null : json(input.templateReceipt),
-        ],
+        `SELECT ${SELECT_DERIVATION_COLUMNS}
+           FROM project_derivations
+          WHERE org_id = $1 AND idempotency_fingerprint = $2`,
+        [orgId, idempotencyFingerprint],
       );
-      return decode(result.rows[0]!);
+      return result.rows[0] === undefined ? undefined : decode(result.rows[0]);
     });
+  },
+
+  async begin(pool: pg.Pool, input: BeginDerivationInput): Promise<ProjectDerivationRow> {
+    return inOrgScope(pool, input.orgId, (client) => beginOnClientQuery(client, input));
+  },
+
+  async beginOnClient(
+    client: Pick<pg.PoolClient, "query">,
+    input: BeginDerivationInput,
+  ): Promise<ProjectDerivationRow> {
+    return beginOnClientQuery(client, input);
   },
 
   async recordTemplate(
     pool: pg.Pool,
     operation: ProjectDerivationRow,
-    receipt: unknown,
+    receipt: NonNullable<DecodedDerivationReceipts["template"]>,
   ): Promise<ProjectDerivationRow> {
-    return updateOperation(pool, operation, "template", "template_receipt = $3::jsonb", [json(receipt)]);
+    const ownership = decodeReceipts(operation).ownership;
+    return updateOperation(pool, operation, "template", "template_receipt = $3::jsonb", [
+      json(encodeTemplateReceipt(ownership, receipt)),
+    ]);
   },
 
-  async recordReceipt(
+  async recordReceipt<K extends DerivationReceiptKey>(
     pool: pg.Pool,
     operation: ProjectDerivationRow,
-    key: "template_intent" | "deploy_intent" | "deploy" | "graph" | "bootstrap",
-    receipt: unknown,
+    key: K,
+    receipt: DerivationReceiptValueByKey[K],
     phase: DerivationPhase,
   ): Promise<ProjectDerivationRow> {
-    return inOrgScope(pool, operation.orgId, async (client) => {
-      const result = await client.query<RawDerivationRow>(
-        `UPDATE project_derivations
-            SET result_receipt = jsonb_set(COALESCE(result_receipt, '{}'::jsonb), ARRAY[$3]::text[], $4::jsonb, true),
-                phase = $5,
-                sanitized_error = NULL,
-                status = 'in_progress',
-                updated_at = now()
-          WHERE org_id = $1 AND id = $2 AND status = 'in_progress'
-          RETURNING ${SELECT_DERIVATION_COLUMNS}`,
-        [operation.orgId, operation.id, key, json(receipt), phase],
-      );
-      if (result.rows[0] === undefined)
-        throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
-      return decode(result.rows[0]);
-    });
+    return inOrgScope(pool, operation.orgId, (client) =>
+      recordReceiptOnClientQuery(client, operation, key, receipt, phase),
+    );
+  },
+
+  async recordReceiptOnClient<K extends DerivationReceiptKey>(
+    client: Pick<pg.PoolClient, "query">,
+    operation: ProjectDerivationRow,
+    key: K,
+    receipt: DerivationReceiptValueByKey[K],
+    phase: DerivationPhase,
+  ): Promise<ProjectDerivationRow> {
+    return recordReceiptOnClientQuery(client, operation, key, receipt, phase);
   },
 
   async recordFailure(pool: pg.Pool, operation: ProjectDerivationRow, error: unknown): Promise<void> {
@@ -253,27 +397,31 @@ export const ProjectDerivationStore = {
       );
       const current = locked.rows[0] === undefined ? undefined : decode(locked.rows[0]);
       if (current === undefined) throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
+      if (
+        current.projectId !== operation.projectId ||
+        current.idempotencyFingerprint !== operation.idempotencyFingerprint
+      ) {
+        throw new ProjectDerivationConflictError(operation.projectId, "binding_mismatch");
+      }
+      const complete = requireComplete(current);
+      const project = await client.query<{ lifecycle: ProjectLifecycle; repo_url: string }>(
+        `SELECT lifecycle, repo_url FROM projects
+          WHERE org_id = $1 AND project_id = $2
+          FOR UPDATE`,
+        [current.orgId, current.projectId],
+      );
+      const projectRow = project.rows[0];
+      if (
+        projectRow === undefined ||
+        projectRow.repo_url.replace(/\.git$/u, "") !== complete.ownership.repoUrl.replace(/\.git$/u, "")
+      ) {
+        throw new ProjectDerivationConflictError(current.projectId, "binding_mismatch");
+      }
       if (current.status === "succeeded") {
-        const project = await client.query<{ lifecycle: ProjectLifecycle }>(
-          "SELECT lifecycle FROM projects WHERE org_id = $1 AND project_id = $2",
-          [operation.orgId, operation.projectId],
-        );
-        if (project.rows[0]?.lifecycle !== "active") {
-          throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
+        if (projectRow.lifecycle !== "active") {
+          throw new ProjectDerivationConflictError(current.projectId, "invalid_lifecycle");
         }
         return current;
-      }
-
-      const kind = DerivationKind.safeParse(current.sanitizedInput["kind"]);
-      const required =
-        kind.success && kind.data === "interview"
-          ? ["template_intent", "deploy_intent", "deploy", "graph", "bootstrap"]
-          : ["deploy_intent", "deploy", "bootstrap"];
-      if (!kind.success || required.some((key) => current.resultReceipt[key] === undefined)) {
-        throw new ProjectDerivationConflictError(operation.projectId, "incomplete_receipts");
-      }
-      if (kind.data === "interview" && current.templateReceipt === null) {
-        throw new ProjectDerivationConflictError(operation.projectId, "incomplete_receipts");
       }
 
       const activated = await client.query<{ project_id: string }>(
@@ -281,15 +429,15 @@ export const ProjectDerivationStore = {
             SET lifecycle = 'active'
           WHERE org_id = $1 AND project_id = $2 AND lifecycle = 'deriving'
           RETURNING project_id`,
-        [operation.orgId, operation.projectId],
+        [current.orgId, current.projectId],
       );
       if ((activated.rowCount ?? 0) !== 1) {
-        const project = await client.query<{ lifecycle: ProjectLifecycle }>(
+        const reread = await client.query<{ lifecycle: ProjectLifecycle }>(
           "SELECT lifecycle FROM projects WHERE org_id = $1 AND project_id = $2",
-          [operation.orgId, operation.projectId],
+          [current.orgId, current.projectId],
         );
-        if (project.rows[0]?.lifecycle !== "active") {
-          throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
+        if (reread.rows[0]?.lifecycle !== "active") {
+          throw new ProjectDerivationConflictError(current.projectId, "invalid_lifecycle");
         }
       }
       const completed = await client.query<RawDerivationRow>(
@@ -298,12 +446,14 @@ export const ProjectDerivationStore = {
                 completed_at = COALESCE(completed_at, now()), updated_at = now()
           WHERE org_id = $1 AND id = $2 AND status = 'in_progress'
           RETURNING ${SELECT_DERIVATION_COLUMNS}`,
-        [operation.orgId, operation.id],
+        [current.orgId, current.id],
       );
       const row = completed.rows[0];
-      if (row === undefined) throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
-      await notifyDagChanged(client, operation.projectId);
-      return decode(row);
+      if (row === undefined) throw new ProjectDerivationConflictError(current.projectId, "invalid_lifecycle");
+      await notifyDagChanged(client, current.projectId);
+      const decoded = decode(row);
+      requireComplete(decoded);
+      return decoded;
     });
   },
 } as const;
@@ -325,6 +475,23 @@ async function updateOperation(
     );
     if (result.rows[0] === undefined)
       throw new ProjectDerivationConflictError(operation.projectId, "invalid_lifecycle");
-    return decode(result.rows[0]);
+    const updated = decode(result.rows[0]);
+    decodeReceipts(updated);
+    return updated;
   });
 }
+
+export {
+  buildDerivationOwnership,
+  explicitRepositoryMarker,
+  repositoryOwnershipMarker,
+} from "./projectDerivationReceipts.js";
+export type {
+  CompleteDirectDerivation,
+  CompleteInterviewDerivation,
+  CompleteProjectDerivation,
+  DecodedDerivationReceipts,
+  DerivationKind,
+  DerivationOwnershipReceipt,
+  ExpectedDerivationIdentity,
+} from "./projectDerivationReceipts.js";

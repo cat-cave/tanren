@@ -18,15 +18,10 @@ import type { ScaffoldSpecDef } from "./deriveScaffoldSpecs.js";
 import type { SeededTemplate } from "../../templates/index.js";
 import type { CreatedRepository } from "../../contracts/codeHostTypes.js";
 import type { InterviewCapture } from "./types.js";
+import { ProjectDerivationStore, type ProjectDerivationRow } from "../../repositories/projectDerivations.js";
 
-/**
- * Build out the entity graph (personas + milestones + scaffold specs + interface
- * milestones + design contract) for the just-created project row, and assemble
- * the `DeriveResult`. The caller (`deriveProductGraph`) is responsible for the
- * durable shell and phase receipts. This function provides the atomic graph
- * boundary that makes an interrupted graph phase safe to retry.
- */
-export async function buildEntityGraph(
+/** Graph rows and their durable receipt commit or roll back as one org-scoped unit. */
+export async function buildEntityGraphWithReceipt(
   pool: pg.Pool,
   input: DeriveInput,
   capture: InterviewCapture,
@@ -36,13 +31,26 @@ export async function buildEntityGraph(
   projectId: string,
   actor: ActorContext,
   scaffoldSpecs: ScaffoldSpecDef[],
-): Promise<DeriveResult> {
-  return runWithOrgScope(pool, input.orgId, (client) =>
-    buildEntityGraphOnClient(client, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs),
-  );
+  operation: ProjectDerivationRow,
+): Promise<{ graph: DeriveResult; operation: ProjectDerivationRow }> {
+  return runWithOrgScope(pool, input.orgId, async (client) => {
+    const graph = await buildEntityGraphOnClient(
+      client,
+      input,
+      capture,
+      slug,
+      seed,
+      repository,
+      projectId,
+      actor,
+      scaffoldSpecs,
+    );
+    const updated = await ProjectDerivationStore.recordReceiptOnClient(client, operation, "graph", graph, "graph");
+    return { graph, operation: updated };
+  });
 }
 
-async function buildEntityGraphOnClient(
+export async function buildEntityGraphOnClient(
   pool: ProjectSpecQueryClient,
   input: DeriveInput,
   capture: InterviewCapture,
