@@ -56,7 +56,8 @@ Owned proof paths: `integrationLifecycleModel.test.ts`,
 `demoOnDeploy.test.ts`, `postMergeWatcher.test.ts`, `reviewMergeContext.test.ts`,
 `conformance/integrationConnections.conformance.test.ts`, plus new
 `runLineageTenantAuthority.rls.integration.test.ts`,
-`deployOnMergeCrossTenantSeam.test.ts`, and `issueClaimStore.test.ts` if split.
+`deployOnMergeCrossTenantSeam.test.ts`, `helpers/deployOnMergeHarness.ts`, and
+`issueClaimStore.test.ts` if split.
 
 Required negatives use real `tanren_app` PostgreSQL constraints/RLS and a
 production post-merge seam. Removing either composite FK/equality defense must
