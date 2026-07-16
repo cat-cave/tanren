@@ -41,6 +41,8 @@ Leased redrive paths (all already present in the exhaustive final-fold manifest)
 - `services/orchestrator/src/routes/integrations/authorityWrites.ts`
 - `services/orchestrator/tests/integrationLifecycleModel.test.ts`
 - `services/orchestrator/tests/integrationRoutes.contract.test.ts`
+- `services/dashboard/src/api/integrationsClient.ts`
+- `services/dashboard/src/components/integrations/IntegrationsBody.tsx`
 - `services/dashboard/src/routes/integrations/index.tsx`
 - `services/dashboard/tests/integrations.render.test.ts`
 - this card
