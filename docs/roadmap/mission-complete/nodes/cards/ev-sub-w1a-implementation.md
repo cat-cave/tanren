@@ -38,7 +38,8 @@ apex behavior. It cannot earn consumer-node credit.
 | `services/orchestrator/src/engine/events/schemas/integrations.ts`                                 | Re-export `w1aEventRegistry` only (one line)                                           |
 | `services/orchestrator/src/engine/events/registry.ts`                                             | Import/spread `w1aEventRegistry` only (≤498 lines)                                     |
 | `services/orchestrator/src/engine/events/sensitivityRules.eventVocabularyW1aIntegrationAuthor.ts` | Complete frozen W1-A sensitivity path sets (16 public leaves)                          |
-| `services/orchestrator/src/engine/events/sensitivityRules.ts`                                     | Import/spread W1-A rule set                                                            |
+| `services/orchestrator/src/engine/events/sensitivityRules.eventVocabulary.ts`                     | Wave-neutral sensitivity fan-in (W0 + W1-A + Wn); import-slot only, no leaf ownership  |
+| `services/orchestrator/src/engine/events/sensitivityRules.ts`                                     | Sole table; spread benchmark + vocabulary waves via the aggregator                     |
 | `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`                          | Four explicit frozen severity entries                                                  |
 | `db/src/eventTypesSeed.ts`                                                                        | Generated mirror from `codegen:events`; never hand-edited                              |
 | `contracts/json/events/integration_author_started.json`                                           | Generated JSON contract                                                                |
