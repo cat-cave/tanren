@@ -310,6 +310,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/routes/inbox/index.ts`
 - `services/orchestrator/src/routes/inbox/sourceRecovery.ts`
 - `services/orchestrator/src/routes/inbox/webhookProvision.ts`
+- `services/orchestrator/src/routes/orgs/github.ts`
 - `services/orchestrator/src/routes/orgs/index.ts`
 - `services/orchestrator/tests/candidateInbox.test.ts`
 - `services/orchestrator/tests/candidateInboxJira.test.ts`
@@ -319,6 +320,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/tests/conformance/fakes/scriptedSentryTransport.ts`
 - `services/orchestrator/tests/conformance/integrationProvisionerConformance.ts`
 - `services/orchestrator/tests/fakes/fakeSentryProvisioner.ts`
+- `services/orchestrator/tests/githubConnectRoutes.test.ts`
 - `services/orchestrator/tests/githubTokenResolver.test.ts`
 - `services/orchestrator/tests/helpers/sentryIntakeAuthority.ts`
 - `services/orchestrator/tests/inboxConnectorWire.test.ts`
