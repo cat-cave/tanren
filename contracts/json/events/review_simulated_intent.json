@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "body": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "event": {
+      "enum": [
+        "APPROVE",
+        "REQUEST_CHANGES"
+      ],
+      "type": "string"
+    },
+    "headSha": {
+      "pattern": "^[0-9a-fA-F]{40}$",
+      "type": "string"
+    },
+    "marker": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "reviewerLogin": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "approved",
+        "changes_requested"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "headSha",
+    "state",
+    "event",
+    "body",
+    "message",
+    "reviewerLogin",
+    "marker"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.review.simulated_intent"
+}

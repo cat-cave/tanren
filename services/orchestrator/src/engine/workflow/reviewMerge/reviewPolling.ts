@@ -13,6 +13,7 @@
 // terminal review.* event. Publication failure/skip/COMMENT/head-mismatch fails
 // closed (no review.approved, no land authorization).
 
+import type pg from "pg";
 import type { ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
@@ -22,11 +23,7 @@ import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { parsePullRequestRef } from "../../providers/githubRepoRef.js";
-import {
-  type ReviewVerdict,
-  type SubmitReviewEvent,
-  type SubmittedReviewReceipt,
-} from "../../providers/githubReviewMerge.js";
+import { type ReviewVerdict } from "../../providers/githubReviewMerge.js";
 import {
   contextOptionsFor,
   loadReviewMergeRunContext,
@@ -36,17 +33,18 @@ import {
 import { finalizePauseForReviewAtomic } from "./reviewPauseSeam.js";
 import { buildGitHubReviewProbe, type ReviewProbe } from "./reviewProbeGithub.js";
 import { markReviewTaskDoneWithEvent } from "./reviewTaskTerminal.js";
+import { SimulatedReviewPublicationError, type ForgeReviewPublication } from "./simulatedReviewPublication.js";
 import {
-  reviewBodyFor,
-  reviewEventFor,
-  runSimulatedReviewer,
-  type SimulatedReviewContext,
-} from "./simulatedReviewer.js";
+  InMemorySimulatedReviewIntentRepository,
+  PgSimulatedReviewIntentRepository,
+  type SimulatedReviewIntentRepository,
+} from "./simulatedReviewIntent.js";
 import {
-  assertStrictForgeReceipt,
-  SimulatedReviewPublicationError,
-  type ForgeReviewPublication,
-} from "./simulatedReviewPublication.js";
+  InMemorySimulatedReviewPublishFence,
+  PgAdvisorySimulatedReviewPublishFence,
+  type SimulatedReviewPublishFence,
+} from "./simulatedReviewPublishFence.js";
+import { runSimulatedReviewStage, type SimulatedReviewSpec } from "./simulatedReviewStage.js";
 
 export type { ReviewProbe };
 
@@ -96,14 +94,21 @@ export interface PollReviewForRunInput {
    */
   simulatedReviewer?: () => AnswererAdapter<ReviewAnswer>;
   simulatedReviewContext?: SimulatedReviewSpec;
+  /**
+   * Durable intent fence (gv-2). Production defaults to the eventStore-backed
+   * repository; tests inject an in-memory first-wins store.
+   */
+  intentRepository?: SimulatedReviewIntentRepository;
+  /**
+   * Cross-process list→POST single-flight (gv-2). Production defaults to a
+   * PostgreSQL session advisory lock; tests inject an in-memory serializing fence.
+   */
+  publishFence?: SimulatedReviewPublishFence;
+  /** Test override for intended reviewer login when the probe omits resolveReviewerLogin. */
+  simulatedReviewerLogin?: string;
 }
 
-/** Spec inputs the simulated reviewer judges the PR diff against. */
-export interface SimulatedReviewSpec {
-  specTitle: string;
-  specDescription: string;
-  acceptanceCriteria: ReadonlyArray<string>;
-}
+export type { SimulatedReviewSpec };
 
 /**
  * The result verdict of a poll: the three GitHub-derived ReviewVerdict values
@@ -206,11 +211,11 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     return autoResult;
   }
 
-  // Simulated tier: Answerer verdict + STRICT exact-head forge APPROVE /
+  // Simulated tier: durable intent fence + STRICT exact-head forge APPROVE /
   // REQUEST_CHANGES publication (distinct reviewer). Fail closed on any
   // publication hole — never authorize land from the internal verdict alone.
   if (context.reviewPolicy === "simulated") {
-    const result = await runSimulatedReview(input, context, probe, taskId, pr.pullNumber);
+    const result = await runSimulatedReviewPath(input, context, probe, eventStore, taskId, pr);
     await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
     return result;
   }
@@ -312,19 +317,13 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
   return result;
 }
 
-/**
- * Drive the simulated-reviewer verdict: fetch the PR diff + exact head, run the
- * reviewer Answerer, post STRICT APPROVE/REQUEST_CHANGES with a distinct
- * reviewer identity on that head, validate the forge receipt, and only then
- * return a terminal result. Any publication hole throws (fail closed) — the
- * caller never finalizes review.approved from the internal verdict alone.
- */
-async function runSimulatedReview(
+async function runSimulatedReviewPath(
   input: PollReviewForRunInput,
   context: ReviewMergeRunContext,
   probe: ReviewProbe,
+  eventStore: EventStore,
   taskId: string,
-  pullNumber: number,
+  pr: { repo: { owner: string; name: string }; pullNumber: number },
 ): Promise<PollReviewForRunResult> {
   const resolveReviewer = input.simulatedReviewer;
   const spec = input.simulatedReviewContext;
@@ -333,57 +332,64 @@ async function runSimulatedReview(
       "reviewPolicy 'simulated' requires both simulatedReviewer (the reviewer Answerer factory) and simulatedReviewContext",
     );
   }
-  if (probe.fetchDiff === undefined || probe.fetchHeadSha === undefined || probe.submitReview === undefined) {
-    throw new SimulatedReviewPublicationError(
-      "reviewPolicy 'simulated' requires a review probe that can fetch the PR diff, exact head sha, and submit a strict review",
-    );
-  }
-  const reviewer = resolveReviewer();
-  const [prDiff, headSha] = await Promise.all([probe.fetchDiff(), probe.fetchHeadSha()]);
-  if (headSha === "" || !/^[0-9a-f]{40}$/iu.test(headSha)) {
-    throw new SimulatedReviewPublicationError(
-      `simulated review requires an exact 40-hex head sha (got ${headSha === "" ? "empty" : headSha})`,
-    );
-  }
-  const reviewContext: SimulatedReviewContext = {
-    specTitle: spec.specTitle,
-    specDescription: spec.specDescription,
-    acceptanceCriteria: spec.acceptanceCriteria,
-    prDiff,
-  };
-  const { verdict } = await runSimulatedReviewer(reviewer, {
-    context: reviewContext,
-  });
-  const event = reviewEventFor(verdict);
-  if (event === ("COMMENT" as SubmitReviewEvent)) {
-    // Defensive: reviewEventFor never returns COMMENT; reject if a shim reappears.
-    throw new SimulatedReviewPublicationError(
-      "simulated review refuses COMMENT cosplay — only APPROVE/REQUEST_CHANGES are land-authoritative",
-    );
-  }
-  let receipt: SubmittedReviewReceipt;
-  try {
-    receipt = await probe.submitReview(event, reviewBodyFor(verdict), headSha);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new SimulatedReviewPublicationError(`simulated review forge publication failed: ${message}`);
-  }
-  const expectedVerdict = verdict.verdict === "approve" ? "approved" : "changes_requested";
-  const forgePublication = assertStrictForgeReceipt({
-    receipt,
-    expectedVerdict,
-    expectedHeadSha: headSha,
+  const intentRepository = input.intentRepository ?? defaultIntentRepository(input.pool, eventStore);
+  const publishFence = input.publishFence ?? defaultPublishFence(input.pool);
+  const stage = await runSimulatedReviewStage({
+    context,
+    probe,
+    taskId,
+    pullNumber: pr.pullNumber,
+    resolveReviewer,
+    spec,
+    intentRepository,
+    publishFence,
+    repo: pr.repo,
+    ...(input.simulatedReviewerLogin !== undefined && {
+      reviewerLoginOverride: input.simulatedReviewerLogin,
+    }),
   });
   return {
-    runId: context.runId,
-    taskId,
-    verdict: expectedVerdict,
-    prUrl: context.prUrl,
-    prNumber: pullNumber,
-    reviewer: forgePublication.reviewerLogin ?? "tanren-simulated-reviewer",
-    feedback: verdict.reasoning,
-    forgePublication,
+    runId: stage.runId,
+    taskId: stage.taskId,
+    verdict: stage.verdict,
+    prUrl: stage.prUrl,
+    prNumber: stage.prNumber,
+    reviewer: stage.reviewer,
+    feedback: stage.feedback,
+    forgePublication: stage.forgePublication,
   };
+}
+
+function defaultIntentRepository(pool: RunStateClient, eventStore: EventStore): SimulatedReviewIntentRepository {
+  // Prefer the production eventStore-backed path when we have a real Pg store.
+  if (eventStore instanceof PgEventStore) {
+    return new PgSimulatedReviewIntentRepository(pool, eventStore as never);
+  }
+  // Test / non-Pg path: in-memory first-wins (still mirrors into the eventStore
+  // timeline when append is available so intent never looks like a terminal review).
+  return new InMemorySimulatedReviewIntentRepository({
+    append: async (entry) => {
+      await eventStore.append({
+        runId: entry.runId,
+        orgId: entry.orgId,
+        ...(entry.projectId !== undefined && { projectId: entry.projectId }),
+        ...(entry.specId !== undefined && { specId: entry.specId }),
+        ...(entry.taskId !== undefined && { taskId: entry.taskId }),
+        eventType: entry.eventType,
+        payload: entry.payload,
+      });
+    },
+  });
+}
+
+function defaultPublishFence(pool: RunStateClient): SimulatedReviewPublishFence {
+  const connectable = pool as RunStateClient & { connect?: () => Promise<unknown> };
+  if (typeof connectable.connect === "function") {
+    return new PgAdvisorySimulatedReviewPublishFence(pool as unknown as { connect: () => Promise<pg.PoolClient> });
+  }
+  // Unit-test pools lack connect(); an injected fence is preferred. Fall back
+  // to in-process serialization so single-worker tests still fence list→POST.
+  return new InMemorySimulatedReviewPublishFence();
 }
 
 async function finalizeReviewTask(
