@@ -34,8 +34,6 @@ import {
   ingestSource,
   SourceKind,
   type InboxEngineDeps,
-  type JiraHttpClient,
-  type LinearHttpClient,
   type SentryHttpClient,
   type SourceConnector,
   type TriageAnswerer,
@@ -52,15 +50,9 @@ export interface InboxRoutesOptions {
   pool: pg.Pool;
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
-  // Injectable Sentry transport (defaults to a fetch-based client). The Sentry
-  // connector reuses `secrets` for its auth token (config `tokenRef`).
+  // Injectable Sentry transport (defaults to a fetch-based client). Its
+  // credential is resolved through exact integration authority per fetch.
   sentryHttp?: SentryHttpClient;
-  // Injectable Linear transport (defaults to a fetch-based client). The Linear
-  // connector reuses `secrets` for its auth token (config `tokenRef`).
-  linearHttp?: LinearHttpClient;
-  // Injectable Jira transport (defaults to a fetch-based client). The Jira
-  // connector reuses `secrets` for its API token (config `tokenRef`).
-  jiraHttp?: JiraHttpClient;
   // The triage answerer factory, called per-ingest with the source's org/project
   // so the answerer resolves THAT project's `forge` routing. Production passes
   // `buildForgeTriageAnswererFactory` (a real provider answerer); tests pass a
@@ -126,10 +118,9 @@ const ReportItemBody = z
 
 export function createInboxRoutes(options: InboxRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
-  // The `issues` slot dispatches by `config.provider` (default `github`, or
-  // `linear`/`jira`); `errors` is Sentry — the SAME default map the P1d poller
-  // builds (shared `buildInboxConnectorMap`). GitHub sources carry no `provider`
-  // and keep working. Tests may override via `options.connectors`.
+  // `issues` is GitHub and `errors` is Sentry — the same authority-aware map
+  // the intake poller builds. Unsupported provider configs fail strict parsing;
+  // there is no bare-secret-ref provider fallback.
   const connectors =
     options.connectors ??
     buildInboxConnectorMap({
@@ -137,8 +128,6 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
       githubHttp: options.githubHttp,
       sentryAuthority: buildPgSentryIntakeAuthority(options.pool),
       ...(options.sentryHttp === undefined ? {} : { sentryHttp: options.sentryHttp }),
-      ...(options.linearHttp === undefined ? {} : { linearHttp: options.linearHttp }),
-      ...(options.jiraHttp === undefined ? {} : { jiraHttp: options.jiraHttp }),
     });
   // The shared deps for the accept + resolution transitions — none of which
   // consult a triage answerer (they commit / move an already-triaged candidate).

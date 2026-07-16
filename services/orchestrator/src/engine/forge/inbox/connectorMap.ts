@@ -1,4 +1,4 @@
-// The default inbox connector map (GitHub/Linear/Jira issues + Sentry errors),
+// The default inbox connector map (GitHub issues + Sentry errors),
 // extracted so BOTH the inbox HTTP route (manual ingest) and the P1d intake
 // poller construct the SAME set of source connectors from one builder — the
 // poll path and the click path read sources identically.
@@ -9,15 +9,12 @@ import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { createCiInsightsConnector } from "./ciInsightsConnector.js";
 import { createGitHubIssuesConnector } from "./githubConnector.js";
-import { createIssuesConnector } from "./issuesConnector.js";
 import {
   createSentryConnector,
   FetchSentryHttpClient,
   type SentryHttpClient,
   type SentryIntakeAuthority,
 } from "./sentryConnector.js";
-import { createLinearConnector, FetchLinearHttpClient, type LinearHttpClient } from "./linearConnector.js";
-import { createJiraConnector, FetchJiraHttpClient, type JiraHttpClient } from "./jiraConnector.js";
 import type { SourceConnector } from "./types.js";
 
 export interface BuildConnectorMapDeps {
@@ -25,8 +22,6 @@ export interface BuildConnectorMapDeps {
   githubHttp: GitHubHttpClient;
   sentryHttp?: SentryHttpClient;
   sentryAuthority?: SentryIntakeAuthority;
-  linearHttp?: LinearHttpClient;
-  jiraHttp?: JiraHttpClient;
   // Intake credential resolution (no-silent-fallbacks fix): the org's GitHub App
   // installation + the shared minter, threaded into the GitHub issues connector so
   // the connector mints an INSTALLATION token. The intake poller builds this map
@@ -48,19 +43,12 @@ export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string,
   return new Map<string, SourceConnector>([
     [
       "issues",
-      createIssuesConnector({
-        github: createGitHubIssuesConnector({
-          secrets: deps.secrets,
-          githubHttp: deps.githubHttp,
-          ...(deps.installation === undefined ? {} : { installation: deps.installation }),
-          ...(deps.minter === undefined ? {} : { minter: deps.minter }),
-          ...(deps.defaultGithubStaticRef === undefined ? {} : { defaultStaticRef: deps.defaultGithubStaticRef }),
-        }),
-        linear: createLinearConnector({
-          secrets: deps.secrets,
-          linearHttp: deps.linearHttp ?? new FetchLinearHttpClient(),
-        }),
-        jira: createJiraConnector({ secrets: deps.secrets, jiraHttp: deps.jiraHttp ?? new FetchJiraHttpClient() }),
+      createGitHubIssuesConnector({
+        secrets: deps.secrets,
+        githubHttp: deps.githubHttp,
+        ...(deps.installation === undefined ? {} : { installation: deps.installation }),
+        ...(deps.minter === undefined ? {} : { minter: deps.minter }),
+        ...(deps.defaultGithubStaticRef === undefined ? {} : { defaultStaticRef: deps.defaultGithubStaticRef }),
       }),
     ],
     [

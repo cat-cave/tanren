@@ -1,6 +1,6 @@
 // Intake source-connector fetch errors (no-silent-fallbacks doctrine).
 //
-// A source connector (`github`/`linear`/`jira`/`sentry`) pulls open issues over
+// A source connector (`github`/`sentry`) pulls open issues over
 // HTTP. The binding doctrine: a credential/auth or transport/HTTP failure is a
 // LOUD hard failure, NEVER a quiet degrade to "no issues" (an empty list). Only a
 // genuine 200-with-an-empty-list is an empty result.
@@ -19,7 +19,7 @@
 //     transient), but the connector never swallows it as an empty list.
 
 /** The connectors that pull from an external issue/error source. */
-export type IntakeSourceProvider = "github" | "linear" | "jira" | "sentry";
+export type IntakeSourceProvider = "github" | "sentry";
 
 /**
  * A 401/403 from an intake source: the credential is missing, expired, or denied.
