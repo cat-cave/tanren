@@ -25,7 +25,7 @@ function ev(eventType: string, payload: unknown = {}): RunEventRow {
 
 describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
   it("renders every gv-2 publication state as an explicit data-state (published is receipt-backed)", async () => {
-    const states = ["intent_pending", "publishing", "stale", "failed", "non_simulated"] as const;
+    const states = ["publishing", "stale", "failed", "non_simulated"] as const;
     for (const status of states) {
       const app = new Hono();
       app.get("/", (c) => c.html(ForgePublicationPanel({ phase: "approved", status, publication: undefined })));

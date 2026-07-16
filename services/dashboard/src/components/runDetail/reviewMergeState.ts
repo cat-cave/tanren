@@ -44,7 +44,7 @@ export interface ReviewMergeState {
    * complete = the full valid receipt tuple (published/success).
    */
   forgePublication?: ForgeReviewPublicationView;
-  publicationStatus: "intent_pending" | "publishing" | "published" | "stale" | "failed" | "non_simulated";
+  publicationStatus: "publishing" | "published" | "stale" | "failed" | "non_simulated";
 }
 
 /** Durable forge receipt fields from review.approved / review.changes_requested. */

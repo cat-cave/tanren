@@ -37,7 +37,7 @@ const context: ReviewMergeRunContext = {
   reviewPolicy: "simulated",
   tanrenLogins: ["tanren[bot]"],
   platformLogins: [],
-  staticCredentialRef: "credential/github/writer",
+  staticCredentialRef: "credential/github/org/org_gv2/writer",
 };
 
 function reviewer(seen: { calls: number }): AnswererAdapter<ReviewAnswer> {
@@ -96,7 +96,7 @@ async function drive(testProbe: ReviewProbe, seen: { calls: number }) {
 describe("GV2-STRICT-FORGE-EXACT-HEAD", () => {
   it("production snapshot performs one PR metadata read, then diffs immutable base/head SHAs", async () => {
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/writer", token: "ghp_writer" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_gv2/writer", token: "ghp_writer" });
     const requests: GitHubHttpRequest[] = [];
     const http: GitHubHttpClient = {
       request: async (request) => {
@@ -136,8 +136,8 @@ describe("GV2-STRICT-FORGE-EXACT-HEAD", () => {
 
   it("production re-lists under the fence, then revalidates head immediately before zero-POST", async () => {
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/writer", token: "ghp_writer" });
-    await storeGithubToken(secrets, { ref: "credential/github/reviewer", token: "ghp_reviewer" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_gv2/writer", token: "ghp_writer" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_gv2/reviewer", token: "ghp_reviewer" });
     const requests: GitHubHttpRequest[] = [];
     const http: GitHubHttpClient = {
       request: async (request) => {
@@ -162,7 +162,7 @@ describe("GV2-STRICT-FORGE-EXACT-HEAD", () => {
     const productionProbe = await buildGitHubReviewProbe({
       secrets,
       githubHttp: http,
-      reviewerGithubCredentialRef: "credential/github/reviewer",
+      reviewerGithubCredentialRef: "credential/github/org/org_gv2/reviewer",
       context,
       repo: { owner: "o", name: "r" },
       pullNumber: 1,

@@ -74,15 +74,13 @@ export function ForgePublicationPanel(props: {
   const pub = props.publication;
   if (props.status !== "published") {
     const detail =
-      props.status === "intent_pending"
-        ? "Review requested; no durable simulated-review intent has been recorded yet."
-        : props.status === "publishing"
-          ? "Durable intent recorded; waiting for an exact-head provider receipt."
-          : props.status === "stale"
-            ? "The forge receipt is for a different head than the current intent or gate. Re-review is required."
-            : props.status === "failed"
-              ? "Publication failed or produced an incomplete/mismatched receipt. Land remains blocked."
-              : "No simulated-publication intent or provider receipt is present on this timeline.";
+      props.status === "publishing"
+        ? "Durable intent recorded; waiting for an exact-head provider receipt."
+        : props.status === "stale"
+          ? "The forge receipt is for a different head than the current intent or gate. Re-review is required."
+          : props.status === "failed"
+            ? "Publication failed or produced an incomplete/mismatched receipt. Land remains blocked."
+            : "No simulated-publication intent or provider receipt is present on this timeline.";
     const danger = props.status === "stale" || props.status === "failed";
     return (
       <div class="forge-turn" data-review="forge-publication" data-state={props.status}>

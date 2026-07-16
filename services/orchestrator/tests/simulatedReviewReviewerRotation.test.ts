@@ -33,8 +33,8 @@ import { fakeMergeWriter, ReviewMergePool } from "./reviewMerge.fixtures.js";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
-const WRITER_REF = "credential/github/writer";
-const REVIEWER_REF = "credential/github/reviewer";
+const WRITER_REF = "credential/github/org/org_rotation/writer";
+const REVIEWER_REF = "credential/github/org/org_rotation/reviewer";
 const WRITER_TOKEN = "ghp_writer";
 const REVIEWER_A_TOKEN = "ghp_reviewer_a";
 const REVIEWER_B_TOKEN = "ghp_reviewer_b";

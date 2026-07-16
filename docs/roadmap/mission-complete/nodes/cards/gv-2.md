@@ -144,15 +144,25 @@ publication flow. Neither shared intersection is an exclusive GV-2 claim.
 ### HTTP / UI
 
 - No new mutation endpoint. Run-detail event GET carries receipt through real
-  redaction. UI multi-state: intent-pending / publishing / published /
-  stale-head / failed / non-simulated no-receipt — never green from event name
-  alone.
+  redaction. UI multi-state: publishing / published / stale-head / failed /
+  non-simulated no-receipt — never green from event name alone. (A durable intent
+  without a terminal receipt renders as `publishing`; there is no distinct
+  `intent_pending` UI state — the reducer has no signal to separate the two.)
 
 ### Named adversarial gate
 
-`GV2-STRICT-FORGE-EXACT-HEAD` covering: COMMENT regression, split snapshot,
-missing/partial receipt, same identity, response-loss no duplicate POST,
-opposing state fence, head A→B, cross-org RLS, intent ≠ approval.
+`GV2-STRICT-FORGE-EXACT-HEAD` (7 cases) covers exactly: split snapshot (one PR
+metadata read, then an immutable base/head diff); re-list under the fence with an
+inside-fence live-head revalidation → zero POST on head drift (two cases:
+production probe + stage redrive); provider-observed PR-author self-review
+rejection before publication; COMMENT regression + partial terminal receipt
+rejection; no cross-run reclaim (another run's same-state/head/login review is not
+reclaimed); and the shared landSignals receipt guard (missing proof and head A→B
+blocked, exact B admitted). The cross-process advisory publish fence — opposing-
+state single-flight and response-loss reclaim → no duplicate POST — is proven
+separately in `simulatedReviewPublishFence.test.ts` / `simulatedReviewIntentFence.test.ts`;
+cross-org RLS isolation is proven in `simulatedReviewIntentFence.pg.integration.test.ts`
+(gated on `TANREN_RLS_DB_TEST`).
 
 ## Credit
 
