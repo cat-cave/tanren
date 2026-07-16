@@ -15,6 +15,11 @@ import { MissingCredentialError, UnscopedOrgError } from "../src/engine/credenti
 import { WorkspaceBootstrapError } from "../src/engine/workspace/index.js";
 import { CodexUsageLimitError } from "../src/engine/providers/codex.js";
 import { EmptyWriterCommitError } from "../src/engine/workflow/plannerRunCi.js";
+import {
+  SimulatedReviewHeadStaleError,
+  SimulatedReviewPublicationError,
+} from "../src/engine/workflow/reviewMerge/simulatedReviewPublication.js";
+import { SimulatedReviewPublishFenceBusyError } from "../src/engine/workflow/reviewMerge/simulatedReviewPublishFence.js";
 
 // PROGRESS facts (a different/first failure → re-drive, UNBOUNDED) vs a FIXED POINT (the same
 // failure recurring with no new work → escalate). NO attempt count.
@@ -22,6 +27,18 @@ const PROGRESS = { priorSameFixedPoint: 0 };
 const FIXED_POINT = { priorSameFixedPoint: 1 };
 
 describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/crash class re-drives", () => {
+  it("publication contention and live-head drift always re-drive, including at a fixed point", () => {
+    for (const error of [
+      new SimulatedReviewPublishFenceBusyError("busy"),
+      new SimulatedReviewHeadStaleError("a".repeat(40), "b".repeat(40)),
+    ]) {
+      expect(decideRunDisposition({ kind: "error", error }, FIXED_POINT)).toMatchObject({
+        bucket: "re_drive",
+        failure: { code: "merge", stage: "merge" },
+        subReason: "simulated_review_publication_retriable",
+      });
+    }
+  });
   it("an UNRECOGNIZED / generic error RE-DRIVES (the bare internal error that used to strand)", () => {
     const d = decideRunDisposition({ kind: "error", error: new Error("boom") }, PROGRESS);
     expect(d).toMatchObject({ bucket: "re_drive", failure: { code: "internal" } });
@@ -100,6 +117,18 @@ describe("decideRunDisposition — PAUSE FOR CAPACITY (task #82, window-pause au
 });
 
 describe("decideRunDisposition — GENUINE-HALT: only the four structural classes", () => {
+  it("a permanent strict-publication proof/identity failure halts immediately", () => {
+    const disposition = decideRunDisposition(
+      { kind: "error", error: new SimulatedReviewPublicationError("raw provider detail") },
+      PROGRESS,
+    );
+    expect(disposition).toMatchObject({
+      bucket: "genuine_halt",
+      reason: "persistent_failure",
+      failure: { code: "merge", stage: "merge" },
+    });
+    expect(disposition.bucket === "genuine_halt" ? disposition.message : "").not.toContain("raw provider detail");
+  });
   it("a credential misconfiguration GENUINE-HALTS immediately (never re-driven, even at count 1)", () => {
     const d = decideRunDisposition({ kind: "error", error: new MissingCredentialError("github_token") }, PROGRESS);
     expect(d).toMatchObject({

@@ -43,7 +43,12 @@
 // identically whether the outcome arrives via the workflow path, the worker path, or the
 // orphan reconciler. The per-path strand logic collapses into routing this verdict.
 
-import { classifyRunFailure, type RunFailureCode, type RunFailureStage } from "../worker/runFailureClassifier.js";
+import {
+  classifyRunFailure,
+  explicitRunFailureRetryability,
+  type RunFailureCode,
+  type RunFailureStage,
+} from "../worker/runFailureClassifier.js";
 import type { WanderingHaltVerdict } from "./wanderingHaltDetector.js";
 
 // The base backoff (seconds) between re-drives + the per-attempt growth, so the
@@ -309,6 +314,26 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
   // a usage-limit pauses for capacity; everything else re-drives while
   // progressing, escalating only at a fixed point).
   const classified = classifyRunFailure(outcome.error);
+  const publicationRetryability = explicitRunFailureRetryability(outcome.error);
+  if (publicationRetryability === "retriable") {
+    return {
+      bucket: "re_drive",
+      failure: classified,
+      runOutcome: "halted",
+      subReason: "simulated_review_publication_retriable",
+      backoffSeconds: redriveBackoffSeconds(facts.priorSameFixedPoint),
+      consecutiveSameFailure: facts.priorSameFixedPoint + 1,
+    };
+  }
+  if (publicationRetryability === "non_retriable") {
+    return {
+      bucket: "genuine_halt",
+      reason: "persistent_failure",
+      failure: classified,
+      message: `${classified.summary} (${classified.code} @ ${classified.stage}) — correct the publication configuration or proof before requeueing`,
+      consecutiveSameFailure: facts.priorSameFixedPoint + 1,
+    };
+  }
   if (classified.code === "usage_limit") {
     // task #82: the answerer-path's `CodexUsageLimitError` (planner / checker /
     // auditor hit the provider window). Routes to the SAME pause bucket as the

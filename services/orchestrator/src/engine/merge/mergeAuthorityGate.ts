@@ -30,6 +30,7 @@ import type { LandBindingEnvelope, LandSubject } from "../contracts/mergeAuthori
 import type { RawBudgetScope, RawDemoVerification, RawHitlSignoff } from "./mergeAuthorityInputs.js";
 import type { AuditEnvelope } from "../events/schemas/audit.js";
 import type { MergeAuthorityBundle } from "../workflow/reviewMerge/mergeDispatchTypes.js";
+import { evaluateExactReviewReceiptHead } from "./landSignals.js";
 
 /**
  * The fail-closed signals the dispatcher gathers for ONE land authorization, in
@@ -70,6 +71,15 @@ export interface MergeAuthorityGateInput {
    * `undefined` ⇒ no recorded verdict (the gate input already blocks).
    */
   gatedHeadSha: string | undefined;
+  /**
+   * The sha the latest terminal review forge receipt was FOR (gv-2). When present
+   * (strict simulated review), the land authorizes ONLY when this EQUALS the head
+   * being landed — event existence alone never authorizes a drifted head.
+   * `undefined` for human/auto paths without a forge receipt.
+   */
+  reviewedHeadSha: string | undefined;
+  /** Simulated policy fails closed when the receipt tuple is absent or malformed. */
+  requiresExactReviewReceipt: boolean;
   /** The fail-closed signals to authorize against. */
   signals: LiveMergeSignals;
   /** The writer-backed durable 4-step land store bound to this run's merge-stage context. */
@@ -152,6 +162,8 @@ export async function runAuthorityLand(input: {
     gateConfigHash: bundle.gateConfigHash,
     policyVersion: bundle.policyVersion,
     gatedHeadSha: bundle.gatedHeadSha,
+    reviewedHeadSha: bundle.reviewedHeadSha,
+    requiresExactReviewReceipt: bundle.requiresExactReviewReceipt,
     signals,
     store,
   });
@@ -236,6 +248,25 @@ export async function authorizeAndLand(input: MergeAuthorityGateInput): Promise<
         `gateVerdict: gate verdict is for a different commit than the one being landed ` +
           `(gated '${input.gatedHeadSha ?? "unknown"}' != landing '${headSha}') — fail closed (re-gate the current head)`,
       ],
+    };
+  }
+
+  // COMMIT-BINDING (the review↔land TOCTOU guard, gv-2): when the terminal
+  // review event carries a forge receipt headSha (strict simulated publication),
+  // that receipt must be FOR EXACTLY the commit being landed. Merely observing
+  // `review.approved` is not enough — a head-advance after publication fails
+  // closed until the advanced head is re-reviewed / re-gated. Human/auto paths
+  // omit the receipt (`reviewedHeadSha === undefined`) and skip this bind.
+  const reviewReceiptGuard = evaluateExactReviewReceiptHead({
+    reviewVerdict: input.signals.reviewVerdict,
+    reviewedHeadSha: input.reviewedHeadSha,
+    landingHeadSha: headSha,
+    receiptRequired: input.requiresExactReviewReceipt,
+  });
+  if (reviewReceiptGuard.kind === "blocked") {
+    return {
+      kind: "blocked",
+      reasons: [`reviewVerdict: ${reviewReceiptGuard.reason} — fail closed (re-review the current head)`],
     };
   }
 

@@ -372,77 +372,14 @@ export function reasoningForTask(detail: RunDetail, taskId: string | null): Mome
 // ---------------------------------------------------------------------------
 // review / merge state (derived from the run's typed events)
 // ---------------------------------------------------------------------------
-
-/** The review/merge phase the operator surface reflects. */
-export type ReviewMergePhase =
-  | "none"
-  | "review_requested"
-  | "changes_requested"
-  | "approved"
-  | "merge_queued"
-  | "merge_conflict"
-  | "merge_failed"
-  | "merged";
-
-export interface ReviewMergeState {
-  phase: ReviewMergePhase;
-  /** Latest changes-requested / failure / conflict message, when present. */
-  message?: string;
-  /** Merge commit sha once merged. */
-  mergeSha?: string;
-  /** Dispatched merge integration recorded on a merge.* event. */
-  integration?: string;
-}
-
-/**
- * Reduce the run's review.* / merge.* / github.pr.* events into the single
- * review/merge phase the review sub-surface renders. The latest matching event
- * wins (events arrive in order), so a re-reviewed PR reflects its final state.
- */
-export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeState {
-  const state: ReviewMergeState = { phase: "none" };
-  for (const event of events) {
-    const payload = asRecord(event.payload) ?? {};
-    const message = asString(payload["message"]);
-    const integration = asString(payload["integration"]);
-    switch (event.eventType) {
-      case "github.pr.ready":
-      case "review.requested":
-        if (state.phase === "none") state.phase = "review_requested";
-        break;
-      case "review.changes_requested":
-        state.phase = "changes_requested";
-        state.message = message;
-        break;
-      case "review.approved":
-        if (state.phase !== "merged") state.phase = "approved";
-        break;
-      case "merge.queued":
-        state.phase = "merge_queued";
-        state.integration = integration;
-        break;
-      case "merge.conflict":
-        state.phase = "merge_conflict";
-        state.message = message;
-        state.integration = integration;
-        break;
-      case "merge.failed":
-        state.phase = "merge_failed";
-        state.message = message;
-        state.integration = integration;
-        break;
-      case "merge.completed":
-      case "github.pr.merged":
-        state.phase = "merged";
-        state.mergeSha = asString(payload["mergeSha"]);
-        state.integration = integration ?? state.integration;
-        break;
-      default:
-        break;
-    }
-  }
-  return state;
-}
+// Extracted to reviewMergeState.ts (gv-2 forge publication multi-state + 500-line cap).
+export {
+  forgePublicationFromPayload,
+  reviewMergeStateFromEvents,
+  type ForgeReviewPublicationView,
+  type ReviewMergePhase,
+  type ReviewMergeState,
+} from "./reviewMergeState.js";
 
 // ---------------------------------------------------------------------------
 // live preview-deploy URL (derived from per-project config + run state)
