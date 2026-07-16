@@ -56,10 +56,15 @@ export interface ForgeReviewPublication {
 
 /** Fail-closed publication / identity error — leaves review/land non-authorized. */
 export class SimulatedReviewPublicationError extends Error {
-  readonly retriable = false as const;
-  constructor(message: string) {
+  /**
+   * Default false (structural / permanent). Fence-busy and similar contention
+   * paths pass `{ retriable: true }` so the job redrive re-lists/reclaims.
+   */
+  readonly retriable: boolean;
+  constructor(message: string, opts?: { retriable?: boolean }) {
     super(message);
     this.name = "SimulatedReviewPublicationError";
+    this.retriable = opts?.retriable ?? false;
   }
 }
 

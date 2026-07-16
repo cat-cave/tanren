@@ -93,9 +93,6 @@ export class PgSimulatedReviewIntentRepository implements SimulatedReviewIntentR
     candidate: SimulatedReviewIntent;
   }): Promise<SimulatedReviewIntent> {
     const headSha = input.candidate.headSha;
-    if (headSha.toLowerCase() !== input.candidate.headSha.toLowerCase()) {
-      // normalize: schema already enforces 40-hex; lower for key only.
-    }
     const key = simulatedReviewIntentKey(input.runId, headSha);
     // First-wins: concurrent appends collide on (run_id, idempotency_key).
     try {
