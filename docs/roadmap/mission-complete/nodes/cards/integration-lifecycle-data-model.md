@@ -57,8 +57,9 @@ Owned proof paths: `integrationLifecycleModel.test.ts`,
 `conformance/integrationConnections.conformance.test.ts`, plus new
 `runLineageTenantAuthority.rls.integration.test.ts`,
 `deployOnMergeCrossTenantSeam.test.ts`, `helpers/deployOnMergeHarness.ts`, and
-`issueClaimStore.test.ts` if split. Full-cohort query-double corrections are
-leased in `demoOnDeployAdapterDispatch.test.ts`, `reviewMerge.fixtures.ts`,
+`issueClaimStore.test.ts` if split. The production-emitter regression is leased
+in `fragmentAuthoringProdWiring.test.ts`. Full-cohort query-double corrections
+are leased in `demoOnDeployAdapterDispatch.test.ts`, `reviewMerge.fixtures.ts`,
 `helpers/workerPool.ts`, `helpers/plannerRunPool.ts`, `coordinatorBuildDriveScope.test.ts`, and
 `driveMergePercolationYield.test.ts`.
 
