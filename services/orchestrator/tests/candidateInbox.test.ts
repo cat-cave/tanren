@@ -48,7 +48,6 @@ const issuesSource: InboxSource = {
     owner: "cat-cave",
     repo: "app",
     labels: ["spec-candidate"],
-    staticRef: "credential/github/x",
   },
   enabled: true,
   autoRoute: false,
@@ -84,6 +83,8 @@ const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
 
 const sentryConnector = (sentryHttp: SentryHttpClient) =>
   createSentryConnector({ secrets, sentryHttp, authority: sentryAuthority });
+const githubConnector = (githubHttp: GitHubHttpClient) =>
+  createGitHubIssuesConnector({ secrets, githubHttp, defaultStaticRef: "credential/github/x" });
 
 // A GitHubHttpClient returning two issues + one PR (which must be filtered).
 function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHubHttpRequest[] } {
@@ -225,7 +226,7 @@ describe("github issues connector (mocked)", () => {
       },
       { number: 92, title: "a PR", pull_request: { url: "x" } },
     ]);
-    const connector = createGitHubIssuesConnector({ secrets, githubHttp: client });
+    const connector = githubConnector(client);
     const items = await connector.fetch(issuesSource);
     expect(items).toHaveLength(2);
     expect(items[0]?.externalId).toBe("gh-cat-cave/app#88");
@@ -304,9 +305,7 @@ describe("ingestSource (connector → triage → upsert)", () => {
   it("triages each issue and persists external candidates as triaged", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "feature · CSV export", body: "x", labels: [] }]);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([
-      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["issues", githubConnector(client)]]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), issuesSource);
     expect(out).toHaveLength(1);
     expect(out[0]?.status).toBe("triaged");
@@ -338,9 +337,7 @@ describe("ingestSource (connector → triage → upsert)", () => {
     const issues = [{ number: 88, title: "CSV export", body: "v1", labels: [] }];
     const { client } = fakeGitHub(issues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([
-      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["issues", githubConnector(client)]]);
     const deps = depsFor(connectors, pool);
     await ingestSource(deps, issuesSource);
     issues[0]!.body = "v2";
@@ -354,9 +351,7 @@ describe("accept → discovery hand-off", () => {
   it("creates a spec via the discovery accept path and resolves the candidate", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
     const { pool, specs } = stubPool();
-    const connectors = new Map<string, SourceConnector>([
-      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["issues", githubConnector(client)]]);
     const deps = depsFor(connectors, pool);
     const { candidates: ingested } = await ingestSource(deps, issuesSource);
     const candidateId = ingested[0]!.id;
@@ -389,9 +384,7 @@ describe("accept → discovery hand-off", () => {
   it("dismiss transitions the candidate to dismissed", async () => {
     const { client } = fakeGitHub([{ number: 88, title: "CSV export", body: "x", labels: [] }]);
     const { pool } = stubPool();
-    const connectors = new Map<string, SourceConnector>([
-      ["issues", createGitHubIssuesConnector({ secrets, githubHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["issues", githubConnector(client)]]);
     const deps = depsFor(connectors, pool);
     const { candidates: ingested } = await ingestSource(deps, issuesSource);
     const out = await dismissCandidate(deps, ingested[0]!.id);

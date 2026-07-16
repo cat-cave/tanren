@@ -11,9 +11,7 @@
 const ISSUE_SOURCES: Array<{ n: string; on: boolean; route: string; glyph: string }> = [
   { n: "operator manual", on: true, route: "ad-hoc · routes via interview", glyph: "✎" },
   { n: "github issues", on: true, route: "label:bug→p1 · feature→backlog", glyph: "⌥" },
-  { n: "linear", on: false, route: "oauth + workspace pick → labels", glyph: "▱" },
-  { n: "jira", on: false, route: "api token + project key → issue type", glyph: "◇" },
-  { n: "custom webhook", on: false, route: "any json · tanren classifies", glyph: "↗" },
+  { n: "sentry errors", on: false, route: "link an exact project grant in integrations", glyph: "×" },
 ];
 
 const AUDITS: Array<{ n: string; agent: string; on: boolean }> = [

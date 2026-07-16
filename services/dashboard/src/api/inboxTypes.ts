@@ -31,6 +31,13 @@ export interface InboxSource {
   autoRoute: boolean;
 }
 
+export interface InboxSourceAttention {
+  state: "needs_attention";
+  code: "unsupported_provider" | "invalid_config" | "credential_unavailable" | "authority_unavailable";
+  message: string;
+  observedAt: string;
+}
+
 export interface CandidateTriage {
   dedupe: string;
   match: string;

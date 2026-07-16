@@ -13,7 +13,13 @@
  * to the discovery surface scoped to the candidate's project.
  */
 
-import type { Candidate, InboxSnapshot, InboxSource, TriageVerdict } from "../../api/inboxTypes.js";
+import type {
+  Candidate,
+  InboxSnapshot,
+  InboxSource,
+  InboxSourceAttention,
+  TriageVerdict,
+} from "../../api/inboxTypes.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { KpiStrip, PageHead } from "../project/shared.js";
@@ -45,10 +51,30 @@ function isResolved(c: Candidate): boolean {
   return ["auto_routed", "accepted", "folded", "dismissed", "closed_duplicate"].includes(c.status);
 }
 
+function sourceAttention(source: InboxSource): InboxSourceAttention | undefined {
+  const raw = source.config["attention"];
+  if (source.config["state"] !== "needs_attention" || typeof raw !== "object" || raw === null) return undefined;
+  const candidate = raw as Partial<InboxSourceAttention>;
+  if (
+    candidate.state !== "needs_attention" ||
+    typeof candidate.code !== "string" ||
+    typeof candidate.message !== "string" ||
+    typeof candidate.observedAt !== "string"
+  ) {
+    return undefined;
+  }
+  return candidate as InboxSourceAttention;
+}
+
 function SourceRow(props: { source: InboxSource }) {
   const { source } = props;
+  const attention = sourceAttention(source);
   return (
-    <div class={`source-row${source.enabled ? " on" : ""}`} data-source-id={source.id}>
+    <div
+      class={`source-row${source.enabled ? " on" : ""}${attention === undefined ? "" : " needs-attention"}`}
+      data-source-id={source.id}
+      data-source-attention={attention?.code}
+    >
       <span class="sg">{SOURCE_GLYPH[source.kind] ?? "▮"}</span>
       <div class="smid">
         <div class="sn">
@@ -56,8 +82,11 @@ function SourceRow(props: { source: InboxSource }) {
           {source.autoRoute && <span class="auto-tag">auto</span>}
         </div>
         <div class="sd">{source.detail}</div>
+        {attention !== undefined && <div class="sd">needs attention · {attention.message}</div>}
       </div>
-      <div class={`toggle${source.enabled ? " on" : ""}`}>{source.enabled ? "on" : "off"}</div>
+      <div class={`toggle${source.enabled ? " on" : ""}`}>
+        {attention === undefined ? (source.enabled ? "on" : "off") : "attention"}
+      </div>
     </div>
   );
 }

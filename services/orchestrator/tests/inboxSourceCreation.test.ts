@@ -31,23 +31,28 @@ const noopAnswerer: TriageAnswerer = {
 
 // A SQL-substring stub pool that captures `INSERT INTO inbox_sources` so a test
 // can assert whether the (mis)configured source was actually created. Returns an
-// empty result for everything else.
+// project ownership as well as the inserted canonical config.
 function stubPool(): { pool: pg.Pool; sourceInserts: Array<Record<string, unknown>> } {
   const sourceInserts: Array<Record<string, unknown>> = [];
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
+    if (sql.startsWith("SELECT org_id FROM projects")) {
+      const projectId = String(params[0]);
+      const orgId = projectId === "project_a" ? "org_a" : projectId === "project_b" ? "org_b" : undefined;
+      return { rows: orgId === undefined ? [] : [{ org_id: orgId }], rowCount: orgId === undefined ? 0 : 1 };
+    }
     if (sql.startsWith("INSERT INTO inbox_sources")) {
-      const [id, orgId, projectId, kind, name] = params as string[];
+      const [id, orgId, projectId, kind, name, detail, config, enabled, autoRoute] = params as string[];
       const row = {
         id,
         org_id: orgId,
         project_id: projectId,
         kind,
         name,
-        detail: "",
-        config: {},
-        enabled: "true",
-        auto_route: "true",
+        detail,
+        config: JSON.parse(config) as unknown,
+        enabled,
+        auto_route: autoRoute,
       };
       sourceInserts.push(row);
       return { rows: [row], rowCount: 1 };
@@ -140,12 +145,26 @@ describe("inbox source creation — auto-route requires a project (Loop 6)", () 
     expect(res.status).toBe(201);
     expect(sourceInserts).toHaveLength(1);
   });
+
+  it("rejects a project owned by a different organization before persistence", async () => {
+    const { pool, sourceInserts } = stubPool();
+    const res = await postSource(pool, {
+      kind: "issues",
+      name: "foreign project",
+      projectId: "project_b",
+      config: { owner: "cat-cave", repo: "app" },
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ error: "project_not_found" });
+    expect(sourceInserts).toHaveLength(0);
+  });
 });
 
 describe("inbox issues source boundary — removed providers never reach authority or transport", () => {
   it.each([
     ["linear", { provider: "linear", team: "ENG", tokenRef: "credential/linear/old" }],
     ["jira", { provider: "jira", baseUrl: "https://jira.example", projectKey: "ENG" }],
+    ["legacy GitHub discriminator", { provider: "github", owner: "cat-cave", repo: "app" }],
     ["raw tokenRef", { provider: "github", owner: "cat-cave", repo: "app", tokenRef: "credential/old" }],
   ])("rejects %s config at source creation without persisting it", async (_label, config) => {
     const { pool, sourceInserts } = stubPool();
@@ -160,18 +179,71 @@ describe("inbox issues source boundary — removed providers never reach authori
     const res = await postSource(pool, {
       kind: "issues",
       name: "github issues",
-      config: { provider: "github", owner: "cat-cave", repo: "app" },
+      config: { owner: "cat-cave", repo: "app" },
     });
     expect(res.status).toBe(201);
     expect(sourceInserts).toHaveLength(1);
+    expect(sourceInserts[0]!.config).toEqual({
+      state: "active",
+      owner: "cat-cave",
+      repo: "app",
+      labels: [],
+    });
+  });
+
+  it.each([
+    ["GitHub config missing repo", "issues", { owner: "cat-cave" }],
+    ["Sentry config missing project", "errors", { org: "cat-cave" }],
+  ])("rejects malformed %s at the route boundary", async (_label, kind, config) => {
+    const { pool, sourceInserts } = stubPool();
+    const res = await postSource(pool, { kind, name: "malformed", config });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_inbox_source_config" });
+    expect(sourceInserts).toHaveLength(0);
+  });
+
+  it("rejects caller-owned Sentry authority coordinates", async () => {
+    const { pool, sourceInserts } = stubPool();
+    const res = await postSource(pool, {
+      kind: "errors",
+      name: "sentry",
+      config: { org: "cat-cave", project: "app", tokenRef: "credential/sentry/org_b" },
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "unsupported_inbox_provider" });
+    expect(sourceInserts).toHaveLength(0);
+  });
+
+  it("rejects a foreign-org staticRef before persistence, secret resolution, or provider I/O", async () => {
+    const { pool, sourceInserts } = stubPool();
+    const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_b/default", value: "org-b-token" });
+    const secretRead = vi.spyOn(secrets, "get");
+    const providerCalls: unknown[] = [];
+    const res = await app(pool, { secrets, providerCalls }).request("/orgs/org_a/inbox/sources", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "issues",
+        name: "confused deputy",
+        config: { owner: "cat-cave", repo: "app", staticRef: "credential/github/org/org_b/default" },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "unsupported_inbox_provider" });
+    expect(sourceInserts).toHaveLength(0);
+    expect(secretRead).not.toHaveBeenCalled();
+    expect(providerCalls).toEqual([]);
   });
 
   it.each([
     ["linear", { provider: "linear", team: "ENG" }],
     ["jira", { provider: "jira", baseUrl: "https://jira.example", projectKey: "ENG" }],
     ["raw tokenRef", { provider: "github", owner: "cat-cave", repo: "app", tokenRef: "credential/old" }],
+    ["foreign staticRef", { owner: "cat-cave", repo: "app", staticRef: "credential/github/org/org_b/default" }],
   ])("returns a stable 400 for a persisted %s source before secret/provider I/O", async (_label, config) => {
     const secrets = new FakeSecretStore();
+    await secrets.put({ ref: "credential/github/org/org_b/default", value: "org-b-token" });
     const secretRead = vi.spyOn(secrets, "get");
     const providerCalls: unknown[] = [];
     const res = await app(storedIssuesPool(config), { secrets, providerCalls }).request(

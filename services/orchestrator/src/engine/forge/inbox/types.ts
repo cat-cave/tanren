@@ -15,6 +15,88 @@ import { SpecPriority } from "../../state/spec.js";
 export const SourceKind = z.enum(["issues", "errors", "system", "manual", "scheduled_audit"]);
 export type SourceKind = z.infer<typeof SourceKind>;
 
+/** Durable, sanitized terminal state for an external source that cannot self-heal. */
+export const InboxSourceAttention = z
+  .object({
+    state: z.literal("needs_attention"),
+    code: z.enum(["unsupported_provider", "invalid_config", "credential_unavailable", "authority_unavailable"]),
+    message: z.string().min(1).max(300),
+    observedAt: z.string().datetime(),
+  })
+  .strict();
+export type InboxSourceAttention = z.infer<typeof InboxSourceAttention>;
+
+const TerminalExternalSourceConfig = z
+  .object({
+    state: z.literal("needs_attention"),
+    attention: InboxSourceAttention,
+  })
+  .strict();
+
+/** The sole active persisted shape for a GitHub issues source. */
+export const ActiveGitHubIssuesConfig = z
+  .object({
+    state: z.literal("active").default("active"),
+    owner: z.string().min(1),
+    repo: z.string().min(1),
+    labels: z.array(z.string().min(1)).default([]),
+    pollIntervalMs: z.number().int().positive().optional(),
+    webhookSecretRef: z.string().min(1).optional(),
+  })
+  .strict();
+export type ActiveGitHubIssuesConfig = z.infer<typeof ActiveGitHubIssuesConfig>;
+
+/** Active or terminal persisted GitHub config; no provider/static-token compatibility form. */
+export const GitHubIssuesConfig = z.union([ActiveGitHubIssuesConfig, TerminalExternalSourceConfig]);
+export type GitHubIssuesConfig = z.infer<typeof GitHubIssuesConfig>;
+
+/** The sole active persisted shape for a Sentry error source. */
+export const ActiveSentryConfig = z
+  .object({
+    state: z.literal("active").default("active"),
+    org: z.string().min(1),
+    project: z.string().min(1),
+    baseUrl: z.string().url().default("https://sentry.io"),
+    query: z.string().min(1).optional(),
+    level: z.enum(["debug", "info", "warning", "error", "fatal", "sample"]).optional(),
+    pollIntervalMs: z.number().int().positive().optional(),
+    managedBy: z.literal("integration-provisioner").optional(),
+  })
+  .strict();
+export type ActiveSentryConfig = z.infer<typeof ActiveSentryConfig>;
+
+/** Active or terminal persisted Sentry config; authority never lives in the blob. */
+export const SentryConfig = z.union([ActiveSentryConfig, TerminalExternalSourceConfig]);
+export type SentryConfig = z.infer<typeof SentryConfig>;
+
+const CreateGitHubIssuesConfig = ActiveGitHubIssuesConfig.omit({
+  state: true,
+  webhookSecretRef: true,
+});
+const CreateSentryConfig = ActiveSentryConfig.omit({ state: true, managedBy: true });
+
+/**
+ * Decode an external source request into its one canonical active persisted
+ * shape. Internal lifecycle/secret metadata cannot be caller-authored.
+ */
+export function parseInboxSourceCreateConfig(kind: SourceKind, config: unknown): Record<string, unknown> {
+  if (kind === "issues") return ActiveGitHubIssuesConfig.parse(CreateGitHubIssuesConfig.parse(config));
+  if (kind === "errors") return ActiveSentryConfig.parse(CreateSentryConfig.parse(config));
+  return z.record(z.string(), z.unknown()).parse(config);
+}
+
+/** Normalize a trusted internal write to the canonical persisted shape. */
+export function parsePersistedInboxSourceConfig(kind: SourceKind, config: unknown): Record<string, unknown> {
+  if (kind === "issues") return GitHubIssuesConfig.parse(config);
+  if (kind === "errors") return SentryConfig.parse(config);
+  return z.record(z.string(), z.unknown()).parse(config);
+}
+
+/** Build the only valid terminal persisted config; poisoned authority fields are discarded. */
+export function terminalInboxSourceConfig(attention: InboxSourceAttention): Record<string, unknown> {
+  return TerminalExternalSourceConfig.parse({ state: "needs_attention", attention });
+}
+
 // A configured source. `config` is connector-specific (repo/labels for issues,
 // query for errors, etc.) and validated by each connector, not here.
 export const InboxSource = z

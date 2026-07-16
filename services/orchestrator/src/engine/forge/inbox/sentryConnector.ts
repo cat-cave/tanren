@@ -14,7 +14,6 @@
 
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
-import { z } from "zod";
 import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityImpl.js";
@@ -22,22 +21,8 @@ import { GenerationAddressedIntegrationSecretStore } from "../../integrations/in
 import { IntegrationConnectionsStore } from "../../repositories/integrationConnections.js";
 import { assertOrgGrantMatchesLease, secretValueForLease } from "../../repositories/integrationConnectionResolve.js";
 import { systemActor } from "../../state/actor.js";
-import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
-import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
-
-// The `config` shape a Sentry source carries. `org`/`project` are the Sentry
-// slugs. Authority and credential identity come from the project's persisted
-// integration selection, never from reusable connector config.
-export const SentryConfig = z
-  .object({
-    org: z.string().min(1),
-    project: z.string().min(1),
-    baseUrl: z.string().url().default("https://sentry.io"),
-    query: z.string().min(1).optional(),
-    level: z.enum(["debug", "info", "warning", "error", "fatal", "sample"]).optional(),
-  })
-  .strict();
-export type SentryConfig = z.infer<typeof SentryConfig>;
+import { assertIntakeResponseOk, IntakeSourceAuthorityError, IntakeSourceFetchError } from "./connectorErrors.js";
+import { ActiveSentryConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
 
 // The injectable Sentry transport. A `path` is org/project-scoped; `token` is
 // the resolved auth token. Mirrors the shape of `GitHubHttpClient` so the same
@@ -113,7 +98,7 @@ export function buildPgSentryIntakeAuthority(pool: pg.Pool): SentryIntakeAuthori
             : result.status === "selection_required"
               ? result.reason
               : "not_linked";
-        throw new Error(`sentry intake authority unavailable: ${reason}`);
+        throw new IntakeSourceAuthorityError("sentry", reason);
       }
       return IntegrationConnectionsStore.orgGrantFromLease(result.lease);
     });
@@ -182,7 +167,7 @@ function bodyFor(issue: RawSentryIssue): string {
   return lines.join("\n").slice(0, 8000);
 }
 
-function buildPath(config: SentryConfig): string {
+function buildPath(config: ActiveSentryConfig): string {
   const query = config.query ?? "is:unresolved";
   const levelClause = config.level === undefined ? "" : ` level:${config.level}`;
   const search = new URLSearchParams({ query: `${query}${levelClause}`, statsPeriod: "14d" });
@@ -198,7 +183,7 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
     // reuses the existing enum value (no migration); see the factory.
     kind: "errors",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
-      const config = SentryConfig.parse(source.config);
+      const config = ActiveSentryConfig.parse(source.config);
       if (source.projectId === null) throw new Error("sentry connector: intake source must name a project");
       const grant = await deps.authority({
         orgId: source.orgId,

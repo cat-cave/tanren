@@ -14,25 +14,8 @@ import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
-import { z } from "zod";
 import { assertIntakeResponseOk, assertSupportedIssuesProvider, IntakeSourceFetchError } from "./connectorErrors.js";
-import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
-
-// The `config` shape a GitHub Issues source carries. `owner`/`repo` name the
-// repository; `labels` (optional) filters to `spec-candidate`-style labels;
-// `staticRef`/`installation` pick the auth path (mirrors the resolver inputs).
-// `provider` is optional (the `issues` dispatcher keyed on it); absent on
-// existing GitHub sources, so they keep parsing unchanged.
-export const GitHubIssuesConfig = z
-  .object({
-    provider: z.literal("github").optional(),
-    owner: z.string().min(1),
-    repo: z.string().min(1),
-    labels: z.array(z.string().min(1)).default([]),
-    staticRef: z.string().min(1).optional(),
-  })
-  .strict();
-export type GitHubIssuesConfig = z.infer<typeof GitHubIssuesConfig>;
+import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
 
 export interface GitHubConnectorDeps {
   secrets: SecretStore;
@@ -40,10 +23,8 @@ export interface GitHubConnectorDeps {
   // Optional org App installation; when present the resolver mints an App token.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
-  // The org-default static credential ref, used when no App is installed and the
-  // source pins no own `config.staticRef`. The intake poller threads the org's
-  // resolved default here (App-installation-OR-org-default-static, the engine's
-  // standard GitHub resolution); the source's own `staticRef` takes precedence.
+  // The organization-bound static credential ref, resolved from the source's
+  // org by the intake seam. Source JSON can never override this coordinate.
   defaultStaticRef?: string;
 }
 
@@ -83,16 +64,14 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       // the authority boundary, before config parsing can look like a generic
       // GitHub failure and before any credential/provider I/O occurs.
       assertSupportedIssuesProvider(source.config);
-      const config = GitHubIssuesConfig.parse(source.config);
-      // The source's own `staticRef` takes precedence; else the org-default static
-      // ref the poller resolved (App-installation-OR-org-default-static). When
-      // neither is present and no App is installed, `resolveGithubToken` raises a
-      // LOUD `NoGithubCredentialConfiguredError` — never a silent empty fetch.
-      const staticRef = config.staticRef ?? deps.defaultStaticRef;
+      const config = ActiveGitHubIssuesConfig.parse(source.config);
+      // Credential authority is bound to the source organization: an App
+      // installation or the org-default ref selected by the intake seam. The
+      // source config has no credential coordinate and cannot become a deputy.
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
         ...(deps.installation === undefined ? {} : { installation: deps.installation }),
-        ...(staticRef === undefined ? {} : { staticRef }),
+        ...(deps.defaultStaticRef === undefined ? {} : { staticRef: deps.defaultStaticRef }),
         minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets }),
       });
 

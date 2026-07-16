@@ -164,10 +164,21 @@ function stubClient(state: StubState): IntegrationQueryClient {
       const existing = state.inboxSources.find(
         (r) => r.org_id === String(params[1]) && r.project_id === String(params[2]) && r.kind === kind,
       );
+      const sourceRow = (row: StubState["inboxSources"][number]) => ({
+        id: row.id,
+        org_id: row.org_id,
+        project_id: row.project_id,
+        kind: row.kind,
+        name: row.name,
+        detail: "",
+        config: JSON.parse(row.config) as unknown,
+        enabled: String(params[7]),
+        auto_route: String(params[8]),
+      });
       if (existing !== undefined) {
         existing.name = String(params[4]);
         existing.config = String(params[6]);
-        return { rows: [{ id: existing.id }], rowCount: 1 };
+        return { rows: [sourceRow(existing)], rowCount: 1 };
       }
       const id = String(params[0]);
       state.inboxSources.push({
@@ -178,7 +189,7 @@ function stubClient(state: StubState): IntegrationQueryClient {
         name: String(params[4]),
         config: String(params[6]),
       });
-      return { rows: [{ id }], rowCount: 1 };
+      return { rows: [sourceRow(state.inboxSources.at(-1)!)], rowCount: 1 };
     }
     // notification target: INSERT ... ON CONFLICT (org_id, channel_kind, destination).
     if (text.includes("INSERT INTO notification_targets")) {
@@ -434,12 +445,10 @@ describe("provisionCapability — idempotent re-onboard", () => {
   });
 });
 
-// Regression guard for the blocking bug: a provisioner that emits an
-// inbox-source kind outside `inbox_sources_kind_check` (e.g. "sentry" instead of
-// "errors") must FAIL persistence — the stub pool mirrors the real DB CHECK, so a
-// future provider re-introducing a bad kind can't pass silently.
-describe("provisionCapability — inbox kind CHECK realism", () => {
-  it("rejects an inbox source whose kind violates inbox_sources_kind_check", async () => {
+// Regression guard: an invalid provisioner kind is rejected at the typed
+// persistence boundary before SQL, while the stub retains DB CHECK realism.
+describe("provisionCapability — typed inbox kind boundary", () => {
+  it("rejects an inbox source whose kind is outside the canonical SourceKind", async () => {
     const state = freshState(true);
     const secrets = new InMemorySecretStore();
     const events = new FakeEventStore();
@@ -471,7 +480,7 @@ describe("provisionCapability — inbox kind CHECK realism", () => {
         mode: "greenfield",
         name: "acme-web",
       }),
-    ).rejects.toThrow(/inbox_sources_kind_check/u);
+    ).rejects.toThrow(/Invalid option/u);
     expect(state.inboxSources).toHaveLength(0);
   });
 });

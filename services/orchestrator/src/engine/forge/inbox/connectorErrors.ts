@@ -39,24 +39,59 @@ export class UnsupportedInboxProviderError extends Error {
 }
 
 /**
- * Reject the deleted provider/authority shapes before any secret or provider
- * I/O. Other malformed GitHub fields remain the connector schema's concern.
+ * Reject caller/source-owned reusable credential coordinates before any secret
+ * or provider I/O. Credential selection belongs to the source's organization,
+ * never to JSON stored on an inbox source.
+ */
+export function assertNoSourceCredentialOverride(config: unknown): void {
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    for (const [key, child] of Object.entries(value)) {
+      if (["tokenRef", "staticRef", "credentialRef", "githubCredentialRef"].includes(key)) {
+        throw new UnsupportedInboxProviderError(
+          null,
+          `source-owned ${key} authority is not supported; use the organization-bound credential`,
+        );
+      }
+      visit(child);
+    }
+  };
+  visit(config);
+}
+
+/**
+ * Reject deleted providers and the former optional GitHub discriminator. The
+ * source kind is now the sole provider discriminator; keeping both forms would
+ * preserve a second compatibility authority.
  */
 export function assertSupportedIssuesProvider(config: unknown): void {
+  assertNoSourceCredentialOverride(config);
   if (typeof config !== "object" || config === null || Array.isArray(config)) return;
   const record = config as Record<string, unknown>;
-  if (Object.hasOwn(record, "tokenRef")) {
-    throw new UnsupportedInboxProviderError(
-      typeof record["provider"] === "string" ? record["provider"] : null,
-      "raw tokenRef authority is not supported; configure the GitHub issues provider",
-    );
-  }
-  const provider = record["provider"];
-  if (provider !== undefined && provider !== "github") {
+  if (Object.hasOwn(record, "provider")) {
+    const provider = record["provider"];
     throw new UnsupportedInboxProviderError(
       typeof provider === "string" ? provider : null,
-      `issues sources support only provider 'github' (received ${typeof provider === "string" ? `'${provider}'` : "a non-string provider"})`,
+      provider === "github"
+        ? "the provider discriminator was removed; kind 'issues' is the sole GitHub authority"
+        : `issues sources support only GitHub through kind 'issues' (received ${typeof provider === "string" ? `'${provider}'` : "a non-string provider"})`,
     );
+  }
+}
+
+/** A selected integration authority is permanently unavailable for this source. */
+export class IntakeSourceAuthorityError extends Error {
+  readonly retriable = false as const;
+  readonly provider: IntakeSourceProvider;
+
+  constructor(provider: IntakeSourceProvider, detail: string) {
+    super(`${provider} intake source authority unavailable: ${detail}`);
+    this.name = "IntakeSourceAuthorityError";
+    this.provider = provider;
   }
 }
 

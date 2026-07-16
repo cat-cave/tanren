@@ -11,7 +11,7 @@
 // source is pollable when it has a connector kind and is enabled.
 
 import type pg from "pg";
-import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
+import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { z } from "zod";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
@@ -19,6 +19,9 @@ import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import {
   ingestSource,
+  ActiveGitHubIssuesConfig,
+  ActiveSentryConfig,
+  InboxSourceAttention,
   InboxStore,
   type AutoRouteDeps,
   type Candidate,
@@ -27,9 +30,10 @@ import {
   type SourceConnector,
   type TriageAnswerer,
 } from "../inbox/index.js";
-import { buildIntakeConnectorMapForOrg, isCredentialResolutionError } from "./issueSourceSeam.js";
+import { buildIntakeConnectorMapForOrg, classifyPermanentInboxSourceError } from "./issueSourceSeam.js";
 import { sweepStuckCandidates, sweepWebhookEvents, type WebhookProcessorDeps } from "./webhookProcessor.js";
 import { createLogger } from "../../observability/logger.js";
+import { PgEventStore } from "../../eventStore.js";
 
 const log = createLogger("intake-poller");
 
@@ -43,6 +47,19 @@ const PollConfig = z
     webhookSecretRef: z.string().min(1).optional(),
   })
   .passthrough();
+
+function pollConfigFor(source: InboxSource): z.infer<typeof PollConfig> | undefined {
+  if (source.kind === "issues") {
+    const parsed = ActiveGitHubIssuesConfig.safeParse(source.config);
+    return parsed.success ? parsed.data : undefined;
+  }
+  if (source.kind === "errors") {
+    const parsed = ActiveSentryConfig.safeParse(source.config);
+    return parsed.success ? parsed.data : undefined;
+  }
+  const parsed = PollConfig.safeParse(source.config);
+  return parsed.success ? parsed.data : undefined;
+}
 
 /** The default per-source poll interval when the source pins none (5 minutes). */
 export const DEFAULT_POLL_INTERVAL_MS = 5 * 60_000;
@@ -93,17 +110,14 @@ export function isPollableSource(source: InboxSource, connectors?: ReadonlyMap<s
   if (!source.enabled) return false;
   const known = connectors === undefined ? POLLABLE_KINDS.has(source.kind) : connectors.has(source.kind);
   if (!known) return false;
-  const config = PollConfig.safeParse(source.config);
+  const config = pollConfigFor(source);
   // A webhook-driven source (a configured secret) is served by push — skip it.
-  if (config.success && config.data.webhookSecretRef !== undefined) return false;
+  if (config?.webhookSecretRef !== undefined) return false;
   return true;
 }
 
 function pollIntervalFor(source: InboxSource): number {
-  const config = PollConfig.safeParse(source.config);
-  return config.success && config.data.pollIntervalMs !== undefined
-    ? config.data.pollIntervalMs
-    : DEFAULT_POLL_INTERVAL_MS;
+  return pollConfigFor(source)?.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 }
 
 export interface PollSourceResult {
@@ -230,15 +244,24 @@ export class IntakePoller {
           results.push(await pollSourceOnce(this.deps, source));
           this.lastPolledAt.set(source.id, this.now());
         } catch (error) {
-          // A credential-RESOLUTION failure is a MISCONFIGURATION, not a transient:
-          // per the no-silent-fallbacks doctrine it is a LOUD fail-closed error that
-          // must NOT be swallowed-and-retried (which would quietly degrade to "this
-          // source never ingests"). This covers BOTH paths uniformly via the shared
-          // predicate — the eager org-default resolution (IntakeGithubCredentialMissingError)
-          // AND the lazy source-owned `config.staticRef` resolution inside the
-          // connector's fetch (No/MissingGithubCredentialRefError). Re-throw so the
-          // failure surfaces loudly at the tick boundary, naming the credential.
-          if (isCredentialResolutionError(error)) throw error;
+          const permanent = classifyPermanentInboxSourceError(error);
+          if (permanent !== undefined) {
+            // Permanent configuration/authority failures are durable terminal
+            // state, not exceptions that re-fire forever. Park this source and
+            // append the proof in one org-scoped transaction, then continue with
+            // independent sources and both maintenance sweepers.
+            try {
+              await this.parkSourceNeedsAttention(source, permanent);
+            } catch (terminalError) {
+              log.error(
+                "failed to persist source needs-attention state (will retry next tick)",
+                { sourceId: source.id },
+                terminalError,
+              );
+              this.lastPolledAt.set(source.id, this.now());
+            }
+            continue;
+          }
           // Any OTHER source failure (rate limit, transient connector error) never
           // stalls the others; it retries on the next due tick.
           log.error("poll of source failed", { sourceId: source.id }, error);
@@ -275,6 +298,30 @@ export class IntakePoller {
       answererFactory: this.deps.answererFactory,
       autoRoute: this.deps.autoRoute,
     };
+  }
+
+  private async parkSourceNeedsAttention(
+    source: InboxSource,
+    failure: { code: InboxSourceAttention["code"]; message: string },
+  ): Promise<void> {
+    const attention = InboxSourceAttention.parse({
+      state: "needs_attention",
+      code: failure.code,
+      message: failure.message,
+      observedAt: new Date(this.now()).toISOString(),
+    });
+    await runWithOrgScope(this.deps.pool, source.orgId, async (client) => {
+      const parked = await InboxStore.markSourceNeedsAttention(client, source, attention);
+      if (parked === undefined) return;
+      await new PgEventStore(client).append({
+        orgId: source.orgId,
+        ...(source.projectId === null ? {} : { projectId: source.projectId }),
+        eventType: "credential.failed",
+        payload: {
+          message: `inbox source ${source.id} needs attention (${failure.code})`,
+        },
+      });
+    });
   }
 
   /** List every org's pollable, due-now source (cross-org, system-scoped). */

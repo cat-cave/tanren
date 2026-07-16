@@ -13,16 +13,23 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import {
   Candidate,
   CandidateTriage,
   InboxSource,
   SourceKind,
+  parsePersistedInboxSourceConfig,
+  terminalInboxSourceConfig,
   type CandidateStatus,
+  type InboxSourceAttention,
   type IngestedItem,
 } from "../forge/inbox/types.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+interface ManagedSourceQueryClient {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
+}
 
 interface SourceRow {
   id: string;
@@ -35,6 +42,20 @@ interface SourceRow {
   enabled: string;
   auto_route: string;
 }
+
+const SourceRowSchema = z
+  .object({
+    id: z.string(),
+    org_id: z.string(),
+    project_id: z.string().nullable(),
+    kind: z.string(),
+    name: z.string(),
+    detail: z.string(),
+    config: z.record(z.string(), z.unknown()).nullable(),
+    enabled: z.string(),
+    auto_route: z.string(),
+  })
+  .strict();
 
 interface CandidateRow {
   id: string;
@@ -97,6 +118,13 @@ export interface CreateSourceInput {
   autoRoute?: boolean;
 }
 
+export class InboxSourceProjectScopeError extends Error {
+  constructor() {
+    super("inbox source project does not belong to its organization");
+    this.name = "InboxSourceProjectScopeError";
+  }
+}
+
 // The candidate-inbox data-access seam: the `inbox_sources` + `candidates`
 // reads/writes behind a value object for the `Repositories` registry. Methods
 // take the caller's `QueryClient` (a pool OR a `runWithOrgScope`/
@@ -105,9 +133,12 @@ export interface CreateSourceInput {
 export const InboxStore = {
   async createSource(client: QueryClient, input: CreateSourceInput): Promise<InboxSource> {
     const id = `src_${randomUUID()}`;
+    const config = parsePersistedInboxSourceConfig(input.kind, input.config ?? {});
     const result = await client.query<SourceRow>(
       `INSERT INTO inbox_sources (id, org_id, project_id, kind, name, detail, config, enabled, auto_route)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
+       SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
+        WHERE $3::text IS NULL
+           OR EXISTS (SELECT 1 FROM projects WHERE project_id = $3 AND org_id = $2)
        RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
       [
         id,
@@ -116,12 +147,47 @@ export const InboxStore = {
         input.kind,
         input.name,
         input.detail ?? "",
-        JSON.stringify(input.config ?? {}),
+        JSON.stringify(config),
         input.enabled === false ? "false" : "true",
         input.autoRoute === true ? "true" : "false",
       ],
     );
-    return mapSource(result.rows[0]!);
+    const row = result.rows[0];
+    if (row === undefined) throw new InboxSourceProjectScopeError();
+    return mapSource(row);
+  },
+
+  /** Idempotent provisioner-owned source write through the same config/project authority. */
+  async upsertManagedSource(
+    client: ManagedSourceQueryClient,
+    input: Omit<CreateSourceInput, "projectId"> & { projectId: string },
+  ): Promise<InboxSource> {
+    const id = `src_${randomUUID()}`;
+    const config = parsePersistedInboxSourceConfig(input.kind, input.config ?? {});
+    const result = await client.query(
+      `INSERT INTO inbox_sources (id, org_id, project_id, kind, name, detail, config, enabled, auto_route)
+       SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
+         FROM projects
+        WHERE project_id = $3 AND org_id = $2
+       ON CONFLICT (org_id, project_id, kind) WHERE (config->>'managedBy') = 'integration-provisioner'
+       DO UPDATE SET name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled,
+                     updated_at = now()
+       RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
+      [
+        id,
+        input.orgId,
+        input.projectId,
+        input.kind,
+        input.name,
+        input.detail ?? "",
+        JSON.stringify(config),
+        input.enabled === false ? "false" : "true",
+        input.autoRoute === true ? "true" : "false",
+      ],
+    );
+    const row = result.rows[0];
+    if (row === undefined) throw new InboxSourceProjectScopeError();
+    return mapSource(SourceRowSchema.parse(row));
   },
 
   async listSources(client: QueryClient, orgId: string): Promise<InboxSource[]> {
@@ -148,12 +214,32 @@ export const InboxStore = {
   async updateSourceConfig(
     client: QueryClient,
     sourceId: string,
+    kind: SourceKind,
     config: Record<string, unknown>,
   ): Promise<InboxSource | undefined> {
+    const canonical = parsePersistedInboxSourceConfig(kind, config);
     const result = await client.query<SourceRow>(
       `UPDATE inbox_sources SET config = $2::jsonb, updated_at = now() WHERE id = $1
        RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
-      [sourceId, JSON.stringify(config)],
+      [sourceId, JSON.stringify(canonical)],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : mapSource(row);
+  },
+
+  /** Disable a permanently invalid external source and replace poison config with sanitized state. */
+  async markSourceNeedsAttention(
+    client: QueryClient,
+    source: Pick<InboxSource, "id" | "orgId" | "kind">,
+    attention: InboxSourceAttention,
+  ): Promise<InboxSource | undefined> {
+    const config = parsePersistedInboxSourceConfig(source.kind, terminalInboxSourceConfig(attention));
+    const result = await client.query<SourceRow>(
+      `UPDATE inbox_sources
+          SET config = $3::jsonb, enabled = 'false', updated_at = now()
+        WHERE id = $1 AND org_id = $2 AND enabled = 'true'
+       RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
+      [source.id, source.orgId, JSON.stringify(config)],
     );
     const row = result.rows[0];
     return row === undefined ? undefined : mapSource(row);

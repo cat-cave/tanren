@@ -37,7 +37,7 @@ const githubSource: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "issues labeled spec-candidate",
-  config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"], staticRef: "credential/github/x" },
+  config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"] },
   enabled: true,
   autoRoute: false,
 };
@@ -85,6 +85,8 @@ const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/miss
 
 const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAuthority = sentryAuthority) =>
   createSentryConnector({ secrets, sentryHttp, authority });
+const githubConnector = (githubHttp: GitHubHttpClient) =>
+  createGitHubIssuesConnector({ secrets, githubHttp, defaultStaticRef: "credential/github/x" });
 
 describe("github issues connector — request wire shape", () => {
   it("rejects removed bare-secret-ref providers before provider I/O", async () => {
@@ -92,7 +94,7 @@ describe("github issues connector — request wire shape", () => {
     const secretRead = vi.spyOn(secrets, "get");
     try {
       await expect(
-        createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch({
+        githubConnector(client).fetch({
           ...githubSource,
           config: {
             provider: "linear",
@@ -111,7 +113,7 @@ describe("github issues connector — request wire shape", () => {
 
   it("issues a GET to the repo issues endpoint carrying state=open, per_page=50, the resolved token and a refresh supplier", async () => {
     const { client, calls } = recordGitHub([]);
-    await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
+    await githubConnector(client).fetch(githubSource);
     expect(calls).toHaveLength(1);
     const req = calls[0]!;
     expect(req.method).toBe("GET");
@@ -124,9 +126,9 @@ describe("github issues connector — request wire shape", () => {
 
   it("omits the labels query entirely when no labels are configured", async () => {
     const { client, calls } = recordGitHub([]);
-    await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch({
+    await githubConnector(client).fetch({
       ...githubSource,
-      config: { owner: "cat-cave", repo: "app", staticRef: "credential/github/x" },
+      config: { owner: "cat-cave", repo: "app" },
     });
     expect(calls[0]!.path).toBe("/repos/cat-cave/app/issues?state=open&per_page=50");
     expect(calls[0]!.path).not.toContain("labels=");
@@ -134,13 +136,12 @@ describe("github issues connector — request wire shape", () => {
 
   it("url-encodes owner/repo and joins multiple labels comma-separated", async () => {
     const { client, calls } = recordGitHub([]);
-    await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch({
+    await githubConnector(client).fetch({
       ...githubSource,
       config: {
         owner: "cat cave",
         repo: "the/app",
         labels: ["spec candidate", "bug"],
-        staticRef: "credential/github/x",
       },
     });
     // labels are comma-joined then URL-encoded (the comma → %2C).
@@ -153,7 +154,7 @@ describe("github issues connector — request wire shape", () => {
 describe("github issues connector — normalization", () => {
   it("maps number/title/body and prefixes externalId with gh-owner/repo#number", async () => {
     const { client } = recordGitHub([{ number: 7, title: "csv export", body: "cfo wants csv", labels: [] }]);
-    const items = await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
+    const items = await githubConnector(client).fetch(githubSource);
     expect(items).toHaveLength(1);
     expect(items[0]).toEqual({
       externalId: "gh-cat-cave/app#7",
@@ -170,7 +171,7 @@ describe("github issues connector — normalization", () => {
       { number: 2, title: "warn me", labels: ["warning"] },
       { number: 3, title: "plain", labels: ["enhancement"] },
     ]);
-    const items = await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
+    const items = await githubConnector(client).fetch(githubSource);
     // perf
     expect(items[0]!.severity).toBe("warn");
     // warn
@@ -186,7 +187,7 @@ describe("github issues connector — normalization", () => {
       { number: 1, title: "x", labels: [{ name: "critical" }] },
       { number: 2, title: "y", labels: ["regression"] },
     ]);
-    const items = await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
+    const items = await githubConnector(client).fetch(githubSource);
     expect(items[0]!.severity).toBe("fail");
     expect(items[1]!.severity).toBe("fail");
   });
@@ -202,34 +203,26 @@ describe("github issues connector — normalization", () => {
       // number not numeric
       { number: "4", title: "string number", labels: [] },
     ]);
-    const items = await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
+    const items = await githubConnector(client).fetch(githubSource);
     expect(items.map((i) => i.title)).toEqual(["keep"]);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, auth, and non-array 200 are not 'no issues'", async () => {
     // A 404/5xx-class non-200 is a LOUD transient fetch error, never an empty list.
     const notOk = recordGitHub([{ number: 1, title: "x", labels: [] }], 404);
-    await expect(
-      createGitHubIssuesConnector({ secrets, githubHttp: notOk.client }).fetch(githubSource),
-    ).rejects.toThrow(IntakeSourceFetchError);
+    await expect(githubConnector(notOk.client).fetch(githubSource)).rejects.toThrow(IntakeSourceFetchError);
     // A 401 is a LOUD auth error (a misconfiguration), never "no issues".
     const denied = recordGitHub({ message: "Bad credentials" }, 401);
-    await expect(
-      createGitHubIssuesConnector({ secrets, githubHttp: denied.client }).fetch(githubSource),
-    ).rejects.toThrow(IntakeSourceAuthError);
+    await expect(githubConnector(denied.client).fetch(githubSource)).rejects.toThrow(IntakeSourceAuthError);
     // A 200 whose body is not an issues array is a failed read (shape changed /
     // error envelope) — LOUD, not silently zero issues.
     const notArray = recordGitHub({ message: "boom" }, 200);
-    await expect(
-      createGitHubIssuesConnector({ secrets, githubHttp: notArray.client }).fetch(githubSource),
-    ).rejects.toThrow(IntakeSourceFetchError);
+    await expect(githubConnector(notArray.client).fetch(githubSource)).rejects.toThrow(IntakeSourceFetchError);
   });
 
   it("returns a genuine empty list on a 200-with-an-empty-array (the legitimate 'no open issues')", async () => {
     const empty = recordGitHub([], 200);
-    expect(await createGitHubIssuesConnector({ secrets, githubHttp: empty.client }).fetch(githubSource)).toHaveLength(
-      0,
-    );
+    expect(await githubConnector(empty.client).fetch(githubSource)).toHaveLength(0);
   });
 });
 
@@ -255,6 +248,22 @@ describe("sentry connector — request wire shape", () => {
     expect(calls[0]!.path).toBe(
       `/api/0/projects/cat-cave/app/issues/?query=is%3Aunresolved+is${"%3A"}assigned+level%3Afatal&statsPeriod=14d`,
     );
+  });
+
+  it("accepts the canonical provisioner-owned config including lifecycle metadata", async () => {
+    const { client, calls } = recordSentry([]);
+    await sentryConnector(client).fetch({
+      ...sentrySource,
+      config: {
+        state: "active",
+        org: "cat-cave",
+        project: "app",
+        baseUrl: "https://sentry.example",
+        pollIntervalMs: 120_000,
+        managedBy: "integration-provisioner",
+      },
+    });
+    expect(calls[0]).toMatchObject({ baseUrl: "https://sentry.example", token: "sntrys_token" });
   });
 
   it("throws when the authorized generation secret is absent from the secret store", async () => {

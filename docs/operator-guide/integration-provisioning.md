@@ -169,8 +169,10 @@ The correct Sentry flow is:
    project it is creating or importing.
 3. Tanren creates or finds a Sentry project under the configured Sentry team.
 4. Tanren creates a client key and stores the DSN as a project secret/artifact.
-5. Tanren creates an `inbox_sources` row for that Tanren project using the
-   Sentry project slug and the org token ref.
+5. Tanren creates an `inbox_sources` row for that Tanren project using only the
+   Sentry organization/project slugs. Intake resolves the exact current project
+   selection and immutable grant/auth generations at execution time; no reusable
+   token reference is persisted on the source.
 
 Sentry's API supports the required pieces: create project under a team, create a
 project client key/DSN, list organization projects, and register service hooks.
