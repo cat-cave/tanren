@@ -1,5 +1,9 @@
 # Timeout / retry-cap eradication — the complete inventory + the program
 
+> ⛔ **FROZEN — historical, not live work.** This program shipped; the doctrine is
+> durable but the build is done. It is kept for rationale/provenance only. The live
+> mission is `docs/roadmap/mission-complete/`. Do not treat items here as to-do.
+
 This is the **coordinating artifact** for a multi-PR program with one owner-stated,
 **BINDING** goal: **Tanren must contain NO arbitrary timeouts, retry caps, attempt
 caps, or wall-clock deadlines anywhere.** Every safety / hang-detection / robustness

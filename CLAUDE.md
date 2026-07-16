@@ -1,5 +1,18 @@
 # Tanren — start here (for agents)
 
+> **CURRENT MISSION (read this first):** the live effort is the
+> **mission-complete build** — finishing the strengthened engine's **142 consumer
+> nodes** on top of the merged 8-contract spine (#931). The authority is
+> [`docs/roadmap/mission-complete/README.md`](docs/roadmap/mission-complete/README.md);
+> live node status is the single ledger
+> [`docs/roadmap/mission-complete/LEDGER.md`](docs/roadmap/mission-complete/LEDGER.md).
+> The orchestration playbook (wave-frozen base · barrier pre-flight · single-pass
+> audit · lane routing) is
+> [`docs/roadmap/mission-complete/orchestration.md`](docs/roadmap/mission-complete/orchestration.md).
+> **The apex v96/v97 narrative below is now the _acceptance test_ that runs AFTER
+> the nodes land — not the current work item.** Where this file and the
+> mission-complete README disagree, the README wins.
+
 Tanren turns specs into merged PRs — **autonomously** — through an agent workflow
 that runs each unit of work per-PR through real CI. **v0 (Phases 0–3) is built and
 merged, and the real run loop is live-validated end-to-end across three tiers
