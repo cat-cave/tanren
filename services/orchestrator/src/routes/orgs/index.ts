@@ -10,7 +10,12 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { ConfigRevisionSchema } from "../../engine/config/configRevision.js";
 import { DEFAULT_BUDGET_PERIOD } from "../../engine/config/index.js";
-import { migrateOrgConfig, type OrgAuditGateTarget, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
+import {
+  bindOrgGithubCredentialRefs,
+  migrateOrgConfig,
+  type OrgAuditGateTarget,
+  type OrgConfigV1,
+} from "../../engine/config/orgConfig.js";
 import { gatedConfigWrite, type ConfigGateGitHub } from "../../engine/config/tanrenConfigGate.js";
 import { OrganizationsStore } from "../../engine/repositories/organizations.js";
 import { systemActor } from "../../engine/state/actor.js";
@@ -134,7 +139,7 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     }
     let nextConfig: OrgConfigV1;
     try {
-      nextConfig = migrateOrgConfig(parsed.data.config);
+      nextConfig = bindOrgGithubCredentialRefs(migrateOrgConfig(parsed.data.config), orgId);
     } catch (error) {
       return c.json({ error: "invalid_org_config", message: messageOf(error) }, 400);
     }

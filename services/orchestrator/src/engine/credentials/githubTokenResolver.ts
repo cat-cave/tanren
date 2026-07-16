@@ -18,6 +18,7 @@
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js";
+import { canonicalOrgGithubCredentialRef } from "./refNamespace.js";
 
 export interface ResolvedGithubToken {
   token: string;
@@ -32,6 +33,11 @@ export interface GithubTokenResolverInput {
   installation?: OrgGithubAppInstallation;
   /** Static fallback ref (e.g. a project/brownfield `github_token` ref). */
   staticRef?: string;
+  /**
+   * When the static ref comes from org authority, revalidate its exact tenant
+   * namespace on every read (including refresh) immediately before SecretStore.
+   */
+  staticRefOrgId?: string;
   /** Shared minter (cache lives here); created per-call if omitted. */
   minter?: GithubAppTokenMinter;
 }
@@ -92,9 +98,17 @@ export async function resolveGithubToken(input: GithubTokenResolverInput): Promi
     throw new NoGithubCredentialConfiguredError();
   }
   const readStatic = async (): Promise<string> => {
-    const secret = await input.secrets.get(ref);
+    const authorizedRef =
+      input.staticRefOrgId === undefined
+        ? ref
+        : canonicalOrgGithubCredentialRef({
+            orgId: input.staticRefOrgId,
+            supplied: ref,
+            kind: "github_token",
+          });
+    const secret = await input.secrets.get(authorizedRef);
     if (secret === undefined) {
-      throw new MissingGithubCredentialRefError(ref);
+      throw new MissingGithubCredentialRefError(authorizedRef);
     }
     return secret.value;
   };

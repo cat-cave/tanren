@@ -54,8 +54,9 @@ function orgConfigPool(config: unknown): pg.Pool {
 }
 
 // A secret store returning a fake token only for the org-default ref.
+const ORG_A_GITHUB_REF = "credential/github/org/org_a/default";
 const fakeSecrets = {
-  get: async (ref: string) => (ref === "gh/org" ? { ref, value: "ghs_fake" } : undefined),
+  get: async (ref: string) => (ref === ORG_A_GITHUB_REF ? { ref, value: "ghs_fake" } : undefined),
 } as never;
 
 // A fake GitHub HTTP client returning one open issue, capturing the token used so
@@ -77,7 +78,7 @@ function fakeGithubHttp(): { http: never; tokensSeen: string[] } {
 describe("intake credential resolution — configured + resolvable", () => {
   it("builds the connector using the org-default static token when no App is installed", async () => {
     // Org has NO App installation but a default static github_token ref.
-    const pool = orgConfigPool({ version: 1, defaultCredentials: { github_token: "gh/org" } });
+    const pool = orgConfigPool({ version: 1, defaultCredentials: { github_token: ORG_A_GITHUB_REF } });
     const { http, tokensSeen } = fakeGithubHttp();
 
     const connectors = await buildIntakeConnectorMapForOrg({ pool, secrets: fakeSecrets, githubHttp: http }, "org_a", [
@@ -112,6 +113,38 @@ describe("intake credential resolution — configured but credential missing (LO
     expect((error as IntakeGithubCredentialMissingError).sourceId).toBe("src_gh");
     expect((error as IntakeGithubCredentialMissingError).orgId).toBe("org_a");
     expect((error as Error).message).toContain("github_token");
+  });
+});
+
+describe("intake credential resolution — hostile persisted tenant ref", () => {
+  it("rejects an old org-B ref before secret or provider I/O", async () => {
+    const pool = orgConfigPool({
+      version: 1,
+      defaultCredentials: { github_token: "credential/github/org/org_b/default" },
+    });
+    let secretReads = 0;
+    let providerCalls = 0;
+    await expect(
+      buildIntakeConnectorMapForOrg(
+        {
+          pool,
+          secrets: {
+            get: async () => {
+              secretReads += 1;
+            },
+          } as never,
+          githubHttp: {
+            request: async () => {
+              providerCalls += 1;
+              return { status: 200, body: [] };
+            },
+          } as never,
+        },
+        "org_a",
+        [githubSource],
+      ),
+    ).rejects.toThrow("credential ref does not belong to the authenticated owner");
+    expect({ secretReads, providerCalls }).toEqual({ secretReads: 0, providerCalls: 0 });
   });
 });
 
@@ -242,10 +275,10 @@ describe("intake fetch auth — permanent denial reaches durable attention", () 
   it("parks a denied organization-bound credential instead of retrying forever", async () => {
     const stub = pollerStubPool(githubSource, {
       version: 1,
-      defaultCredentials: { github_token: "gh/live" },
+      defaultCredentials: { github_token: ORG_A_GITHUB_REF },
     });
     const secrets = {
-      get: async (ref: string) => (ref === "gh/live" ? { ref, value: "ghs_live_but_denied" } : undefined),
+      get: async (ref: string) => (ref === ORG_A_GITHUB_REF ? { ref, value: "ghs_live_but_denied" } : undefined),
     } as never;
     const deniedHttp = {
       request: async () => ({ status: 401, body: { message: "Bad credentials" } }),

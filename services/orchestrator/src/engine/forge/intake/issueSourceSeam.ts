@@ -27,6 +27,7 @@ import {
   MissingGithubCredentialRefError,
   NoGithubCredentialConfiguredError,
 } from "../../credentials/githubTokenResolver.js";
+import { CredentialRefOwnershipError } from "../../credentials/refNamespace.js";
 import {
   IntakeSourceAuthError,
   IntakeSourceAuthorityError,
@@ -106,6 +107,7 @@ export function classifyPermanentInboxSourceError(error: unknown): PermanentInbo
     error instanceof IntakeGithubCredentialMissingError ||
     error instanceof NoGithubCredentialConfiguredError ||
     error instanceof MissingGithubCredentialRefError ||
+    error instanceof CredentialRefOwnershipError ||
     error instanceof IntakeSourceAuthError
   ) {
     return {

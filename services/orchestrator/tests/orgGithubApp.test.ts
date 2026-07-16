@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OrgGithubAppInstallation } from "../src/engine/config/orgConfig.js";
 import {
+  loadOrgDefaultGithubCredentialRef,
   loadOrgGithubAppInstallation,
+  persistOrgDefaultGithubCredentialRef,
   persistOrgGithubAppInstallation,
 } from "../src/engine/credentials/orgGithubApp.js";
 import { RoutesPool } from "./helpers/routesPool.js";
@@ -38,11 +40,14 @@ describe("orgGithubApp installation round-trip", () => {
     const pool = new RoutesPool();
     pool.seedOrg({
       id: "org_acme",
-      config: { version: 1, defaultCredentials: { github_token: "credential/github/x" } },
+      config: {
+        version: 1,
+        defaultCredentials: { github_token: "credential/github/org/org_acme/default" },
+      },
     });
     await persistOrgGithubAppInstallation(pool.asPgPool(), "org_acme", installation);
     const stored = pool.orgs.get("org_acme")?.config as { defaultCredentials?: unknown; github_app?: unknown };
-    expect(stored.defaultCredentials).toEqual({ github_token: "credential/github/x" });
+    expect(stored.defaultCredentials).toEqual({ github_token: "credential/github/org/org_acme/default" });
     expect(stored.github_app).toEqual(installation);
   });
 
@@ -51,5 +56,31 @@ describe("orgGithubApp installation round-trip", () => {
     const wrote = await persistOrgGithubAppInstallation(pool.asPgPool(), "org_ghost", installation);
     expect(wrote).toBe(false);
     expect(pool.orgs.get("org_ghost")).toBeUndefined();
+  });
+
+  it("derives a bare default-token name and rejects a cross-org full ref", async () => {
+    const pool = new RoutesPool();
+    pool.seedOrg({ id: "org_acme", config: { version: 1 } });
+    await expect(persistOrgDefaultGithubCredentialRef(pool.asPgPool(), "org_acme", "default")).resolves.toBe(true);
+    await expect(loadOrgDefaultGithubCredentialRef(pool.asPgPool(), "org_acme")).resolves.toBe(
+      "credential/github/org/org_acme/default",
+    );
+    await expect(
+      persistOrgDefaultGithubCredentialRef(pool.asPgPool(), "org_acme", "credential/github/org/org_other/default"),
+    ).rejects.toThrow("credential ref does not belong to the authenticated owner");
+  });
+
+  it("rejects an already-persisted hostile default ref on read", async () => {
+    const pool = new RoutesPool();
+    pool.seedOrg({
+      id: "org_acme",
+      config: {
+        version: 1,
+        defaultCredentials: { github_token: "credential/github/org/org_other/default" },
+      },
+    });
+    await expect(loadOrgDefaultGithubCredentialRef(pool.asPgPool(), "org_acme")).rejects.toThrow(
+      "credential ref does not belong to the authenticated owner",
+    );
   });
 });

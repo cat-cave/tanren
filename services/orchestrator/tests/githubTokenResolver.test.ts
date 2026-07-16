@@ -22,10 +22,28 @@ describe("resolveGithubToken", () => {
     const resolved = await resolveGithubToken({
       secrets,
       staticRef: "credential/github/org/o1/default",
+      staticRefOrgId: "o1",
     });
     expect(resolved.source).toBe("static");
     expect(resolved.token).toBe("ghp_static");
     expect(await resolved.refresh()).toBe("ghp_static");
+  });
+
+  it("rejects a cross-org static ref immediately before SecretStore access", async () => {
+    let secretReads = 0;
+    const secrets = {
+      get: async () => {
+        secretReads += 1;
+      },
+    } as never;
+    await expect(
+      resolveGithubToken({
+        secrets,
+        staticRef: "credential/github/org/org_b/default",
+        staticRefOrgId: "org_a",
+      }),
+    ).rejects.toThrow("credential ref does not belong to the authenticated owner");
+    expect(secretReads).toBe(0);
   });
 
   it("throws a descriptive error when the configured static ref is missing", async () => {
@@ -81,7 +99,11 @@ describe("resolveGithubToken", () => {
   it("re-reads the static secret on refresh, observing a rotated value", async () => {
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_v1" });
-    const resolved = await resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/default" });
+    const resolved = await resolveGithubToken({
+      secrets,
+      staticRef: "credential/github/org/o1/default",
+      staticRefOrgId: "o1",
+    });
     expect(resolved.token).toBe("ghp_v1");
     await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_v2" });
     expect(await resolved.refresh()).toBe("ghp_v2");
