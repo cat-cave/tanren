@@ -8,7 +8,6 @@
 
 import type { Hono } from "hono";
 import type pg from "pg";
-import { PgCasByteStore } from "./engine/cas/pgCasByteStore.js";
 import { orgScopingPool } from "./engine/data/orgScopedDb.js";
 import { PgEventStore } from "./engine/eventStore.js";
 import type { Allocator, SecretStore, CommandSubstrate } from "./engine/contracts/index.js";
@@ -16,8 +15,7 @@ import { buildForgeRouteAnswererFactories } from "./engine/forge/routeFactories.
 import type { GitHubHttpClient } from "./engine/providers/github.js";
 import type { GithubAppTokenMinter } from "./engine/providers/githubAppTokenMinter.js";
 import { mountGithubAppInstallFromEnv } from "./routes/auth/githubAppInstall.js";
-import { createBehaviorCoverageRoutes } from "./routes/behaviorCoverage/index.js";
-import { createBehaviorRoutes } from "./routes/behaviors/index.js";
+import { mountBehaviorSurfaces } from "./routes/behaviorCoverage/mount.js";
 import { mountBrownfieldRoutes } from "./routes/brownfield/mount.js";
 import { createCredentialRoutes, type CredentialRegistry } from "./routes/credentials/index.js";
 import { createDiscoveryRoutes } from "./routes/discovery/index.js";
@@ -158,15 +156,11 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // no JUnit-upload webhook (the no-Actions delivery model).
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));
-  app.route("/orgs", createBehaviorRoutes({ pool: scopedPool }));
-  // rv-4 frozen behavior-coverage selection: the read/write/analyze/replay
-  // authority. Mounts at `/orgs/:orgId/projects/:projectId/behavior-coverage`
-  // on the org-scoping pool, with the SOLE production PgCasByteStore (IN-2/#961)
-  // for the immutable selection facts and the default PgEventStore path (the
-  // factory constructs `new PgEventStore(client)` per locked transaction). No
-  // fake recorder, in-memory CAS, or test-only mount — the durable digest is the
-  // `behavior.coverage.selection_analyzed` event's `analysisId`.
-  app.route("/orgs", createBehaviorCoverageRoutes({ pool: scopedPool, cas: new PgCasByteStore(scopedPool) }));
+  // Runtime-verification behavior surfaces (persona/behavior-revision API + the
+  // rv-4 behavior-coverage selection authority) on the org-scoping pool, folded
+  // into one sub-mount — see routes/behaviorCoverage/mount.ts. Same routes, same
+  // paths, same deps, same registration order as the prior inline calls.
+  mountBehaviorSurfaces(app, scopedPool);
   app.route("/orgs", createMilestoneRoutes({ pool: scopedPool }));
   mountBrownfieldRoutes(app, {
     pool: scopedPool,
