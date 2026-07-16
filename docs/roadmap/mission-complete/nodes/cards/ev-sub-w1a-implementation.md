@@ -46,19 +46,24 @@ apex behavior. It cannot earn consumer-node credit.
 | `contracts/json/events/integration_author_succeeded.json`                                           | Generated JSON contract                                                 |
 | `contracts/json/events/integration_author_failed.json`                                              | Generated JSON contract                                                 |
 | `services/orchestrator/tests/eventVocabularyW1aIntegrationAuthor.test.ts`                           | Unit and drift-boundary proof                                           |
-| `services/orchestrator/tests/eventVocabularyW1aIntegrationAuthorCatalog.integration.test.ts`        | Gated real-Postgres catalog/FK/RLS proof (skipped until Phase B slot)   |
 | `services/orchestrator/tests/prep/integrationAuthorEventPrep.test.ts`                               | Flip obsolete “no production registration” assertion; retain no-authority-import proof |
 
 ### Phase B — serialized migration paths (BLOCKED; do not author yet)
 
-| Path                                              | Action after 0043/0044/0045 on `origin/main`                          |
-| ------------------------------------------------- | --------------------------------------------------------------------- |
-| `db/migrations/004N_event_vocabulary_w1a.sql`     | Add only the four frozen catalog rows, idempotently (`004N` = free)   |
-| `db/migrations/meta/004N_snapshot.json`           | Schema-copy predecessor; fresh ID chained (no DDL)                    |
-| `db/migrations/meta/_journal.json`                | Append the serialized idx-N entry                                     |
+| Path                                                                                         | Action after 0043/0044/0045 on `origin/main`                                                                                          |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `db/migrations/004N_event_vocabulary_w1a.sql`                                                | Add only the four frozen catalog rows, idempotently (`004N` = free)                                                                   |
+| `db/migrations/meta/004N_snapshot.json`                                                      | Schema-copy predecessor; fresh ID chained (no DDL)                                                                                    |
+| `db/migrations/meta/_journal.json`                                                           | Append the serialized idx-N entry                                                                                                     |
+| `services/orchestrator/tests/eventVocabularyW1aIntegrationAuthorCatalog.integration.test.ts` | **Not authored until the actual free migration slot exists.** When created, complete W0-shaped proof: `migrate()` + `PgEventStore` append + FK/catalog seed + RLS isolation + restart read-back (`eventVocabularyW0Catalog.integration.test.ts`). No guessed 0046–0048 filenames, no skip-stub body, no Phase A partial suite. |
 
 **Never steal slots 0043 / 0044 / 0045.** Choose the then-free ≥0046-class index
 only after predecessors land and this branch rebases onto that `main`.
+
+**Phase A hard exclusion:** do not create
+`eventVocabularyW1aIntegrationAuthorCatalog.integration.test.ts` (or any
+stub/skip cosplay of the catalog proof) until Phase B authors the real
+`004N` slot. Catalog/FK/RLS success is not claimable from Phase A.
 
 No wildcard ownership. Any additional changed path requires this card to be
 amended and committed before that path is edited.
@@ -111,7 +116,9 @@ All 16 leaves are `public`. No `orgId` / `projectId` / `runId` / credentials in 
 
 - All migrations / journal / snapshots until the free post-0045 slot is known
 - Real catalog/FK claims that cannot execute without the migration
-- IN-7 producer, binding, kernel, `PgEventStore.append` call sites
+- Stub or skip-only catalog integration tests (guessed future slots, empty
+  Phase-B TODO bodies, or “defers until migration” cosplay proofs)
+- IN-7 producer, binding, kernel, `PgEventStore.append` call sites (Phase A)
 - HTTP routes, dashboard UI, nav, `screens.ts`, apex harness
 - EventStore changes, runtime `event_types` upsert, second catalog
 - Aliases / synonyms with `fragment.authoring.*` or any fifth name
@@ -124,18 +131,20 @@ All 16 leaves are `public`. No `orgId` / `projectId` / `runId` / credentials in 
 
 ### Phase A (this branch)
 
-1. focused W1-A unit tests;
+1. focused W1-A unit tests only (`eventVocabularyW1aIntegrationAuthor.test.ts` + PREP flip);
 2. updated PREP no-authority-import proof + production-registration flip;
 3. `corepack pnpm run codegen:events` and event-seed content proof;
 4. contract JSON generation via official generators (never hand-edit);
 5. `export __ETC_BASHRC_SOURCED=1; just affected-typecheck origin/main`;
 6. `just affected-test origin/main`;
-7. all authored files ≤500 lines (`registry.ts` ≤498).
+7. all authored files ≤500 lines (`registry.ts` ≤498);
+8. no catalog integration test file present.
 
 ### Phase B (after free slot)
 
-1. append `004N` SQL/journal/snapshot only;
-2. run gated disposable real-Postgres catalog/FK/RLS suite;
+1. append `004N` SQL/journal/snapshot only (real free index, no guessing);
+2. author the complete W0-shaped gated real-Postgres catalog/FK/RLS/restart suite
+   at `eventVocabularyW1aIntegrationAuthorCatalog.integration.test.ts`;
 3. rerun narrow checks;
 4. hand off full `just fast-check`, `just ci`, and `just smoke` to root publication.
 
