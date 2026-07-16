@@ -426,3 +426,27 @@ completion until Slice 2/3 land binding activation and remaining cutover.
 - Protected `0041`/`0042` migration and snapshot bytes match the publication base.
   Migration `0043` contains no line-leading `UPDATE` or `DELETE FROM`; the
   mutation-sensitive model test guards that clean zero-user replacement rule.
+
+#### Final P1 redrive receipt
+
+- The two publication-blocking P1 corrections were validated at exact product
+  head `0d00346d03c507c198013c808eb0811bb0d8461b` (tree
+  `f844d85c98c053a209c62f1de4068e032081dafb`). Principal selection now preserves
+  the submitted durable operation identity and exact continuation state, fails
+  closed on hostile/malformed/mismatched responses, and treats only a matching
+  `completed` response as success. Resume accepts migration-valid
+  `credential_staged` and rejects schema-impossible `staged`.
+- Four focused files passed 53/53 tests. `just affected-typecheck` passed;
+  `just affected-test` passed 499 files / 4,888 tests with 58 files / 316 declared
+  live-gated tests skipped. `just lint`, `just fast-check`, and build-inclusive
+  `just ci` passed; both full gates passed 718 files / 6,980 tests with 59 files /
+  330 declared live-gated tests skipped, and all five package builds passed.
+- Serialized `just smoke` completed green at that exact product head through
+  service health, CLI doctor, runner SSH, mTLS plane split/deprivilege, real-PG
+  recovery and RLS cohorts, integration lifecycle durability, Vault CAS,
+  allocator/registry/budget proofs, and writer-backed merge authority 28/28.
+  Scoped teardown proved zero candidate containers, volumes, networks, image
+  tags, secret symlinks, processes, or smoke-port listeners.
+- This receipt is evidence-only: it does not change product bytes or claim IN-1,
+  binding-worker, downstream-consumer, or SP-8 completion. Node credit remains
+  **0**.
