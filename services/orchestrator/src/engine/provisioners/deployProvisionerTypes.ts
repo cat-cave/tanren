@@ -35,9 +35,3 @@ export interface DeployArtifactIdentity {
   artifactDigest: string;
   providerChecksum: string | null;
 }
-
-/** One build and its identity, acquired under the same deploy-stage authority. */
-export interface DeployArtifactBuild {
-  result: DeployResult;
-  identity: DeployArtifactIdentity;
-}

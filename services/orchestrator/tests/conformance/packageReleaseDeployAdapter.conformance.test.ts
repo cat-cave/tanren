@@ -123,7 +123,7 @@ describe("PackageReleaseDeployAdapter — verify + surface", () => {
     );
     registry.scriptResolvable("0.0.0-deadbee", [false, false, true]);
     const verification = await instance.verify(
-      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      () => operationGrant("verify", { resourceId: ref.appId, deploymentId }),
       ref,
       deploymentId,
     );
@@ -143,7 +143,7 @@ describe("PackageReleaseDeployAdapter — verify + surface", () => {
     );
     registry.scriptResolvable("0.0.0-deadbee", [false]);
     await expect(
-      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+      instance.verify(() => operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
     ).rejects.toThrow(/is STUCK unresolvable on the registry/u);
   });
 

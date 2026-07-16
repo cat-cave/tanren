@@ -3,7 +3,7 @@
  * Consent revision is issued by authenticated administrative action, not callers.
  */
 
-export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v1" as const;
+export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v2" as const;
 
 export type IntegrationProviderKind =
   | "slack"
@@ -44,7 +44,7 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
         operations: [
           { id: "discover", requiredScopes: ["channels:read"], plane: "control" },
           { id: "provision", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
-          { id: "bind", requiredScopes: ["channels:read"], plane: "control" },
+          { id: "bind", requiredScopes: ["channels:manage", "channels:read"], plane: "control" },
         ],
       },
     ],
@@ -63,6 +63,7 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
           // never invent project:admin that the verifier cannot prove without mutation.
           { id: "provision", requiredScopes: ["project:write"], plane: "control" },
           { id: "bind", requiredScopes: ["project:read"], plane: "control" },
+          { id: "intake", requiredScopes: ["event:read", "project:read"], plane: "control" },
         ],
       },
     ],

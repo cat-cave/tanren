@@ -37,6 +37,8 @@ function defaultTarget(operation: IntegrationPrivilegedOperation): IntegrationOp
       return { resourceId: "resource-1", projectName: "proj-test", orgSlug: "org-test" };
     case "attach_runtime_env":
       return { resourceId: "app-1", environment: "production" };
+    case "intake":
+      return { resourceId: "resource-1" };
     case "deploy":
       return { resourceId: "app-1", sourceRepo: "owner/repo", sourceRef: "sha" };
     default:
@@ -46,7 +48,7 @@ function defaultTarget(operation: IntegrationPrivilegedOperation): IntegrationOp
 
 function scopesFor(providerKind: string): string[] {
   if (providerKind === "slack") return ["channels:read", "channels:manage"];
-  if (providerKind === "sentry") return ["project:read", "project:write"];
+  if (providerKind === "sentry") return ["event:read", "project:read", "project:write"];
   return [];
 }
 

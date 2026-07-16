@@ -161,7 +161,7 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
     expect(JSON.stringify(artifact)).not.toContain(stored?.value);
   });
 
-  it("provision() emits an errors-kind inbox_source referencing the project slug + the org token ref (no token value)", async () => {
+  it("provision() emits an errors-kind inbox source without reusable credential authority", async () => {
     const ctx = projectCtx("billing");
     const artifact = await makeSentry().provision(
       await sentryGrant("provision", ctx, projectIntegrationOperationTarget(ctx)),
@@ -173,9 +173,9 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
     expect(artifact.inboxSource?.config).toMatchObject({
       org: "acme",
       project: "billing",
-      tokenRef: `${SENTRY_TOKEN_REF}/g/1`,
     });
-    // The inbox source carries the token REF, never the resolved token value.
+    expect(artifact.inboxSource?.config).not.toHaveProperty("tokenRef");
+    // Reusable credential coordinates never enter connector config.
     expect(JSON.stringify(artifact.inboxSource)).not.toContain("org-token-value");
   });
 
@@ -197,6 +197,26 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
         missingCtx,
       ),
     ).rejects.toThrow(/unknown project/u);
+  });
+
+  it("bind() refuses to mint a client key when the existing project has none", async () => {
+    const secrets = new InMemorySecretStore();
+    await secrets.put({ ref: `${SENTRY_TOKEN_REF}/g/1`, value: "org-token-value" });
+    const transport = new ScriptedSentryTransport({
+      existing: [{ slug: SENTRY_SEEDED_SLUG, name: "acme-web", platform: "node" }],
+      seedKeys: false,
+    });
+    const provisioner = new SentryProvisioner(transport, secrets);
+    const ctx = projectCtx("billing");
+
+    await expect(
+      provisioner.bind(
+        await sentryGrant("bind", ctx, projectIntegrationOperationTarget(ctx, SENTRY_SEEDED_SLUG)),
+        SENTRY_SEEDED_SLUG,
+        ctx,
+      ),
+    ).rejects.toThrow(/bind is non-mutating/u);
+    expect(transport.clientKeyCreates).toBe(0);
   });
 
   it("registry: buildIntegrationProvisioner('sentry', { sentry }) constructs the real SentryProvisioner", () => {
@@ -368,7 +388,7 @@ describe("buildIntegrationProvisioner registry (Codex H3 #25 unified registry)",
     const vercel = buildDeployProvisioner("deploy.vercel", { transport: scriptedDeployTransport("vercel"), secrets });
     const fly = buildDeployProvisioner("deploy.flyio", { transport: scriptedDeployTransport("fly"), secrets });
     // The narrower helper returns the DeployProvisioner base class (so callers get
-    // `attachRuntimeEnv` / `deploy` / `destroyApp` without an extra cast). Asserted
+    // `attachRuntimeEnv` / `deploy` / `deploymentStatus` without an extra cast). Asserted
     // via the concrete subclass check + the `providerKind` getter that only exists
     // on the DeployProvisioner base.
     expect(vercel).toBeInstanceOf(VercelDeployProvisioner);

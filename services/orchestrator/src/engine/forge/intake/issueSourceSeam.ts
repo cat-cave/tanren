@@ -28,7 +28,12 @@ import {
   NoGithubCredentialConfiguredError,
 } from "../../credentials/githubTokenResolver.js";
 import { IntakeSourceAuthError } from "../inbox/connectorErrors.js";
-import { buildInboxConnectorMap, type InboxSource, type SourceConnector } from "../inbox/index.js";
+import {
+  buildInboxConnectorMap,
+  buildPgSentryIntakeAuthority,
+  type InboxSource,
+  type SourceConnector,
+} from "../inbox/index.js";
 
 /**
  * Thrown when a project/org HAS a GitHub `issues` intake source configured but no
@@ -148,6 +153,7 @@ export async function buildIntakeConnectorMapForOrg(
   return buildInboxConnectorMap({
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
+    sentryAuthority: buildPgSentryIntakeAuthority(deps.pool),
     ...(installation === undefined ? {} : { installation }),
     ...(staticRef === undefined ? {} : { defaultGithubStaticRef: staticRef }),
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),

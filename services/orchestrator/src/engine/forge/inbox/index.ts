@@ -31,8 +31,10 @@ export { GitHubIssuesConfig, createGitHubIssuesConnector, type GitHubConnectorDe
 export {
   SentryConfig,
   createSentryConnector,
+  buildPgSentryIntakeAuthority,
   FetchSentryHttpClient,
   type SentryConnectorDeps,
+  type SentryIntakeAuthority,
   type SentryHttpClient,
   type SentryHttpRequest,
   type SentryHttpResponse,

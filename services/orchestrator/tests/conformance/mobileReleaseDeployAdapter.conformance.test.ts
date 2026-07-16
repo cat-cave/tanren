@@ -111,7 +111,7 @@ describe("MobileReleaseDeployAdapter — verify + surface", () => {
     );
     distribution.scriptStates(deploymentId, ["processing", "processing", "available"]);
     const verification = await instance.verify(
-      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      () => operationGrant("verify", { resourceId: ref.appId, deploymentId }),
       ref,
       deploymentId,
     );
@@ -131,7 +131,7 @@ describe("MobileReleaseDeployAdapter — verify + surface", () => {
     );
     distribution.scriptStates(deploymentId, ["processing", "rejected"]);
     await expect(
-      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+      instance.verify(() => operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
     ).rejects.toThrow(/was REJECTED by the channel/u);
   });
 
@@ -147,7 +147,7 @@ describe("MobileReleaseDeployAdapter — verify + surface", () => {
     const advancing = Array.from({ length: 20 }, (_v, i) => `in_review_${String(i)}`);
     distribution.scriptStates(deploymentId, [...advancing, "available"]);
     const verification = await instance.verify(
-      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      () => operationGrant("verify", { resourceId: ref.appId, deploymentId }),
       ref,
       deploymentId,
     );
@@ -166,7 +166,7 @@ describe("MobileReleaseDeployAdapter — verify + surface", () => {
     );
     distribution.scriptStates(deploymentId, ["processing"]);
     await expect(
-      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+      instance.verify(() => operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
     ).rejects.toThrow(/is STUCK in non-terminal state 'processing'/u);
   });
 

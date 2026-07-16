@@ -243,19 +243,19 @@ function isNameTaken(error: unknown): boolean {
  */
 export function secretStoreSlackTransportFactory(
   secrets: SecretStore,
-  makeTransport: (botToken: string) => SlackApiTransport,
+  makeTransport: (tokenForAttempt: () => Promise<string>) => SlackApiTransport,
 ): SlackTransportFactory {
   return async (grant: OrgGrant, expected: EligibleOperationExpectation): Promise<SlackApiTransport> => {
-    // Exact generation secret read only — lease-gated IntegrationSecretStore.getExact.
-    const { GenerationAddressedIntegrationSecretStore } = await import("../integrationSecretStoreImpl.js");
-    const { assertOrgGrantMatchesLease, secretValueForLease } =
-      await import("../../repositories/integrationConnectionResolve.js");
-    assertOrgGrantMatchesLease(grant);
-    const token = await secretValueForLease(
-      new GenerationAddressedIntegrationSecretStore(secrets),
-      grant.eligibleOperation,
-      expected,
-    );
-    return makeTransport(token);
+    return makeTransport(async () => {
+      const { GenerationAddressedIntegrationSecretStore } = await import("../integrationSecretStoreImpl.js");
+      const { assertOrgGrantMatchesLease, secretValueForLease } =
+        await import("../../repositories/integrationConnectionResolve.js");
+      assertOrgGrantMatchesLease(grant);
+      return secretValueForLease(
+        new GenerationAddressedIntegrationSecretStore(secrets),
+        grant.eligibleOperation,
+        expected,
+      );
+    });
   };
 }

@@ -159,6 +159,15 @@ export interface VerifyPollPolicy {
   intervalMs: number;
 }
 
+/** Acquire fresh exact verify authority immediately before each privileged poll. */
+export type DeployGrantForAttempt = () => Promise<OrgGrant>;
+
+/** Distinct authorities for the two privileged stages in a composite build. */
+export interface BuildArtifactAuthority {
+  readonly deploy: OrgGrant;
+  readonly resolveArtifactIdentity: (deploymentId: string) => Promise<OrgGrant>;
+}
+
 // ===========================================================================
 // SP-6 — the EXTENDED release lifecycle (digest / preview / promote / rollback).
 // These are NOT a V2 port: they extend the SINGLE DeployAdapter contract in place
@@ -362,7 +371,7 @@ export interface DeployAdapter {
    * throw LOUD when it reaches a failure terminal / never becomes ready within the
    * poll budget / the URL smoke check fails. The success shape proves the deploy.
    */
-  verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification>;
+  verify(grantForAttempt: DeployGrantForAttempt, ref: DeployRef, deploymentId: string): Promise<DeployVerification>;
   /** Read a triggered deployment's current provider status (one read, no polling). */
   status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus>;
   /**
@@ -381,7 +390,7 @@ export interface DeployAdapter {
    * digest" primitive — the minted digest is the release/artifact identity that
    * lands on `release_instances.artifact_digest`. A build failure throws LOUD.
    */
-  buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult>;
+  buildArtifact(authority: BuildArtifactAuthority, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult>;
   /**
    * Read the EXACT artifact identity of an existing deployment (the canonical SP-3
    * `Digest` + optional provider `ProviderChecksum`) — used to re-bind a running

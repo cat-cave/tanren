@@ -58,6 +58,8 @@ export function normalizeIntegrationOperationTarget(
       return nonEmpty(target.resourceId) && target.environment === "production" && only("resourceId", "environment")
         ? target
         : undefined;
+    case "intake":
+      return nonEmpty(target.resourceId) && only("resourceId") ? target : undefined;
     case "deploy":
       return nonEmpty(target.resourceId) &&
         nonEmpty(target.sourceRepo) &&

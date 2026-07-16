@@ -24,6 +24,7 @@ import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { ProposedSpec, PlacementKind } from "../../engine/forge/discovery/index.js";
 import {
   acceptCandidate,
+  buildPgSentryIntakeAuthority,
   buildInboxConnectorMap,
   CandidateNotFoundError,
   CandidateNotPlaceableError,
@@ -134,6 +135,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     buildInboxConnectorMap({
       secrets: options.secrets,
       githubHttp: options.githubHttp,
+      sentryAuthority: buildPgSentryIntakeAuthority(options.pool),
       ...(options.sentryHttp === undefined ? {} : { sentryHttp: options.sentryHttp }),
       ...(options.linearHttp === undefined ? {} : { linearHttp: options.linearHttp }),
       ...(options.jiraHttp === undefined ? {} : { jiraHttp: options.jiraHttp }),

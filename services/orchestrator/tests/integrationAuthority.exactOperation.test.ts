@@ -14,7 +14,10 @@ import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAu
 import type { IntegrationEligibilityRow } from "../src/engine/integrations/integrationAuthorityEligibility.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
 import { secretValueForDeployOperation } from "../src/engine/provisioners/deployOperationAuthority.js";
-import { loadDurableLinkStateSql } from "../src/engine/repositories/integrationConnectionFinalize.js";
+import {
+  loadDurableLinkStateSql,
+  markStagedCleanupCompleteSql,
+} from "../src/engine/repositories/integrationConnectionFinalize.js";
 import type { IntegrationQueryClient } from "../src/engine/repositories/integrationQuery.js";
 import { secretValueForLease } from "../src/engine/repositories/integrationConnectionResolve.js";
 import { testOrgGrant } from "./helpers/orgGrant.js";
@@ -270,6 +273,9 @@ describe("exact integration operation authority", () => {
       stagedSecretHandle: "secret://integration/staged/op-forged",
     } as unknown as PrincipalVerificationPermit;
     await expect(loadDurableLinkStateSql({ query }, forged)).rejects.toThrow(/invalid principal verification permit/u);
+    await expect(markStagedCleanupCompleteSql({ query }, forged)).rejects.toThrow(
+      /invalid principal verification permit/u,
+    );
     expect(query).not.toHaveBeenCalled();
   });
 

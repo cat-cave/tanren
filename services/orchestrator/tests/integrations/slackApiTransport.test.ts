@@ -30,7 +30,7 @@ describe("FetchSlackApiTransport", () => {
   it("lists conversations and maps is_member + the next cursor", async () => {
     const recorder: Recorded[] = [];
     const transport = new FetchSlackApiTransport(
-      "xoxb-token",
+      async () => "xoxb-token",
       fetchReturning(
         {
           ok: true,
@@ -50,7 +50,7 @@ describe("FetchSlackApiTransport", () => {
 
   it("creates a conversation and maps the returned channel", async () => {
     const transport = new FetchSlackApiTransport(
-      "xoxb-token",
+      async () => "xoxb-token",
       fetchReturning({ ok: true, channel: { id: "C_new", name: "tanren-x", is_member: true } }),
     );
     const channel = await transport.createConversation({ name: "tanren-x" });
@@ -58,19 +58,25 @@ describe("FetchSlackApiTransport", () => {
   });
 
   it("surfaces a non-ok Slack envelope as a thrown Error carrying the slack error code", async () => {
-    const transport = new FetchSlackApiTransport("xoxb-token", fetchReturning({ ok: false, error: "name_taken" }));
+    const transport = new FetchSlackApiTransport(
+      async () => "xoxb-token",
+      fetchReturning({ ok: false, error: "name_taken" }),
+    );
     await expect(transport.createConversation({ name: "dup" })).rejects.toThrow(/name_taken/u);
   });
 
   it("resolves the bot user id from auth.test", async () => {
-    const transport = new FetchSlackApiTransport("xoxb-token", fetchReturning({ ok: true, user_id: "U_BOT" }));
+    const transport = new FetchSlackApiTransport(
+      async () => "xoxb-token",
+      fetchReturning({ ok: true, user_id: "U_BOT" }),
+    );
     expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
   });
 
   it("throws on a non-2xx HTTP response", async () => {
     const failing = (async () =>
       new Response("boom", { status: 500, statusText: "Server Error" })) as unknown as typeof fetch;
-    const transport = new FetchSlackApiTransport("xoxb-token", failing);
+    const transport = new FetchSlackApiTransport(async () => "xoxb-token", failing);
     await expect(transport.joinConversation("C1")).rejects.toThrow(/HTTP 500/u);
   });
 
@@ -88,13 +94,36 @@ describe("FetchSlackApiTransport", () => {
       });
     }) as unknown as typeof fetch;
     // Inject a no-op sleep that records the honored wait (no real timers in the test).
-    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async (ms) => {
-      waited.push(ms);
-    });
+    const transport = new FetchSlackApiTransport(
+      async () => "xoxb-token",
+      fetchImpl,
+      async (ms) => {
+        waited.push(ms);
+      },
+    );
     expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
     expect(calls).toBe(2);
     // The Retry-After header (2s) was honored before the retry.
     expect(waited).toEqual([2000]);
+  });
+
+  it("reauthorizes before a retry and performs no second HTTP call after authority expires", async () => {
+    let authorityAttempts = 0;
+    let httpCalls = 0;
+    const tokenForAttempt = async () => {
+      authorityAttempts += 1;
+      if (authorityAttempts > 1) throw new Error("eligible operation lease expired");
+      return "xoxb-token";
+    };
+    const fetchImpl = (async () => {
+      httpCalls += 1;
+      return new Response("", { status: 429, headers: { "Retry-After": "1" } });
+    }) as unknown as typeof fetch;
+    const transport = new FetchSlackApiTransport(tokenForAttempt, fetchImpl, async () => {});
+
+    await expect(transport.authTest()).rejects.toThrow(/expired/u);
+    expect(authorityAttempts).toBe(2);
+    expect(httpCalls).toBe(1);
   });
 
   it("retries UNBOUNDED while the 429 cadence is RAMPING (no attempt cap)", async () => {
@@ -116,7 +145,11 @@ describe("FetchSlackApiTransport", () => {
         headers: { "Content-Type": "application/json" },
       });
     }) as unknown as typeof fetch;
-    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async () => {});
+    const transport = new FetchSlackApiTransport(
+      async () => "xoxb-token",
+      fetchImpl,
+      async () => {},
+    );
     expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
     // Ramp + 1 success — strictly more than the legacy bounded budget of 4, so this proves
     // the cap is gone (the call would have failed LOUD at the old bounded budget).
@@ -129,7 +162,11 @@ describe("FetchSlackApiTransport", () => {
       calls += 1;
       return new Response("", { status: 429, statusText: "Too Many Requests", headers: { "Retry-After": "1" } });
     }) as unknown as typeof fetch;
-    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async () => {});
+    const transport = new FetchSlackApiTransport(
+      async () => "xoxb-token",
+      fetchImpl,
+      async () => {},
+    );
     let captured: PersistentSlackRateLimitError | undefined;
     try {
       await transport.joinConversation("C1");
@@ -167,9 +204,13 @@ describe("FetchSlackApiTransport", () => {
         headers: { "Content-Type": "application/json" },
       });
     }) as unknown as typeof fetch;
-    const transport = new FetchSlackApiTransport("xoxb-token", fetchImpl, async (ms) => {
-      waited.push(ms);
-    });
+    const transport = new FetchSlackApiTransport(
+      async () => "xoxb-token",
+      fetchImpl,
+      async (ms) => {
+        waited.push(ms);
+      },
+    );
     expect(await transport.authTest()).toEqual({ botUserId: "U_BOT" });
     expect(calls).toBe(2);
     // The full 120s wait was honored verbatim — no clamp.

@@ -21,12 +21,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -209,26 +211,18 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     return { deploymentId: result.coordinate, url: result.coordinate, state: "published" };
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const registry = this.registryName(grant);
-    const token = await this.token(grant, "deploy", {
-      resourceId: ref.appId,
-      sourceRepo: source.repo,
-      sourceRef: source.ref,
-    });
-    const deployed = await this.deps.registry.publish({ registry, packageName: ref.appId, token, source });
-    const identity = await this.deps.registry.resolveArtifactIdentity({
-      registry,
-      packageName: ref.appId,
-      token,
-      version: versionFromDeploymentId(deployed.coordinate),
-    });
-    return {
-      artifactDigest: parseDigest(identity.artifactDigest),
-      providerChecksum: identity.providerChecksum === null ? null : parseProviderChecksum(identity.providerChecksum),
-      deploymentId: deployed.coordinate,
-      state: "built",
-    };
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
@@ -320,15 +314,18 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     return { kind: "package", registry, coordinate: read.coordinate };
   }
 
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     // A registry has no FAILURE terminal — a version is either RESOLVABLE (the registry
     // indexed it) or simply not-yet-resolvable (pending). So the poll succeeds on resolvable
     // and escalates LOUD only when the version is a PROVEN stuck non-terminal (never indexed,
     // no advancement) — never "failed after N polls".
-    const readStatus = await this.statusReader(grant, ref, deploymentId, "verify");
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await readStatus();
+        const read = await this.read(await grantForAttempt(), ref, deploymentId, "verify");
         return {
           state: read.resolvable ? "resolvable" : "pending",
           ready: read.resolvable,
@@ -361,23 +358,13 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     deploymentId: string,
     operation: "verify" | "resolve_demo_surface",
   ): Promise<PackageVersionStatus> {
-    return (await this.statusReader(grant, ref, deploymentId, operation))();
-  }
-
-  private async statusReader(
-    grant: OrgGrant,
-    ref: DeployRef,
-    deploymentId: string,
-    operation: "verify" | "resolve_demo_surface",
-  ): Promise<() => Promise<PackageVersionStatus>> {
     const registry = this.registryName(grant);
     const token = await this.token(grant, operation, { resourceId: ref.appId, deploymentId });
-    return () =>
-      this.deps.registry.versionStatus({
-        registry,
-        packageName: ref.appId,
-        token,
-        version: versionFromDeploymentId(deploymentId),
-      });
+    return this.deps.registry.versionStatus({
+      registry,
+      packageName: ref.appId,
+      token,
+      version: versionFromDeploymentId(deploymentId),
+    });
   }
 }
