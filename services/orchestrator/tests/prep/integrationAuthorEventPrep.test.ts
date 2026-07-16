@@ -418,7 +418,14 @@ describe("IN-7 event observability cannot become product authority", () => {
       new URL("../../src/engine/events/sensitivityRules.eventVocabulary.ts", import.meta.url),
       "utf8",
     );
-    const productionSources = [registrySource, sensitivitySource, severitySource, seedSource, schemaSource];
+    const productionSources = [
+      registrySource,
+      sensitivitySource,
+      severitySource,
+      seedSource,
+      schemaSource,
+      eventVocabularyAggregatorSource,
+    ];
 
     // PREP remains non-authority: only kernel + sibling draft + zod (and type-only
     // sensitivity/severity imports for draft metadata). Never EventRegistry/EventStore.
@@ -453,6 +460,14 @@ describe("IN-7 event observability cannot become product authority", () => {
     expect(sensitivitySource).toContain("...eventVocabularySensitivityRules");
     expect(sensitivitySource).not.toContain("./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js");
     expect(eventVocabularyAggregatorSource).toContain("eventVocabularyW1aIntegrationAuthorSensitivityRules");
+    expect(importPaths(eventVocabularyAggregatorSource).sort()).toEqual([
+      "./sensitivity.js",
+      "./sensitivityRules.benchmark.js",
+      "./sensitivityRules.eventVocabularyW0.js",
+      "./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js",
+    ]);
+    expect(eventVocabularyAggregatorSource).toContain("...eventVocabularyW0SensitivityRules");
+    expect(eventVocabularyAggregatorSource).toContain("...eventVocabularyW1aIntegrationAuthorSensitivityRules");
     for (const name of PROSPECTIVE_INTEGRATION_AUTHOR_EVENT_NAMES) {
       expect(schemaSource).toContain(`"${name}"`);
       expect(w1aSensitivitySource).toContain(`"${name}"`);
