@@ -36,6 +36,40 @@ export {
   type SimulatedReviewResult,
 } from "./simulatedReviewer.js";
 export {
+  assertStrictForgeReceipt,
+  bodyContainsSimulatedReviewIntentMarker,
+  bodyContainsTanrenSimulatedMarker,
+  publishSimulatedReviewConvergent,
+  reconcileExistingSimulatedReviews,
+  resolveDistinctSimulatedReviewerToken,
+  requireSimulatedReviewIntentMarker,
+  simulatedReviewIntentFingerprint,
+  simulatedReviewIntentMarker,
+  SimulatedReviewHeadStaleError,
+  SimulatedReviewPublicationError,
+  strictReviewEventFor,
+  tanrenSimulatedReviewMarker,
+  type ForgeReviewPublication,
+} from "./simulatedReviewPublication.js";
+export {
+  InMemorySimulatedReviewIntentRepository,
+  PgSimulatedReviewIntentRepository,
+  REVIEW_SIMULATED_INTENT_EVENT,
+  parseSimulatedReviewIntent,
+  simulatedReviewIntentKey,
+  type SimulatedReviewIntent,
+  type SimulatedReviewIntentRepository,
+} from "./simulatedReviewIntent.js";
+export {
+  InMemorySimulatedReviewPublishFence,
+  PgAdvisorySimulatedReviewPublishFence,
+  SIMULATED_REVIEW_PUBLISH_FENCE_NAMESPACE,
+  SimulatedReviewPublishFenceBusyError,
+  simulatedReviewPublishFenceMaterial,
+  type SimulatedReviewPublishFence,
+  type SimulatedReviewPublishFenceKey,
+} from "./simulatedReviewPublishFence.js";
+export {
   mergeForRun,
   dispatchedIntegrationFor,
   type MergeAuthorityBundle,

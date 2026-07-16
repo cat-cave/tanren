@@ -14,9 +14,15 @@
 // single-finalize invariant, now extended to the pre-terminal observation).
 //
 // One writer call, one transaction, no half-measure.
+//
+// gv-2: when a forge publication receipt is present (strict simulated review),
+// it is bound onto the same atomic `review.approved` / `review.changes_requested`
+// payload — no second audit store.
 
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
+import type { EventPayload } from "../../events/index.js";
 import type { PriorEventInput } from "../../eventStore.js";
+import { SimulatedReviewPublicationError, type ForgeReviewPublication } from "./simulatedReviewPublication.js";
 
 export interface ReviewTaskTerminalBase {
   runId: string;
@@ -45,48 +51,127 @@ export async function markReviewTaskDoneWithEvent(input: {
   reviewer?: string;
   /** changes_requested feedback body (the writer-rework steering payload). */
   feedback?: string;
+  /**
+   * Strict simulated-review forge receipt (gv-2). When present, bound onto the
+   * terminal review.* event so land signals / UI observe the same durable proof.
+   * Human/auto paths omit it.
+   */
+  forgePublication?: ForgeReviewPublication;
 }): Promise<void> {
-  const { writer, base, verdict, prUrl, prNumber, reviewer, feedback } = input;
+  const { writer, base, verdict, prUrl, prNumber, reviewer, feedback, forgePublication } = input;
   // PRE-TERMINAL verdict event (the loud `review.*` observation, downstream
   // consumers key off this event). Bundled into the SAME atomic transaction
   // as the terminal row + `task.completed` via the writer-seam `priorEvents`
   // extension — collapses what used to be a separate `writer.append()` call
   // into ONE commit alongside the terminal pair.
   //
-  // Round-3 audit finding H-R3.2: the prior-event entry carries a stable
-  // idempotency key so a retried atomic write deduplicates the verdict event
-  // on (run_id, idempotency_key) instead of double-emitting. Key shape
-  // `${runId}:review:${verdict}` keys the verdict to its run + outcome, so a
-  // retry of THIS finalize call dedupes cleanly; a subsequent flip of the
-  // verdict (e.g. an explicit re-review with a DIFFERENT outcome) would carry
-  // a distinct key and land afresh.
-  const eventType = verdict === "approved" ? "review.approved" : "review.changes_requested";
+  // Round-3 audit finding H-R3.2 + gv-2 head rebind: the prior-event entry
+  // carries a stable idempotency key so a retried atomic write deduplicates
+  // the verdict event on (run_id, idempotency_key) instead of double-emitting.
+  //
+  // Key shape:
+  //   - no forge receipt (human/auto): `${runId}:review:${verdict}`
+  //     first-wins finalize; retry of THIS finalize dedupes; a verdict flip
+  //     (approve ↔ changes_requested) carries a distinct key and lands afresh.
+  //   - strict simulated forge receipt: `${runId}:review:${verdict}:${headSha}`
+  //     same-head retry remains idempotent; re-review on a replacement head
+  //     (writer push after approval, base-shift restack) lands a NEW durable
+  //     receipt. Land signals take LATEST by ts, so B supersedes A for land
+  //     authorization — A never authorizes B (exact-head bind).
+  //
+  // The forge review id is NOT part of the key (receipt id is observation,
+  // not identity of the terminal). No second receipt store; one event stream.
+  const effectiveReviewer = forgePublication?.reviewerLogin ?? reviewer;
+  // Head-bound key only when a forge receipt is present — human/auto omit it.
+  const idempotencyKey =
+    forgePublication === undefined
+      ? `${base.runId}:review:${verdict}`
+      : `${base.runId}:review:${verdict}:${forgePublication.headSha}`;
+
   const verdictEvent: PriorEventInput =
     verdict === "approved"
       ? {
           ...base,
-          eventType,
-          payload: { prUrl, prNumber, ...(reviewer !== undefined && { reviewer }) } as never,
-          idempotencyKey: `${base.runId}:review:${verdict}`,
+          eventType: "review.approved",
+          payload: approvedPayload({ prUrl, prNumber, reviewer: effectiveReviewer, forgePublication }),
+          idempotencyKey,
         }
       : {
           ...base,
-          eventType,
-          payload: {
+          eventType: "review.changes_requested",
+          payload: changesRequestedPayload({
             prUrl,
             prNumber,
-            ...(reviewer !== undefined && { reviewer }),
-            ...(feedback !== undefined && { message: feedback }),
-          } as never,
-          idempotencyKey: `${base.runId}:review:${verdict}`,
+            reviewer: effectiveReviewer,
+            feedback,
+            forgePublication,
+          }),
+          idempotencyKey,
         };
+
+  const completedPayload: EventPayload<"task.completed"> = {
+    taskKind: "review",
+    status: verdict,
+  };
   await writer.updateTaskWithEvent({
     task: { taskId: base.taskId, transition: "done", outcome: "ok" },
     event: {
       ...base,
       eventType: "task.completed",
-      payload: { taskKind: "review", status: verdict } as never,
+      payload: completedPayload,
     },
     priorEvents: [verdictEvent],
   });
+}
+
+function approvedPayload(input: {
+  prUrl: string;
+  prNumber: number;
+  reviewer?: string;
+  forgePublication?: ForgeReviewPublication;
+}): EventPayload<"review.approved"> {
+  const base = {
+    prUrl: input.prUrl,
+    prNumber: input.prNumber,
+    ...(input.reviewer !== undefined && { reviewer: input.reviewer }),
+  };
+  if (input.forgePublication === undefined) return base;
+  if (input.forgePublication.forgeReviewState !== "approved") {
+    throw new SimulatedReviewPublicationError("approved terminal event requires an approved forge receipt");
+  }
+  return {
+    ...base,
+    forgeReviewId: input.forgePublication.forgeReviewId,
+    forgeReviewState: input.forgePublication.forgeReviewState,
+    forgeReviewUrl: input.forgePublication.forgeReviewUrl,
+    headSha: input.forgePublication.headSha,
+  };
+}
+
+function changesRequestedPayload(input: {
+  prUrl: string;
+  prNumber: number;
+  reviewer?: string;
+  feedback?: string;
+  forgePublication?: ForgeReviewPublication;
+}): EventPayload<"review.changes_requested"> {
+  const base = {
+    prUrl: input.prUrl,
+    prNumber: input.prNumber,
+    ...(input.reviewer !== undefined && { reviewer: input.reviewer }),
+    ...(input.feedback !== undefined && { message: input.feedback }),
+  };
+  if (input.forgePublication === undefined) return base;
+  if (input.forgePublication.forgeReviewState !== "changes_requested") {
+    throw new SimulatedReviewPublicationError(
+      "changes_requested terminal event requires a changes_requested forge receipt",
+    );
+  }
+  return {
+    ...base,
+    forgeReviewId: input.forgePublication.forgeReviewId,
+    forgeReviewState: input.forgePublication.forgeReviewState,
+    forgeReviewUrl: input.forgePublication.forgeReviewUrl,
+    headSha: input.forgePublication.headSha,
+  };
 }

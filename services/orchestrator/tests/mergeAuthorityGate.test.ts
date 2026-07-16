@@ -75,6 +75,9 @@ function gateInput(host: InMemoryCodeHost) {
     policyVersion: "pv",
     // The gate verdict was for the EXACT commit being landed (the `feat` head, sha-feat).
     gatedHeadSha: "sha-feat",
+    // Human/auto path (no forge receipt) unless a TOCTOU test overrides.
+    reviewedHeadSha: undefined,
+    requiresExactReviewReceipt: false,
     store: STORE,
     signals: {
       gateOutcome: { passed: true, results: [] } as GateOutcome,
@@ -169,5 +172,49 @@ describe("authorizeAndLand — clean land via CodeHost.landAuthorizedRef CAS", (
     const disposition = await authorizeAndLand(gateInput(host));
     expect(disposition.kind).toBe("merged");
     expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-feat");
+  });
+
+  it("TOCTOU LOCK (gv-2 former bug): review.approved with forge headSha A, head advanced to B → BLOCKED", async () => {
+    const headA = "a".repeat(40);
+    const headB = "b".repeat(40);
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: headB });
+    const input = gateInput(host);
+    // Gate binds to the live head so only the review receipt is the mismatch.
+    input.gatedHeadSha = headB;
+    // Former bug: land trusted review.approved existence and ignored the receipt head.
+    input.reviewedHeadSha = headA;
+    input.requiresExactReviewReceipt = true;
+    const disposition = await authorizeAndLand(input);
+    expect(disposition.kind).toBe("blocked");
+    const reasons = disposition.kind === "blocked" ? disposition.reasons.join(" ") : "";
+    expect(reasons).toContain(`reviewed '${headA}' != landing '${headB}'`);
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
+  });
+
+  it("TOCTOU LOCK (gv-2 positive): review forge receipt headSha equals landing head → lands", async () => {
+    const head = "c".repeat(40);
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: head });
+    const input = gateInput(host);
+    input.gatedHeadSha = head;
+    input.reviewedHeadSha = head;
+    input.requiresExactReviewReceipt = true;
+    const disposition = await authorizeAndLand(input);
+    expect(disposition.kind).toBe("merged");
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe(head);
+  });
+
+  it("simulated policy blocks an approved event with no complete forge receipt", async () => {
+    const host = new InMemoryCodeHost();
+    host.seed(REPO, "main", "sha-main");
+    await host.pushRef({ repo: REPO, localRef: "feat", remoteBranch: "feat", sha: "sha-feat" });
+    const input = gateInput(host);
+    input.requiresExactReviewReceipt = true;
+    const disposition = await authorizeAndLand(input);
+    expect(disposition).toMatchObject({ kind: "blocked", reasons: [expect.stringContaining("no complete")] });
+    expect(await host.fetchRef({ repo: REPO, remoteBranch: "main" })).toBe("sha-main");
   });
 });

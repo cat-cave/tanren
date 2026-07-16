@@ -108,6 +108,40 @@ describeDb("plane-split P3 — control-plane run-state write endpoints (real PG,
     expect(row.rows[0]).toMatchObject({ org_id: ORG, event_type: "run.started" });
   });
 
+  it("(2a) keyed prior append is first-wins and preserves the idempotency key over HTTP", async () => {
+    const runId = "run_p3_prior_event";
+    const headSha = "a".repeat(40);
+    const idempotencyKey = `${runId}:simulated-review-intent:${headSha}`;
+    await seedRun(ownerPool(), runId);
+    const app = createInternalRunStateWriteRoutes({ pool: runtimePool(), verifier: new AllowAllPeerVerifier() });
+    const writer = new HttpRunStateWriter("https://control.internal:3110", fetchInto(app));
+    const input = {
+      runId,
+      specId: SPEC,
+      projectId: PROJECT,
+      orgId: ORG,
+      eventType: "review.simulated_intent" as const,
+      idempotencyKey,
+      payload: {
+        headSha,
+        state: "approved" as const,
+        event: "APPROVE" as const,
+        body: "approved\ntanren-simulated-review:v1:approved",
+        message: "approved",
+        reviewerLogin: "reviewer-bot",
+        marker: "tanren-simulated-review:v1:approved",
+      },
+    };
+
+    await expect(runWithJobOrgId(ORG, () => writer.appendPriorIfAbsent(input))).resolves.toBe(true);
+    await expect(runWithJobOrgId(ORG, () => writer.appendPriorIfAbsent(input))).resolves.toBe(false);
+    const rows = await ownerPool().query<{ idempotency_key: string }>(
+      "SELECT idempotency_key FROM events WHERE run_id = $1 AND event_type = 'review.simulated_intent'",
+      [runId],
+    );
+    expect(rows.rows).toEqual([{ idempotency_key: idempotencyKey }]);
+  });
+
   it("(2b) append-event accepts a PROJECT-scoped event (null run_id/spec_id), org-scoped", async () => {
     // The DagWalker's cold-start (onDagChange) walk emits PROJECT-scoped dag.*
     // events — dag.drained / dag.budget.paused / dag.concurrency.saturated — which

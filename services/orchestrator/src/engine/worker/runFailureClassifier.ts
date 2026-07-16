@@ -170,7 +170,28 @@ const BY_ERROR_NAME: Readonly<Record<string, ClassifiedRunFailure>> = {
     stage: "agent",
     summary: "a spec could not be made valid and requires human attention",
   },
+  SimulatedReviewPublicationError: {
+    code: "merge",
+    stage: "merge",
+    summary: "strict simulated-review publication failed",
+  },
+  SimulatedReviewPublishFenceBusyError: {
+    code: "merge",
+    stage: "merge",
+    summary: "strict simulated-review publication is contended",
+  },
+  SimulatedReviewHeadStaleError: {
+    code: "merge",
+    stage: "merge",
+    summary: "the pull request advanced before strict simulated-review publication",
+  },
 };
+
+const EXPLICIT_REVIEW_PUBLICATION_ERRORS = new Set([
+  "SimulatedReviewPublicationError",
+  "SimulatedReviewPublishFenceBusyError",
+  "SimulatedReviewHeadStaleError",
+]);
 
 // Fail-closed default: an unrecognized error is the generic internal failure with a
 // fixed summary — the raw message is NEVER passed through to the public summary.
@@ -194,4 +215,12 @@ export function classifyRunFailure(error: unknown): ClassifiedRunFailure {
     }
   }
   return DEFAULT_FAILURE;
+}
+
+/** Read the typed publication retry contract without trusting arbitrary error fields. */
+export function explicitRunFailureRetryability(error: unknown): "retriable" | "non_retriable" | undefined {
+  if (!(error instanceof Error) || !EXPLICIT_REVIEW_PUBLICATION_ERRORS.has(error.name)) return undefined;
+  const retriable = (error as Error & { retriable?: unknown }).retriable;
+  if (typeof retriable !== "boolean") return undefined;
+  return retriable ? "retriable" : "non_retriable";
 }

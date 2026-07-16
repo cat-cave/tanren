@@ -27,6 +27,7 @@ const BASE = {
   runId: "run_review_terminal",
   specId: "spec_review_terminal",
   projectId: "project_review_terminal",
+  orgId: "org_review_terminal",
   taskId: "task_review_terminal",
 };
 
@@ -79,6 +80,47 @@ describe("review task terminal routing (audit findings #6 + D2 — atomic 3-writ
         // key so a retried atomic write deduplicates the verdict event on
         // (run_id, idempotency_key) under `events_prior_idempotency_unique`.
         idempotencyKey: `${BASE.runId}:review:approved`,
+      },
+    ]);
+  });
+
+  it("approved + forge publication: binds forge id/state/url/head and head-bound idempotency key", async () => {
+    const writer = new RecordingWriter();
+    const headSha = "f".repeat(40);
+
+    await markReviewTaskDoneWithEvent({
+      writer: writer as unknown as RunStateWriter,
+      base: BASE,
+      verdict: "approved",
+      prUrl: "https://github.com/o/r/pull/7",
+      prNumber: 7,
+      reviewer: "reviewer-bot",
+      forgePublication: {
+        forgeReviewId: "9001",
+        forgeReviewState: "approved",
+        forgeReviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-9001",
+        headSha,
+        reviewerLogin: "reviewer-bot",
+      },
+    });
+
+    expect(writer.atomic).toHaveLength(1);
+    expect(writer.atomic[0]!.priorEvents).toEqual([
+      {
+        ...BASE,
+        eventType: "review.approved",
+        payload: {
+          prUrl: "https://github.com/o/r/pull/7",
+          prNumber: 7,
+          reviewer: "reviewer-bot",
+          forgeReviewId: "9001",
+          forgeReviewState: "approved",
+          forgeReviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-9001",
+          headSha,
+        },
+        // gv-2: forge receipt terminals key on run+verdict+head so re-review on a
+        // replacement head can supersede without a second receipt store.
+        idempotencyKey: `${BASE.runId}:review:approved:${headSha}`,
       },
     ]);
   });

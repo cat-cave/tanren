@@ -59,6 +59,8 @@ export type PriorEventInput<N extends EventName = EventName> = AppendEventInput<
 
 export interface EventStore {
   append<N extends EventName>(input: AppendEventInput<N>): Promise<void>;
+  /** Atomic keyed append when the backing store can provide durable first-wins semantics. */
+  appendPriorIfAbsent?<N extends EventName>(input: PriorEventInput<N>): Promise<boolean>;
 }
 
 /**

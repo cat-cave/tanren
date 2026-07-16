@@ -25,8 +25,13 @@ import {
   DesignOracleActorConfigError,
   MalformedDesignOracleResultError,
 } from "../src/engine/workflow/designOracle/designOracle.js";
-import { classifyRunFailure } from "../src/engine/worker/runFailureClassifier.js";
+import { classifyRunFailure, explicitRunFailureRetryability } from "../src/engine/worker/runFailureClassifier.js";
 import { PersistentlyInvalidSpecError } from "../src/engine/forge/specQuality/index.js";
+import {
+  SimulatedReviewHeadStaleError,
+  SimulatedReviewPublicationError,
+} from "../src/engine/workflow/reviewMerge/simulatedReviewPublication.js";
+import { SimulatedReviewPublishFenceBusyError } from "../src/engine/workflow/reviewMerge/simulatedReviewPublishFence.js";
 
 describe("classifyRunFailure — typed-error arms for context-hydration + pre-row paths (Codex round-3 #3)", () => {
   it("maps MalformedAncestorStackError → malformed_ancestor_stack @ bootstrap", () => {
@@ -119,5 +124,21 @@ describe("classifyRunFailure — typed-error arms for context-hydration + pre-ro
       stage: "run",
       summary: "the run failed with an internal error",
     });
+  });
+
+  it("classifies strict publication failures safely and honors only their typed retry contract", () => {
+    const permanent = new SimulatedReviewPublicationError("provider secret text");
+    const busy = new SimulatedReviewPublishFenceBusyError("busy secret text");
+    const stale = new SimulatedReviewHeadStaleError("a".repeat(40), "b".repeat(40));
+    expect(classifyRunFailure(permanent)).toEqual({
+      code: "merge",
+      stage: "merge",
+      summary: "strict simulated-review publication failed",
+    });
+    expect(explicitRunFailureRetryability(permanent)).toBe("non_retriable");
+    expect(explicitRunFailureRetryability(busy)).toBe("retriable");
+    expect(explicitRunFailureRetryability(stale)).toBe("retriable");
+    const untrusted = Object.assign(new Error("not a publication error"), { retriable: true });
+    expect(explicitRunFailureRetryability(untrusted)).toBeUndefined();
   });
 });

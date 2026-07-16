@@ -7,24 +7,23 @@
 //
 // All GitHub calls go through the resolver/client (App-or-static,
 // 401-retry). The poll function is injectable so tests never hit real GitHub.
+//
+// gv-2: reviewPolicy "simulated" is STRICT — real APPROVE/REQUEST_CHANGES on the
+// exact head with a distinct reviewer identity; forge receipt is bound onto the
+// terminal review.* event. Publication failure/skip/COMMENT/head-mismatch fails
+// closed (no review.approved, no land authorization).
 
+import type pg from "pg";
 import type { ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
-import { type EventStore, PgEventStore } from "../../eventStore.js";
+import type { EventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
-import type { PullRequestRef, RepoRef } from "../../contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { parsePullRequestRef } from "../../providers/githubRepoRef.js";
-import { resolveVcsToken } from "../../credentials/vcsCredentials.js";
-import { projectHostSeamsOver, readChangeRequestShas } from "../../providers/projectHostSeamsOver.js";
-import {
-  type ReviewVerdict,
-  type ReviewVerdictResult,
-  type SubmitReviewEvent,
-} from "../../providers/githubReviewMerge.js";
+import { type ReviewVerdict } from "../../providers/githubReviewMerge.js";
 import {
   contextOptionsFor,
   loadReviewMergeRunContext,
@@ -32,13 +31,20 @@ import {
   type RunStateClient,
 } from "./context.js";
 import { finalizePauseForReviewAtomic } from "./reviewPauseSeam.js";
+import { buildGitHubReviewProbe, type ReviewProbe } from "./reviewProbeGithub.js";
 import { markReviewTaskDoneWithEvent } from "./reviewTaskTerminal.js";
+import { SimulatedReviewPublicationError, type ForgeReviewPublication } from "./simulatedReviewPublication.js";
 import {
-  reviewBodyFor,
-  reviewEventFor,
-  runSimulatedReviewer,
-  type SimulatedReviewContext,
-} from "./simulatedReviewer.js";
+  durableSimulatedReviewIntentRepository,
+  type SimulatedReviewIntentRepository,
+} from "./simulatedReviewIntent.js";
+import {
+  PgAdvisorySimulatedReviewPublishFence,
+  type SimulatedReviewPublishFence,
+} from "./simulatedReviewPublishFence.js";
+import { runSimulatedReviewStage, type SimulatedReviewSpec } from "./simulatedReviewStage.js";
+
+export type { ReviewProbe };
 
 export interface PollReviewForRunInput {
   pool: RunStateClient;
@@ -61,6 +67,12 @@ export interface PollReviewForRunInput {
    * than the project-config JSONB alone.
    */
   resolvedGithubCredentialRef?: string;
+  /**
+   * Optional explicit static reviewer credential ref for strict simulated review
+   * (`credential/github/*`). When omitted, the dual App-writer + static-reviewer
+   * seam is required (see resolveDistinctSimulatedReviewerToken).
+   */
+  reviewerGithubCredentialRef?: string;
   pollDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
   /**
@@ -74,33 +86,25 @@ export interface PollReviewForRunInput {
    * Answerer + the spec context it judges. Required when the project's
    * reviewPolicy is "simulated"; on every other policy it is NEVER invoked (so a
    * `human`/`auto` run never needs to resolve a reviewer adapter). The Answerer
-   * reads the PR diff (fetched via the probe) + these criteria and the stage
-   * posts its verdict as a REAL GitHub COMMENT review (self-PR-safe) before
-   * driving the approve/request_changes decision internally off that verdict.
+   * produces the typed internal verdict; the stage posts real APPROVE /
+   * REQUEST_CHANGES (distinct reviewer identity) and only terminalizes on a
+   * durable exact-head forge receipt.
    */
   simulatedReviewer?: () => AnswererAdapter<ReviewAnswer>;
   simulatedReviewContext?: SimulatedReviewSpec;
+  /**
+   * Durable intent fence (gv-2). Production defaults to the eventStore-backed
+   * repository; tests inject an in-memory first-wins store.
+   */
+  intentRepository?: SimulatedReviewIntentRepository;
+  /**
+   * Cross-process list→POST single-flight (gv-2). Production defaults to a
+   * PostgreSQL session advisory lock; tests inject an in-memory serializing fence.
+   */
+  publishFence?: SimulatedReviewPublishFence;
 }
 
-/** Spec inputs the simulated reviewer judges the PR diff against. */
-export interface SimulatedReviewSpec {
-  specTitle: string;
-  specDescription: string;
-  acceptanceCriteria: ReadonlyArray<string>;
-}
-
-/**
- * Injectable review-state probe (real GitHub by default; mocked in tests). The
- * `fetchDiff`/`submitReview` members are used ONLY on the simulated path; the
- * real GitHub probe always provides them, while human/auto test probes may omit
- * them (the simulated branch asserts their presence before use).
- */
-export interface ReviewProbe {
-  markReady(): Promise<void>;
-  fetchVerdict(): Promise<ReviewVerdictResult>;
-  fetchDiff?(): Promise<string>;
-  submitReview?(event: SubmitReviewEvent, body: string): Promise<void>;
-}
+export type { SimulatedReviewSpec };
 
 /**
  * The result verdict of a poll: the three GitHub-derived ReviewVerdict values
@@ -122,11 +126,17 @@ export interface PollReviewForRunResult {
   reviewer?: string;
   /** changes_requested feedback body, used as writer-rework steering. */
   feedback?: string;
+  /** Strict simulated-review forge receipt, when published. */
+  forgePublication?: ForgeReviewPublication;
 }
 
 export async function pollReviewForRun(input: PollReviewForRunInput): Promise<PollReviewForRunResult> {
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
-  const eventStore = input.eventStore ?? new PgEventStore(input.pool);
+  const eventStore = input.eventStore ?? input.runStateWriter;
+  const simulatedIntent =
+    context.reviewPolicy === "simulated"
+      ? { repository: input.intentRepository ?? durableSimulatedReviewIntentRepository(input.pool, eventStore) }
+      : undefined;
   const prRef = parsePullRequestRef(context.prUrl);
   const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const taskId = await ensureReviewTask(input.pool, context, input.runStateWriter);
@@ -140,7 +150,17 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     payload: { taskKind: "review" },
   });
 
-  const probe = input.reviewProbe ?? (await buildGitHubProbe(input, context, pr.repo, pr.pullNumber));
+  const probe =
+    input.reviewProbe ??
+    (await buildGitHubReviewProbe({
+      secrets: input.secrets,
+      githubHttp: input.githubHttp,
+      githubAppMinter: input.githubAppMinter,
+      reviewerGithubCredentialRef: input.reviewerGithubCredentialRef,
+      context,
+      repo: pr.repo,
+      pullNumber: pr.pullNumber,
+    }));
 
   // Flip draft → ready and announce the review request once.
   await probe.markReady();
@@ -191,17 +211,19 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
     return autoResult;
   }
 
-  // Simulated tier (project reviewPolicy === "simulated"): the orchestrator runs
-  // a reviewer Answerer over the PR diff + acceptance criteria, posts its verdict
-  // as a REAL GitHub COMMENT review (self-PR-safe — the bot pushes AND reviews
-  // with the same identity, which GitHub forbids for APPROVE/REQUEST_CHANGES),
-  // then drives the approve/request_changes decision INTERNALLY off the Answerer
-  // verdict through the SAME finalize path the human policy uses. The posted
-  // COMMENT is a genuine, visible audit artifact — not a synthetic shortcut — so
-  // the rest of the pipeline (approve→merge, changes_requested→rework) reacts
-  // exactly as it does for a human reviewer.
+  // Simulated tier: durable intent fence + STRICT exact-head forge APPROVE /
+  // REQUEST_CHANGES publication (distinct reviewer). Fail closed on any
+  // publication hole — never authorize land from the internal verdict alone.
   if (context.reviewPolicy === "simulated") {
-    const result = await runSimulatedReview(input, context, probe, taskId, pr.pullNumber);
+    if (simulatedIntent === undefined) throw new Error("simulated review intent preflight was not composed");
+    const result = await runSimulatedReviewPath({
+      input,
+      context,
+      probe,
+      taskId,
+      pr,
+      intentRepository: simulatedIntent.repository,
+    });
     await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
     return result;
   }
@@ -259,8 +281,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
         orgId: context.orgId,
         // Test-inject seam: route the event append through the run's
         // eventStore so a `FakeEventStore` (unit tests) sees the emitted
-        // `run.paused`; production paths pass a real `PgEventStore` which
-        // shares the row UPDATE's transaction via the client wrapper.
+        // `run.paused`; production paths pass the canonical run-state writer.
         eventStore,
         // Legacy-arm fallback event append via the run's event store — the
         // real-pool arm never uses it, but the seam signature requires it for
@@ -303,22 +324,15 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
   return result;
 }
 
-/**
- * Drive the simulated-reviewer verdict: fetch the PR diff, run the reviewer
- * Answerer over it + the spec's acceptance criteria, post the verdict as a REAL
- * GitHub COMMENT review (self-PR-safe audit artifact), and return the normalized
- * verdict the standard finalize path consumes. The approve/request_changes
- * decision is derived INTERNALLY from the Answerer verdict here (the COMMENT
- * review is the audit trail, not the decision source), so finalizeReviewTask
- * routes approve→merge / request_changes→rework off a genuine, posted review.
- */
-async function runSimulatedReview(
-  input: PollReviewForRunInput,
-  context: ReviewMergeRunContext,
-  probe: ReviewProbe,
-  taskId: string,
-  pullNumber: number,
-): Promise<PollReviewForRunResult> {
+async function runSimulatedReviewPath(args: {
+  input: PollReviewForRunInput;
+  context: ReviewMergeRunContext;
+  probe: ReviewProbe;
+  taskId: string;
+  pr: { repo: { owner: string; name: string }; pullNumber: number };
+  intentRepository: SimulatedReviewIntentRepository;
+}): Promise<PollReviewForRunResult> {
+  const { input, context, probe, taskId, pr, intentRepository } = args;
   const resolveReviewer = input.simulatedReviewer;
   const spec = input.simulatedReviewContext;
   if (resolveReviewer === undefined || spec === undefined) {
@@ -326,36 +340,41 @@ async function runSimulatedReview(
       "reviewPolicy 'simulated' requires both simulatedReviewer (the reviewer Answerer factory) and simulatedReviewContext",
     );
   }
-  if (probe.fetchDiff === undefined || probe.submitReview === undefined) {
-    throw new Error("reviewPolicy 'simulated' requires a review probe that can fetch the PR diff and submit a review");
-  }
-  const reviewer = resolveReviewer();
-  const prDiff = await probe.fetchDiff();
-  const reviewContext: SimulatedReviewContext = {
-    specTitle: spec.specTitle,
-    specDescription: spec.specDescription,
-    acceptanceCriteria: spec.acceptanceCriteria,
-    prDiff,
-  };
-  const { verdict } = await runSimulatedReviewer(reviewer, {
-    context: reviewContext,
-  });
-  // Post the REAL GitHub review as a COMMENT (self-PR-safe: the bot pushes AND
-  // reviews with the same identity, and GitHub forbids self-APPROVE/REQUEST_
-  // CHANGES). The COMMENT body states the verdict + reasoning so it is a real,
-  // honest audit artifact on the PR. The approve/request_changes decision is
-  // driven INTERNALLY off the Answerer verdict below — not read back from a
-  // review-state poll (a COMMENT carries no APPROVE/REQUEST_CHANGES state).
-  await probe.submitReview(reviewEventFor(verdict), reviewBodyFor(verdict));
-  return {
-    runId: context.runId,
+  const publishFence = input.publishFence ?? defaultPublishFence(input.pool);
+  const stage = await runSimulatedReviewStage({
+    context,
+    probe,
     taskId,
-    verdict: verdict.verdict === "approve" ? "approved" : "changes_requested",
-    prUrl: context.prUrl,
-    prNumber: pullNumber,
-    reviewer: "tanren-simulated-reviewer",
-    feedback: verdict.reasoning,
+    pullNumber: pr.pullNumber,
+    resolveReviewer,
+    spec,
+    intentRepository,
+    publishFence,
+    repo: pr.repo,
+  });
+  return {
+    runId: stage.runId,
+    taskId: stage.taskId,
+    verdict: stage.verdict,
+    prUrl: stage.prUrl,
+    prNumber: stage.prNumber,
+    reviewer: stage.reviewer,
+    feedback: stage.feedback,
+    forgePublication: stage.forgePublication,
   };
+}
+
+function defaultPublishFence(pool: RunStateClient): SimulatedReviewPublishFence {
+  // Production must pin a real PG pool client for the session advisory lock.
+  // In-memory fence is explicit test injection only — never auto-fallback.
+  const connectable = pool as RunStateClient & { connect?: () => Promise<unknown> };
+  if (typeof connectable.connect !== "function") {
+    throw new SimulatedReviewPublicationError(
+      "simulated review publish fence requires a PostgreSQL pool with connect(); " +
+        "production must use PgAdvisorySimulatedReviewPublishFence — inject publishFence only in tests",
+    );
+  }
+  return new PgAdvisorySimulatedReviewPublishFence(pool as unknown as { connect: () => Promise<pg.PoolClient> });
 }
 
 async function finalizeReviewTask(
@@ -380,6 +399,14 @@ async function finalizeReviewTask(
     // row + `task.completed` pair lands atomically via `updateTaskWithEvent`. The
     // writer-undefined split-write fallback was unreachable in production after
     // PR #714 and is now gone.
+    //
+    // gv-2: for simulated review, forgePublication is REQUIRED on the terminal
+    // path (runSimulatedReview always supplies it). Human/auto may omit it.
+    if (context.reviewPolicy === "simulated" && result.forgePublication === undefined) {
+      throw new SimulatedReviewPublicationError(
+        "simulated review refuses terminal review.* without a durable forge publication receipt",
+      );
+    }
     await markReviewTaskDoneWithEvent({
       writer,
       base,
@@ -388,6 +415,7 @@ async function finalizeReviewTask(
       prNumber: result.prNumber,
       ...(result.reviewer !== undefined && { reviewer: result.reviewer }),
       ...(result.feedback !== undefined && { feedback: result.feedback }),
+      ...(result.forgePublication !== undefined && { forgePublication: result.forgePublication }),
     });
     return;
   }
@@ -402,60 +430,6 @@ async function finalizeReviewTask(
     "UPDATE tasks SET status = 'running', outcome = 'pending', ended_at = NULL WHERE task_id = $1",
     [result.taskId],
   );
-}
-
-async function buildGitHubProbe(
-  input: PollReviewForRunInput,
-  context: ReviewMergeRunContext,
-  repo: RepoRef,
-  pullNumber: number,
-): Promise<ReviewProbe> {
-  const resolved = await resolveVcsToken(input.githubHttp, {
-    secrets: input.secrets,
-    orgId: context.orgId,
-    installation: context.installation,
-    staticRef: context.staticCredentialRef,
-    minter: input.githubAppMinter,
-  });
-  const pr: PullRequestRef = { repo, number: pullNumber };
-  const repoFullName = `${repo.owner}/${repo.name}`;
-  // Build the REAL host seams over the run's shared GitHub client (decomposition PR-5).
-  // `codeHost` serves the sha-addressed diff read; `visibility` is the hardened
-  // `SafeVisibilityProjection` — every forge-UI write/read yields a `ProjectionOutcome`
-  // and can NEVER throw, so a failed mirror can never block the (internally-derived)
-  // review verdict (§0, §6).
-  const { codeHost, visibility } = projectHostSeamsOver(input.githubHttp, async () => resolved);
-  return {
-    // §5d: un-drafting the PR is a best-effort, NON-gating forge-UI nicety — route it
-    // through the hardened projection (a host that never drafts simply yields `skipped`).
-    markReady: async () => {
-      await visibility.markChangeRequestReady({ repoFullName, changeRequestNumber: pullNumber });
-    },
-    // §5f (step-1): the host review verdict is the EXTERNAL approval read — now routed
-    // through the best-effort `VisibilityProjection.readExternalApproval?` seam (the host
-    // review is an "optional external approval"; Tanren's internal review record is the
-    // authoritative gate, §6). A `projected` outcome yields the host verdict; a `skipped`
-    // (no host review surface) / `failed` (transient forge error) resolves to `pending`,
-    // so the poll keeps polling rather than treating the absence as a verdict. The
-    // best-effort severance means a transient host hiccup can never brick the poll.
-    fetchVerdict: async () => {
-      const outcome = await visibility.readExternalApproval({ repoFullName, changeRequestNumber: pullNumber });
-      return outcome.kind === "projected" ? outcome.value : { verdict: "pending" };
-    },
-    // §1 #16: the reviewer's diff moves onto the host-neutral, sha-addressed
-    // `CodeHost.readDiff` (compares the PR's exact base/head shas — same render shape).
-    fetchDiff: async () => {
-      const { baseSha, headSha } = await readChangeRequestShas(input.githubHttp, pr, resolved);
-      return codeHost.readDiff(repo, baseSha, headSha);
-    },
-    // The simulated-review COMMENT is a BEST-EFFORT audit mirror, not the decision source
-    // (the approve/request_changes verdict is derived internally from the Answerer). The
-    // hardened projection captures any publish failure as a `ProjectionOutcome` so the
-    // probe's `submitReview` resolves regardless (§0, §6).
-    submitReview: async (_event, body) => {
-      await visibility.publishReview({ repoFullName, changeRequestNumber: pullNumber, body });
-    },
-  };
 }
 
 async function ensureReviewTask(

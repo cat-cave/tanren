@@ -66,6 +66,14 @@ export interface MergeAuthorityBundle {
    * is recorded (the gate already blocks via `gateOutcome === undefined`).
    */
   gatedHeadSha: string | undefined;
+  /**
+   * The sha the latest terminal review forge receipt was FOR (gv-2 review↔land TOCTOU).
+   * When present, land requires equality with the head being landed. `undefined` for
+   * human/auto paths without a forge receipt.
+   */
+  reviewedHeadSha: string | undefined;
+  /** Simulated policy requires a complete provider receipt; human/auto do not. */
+  requiresExactReviewReceipt: boolean;
   /** The auditor's emitted findings + the project posture (the DORA block decision). */
   findings: ReadonlyArray<Finding>;
   auditPosture: AuditPosture;

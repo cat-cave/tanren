@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AuditEnvelope } from "./audit.js";
 
 export { w0EventRegistry } from "./eventVocabularyW0.js";
+export { ReviewApprovedPayload, ReviewChangesRequestedPayload } from "./reviewForgeReceipt.js";
 
 // External integration events: GitHub (branch/PR), the review lifecycle, and the
 // merge stage. (The native gate is the merge authority — there are no forge-CI
@@ -70,23 +71,6 @@ export const ReviewRequestedPayload = z
     prUrl: z.string(),
     prNumber: z.number().int(),
     reviewers: z.array(z.string()).optional(),
-  })
-  .strict();
-
-export const ReviewApprovedPayload = z
-  .object({
-    prUrl: z.string(),
-    prNumber: z.number().int(),
-    reviewer: z.string().optional(),
-  })
-  .strict();
-
-export const ReviewChangesRequestedPayload = z
-  .object({
-    prUrl: z.string(),
-    prNumber: z.number().int(),
-    reviewer: z.string().optional(),
-    message: z.string().optional(),
   })
   .strict();
 
