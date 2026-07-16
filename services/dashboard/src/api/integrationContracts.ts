@@ -30,6 +30,8 @@ export interface IntegrationValidateOk {
   ok: true;
   missionNodeId: "in-2";
   orgId: string;
+  /** R3: honest checked-vs-persisted state. false = validated only, no CAS write. */
+  persisted: boolean;
   requirementDigest: string;
   artifact: {
     digest: string;
@@ -76,7 +78,7 @@ function asNonEmptyString(value: unknown): string | undefined {
 function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   if (!value.every((v) => typeof v === "string")) return undefined;
-  return value as string[];
+  return value;
 }
 
 export function decodeIntegrationCatalog(body: unknown): IntegrationContractCatalog | undefined {
@@ -136,6 +138,7 @@ export function decodeValidateOk(body: unknown): IntegrationValidateOk | undefin
   const plane = asNonEmptyString(body["plane"]);
   const direction = asNonEmptyString(body["direction"]);
   const criticality = asNonEmptyString(body["criticality"]);
+  const persisted = body["persisted"];
   const artifactRaw = body["artifact"];
   if (!isRecord(artifactRaw)) return undefined;
   const artifactDigest = asNonEmptyString(artifactRaw["digest"]);
@@ -148,6 +151,7 @@ export function decodeValidateOk(body: unknown): IntegrationValidateOk | undefin
     plane === undefined ||
     direction === undefined ||
     criticality === undefined ||
+    typeof persisted !== "boolean" ||
     artifactDigest === undefined ||
     mediaType === undefined ||
     typeof byteSize !== "number"
@@ -158,6 +162,7 @@ export function decodeValidateOk(body: unknown): IntegrationValidateOk | undefin
     ok: true,
     missionNodeId: "in-2",
     orgId,
+    persisted,
     requirementDigest,
     artifact: { digest: artifactDigest, byteSize, mediaType },
     capability,
@@ -219,14 +224,16 @@ export async function validateIntegrationRequirement(
   deps: IntegrationContractsFetchDeps,
   orgId: string,
   requirement: unknown,
+  options?: { readonly persist?: boolean },
 ): Promise<FetchValidateResult> {
   const url = `${deps.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/integration-contracts:validate`;
+  const persist = options?.persist ?? true;
   let res: Response;
   try {
     res = await deps.fetchImpl(url, {
       method: "POST",
       headers: { ...deps.headers, "content-type": "application/json" },
-      body: JSON.stringify({ requirement }),
+      body: JSON.stringify({ requirement, persist }),
     });
   } catch {
     return { kind: "unavailable", reason: "network" };

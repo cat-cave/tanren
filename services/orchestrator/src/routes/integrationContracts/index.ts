@@ -5,11 +5,13 @@
  */
 
 import type { Hono } from "hono";
+import { createHash } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PgCasByteStore } from "../../engine/cas/pgCasByteStore.js";
-import type { CasByteStore } from "../../engine/contracts/cas.js";
+import type { CasByteStore, Digest } from "../../engine/contracts/cas.js";
+import { parseDigest } from "../../engine/contracts/cas.js";
 import {
   INTEGRATION_REQUIREMENT_MEDIA_TYPE,
   canonicalRequirementBytes,
@@ -23,8 +25,21 @@ import { actorCanAccessOrg } from "../orgs/access.js";
 const ValidateBodySchema = z
   .object({
     requirement: z.unknown(),
+    /**
+     * R3: explicit non-persisting validation mode. Real callers default to
+     * `true` (durable CAS put). `persist: false` performs the full parse +
+     * semantics + canonical bytes + both digests but performs NO CAS write and
+     * must not claim persistence — used by read-only live UI samples so a page
+     * load never mutates cas_artifacts.
+     */
+    persist: z.boolean().optional(),
   })
   .strict();
+
+/** Computes the would-be CAS content digest of canonical bytes (no write). */
+function contentDigestOf(bytes: Uint8Array): Digest {
+  return parseDigest(`sha256:${createHash("sha256").update(bytes).digest("hex")}`);
+}
 
 export interface IntegrationContractRouteOptions {
   pool: pg.Pool;
@@ -88,18 +103,37 @@ export function registerIntegrationContractRoutes(
       );
     }
 
+    // R3: persist defaults to true for real callers. The full parse, semantic
+    // rules, canonical bytes, and both digests always run regardless of persist.
+    const persist = envelope.data.persist ?? true;
+
     const requirementDigest = integrationRequirementDigest(validated.requirement);
     const bytes = canonicalRequirementBytes(validated.requirement);
-    const artifact = await cas.put({
-      orgId,
-      bytes,
-      mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
-    });
+
+    // Artifact identity is the content digest of the canonical bytes — the same
+    // digest CAS would assign on put. For non-persisting mode this is a computed
+    // would-be identity, honestly reported via persisted:false (no CAS write).
+    let artifact: { digest: Digest; byteSize: number; mediaType: string };
+    if (persist) {
+      artifact = await cas.put({
+        orgId,
+        bytes,
+        mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+      });
+    } else {
+      artifact = {
+        digest: contentDigestOf(bytes),
+        byteSize: bytes.byteLength,
+        mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+      };
+    }
 
     return c.json({
       ok: true as const,
       missionNodeId: "in-2" as const,
       orgId,
+      // R3: honest checked-vs-persisted state. Invalid input never reaches here.
+      persisted: persist,
       requirementDigest,
       artifact: {
         digest: artifact.digest,

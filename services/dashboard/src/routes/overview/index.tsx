@@ -164,9 +164,12 @@ async function loadIntegrationContracts(
   };
   const [catalog, productSample, controlSample, crossPlaneSample] = await Promise.all([
     fetchIntegrationCatalog(fetchDeps, orgId),
-    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_PRODUCT),
-    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_CONTROL),
-    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_CROSS_PLANE),
+    // R3: overview samples are read-only live exercises — they must NOT mutate
+    // cas_artifacts on every page load. persist:false runs full parse + digests
+    // without a CAS write; the panel reports the honest checked-not-persisted state.
+    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_PRODUCT, { persist: false }),
+    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_CONTROL, { persist: false }),
+    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_CROSS_PLANE, { persist: false }),
   ]);
   return { catalog, productSample, controlSample, crossPlaneSample };
 }

@@ -121,4 +121,101 @@ describeDb("PgCasByteStore RLS (in-2 durable CAS)", () => {
     const missing = parseDigest(`sha256:${"ab".repeat(32)}`);
     await expect(store.get(ORG_A, missing)).rejects.toMatchObject({ name: "CasArtifactNotFoundError" });
   });
+
+  // ---- R2: stored-winner metadata + integrity re-hash ----
+  // Each test below uses UNIQUE bytes so it owns a private content digest and
+  // cannot contaminate (or be contaminated by) another test's row — important
+  // because the corruption tests deliberately mutate stored rows out-of-band.
+
+  /** Distinct synthetic payload → distinct content digest → isolated CAS row. */
+  function uniqueBytes(label: string): Uint8Array {
+    return new TextEncoder().encode(`in2-rls-${label}-${database}`);
+  }
+
+  it("put returns the STORED winner media type when same bytes are put under a different media type", async () => {
+    const store = new PgCasByteStore(runtimePool);
+    const bytes = uniqueBytes("stored-winner");
+    const mediaTypeA = "application/vnd.tanren.integration-requirement.v1+json";
+    const mediaTypeB = "application/vnd.tanren.integration-requirement.v1+json; profile=alt";
+
+    const first = await store.put({ orgId: ORG_A, bytes, mediaType: mediaTypeA });
+    expect(first.byteSize).toBe(bytes.byteLength);
+    // R2: conflict (same digest) must NOT echo caller metadata — the first
+    // writer's media type wins and is honestly returned.
+    const second = await store.put({ orgId: ORG_A, bytes, mediaType: mediaTypeB });
+    expect(second.mediaType).toBe(mediaTypeA);
+    expect(second.byteSize).toBe(first.byteSize);
+    expect(second.digest).toBe(first.digest);
+    // And a get confirms the stored winner too.
+    const got = await store.get(ORG_A, first.digest);
+    expect(got.mediaType).toBe(mediaTypeA);
+  });
+
+  it("get detects corrupted inline_bytes as a typed CasArtifactIntegrityError (never false success)", async () => {
+    const store = new PgCasByteStore(runtimePool);
+    const bytes = uniqueBytes("get-corrupt");
+    const ref = await store.put({
+      orgId: ORG_A,
+      bytes,
+      mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+    });
+
+    // Corrupt the stored bytes out-of-band via the owner (BYPASSRLS), keeping the
+    // digest key fixed. This simulates storage corruption / a miswrite.
+    const corrupt = Buffer.from("corrupted-bytes-that-do-not-hash-to-the-requested-digest");
+    await ownerPool.query(`UPDATE cas_artifacts SET inline_bytes = $1 WHERE org_id = $2 AND digest = $3`, [
+      corrupt,
+      ORG_A,
+      ref.digest,
+    ]);
+
+    // R2: read path re-hashes stored bytes; corruption is a typed integrity error.
+    await expect(store.get(ORG_A, ref.digest)).rejects.toMatchObject({
+      name: "CasArtifactIntegrityError",
+    });
+  });
+
+  it("put detects a corrupted existing row as a typed CasArtifactIntegrityError on the read-back", async () => {
+    const store = new PgCasByteStore(runtimePool);
+    const bytes = uniqueBytes("put-corrupt");
+    const ref = await store.put({
+      orgId: ORG_A,
+      bytes,
+      mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+    });
+
+    // Corrupt the existing row, then re-put the original bytes. The INSERT hits
+    // ON CONFLICT DO NOTHING (row already present), so the read-back path must
+    // catch the corruption rather than echo a false success.
+    const corrupt = Buffer.from("corrupted-bytes-mismatched-against-digest-key");
+    await ownerPool.query(`UPDATE cas_artifacts SET inline_bytes = $1 WHERE org_id = $2 AND digest = $3`, [
+      corrupt,
+      ORG_A,
+      ref.digest,
+    ]);
+
+    await expect(
+      store.put({ orgId: ORG_A, bytes, mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE }),
+    ).rejects.toMatchObject({ name: "CasArtifactIntegrityError" });
+  });
+
+  it("same-org positive + cross-org denial keeps zero cross-org effects", async () => {
+    const store = new PgCasByteStore(runtimePool);
+    const bytes = uniqueBytes("same-org");
+    const ref = await store.put({
+      orgId: ORG_A,
+      bytes,
+      mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+    });
+    // Same-org positive.
+    expect(await store.has(ORG_A, ref.digest)).toBe(true);
+    // Cross-org denial: org B cannot see org A's artifact.
+    expect(await store.has(ORG_B, ref.digest)).toBe(false);
+    await expect(store.get(ORG_B, ref.digest)).rejects.toMatchObject({
+      name: "CasArtifactNotFoundError",
+    });
+    // Unscoped runtime SELECT sees zero rows (deny-by-default).
+    const denied = await runtimePool.query("SELECT digest FROM cas_artifacts");
+    expect(denied.rowCount).toBe(0);
+  });
 });

@@ -47,6 +47,19 @@ export class CasArtifactNotFoundError extends Error {
   }
 }
 
+/**
+ * Typed integrity error raised when stored CAS bytes do not hash to the
+ * requested digest (corruption / digest collision / miswrite). Never a silent
+ * false success — in-2 R2 integrity hardening on the sole CAS adapter.
+ */
+export class CasArtifactIntegrityError extends Error {
+  public override readonly name = "CasArtifactIntegrityError";
+
+  public constructor(orgId: string, digest: Digest, reason: string) {
+    super(`CAS artifact integrity failure for org ${orgId} ${digest}: ${reason}`);
+  }
+}
+
 export function parseDigest(raw: string): Digest {
   if (!DIGEST_PATTERN.test(raw)) {
     throw new MalformedDigestError(raw);
@@ -81,7 +94,14 @@ export type CanonicalBody =
   | readonly CanonicalBody[]
   | { readonly [k: string]: CanonicalBody };
 
-function canonicalJson(value: CanonicalBody): string {
+/**
+ * The SOLE SP-3 canonical serializer: key-sorted JSON over a CanonicalBody.
+ * Domain-hash framing (`[tag, body]`) vs content-hash framing (bare body) is a
+ * DELIBERATE identity separation — both reuse this one serializer, they do not
+ * duplicate it. Exported so in-2 (and future consumers) canonicalize stored
+ * bytes with the exact same algorithm as `domainHash`.
+ */
+export function canonicalJson(value: CanonicalBody): string {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
   }

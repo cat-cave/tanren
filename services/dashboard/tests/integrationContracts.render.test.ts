@@ -39,6 +39,7 @@ const VALIDATE_OK: IntegrationValidateOk = {
   ok: true,
   missionNodeId: "in-2",
   orgId: "org_acme",
+  persisted: true,
   requirementDigest: `sha256:${"11".repeat(32)}`,
   artifact: {
     digest: `sha256:${"22".repeat(32)}`,
@@ -69,6 +70,8 @@ function stubPool(): pg.Pool {
 }
 
 let catalogMode: "ok" | "down" = "ok";
+/** R3: captures every validate request body the dashboard issues. */
+const validateCalls: Array<{ requirement?: unknown; persist?: boolean }> = [];
 
 function mockOrchestrator(): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -87,7 +90,8 @@ function mockOrchestrator(): void {
       return new Response(JSON.stringify(CATALOG), { status: 200 });
     }
     if (url.includes("integration-contracts:validate")) {
-      const body = init?.body !== undefined ? JSON.parse(String(init.body)) : {};
+      const body = init?.body === undefined ? {} : JSON.parse(String(init.body));
+      validateCalls.push({ requirement: body.requirement, persist: body.persist });
       const req = body.requirement as { plane?: string; bindingOutputs?: Array<{ kind: string }> };
       const kinds = req?.bindingOutputs?.map((b) => b.kind) ?? [];
       if (req?.plane === "product" && kinds.some((k) => k.startsWith("control."))) {
@@ -107,9 +111,14 @@ function mockOrchestrator(): void {
         );
       }
       if (req?.plane === "control") {
-        return new Response(JSON.stringify(VALIDATE_CONTROL), { status: 200 });
+        // R3: mirror the honest persisted state the server would return.
+        return new Response(JSON.stringify({ ...VALIDATE_CONTROL, persisted: body.persist === true }), {
+          status: 200,
+        });
       }
-      return new Response(JSON.stringify(VALIDATE_OK), { status: 200 });
+      return new Response(JSON.stringify({ ...VALIDATE_OK, persisted: body.persist === true }), {
+        status: 200,
+      });
     }
     if (/\/orgs\/[^/]+\/budget(\?|$)/u.test(url)) {
       return new Response(JSON.stringify({ ceilingUsd: 100, period: "monthly" }), { status: 200 });
@@ -124,6 +133,7 @@ function mockOrchestrator(): void {
 beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
   catalogMode = "ok";
+  validateCalls.length = 0;
   mockOrchestrator();
 });
 
@@ -168,6 +178,24 @@ describe("IntegrationContractPanel on overview (visible UI)", () => {
     expect(html).toContain('data-in2="sample-cross-plane"');
     expect(html).toContain("binding_plane_mismatch");
     expect(html).toContain('data-in2-state="invalid"');
+  });
+
+  it("overview samples validate with persist:false (zero CAS writes on page load)", async () => {
+    const app = await build();
+    await app.request("/overview");
+    // R3: every live sample from the overview read path must opt out of persistence.
+    expect(validateCalls.length).toBeGreaterThanOrEqual(3);
+    for (const call of validateCalls) {
+      expect(call.persist).toBe(false);
+    }
+  });
+
+  it("panel renders the honest checked-not-persisted state for samples", async () => {
+    const app = await build();
+    const html = await (await app.request("/overview")).text();
+    // R3: persisted:false samples render the explicit "not persisted" marker,
+    // never a false "durable CAS artifact" claim.
+    expect(html).toContain("checked · not persisted");
   });
 
   it("renders loud unavailable when catalog upstream fails", async () => {

@@ -58,6 +58,10 @@ function ValidateOkBlock(props: { label: string; marker: string; body: Integrati
         artifact · <code data-in2="artifact-digest">{props.body.artifact.digest}</code> ·{" "}
         <span data-in2="artifact-bytes">{props.body.artifact.byteSize}</span> bytes
       </div>
+      {/* R3: honest checked-vs-persisted state, never a false "stored" claim. */}
+      <div data-in2="persistence">
+        {props.body.persisted ? "persisted · durable CAS artifact" : "checked · not persisted (no CAS write)"}
+      </div>
     </div>
   );
 }

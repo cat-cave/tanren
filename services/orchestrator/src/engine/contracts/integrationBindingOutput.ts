@@ -27,9 +27,20 @@ export const PRODUCT_BINDING_OUTPUT_KINDS = [
 
 export const ALL_BINDING_OUTPUT_KINDS = [...CONTROL_BINDING_OUTPUT_KINDS, ...PRODUCT_BINDING_OUTPUT_KINDS] as const;
 
-export type ControlBindingOutputKind = (typeof CONTROL_BINDING_OUTPUT_KINDS)[number];
-export type ProductBindingOutputKind = (typeof PRODUCT_BINDING_OUTPUT_KINDS)[number];
 export type BindingOutputKind = (typeof ALL_BINDING_OUTPUT_KINDS)[number];
+
+/**
+ * Explicit allowlist of reference-shaped binding kinds permitted to carry the
+ * `secret_ref` classification. A bare `_id` kind (e.g. channel_id) is an opaque
+ * identifier, not a secret-handle ref, and is rejected for secret_ref.
+ */
+export const SECRET_REF_BINDING_KINDS = ALL_BINDING_OUTPUT_KINDS.filter((kind) =>
+  kind.endsWith("_ref"),
+) as readonly BindingOutputKind[];
+
+export function isSecretRefShapedKind(kind: BindingOutputKind): boolean {
+  return (SECRET_REF_BINDING_KINDS as readonly string[]).includes(kind);
+}
 
 export function planeOfBindingKind(kind: BindingOutputKind): "control" | "product" {
   return kind.startsWith("control.") ? "control" : "product";

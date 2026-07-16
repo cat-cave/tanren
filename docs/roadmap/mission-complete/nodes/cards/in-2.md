@@ -128,6 +128,37 @@ later serialized event-lease PR to add exactly:
 
 Until then: node is **NOT COMPLETE**, not PR/merge/count eligible.
 
+### Bounded audit-fixes (R2–R4; R1 still serialized/blocked)
+
+Independent convergence audit `in2-b5edc573-grok-convergence-report.md` ranked
+the named-event/apex gap (R1) as the P0 that still blocks completeness. The
+bounded, in-slice remediation applied here touches only already-owned/shared
+paths above (no new manifest paths):
+
+- **R2 — CAS adapter truth/integrity** (`pgCasByteStore.ts`, `cas.ts`):
+  `put` returns the STORED winner's media type/byte size (re-read after
+  insert-or-conflict); stored bytes are re-hashed to the requested digest on
+  put/read and corruption raises a typed `CasArtifactIntegrityError`. Real-PG
+  RLS proof extended: same-bytes/different-media-type stored-winner, corruption
+  detection, same-org positive, cross-org denial/zero effects.
+- **R3 — live UI without write-on-read** (`routes/integrationContracts`,
+  dashboard api + overview + panel): explicit `persist` flag (default `true`
+  for real callers; `false` still runs full parse + both digests but performs NO
+  CAS write). Overview samples use `persist: false`; response honestly reports
+  `persisted` state. Route/render tests prove samples cause zero CAS puts while
+  normal validation persists exactly once/idempotently.
+- **R4 — canonical contract hardening** (`integrationRequirement.ts`,
+  `integrationBindingOutput.ts`, `cas.ts`): `secret_ref` requires an explicitly
+  ref-shaped/allowlisted kind (bare `_id` rejects); set-semantic arrays
+  (environments / requiredOperations / requiredScopes) canonicalize to
+  sorted-unique order before hashing without mutating caller input; the private
+  canonical-JSON duplication was eliminated by reusing the exported sole SP-3
+  `canonicalJson`; pinned full-hex golden digests + byte lengths plus
+  permutation/duplicate/version/extra-field coverage.
+
+**R1 remains a P0 and is not addressable in this slice. The node is still NOT
+COMPLETE / not merge / not count eligible.**
+
 ## Validation
 
 - Golden contract vectors (always-on)

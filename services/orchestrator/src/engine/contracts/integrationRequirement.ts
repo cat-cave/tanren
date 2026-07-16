@@ -6,15 +6,15 @@
 
 import { z } from "zod";
 import type { CanonicalBody, Digest } from "./cas.js";
-import { domainHash } from "./cas.js";
+import { canonicalJson, domainHash } from "./cas.js";
 import {
   ALL_BINDING_OUTPUT_KINDS,
   AppBindingOutputV1Schema,
   CONTROL_BINDING_OUTPUT_KINDS,
+  isSecretRefShapedKind,
   planeOfBindingKind,
   PRODUCT_BINDING_OUTPUT_KINDS,
   type AppBindingOutputV1,
-  type BindingOutputKind,
 } from "./integrationBindingOutput.js";
 import {
   BehaviorStimulusContractV1Schema,
@@ -65,8 +65,6 @@ export const IntegrationValidationPlanV1Schema = z
   })
   .strict();
 
-export type IntegrationValidationPlanV1 = z.infer<typeof IntegrationValidationPlanV1Schema>;
-
 export const ProviderPolicyV1Schema = z
   .object({
     preferred: z.array(z.string().min(1).max(64)).max(16).optional(),
@@ -74,8 +72,6 @@ export const ProviderPolicyV1Schema = z
     forbidden: z.array(z.string().min(1).max(64)).max(32).optional(),
   })
   .strict();
-
-export type ProviderPolicyV1 = z.infer<typeof ProviderPolicyV1Schema>;
 
 export const IntegrationRequirementV1Schema = z
   .object({
@@ -108,6 +104,7 @@ export type IntegrationRequirementValidation =
   | { readonly ok: false; readonly issues: readonly IntegrationRequirementIssue[] };
 
 /** Reject strings that look like live credentials (never store/return secrets). */
+// cspell:ignore baprs AKIA
 const SECRET_SHAPED = /\b(xox[baprs]-|sk_live_|sk_test_|ghp_[A-Za-z0-9]|github_pat_|AKIA[0-9A-Z]{16}|-----BEGIN )/u;
 
 function scanSecrets(value: unknown, path: string, issues: IntegrationRequirementIssue[]): void {
@@ -163,7 +160,7 @@ function semanticIssues(req: IntegrationRequirementV1): IntegrationRequirementIs
 
   for (let i = 0; i < req.bindingOutputs.length; i++) {
     const out = req.bindingOutputs[i]!;
-    const kindPlane = planeOfBindingKind(out.kind as BindingOutputKind);
+    const kindPlane = planeOfBindingKind(out.kind);
     if (kindPlane !== req.plane) {
       issues.push({
         path: `bindingOutputs[${i}].kind`,
@@ -173,12 +170,14 @@ function semanticIssues(req: IntegrationRequirementV1): IntegrationRequirementIs
           `${req.plane}-plane (control credentials never validate as product bindings)`,
       });
     }
-    if (out.classification === "secret_ref" && !out.kind.endsWith("_ref") && !out.kind.endsWith("_id")) {
-      // handle/plain ok; secret_ref should be a ref-shaped kind
+    if (out.classification === "secret_ref" && !isSecretRefShapedKind(out.kind)) {
+      // secret_ref must bind to an explicitly reference-shaped kind. Bare `_id`
+      // (e.g. channel_id) carries an opaque id, not a secret ref handle, and
+      // must reject — never allow secret_ref on a plain identifier kind.
       issues.push({
         path: `bindingOutputs[${i}].classification`,
         code: "secret_ref_kind_mismatch",
-        message: `classification 'secret_ref' requires a ref-shaped binding kind, got '${out.kind}'`,
+        message: `classification 'secret_ref' requires a ref-shaped binding kind (ending in '_ref'), got '${out.kind}'`,
       });
     }
   }
@@ -222,13 +221,8 @@ function semanticIssues(req: IntegrationRequirementV1): IntegrationRequirementIs
     });
   }
 
-  if (req.validation.preMerge.liveProviderInMergeGate !== false) {
-    issues.push({
-      path: "validation.preMerge.liveProviderInMergeGate",
-      code: "live_provider_merge_forbidden",
-      message: "Live provider calls cannot be merge authority",
-    });
-  }
+  // liveProviderInMergeGate is enforced as the literal `false` by the Zod schema
+  // (IntegrationValidationPlanV1Schema), so no runtime re-check is needed here.
 
   // Classic wrong-plane Slack: product messaging cannot use control notify bot token.
   if (req.plane === "product" && req.capability === "messaging.send") {
@@ -264,9 +258,28 @@ export function parseIntegrationRequirement(input: unknown): IntegrationRequirem
   return { ok: true, requirement: parsed.data };
 }
 
-/** Canonical body for domainHash — deterministic key order via object construction. */
+/** Sort + de-duplicate a set-semantic string array. Returns a NEW array. */
+function canonicalSet(values: readonly string[]): readonly string[] {
+  return Array.from(new Set(values)).sort();
+}
+
+/**
+ * Canonical body for identity. Set-semantic arrays (environments /
+ * requiredOperations / requiredScopes) are normalized to sorted-unique order so
+ * the digest is stable under permutation or duplication, matching the way an
+ * operator reasons about a requirement (a set of environments/scopes, not an
+ * ordered list). Caller input is NEVER mutated — a shallow copy with replaced
+ * arrays is returned. The same canonical body feeds both the domain-separated
+ * requirementDigest and the content-addressed stored bytes.
+ */
 export function toCanonicalRequirementBody(req: IntegrationRequirementV1): CanonicalBody {
-  return req as unknown as CanonicalBody;
+  const source = req as unknown as { readonly [k: string]: unknown };
+  return {
+    ...source,
+    environments: canonicalSet(req.environments),
+    requiredOperations: canonicalSet(req.requiredOperations),
+    requiredScopes: canonicalSet(req.requiredScopes),
+  } as unknown as CanonicalBody;
 }
 
 export function integrationRequirementDigest(req: IntegrationRequirementV1): Digest {
@@ -274,29 +287,10 @@ export function integrationRequirementDigest(req: IntegrationRequirementV1): Dig
 }
 
 export function canonicalRequirementBytes(req: IntegrationRequirementV1): Uint8Array {
-  // Stable stringify matching SP-3 key sort (domainHash uses sorted keys internally;
-  // stored bytes are the validated document JSON with sorted keys for durability).
-  return new TextEncoder().encode(stableStringify(req as unknown as CanonicalBody));
-}
-
-function stableStringify(value: CanonicalBody): string {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new TypeError("Canonical JSON cannot contain a non-finite number");
-    }
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-  const objectValue = value as { readonly [k: string]: CanonicalBody };
-  return `{${Object.keys(objectValue)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(objectValue[key]!)}`)
-    .join(",")}}`;
+  // Reuses the SOLE SP-3 canonical serializer (no private duplication). Content
+  // bytes are the canonical body alone; requirementDigest wraps [tag, body] — a
+  // deliberate domain-vs-content identity separation using one serializer.
+  return new TextEncoder().encode(canonicalJson(toCanonicalRequirementBody(req)));
 }
 
 export interface IntegrationContractCatalogV1 {

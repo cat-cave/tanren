@@ -8,6 +8,7 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import type { CasArtifactBytes, CasArtifactRef, CasByteStore, Digest } from "../src/engine/contracts/cas.js";
 import { parseDigest } from "../src/engine/contracts/cas.js";
 import {
+  canonicalRequirementBytes,
   goldenControlNotifyRequirement,
   goldenCrossPlaneForbiddenRequirement,
   goldenProductMessagingRequirement,
@@ -153,6 +154,8 @@ describe("integration-contracts HTTP (in-2)", () => {
     expect(body["ok"]).toBe(true);
     expect(body["missionNodeId"]).toBe("in-2");
     expect(body["plane"]).toBe("product");
+    // R3: real callers default to persisting; state is honestly reported.
+    expect(body["persisted"]).toBe(true);
     expect(String(body["requirementDigest"])).toMatch(/^sha256:[0-9a-f]{64}$/u);
     const artifact = body["artifact"] as Record<string, unknown>;
     expect(String(artifact["digest"])).toMatch(/^sha256:[0-9a-f]{64}$/u);
@@ -161,6 +164,85 @@ describe("integration-contracts HTTP (in-2)", () => {
     expect(cas.store.size).toBe(1);
     const text = JSON.stringify(body);
     expect(text).not.toMatch(/xoxb-/u);
+  });
+
+  it("POST validate default persists exactly once and is idempotent at the identity level", async () => {
+    const cas = new MemoryCas();
+    const app = buildHarness(cas);
+    const body = JSON.stringify({ requirement: goldenProductMessagingRequirement() });
+    const first = await app.request("/orgs/org_acme/integration-contracts:validate", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      body,
+    });
+    expect(first.status).toBe(200);
+    const second = await app.request("/orgs/org_acme/integration-contracts:validate", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      body,
+    });
+    expect(second.status).toBe(200);
+    const firstBody = (await first.json()) as { artifact: { digest: string }; persisted: boolean };
+    const secondBody = (await second.json()) as { artifact: { digest: string }; persisted: boolean };
+    // Both persist (R3: real callers persist every time); identity is stable.
+    expect(firstBody.persisted).toBe(true);
+    expect(secondBody.persisted).toBe(true);
+    expect(secondBody.artifact.digest).toBe(firstBody.artifact.digest);
+    // One put per request (MemoryCas does not dedup by conflict, but the SAME
+    // canonical key collapses to a single stored entry).
+    expect(cas.puts).toBe(2);
+    expect(cas.store.size).toBe(1);
+  });
+
+  it("POST validate with persist:false performs zero CAS puts and reports persisted:false", async () => {
+    const cas = new MemoryCas();
+    const app = buildHarness(cas);
+    const requirement = goldenProductMessagingRequirement();
+    const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      body: JSON.stringify({ requirement, persist: false }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body["ok"]).toBe(true);
+    expect(body["persisted"]).toBe(false);
+    // R3: non-persisting mode still runs full parse + both digests.
+    expect(String(body["requirementDigest"])).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    const artifact = body["artifact"] as Record<string, unknown>;
+    expect(String(artifact["digest"])).toMatch(/^sha256:[0-9a-f]{64}$/u);
+    // The would-be content digest equals sha256 of the canonical bytes (the same
+    // identity CAS would assign on put) — computed, never stored.
+    const expectedContent = `sha256:${createHash("sha256").update(canonicalRequirementBytes(requirement)).digest("hex")}`;
+    expect(artifact["digest"]).toBe(expectedContent);
+    // Zero CAS puts: the read-only sample path never mutates cas_artifacts.
+    expect(cas.puts).toBe(0);
+    expect(cas.store.size).toBe(0);
+  });
+
+  it("POST validate with persist:false still rejects invalid input with 422 and never persists", async () => {
+    const cas = new MemoryCas();
+    const app = buildHarness(cas);
+    const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      body: JSON.stringify({ requirement: goldenCrossPlaneForbiddenRequirement(), persist: false }),
+    });
+    expect(res.status).toBe(422);
+    expect(cas.puts).toBe(0);
+  });
+
+  it("POST validate rejects persist:false with malformed envelope (400, no put)", async () => {
+    const cas = new MemoryCas();
+    const app = buildHarness(cas);
+    const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      body: JSON.stringify({ requirement: goldenProductMessagingRequirement(), persist: "not-a-bool" }),
+    });
+    // strict() rejects the non-boolean persist at the envelope schema layer.
+    expect(res.status).toBe(400);
+    expect(cas.puts).toBe(0);
   });
 
   it("POST validate control notify succeeds on control plane", async () => {
