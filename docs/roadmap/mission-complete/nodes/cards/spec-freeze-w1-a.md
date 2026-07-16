@@ -42,14 +42,18 @@ these verified contract obligations.
 
 ## Exact exclusive path lease
 
-| Path                                                            | Role                                                   |
-| --------------------------------------------------------------- | ------------------------------------------------------ |
-| `docs/roadmap/mission-complete/nodes/cards/spec-freeze-w1-a.md` | Ownership, dependency, exclusion, and validation card  |
-| `docs/roadmap/mission-complete/event-vocabulary-waves.md`       | Durable W1-A freeze authority and EV-SUB handoff index |
+| Path                                                                       | Role                                                    |
+| -------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `docs/roadmap/mission-complete/nodes/cards/spec-freeze-w1-a.md`            | Ownership, dependency, exclusion, and validation card   |
+| `docs/roadmap/mission-complete/event-vocabulary-waves.md`                  | Durable W1-A freeze authority and EV-SUB handoff index  |
+| `docs/roadmap/mission-complete/event-vocabulary-w1a-integration-author.md` | Linked durable W1-A contract rows and exact obligations |
 
-No wildcard ownership. The optional line-cap detail path is **not leased** by
-this commit. If the complete W1-A obligations cannot fit while keeping waves
-under 500 lines, amend and commit this card before creating that third path.
+No wildcard ownership. The line-cap contingency is invoked: waves starts at
+384 lines, and the exact W1-A payload, sensitivity, producer, collision,
+replay, and negative-control obligations cannot fit in its remaining 116 lines.
+The named detail file is one linked extension of the same freeze authority,
+not a second protocol. It must not exist until this lease amendment is
+committed.
 
 ## Merged PREP provenance
 
