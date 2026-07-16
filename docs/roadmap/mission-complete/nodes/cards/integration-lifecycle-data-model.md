@@ -28,12 +28,17 @@ workers remain schema-only for later slices.
 ## Final cumulative fold scope
 
 The final fold is one cumulative clean-replacement candidate, originally built
-from the authorized base `67d9363fe220e1f280ed706a0b80af2b16724362` and then
-replayed onto the exact publication target
-`608c5bbc08728dfa0188a2d1a0408688f0e76876` (#962). The 18-commit replay was
-conflict-free and patch-equivalent; the target's dependency-cap gate then required
-one test-only convergence helper. It is not a repair delta layered on an
-undeclared branch. Never publish the pre-rebase candidate.
+from the authorized base `67d9363fe220e1f280ed706a0b80af2b16724362` and now
+replayed as a 19-commit sequence onto the exact publication base
+`8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897` (post-GV-1). The exact replayed
+code/test head is `7ec09766ef16a5c267a32e8532e8e065a3cbb942`; the following
+card-only child refreshes this publication metadata without changing executable
+behavior. GV-1 intersected exactly five paths, which were deliberately unioned to
+preserve its `auditPosture` reservation/CAS-event authority and IN-1's lifecycle
+and org-owned credential semantics. The other 18 commit payloads remain
+patch-equivalent (two require zero-context patch IDs because the inherited GV-1
+event-helper import changed patch context). This is not a repair delta layered on
+an undeclared branch; publish only the lineage rooted at the exact base above.
 
 The manifest below is exhaustive relative to the exact publication target through
 the converged candidate: **370 paths = 96 added + 263 modified + 11 deleted**. Each
@@ -317,8 +322,9 @@ closes the following with production cutover (still not full IN-1 completion):
 | Fly multi-org            | GraphQL `organizations(first, after)` + `pageInfo` cursor advance/duplicate fail-loud; never sole-principal collapse.                                                                                                                      |
 | PG/RLS proof             | Live-gated tests apply the real `0000→0043` chain and seed connection→auth generation→grant→grant generation→selection rows. Memory fakes remain unit-contract proof only. Opt-in: `TANREN_RLS_DB_TEST=1`.                                 |
 
-**Not claimed:** full IN-1 node completion, binding workers, downstream consumer
-completion, or publication readiness before the mandatory `608c5bbc` rebase.
+**Not claimed:** full IN-1 node completion, binding workers, any completed
+downstream consumer DAG node (credit remains **0**), or completion of the deferred
+SP-8 event surface (`in-3`).
 
 ### Live obligations (skipped when credentials/DB absent)
 
