@@ -7,10 +7,11 @@
 // review.changes_requested / review.auto_approved).
 
 import type pg from "pg";
+import { getOrgScopedClient } from "@tanren/db";
 import type { z } from "zod";
 import { type EventStore, type PriorEventInput } from "../../eventStore.js";
 import { ReviewSimulatedIntentPayload } from "../../events/schemas/eventVocabularyW0.js";
-import { resolveWritableClient } from "../../data/orgScopedDb.js";
+import { isPool, resolveWritableClient } from "../../data/orgScopedDb.js";
 import { SimulatedReviewPublicationError } from "./simulatedReviewPublication.js";
 
 export const REVIEW_SIMULATED_INTENT_EVENT = "review.simulated_intent" as const;
@@ -108,10 +109,20 @@ export class PgSimulatedReviewIntentRepository implements SimulatedReviewIntentR
         idempotencyKey: key,
       });
     } catch (err) {
-      // Append may race a concurrent insert; always fall through to readback.
-      // Only rethrow non-conflict schema failures after readback fails.
-      const existingAfterRace = await this.lookup(input.orgId, input.runId, headSha);
-      if (existingAfterRace !== undefined) return existingAfterRace;
+      // ON CONFLICT is represented by a clean `false`, never an exception. An
+      // exception may still be an ambiguous transport response loss, but a SQL
+      // statement error aborts its transaction: issuing lookup SQL on that same
+      // client only produces 25P02 and masks the primary RLS/schema failure.
+      // Recover only from a pool/autocommit boundary with no ambient transaction.
+      if (canReadBackAfterAppendFailure(this.pool, err)) {
+        try {
+          const existingAfterResponseLoss = await this.lookup(input.orgId, input.runId, headSha);
+          if (existingAfterResponseLoss !== undefined) return existingAfterResponseLoss;
+        } catch {
+          // Fail closed with the primary append failure. A recovery-read error
+          // must never replace the causal provider/SQL failure in diagnostics.
+        }
+      }
       const message = err instanceof Error ? err.message : String(err);
       throw new SimulatedReviewPublicationError(
         `simulated review intent append failed for head ${headSha}: ${message}`,
@@ -127,6 +138,18 @@ export class PgSimulatedReviewIntentRepository implements SimulatedReviewIntentR
     }
     return winner;
   }
+}
+
+function canReadBackAfterAppendFailure(pool: IntentQueryClient, error: unknown): boolean {
+  if (isSqlStatementFailure(error)) return false;
+  if (getOrgScopedClient() !== undefined) return false;
+  return isPool(pool);
+}
+
+function isSqlStatementFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = Reflect.get(error, "code");
+  return typeof code === "string" && /^[0-9A-Z]{5}$/u.test(code);
 }
 
 /**

@@ -8,12 +8,38 @@ import { pollReviewForRun } from "../src/engine/workflow/reviewMerge/reviewPolli
 import {
   durableSimulatedReviewIntentRepository,
   PgSimulatedReviewIntentRepository,
+  type SimulatedReviewIntent,
 } from "../src/engine/workflow/reviewMerge/simulatedReviewIntent.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { fakeMergeWriter, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
 const HEAD = "a".repeat(40);
 const KEY = `run_1:simulated-review-intent:${HEAD}`;
+const CANDIDATE: SimulatedReviewIntent = {
+  headSha: HEAD,
+  state: "approved",
+  event: "APPROVE",
+  body: "approved\ntanren-simulated-review:v1:approved",
+  message: "approved",
+  reviewerLogin: "reviewer-bot",
+  marker: "tanren-simulated-review:v1:approved",
+};
+
+function priorCapableStore(appendPriorIfAbsent: () => Promise<boolean>) {
+  return {
+    append: async () => {},
+    appendPriorIfAbsent,
+  };
+}
+
+function adopt(repo: PgSimulatedReviewIntentRepository) {
+  return repo.adoptOrRecord({
+    runId: "run_1",
+    projectId: "project_1",
+    orgId: "org_1",
+    candidate: CANDIDATE,
+  });
+}
 
 describe("gv-2 production durable-intent composition", () => {
   it("fails closed for append-only stores instead of creating process-local memory", () => {
@@ -35,6 +61,58 @@ describe("gv-2 production durable-intent composition", () => {
     expect(durableSimulatedReviewIntentRepository({ query: vi.fn<() => void>() } as never, writer)).toBeInstanceOf(
       PgSimulatedReviewIntentRepository,
     );
+  });
+
+  it("preserves the primary SQLSTATE failure without querying an aborted transaction client", async () => {
+    const query = vi.fn<() => Promise<{ rows: never[] }>>(async () => ({ rows: [] }));
+    const transactionClient = { query, release: () => {} };
+    const rlsFailure = Object.assign(new Error("new row violates row-level security policy"), {
+      code: "42501",
+    });
+    const repo = new PgSimulatedReviewIntentRepository(
+      transactionClient as never,
+      priorCapableStore(async () => {
+        throw rlsFailure;
+      }) as never,
+    );
+
+    await expect(adopt(repo)).rejects.toThrow(/simulated review intent append failed.*row-level security policy/iu);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("retains response-loss recovery at a safe pool boundary", async () => {
+    const query = vi.fn<() => Promise<{ rows: { payload: SimulatedReviewIntent }[] }>>(async () => ({
+      rows: [{ payload: CANDIDATE }],
+    }));
+    const pool = { query, connect: async () => {}, totalCount: 1 };
+    const repo = new PgSimulatedReviewIntentRepository(
+      pool as never,
+      priorCapableStore(async () => {
+        throw new Error("socket reset after commit");
+      }) as never,
+    );
+
+    await expect(runWithJobOrgId("org_1", () => adopt(repo))).resolves.toEqual(CANDIDATE);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("never masks an ambiguous append failure with a failed recovery read", async () => {
+    const aborted = Object.assign(new Error("current transaction is aborted"), { code: "25P02" });
+    const query = vi.fn<() => Promise<never>>(async () => {
+      throw aborted;
+    });
+    const pool = { query, connect: async () => {}, totalCount: 1 };
+    const repo = new PgSimulatedReviewIntentRepository(
+      pool as never,
+      priorCapableStore(async () => {
+        throw new Error("socket reset after commit");
+      }) as never,
+    );
+
+    await expect(runWithJobOrgId("org_1", () => adopt(repo))).rejects.toThrow(
+      /simulated review intent append failed.*socket reset after commit/iu,
+    );
+    expect(query).toHaveBeenCalledTimes(1);
   });
 
   it("canonical polling fails before Answerer or forge I/O when its writer is append-only", async () => {
@@ -91,13 +169,7 @@ describe("gv-2 production durable-intent composition", () => {
       eventType: "review.simulated_intent",
       idempotencyKey: KEY,
       payload: {
-        headSha: HEAD,
-        state: "approved",
-        event: "APPROVE",
-        body: "approved\ntanren-simulated-review:v1:approved",
-        message: "approved",
-        reviewerLogin: "reviewer-bot",
-        marker: "tanren-simulated-review:v1:approved",
+        ...CANDIDATE,
       },
     };
 
