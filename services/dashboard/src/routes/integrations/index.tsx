@@ -56,7 +56,6 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const principalOp = c.req.query("principalOp");
     const principalProvider = c.req.query("principalProvider");
     const principalStatus = c.req.query("principalStatus");
-    const principalCandidatesRaw = c.req.query("principalCandidates");
 
     let integrations: OrgIntegrationSummary[] | undefined;
     let lifecycle: IntegrationLifecycleInventory | undefined;
@@ -74,45 +73,41 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
           providerKind: string;
           operationId: string;
           candidates: PrincipalSelectionCandidate[];
-          status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed";
+          status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed" | "unavailable";
         }
       | undefined;
-    if (
-      principalOp !== undefined &&
-      principalOp !== "" &&
-      principalProvider !== undefined &&
-      principalProvider !== ""
-    ) {
-      let candidates: PrincipalSelectionCandidate[] = [];
-      if (principalCandidatesRaw !== undefined && principalCandidatesRaw !== "") {
-        try {
-          const parsed: unknown = JSON.parse(principalCandidatesRaw);
-          if (Array.isArray(parsed)) {
-            candidates = parsed.filter(
-              (item): item is PrincipalSelectionCandidate =>
-                typeof item === "object" &&
-                item !== null &&
-                typeof (item as { providerPrincipalId?: unknown }).providerPrincipalId === "string" &&
-                typeof (item as { displayName?: unknown }).displayName === "string",
-            );
-          }
-        } catch {
-          candidates = [];
-        }
+    // Query carries operation id only — durable candidates reloaded from the
+    // operation endpoint so refresh/truncated/forged URL cannot authorize outside the op.
+    if (principalOp !== undefined && principalOp !== "" && ctx.org !== undefined) {
+      const client = readClient(c, deps);
+      const op = await client.getOperation(ctx.org.id, principalOp);
+      if (op === undefined) {
+        principalSelection = {
+          providerKind: principalProvider ?? "unknown",
+          operationId: principalOp,
+          candidates: [],
+          status: "unavailable",
+        };
+      } else {
+        const statusMap: Record<string, NonNullable<typeof principalSelection>["status"]> = {
+          awaiting_principal_selection: "awaiting",
+          pending: "pending",
+          in_progress: "pending",
+          completed: "completed",
+          failed: "failed",
+          compensated: "failed",
+        };
+        const mapped =
+          principalStatus === "invalidated"
+            ? "invalidated"
+            : (statusMap[op.status] ?? (op.status === "awaiting_principal_selection" ? "awaiting" : "pending"));
+        principalSelection = {
+          providerKind: op.providerKind,
+          operationId: op.operationId,
+          candidates: op.candidates,
+          status: mapped,
+        };
       }
-      principalSelection = {
-        providerKind: principalProvider,
-        operationId: principalOp,
-        candidates,
-        status:
-          principalStatus === "failed" ||
-          principalStatus === "invalidated" ||
-          principalStatus === "pending" ||
-          principalStatus === "completed" ||
-          principalStatus === "awaiting"
-            ? principalStatus
-            : "awaiting",
-      };
     }
 
     return renderShell(
@@ -214,18 +209,10 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     if (bodyStatus === "awaiting_principal_selection") {
       const body = result.body;
       const operationId = body !== undefined && typeof body.operationId === "string" ? body.operationId : "";
-      const candidates = body !== undefined && Array.isArray(body.candidates) ? body.candidates : [];
       const qs = new URLSearchParams({
         principalOp: operationId,
         principalProvider: providerKind,
         principalStatus: "awaiting",
-        principalCandidates: JSON.stringify(
-          candidates.map((candidate) => ({
-            providerPrincipalId: candidate.providerPrincipalId,
-            principalKind: candidate.principalKind,
-            displayName: candidate.displayName,
-          })),
-        ),
       });
       return c.redirect(`/integrations?${qs.toString()}`, 303);
     }
@@ -264,7 +251,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
       });
       return c.redirect(`/integrations?${qs.toString()}`, 303);
     }
-    return redirectTo(c, "/integrations", `principal selected for ${providerPrincipalId}`);
+    return redirectTo(c, "/integrations", "principal selected");
   });
 
   // ── enable capability (Plane B write) ───────────────────────────────────

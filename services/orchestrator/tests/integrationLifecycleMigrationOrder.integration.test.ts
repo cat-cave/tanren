@@ -8,8 +8,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
  * cleanly (no DDL ordering / 42830 errors) and that the composite org-qualified
  * FKs + unique keys exist and reject wrong-org / cross-binding rows.
  *
+ * Seeds use the current 0041 shape only: connection → auth generation → grant →
+ * grant generation → project selection with exact auth/grant generations.
+ * No deleted pre-0041 columns (upstream_account_id, auth_kind on connection, etc.).
+ *
  * Gated behind TANREN_RLS_DB_TEST=1 + an owner/superuser DATABASE_URL — same
  * harness as integrationLifecycleRls.integration.test.ts.
+ * Compiles/typechecks when the env gate is off (describe.skip).
  */
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -49,6 +54,61 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
+/** Seed verified connection+generations against the real 0041 shape (RLS helper parity). */
+async function seedLinkedConnection(
+  owner: Pool,
+  input: {
+    orgId: string;
+    connectionId: string;
+    grantId: string;
+    providerKind: string;
+    principalId: string;
+    actorId: string;
+    credentialRef: string;
+    scopes: string[];
+    capabilities: string[];
+    operations: string[];
+  },
+): Promise<void> {
+  await owner.query(
+    `INSERT INTO org_integration_connections
+       (org_id, id, provider_kind, provider_principal_id, principal_kind, display_name,
+        principal_metadata, health, status, current_auth_generation, owner_id)
+     VALUES ($1, $2, $3, $4, 'organization', $4, '{}'::jsonb, 'healthy', 'active', 1, $5)`,
+    [input.orgId, input.connectionId, input.providerKind, input.principalId, input.actorId],
+  );
+  await owner.query(
+    `INSERT INTO org_integration_connection_auth_generations
+       (org_id, provider_kind, connection_id, generation, credential_ref, auth_kind, status)
+     VALUES ($1, $2, $3, 1, $4, 'api_key', 'active')`,
+    [input.orgId, input.providerKind, input.connectionId, input.credentialRef],
+  );
+  await owner.query(
+    `INSERT INTO org_integration_grants
+       (org_id, id, provider_kind, connection_id, plane, environment, current_generation, status)
+     VALUES ($1, $2, $3, $4, 'control', 'control', 1, 'active')`,
+    [input.orgId, input.grantId, input.providerKind, input.connectionId],
+  );
+  await owner.query(
+    `INSERT INTO org_integration_grant_generations
+       (org_id, provider_kind, connection_id, grant_id, generation, capabilities, operations,
+        provider_scopes, resource_constraints, policy_revision, consent_revision,
+        consent_actor_id, consented_at, status)
+     VALUES ($1, $2, $3, $4, 1, $5::text[], $6::text[], $7::text[], '{}'::jsonb,
+             'integration-catalog.v1', 'consent.test', $8, now(), 'active')`,
+    [
+      input.orgId,
+      input.providerKind,
+      input.connectionId,
+      input.grantId,
+      input.capabilities,
+      input.operations,
+      input.scopes,
+      input.actorId,
+    ],
+  );
+}
+
 describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -73,39 +133,35 @@ describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => 
     await seedTenant(ownerPool, ORG_A, PROJECT_A);
     await seedTenant(ownerPool, ORG_B, PROJECT_B);
 
-    const connA = await ownerPool.query<{ id: string }>(
-      `INSERT INTO org_integration_connections
-         (org_id, id, provider_kind, upstream_account_id, auth_kind, credential_ref, owner_id)
-       VALUES ($1, 'conn-a', 'sentry', 'account-a', 'api_key', 'secret://a', 'owner-a')
-       RETURNING id`,
-      [ORG_A],
-    );
-    connectionA = connA.rows[0]!.id;
+    connectionA = "conn-a";
+    connectionB = "conn-b";
+    grantA = "grant-a";
 
-    const connB = await ownerPool.query<{ id: string }>(
-      `INSERT INTO org_integration_connections
-         (org_id, id, provider_kind, upstream_account_id, auth_kind, credential_ref, owner_id)
-       VALUES ($1, 'conn-b', 'sentry', 'account-b', 'api_key', 'secret://b', 'owner-b')
-       RETURNING id`,
-      [ORG_B],
-    );
-    connectionB = connB.rows[0]!.id;
+    await seedLinkedConnection(ownerPool, {
+      orgId: ORG_A,
+      connectionId: connectionA,
+      grantId: grantA,
+      providerKind: "sentry",
+      principalId: "principal-a",
+      actorId: "owner-a",
+      credentialRef: "secret://org/org_in_mig_order_a/integration/sentry/connection/conn-a/token/g/1",
+      scopes: ["project:read", "project:write"],
+      capabilities: ["errors"],
+      operations: ["discover", "provision", "bind"],
+    });
 
-    const gA = await ownerPool.query<{ id: string }>(
-      `INSERT INTO org_integration_grants
-         (org_id, id, connection_id, plane, environment, policy_revision, consent_revision, status)
-       VALUES ($1, 'grant-a', $2, 'control', 'control', 'p1', 'c1', 'active')
-       RETURNING id`,
-      [ORG_A, connectionA],
-    );
-    grantA = gA.rows[0]!.id;
-
-    await ownerPool.query(
-      `INSERT INTO org_integration_grants
-         (org_id, id, connection_id, plane, environment, policy_revision, consent_revision, status)
-       VALUES ($1, 'grant-b', $2, 'control', 'control', 'p1', 'c1', 'active')`,
-      [ORG_B, connectionB],
-    );
+    await seedLinkedConnection(ownerPool, {
+      orgId: ORG_B,
+      connectionId: connectionB,
+      grantId: "grant-b",
+      providerKind: "sentry",
+      principalId: "principal-b",
+      actorId: "owner-b",
+      credentialRef: "secret://org/org_in_mig_order_b/integration/sentry/connection/conn-b/token/g/1",
+      scopes: ["project:read", "project:write"],
+      capabilities: ["errors"],
+      operations: ["discover", "provision", "bind"],
+    });
   }, 120_000);
 
   afterAll(async () => {
@@ -175,8 +231,9 @@ describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => 
     await expect(
       ownerPool.query(
         `INSERT INTO project_integration_grant_selections
-           (org_id, project_id, provider_kind, connection_id, grant_id, selected_by)
-         VALUES ($1, $2, 'sentry', $3, $4, 'tester')`,
+           (org_id, project_id, provider_kind, connection_id, auth_generation,
+            grant_id, grant_generation, selected_by)
+         VALUES ($1, $2, 'sentry', $3, 1, $4, 1, 'tester')`,
         [ORG_A, PROJECT_A, connectionB, grantA],
       ),
     ).rejects.toThrow(/foreign key|violates/iu);
@@ -185,25 +242,35 @@ describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => 
     await expect(
       ownerPool.query(
         `INSERT INTO project_integration_grant_selections
-           (org_id, project_id, provider_kind, connection_id, grant_id, selected_by)
-         VALUES ($1, $2, 'sentry', $3, 'grant-b', 'tester')`,
+           (org_id, project_id, provider_kind, connection_id, auth_generation,
+            grant_id, grant_generation, selected_by)
+         VALUES ($1, $2, 'sentry', $3, 1, 'grant-b', 1, 'tester')`,
         [ORG_A, PROJECT_A, connectionA],
       ),
     ).rejects.toThrow(/foreign key|violates/iu);
 
-    // Happy path: same-org composite binding is accepted.
+    // Happy path: same-org composite binding with exact auth/grant generations.
     await ownerPool.query(
       `INSERT INTO project_integration_grant_selections
-         (org_id, project_id, provider_kind, connection_id, grant_id, selected_by)
-       VALUES ($1, $2, 'sentry', $3, $4, 'tester')`,
+         (org_id, project_id, provider_kind, connection_id, auth_generation,
+          grant_id, grant_generation, selected_by)
+       VALUES ($1, $2, 'sentry', $3, 1, $4, 1, 'tester')`,
       [ORG_A, PROJECT_A, connectionA, grantA],
     );
     const accepted = await ownerPool.query(
-      `SELECT connection_id, grant_id FROM project_integration_grant_selections
+      `SELECT connection_id, grant_id, auth_generation, grant_generation
+       FROM project_integration_grant_selections
        WHERE org_id = $1 AND project_id = $2 AND provider_kind = 'sentry'`,
       [ORG_A, PROJECT_A],
     );
-    expect(accepted.rows).toEqual([{ connection_id: connectionA, grant_id: grantA }]);
+    expect(accepted.rows).toEqual([
+      {
+        connection_id: connectionA,
+        grant_id: grantA,
+        auth_generation: 1,
+        grant_generation: 1,
+      },
+    ]);
   });
 });
 

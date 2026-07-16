@@ -128,27 +128,43 @@ const SentryOrgSchema = z.object({
   name: z.string().optional(),
 });
 
-/** Probe catalog scopes via provider-authenticated capability checks (never invent). */
+/**
+ * Probe catalog scopes via provider-authenticated capability checks (never invent).
+ * Official create-project/create-client-key accept project:write OR project:admin —
+ * catalog requires only project:write. Prefer org `access` when present; otherwise
+ * project list proves project:read. Do not invent project:admin.
+ */
 async function probeSentryScopes(fetchImpl: FetchImpl, token: string, orgSlug: string): Promise<string[]> {
   const scopes = new Set<string>();
   const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
-  // project:read — listing projects under the org.
+  const orgDetail = await fetchImpl(`https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/`, {
+    headers,
+  });
+  if (orgDetail.status === 401 || orgDetail.status === 403) return [];
+  if (orgDetail.ok) {
+    const body: unknown = await orgDetail.json();
+    const access = z.object({ access: z.array(z.string()).optional() }).safeParse(body);
+    if (access.success && access.data.access !== undefined) {
+      for (const scope of access.data.access) {
+        if (scope === "project:read" || scope === "project:write" || scope === "project:admin") {
+          scopes.add(scope);
+        }
+      }
+      // project:admin implies write for catalog eligibility.
+      if (scopes.has("project:admin")) scopes.add("project:write");
+    }
+  }
+  // project:read — listing projects under the org (side-effect-free).
   const projects = await fetchImpl(
     `https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/projects/?per_page=1`,
     { headers },
   );
-  if (projects.status === 401 || projects.status === 403) return [];
-  if (projects.ok) scopes.add("project:read");
-  // project:write — team list is a write-adjacent probe that fails closed on missing scope.
-  const teams = await fetchImpl(
-    `https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/teams/?per_page=1`,
-    { headers },
-  );
-  if (teams.ok) {
-    scopes.add("project:write");
-    // project:admin is not independently probeable without mutating; if write works,
-    // provision still re-checks on first create. Do not invent admin.
+  if (projects.status === 401 || projects.status === 403) {
+    return scopes.has("project:write") || scopes.has("project:read") ? [...scopes] : [];
   }
+  if (projects.ok) scopes.add("project:read");
+  // When org access did not advertise write, a successful project list still only
+  // proves read. Operators must mint tokens with project:write; we never invent it.
   return [...scopes];
 }
 
@@ -312,6 +328,27 @@ const FlyOrgSchema = z.object({
   name: z.string().optional(),
 });
 
+const FlyOrgPageSchema = z
+  .object({
+    data: z
+      .object({
+        organizations: z
+          .object({
+            nodes: z.array(z.unknown()).optional(),
+            pageInfo: z
+              .object({
+                hasNextPage: z.boolean().optional(),
+                endCursor: z.string().nullable().optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      })
+      .optional(),
+    errors: z.array(z.object({ message: z.string().optional() })).optional(),
+  })
+  .strict();
+
 export class FlyPrincipalVerifier implements PrincipalVerifier {
   readonly providerKind = "deploy.flyio";
   constructor(private readonly fetchImpl: FetchImpl = fetch) {}
@@ -322,47 +359,58 @@ export class FlyPrincipalVerifier implements PrincipalVerifier {
     secrets: IntegrationSecretStore,
   ): Promise<PrincipalVerificationResult> {
     const token = await readStagedToken(permit, staged, secrets);
-    const response = await this.fetchImpl("https://api.fly.io/graphql", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        query: "{ organizations { nodes { id slug name } } }",
-      }),
-    });
-    if (response.status === 401 || response.status === 403) {
-      return { status: "invalid", reason: `fly_http_${response.status}` };
-    }
-    if (!response.ok) return { status: "invalid", reason: `fly_http_${response.status}` };
-    const body: unknown = await response.json();
-    const parsed = z
-      .object({
-        data: z
-          .object({
-            organizations: z.object({ nodes: z.array(z.unknown()).optional() }).optional(),
-          })
-          .optional(),
-        errors: z.array(z.object({ message: z.string().optional() })).optional(),
-      })
-      .safeParse(body);
-    if (!parsed.success) return { status: "invalid", reason: "fly_malformed_organizations" };
-    if (parsed.data.errors !== undefined && parsed.data.errors.length > 0) {
-      return { status: "invalid", reason: parsed.data.errors[0]?.message ?? "fly_graphql_error" };
-    }
     const candidates: PrincipalCandidate[] = [];
-    for (const node of parsed.data.data?.organizations?.nodes ?? []) {
-      const org = FlyOrgSchema.safeParse(node);
-      if (!org.success) continue;
-      candidates.push({
-        providerPrincipalId: org.data.id,
-        principalKind: "organization",
-        displayName: org.data.name ?? org.data.slug ?? org.data.id,
-        metadata: meta({ slug: org.data.slug }),
+    const seenCursors = new Set<string>();
+    let after: string | null = null;
+    for (;;) {
+      const response = await this.fetchImpl("https://api.fly.io/graphql", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `query($after: String) {
+            organizations(first: 50, after: $after) {
+              nodes { id slug name }
+              pageInfo { hasNextPage endCursor }
+            }
+          }`,
+          variables: { after },
+        }),
       });
+      if (response.status === 401 || response.status === 403) {
+        return { status: "invalid", reason: `fly_http_${response.status}` };
+      }
+      if (!response.ok) return { status: "invalid", reason: `fly_http_${response.status}` };
+      const body: unknown = await response.json();
+      const parsed = FlyOrgPageSchema.safeParse(body);
+      if (!parsed.success) return { status: "invalid", reason: "fly_malformed_organizations" };
+      if (parsed.data.errors !== undefined && parsed.data.errors.length > 0) {
+        return { status: "invalid", reason: "fly_graphql_error" };
+      }
+      for (const node of parsed.data.data?.organizations?.nodes ?? []) {
+        const org = FlyOrgSchema.safeParse(node);
+        if (!org.success) continue;
+        candidates.push({
+          providerPrincipalId: org.data.id,
+          principalKind: "organization",
+          displayName: org.data.name ?? org.data.slug ?? org.data.id,
+          metadata: meta({ slug: org.data.slug }),
+        });
+      }
+      const pageInfo = parsed.data.data?.organizations?.pageInfo;
+      const hasNext = pageInfo?.hasNextPage === true;
+      const endCursor = pageInfo?.endCursor ?? null;
+      if (!hasNext || endCursor === null || endCursor === "") break;
+      if (seenCursors.has(endCursor)) {
+        throw new Error(`fly organizations listing returned a non-advancing cursor (${endCursor})`);
+      }
+      seenCursors.add(endCursor);
+      after = endCursor;
     }
     if (candidates.length === 0) return { status: "invalid", reason: "fly_no_organizations" };
+    // Never collapse multi-org tokens to a sole principal.
     const scopes: string[] = [];
     if (candidates.length > 1) {
       return { status: "multi_principal", candidates, authKind: "api_key", scopes };

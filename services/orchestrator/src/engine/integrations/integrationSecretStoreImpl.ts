@@ -20,7 +20,7 @@ function isStaged(handle: StagedSecretHandle | ExactSecretCoordinate): handle is
 
 /**
  * Generation-addressed integration secrets backed by a private SecretStore.
- * Create-only finalize: refuses to overwrite an existing generation path.
+ * Create-only finalize uses SecretStore.putCreateOnly (Vault KV v2 CAS=0).
  * Staged reads are only available to principal verifiers that hold a permit.
  */
 export class GenerationAddressedIntegrationSecretStore implements IntegrationSecretStore {
@@ -54,15 +54,12 @@ export class GenerationAddressedIntegrationSecretStore implements IntegrationSec
       ref: generationSecretRef(baseRef, generation),
       generation,
     };
-    const existing = await this.secrets.get(coordinate.ref);
-    if (existing !== undefined) {
-      if (existing.value === stagedValue.value) {
-        await this.secrets.delete(staged.handle);
-        return coordinate;
-      }
+    // True create-only — no get→put race, never overwrite an occupied generation.
+    const result = await this.secrets.putCreateOnly({ ref: coordinate.ref, value: stagedValue.value });
+    if (result.status === "conflict_different_value") {
       throw new Error(`integration secret generation already exists: ${coordinate.ref}`);
     }
-    await this.secrets.put({ ref: coordinate.ref, value: stagedValue.value });
+    // created | already_exists_identical — both are success; never delete ambiguous.
     await this.secrets.delete(staged.handle);
     return coordinate;
   }

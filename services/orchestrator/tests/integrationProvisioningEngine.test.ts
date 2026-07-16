@@ -82,7 +82,7 @@ function stubClient(state: StubState): IntegrationQueryClient {
           auth_status: "active",
           capabilities: ["errors", "notify", "deploy"],
           operations: ["discover", "provision", "bind", "teardown"],
-          provider_scopes: ["project:read", "project:write", "project:admin"],
+          provider_scopes: ["project:read", "project:write"],
           resource_constraints: {},
           policy_revision: "integration-catalog.v1",
           consent_revision: "consent.test",

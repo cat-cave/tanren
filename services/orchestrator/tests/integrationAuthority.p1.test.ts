@@ -71,12 +71,17 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       stagedSecretHandle: staged.handle,
     });
     const { SentryPrincipalVerifier } = await import("../src/engine/integrations/principalVerifiers.js");
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      Response.json([
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("/organizations/") && !url.includes("?") && url.endsWith("/")) {
+        return Response.json({ access: ["project:read", "project:write"] });
+      }
+      if (url.includes("/projects/")) return Response.json([]);
+      return Response.json([
         { id: "1", slug: "a", name: "A" },
         { id: "2", slug: "b", name: "B" },
-      ]),
-    );
+      ]);
+    });
     const result = await new SentryPrincipalVerifier(fetchImpl as unknown as typeof fetch).verify(
       permit,
       staged,

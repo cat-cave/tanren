@@ -7,6 +7,7 @@ import type {
   MemorySelection,
 } from "./integrationMemoryTables.js";
 import { finalizeLinkInMemory } from "./integrationMemoryFinalize.js";
+import { dispatchActivateSql } from "./integrationMemoryActivate.js";
 import { eligibilityQuery, insertSelection, listInventory, rowsOf } from "./integrationMemoryQueries.js";
 /** Unit-fake integration tables — not a SQL/transaction/RLS proof. */
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../../src/engine/repositories/integrationQuery.js";
@@ -147,6 +148,8 @@ export class IntegrationMemoryDb {
       const conn = this.connections.find((row) => row.org_id === orgId && row.id === connectionId);
       return rowsOf(conn ? [{ provider_principal_id: conn.provider_principal_id }] : []);
     }
+    const activated = dispatchActivateSql(this, sql, params);
+    if (activated !== null) return activated;
     if (sql.includes("WITH supersede_auth AS") || (sql.includes("auth_gen AS") && sql.includes("grant_gen AS"))) {
       return this.finalizeLink(params);
     }
@@ -342,7 +345,8 @@ export class IntegrationMemoryDb {
       }
       return rowsOf([]);
     }
-    if (sql.includes("stage = 'finalizing'")) {
+    // SET stage = 'finalizing' only (not WHERE stage = 'finalizing' on complete).
+    if (sql.includes("SET stage = 'finalizing'") || sql.includes("SET stage = 'finalizing', status = 'in_progress'")) {
       const [orgId, operationId, connectionId, generation, principalId, compensationJson] = params as [
         string,
         string,
@@ -384,6 +388,24 @@ export class IntegrationMemoryDb {
         op.stage = "failed";
         op.status = "failed";
         op.failure_classification = classification;
+      }
+      return rowsOf([]);
+    }
+    if (sql.includes("stage = 'completed'") && sql.includes("status = 'completed'")) {
+      const [orgId, operationId, connectionId, generation, principalId] = params as [
+        string,
+        string,
+        string,
+        number,
+        string,
+      ];
+      const op = this.operations.find((row) => row.org_id === orgId && row.id === operationId);
+      if (op !== undefined) {
+        op.stage = "completed";
+        op.status = "completed";
+        op.connection_id = connectionId;
+        op.target_auth_generation = generation;
+        op.selected_principal_id = principalId;
       }
       return rowsOf([]);
     }

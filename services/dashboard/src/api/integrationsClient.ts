@@ -20,6 +20,7 @@ import type {
   DiscoverOutcome,
   LinkOutcome,
   OrgIntegrationsList,
+  PrincipalSelectionCandidate,
   ProvisionOutcome,
   SelectGrantOutcome,
   SelectPrincipalOutcome,
@@ -64,6 +65,28 @@ export class IntegrationsClient extends OrchestratorHttpClient {
       input,
     );
     return { ok: r.ok, status: r.status, body: r.body };
+  }
+
+  /**
+   * Durable operation reload — candidates + status only (never secret refs).
+   * Used so multi-principal UI does not trust query-string candidate payloads.
+   */
+  async getOperation(
+    orgId: string,
+    operationId: string,
+  ): Promise<
+    | {
+        operationId: string;
+        providerKind: string;
+        status: string;
+        stage: string;
+        candidates: PrincipalSelectionCandidate[];
+      }
+    | undefined
+  > {
+    return this.getJson(
+      `/orgs/${encodeURIComponent(orgId)}/integrations/operations/${encodeURIComponent(operationId)}`,
+    );
   }
 
   /**

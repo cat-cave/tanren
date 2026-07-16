@@ -3,8 +3,25 @@ export interface SecretValue {
   value: string;
 }
 
+/**
+ * Create-only write result. Never includes secret values.
+ * - created: path was empty and write accepted
+ * - already_exists_identical: path occupied with the same value (idempotent success)
+ * - conflict_different_value: path occupied with a different value (hard conflict)
+ */
+export type PutCreateOnlyResult =
+  | { status: "created" }
+  | { status: "already_exists_identical" }
+  | { status: "conflict_different_value" };
+
 export interface SecretStore {
   put(secret: SecretValue): Promise<void>;
+  /**
+   * Create-only write. Must not overwrite an existing coordinate.
+   * Vault KV v2 uses `options.cas = 0`. Identical prior write is idempotent success.
+   * Never logs or returns plaintext beyond the status discriminant.
+   */
+  putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult>;
   get(ref: string): Promise<SecretValue | undefined>;
   delete(ref: string): Promise<void>;
   /**
@@ -29,6 +46,18 @@ export class InMemorySecretStore implements SecretStore {
 
   async put(secret: SecretValue): Promise<void> {
     this.values.set(secret.ref, secret.value);
+  }
+
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    const existing = this.values.get(secret.ref);
+    if (existing === undefined) {
+      this.values.set(secret.ref, secret.value);
+      return { status: "created" };
+    }
+    if (existing === secret.value) {
+      return { status: "already_exists_identical" };
+    }
+    return { status: "conflict_different_value" };
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {
@@ -63,6 +92,46 @@ export class VaultSecretStore implements SecretStore {
       body: JSON.stringify({ data: { value: secret.value } }),
     });
     await assertVaultOk(response, `store secret ${secret.ref}`);
+  }
+
+  /**
+   * Vault KV v2 create-only via `options.cas = 0` (write only when version is 0 /
+   * path does not exist). On 412, read back and classify identical vs different
+   * without returning plaintext. Response-loss after accept: readback of identical
+   * value is idempotent success — never delete an ambiguous write.
+   */
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(this.url(secret.ref), {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ options: { cas: 0 }, data: { value: secret.value } }),
+      });
+    } catch {
+      // Accepted-but-response-lost / network blip: read back without deleting.
+      return this.classifyCreateOnlyReadback(secret);
+    }
+    if (response.ok) {
+      return { status: "created" };
+    }
+    if (response.status === 412) {
+      return this.classifyCreateOnlyReadback(secret);
+    }
+    // Decode Vault error without leaking secret material (body is error JSON/text).
+    const detail = await response.text();
+    throw new Error(`Vault create-only secret ${secret.ref} failed: ${response.status} ${detail}`);
+  }
+
+  private async classifyCreateOnlyReadback(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    const existing = await this.get(secret.ref);
+    if (existing === undefined) {
+      throw new Error(`Vault create-only secret ${secret.ref} failed: conflict without readable prior version`);
+    }
+    if (existing.value === secret.value) {
+      return { status: "already_exists_identical" };
+    }
+    return { status: "conflict_different_value" };
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {

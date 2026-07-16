@@ -58,7 +58,10 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
         id: "errors",
         operations: [
           { id: "discover", requiredScopes: ["project:read"], plane: "control" },
-          { id: "provision", requiredScopes: ["project:write", "project:admin"], plane: "control" },
+          // Official Sentry create-project + create-client-key accept project:write OR
+          // project:admin (docs.sentry.io/api/projects). Require only project:write —
+          // never invent project:admin that the verifier cannot prove without mutation.
+          { id: "provision", requiredScopes: ["project:write"], plane: "control" },
           { id: "bind", requiredScopes: ["project:read"], plane: "control" },
         ],
       },

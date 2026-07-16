@@ -224,6 +224,10 @@ describe("integrations two-plane panel (/integrations)", () => {
     expect(html).toContain('data-provider="deploy.vercel"');
     expect(html).not.toContain("secret://org/");
     expect(html).toContain("verified principal · Acme Sentry");
+    // Principal IDs and generation numbers never appear in visible chrome.
+    expect(html).not.toContain("sentry_acme");
+    expect(html).not.toContain("workspace_acme");
+    expect(html).not.toContain("team_abc");
     // Generation numbers are internal eligibility coordinates — never operator UI.
     expect(html).not.toContain("auth generation");
     expect(html).not.toContain("grant generation");

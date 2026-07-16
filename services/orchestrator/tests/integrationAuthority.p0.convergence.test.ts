@@ -28,6 +28,19 @@ function readSrc(rel: string): string {
 }
 
 describe("IN-1 P0 convergence — former-bug proofs", () => {
+  it("authorityWrites splits reserve → Vault → activate (no secrets under withOrgScope finalize)", () => {
+    const writes = readSrc("routes/integrations/authorityWrites.ts");
+    expect(writes).toContain("runSplitLinkFinalize");
+    expect(writes).toContain("finalizeReservedSecret");
+    expect(writes).toContain("reserveVerifiedLink");
+    expect(writes).toContain("activateReservedLink");
+    // Must not call finalizeVerifiedLink inside a single withOrgScope (Vault-in-TX bug).
+    expect(writes).not.toMatch(/withOrgScope\([^)]*finalizeVerifiedLink/u);
+    const finalize = readSrc("engine/repositories/integrationConnectionFinalize.ts");
+    expect(finalize).toContain("ON CONFLICT (org_id, provider_kind, connection_id, generation) DO NOTHING");
+    expect(finalize).not.toMatch(/ON CONFLICT \(org_id, provider_kind, connection_id, generation\) DO UPDATE/u);
+  });
+
   it("production provider paths do not bypass authorizeOperation with naked grant resolve", () => {
     // Deleted dual authority surfaces must stay gone from production src.
     expect(() =>
@@ -191,11 +204,11 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     });
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
+      if (url.match(/\/organizations\/[^/?]+\/$/u) || url.match(/\/organizations\/[^/?]+\?$/u)) {
+        return Response.json({ id: "1", slug: "a", access: ["project:read", "project:write"] });
+      }
       if (url.includes("/organizations/") && url.includes("/projects/")) {
         return Response.json([{ slug: "p1" }]);
-      }
-      if (url.includes("/teams/")) {
-        return Response.json([{ slug: "t1" }]);
       }
       return Response.json([
         { id: "1", slug: "a", name: "A" },
@@ -210,7 +223,102 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     expect(result.status).toBe("multi_principal");
     if (result.status !== "multi_principal") return;
     expect(result.candidates).toHaveLength(2);
-    expect(result.scopes).toEqual(expect.arrayContaining(["project:read"]));
+    expect(result.scopes).toEqual(expect.arrayContaining(["project:read", "project:write"]));
+    expect(result.scopes).not.toContain("project:admin");
+  });
+
+  it("Sentry full-capability link scopes satisfy catalog provision (project:write only)", async () => {
+    const { catalogOperation } = await import("../src/engine/contracts/integrationCatalog.js");
+    const provision = catalogOperation("sentry", "errors", "provision");
+    expect(provision?.requiredScopes).toEqual(["project:write"]);
+    expect(provision?.requiredScopes).not.toContain("project:admin");
+    // Proven scopes from access array must authorize provision eligibility.
+    const proven = ["project:read", "project:write"];
+    for (const required of provision!.requiredScopes) {
+      expect(proven).toContain(required);
+    }
+  });
+
+  it("Vault putCreateOnly uses CAS0 semantics: identical idempotent, different conflict", async () => {
+    const calls: Array<{ body?: string; method?: string }> = [];
+    const values = new Map<string, string>();
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      const method = init?.method ?? "GET";
+      const path = String(url);
+      calls.push({ method, body: typeof init?.body === "string" ? init.body : undefined });
+      if (method === "POST") {
+        const parsed = JSON.parse(String(init?.body)) as {
+          options?: { cas?: number };
+          data?: { value?: string };
+        };
+        if (parsed.options?.cas === 0) {
+          if (values.has(path)) {
+            return new Response("check-and-set failed", { status: 412 });
+          }
+          values.set(path, parsed.data?.value ?? "");
+          return new Response(null, { status: 204 });
+        }
+        values.set(path, parsed.data?.value ?? "");
+        return new Response(null, { status: 204 });
+      }
+      if (values.has(path)) {
+        return Response.json({ data: { data: { value: values.get(path) } } });
+      }
+      return new Response("missing", { status: 404 });
+    });
+    const { VaultSecretStore } = await import("../src/engine/contracts/secretStore.js");
+    const vault = new VaultSecretStore({ addr: "http://vault:8200", token: "t", fetchImpl });
+    const first = await vault.putCreateOnly({ ref: "secret://g/1", value: "same" });
+    expect(first).toEqual({ status: "created" });
+    const again = await vault.putCreateOnly({ ref: "secret://g/1", value: "same" });
+    expect(again).toEqual({ status: "already_exists_identical" });
+    const conflict = await vault.putCreateOnly({ ref: "secret://g/1", value: "other" });
+    expect(conflict).toEqual({ status: "conflict_different_value" });
+    expect(calls.some((c) => c.body?.includes('"cas":0'))).toBe(true);
+  });
+
+  it("Fly multi-org paginates via pageInfo and never sole-principal collapses", async () => {
+    const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
+    const staged = await secrets.stage("op-fly", "token");
+    const permit = issuePrincipalVerificationPermit({
+      orgId: "org-1",
+      providerKind: "deploy.flyio",
+      operationId: "op-fly",
+      actorId: "admin",
+      stagedSecretHandle: staged.handle,
+    });
+    let page = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { variables?: { after?: string | null } };
+      page += 1;
+      if (body.variables?.after === null || body.variables?.after === undefined) {
+        return Response.json({
+          data: {
+            organizations: {
+              nodes: [{ id: "o1", slug: "one", name: "One" }],
+              pageInfo: { hasNextPage: true, endCursor: "c1" },
+            },
+          },
+        });
+      }
+      if (body.variables?.after === "c1") {
+        return Response.json({
+          data: {
+            organizations: {
+              nodes: [{ id: "o2", slug: "two", name: "Two" }],
+              pageInfo: { hasNextPage: false, endCursor: "c2" },
+            },
+          },
+        });
+      }
+      throw new Error("unexpected cursor");
+    });
+    const { FlyPrincipalVerifier } = await import("../src/engine/integrations/principalVerifiers.js");
+    const result = await new FlyPrincipalVerifier(fetchImpl as unknown as typeof fetch).verify(permit, staged, secrets);
+    expect(result.status).toBe("multi_principal");
+    if (result.status !== "multi_principal") return;
+    expect(result.candidates.map((c) => c.providerPrincipalId)).toEqual(["o1", "o2"]);
+    expect(page).toBe(2);
   });
 
   it("Vercel team fetch non-OK fails loud (never silent user-only downgrade)", async () => {

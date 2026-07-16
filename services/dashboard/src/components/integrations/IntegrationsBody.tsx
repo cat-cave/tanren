@@ -51,7 +51,7 @@ export interface IntegrationsBodyProps {
     providerKind: string;
     operationId: string;
     candidates: PrincipalSelectionCandidate[];
-    status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed";
+    status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed" | "unavailable";
   };
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
@@ -301,7 +301,7 @@ function GrantCard(props: { row: OrgIntegrationSummary; projectId: string; csrfT
       <span class="label">{providerLabel(row.providerKind)}</span>
       <span class={`value${active ? "" : " empty"}`}>{statusLabel(row.grantStatus ?? row.connectionStatus)}</span>
       <span class="ref">
-        verified principal · {row.displayName} ({row.principalKind} · {row.providerPrincipalId})
+        verified principal · {row.displayName} ({row.principalKind})
       </span>
       <span class="sub">health · {statusLabel(row.health)}</span>
       {row.authExpiresAt === undefined ? null : <span class="sub">expires · {row.authExpiresAt}</span>}
@@ -366,6 +366,9 @@ function PrincipalSelectionPanel(props: {
         {status === "invalidated" ? (
           <div class="notice warn">candidates were invalidated — re-link to refresh verified principals.</div>
         ) : null}
+        {status === "unavailable" ? (
+          <div class="notice warn">operation unavailable — refresh or re-link to continue principal selection.</div>
+        ) : null}
         {status === "completed" ? (
           <div class="notice">principal selection completed for {providerLabel(panel.providerKind)}.</div>
         ) : null}
@@ -376,15 +379,14 @@ function PrincipalSelectionPanel(props: {
                 class="int-card linked"
                 method="post"
                 action="/integrations/select-principal"
-                data-principal-candidate={candidate.providerPrincipalId}
+                data-principal-kind={candidate.principalKind}
               >
                 <CsrfField token={csrfToken} />
                 <input type="hidden" name="operationId" value={panel.operationId} />
+                {/* Hidden exact ID for CSRF form submission only — never visible chrome. */}
                 <input type="hidden" name="providerPrincipalId" value={candidate.providerPrincipalId} />
                 <span class="label">{candidate.displayName}</span>
-                <span class="sub">
-                  {candidate.principalKind} · {candidate.providerPrincipalId}
-                </span>
+                <span class="sub">{candidate.principalKind}</span>
                 <button class="btn primary" type="submit">
                   use this principal
                 </button>

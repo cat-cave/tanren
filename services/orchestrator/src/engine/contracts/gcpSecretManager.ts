@@ -1,4 +1,4 @@
-import type { SecretStore, SecretValue } from "./secretStore.js";
+import type { PutCreateOnlyResult, SecretStore, SecretValue } from "./secretStore.js";
 
 /**
  * Backend-agnostic credential refs look like
@@ -106,6 +106,17 @@ export class GcpSecretManagerStore implements SecretStore {
       body: JSON.stringify({ payload: { data } }),
     });
     await assertOk(response, `add version for secret ${secret.ref}`);
+  }
+
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    const existing = await this.get(secret.ref);
+    if (existing !== undefined) {
+      return existing.value === secret.value
+        ? { status: "already_exists_identical" }
+        : { status: "conflict_different_value" };
+    }
+    await this.put(secret);
+    return { status: "created" };
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {

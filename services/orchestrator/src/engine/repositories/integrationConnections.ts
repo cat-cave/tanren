@@ -2,8 +2,12 @@ import { z } from "zod";
 import type { EligibleOperationLease, PrincipalCandidate } from "../contracts/integrationAuthority.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import type { IntegrationSecretStore } from "../contracts/integrationSecretStore.js";
-import type { FinalizeVerifiedLinkInput, FinalizeVerifiedLinkResult } from "./integrationConnectionFinalize.js";
-export type { FinalizeVerifiedLinkInput, FinalizeVerifiedLinkResult };
+import type {
+  FinalizeVerifiedLinkInput,
+  FinalizeVerifiedLinkResult,
+  LinkReservation,
+} from "./integrationConnectionFinalize.js";
+export type { FinalizeVerifiedLinkInput, FinalizeVerifiedLinkResult, LinkReservation };
 import type { ActorRef } from "../state/actor.js";
 import { listExactControlGrants, orgGrantFromLease, secretValueForLease } from "./integrationConnectionResolve.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
@@ -207,6 +211,11 @@ export const IntegrationConnectionsStore = {
     };
   },
 
+  /**
+   * Unit-fake convenience: reserve + secret + activate on one client.
+   * Production HTTP must use reserve / finalizeReservedSecret / activate so Vault
+   * never runs under BEGIN (see authorityWrites).
+   */
   async finalizeVerifiedLink(
     client: IntegrationQueryClient,
     input: FinalizeVerifiedLinkInput,
@@ -214,6 +223,20 @@ export const IntegrationConnectionsStore = {
   ): Promise<FinalizeVerifiedLinkResult> {
     const { finalizeVerifiedLinkSql } = await import("./integrationConnectionFinalize.js");
     return finalizeVerifiedLinkSql(client, input, secrets);
+  },
+
+  async reserveVerifiedLink(client: IntegrationQueryClient, input: FinalizeVerifiedLinkInput) {
+    const { reserveVerifiedLinkSql } = await import("./integrationConnectionFinalize.js");
+    return reserveVerifiedLinkSql(client, input);
+  },
+
+  async activateReservedLink(
+    client: IntegrationQueryClient,
+    reservation: LinkReservation,
+    credentialRef: string,
+  ): Promise<FinalizeVerifiedLinkResult> {
+    const { activateReservedLinkSql } = await import("./integrationConnectionFinalize.js");
+    return activateReservedLinkSql(client, reservation, credentialRef);
   },
 
   async listInventory(

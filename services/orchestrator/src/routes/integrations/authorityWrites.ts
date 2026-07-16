@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import type { ActorContext } from "../../auth/schemas.js";
 import { catalogCapabilitiesForProvider, isKnownProviderKind } from "../../engine/contracts/integrationCatalog.js";
 import type { IntegrationSecretStore } from "../../engine/contracts/integrationSecretStore.js";
+import type { LinkReservation } from "../../engine/repositories/integrationConnectionFinalize.js";
 import { issuePrincipalVerificationPermit } from "../../engine/contracts/integrationAuthority.js";
 import type { EventStore } from "../../engine/eventStore.js";
 import type { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
@@ -38,6 +39,51 @@ function requireActor(c: { var: { actor?: ActorContext } }): ActorContext {
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/** Split reserve → Vault create-only → activate; no provider/Vault I/O under BEGIN. */
+async function runSplitLinkFinalize(
+  database: IntegrationAuthorityRouteDatabase,
+  orgId: string,
+  input: Parameters<typeof IntegrationConnectionsStore.finalizeVerifiedLink>[1],
+  integrationSecrets: IntegrationSecretStore,
+): Promise<Awaited<ReturnType<typeof IntegrationConnectionsStore.finalizeVerifiedLink>>> {
+  const { finalizeReservedSecret } = await import("../../engine/repositories/integrationConnectionFinalize.js");
+
+  const reserved = await database.withOrgScope(orgId, (client) =>
+    IntegrationConnectionsStore.reserveVerifiedLink(client, input),
+  );
+  if ("authGeneration" in reserved && !("nextGeneration" in reserved)) {
+    return reserved;
+  }
+  const reservation = reserved as LinkReservation;
+  let credentialRef: string;
+  try {
+    credentialRef = await finalizeReservedSecret(integrationSecrets, reservation, input.staged);
+  } catch (error) {
+    await database.withOrgScope(orgId, (client) =>
+      client.query(
+        `UPDATE org_integration_connection_operations
+         SET failure_classification = 'secret_finalize_failed',
+             compensation_state = compensation_state || $3::jsonb,
+             updated_at = now()
+         WHERE org_id = $1 AND id = $2`,
+        [
+          orgId,
+          reservation.permit.operationId,
+          JSON.stringify({
+            secretFinalizeError: error instanceof Error ? error.message : "secret_finalize_failed",
+            reservedCredentialBase: reservation.baseRef,
+          }),
+        ],
+      ),
+    );
+    throw error;
+  }
+  return database.withOrgScope(orgId, (client) =>
+    IntegrationConnectionsStore.activateReservedLink(client, reservation, credentialRef),
+  );
+}
+
 async function projectAccess(
   database: IntegrationAuthorityRouteDatabase,
   orgId: string,
@@ -169,19 +215,18 @@ export function mountIntegrationAuthorityWrites(
         );
       }
       try {
-        const linked = await database.withOrgScope(orgId, (client) =>
-          IntegrationConnectionsStore.finalizeVerifiedLink(
-            client,
-            {
-              permit: { ...permit, stagedSecretHandle: staged.handle },
-              staged,
-              principal: verified.principal,
-              authKind: verified.authKind,
-              scopes: verified.scopes,
-              ...(verified.expiresAt === undefined ? {} : { expiresAt: verified.expiresAt }),
-            },
-            integrationSecrets,
-          ),
+        const linked = await runSplitLinkFinalize(
+          database,
+          orgId,
+          {
+            permit: { ...permit, stagedSecretHandle: staged.handle },
+            staged,
+            principal: verified.principal,
+            authKind: verified.authKind,
+            scopes: verified.scopes,
+            ...(verified.expiresAt === undefined ? {} : { expiresAt: verified.expiresAt }),
+          },
+          integrationSecrets,
         );
         return c.json(
           {
@@ -217,7 +262,14 @@ export function mountIntegrationAuthorityWrites(
           202,
         );
       }
-    } catch {
+    } catch (error) {
+      const msg = messageOf(error);
+      if (msg.includes("auth_generation_immutable_conflict") || msg.includes("grant_generation_immutable_conflict")) {
+        return c.json({ error: "generation_immutable_conflict" }, 409);
+      }
+      if (msg.includes("principal_already_linked")) {
+        return c.json({ error: "principal_already_linked" }, 409);
+      }
       return c.json({ error: "link_failed" }, 500);
     }
   });
@@ -275,18 +327,17 @@ export function mountIntegrationAuthorityWrites(
           202,
         );
       }
-      const linked = await database.withOrgScope(orgId, (client) =>
-        IntegrationConnectionsStore.finalizeVerifiedLink(
-          client,
-          {
-            permit: { ...permit, stagedSecretHandle: staged.handle },
-            staged,
-            principal: verified.principal,
-            authKind: verified.authKind,
-            scopes: verified.scopes,
-          },
-          integrationSecrets,
-        ),
+      const linked = await runSplitLinkFinalize(
+        database,
+        orgId,
+        {
+          permit: { ...permit, stagedSecretHandle: staged.handle },
+          staged,
+          principal: verified.principal,
+          authKind: verified.authKind,
+          scopes: verified.scopes,
+        },
+        integrationSecrets,
       );
       return c.json(
         {
@@ -299,7 +350,11 @@ export function mountIntegrationAuthorityWrites(
         },
         202,
       );
-    } catch {
+    } catch (error) {
+      const msg = messageOf(error);
+      if (msg.includes("auth_generation_immutable_conflict") || msg.includes("grant_generation_immutable_conflict")) {
+        return c.json({ error: "generation_immutable_conflict" }, 409);
+      }
       return c.json({ error: "rotate_failed" }, 500);
     }
   });
@@ -334,19 +389,18 @@ export function mountIntegrationAuthorityWrites(
       stagedSecretHandle: op.stagedSecretHandle,
     });
     try {
-      const linked = await database.withOrgScope(orgId, (client) =>
-        IntegrationConnectionsStore.finalizeVerifiedLink(
-          client,
-          {
-            permit: branded,
-            staged,
-            principal,
-            authKind: op.verifiedAuthKind ?? "api_key",
-            scopes: op.verifiedScopes ?? [],
-            selectedPrincipalId: principal.providerPrincipalId,
-          },
-          integrationSecrets,
-        ),
+      const linked = await runSplitLinkFinalize(
+        database,
+        orgId,
+        {
+          permit: branded,
+          staged,
+          principal,
+          authKind: op.verifiedAuthKind ?? "api_key",
+          scopes: op.verifiedScopes ?? [],
+          selectedPrincipalId: principal.providerPrincipalId,
+        },
+        integrationSecrets,
       );
       return c.json(
         {
