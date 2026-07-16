@@ -19,13 +19,12 @@
 
 import type { RunDetail, RunEventRow } from "../../api/types.js";
 import { CsrfField } from "../shell/CsrfField.js";
+import { summarizeCosts, formatCostUsd } from "./model.js";
 import {
-  summarizeCosts,
-  formatCostUsd,
   reviewMergeStateFromEvents,
   type ForgeReviewPublicationView,
   type ReviewMergeState,
-} from "./model.js";
+} from "./reviewMergeState.js";
 import { RUN_DETAIL_CSS } from "./runDetail.css.js";
 
 /** The four merge-integration modes (mirrors MergeIntegration). */

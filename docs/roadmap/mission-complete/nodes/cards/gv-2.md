@@ -71,7 +71,11 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 - `services/orchestrator/src/engine/merge/mergeAuthorityBundleBuild.ts` +
   `mergeDispatchTypes.ts` (thread `reviewedHeadSha`)
 - `services/dashboard/src/components/runDetail/ReviewBody.tsx`
-- `services/dashboard/src/components/runDetail/model.ts` (forge publication view)
+- `services/dashboard/src/components/runDetail/model.ts` (cost/trajectory/
+  reasoning/preview view-model only — review/merge reducer extracted)
+- `services/dashboard/src/components/runDetail/reviewMergeState.ts`
+  (review/merge event reducer + gv-2 forge publication tri-state; extracted
+  from `model.ts` so each file stays under the 500-line architecture cap)
 - Focused tests: `simulatedReviewer.test.ts`,
   `simulatedReviewPublication.test.ts`, `simulatedReviewIntentFence.test.ts`,
   `simulatedReviewIntentFence.pg.integration.test.ts` (opt-in real PG; pre-
@@ -79,7 +83,9 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   `githubReviewMergeSubmit.test.ts`, `reviewTaskTerminalRouting.test.ts`,
   `reviewForgePublicationSchema.test.ts`, `mergeAuthorityGate.test.ts` (review
   TOCTOU), `simulatedReviewHeadRebind.test.ts` (A→B re-review recovery),
-  `runDetail.model.test.ts`
+  `runDetail.model.test.ts` (cost/trajectory/reasoning view-model),
+  `reviewMergeState.test.ts` (review/merge reducer + forge publication view,
+  moved out of `runDetail.model.test.ts` to respect the 500-line cap)
 
 ## Shared-resource leases (not taken)
 
