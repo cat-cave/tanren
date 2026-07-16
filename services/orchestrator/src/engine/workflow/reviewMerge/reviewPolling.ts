@@ -102,8 +102,6 @@ export interface PollReviewForRunInput {
    * PostgreSQL session advisory lock; tests inject an in-memory serializing fence.
    */
   publishFence?: SimulatedReviewPublishFence;
-  /** Test override for intended reviewer login when the probe omits resolveReviewerLogin. */
-  simulatedReviewerLogin?: string;
 }
 
 export type { SimulatedReviewSpec };
@@ -353,9 +351,6 @@ async function runSimulatedReviewPath(args: {
     intentRepository,
     publishFence,
     repo: pr.repo,
-    ...(input.simulatedReviewerLogin !== undefined && {
-      reviewerLoginOverride: input.simulatedReviewerLogin,
-    }),
   });
   return {
     runId: stage.runId,

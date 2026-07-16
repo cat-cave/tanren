@@ -91,22 +91,24 @@ function sharedConvergentProbe(forge: SharedForge, headSha = HEAD): ReviewProbe 
       diff: "diff --git a/x b/x\n+x",
     }),
     fetchLiveHeadSha: async () => headSha,
-    resolveReviewerLogin: async () => REVIEWER,
-    submitReview: async (event, body, sha) => {
-      forge.listed += 1;
-      const expectedState = event === "APPROVE" ? "approved" : "changes_requested";
-      const existing = forge.reviews.find(
-        (r) =>
-          r.headSha.toLowerCase() === sha.toLowerCase() &&
-          r.forgeReviewState === expectedState &&
-          (r.reviewerLogin ?? "").toLowerCase() === REVIEWER.toLowerCase(),
-      );
-      if (existing !== undefined) return existing;
-      forge.posts.push({ event, body, headSha: sha });
-      const receipt = receiptFor(event, sha, String(9000 + forge.posts.length));
-      forge.reviews.push(receipt);
-      return receipt;
-    },
+    pinSimulatedReviewer: async () => ({
+      reviewerLogin: REVIEWER,
+      submitReview: async (event, body, sha) => {
+        forge.listed += 1;
+        const expectedState = event === "APPROVE" ? "approved" : "changes_requested";
+        const existing = forge.reviews.find(
+          (r) =>
+            r.headSha.toLowerCase() === sha.toLowerCase() &&
+            r.forgeReviewState === expectedState &&
+            (r.reviewerLogin ?? "").toLowerCase() === REVIEWER.toLowerCase(),
+        );
+        if (existing !== undefined) return existing;
+        forge.posts.push({ event, body, headSha: sha });
+        const receipt = receiptFor(event, sha, String(9000 + forge.posts.length));
+        forge.reviews.push(receipt);
+        return receipt;
+      },
+    }),
   };
 }
 
@@ -416,18 +418,20 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
         diff: "diff",
       }),
       fetchLiveHeadSha: async () => HEAD,
-      resolveReviewerLogin: async () => REVIEWER,
-      submitReview: async (event, body, sha) => {
-        forge.listed += 1;
-        if (failFirstPost) {
-          failFirstPost = false;
-          throw new Error("worker died before POST");
-        }
-        forge.posts.push({ event, body, headSha: sha });
-        const receipt = receiptFor(event, sha);
-        forge.reviews.push(receipt);
-        return receipt;
-      },
+      pinSimulatedReviewer: async () => ({
+        reviewerLogin: REVIEWER,
+        submitReview: async (event, body, sha) => {
+          forge.listed += 1;
+          if (failFirstPost) {
+            failFirstPost = false;
+            throw new Error("worker died before POST");
+          }
+          forge.posts.push({ event, body, headSha: sha });
+          const receipt = receiptFor(event, sha);
+          forge.reviews.push(receipt);
+          return receipt;
+        },
+      }),
     };
     const intentRepository = new InMemorySimulatedReviewIntentRepository();
     const publishFence = new InMemorySimulatedReviewPublishFence();

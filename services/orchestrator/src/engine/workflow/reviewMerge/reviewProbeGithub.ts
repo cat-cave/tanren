@@ -31,7 +31,7 @@ import {
 
 /**
  * Injectable review-state probe (real GitHub by default; mocked in tests). The
- * `fetchSnapshot`/`fetchLiveHeadSha`/`submitReview` members are used ONLY on the
+ * `fetchSnapshot`/`fetchLiveHeadSha`/`pinSimulatedReviewer` members are used ONLY on the
  * simulated path; human/auto test probes may omit them.
  */
 export interface ReviewProbe {
@@ -41,17 +41,18 @@ export interface ReviewProbe {
   fetchSnapshot?(): Promise<ReviewSnapshot>;
   /** Re-read only the live PR head immediately before the provider POST. */
   fetchLiveHeadSha?(): Promise<string>;
-  /**
-   * Distinct reviewer login for the durable intent fence. Production resolves
-   * the dual-credential seam; test probes may hard-code the fixture login.
-   */
-  resolveReviewerLogin?(): Promise<string>;
-  /**
-   * Strict forge publication: posts the event (or reclaims an existing exact
-   * match) and returns a durable receipt. Must throw (not swallow) on failure
-   * — no best-effort path for simulated land.
-   */
-  submitReview?(event: SubmitReviewEvent, body: string, headSha: string): Promise<SubmittedReviewReceipt>;
+  /** Resolve one attempt-scoped reviewer identity + credential capability. */
+  pinSimulatedReviewer?(): Promise<PinnedSimulatedReviewer>;
+}
+
+/**
+ * Opaque attempt capability: the login and submit closure are derived from one
+ * credential resolution. The token never enters the intent/event payload, and
+ * submit cannot perform a second mutable secret lookup.
+ */
+export interface PinnedSimulatedReviewer {
+  readonly reviewerLogin: string;
+  submitReview(event: SubmitReviewEvent, body: string, headSha: string): Promise<SubmittedReviewReceipt>;
 }
 
 export interface ReviewSnapshot {
@@ -82,11 +83,7 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
   const repoFullName = `${repo.owner}/${repo.name}`;
   const { codeHost, visibility } = projectHostSeamsOver(githubHttp, async () => resolved);
   const reviewMerge = new GitHubReviewMergeService(githubHttp);
-  let cachedReviewer:
-    | { reviewer: Awaited<ReturnType<typeof resolveDistinctSimulatedReviewerToken>>["reviewer"]; reviewerLogin: string }
-    | undefined;
-  async function loadReviewer() {
-    if (cachedReviewer !== undefined) return cachedReviewer;
+  async function pinSimulatedReviewer(): Promise<PinnedSimulatedReviewer> {
     const resolvedReviewer = await resolveDistinctSimulatedReviewerToken({
       secrets,
       githubHttp,
@@ -95,8 +92,23 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
       githubAppMinter,
       reviewerGithubCredentialRef: input.reviewerGithubCredentialRef,
     });
-    cachedReviewer = { reviewer: resolvedReviewer.reviewer, reviewerLogin: resolvedReviewer.reviewerLogin };
-    return cachedReviewer;
+    const { reviewer, reviewerLogin } = resolvedReviewer;
+    return {
+      reviewerLogin,
+      submitReview: (event, body, headSha) =>
+        publishPinnedSimulatedReview({
+          event,
+          body,
+          headSha,
+          reviewer,
+          reviewerLogin,
+          githubHttp,
+          reviewMerge,
+          resolvedWriter: resolved,
+          repo,
+          pullNumber,
+        }),
+    };
   }
   return {
     markReady: async () => {
@@ -111,73 +123,78 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
       return { ...metadata, diff: await codeHost.readDiff(repo, metadata.baseSha, metadata.headSha) };
     },
     fetchLiveHeadSha: async () => (await readReviewMetadata(githubHttp, repo, pullNumber, resolved)).headSha,
-    resolveReviewerLogin: async () => {
-      const { reviewerLogin } = await loadReviewer();
-      return reviewerLogin;
-    },
-    submitReview: async (event, body, headSha) => {
-      if (event === "COMMENT") {
-        throw new SimulatedReviewPublicationError(
-          "strict simulated review refuses COMMENT event — only APPROVE/REQUEST_CHANGES",
-        );
-      }
-      const expectedState = event === "APPROVE" ? "approved" : "changes_requested";
-      if (!bodyContainsTanrenSimulatedMarker(body, expectedState)) {
-        throw new SimulatedReviewPublicationError(
-          `strict simulated review body missing durable Tanren marker for ${expectedState}`,
-        );
-      }
-      const expectedIntentMarker = requireSimulatedReviewIntentMarker(body);
-      const { reviewer, reviewerLogin } = await loadReviewer();
-      try {
-        // list→POST convergence lives here; the stage wraps this call in the
-        // cross-process advisory publish fence so concurrent workers serialize.
-        return await publishSimulatedReviewConvergent({
-          expectedState,
-          expectedHeadSha: headSha,
-          expectedReviewerLogin: reviewerLogin,
-          expectedIntentMarker,
-          listReviews: () =>
-            reviewMerge.listPullRequestReviews({
-              repo,
-              pullNumber,
-              token: reviewer.token,
-              refreshToken: reviewer.refresh,
-            }),
-          postReview: async () => {
-            // Reconcile/list can take time after the stage's inside-fence head
-            // check. Re-read again here so nothing sits between this read and
-            // the non-idempotent POST except local argument construction.
-            const liveHeadSha = (await readReviewMetadata(githubHttp, repo, pullNumber, resolved)).headSha;
-            if (liveHeadSha.toLowerCase() !== headSha.toLowerCase()) {
-              throw new SimulatedReviewHeadStaleError(headSha, liveHeadSha);
-            }
-            const receipt = await reviewMerge.submitReview({
-              repo,
-              pullNumber,
-              event,
-              body,
-              commitId: headSha,
-              token: reviewer.token,
-              refreshToken: reviewer.refresh,
-            });
-            if (receipt === undefined) {
-              throw new SimulatedReviewPublicationError(
-                "strict simulated review got no forge receipt (COMMENT or empty response)",
-              );
-            }
-            return receipt;
-          },
-        });
-      } catch (err) {
-        if (err instanceof SimulatedReviewPublicationError) throw err;
-        const message = err instanceof Error ? err.message : String(err);
-        throw new SimulatedReviewPublicationError(`simulated review forge publication failed: ${message}`, {
-          retriable: err instanceof GitHubReviewHttpError && err.retriable,
-        });
-      }
-    },
+    pinSimulatedReviewer,
   };
+}
+
+async function publishPinnedSimulatedReview(input: {
+  event: SubmitReviewEvent;
+  body: string;
+  headSha: string;
+  reviewer: ResolvedVcsToken;
+  reviewerLogin: string;
+  githubHttp: GitHubHttpClient;
+  reviewMerge: GitHubReviewMergeService;
+  resolvedWriter: ResolvedVcsToken;
+  repo: RepoRef;
+  pullNumber: number;
+}): Promise<SubmittedReviewReceipt> {
+  if (input.event === "COMMENT") {
+    throw new SimulatedReviewPublicationError(
+      "strict simulated review refuses COMMENT event — only APPROVE/REQUEST_CHANGES",
+    );
+  }
+  const expectedState = input.event === "APPROVE" ? "approved" : "changes_requested";
+  if (!bodyContainsTanrenSimulatedMarker(input.body, expectedState)) {
+    throw new SimulatedReviewPublicationError(
+      `strict simulated review body missing durable Tanren marker for ${expectedState}`,
+    );
+  }
+  const expectedIntentMarker = requireSimulatedReviewIntentMarker(input.body);
+  try {
+    return await publishSimulatedReviewConvergent({
+      expectedState,
+      expectedHeadSha: input.headSha,
+      expectedReviewerLogin: input.reviewerLogin,
+      expectedIntentMarker,
+      listReviews: () =>
+        input.reviewMerge.listPullRequestReviews({
+          repo: input.repo,
+          pullNumber: input.pullNumber,
+          token: input.reviewer.token,
+          refreshToken: input.reviewer.refresh,
+        }),
+      postReview: async () => {
+        const liveHeadSha = (
+          await readReviewMetadata(input.githubHttp, input.repo, input.pullNumber, input.resolvedWriter)
+        ).headSha;
+        if (liveHeadSha.toLowerCase() !== input.headSha.toLowerCase()) {
+          throw new SimulatedReviewHeadStaleError(input.headSha, liveHeadSha);
+        }
+        const receipt = await input.reviewMerge.submitReview({
+          repo: input.repo,
+          pullNumber: input.pullNumber,
+          event: input.event,
+          body: input.body,
+          commitId: input.headSha,
+          token: input.reviewer.token,
+          refreshToken: input.reviewer.refresh,
+        });
+        if (receipt === undefined) {
+          throw new SimulatedReviewPublicationError(
+            "strict simulated review got no forge receipt (COMMENT or empty response)",
+          );
+        }
+        return receipt;
+      },
+    });
+  } catch (err) {
+    if (err instanceof SimulatedReviewPublicationError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    throw new SimulatedReviewPublicationError(`simulated review forge publication failed: ${message}`, {
+      retriable: err instanceof GitHubReviewHttpError && err.retriable,
+    });
+  }
 }
 
 async function readReviewMetadata(

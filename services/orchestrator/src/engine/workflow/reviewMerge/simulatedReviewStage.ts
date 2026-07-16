@@ -5,7 +5,7 @@ import type { ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import type { SubmittedReviewReceipt } from "../../providers/githubReviewMerge.js";
 import type { ReviewMergeRunContext } from "./context.js";
-import type { ReviewProbe } from "./reviewProbeGithub.js";
+import type { PinnedSimulatedReviewer, ReviewProbe } from "./reviewProbeGithub.js";
 import {
   reviewBodyFor,
   reviewEventFor,
@@ -48,11 +48,6 @@ export interface RunSimulatedReviewStageInput {
    * owner/name; tests may use fixtures.
    */
   repo: { owner: string; name: string };
-  /**
-   * Optional override when the probe already knows the reviewer login (tests).
-   * Production resolves via probe.resolveReviewerLogin when present.
-   */
-  reviewerLoginOverride?: string;
 }
 
 export interface SimulatedReviewStageResult {
@@ -71,18 +66,23 @@ export interface SimulatedReviewStageResult {
 /**
  * Drive simulated review with the durable intent fence:
  *   1. Acquire one coherent base/head/author snapshot + immutable diff.
- *   2. Lookup head-keyed intent — if present, skip Answerer and reuse it.
- *   3. Else run Answerer, first-wins append intent, read back winner.
- *   4. Under cross-process publish fence: list→reconcile→optional POST.
- *   5. Bind forge receipt; never terminalize without it.
+ *   2. Pin one attempt-scoped reviewer identity + credential capability.
+ *   3. Resolve the head-keyed durable intent; a hit skips the Answerer.
+ *   4. Compare pinned login to intent before any publish-fence/forge work.
+ *   5. Under cross-process publish fence: list→reconcile→optional POST.
+ *   6. Bind forge receipt; never terminalize without it.
  */
 export async function runSimulatedReviewStage(
   input: RunSimulatedReviewStageInput,
 ): Promise<SimulatedReviewStageResult> {
   const { context, probe, taskId, pullNumber } = input;
-  if (probe.fetchSnapshot === undefined || probe.fetchLiveHeadSha === undefined || probe.submitReview === undefined) {
+  if (
+    probe.fetchSnapshot === undefined ||
+    probe.fetchLiveHeadSha === undefined ||
+    probe.pinSimulatedReviewer === undefined
+  ) {
     throw new SimulatedReviewPublicationError(
-      "reviewPolicy 'simulated' requires a coherent PR snapshot, live-head revalidation, and strict review publication",
+      "reviewPolicy 'simulated' requires a coherent PR snapshot, live-head revalidation, and pinned strict review publication",
     );
   }
   const snapshot = await probe.fetchSnapshot();
@@ -93,6 +93,10 @@ export async function runSimulatedReviewStage(
     );
   }
 
+  // One attempt-scoped pin is the sole reviewer login + credential authority.
+  // It is resolved before intent creation so an Answerer cannot outlive a
+  // credential rotation and bind an intent that submit would publish elsewhere.
+  const pinnedReviewer = await pinReviewer(probe);
   const intent = await resolveDurableIntent({
     context,
     taskId,
@@ -102,16 +106,16 @@ export async function runSimulatedReviewStage(
     resolveReviewer: input.resolveReviewer,
     spec: input.spec,
     intentRepository: input.intentRepository,
-    probe,
-    reviewerLoginOverride: input.reviewerLoginOverride,
+    reviewerLogin: pinnedReviewer.reviewerLogin,
   });
+  assertPinnedReviewerMatchesIntent(pinnedReviewer, intent);
 
   const fenceKey: SimulatedReviewPublishFenceKey = {
     owner: input.repo.owner,
     repo: input.repo.name,
     pullNumber,
     headSha: intent.headSha,
-    reviewerLogin: intent.reviewerLogin,
+    reviewerLogin: pinnedReviewer.reviewerLogin,
   };
 
   let receipt: SubmittedReviewReceipt;
@@ -122,7 +126,7 @@ export async function runSimulatedReviewStage(
         throw new SimulatedReviewHeadStaleError(intent.headSha, liveHeadSha);
       }
       // Always publish the durable winner — never a losing concurrent Answerer.
-      return probe.submitReview!(intent.event, intent.body, intent.headSha);
+      return pinnedReviewer.submitReview(intent.event, intent.body, intent.headSha);
     });
   } catch (err) {
     if (err instanceof SimulatedReviewPublicationError) throw err;
@@ -135,7 +139,7 @@ export async function runSimulatedReviewStage(
     expectedVerdict: intent.state,
     expectedHeadSha: intent.headSha,
   });
-  if (forgePublication.reviewerLogin.toLowerCase() !== intent.reviewerLogin.toLowerCase()) {
+  if (normalizedReviewerLogin(forgePublication.reviewerLogin) !== normalizedReviewerLogin(intent.reviewerLogin)) {
     throw new SimulatedReviewPublicationError(
       `simulated review publication reviewer mismatch: forge=${forgePublication.reviewerLogin} intent=${intent.reviewerLogin}`,
     );
@@ -163,8 +167,7 @@ async function resolveDurableIntent(input: {
   resolveReviewer: () => AnswererAdapter<ReviewAnswer>;
   spec: SimulatedReviewSpec;
   intentRepository: SimulatedReviewIntentRepository;
-  probe: ReviewProbe;
-  reviewerLoginOverride?: string;
+  reviewerLogin: string;
 }): Promise<SimulatedReviewIntent> {
   const existing = await input.intentRepository.lookup(input.context.orgId, input.context.runId, input.headSha);
   if (existing !== undefined) {
@@ -172,7 +175,7 @@ async function resolveDurableIntent(input: {
     return existing;
   }
 
-  const reviewerLogin = await resolveReviewerLoginForIntent(input.probe, input.reviewerLoginOverride);
+  const reviewerLogin = input.reviewerLogin;
   assertReviewerIsNotAuthor(reviewerLogin, input.authorLogin);
   const { verdict } = await runSimulatedReviewer(input.resolveReviewer(), {
     context: {
@@ -254,8 +257,8 @@ function markerForIntent(runId: string, taskId: string, intent: SimulatedReviewI
 }
 
 function assertReviewerIsNotAuthor(reviewerLogin: string, authorLogin: string): void {
-  const reviewer = reviewerLogin.trim().toLowerCase();
-  const author = authorLogin.trim().toLowerCase();
+  const reviewer = normalizedReviewerLogin(reviewerLogin);
+  const author = normalizedReviewerLogin(authorLogin);
   if (reviewer === "" || author === "") {
     throw new SimulatedReviewPublicationError("simulated review requires provider-observed author and reviewer logins");
   }
@@ -266,20 +269,30 @@ function assertReviewerIsNotAuthor(reviewerLogin: string, authorLogin: string): 
   }
 }
 
-async function resolveReviewerLoginForIntent(probe: ReviewProbe, override: string | undefined): Promise<string> {
-  if (typeof override === "string" && override.trim() !== "") {
-    return override.trim();
+async function pinReviewer(probe: ReviewProbe): Promise<PinnedSimulatedReviewer> {
+  const pinned = await probe.pinSimulatedReviewer!();
+  if (pinned.reviewerLogin.trim() === "") {
+    throw new SimulatedReviewPublicationError(
+      "simulated review intent requires a non-empty reviewer login from the pinned production probe",
+    );
   }
-  if (probe.resolveReviewerLogin !== undefined) {
-    const login = await probe.resolveReviewerLogin();
-    if (login.trim() === "") {
-      throw new SimulatedReviewPublicationError(
-        "simulated review intent requires a non-empty reviewer login from the probe",
-      );
-    }
-    return login.trim();
+  return pinned;
+}
+
+function assertPinnedReviewerMatchesIntent(
+  pinnedReviewer: PinnedSimulatedReviewer,
+  intent: SimulatedReviewIntent,
+): void {
+  const pinned = normalizedReviewerLogin(pinnedReviewer.reviewerLogin);
+  const intended = normalizedReviewerLogin(intent.reviewerLogin);
+  if (pinned !== intended) {
+    throw new SimulatedReviewPublicationError(
+      `simulated review reviewer credential mismatch before publication: pinned=${pinnedReviewer.reviewerLogin.trim()} ` +
+        `intent=${intent.reviewerLogin.trim()}`,
+    );
   }
-  throw new SimulatedReviewPublicationError(
-    "simulated review intent requires reviewer login (probe.resolveReviewerLogin or override)",
-  );
+}
+
+function normalizedReviewerLogin(login: string): string {
+  return login.trim().toLowerCase();
 }

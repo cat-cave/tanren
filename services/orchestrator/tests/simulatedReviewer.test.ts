@@ -54,6 +54,7 @@ function simulatedProbe(
   opts: {
     failSubmit?: boolean;
     receiptHead?: string;
+    receiptState?: "approved" | "changes_requested";
     skipReceipt?: boolean;
   } = {},
 ): ReviewProbe {
@@ -67,17 +68,21 @@ function simulatedProbe(
       return { baseSha: OTHER_HEAD, headSha: captured.headSha, authorLogin: "pr-writer", diff: captured.diff };
     },
     fetchLiveHeadSha: async () => captured.headSha,
-    resolveReviewerLogin: async () => FIXTURE_REVIEWER_LOGIN,
-    submitReview: async (event, body, headSha) => {
-      captured.submitted.push({ event, body, headSha });
-      if (opts.failSubmit) {
-        throw new Error("forge 422 Unprocessable");
-      }
-      if (opts.skipReceipt) {
-        throw new Error("no receipt");
-      }
-      return receiptFor(event, opts.receiptHead ?? headSha);
-    },
+    pinSimulatedReviewer: async () => ({
+      reviewerLogin: FIXTURE_REVIEWER_LOGIN,
+      submitReview: async (event, body, headSha) => {
+        captured.submitted.push({ event, body, headSha });
+        if (opts.failSubmit) {
+          throw new Error("forge 422 Unprocessable");
+        }
+        if (opts.skipReceipt) {
+          throw new Error("no receipt");
+        }
+        return receiptFor(event, opts.receiptHead ?? headSha, {
+          ...(opts.receiptState !== undefined && { forgeReviewState: opts.receiptState }),
+        });
+      },
+    }),
   };
 }
 
@@ -331,18 +336,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
     const events = new FakeEventStore();
     const captured = { diff: "diff", submitted: [] as SubmittedReview[], fetchedDiff: false, headSha: HEAD };
     const seen = { prompts: [] as string[] };
-    const probe = simulatedProbe(captured);
-    probe.submitReview = async (event, body, headSha) => {
-      captured.submitted.push({ event, body, headSha });
-      // Internal Answerer said approve; forge returns changes_requested (state mismatch).
-      return {
-        forgeReviewId: "1",
-        forgeReviewState: "changes_requested",
-        forgeReviewUrl: "https://example.com/r/1",
-        headSha,
-        reviewerLogin: FIXTURE_REVIEWER_LOGIN,
-      };
-    };
+    const probe = simulatedProbe(captured, { receiptState: "changes_requested" });
 
     await expect(
       pollReviewForRun({
@@ -385,7 +379,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
     ).rejects.toThrow(/simulated/u);
   });
 
-  it("throws when the probe cannot publish (missing submitReview) — no internal-only authority", async () => {
+  it("throws when the probe cannot pin a publisher — no internal-only authority", async () => {
     const pool = new ReviewMergePool("direct_merge", "open", "simulated");
     const events = new FakeEventStore();
     const seen = { prompts: [] as string[] };
@@ -394,8 +388,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
       fetchVerdict: async () => ({ verdict: "pending" }),
       fetchSnapshot: async () => ({ baseSha: OTHER_HEAD, headSha: HEAD, authorLogin: "pr-writer", diff: "diff" }),
       fetchLiveHeadSha: async () => HEAD,
-      resolveReviewerLogin: async () => FIXTURE_REVIEWER_LOGIN,
-      // no submitReview
+      // no pinSimulatedReviewer
     };
 
     await expect(

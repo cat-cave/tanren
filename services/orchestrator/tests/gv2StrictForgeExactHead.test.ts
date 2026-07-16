@@ -63,17 +63,19 @@ function probe(input: { author: string; liveHead: string; posts: { count: number
       diff: "diff --git a/x b/x\n+x",
     }),
     fetchLiveHeadSha: async () => input.liveHead,
-    resolveReviewerLogin: async () => REVIEWER,
-    submitReview: async () => {
-      input.posts.count += 1;
-      return {
-        forgeReviewId: "7",
-        forgeReviewState: "approved",
-        forgeReviewUrl: "https://github.com/o/r/pull/1#pullrequestreview-7",
-        headSha: HEAD_A,
-        reviewerLogin: REVIEWER,
-      };
-    },
+    pinSimulatedReviewer: async () => ({
+      reviewerLogin: REVIEWER,
+      submitReview: async () => {
+        input.posts.count += 1;
+        return {
+          forgeReviewId: "7",
+          forgeReviewState: "approved",
+          forgeReviewUrl: "https://github.com/o/r/pull/1#pullrequestreview-7",
+          headSha: HEAD_A,
+          reviewerLogin: REVIEWER,
+        };
+      },
+    }),
   };
 }
 
@@ -166,8 +168,9 @@ describe("GV2-STRICT-FORGE-EXACT-HEAD", () => {
       pullNumber: 1,
     });
     const intentMarker = simulatedReviewIntentMarker("1".repeat(64));
+    const pinnedReviewer = await productionProbe.pinSimulatedReviewer!();
     await expect(
-      productionProbe.submitReview!("APPROVE", `${tanrenSimulatedReviewMarker("approved")}\n${intentMarker}`, HEAD_A),
+      pinnedReviewer.submitReview("APPROVE", `${tanrenSimulatedReviewMarker("approved")}\n${intentMarker}`, HEAD_A),
     ).rejects.toBeInstanceOf(SimulatedReviewHeadStaleError);
     expect(requests.filter((request) => request.method === "POST")).toHaveLength(0);
     expect(requests.at(-2)?.path).toContain("/reviews?");
