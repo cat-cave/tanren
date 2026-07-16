@@ -308,7 +308,6 @@ describe("generic project creation deploy guard", () => {
     });
   });
 
-  // gv-1: member PATCH must not mutate governance-owned auditPosture (nested object).
   it("rejects full config PATCH that changes auditPosture (authorization bypass)", async () => {
     const { app, pool } = orgProjectHarness(memberActor);
     pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
@@ -334,7 +333,6 @@ describe("generic project creation deploy guard", () => {
     expect(pool.events).toEqual([]);
   });
 
-  // Structural equality: re-stated default posture is not a reserved change.
   it("allows full config PATCH when auditPosture is re-stated unchanged", async () => {
     const { app, pool } = orgProjectHarness(memberActor);
     pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
