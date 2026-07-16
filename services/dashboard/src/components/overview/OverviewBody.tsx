@@ -9,6 +9,10 @@
 
 import type { ProjectSummary } from "../../api/types.js";
 import {
+  IntegrationContractPanel,
+  type IntegrationContractPanelProps,
+} from "../integrations/IntegrationContractPanel.js";
+import {
   activityKind,
   budgetUsd,
   capBarWidth,
@@ -52,6 +56,8 @@ export interface OverviewBodyProps {
   activityFailedReads: number;
   /** Optional fixed "now" for relative timestamps in tests. */
   now?: Date;
+  /** in-2: live integration-contract catalog + sample validates (optional). */
+  integrationContracts?: IntegrationContractPanelProps;
 }
 
 function isEmpty(value: string): boolean {
@@ -270,6 +276,7 @@ export function OverviewBody(props: OverviewBodyProps) {
     activityUnavailable,
     activityFailedReads,
     now = new Date(),
+    integrationContracts,
   } = props;
 
   const projectCount = projects.length;
@@ -369,6 +376,7 @@ export function OverviewBody(props: OverviewBodyProps) {
               />
             </div>
           </div>
+          {integrationContracts === undefined ? null : <IntegrationContractPanel {...integrationContracts} />}
         </div>
       </div>
     </>

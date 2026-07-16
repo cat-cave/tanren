@@ -66,6 +66,9 @@ export const DOMAIN_TAGS = [
   "behavior_revision.v1",
   "runtime_behavior_context.v1",
   "plan.v1",
+  // in-2 consumer extension: typed IntegrationRequirementV1 content identity.
+  // Compatible additive DomainTag; not a second Digest/hash family.
+  "integration_requirement.v1",
 ] as const;
 
 export type DomainTag = (typeof DOMAIN_TAGS)[number];

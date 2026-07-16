@@ -12,10 +12,175 @@ import type { Context, Hono } from "hono";
 import type { ProjectBudgetView } from "../../api/budget.js";
 import { BudgetClient } from "../../api/budgetClient.js";
 import { OrchestratorHttpClient } from "../../api/httpClient.js";
+import {
+  fetchIntegrationCatalog,
+  validateIntegrationRequirement,
+  type FetchCatalogResult,
+  type FetchValidateResult,
+} from "../../api/integrationContracts.js";
 import type { ProjectFeedItem, ProjectSummary } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
+import type { IntegrationContractPanelProps } from "../../components/integrations/IntegrationContractPanel.js";
 import { aggregateOrgMtd, type OrgMtdBudget } from "../../components/overview/format.js";
 import { OverviewBody, type OverviewActivityItem } from "../../components/overview/OverviewBody.js";
+
+/** Golden samples mirrored from orchestrator in-2 contract vectors (UI live exercise). */
+const SAMPLE_PRODUCT = {
+  version: 1 as const,
+  capability: "messaging.send",
+  plane: "product" as const,
+  direction: "outbound" as const,
+  providerPolicy: { preferred: ["slack"], allowed: ["slack"], forbidden: ["twilio"] },
+  environments: ["test", "production"] as const,
+  trigger: {
+    version: 1 as const,
+    kind: "threshold" as const,
+    description: "when any short link crosses 100 clicks",
+    given: "a short link exists with 99 clicks",
+    when: "the 100th click is recorded",
+    behaviorKey: "celebrate_100_clicks",
+  },
+  expectedEffect: {
+    version: 1 as const,
+    plane: "product" as const,
+    provider: "slack",
+    observation: "message_in_channel",
+    correlationFields: ["behaviorKey", "correlationId", "bindingGeneration", "deploySha"],
+    independent: true as const,
+  },
+  requiredOperations: ["chat.postMessage", "conversations.history"],
+  requiredScopes: ["chat:write", "channels:history"],
+  bindingOutputs: [
+    {
+      version: 1 as const,
+      kind: "product.messaging.relay_binding_id" as const,
+      logicalKey: "SLACK_PRODUCT_BINDING_ID",
+      classification: "handle" as const,
+      required: true,
+      description: "Managed relay binding; token never reaches product code",
+    },
+    {
+      version: 1 as const,
+      kind: "product.messaging.channel_id" as const,
+      logicalKey: "SLACK_PRODUCT_CHANNEL_ID",
+      classification: "plain" as const,
+      required: true,
+    },
+  ],
+  validation: {
+    version: 1 as const,
+    preMerge: {
+      contractTests: true,
+      recordingFake: true,
+      negativeControls: true,
+      liveProviderInMergeGate: false as const,
+    },
+    postDeploy: { liveStimulus: true, independentObservation: true },
+    negativeControls: ["99_clicks_no_message", "retry_no_duplicate", "cross_org_denied"],
+  },
+  criticality: "release_required" as const,
+};
+
+const SAMPLE_CONTROL = {
+  version: 1 as const,
+  capability: "control.notify",
+  plane: "control" as const,
+  direction: "outbound" as const,
+  providerPolicy: { preferred: ["slack"], allowed: ["slack"] },
+  environments: ["production"] as const,
+  trigger: {
+    version: 1 as const,
+    kind: "event" as const,
+    description: "Tanren operator notification on run failure",
+    when: "run.status becomes failed",
+  },
+  expectedEffect: {
+    version: 1 as const,
+    plane: "control" as const,
+    provider: "slack",
+    observation: "operator_channel_message",
+    correlationFields: ["runId", "orgId"],
+    independent: true as const,
+  },
+  requiredOperations: ["chat.postMessage"],
+  requiredScopes: ["chat:write"],
+  bindingOutputs: [
+    {
+      version: 1 as const,
+      kind: "control.notify.bot_token_ref" as const,
+      logicalKey: "TANREN_SLACK_BOT_TOKEN_REF",
+      classification: "secret_ref" as const,
+      required: true,
+    },
+    {
+      version: 1 as const,
+      kind: "control.notify.channel_id" as const,
+      logicalKey: "TANREN_SLACK_CHANNEL_ID",
+      classification: "plain" as const,
+      required: true,
+    },
+  ],
+  validation: {
+    version: 1 as const,
+    preMerge: {
+      contractTests: true,
+      recordingFake: true,
+      negativeControls: true,
+      liveProviderInMergeGate: false as const,
+    },
+    postDeploy: { liveStimulus: false, independentObservation: false },
+    negativeControls: ["revoked_token_fails_closed"],
+  },
+  criticality: "best_effort" as const,
+};
+
+const SAMPLE_CROSS_PLANE = {
+  ...SAMPLE_PRODUCT,
+  bindingOutputs: [
+    {
+      version: 1 as const,
+      kind: "control.notify.bot_token_ref" as const,
+      logicalKey: "SLACK_BOT_TOKEN",
+      classification: "secret_ref" as const,
+      required: true,
+    },
+  ],
+};
+
+async function loadIntegrationContracts(
+  deps: ShellDeps,
+  c: Context,
+  orgId: string,
+): Promise<IntegrationContractPanelProps> {
+  const headers: Record<string, string> = {};
+  const cookie = c.req.header("cookie");
+  if (cookie !== undefined && cookie !== "") {
+    headers["cookie"] = cookie;
+  }
+  const fetchDeps = {
+    orchestratorUrl: deps.orchestratorUrl,
+    headers,
+    fetchImpl: fetch,
+  };
+  const [catalog, productSample, controlSample, crossPlaneSample] = await Promise.all([
+    fetchIntegrationCatalog(fetchDeps, orgId),
+    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_PRODUCT),
+    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_CONTROL),
+    validateIntegrationRequirement(fetchDeps, orgId, SAMPLE_CROSS_PLANE),
+  ]);
+  return { catalog, productSample, controlSample, crossPlaneSample };
+}
+
+function unavailableContracts(): IntegrationContractPanelProps {
+  const unavailable: FetchCatalogResult = { kind: "unavailable", reason: "upstream" };
+  const vUnavailable: FetchValidateResult = { kind: "unavailable", reason: "upstream" };
+  return {
+    catalog: unavailable,
+    productSample: vUnavailable,
+    controlSample: vUnavailable,
+    crossPlaneSample: vUnavailable,
+  };
+}
 
 const ACTIVITY_LIMIT = 20;
 
@@ -146,6 +311,7 @@ export function mountOverviewScreen(app: Hono, deps: ShellDeps): void {
     let activityFailedReads = 0;
     let projects: ProjectSummary[] = [];
     let projectsUnavailable = false;
+    let integrationContracts: IntegrationContractPanelProps | undefined;
 
     const org = ctx.org;
     if (org) {
@@ -160,7 +326,7 @@ export function mountOverviewScreen(app: Hono, deps: ShellDeps): void {
         projects = maybeProjects;
       }
 
-      const [budgetResult, activityResult] = await Promise.all([
+      const [budgetResult, activityResult, contracts] = await Promise.all([
         loadMtd(budget, org.id, projects),
         // When projects are unavailable, do not claim an empty activity feed.
         projectsUnavailable
@@ -170,16 +336,20 @@ export function mountOverviewScreen(app: Hono, deps: ShellDeps): void {
               activityFailedReads: 0,
             })
           : loadActivity(reads, org.id, projects),
+        // in-2: live catalog + plane-separation samples against orchestrator.
+        loadIntegrationContracts(deps, c, org.id),
       ]);
       mtd = budgetResult.mtd;
       orgBudgetUnavailable = budgetResult.orgBudgetUnavailable;
       activity = activityResult.activity;
       activityUnavailable = activityResult.activityUnavailable;
       activityFailedReads = activityResult.activityFailedReads;
+      integrationContracts = contracts;
     } else {
       orgBudgetUnavailable = true;
       activityUnavailable = true;
       projectsUnavailable = true;
+      integrationContracts = unavailableContracts();
     }
 
     return renderShell(
@@ -195,6 +365,7 @@ export function mountOverviewScreen(app: Hono, deps: ShellDeps): void {
         activity={activity}
         activityUnavailable={activityUnavailable}
         activityFailedReads={activityFailedReads}
+        integrationContracts={integrationContracts}
       />,
     );
   });
