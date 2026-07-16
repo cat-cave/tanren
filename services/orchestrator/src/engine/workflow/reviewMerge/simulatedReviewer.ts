@@ -13,7 +13,7 @@ import { answererOutputSchemaFor, ReviewAnswer } from "../../answerers/schemas/i
 import { fenceAsData } from "../../answerers/promptData.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import { runAnswererStageWithRecovery } from "../loopStageRecovery.js";
-import { strictReviewEventFor } from "./simulatedReviewPublication.js";
+import { strictReviewEventFor, tanrenSimulatedReviewMarker } from "./simulatedReviewPublication.js";
 
 export interface SimulatedReviewContext {
   specTitle: string;
@@ -69,11 +69,19 @@ export function reviewEventFor(verdict: ReviewAnswer): "APPROVE" | "REQUEST_CHAN
 }
 
 /**
- * Build the forge review body: a header that states the orchestrator-managed
- * reviewer's verdict, followed by the Answerer's reasoning verbatim.
+ * Build the forge review body: a human-readable header, the durable Tanren
+ * machine marker (forge-side idempotency identity), then the Answerer's
+ * reasoning. The marker line is exact-matched on reconcile — free-text alone
+ * never satisfies forge recovery.
  */
 export function reviewBodyFor(verdict: ReviewAnswer): string {
-  return `Tanren simulated review — VERDICT: ${verdict.verdict}\n\n${verdict.reasoning}`;
+  const state = verdict.verdict === "approve" ? "approved" : "changes_requested";
+  return [
+    `Tanren simulated review — VERDICT: ${verdict.verdict}`,
+    tanrenSimulatedReviewMarker(state),
+    "",
+    verdict.reasoning,
+  ].join("\n");
 }
 
 export function buildSimulatedReviewerPrompt(context: SimulatedReviewContext): string {

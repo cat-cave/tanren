@@ -157,6 +157,34 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
     expect(state.forgePublication?.forgeReviewId).toBe("9001");
   });
 
+  it("gv-2 former-bug: full tuple with commented/unknown state is NOT complete success", () => {
+    const headSha = "b".repeat(40);
+    const commented = reviewMergeStateFromEvents([
+      ev("review.approved", {
+        prUrl: "u",
+        prNumber: 7,
+        forgeReviewId: "1",
+        forgeReviewState: "commented",
+        forgeReviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-1",
+        headSha,
+      }),
+    ]);
+    expect(commented.forgePublication?.complete).toBe(false);
+    expect(commented.forgePublication?.forgeReviewState).toBe("commented");
+
+    const unknown = reviewMergeStateFromEvents([
+      ev("review.changes_requested", {
+        prUrl: "u",
+        prNumber: 7,
+        forgeReviewId: "2",
+        forgeReviewState: "pending",
+        forgeReviewUrl: "https://github.com/o/r/pull/7#pullrequestreview-2",
+        headSha,
+      }),
+    ]);
+    expect(unknown.forgePublication?.complete).toBe(false);
+  });
+
   it("surfaces a merge conflict as a recoverable phase", () => {
     const state = reviewMergeStateFromEvents([
       ev("merge.queued", { prUrl: "u", prNumber: 7, integration: "direct_merge" }),

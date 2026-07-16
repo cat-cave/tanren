@@ -20,7 +20,30 @@ import { normalizeStaticGithubRef } from "../../credentials/githubToken.js";
 import { resolveVcsActorIdentity, resolveVcsToken } from "../../credentials/vcsCredentials.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
+import { receiptFromListedReview, type ListedPullRequestReview } from "../../providers/githubReviewMergeParse.js";
 import type { SubmittedReviewReceipt, SubmitReviewEvent } from "../../providers/githubReviewMerge.js";
+
+/**
+ * Durable Tanren-owned marker embedded in the forge review body. Deterministic
+ * for a given terminal state — used as the sole forge-side idempotency identity
+ * (no second receipt store). Format is exact-line; free-text reasoning cannot
+ * satisfy reconcile without this machine line from our publisher.
+ */
+export const TANREN_SIMULATED_REVIEW_MARKER_PREFIX = "tanren-simulated-review:v1:" as const;
+
+export function tanrenSimulatedReviewMarker(state: "approved" | "changes_requested"): string {
+  return `${TANREN_SIMULATED_REVIEW_MARKER_PREFIX}${state}`;
+}
+
+export function bodyContainsTanrenSimulatedMarker(
+  body: string | undefined,
+  state: "approved" | "changes_requested",
+): boolean {
+  if (body === undefined || body === "") return false;
+  const marker = tanrenSimulatedReviewMarker(state);
+  // Exact line match — never adopt a body that only embeds the token mid-sentence.
+  return body.split(/\r?\n/u).some((line) => line.trim() === marker);
+}
 
 /** Durable forge receipt fields bound onto the terminal review.* event payload. */
 export interface ForgeReviewPublication {
@@ -173,4 +196,146 @@ async function resolveReviewerToken(
       "APPROVE/REQUEST_CHANGES). Install the GitHub App for the writer and keep a static " +
       "reviewer token, or pass reviewerGithubCredentialRef",
   );
+}
+
+export type SimulatedReviewReconcileInput = {
+  reviews: ReadonlyArray<ListedPullRequestReview>;
+  expectedState: "approved" | "changes_requested";
+  expectedHeadSha: string;
+  expectedReviewerLogin: string;
+};
+
+export type SimulatedReviewReconcileResult = { kind: "reuse"; receipt: SubmittedReviewReceipt } | { kind: "absent" };
+
+/**
+ * Pure forge-side reconcile: adopt only an exact-head, exact-login, marker-
+ * matched, land-authoritative Tanren simulated review. Wrong head / wrong login
+ * / wrong marker / COMMENT / non-authoritative state are ignored. Opposite
+ * terminal Tanren state on the same head fails loud. Multiple distinct matches
+ * or a marker-hit that cannot mint a receipt fail loud (ambiguity).
+ */
+export function reconcileExistingSimulatedReviews(
+  input: SimulatedReviewReconcileInput,
+): SimulatedReviewReconcileResult {
+  const head = input.expectedHeadSha.toLowerCase();
+  if (!/^[0-9a-f]{40}$/iu.test(input.expectedHeadSha)) {
+    throw new SimulatedReviewPublicationError(
+      `simulated review reconcile requires exact 40-hex head (got ${input.expectedHeadSha})`,
+    );
+  }
+  const login = input.expectedReviewerLogin.toLowerCase();
+  if (login === "") {
+    throw new SimulatedReviewPublicationError("simulated review reconcile requires reviewer login");
+  }
+  const opposite: "approved" | "changes_requested" =
+    input.expectedState === "approved" ? "changes_requested" : "approved";
+
+  const sameMatches: ListedPullRequestReview[] = [];
+  for (const review of input.reviews) {
+    if (review.headSha === undefined || review.headSha.toLowerCase() !== head) continue;
+    if (review.reviewerLogin === undefined || review.reviewerLogin.toLowerCase() !== login) continue;
+
+    const hasExpectedMarker = bodyContainsTanrenSimulatedMarker(review.body, input.expectedState);
+    const hasOppositeMarker = bodyContainsTanrenSimulatedMarker(review.body, opposite);
+
+    // Marker is the Tanren ownership proof — no marker ⇒ coincidental human/other.
+    if (!hasExpectedMarker && !hasOppositeMarker) continue;
+
+    // COMMENT (or pending/dismissed) is never land-authoritative, even with a marker.
+    if (review.state !== "approved" && review.state !== "changes_requested") {
+      if (hasExpectedMarker || hasOppositeMarker) {
+        throw new SimulatedReviewPublicationError(
+          `simulated review forge convergence rejects non-authoritative state '${review.state}' ` +
+            `for Tanren-marked review ${review.forgeReviewId} on head ${input.expectedHeadSha}`,
+        );
+      }
+      continue;
+    }
+
+    if (hasOppositeMarker || review.state === opposite) {
+      throw new SimulatedReviewPublicationError(
+        `simulated review forge convergence conflict: existing Tanren review ` +
+          `${review.forgeReviewId} is ${review.state} on head ${input.expectedHeadSha}, ` +
+          `refusing to publish ${input.expectedState}`,
+      );
+    }
+
+    if (hasExpectedMarker && review.state === input.expectedState) {
+      sameMatches.push(review);
+    } else if (hasExpectedMarker) {
+      // Marker claims expected state but host state disagrees — fail loud.
+      throw new SimulatedReviewPublicationError(
+        `simulated review forge convergence ambiguity: review ${review.forgeReviewId} ` +
+          `marker is ${input.expectedState} but host state is ${review.state}`,
+      );
+    }
+  }
+
+  if (sameMatches.length === 0) return { kind: "absent" };
+  if (sameMatches.length > 1) {
+    const ids = sameMatches.map((r) => r.forgeReviewId).join(",");
+    throw new SimulatedReviewPublicationError(
+      `simulated review forge convergence ambiguity: ${sameMatches.length} Tanren reviews ` +
+        `(${ids}) match head ${input.expectedHeadSha} state ${input.expectedState}`,
+    );
+  }
+  const match = sameMatches[0]!;
+  try {
+    const receipt = receiptFromListedReview(match);
+    return { kind: "reuse", receipt };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new SimulatedReviewPublicationError(
+      `simulated review forge convergence found malformed durable review ${match.forgeReviewId}: ${message}`,
+    );
+  }
+}
+
+/**
+ * Forge-side recovery authority for strict simulated publication:
+ *   1. List + reconcile before POST (stage retry / prior success).
+ *   2. POST only when absent.
+ *   3. On POST failure, re-list + reconcile (response-loss recovery).
+ * Never double-POSTs when a matching durable forge review already exists.
+ */
+export async function publishSimulatedReviewConvergent(input: {
+  listReviews: () => Promise<ReadonlyArray<ListedPullRequestReview>>;
+  postReview: () => Promise<SubmittedReviewReceipt>;
+  expectedState: "approved" | "changes_requested";
+  expectedHeadSha: string;
+  expectedReviewerLogin: string;
+}): Promise<SubmittedReviewReceipt> {
+  const target = {
+    expectedState: input.expectedState,
+    expectedHeadSha: input.expectedHeadSha,
+    expectedReviewerLogin: input.expectedReviewerLogin,
+  };
+  const before = reconcileExistingSimulatedReviews({
+    reviews: await input.listReviews(),
+    ...target,
+  });
+  if (before.kind === "reuse") return before.receipt;
+
+  try {
+    return await input.postReview();
+  } catch (postErr) {
+    // Response-loss / ambiguous transport: the forge may have accepted the review.
+    // Re-list and reclaim; only rethrow the post error when still absent.
+    let after: SimulatedReviewReconcileResult;
+    try {
+      after = reconcileExistingSimulatedReviews({
+        reviews: await input.listReviews(),
+        ...target,
+      });
+    } catch (listOrReconcileErr) {
+      // Prefer the original post failure when re-list itself fails; surface
+      // reconcile conflict if the re-list succeeded into a conflict (thrown above).
+      if (listOrReconcileErr instanceof SimulatedReviewPublicationError) {
+        throw listOrReconcileErr;
+      }
+      throw postErr instanceof Error ? postErr : new Error(String(postErr));
+    }
+    if (after.kind === "reuse") return after.receipt;
+    throw postErr instanceof Error ? postErr : new Error(String(postErr));
+  }
 }

@@ -95,9 +95,11 @@ describe("simulated reviewer Answerer", () => {
     expect(approved.verdict).toBe("approve");
     expect(reviewEventFor(approved)).toBe("APPROVE");
     expect(reviewEventFor({ verdict: "request_changes", reasoning: "criterion 2 unmet" })).toBe("REQUEST_CHANGES");
-    expect(reviewBodyFor(approved)).toBe("Tanren simulated review — VERDICT: approve\n\nall criteria met");
+    expect(reviewBodyFor(approved)).toBe(
+      "Tanren simulated review — VERDICT: approve\ntanren-simulated-review:v1:approved\n\nall criteria met",
+    );
     expect(reviewBodyFor({ verdict: "request_changes", reasoning: "criterion 2 unmet" })).toBe(
-      "Tanren simulated review — VERDICT: request_changes\n\ncriterion 2 unmet",
+      "Tanren simulated review — VERDICT: request_changes\ntanren-simulated-review:v1:changes_requested\n\ncriterion 2 unmet",
     );
 
     expect(() => schema.parse({ verdict: "approve", reasoning: "x", extra: 1 })).toThrow(/unrecognized|extra/iu);
@@ -186,7 +188,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
     expect(captured.submitted).toEqual([
       {
         event: "APPROVE",
-        body: "Tanren simulated review — VERDICT: approve\n\ncriteria satisfied",
+        body: "Tanren simulated review — VERDICT: approve\ntanren-simulated-review:v1:approved\n\ncriteria satisfied",
         headSha: HEAD,
       },
     ]);
@@ -233,7 +235,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
     expect(captured.submitted).toEqual([
       {
         event: "REQUEST_CHANGES",
-        body: "Tanren simulated review — VERDICT: request_changes\n\ncriterion 1 is unmet",
+        body: "Tanren simulated review — VERDICT: request_changes\ntanren-simulated-review:v1:changes_requested\n\ncriterion 1 is unmet",
         headSha: HEAD,
       },
     ]);

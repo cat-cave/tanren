@@ -408,20 +408,15 @@ export interface ForgeReviewPublicationView {
   forgeReviewUrl?: string;
   headSha?: string;
   reviewer?: string;
-  /** True only when all four required receipt fields are non-empty. */
+  /** True only for full tuple with state exactly approved|changes_requested. */
   complete: boolean;
 }
 
 /**
- * Extract the forge publication receipt from a terminal review event payload.
- * Honest tri-state — never infers success from missing fields:
- *   - ZERO receipt fields (no id/state/url/headSha) → `undefined`: the event is
- *     a human/auto terminal review with no forge receipt and renders the neutral
- *     unpublished state, never the loud "partial forge fields present" danger.
- *   - a STRICT SUBSET of receipt fields → `{ complete: false }`: a malformed /
- *     partial simulated receipt stays loud (danger).
- *   - the FULL valid tuple (id + state + url + headSha, all non-empty) →
- *     `{ complete: true }`: published / success.
+ * Extract forge publication from a terminal review payload. Honest tri-state:
+ * zero receipt fields → undefined (neutral); strict subset or non-authoritative
+ * state (`commented`/unknown) → complete:false (loud); full approved/
+ * changes_requested tuple → complete:true.
  */
 export function forgePublicationFromPayload(payload: Record<string, unknown>): ForgeReviewPublicationView | undefined {
   const forgeReviewId = asString(payload["forgeReviewId"]);
@@ -429,8 +424,7 @@ export function forgePublicationFromPayload(payload: Record<string, unknown>): F
   const forgeReviewUrl = asString(payload["forgeReviewUrl"]);
   const headSha = asString(payload["headSha"]);
   const reviewer = asString(payload["reviewer"]);
-  // Zero receipt fields → no publication at all (neutral unpublished). A lone
-  // `reviewer` (or other non-receipt field) does NOT count as a partial receipt.
+  // Zero receipt fields → unpublished. A lone non-receipt field does not count.
   if (
     forgeReviewId === undefined &&
     forgeReviewState === undefined &&
@@ -439,11 +433,11 @@ export function forgePublicationFromPayload(payload: Record<string, unknown>): F
   ) {
     return undefined;
   }
+  const stateAuthoritative = forgeReviewState === "approved" || forgeReviewState === "changes_requested";
   const complete =
     forgeReviewId !== undefined &&
     forgeReviewId !== "" &&
-    forgeReviewState !== undefined &&
-    forgeReviewState !== "" &&
+    stateAuthoritative &&
     forgeReviewUrl !== undefined &&
     forgeReviewUrl !== "" &&
     headSha !== undefined &&

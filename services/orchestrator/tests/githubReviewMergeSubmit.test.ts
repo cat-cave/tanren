@@ -101,15 +101,29 @@ describe("submitReview posts a real GitHub review", () => {
       repo: { owner: "cat-cave", name: "fix" },
       pullNumber: 9,
       event: "COMMENT",
-      body: "Tanren simulated review — VERDICT: approve\n\ncriteria satisfied",
+      body: "Tanren simulated review — VERDICT: approve\ntanren-simulated-review:v1:approved\n\ncriteria satisfied",
       token: "t",
     });
 
     expect(http.requests[0]?.body).toEqual({
       event: "COMMENT",
-      body: "Tanren simulated review — VERDICT: approve\n\ncriteria satisfied",
+      body: "Tanren simulated review — VERDICT: approve\ntanren-simulated-review:v1:approved\n\ncriteria satisfied",
     });
     expect(receipt).toBeUndefined();
+  });
+
+  it("disables transport auto-retry on APPROVE/REQUEST_CHANGES (no double-POST on 504)", async () => {
+    const http = recordingHttp(() => ({ status: 200, body: approveBody(1) }));
+    const service = new GitHubReviewMergeService(http.client);
+    await service.submitReview({
+      repo: { owner: "o", name: "r" },
+      pullNumber: 1,
+      event: "APPROVE",
+      body: "x",
+      commitId: HEAD,
+      token: "t",
+    });
+    expect(http.requests[0]?.retryTransient).toBe(false);
   });
 
   it("throws on a non-2xx submit response", async () => {
