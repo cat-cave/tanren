@@ -27,11 +27,12 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   - Zod/registry/JSON/severity/sensitivity carry the app catalog row, but are
     **not** an upgrade mechanism for existing DBs.
 - The DB catalog row for `review.simulated_intent` requires a **new post-0040
-  migration**. **IN-1 currently owns unmerged 0041**, so this branch **cannot
-  become merge-ready** until IN-1 lands and GV-2 restacks to add the next
-  serialized migration (**expected 0042**). Do not invent startup DDL or a
-  second vocabulary seeder. Opt-in real-PG tests may seed the row in isolated
-  setup and must label upgrade proof as blocked until that migration exists.
+  migration**. The verified train is IN-1/0041 → RV-4/0042 → GV-1/0043 →
+  GV-2/0044, so this branch **cannot become merge-ready** until IN-1/RV-4/GV-1
+  land and GV-2 restacks to add its serialized migration (**expected 0044,
+  serialized after GV-1/0043**). Do not invent startup DDL or a second
+  vocabulary seeder. Opt-in real-PG tests may seed the row in isolated setup
+  and must label upgrade proof as blocked until that migration exists.
 
 **Downstream consumers**
 
@@ -94,10 +95,10 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   `githubCredentialRef` + App install seam; explicit
   `reviewerGithubCredentialRef` is an optional poll-stage input for tests /
   future config wiring.
-- Migration serial number **0041** — **owned by IN-1** (unmerged). GV-2 must not
-  create 0041; after IN-1 merges, GV-2 adds the next number for the intent
-  catalog row (expected 0042). App-side `eventTypesSeed` / registry already list
-  `review.simulated_intent` as codegen/catalog data.
+- Migration serial numbers **0041–0043** — owned by IN-1 (0041), RV-4 (0042),
+  GV-1 (0043). GV-2 must not create any of them; GV-2 owns **0044** (serialized
+  after GV-1/0043) for the intent catalog row. App-side `eventTypesSeed` /
+  registry already list `review.simulated_intent` as codegen/catalog data.
 - `mountFeatureRoutes` / nav / `RunDetailBody` / runs index — HTTP uses existing
   run-detail event surface.
 
@@ -136,7 +137,7 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 
 - **New:** `review.simulated_intent` carries non-secret publication identity
   (head, state, event, body, message, reviewerLogin, marker). App registry +
-  seed list it; **DB upgrade row blocked on post-IN-1 migration**.
+  seed list it; **DB upgrade row blocked on post-GV-1/0043 migration**.
 - `review.approved` / `review.changes_requested` carry complete forge receipt
   fields when simulated review terminalizes (never a partial tuple).
 - Negative: failed/skipped/mismatched publication leaves those events absent.
@@ -198,10 +199,12 @@ Auth / forge:
   eventStore first-wins; seeds catalog row; **not** upgrade proof.
 - `just affected-typecheck origin/main`, `just affected-test origin/main`,
   `just fast-check`, `just ci`.
-- Line counts under 500; **no migration on this branch** (IN-1 serial blocker);
+- Line counts under 500; **no migration on this branch** (serial blocker:
+  IN-1 → RV-4 → GV-1);
   no new runtime deps.
-- **Merge-ready only after:** IN-1 lands → restack → add serialized migration
-  for `review.simulated_intent` (expected 0042) → fresh audit.
+- **Merge-ready only after:** IN-1/RV-4/GV-1 land → restack → add serialized
+  migration for `review.simulated_intent` (expected 0044, serialized after
+  GV-1/0043) → fresh audit.
 
 ## Credential operator note
 
