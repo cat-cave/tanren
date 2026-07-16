@@ -38,6 +38,7 @@ import {
   APP_PASSWORD,
   APP_ROLE,
   ASSEMBLED_HEAD,
+  BASE_SHA,
   dbName,
   DispatchingSsh,
   makeContext,
@@ -91,6 +92,7 @@ describe("eager_base node bootstrap UPSERT (wiring)", () => {
     expect(facts.orgId).toBe("org_dep");
     expect(facts.projectId).toBe("project_dep");
     expect(facts.baseBranch).toBe("main");
+    expect(facts.baseSha).toBe(BASE_SHA);
     // `ref` = the LOCAL assembly bookmark (matching how the batch path uses `.ref`).
     expect(facts.ref).toBe(bootstrapLocalIntegrationRef(RUN_BRANCH));
     // The assembled head/tree the node materializes as.
@@ -168,9 +170,8 @@ describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () =>
     { specId: "spec-a", runId: "run-a", branch: "feat-a", headSha: "1".repeat(40) },
     { specId: "spec-b", runId: "run-b", branch: "feat-b", headSha: "2".repeat(40) },
   ];
-  // The memberKey keys on the base identity (the base branch name — the assembly carries
-  // the head, not the pristine `main` sha) + the ORDERED member shas.
-  const EXPECTED_KEY = memberKey(BASE_BRANCH, [MEMBERS[0]!.headSha, MEMBERS[1]!.headSha]);
+  // The memberKey keys on the exact cloned base commit + the ORDERED member shas.
+  const EXPECTED_KEY = memberKey(BASE_SHA, [MEMBERS[0]!.headSha, MEMBERS[1]!.headSha]);
 
   beforeAll(async () => {
     const adminPool = new Pool({ connectionString: ADMIN_URL });
@@ -211,21 +212,27 @@ describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () =>
   }, 30_000);
 
   it("UPSERTs an eager_base node org-scoped; off-scope org sees ZERO rows; re-bootstrap is idempotent", async () => {
-    await upsert({
-      orgId: ORG,
-      projectId: PROJECT,
-      baseBranch: BASE_BRANCH,
-      ref: LOCAL_REF,
-      members: MEMBERS,
-      headSha: ASSEMBLED_HEAD,
-      treeHash: TREE_HASH,
-    });
+    await upsert(
+      {
+        orgId: ORG,
+        projectId: PROJECT,
+        baseBranch: BASE_BRANCH,
+        baseSha: BASE_SHA,
+        ref: LOCAL_REF,
+        members: MEMBERS,
+        headSha: ASSEMBLED_HEAD,
+        treeHash: TREE_HASH,
+      },
+      { ssh: new DispatchingSsh(), target, workspacePath: WORKSPACE_PATH },
+    );
 
     const found = await model.findByMemberKey(ORG, EXPECTED_KEY);
     expect(found?.purpose).toBe("eager_base");
     expect(found?.ref).toBe(LOCAL_REF);
     expect(found?.headSha).toBe(ASSEMBLED_HEAD);
     expect(found?.treeHash).toBe(TREE_HASH);
+    expect(found?.baseSha).toBe(BASE_SHA);
+    expect(found?.affectedFingerprint).toMatch(/^rv4\.coverage-authority\.v1\|/u);
     expect(found?.members.map((m) => m.specId)).toEqual(["spec-a", "spec-b"]);
     expect(found?.members.map((m) => m.headSha)).toEqual([MEMBERS[0]!.headSha, MEMBERS[1]!.headSha]);
 
@@ -237,15 +244,19 @@ describeDb("eager_base node bootstrap UPSERT (real DB + fail-closed RLS)", () =>
     expect(offScope).toBe(0);
 
     // Re-bootstrap the SAME base + ordered ancestors ⇒ an UPSERT, not a duplicate.
-    await upsert({
-      orgId: ORG,
-      projectId: PROJECT,
-      baseBranch: BASE_BRANCH,
-      ref: LOCAL_REF,
-      members: MEMBERS,
-      headSha: ASSEMBLED_HEAD,
-      treeHash: TREE_HASH,
-    });
+    await upsert(
+      {
+        orgId: ORG,
+        projectId: PROJECT,
+        baseBranch: BASE_BRANCH,
+        baseSha: BASE_SHA,
+        ref: LOCAL_REF,
+        members: MEMBERS,
+        headSha: ASSEMBLED_HEAD,
+        treeHash: TREE_HASH,
+      },
+      { ssh: new DispatchingSsh(), target, workspacePath: WORKSPACE_PATH },
+    );
     const count = await runWithOrgScope(appPool, ORG, async (client) => {
       const r = await client.query("SELECT count(*)::int AS c FROM integration_nodes WHERE member_key = $1", [
         EXPECTED_KEY,

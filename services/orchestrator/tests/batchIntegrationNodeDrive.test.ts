@@ -17,7 +17,6 @@ import { type IntegrationNode, memberKey } from "../src/engine/contracts/integra
 import type { BatchCheckVerdict } from "../src/engine/contracts/batchMergeCoordinator.js";
 import type { AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
-import type { IntegrationNodeUpsert } from "../src/engine/dag/integrationNodesPg.js";
 import type { ProofReuseKeyInput } from "../src/engine/contracts/integrationNodes.js";
 import { proofReuseKey } from "../src/engine/contracts/integrationNodes.js";
 import {
@@ -28,6 +27,7 @@ import {
   driveBatchThroughNode,
 } from "../src/engine/merge/batchIntegrationNodeDrive.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
+import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 
 /** The gate spy signature (a recompute-only gate over the open workspace). */
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
@@ -39,7 +39,7 @@ class FakeNodeStore implements BatchNodeStore {
   // Stays EMPTY — the jj-local path writes no host ref.
   hostRefsWritten: string[] = [];
 
-  async upsertNode(input: IntegrationNodeUpsert): Promise<string> {
+  async materializeReadyNode(input: CoverageAuthorityReadyNodeInput): Promise<string> {
     const key = memberKey(
       input.baseSha,
       input.members.map((m) => m.headSha),
@@ -55,10 +55,10 @@ class FakeNodeStore implements BatchNodeStore {
       memberKey: key,
       gateConfigHash: input.gateConfigHash ?? "",
       policyVersion: input.policyVersion ?? "",
-      affectedFingerprint: input.affectedFingerprint ?? "",
-      ...(input.headSha !== undefined && { headSha: input.headSha }),
-      ...(input.treeHash !== undefined && { treeHash: input.treeHash }),
-      status: input.status ?? "building",
+      affectedFingerprint: "rv4-test-authority",
+      headSha: input.headSha,
+      treeHash: input.treeHash,
+      status: "ready",
     });
     return nodeId;
   }
@@ -117,7 +117,7 @@ const INTEGRATED_HEAD = "c".repeat(40);
  * live runner and runs the continuation with a dummy workspace. It NEVER writes a host
  * ref — the integration is purely local (the §3b invariant).
  */
-function fakeIntegratePort(store: FakeNodeStore): BatchNodeDriveDeps["integrate"] {
+function fakeIntegratePort(store: FakeNodeStore, baseSha = FACTS.baseSha): BatchNodeDriveDeps["integrate"] {
   return async (_workspaceDeps, input, onIntegrated) => {
     // The jj-local integration NEVER pushes a host ref (only a runner-local bookmark).
     // The local ref name must be the local-batch bookmark, NOT a `tanren/integ|batch`
@@ -130,12 +130,13 @@ function fakeIntegratePort(store: FakeNodeStore): BatchNodeDriveDeps["integrate"
     const integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }> = {
       outcome: "integrated",
       localRef: input.localRef,
+      baseSha,
       headSha: INTEGRATED_HEAD,
       treeHash: "tree-deadbeef",
       memberHeadShas: MEMBER_HEAD_SHAS,
     };
     // The dummy workspace is never touched by the fakes (resolveConfig/gate ignore it).
-    const value = await onIntegrated({} as never, integrated);
+    const value = await onIntegrated({ target: {} as never, workspacePath: "/workspace" } as never, integrated);
     return { outcome: "integrated", value };
   };
 }
@@ -145,12 +146,13 @@ function deps(
   store: FakeNodeStore,
   events: RecordingEventStore,
   gateSpy: ReturnType<typeof vi.fn>,
+  integratedBaseSha = FACTS.baseSha,
 ): BatchNodeDriveDeps {
   return {
     nodes: store,
     eventStore: events as never,
-    jjWorkspaceDeps: {} as never,
-    integrate: fakeIntegratePort(store),
+    jjWorkspaceDeps: { ssh: {} as never } as never,
+    integrate: fakeIntegratePort(store, integratedBaseSha),
     resolveConfig: async () =>
       ({
         version: 1,
@@ -158,7 +160,7 @@ function deps(
         when: { fast: ["pre_merge"], slow: ["pre_merge"] },
       }) as never,
     gate: gateSpy as never,
-    timeoutMs: 1000,
+    materializeReadyNode: (input) => store.materializeReadyNode(input),
   };
 }
 
@@ -243,5 +245,14 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const second = await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), gate2));
     expect(second.result).toBe("pass");
     expect(gate2).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds for re-drive when the cloned base differs from the pre-clone host read", async () => {
+    const store = new FakeNodeStore();
+    const gate = vi.fn<GateFn>();
+    const verdict = await driveBatchThroughNode(FACTS, deps(store, new RecordingEventStore(), gate, "9".repeat(40)));
+    expect(verdict).toMatchObject({ result: "infra-error", retriable: true });
+    expect(store.nodes.size).toBe(0);
+    expect(gate).not.toHaveBeenCalled();
   });
 });

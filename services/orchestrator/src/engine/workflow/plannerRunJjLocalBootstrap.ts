@@ -24,7 +24,6 @@ import { SpeculativeAssemblyError } from "../dag/speculativeAssemblyError.js";
 import { classifySpecStatus } from "../dag/walkerPg.js";
 import type { AncestorSpecPhase } from "../dag/jjLocalIntegration.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
-import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
 import {
   autoSnapshotWorkingEdit,
@@ -35,7 +34,14 @@ import {
 } from "../providers/jjWorkspaceVcsCore.js";
 import { createLogger } from "../observability/logger.js";
 import type { RunPlannerLoopInput } from "./plannerRun.js";
+import { recordEagerBaseNode } from "./plannerRunEagerBaseNode.js";
 import type { ResolvedCloneCredential } from "./plannerRunWorkspace.js";
+
+export {
+  buildEagerBaseNodeUpsert,
+  type EagerBaseNodeUpsert,
+  type EagerBaseNodeUpsertFacts,
+} from "./plannerRunEagerBaseNode.js";
 
 const log = createLogger("jj-local-bootstrap");
 
@@ -47,78 +53,6 @@ const log = createLogger("jj-local-bootstrap");
 export interface ClonedWorkspace {
   cloneHeadSha: string;
   bootstrappedBaseRevision?: string;
-}
-
-/**
- * WS-A PR-8 (walker-jj-local-integration-design.md §2.3, §6 fork F4) — the facts the
- * dependent bootstrap records the `eager_base` integration node from. The SAME assembly
- * `bootstrapDependentBase` just performed: the org/project tenant key, the real base
- * branch the stack assembled ONTO (`main`), the LOCAL assembly bookmark (`ref`, matching
- * how the batch path uses `integration_nodes.ref`), and the ORDERED members
- * (`{specId, runId, branch, headSha}`) the proof-reuse `memberKey` keys on.
- */
-export interface EagerBaseNodeUpsertFacts {
-  orgId: string;
-  projectId: string;
-  /** The real base branch the stack assembled ONTO (the run's `targetBranch` — `main`). */
-  baseBranch: string;
-  /** The LOCAL assembly bookmark the stack materialized as (NEVER a host ref). */
-  ref: string;
-  /** The ORDERED ancestor members (DAG order is LOAD-BEARING for the `memberKey`). */
-  members: ReadonlyArray<{ specId: string; runId: string; branch: string; headSha: string }>;
-  /** The assembled head sha (`main + ordered ancestors`) — the node's materialized head. */
-  headSha: string;
-  /** The assembled head's git tree hash (the content identity proof reuse keys on). */
-  treeHash: string;
-}
-
-/**
- * WS-A PR-8 — the OBSERVE-ONLY port the dependent bootstrap UPSERTs its `eager_base`
- * integration node through. It records the node into the SAME proof-reuse substrate the
- * batch path's `merge_batch` node uses (`integration_nodes`), so the host-meaningful
- * identity (`members[].branch` + `headSha`) + the `memberKey` participate in proof reuse.
- *
- * It NEVER gates the run: a failure is loud-logged (the §6-style observability write
- * pattern, mirroring `observeRunAsIntegrationNode`) and swallowed — the proof-reuse
- * substrate is NOT the merge authority. Org-scoped (RLS) — the write carries the org key.
- * Injected as a port so the bootstrap unit/conformance paths drive it without a live DB.
- */
-export type EagerBaseNodeUpsert = (facts: EagerBaseNodeUpsertFacts) => Promise<void>;
-
-/**
- * The Pg-backed {@link EagerBaseNodeUpsert} the run worker wires (mirrors
- * `buildNativeQueueEnqueuer`): an org-scoped `PgIntegrationNodeModel.upsertNode` over the
- * worker's real pool. The (org, member_key) unique index makes a re-bootstrap of the SAME
- * base + ordered ancestors IDEMPOTENT (an UPSERT, not a duplicate row).
- */
-export function buildEagerBaseNodeUpsert(pool: pg.Pool): EagerBaseNodeUpsert {
-  const model = new PgIntegrationNodeModel(pool);
-  return async (facts) => {
-    await model.upsertNode({
-      projectId: facts.projectId,
-      orgId: facts.orgId,
-      baseBranch: facts.baseBranch,
-      // The bootstrap materializes the assembled head, not the pristine `main` sha; the
-      // base branch name is the honest base identity (the same convenience
-      // `observeRunAsIntegrationNode` records — the assembly carries the head, not the
-      // `main` SHA). The `memberKey` keys on this + the ordered member shas.
-      baseSha: facts.baseBranch,
-      ref: facts.ref,
-      // FORK F4: reuse `eager_base` (a valid CHECK value — no migration); the label only
-      // tags intent, it NEVER branches control flow.
-      purpose: "eager_base",
-      members: facts.members.map((m) => ({
-        specId: m.specId,
-        runId: m.runId,
-        branch: m.branch,
-        headSha: m.headSha,
-      })),
-      headSha: facts.headSha,
-      treeHash: facts.treeHash,
-      // The dependent's base is assembled + ready for the writer to commit onto.
-      status: "ready",
-    });
-  };
 }
 
 /**
@@ -217,54 +151,6 @@ async function recordBootstrapStackHeadShas(
     // never bricks the run) — a write-back failure must NEVER break the run. Loud-log + go on.
     log.warn(
       "bootstrap ancestor_stack head-sha write-back failed (non-fatal)",
-      { runBranch: input.context.runBranch, projectId: input.context.projectId },
-      error,
-    );
-  }
-}
-
-/**
- * WS-A PR-8 — OBSERVE-ONLY: record the `eager_base` integration node for the just-assembled
- * dependent base. Zips the ordered ancestor `stack` (`specId`/`runId`/`branch`) with the
- * per-ancestor pristine head shas the assembly captured (`memberHeadShas`, keyed by spec id)
- * — the SAME ordered member shape the batch path records, so the node shares the proof-reuse
- * substrate. A failure NEVER breaks the run: it is loud-logged + swallowed (the substrate is
- * not the merge authority). A null org (no tenant key) is skipped (nothing to RLS-scope to).
- */
-async function recordEagerBaseNode(
-  upsert: EagerBaseNodeUpsert,
-  input: RunPlannerLoopInput,
-  stack: AncestorStack,
-  bootstrapped: BootstrapDependentBaseSuccess,
-): Promise<void> {
-  const orgId = input.context.orgId;
-  if (orgId === undefined || orgId === null) {
-    // A null-org (CLI) run has no tenant key to scope a tenant write to — skip it.
-    return;
-  }
-  try {
-    await upsert({
-      orgId,
-      projectId: input.context.projectId,
-      baseBranch: input.context.targetBranch,
-      ref: bootstrapped.localRef,
-      members: stack.map((ancestor) => ({
-        specId: ancestor.specId,
-        runId: ancestor.runId,
-        branch: ancestor.branch,
-        // The pristine ancestor PR-head sha captured AT assembly time (the divergence
-        // key the `memberKey` hashes), zipped in by spec id; "" only if the assembly did
-        // not surface it (it always does for a real assembly).
-        headSha: bootstrapped.memberHeadShas[ancestor.specId] ?? "",
-      })),
-      headSha: bootstrapped.headSha,
-      treeHash: bootstrapped.treeHash,
-    });
-  } catch (error) {
-    // OBSERVE-ONLY: the proof-reuse substrate is NOT the merge authority — a node-write
-    // failure must NEVER break the run. Loud-log (don't silently swallow) and continue.
-    log.warn(
-      "observe-only eager_base integration-node UPSERT failed (non-fatal)",
       { runBranch: input.context.runBranch, projectId: input.context.projectId },
       error,
     );

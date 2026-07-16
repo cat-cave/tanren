@@ -91,6 +91,8 @@ export interface BootstrapDependentBaseSuccess {
   runBranch: string;
   /** The LOCAL assembly bookmark the stack materialized as (NEVER pushed to the host). */
   localRef: string;
+  /** The exact cloned base-branch commit the ancestor stack was assembled over. */
+  baseSha: string;
   /**
    * The assembled integrated head sha (`main + ordered ancestors`) — the dependent's run
    * branch was created AT it (the run branch is a distinct commit whose PARENT is this
@@ -212,6 +214,7 @@ export async function bootstrapDependentBase(
       release: live.release,
       runBranch: input.runBranch,
       localRef: integration.localRef,
+      baseSha: integration.baseSha,
       headSha: integration.headSha,
       treeHash: integration.treeHash,
       memberHeadShas: integration.memberHeadShas,

@@ -119,6 +119,14 @@ SCREEN_MOUNTS.push(mountIntegrationsScreen);
 import { mountOverviewScreen } from "../routes/overview/index.js";
 SCREEN_MOUNTS.push(mountOverviewScreen);
 
+// rv-4 behavior coverage — the project-scoped runtime-proof selection surface
+// (`/projects/:projectId/behavior-coverage`): active revisions, edge counts,
+// uncovered/unknown state, selected/excluded reasons, graph/head bindings, and
+// the operator analyze + replay forms over the real orchestrator POST surfaces.
+// Directly callable at its project-scoped URL; no nav row is required.
+import { mountBehaviorCoverageScreen } from "../routes/behaviorCoverage/index.js";
+SCREEN_MOUNTS.push(mountBehaviorCoverageScreen);
+
 /** Run every registered screen mount. Called BEFORE `mountShell`. */
 export function mountScreens(app: Hono, deps: ShellDeps): void {
   for (const mount of SCREEN_MOUNTS) {
