@@ -1,32 +1,15 @@
-// The LAND path the merge stage's `directMerge` dispatches to (§5 cutover), extracted
-// from `MergeDispatcher` to keep each file under the 500-line cap:
-//   - `landViaAuthority` — the GUARANTEED + ONLY land: run the fail-closed
-//     `MergeAuthority` truth table, land the authorized commit via
-//     `CodeHost.landAuthorizedRef` (the ff-only CAS), and map the disposition onto the
-//     merge stage's event vocabulary.
-//
-// It operates on the dispatcher's `DispatcherDeps` + a small {@link LandOps} surface
-// (the shared event/finalize/result helpers the dispatcher owns), so the land logic
-// is one cohesive module without duplicating those helpers.
+// LAND path for directMerge / native_queue (§5). mq-1 classifies authority blocks.
 
 import { runAuthorityLand } from "../../merge/mergeAuthorityGate.js";
 import { appendInfraSignature, isSustainedInfraNonRecovery } from "../../merge/infraNonRecovery.js";
+import { classifyLandAuthorityBlockForRun } from "../../merge/authoritySignalLandBlock.js";
 import { evaluatePostureGate } from "../../forge/audits/postureGate.js";
 import type { AuditEnvelope } from "../../events/schemas/audit.js";
 import type { PullRequestMergeability } from "../../contracts/codeHostTypes.js";
 import type { MergeAuthorityBundle, MergeForRunResult, MergeOutcomeKind } from "./mergeDispatchTypes.js";
 import type { DispatcherDeps } from "./mergeDispatcher.js";
 
-/**
- * THE ONE BASE-SHIFT HANDLER (tanren-owns-the-engine.md §7): rebase a `behind` branch
- * onto its base through the unified `baseShiftRebase` hook (`BaseShiftCoordinator.rebaseOnto`
- * — the SAME path change-percolation uses; the two divergent base-shift handlers collapse
- * into ONE). The hook is now UNCONDITIONAL on every land-driving caller (the in-loop
- * `direct_merge` path AND the native_queue DRIVE pass both wire it; decomposition PR-7 /
- * §5h) — the legacy server-side `probe.updateBranch()` fallback is GONE. An absent hook is
- * a fail-closed HOLD (a wiring bug — never a silent server-side update), never a proceed.
- * Extracted as a free function to keep the dispatcher under the 500-line cap.
- */
+/** THE ONE BASE-SHIFT HANDLER (§7): rebase a behind branch via baseShiftRebase. */
 export async function rebaseBehindBranch(
   deps: DispatcherDeps,
   mergeability: PullRequestMergeability,
@@ -46,12 +29,7 @@ export async function rebaseBehindBranch(
   });
 }
 
-/**
- * The shared dispatcher operations the land path reuses (the event base, the PR
- * fields, the audit envelope, the integration label, the task finalize, the result
- * shape, and the recoverable-conflict emit). Implemented by
- * `MergeDispatcher`; passed to the extracted path so it does not re-derive any of it.
- */
+/** Shared dispatcher ops the land path reuses (events, finalize, result). */
 export interface LandOps {
   base(): { runId: string; specId: string; projectId: string; orgId: string; taskId: string };
   prFields(): { prUrl: string; prNumber: number };
@@ -185,14 +163,7 @@ export async function landViaAuthority(
   return landViaAuthorityAttempt(deps, ops, bundle, []);
 }
 
-/**
- * One authority-land attempt. `casHistory` is the trailing history of CAS-rejection
- * SIGNATURES (oldest→newest) the native rebase-on-CAS re-drive (§3.3) reasons over: a CAS
- * rejection whose observed-main signature keeps CHANGING is genuine PROGRESS (main is live
- * + advancing under the run — contention, not failure), so the re-drive continues
- * UNBOUNDED; an IDENTICAL non-advancing rejection signature is genuine non-convergence
- * (`isSustainedInfraNonRecovery`), and only THEN does it hold recoverably. No count.
- */
+/** One authority-land attempt; casHistory tracks CAS-rejection signatures (§3.3). */
 async function landViaAuthorityAttempt(
   deps: DispatcherDeps,
   ops: LandOps,
@@ -240,26 +211,46 @@ async function landViaAuthorityAttempt(
       await recordPostureRouting(deps, ops, landBundle);
       return ops.result("merged", { mergeSha: disposition.mainSha });
     }
-    case "needs_attention": {
-      // A GENUINE human decision (HITL pending / changes_requested at land time). PARK the
-      // spec via the SpecEscalator (the `needs_attention` outcome maps to the coordinator's
-      // park-then-dequeue) so it frees its slot rather than hot-holding the queue head
-      // forever. NOT recoverable `blocked` — a human must make the call.
-      await emitAuthorityBlocked(deps, ops, disposition.reasons);
-      await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
-      return ops.result("needs_attention", { message: disposition.reasons.join("; ") });
-    }
+    case "needs_attention":
     case "blocked": {
-      // §3.2: a TRANSIENT authority refusal (a not-yet-converged signal: gate pending,
-      // budget momentarily unresolved, a mergeability re-read race). RECOVERABLE — emit
-      // `merge.blocked` + hold the task running so the recovery surface re-drives. The old
-      // `emitConflict` here finalized a TERMINAL `merge.dequeued(reason:"conflict")`,
-      // permanently stranding the spec + every dependent. Recoverable `blocked` is the SAME
-      // finalize the needs_attention arm uses,
-      // mapped by the coordinator to a bounded recoverable hold (NOT a terminal dequeue).
+      // needs_attention: park for human. blocked: recoverable hold — unless mq-1 policy.
+      // mq-1: classify via MA-V2 + EventStore; attributed policy → failed (writer repair).
+      const base = ops.base();
+      const classified = await classifyLandAuthorityBlockForRun({
+        bundle: landBundle,
+        eventStore: deps.eventStore,
+        mergeability,
+        reasons: disposition.reasons,
+        orgId: base.orgId,
+        projectId: base.projectId,
+        runId: base.runId,
+        specId: base.specId,
+        taskId: deps.taskId,
+        prUrl: deps.context.prUrl,
+        prNumber: deps.pr.pullNumber,
+        repo: deps.pr.repo,
+        intoMain: deps.context.baseBranch,
+        integration: ops.mergeLabel(),
+        auditEnvelope: ops.auditEnvelope(),
+      });
       await emitAuthorityBlocked(deps, ops, disposition.reasons);
+      if (disposition.kind === "blocked" && classified.classification.classification === "deterministic_policy") {
+        await ops.finalize("failed", {
+          taskOutcome: "failed",
+          taskStatus: "failed",
+          failureKind: "merge_policy_blocked",
+        });
+        return ops.result("failed", { message: classified.message });
+      }
+      if (
+        disposition.kind === "needs_attention" ||
+        classified.classification.classification === "needs_product_decision"
+      ) {
+        await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
+        return ops.result("needs_attention", { message: classified.message });
+      }
       await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });
-      return ops.result("blocked", { message: `land blocked by authority: ${disposition.reasons.join("; ")}` });
+      return ops.result("blocked", { message: classified.message });
     }
     case "cas_rejected":
       // §3.3: main advanced underneath (a batch sibling landed first). This is a

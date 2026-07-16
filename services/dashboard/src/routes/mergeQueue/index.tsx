@@ -15,6 +15,10 @@
 import type { Context, Hono } from "hono";
 import { MergeQueueClient } from "../../api/mergeQueueClient.js";
 import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
+import {
+  MergeQueueAuthoritySignalsClient,
+  type MergeQueueAuthoritySignalsListResponse,
+} from "../../api/mergeQueueAuthoritySignals.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { MergeQueueBody } from "../../components/mergeQueue/MergeQueueBody.js";
 
@@ -35,14 +39,20 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
 
     let metrics: IntegrationMetrics | undefined;
     let stats: QueueStats | undefined;
+    let authoritySignals: MergeQueueAuthoritySignalsListResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      [metrics, stats] = await Promise.all([
+      const signalClient = new MergeQueueAuthoritySignalsClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      [metrics, stats, authoritySignals] = await Promise.all([
         client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
         client.getQueueStats(ctx.org.id, project.projectId, windowDays),
+        signalClient.listAuthoritySignals(ctx.org.id, project.projectId),
       ]);
     }
 
@@ -53,6 +63,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
       <MergeQueueBody
         metrics={metrics}
         stats={stats}
+        authoritySignals={authoritySignals}
         windowDays={windowDays}
         projectName={project?.name ?? ""}
         noProject={project === undefined}

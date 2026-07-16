@@ -25,6 +25,7 @@
 
 import type { MergeDriveOutcome, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
+import { isClassifiedMemberPolicyMessage } from "./authoritySignalClassification.js";
 import { type HoldCeilingStore, InMemoryHoldCeilingStore } from "./holdCeilingStore.js";
 import { isSustainedInfraNonRecovery } from "./infraNonRecovery.js";
 import { alertRetryAfterMs, recoverableRetryDelayMs } from "./retrySchedule.js";
@@ -96,6 +97,19 @@ export async function holdOrHaltRecoverableDrive(input: {
   entry: MergeQueueEntry;
   outcome: Extract<MergeDriveOutcome, { kind: "blocked" }>;
 }): Promise<RecoverableDriveHoldResult> {
+  // mq-1: a classified member-policy block must never become merge.queue.infra_blocked.
+  // The land path maps policy to `failed`; this is a fail-closed belt if a blocked slips through.
+  if (isClassifiedMemberPolicyMessage(input.outcome.message)) {
+    await input.ceiling.reset(input.entry.queueId);
+    await input.queue.releaseClaim(input.entry.queueId);
+    log.error("refusing infrastructure hold for classified member-policy authority block", {
+      projectId: input.projectId,
+      specId: input.entry.specId,
+      message: input.outcome.message,
+    });
+    return { kind: "held", retryAfterMs: recoverableRetryDelayMs(1) };
+  }
+
   const next = await input.ceiling.next(input.entry.queueId, recoverableOutcomeSignature(input.outcome));
   if (next.sustainedNonRecovery) {
     // The PROGRESS signal fired: the SAME recoverable outcome is sustained-non-recovering

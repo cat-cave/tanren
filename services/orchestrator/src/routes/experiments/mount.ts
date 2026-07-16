@@ -12,6 +12,7 @@ import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createDoraRoutes } from "../dora/index.js";
 import { createCiInsightRoutes } from "../ciInsights/index.js";
 import { createIntegrationMetricsRoutes } from "../integrationMetrics/index.js";
+import { createMergeQueueAuthoritySignalRoutes } from "../mergeQueue/authoritySignals.js";
 import { createExperimentRoutes } from "./index.js";
 
 export interface MountReportRoutesDeps {
@@ -35,6 +36,8 @@ export function mountReportRoutes(app: Hono<ActorContextEnv>, deps: MountReportR
   // (the `integration.rebase` event carries only the categorical decision) — proves
   // rebase < rebuild. A pure read over the existing event/cost/run data plane.
   app.route("/orgs", createIntegrationMetricsRoutes({ pool: deps.pool }));
+  // mq-1 durable authority-signal projection (list + evaluation).
+  app.route("/orgs", createMergeQueueAuthoritySignalRoutes({ pool: deps.pool }));
   // Benchmark report/CRUD surface (tanren-method-benchmark §4.2.4): author
   // experiments + cells, trigger the scheduler, read cell scorecards + compare.
   // With live infra wired, the scheduler runs real trials (real accept + await);

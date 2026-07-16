@@ -13,6 +13,8 @@
  */
 
 import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
+import type { MergeQueueAuthoritySignalsListResponse } from "../../api/mergeQueueAuthoritySignals.js";
+import { AuthoritySignalPanel } from "./AuthoritySignalPanel.js";
 import { mqDuration, mqInt, mqPercent, mqTokens } from "./format.js";
 import { MERGE_QUEUE_SCREEN_CSS } from "./styles.js";
 
@@ -21,6 +23,8 @@ export interface MergeQueueBodyProps {
   metrics: IntegrationMetrics | undefined;
   /** Native queue stats, or `undefined` when the read failed / no project. */
   stats: QueueStats | undefined;
+  /** mq-1 authority-signal projection (undefined when read failed / no project). */
+  authoritySignals: MergeQueueAuthoritySignalsListResponse | undefined;
   /** Active window pill (7d / 30d / 90d). */
   windowDays: number;
   /** Project name for the eyebrow scope line. */
@@ -143,7 +147,7 @@ function StatGrid(props: { cards: StatCard[] }) {
 }
 
 export function MergeQueueBody(props: MergeQueueBodyProps) {
-  const { metrics, stats, windowDays, projectName, noProject } = props;
+  const { metrics, stats, authoritySignals, windowDays, projectName, noProject } = props;
   const v = verdict(metrics);
   return (
     <>
@@ -173,6 +177,7 @@ export function MergeQueueBody(props: MergeQueueBodyProps) {
             </section>
           ) : (
             <>
+              <AuthoritySignalPanel projection={authoritySignals} />
               <section class="panel">
                 <div class="panel-pad">
                   <div class="mini-eyebrow">
