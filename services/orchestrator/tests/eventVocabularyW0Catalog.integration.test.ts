@@ -4,6 +4,7 @@
 // RLS role used by the production service.
 
 import { migrate, runWithOrgScope } from "@tanren/db";
+import { readFileSync } from "node:fs";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgEventStore } from "../src/engine/eventStore.js";
@@ -15,6 +16,10 @@ const RUNTIME_ROLE = "tanren_app";
 const RUNTIME_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
 const ORG_A = "org_event_vocabulary_w0_a";
 const ORG_B = "org_event_vocabulary_w0_b";
+const MIGRATION_SQL = readFileSync(
+  new URL("../../../db/migrations/0042_event_vocabulary_w0.sql", import.meta.url),
+  "utf8",
+);
 
 const W0_CATALOG_ROWS = [
   { name: "behavior.coverage.selection_analyzed", defaultSeverity: "info" },
@@ -78,6 +83,8 @@ describeDb("SP-8 W0 event catalog and org-scoped append", () => {
   }, 30_000);
 
   it("seeds all six rows and permits only the matching org scope to append/read them", async () => {
+    // Prove the hand-authored seed migration is safe to replay.
+    await ownerPool.query(MIGRATION_SQL);
     const catalog = await ownerPool.query<{ name: string; defaultSeverity: string }>(
       `SELECT name, default_severity AS "defaultSeverity"
        FROM event_types

@@ -23,6 +23,10 @@ const eventTypesSeed = [
   name: groups?.["name"] ?? "",
   defaultSeverity: groups?.["defaultSeverity"] ?? "",
 }));
+const eventVocabularyMigrationSource = readFileSync(
+  new URL("../../../db/migrations/0042_event_vocabulary_w0.sql", import.meta.url),
+  "utf8",
+);
 
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
 const DIGEST_B = `sha256:${"b".repeat(64)}`;
@@ -261,6 +265,23 @@ describe("mission-complete W0 event vocabulary", () => {
       ["merge.signal.classified", "info"],
       ["merge.member.policy_blocked", "warn"],
     ]);
+  });
+
+  it("keeps migration 0042 additive, idempotent, and equal to the frozen rows", () => {
+    const migrationRows = [
+      ...eventVocabularyMigrationSource.matchAll(/\('(?<name>[^']+)', '(?<severity>[^']+)'\)/gu),
+    ].map(({ groups }) => ({ name: groups?.["name"], defaultSeverity: groups?.["severity"] }));
+    expect(migrationRows).toEqual([
+      { name: "integration.requirement.validated", defaultSeverity: "info" },
+      { name: "behavior.coverage.selection_analyzed", defaultSeverity: "info" },
+      { name: "governance.audit_posture.updated", defaultSeverity: "info" },
+      { name: "review.simulated_intent", defaultSeverity: "info" },
+      { name: "merge.signal.classified", defaultSeverity: "info" },
+      { name: "merge.member.policy_blocked", defaultSeverity: "warn" },
+    ]);
+    expect(eventVocabularyMigrationSource).toContain('ON CONFLICT ("name") DO NOTHING;');
+    expect(eventVocabularyMigrationSource).not.toContain("ALTER ");
+    expect(eventVocabularyMigrationSource).not.toContain("CREATE ");
   });
 
   it("preserves the four hello registry entries through extraction", () => {

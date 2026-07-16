@@ -2,8 +2,8 @@
 
 **Phase**: Mission-complete event substrate (SP-8)
 **Node credit**: **0**
-**State**: production authoring; migration lease parked until CAS-SUB lands
-**Base**: `origin/main` / `4ef95453168a394a2233f47dd495a69768dbbc55`
+**State**: production complete; migration unparked after CAS-SUB landed
+**Base**: `origin/main` / `55c53ab1f07abce4cf29a53411b44a2eddf0828e`
 **Branch**: `mission/ev-sub-w0`
 **Consumes**: [`event-vocabulary-waves.md`](../../event-vocabulary-waves.md)
 **Distinct from**: [`ev-sub-w0.md`](./ev-sub-w0.md), the landed docs-only freeze card
@@ -46,12 +46,12 @@ apex behavior. It cannot earn consumer-node credit.
 | `services/orchestrator/tests/eventVocabularyW0.test.ts`                         | Unit and drift-boundary proof                                 |
 | `services/orchestrator/tests/eventVocabularyW0Catalog.integration.test.ts`      | Gated real-Postgres catalog/FK/RLS append proof               |
 
-### Parked migration paths — forbidden until CAS-SUB lands
+### Serialized migration paths — unparked after CAS-SUB landed
 
 | Path                                         | Action after CAS-SUB `0041` is on `origin/main`       |
 | -------------------------------------------- | ----------------------------------------------------- |
 | `db/migrations/0042_event_vocabulary_w0.sql` | Add only the six frozen catalog rows, idempotently    |
-| `db/migrations/meta/0042_snapshot.json`      | Byte-copy the landed `0041` snapshot (no DDL in 0042) |
+| `db/migrations/meta/0042_snapshot.json`      | Schema-copy `0041`; fresh ID chained to 0041 (no DDL) |
 | `db/migrations/meta/_journal.json`           | Append the serialized idx-42 entry                    |
 
 No wildcard ownership. Any additional changed path requires this card to be
