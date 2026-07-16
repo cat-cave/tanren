@@ -44,10 +44,31 @@ function formatElapsed(startIso: string, endIso: string | null): string {
   return `${mins}m ${secs % 60}s`;
 }
 
-/** Sum the run's recorded dollars (null-cost rows contribute nothing). */
+/**
+ * Sum known recorded dollars. Null costUsd is unknown — never coerced to $0.
+ * A partial known subtotal is labeled; all-unknown stays "unknown".
+ */
 function sumDollars(detail: RunDetail): string {
-  const total = detail.costs.reduce((sum, c) => sum + (c.costUsd === null ? 0 : Number(c.costUsd)), 0);
-  return `$${total.toFixed(2)}`;
+  let known = 0;
+  let priced = 0;
+  let unknown = 0;
+  for (const cost of detail.costs) {
+    if (cost.costUsd === null) {
+      unknown += 1;
+      continue;
+    }
+    const amount = Number(cost.costUsd);
+    if (!Number.isFinite(amount) || amount < 0) {
+      unknown += 1;
+      continue;
+    }
+    known += amount;
+    priced += 1;
+  }
+  if (priced === 0 && unknown > 0) return "unknown";
+  if (priced === 0) return "$0.00";
+  const formatted = `$${known.toFixed(2)}`;
+  return unknown > 0 ? `${formatted} known` : formatted;
 }
 
 /** Human label for the escape hatch / outcome that fired. */

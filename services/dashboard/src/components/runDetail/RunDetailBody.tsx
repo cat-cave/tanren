@@ -20,9 +20,10 @@ import {
   costSourceLabel,
   costSourceVar,
   failedTasks,
+  formatCostUsd,
   formatDuration,
+  formatSourceAmt,
   formatTokens,
-  formatUsd,
   reasoningForTask,
   runFailed,
   spineProgress,
@@ -70,9 +71,9 @@ function CostBar(props: { detail: RunDetail }) {
     totals.inputTokens + totals.outputTokens === 0
       ? 0
       : (totals.inputTokens / (totals.inputTokens + totals.outputTokens)) * 100;
+  const perTok = totals.bySource.get("per_token")?.tokens ?? 0;
   return (
     <div class="cost-bar" data-rd="cost-bar">
-      {/* per-token: real dollars */}
       <div class="cost-cell">
         <div class="row1">
           <span class="swatch" style="background: var(--cost-token)"></span>
@@ -80,15 +81,16 @@ function CostBar(props: { detail: RunDetail }) {
             per-token
           </span>
           <span class="v" data-rd="cost-per-token">
-            {formatUsd(totals.perTokenUsd)}
+            {formatCostUsd(totals)}
           </span>
         </div>
         <div class="bar">
-          <i style={`width: ${Math.min(100, totals.perTokenUsd * 100).toFixed(1)}%; background: var(--cost-token)`}></i>
+          <i style={`width:${Math.min(100, totals.perTokenKnownUsd * 100).toFixed(1)}%;background:var(--cost-token)`} />
         </div>
-        <div class="k">real-dollar spend · {totals.bySource.get("per_token")?.tokens ?? 0} tok</div>
+        <div class="k">
+          real-dollar spend{totals.perTokenHasUnknown ? " · partial" : ""} · {perTok} tok
+        </div>
       </div>
-      {/* window: subscription usage by source */}
       <div class="cost-cell">
         <div class="row1">
           <span class="swatch" style="background: var(--cost-window)"></span>
@@ -102,9 +104,7 @@ function CostBar(props: { detail: RunDetail }) {
             <div class="source-row">
               <span class="sw" style={`background: ${costSourceVar(mode)}`}></span>
               <span>{costSourceLabel(mode)}</span>
-              <span class="amt">
-                {formatTokens(agg.tokens)} tok{agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}
-              </span>
+              <span class="amt">{formatSourceAmt(agg)}</span>
             </div>
           ))}
         </div>

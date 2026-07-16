@@ -116,6 +116,136 @@ describe("P2A-0014 SSE driver", () => {
     expect(frames).toBeDefined();
   });
 
+  it("resumes cost deltas past Number.MAX_SAFE_INTEGER without skip or replay", async () => {
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_big", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_big", project_id: "project_big" });
+    pool.seedRun({ run_id: "run_big", spec_id: "spec_big", project_id: "project_big", status: "running" });
+    // Number.MAX_SAFE_INTEGER + 2 — must stay exact decimal text end-to-end.
+    const huge = "9007199254740993";
+    const next = "9007199254740994";
+    pool.seedCost({
+      id: huge,
+      run_id: "run_big",
+      task_id: "task_1",
+      project_id: "project_big",
+      input_tokens: 1,
+      total_tokens: 1,
+      cost_usd: "0.01",
+    });
+    const captured: Array<{ event: string; data: unknown }> = [];
+    const driver = new SseDriver(
+      {
+        pool: pool.asPgPool(),
+        runId: "run_big",
+        projectId: "project_big",
+        orgId: "org_acme",
+        actor,
+        rawView: false,
+        intervalMs: 0,
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
+      },
+      (frame) => {
+        const parsed = parseFrame(frame);
+        if (parsed !== undefined) captured.push(parsed);
+      },
+    );
+    // Seed fingerprints as a post-snapshot stream would.
+    (driver as unknown as { lastCostId: string }).lastCostId = huge;
+    (driver as unknown as { lastCostFingerprint: Map<string, string> }).lastCostFingerprint = new Map([
+      [huge, "0.01|0.01|1|0|0|0|0|1|per_token|provider_response"],
+    ]);
+    (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
+    pool.seedCost({
+      id: next,
+      run_id: "run_big",
+      task_id: "task_2",
+      project_id: "project_big",
+      input_tokens: 2,
+      total_tokens: 2,
+      cost_usd: "0.02",
+    });
+    await driver.tick();
+    const costsFrame = captured.find((f) => f.event === "costs");
+    expect(costsFrame).toBeDefined();
+    const costs = (costsFrame!.data as { costs: Array<{ id: string | number }> }).costs;
+    expect(costs.map((c) => String(c.id))).toEqual([next]);
+    // A second tick must not re-emit the same cost (no double count / replay).
+    const before = captured.filter((f) => f.event === "costs").length;
+    await driver.tick();
+    expect(captured.filter((f) => f.event === "costs").length).toBe(before);
+    // Cursor state stayed exact decimal text (no Number() precision loss).
+    expect((driver as unknown as { lastCostId: string }).lastCostId).toBe(next);
+  });
+
+  it("same-id reconciliation + terminal ordering: costs before status, recon once, no double", async () => {
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_rec", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_rec", project_id: "project_rec" });
+    pool.seedRun({ run_id: "run_rec", spec_id: "spec_rec", project_id: "project_rec", status: "running" });
+    const id = "9007199254740993";
+    pool.seedCost({
+      id,
+      run_id: "run_rec",
+      task_id: "task_1",
+      project_id: "project_rec",
+      input_tokens: 1,
+      total_tokens: 1,
+      cost_usd: null,
+      cost_basis: "unknown",
+      billing_mode: "per_token",
+    });
+    const captured: Array<{ event: string; data: unknown }> = [];
+    const driver = new SseDriver(
+      {
+        pool: pool.asPgPool(),
+        runId: "run_rec",
+        projectId: "project_rec",
+        orgId: "org_acme",
+        actor,
+        rawView: false,
+        intervalMs: 0,
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
+      },
+      (frame) => {
+        const parsed = parseFrame(frame);
+        if (parsed !== undefined) captured.push(parsed);
+      },
+    );
+    // Snapshot-equivalent fingerprint seed for the null row (seedCost defaults
+    // notional to "0.001" when cost_usd is null).
+    (driver as unknown as { lastCostId: string }).lastCostId = id;
+    (driver as unknown as { lastCostFingerprint: Map<string, string> }).lastCostFingerprint = new Map([
+      [id, "|0.001|1|0|0|0|0|1|per_token|unknown"],
+    ]);
+    (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
+
+    // Mutate in place: same id null → known $1.00, then terminal.
+    const row = pool.costs.find((c) => String(c.id) === id);
+    expect(row).toBeDefined();
+    row!.cost_usd = "1.00";
+    row!.cost_basis = "provider_response";
+    row!.notional_cost_usd = "1.00";
+    pool.runs[0]!.status = "completed";
+    pool.runs[0]!.outcome = "ok";
+
+    await driver.tick();
+    const events = captured.map((f) => f.event);
+    const costIdx = events.indexOf("costs");
+    const statusIdx = events.indexOf("status");
+    expect(costIdx).toBeGreaterThanOrEqual(0);
+    expect(statusIdx).toBeGreaterThan(costIdx);
+    const costs = (captured[costIdx]!.data as { costs: Array<{ id: string | number; costUsd: string | null }> }).costs;
+    expect(costs).toHaveLength(1);
+    expect(String(costs[0]!.id)).toBe(id);
+    expect(costs[0]!.costUsd).toBe("1.00");
+
+    // Reconnect/no double count: second tick must not re-emit same fingerprint.
+    const costFramesBefore = captured.filter((f) => f.event === "costs").length;
+    await driver.tick();
+    expect(captured.filter((f) => f.event === "costs").length).toBe(costFramesBefore);
+  });
+
   it("emits a status frame when the run's status changes between ticks", async () => {
     const pool = new RunRoutesPool();
     pool.seedRun({

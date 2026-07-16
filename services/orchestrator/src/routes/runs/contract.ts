@@ -74,7 +74,7 @@ export type TaskTimelineEntry = z.infer<typeof TaskTimelineEntry>;
 // hint without guessing.
 export const RunEventRow = z
   .object({
-    id: z.union([z.number(), z.string()]),
+    id: z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.string().regex(/^\d+$/u)]),
     ts: z.coerce.date(),
     runId: z.string().nullable(),
     taskId: z.string().nullable(),
@@ -93,7 +93,10 @@ export type RunEventRow = z.infer<typeof RunEventRow>;
 
 export const RunCostRecord = z
   .object({
-    id: z.union([z.number(), z.string()]),
+    // bigserial may exceed Number.MAX_SAFE_INTEGER — keep exact decimal text
+    // when the driver hands back a string, and only accept safe integers as
+    // numbers (large ids must wire as digit strings).
+    id: z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.string().regex(/^\d+$/u)]),
     runId: z.string().min(1),
     taskId: z.string().min(1),
     projectId: z.string().min(1),
@@ -106,12 +109,46 @@ export const RunCostRecord = z
     outputTokens: z.number().int().nonnegative(),
     reasoningOutputTokens: z.number().int().nonnegative(),
     totalTokens: z.number().int().nonnegative(),
-    costUsd: z.string().min(1).nullable(),
+    costUsd: z
+      .string()
+      .regex(/^\d+(?:\.\d+)?$/u)
+      .nullable(),
+    // List-priced API equivalent. This is deliberately distinct from real
+    // spend (`costUsd`) and is required by the costs dashboard's math.
+    notionalCostUsd: z
+      .string()
+      .regex(/^\d+(?:\.\d+)?$/u)
+      .nullable(),
     billingMode: z.enum(["per_token", "subscription", "self_hosted", "unattributed"]),
     costBasis: z.enum(["ccusage", "provider_response", "credits", "unknown", "unattributed"]),
     recordedAt: z.coerce.date(),
   })
-  .strict();
+  .strict()
+  .superRefine((record, context) => {
+    // Five mandatory disjoint typed buckets must sum exactly to totalTokens.
+    // Enforce on the server contract (every HTTP decode path) so the dashboard
+    // is not the only place that rejects a corrupted row.
+    const bucketTotal =
+      record.inputTokens +
+      record.cachedInputTokens +
+      record.cacheCreationTokens +
+      record.outputTokens +
+      record.reasoningOutputTokens;
+    if (record.totalTokens !== bucketTotal) {
+      context.addIssue({
+        code: "custom",
+        path: ["totalTokens"],
+        message: "token buckets do not sum to totalTokens",
+      });
+    }
+    if ((record.costBasis === "unknown" || record.costBasis === "unattributed") && record.costUsd !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["costUsd"],
+        message: `${record.costBasis} cost basis requires a null real cost`,
+      });
+    }
+  });
 export type RunCostRecord = z.infer<typeof RunCostRecord>;
 
 // ---------------------------------------------------------------------------
@@ -173,7 +210,12 @@ export const RECENT_EVENT_CAP = 50;
 
 export const RunListItem = RunSummary.extend({
   specTitle: z.string(),
-  costTotalUsd: z.string(),
+  // Null means one or more records have no real-dollar basis, so a complete
+  // total is unknowable. "0" is reserved for the genuine no-cost-record case.
+  costTotalUsd: z
+    .string()
+    .regex(/^\d+(?:\.\d+)?$/u)
+    .nullable(),
   lastEventAt: z.coerce.date().nullable(),
   // True when the run is in a review state with an open PR — derived from
   // runs.outcome plus presence of pr_url. Drives the attention queue in the
@@ -181,6 +223,27 @@ export const RunListItem = RunSummary.extend({
   needsReview: z.boolean(),
 }).strict();
 export type RunListItem = z.infer<typeof RunListItem>;
+
+// ---------------------------------------------------------------------------
+// Org costs read model
+// ---------------------------------------------------------------------------
+
+/**
+ * One org-scoped response for the history & costs screen and CSV export.
+ * Cost rows never expose `cost_source_raw`; only the typed, safe projection
+ * above crosses this boundary.
+ */
+export const OrgCosts = z
+  .object({
+    // Echoing the authorized path org lets strict clients bind every page to
+    // the domain they requested instead of trusting an ambient URL alone.
+    orgId: z.string().min(1),
+    costs: z.array(RunCostRecord),
+    runs: z.array(RunListItem),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+export type OrgCosts = z.infer<typeof OrgCosts>;
 
 // ---------------------------------------------------------------------------
 // Cursor pagination
@@ -202,7 +265,9 @@ export const MAX_PAGE_SIZE = 200;
 
 export interface DecodedCursor {
   ts: Date;
-  id: number;
+  // PostgreSQL bigserial exceeds JavaScript's safe-integer range. Keep the
+  // exact decimal text through decode and bind it directly as ::bigint.
+  id: string;
 }
 
 // Encoded cursor = base64("<isoTs>:<id>"). Tests treat it as an opaque token
@@ -236,11 +301,19 @@ export function decodeCursor(value: string): DecodedCursor {
   if (Number.isNaN(ts.getTime())) {
     throw new InvalidCursorError("bad timestamp");
   }
-  const id = Number(idStr);
-  if (!Number.isFinite(id) || !Number.isInteger(id)) {
+  if (!/^\d+$/u.test(idStr)) {
     throw new InvalidCursorError("bad id");
   }
-  return { ts, id };
+  let id: bigint;
+  try {
+    id = BigInt(idStr);
+  } catch {
+    throw new InvalidCursorError("bad id");
+  }
+  if (id > 9_223_372_036_854_775_807n) {
+    throw new InvalidCursorError("id out of range");
+  }
+  return { ts, id: id.toString() };
 }
 
 export function parsePageSize(raw: string | undefined): number {

@@ -4,8 +4,7 @@
  * I/O-free so the route handler stays thin and the derivation is testable.
  *
  * Economics doctrine: uncomputable figures render as "—", never a fake $0.00.
- * `costTotalUsd` arrives as a string (often "0" when no priced records exist);
- * only strictly-positive finite amounts count as real spend.
+ * `costTotalUsd: null` is unknown; a numeric "0" is a genuine known zero.
  */
 
 import { RECOVERABLE_OUTCOMES } from "@tanren/db";
@@ -19,8 +18,8 @@ export interface SpecRunRow {
   /** ISO stamp for the run's most recent activity (started / last event). */
   when: string;
   /**
-   * Display cost for this run: `"$12.50"` when a positive priced total exists,
-   * otherwise `"—"` (unpriced / uncomputable — never a fabricated `$0.00`).
+   * Display cost for this run: `"$12.50"` (including `"$0.00"` for known zero)
+   * or `"—"` for an unknown/uncomputable total.
    */
   costLabel: string;
   href: string | null;
@@ -30,14 +29,15 @@ export interface SpecRunRow {
 export interface SpecDepChip {
   specId: string;
   title: string;
-  status: DagStatus;
+  /** Run-derived status; `"unavailable"` when the project run-list read failed. */
+  status: DagStatus | "unavailable";
 }
 
 /** Economics figures for the full-page panel (and the lighter drawer strip). */
 export interface SpecEconomics {
   /**
    * Known real spend (`"$12.50"`) summed over priced attempts only, or `"—"`
-   * when no attempt has a positive priced total. Never invents $0 for unpriced
+   * when no attempt has a known total. Never invents $0 for unpriced
    * runs. When `unpricedAttempts > 0` this is a known-lower-bound, not a
    * complete total — the panel surfaces that.
    */
@@ -45,13 +45,13 @@ export interface SpecEconomics {
   /** Attempt count, or `"—"` when runs are unavailable / empty. */
   attempts: string;
   /**
-   * Average over **priced** attempts only, or `"—"`. Unpriced attempts are
+   * Average over **known** attempts only, or `"—"`. Unknown attempts are
    * excluded from both numerator and denominator (not treated as $0).
    */
   avgCostUsd: string;
-  /** How many runs contributed a positive priced total. */
+  /** How many runs contributed a known total (including genuine zero). */
   pricedAttempts: number;
-  /** How many runs had no priced total (unpriced / `"0"` / unparseable). */
+  /** How many runs had no priced total (null / unparseable). */
   unpricedAttempts: number;
 }
 
@@ -117,19 +117,19 @@ function runHref(projectId: string, runId: string): string {
 }
 
 /**
- * Parse a run's `costTotalUsd` into a positive finite amount, or null when the
- * figure is uncomputable. The run-list API COALESCE-defaults missing sums to
- * `"0"`, which is NOT trustworthy real spend — treat ≤0 / NaN as unpriced.
+ * Parse a run's `costTotalUsd` into a nonnegative finite amount, or null when
+ * the complete figure is unknown. The API now reserves null for incomplete
+ * coverage, so a numeric zero is trustworthy and must remain distinguishable.
  */
-export function parsePricedUsd(costTotalUsd: string | null | undefined): number | null {
+export function parseKnownUsd(costTotalUsd: string | null | undefined): number | null {
   if (costTotalUsd === null || costTotalUsd === undefined || costTotalUsd === "") return null;
   const n = Number(costTotalUsd);
-  if (!Number.isFinite(n) || n <= 0) return null;
+  if (!Number.isFinite(n) || n < 0) return null;
   return n;
 }
 
-/** Format a positive amount as `$12.50`; null → `"—"`. */
-export function formatPricedUsd(amount: number | null): string {
+/** Format a known amount as `$12.50`; null → `"—"`. */
+export function formatKnownUsd(amount: number | null): string {
   if (amount === null) return "—";
   return `$${amount.toFixed(2)}`;
 }
@@ -141,7 +141,7 @@ function toRunRow(projectId: string, run: RunListItem): SpecRunRow {
     outcome: run.outcome ?? run.status,
     status: run.status,
     when: run.lastEventAt ?? run.startedAt,
-    costLabel: formatPricedUsd(parsePricedUsd(run.costTotalUsd)),
+    costLabel: formatKnownUsd(parseKnownUsd(run.costTotalUsd)),
     href: runHref(projectId, run.runId),
     live,
   };
@@ -150,8 +150,8 @@ function toRunRow(projectId: string, run: RunListItem): SpecRunRow {
 /**
  * Roll run costs into economics figures.
  *
- * Real spend is the sum of **positive priced** totals only — unpriced /
- * COALESCE-`"0"` runs never contribute a fake zero to the sum. When some
+ * Real spend is the sum of known totals only — null/unpriced runs never
+ * contribute a fake zero to the sum. When some
  * attempts are unpriced the spend figure is still the known real dollars
  * (matching the org costs dashboard), but `unpricedAttempts` is set so the
  * panel can label the figure as incomplete rather than a silent full total.
@@ -163,7 +163,7 @@ export function buildEconomics(runs: readonly RunListItem[], runsAvailable: bool
   let total = 0;
   let pricedAttempts = 0;
   for (const run of runs) {
-    const priced = parsePricedUsd(run.costTotalUsd);
+    const priced = parseKnownUsd(run.costTotalUsd);
     if (priced !== null) {
       total += priced;
       pricedAttempts += 1;
@@ -173,8 +173,8 @@ export function buildEconomics(runs: readonly RunListItem[], runsAvailable: bool
   const attempts = runs.length > 0 ? String(runs.length) : "—";
   // Known real spend only. Incomplete coverage is signalled via unpricedAttempts
   // (never by inventing $0 rows or zeroing the whole aggregate).
-  const spendUsd = formatPricedUsd(pricedAttempts > 0 ? total : null);
-  const avgCostUsd = formatPricedUsd(pricedAttempts > 0 ? total / pricedAttempts : null);
+  const spendUsd = formatKnownUsd(pricedAttempts > 0 ? total : null);
+  const avgCostUsd = formatKnownUsd(pricedAttempts > 0 ? total / pricedAttempts : null);
   return { spendUsd, attempts, avgCostUsd, pricedAttempts, unpricedAttempts };
 }
 
@@ -191,51 +191,66 @@ export interface BuildSpecDetailInput {
    * confirmed an empty successful list).
    */
   runsAvailable?: boolean;
+  /**
+   * False when the project-wide run-list (dep status chips) failed. Defaults
+   * to `runsAvailable`.
+   */
+  depsRunsAvailable?: boolean;
 }
 
-function depChip(specId: string, allSpecs: SpecSummary[], statusBySpecId: Map<string, DagStatus>): SpecDepChip {
+function depChip(
+  specId: string,
+  allSpecs: SpecSummary[],
+  statusBySpecId: Map<string, DagStatus>,
+  depsAvailable: boolean,
+): SpecDepChip {
   const found = allSpecs.find((s) => s.specId === specId);
   return {
     specId,
     title: found?.title ?? specId,
-    status: statusBySpecId.get(specId) ?? "queued",
+    status: depsAvailable ? (statusBySpecId.get(specId) ?? "queued") : "unavailable",
   };
 }
 
 export function buildSpecDetail(input: BuildSpecDetailInput): SpecDetail {
   const { spec, allSpecs, runs } = input;
   const runsAvailable = input.runsAvailable !== false;
+  const depsRunsAvailable = input.depsRunsAvailable ?? runsAvailable;
   const latest = runsAvailable ? runs[0] : undefined;
-  const status = statusForSpec(spec.status, latest);
-  const meta = STATUS_META[status];
+  const status = runsAvailable ? statusForSpec(spec.status, latest) : "queued";
+  const meta = runsAvailable ? STATUS_META[status] : { label: "unavailable", pill: "cold" as const, glyph: "?" };
   const projectId = spec.projectId;
 
-  const dependsOn = spec.dependsOn.map((id) => depChip(id, allSpecs, input.statusBySpecId));
+  const dependsOn = spec.dependsOn.map((id) => depChip(id, allSpecs, input.statusBySpecId, depsRunsAvailable));
   const blocks = allSpecs
     .filter((s) => s.dependsOn.includes(spec.specId))
-    .map((s) => depChip(s.specId, allSpecs, input.statusBySpecId));
+    .map((s) => depChip(s.specId, allSpecs, input.statusBySpecId, depsRunsAvailable));
 
   const runRows = runsAvailable ? runs.map((run) => toRunRow(projectId, run)) : [];
   const latestRun = runRows[0] ?? null;
   const economics = buildEconomics(runsAvailable ? runs : [], runsAvailable);
 
-  const blockedDeps = dependsOn.filter((d) => d.status !== "done");
-  const blockedReason =
-    status === "blocked"
+  const blockedDeps = dependsOn.filter((d) => d.status !== "done" && d.status !== "unavailable");
+  const blockedReason = runsAvailable
+    ? status === "blocked"
       ? blockedDeps.length > 0
         ? `Waiting on ${blockedDeps.map((d) => d.title).join(", ")} — ${blockedDeps.length} upstream dep(s) not yet merged.`
         : "This spec's latest run halted. Open the run to see why."
-      : null;
+      : null
+    : "Run state unavailable — the orchestrator read failed.";
 
+  // Never invent forge/start/nav affordances from a failed empty run-list.
   let primaryAction: SpecDetail["primaryAction"] = null;
-  if (status === "review" && latestRun !== null) {
-    primaryAction = { label: "open review ↗", href: `/runs/${latestRun.runId}/review` };
-  } else if (status === "live" && latestRun !== null) {
-    primaryAction = { label: "open live run ↗", href: runHref(projectId, latestRun.runId) };
-  } else if (status === "done" && latestRun !== null) {
-    primaryAction = { label: "view merged run ↗", href: runHref(projectId, latestRun.runId) };
-  } else if (status === "queued") {
-    primaryAction = { label: "forge it now ↗", href: `/projects/${projectId}/specs/new` };
+  if (runsAvailable) {
+    if (status === "review" && latestRun !== null) {
+      primaryAction = { label: "open review ↗", href: `/runs/${latestRun.runId}/review` };
+    } else if (status === "live" && latestRun !== null) {
+      primaryAction = { label: "open live run ↗", href: runHref(projectId, latestRun.runId) };
+    } else if (status === "done" && latestRun !== null) {
+      primaryAction = { label: "view merged run ↗", href: runHref(projectId, latestRun.runId) };
+    } else if (status === "queued") {
+      primaryAction = { label: "forge it now ↗", href: `/projects/${projectId}/specs/new` };
+    }
   }
 
   return {

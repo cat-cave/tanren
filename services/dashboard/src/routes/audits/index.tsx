@@ -14,8 +14,8 @@
  *
  * The audits client is its OWN api module (`api/auditsClient.ts`) per the screen-isolation
  * integration lesson; the window-fill bar reads the SAME subscription
- * heatmap the costs page uses (via the shared OrchestratorClient + buildHeatmap)
- * so it ties to real idle-window data and invents nothing.
+ * heatmap the costs page uses (via the canonical org-costs read model) so it
+ * ties to real idle-window data and invents nothing. No project→run→cost N+1.
  */
 
 import type { Context, Hono } from "hono";
@@ -44,25 +44,25 @@ async function writeAuditsClient(c: Context, deps: ShellDeps): Promise<AuditsCli
   return new AuditsClient(await clientDepsFor(c, deps));
 }
 
-/** Gather subscription cost records across every visible project for the heatmap. */
+/**
+ * Subscription cost records for the window-fill heatmap — one bounded org-costs
+ * read (the sole cost authority). Failures surface as unavailable, never as a
+ * silent empty heatmap.
+ */
 async function gatherRecords(
   c: Context,
   deps: ShellDeps,
   orgId: string,
-  projects: { projectId: string }[],
-): Promise<CostRecord[]> {
+): Promise<{ records: CostRecord[]; unavailable: boolean }> {
   const client = new OrchestratorClient({
     orchestratorUrl: deps.orchestratorUrl,
     cookieHeader: c.req.header("cookie"),
   });
-  const records: CostRecord[] = [];
-  for (const project of projects) {
-    const runs = await client.listRuns(orgId, project.projectId);
-    for (const run of runs) {
-      records.push(...(await client.listRunCosts(orgId, project.projectId, run.runId)));
-    }
+  const result = await client.getOrgCosts(orgId);
+  if (result.kind !== "ok") {
+    return { records: [], unavailable: true };
   }
-  return records;
+  return { records: result.data.costs, unavailable: false };
 }
 
 function str(form: Record<string, unknown>, key: string): string {
@@ -88,10 +88,14 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
         />,
       );
     }
-    const snapshot = (await readAuditsClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
-    const records = await gatherRecords(c, deps, ctx.org.id, ctx.projects);
-    const matrix = buildHeatmap(records, { now: new Date() });
-    const columns = windowFillColumns(matrix);
+    const snapshotMaybe = await readAuditsClient(c, deps).snapshot(ctx.org.id);
+    // Independent unavailable planes: snapshot failure is NOT EMPTY success,
+    // and heatmap failure is NOT zero utilization.
+    const snapshotAvailable = snapshotMaybe !== undefined;
+    const snapshot = snapshotMaybe ?? EMPTY;
+    const { records, unavailable: heatmapUnavailable } = await gatherRecords(c, deps, ctx.org.id);
+    const matrix = heatmapUnavailable ? null : buildHeatmap(records, { now: new Date() });
+    const columns = matrix === null ? [] : windowFillColumns(matrix);
     return renderShell(
       c,
       ctx,
@@ -99,8 +103,10 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
       <AuditsBody
         orgId={ctx.org.id}
         snapshot={snapshot}
+        snapshotAvailable={snapshotAvailable}
         windowColumns={columns}
-        lowNames={underfilledNames(columns)}
+        lowNames={heatmapUnavailable ? [] : underfilledNames(columns)}
+        heatmapUnavailable={heatmapUnavailable}
         csrfToken={ctx.csrfToken}
       />,
     );

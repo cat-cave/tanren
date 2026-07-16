@@ -75,6 +75,7 @@ describe("summarizeCosts — three pricing models", () => {
     expect(subscription?.totalTokens).toBe(1500);
     expect(selfHosted?.costUsd).toBe(0);
     expect(selfHosted?.records).toBe(1);
+    expect(summary.realCoverage).toMatchObject({ kind: "partial", knownUsd: 10, unpricedRecords: 2 });
   });
 
   it("computes per-model share against priced total", () => {
@@ -126,6 +127,18 @@ describe("summarizeCosts — every row shows its REAL source", () => {
     ];
     const summary = summarizeCosts(records);
     expect(summary.unpricedRecords).toBe(1);
+    expect(summary.realCoverage.kind).toBe("partial");
+  });
+
+  it("keeps empty, unknown, known zero, and partial monetary totals distinct", () => {
+    expect(summarizeCosts([]).realCoverage.kind).toBe("empty");
+    expect(
+      summarizeCosts([rec({ costUsd: null, notionalCostUsd: null, costBasis: "unknown" })]).realCoverage,
+    ).toMatchObject({ kind: "unknown", knownUsd: null, unpricedRecords: 1 });
+    expect(summarizeCosts([rec({ costUsd: "0" })]).realCoverage).toMatchObject({ kind: "known", knownUsd: 0 });
+    expect(
+      summarizeCosts([rec({ costUsd: "2.00" }), rec({ costUsd: null, costBasis: "unknown" })]).realCoverage,
+    ).toMatchObject({ kind: "partial", knownUsd: 2, pricedRecords: 1, unpricedRecords: 1 });
   });
 
   it("sorts provider rows by dollars desc", () => {
@@ -149,6 +162,7 @@ describe("summarizeCosts — notional / equivalent alongside real", () => {
     ];
     const summary = summarizeCosts(records);
     expect(summary.totalUsd).toBe(0);
+    expect(summary.realCoverage.kind).toBe("unknown");
     expect(summary.totalNotionalUsd).toBeCloseTo(10);
     // Real is $0 but notional > 0 ⇒ the headline leads with the equivalent figure
     // (so the org never sees a misleading "$0 trend").

@@ -189,6 +189,11 @@ export function SpecListBody(props: {
   project: ProjectSummary;
   specs: SpecSummary[];
   runBySpec: Record<string, string | undefined>;
+  /**
+   * False when the project run-list read failed. Suppresses "no runs" claims
+   * and run-navigation derived from a fake-empty map.
+   */
+  runsAvailable?: boolean;
   /** Set when a prior run-trigger failed; shown inline on the row. */
   error?: string;
   /** The spec id the trigger error belongs to. */
@@ -196,6 +201,7 @@ export function SpecListBody(props: {
   /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
   csrfToken?: string;
 }) {
+  const runsAvailable = props.runsAvailable !== false;
   return (
     <div class="p2b">
       <ScreenStyles />
@@ -213,6 +219,12 @@ export function SpecListBody(props: {
         }
       />
       <div class="page-body">
+        {!runsAvailable && (
+          <div class="placeholder-card" role="alert" data-runs-unavailable style="margin-bottom:12px">
+            Run history is unavailable — the orchestrator read failed. Spec rows do not invent an empty run history or
+            empty-state navigation from a failed list.
+          </div>
+        )}
         <div class="panel">
           <div class="panel-head">
             <h3>
@@ -225,12 +237,14 @@ export function SpecListBody(props: {
               <div class="empty-note">No specs yet. Create one to start forging.</div>
             ) : (
               props.specs.map((spec) => {
-                const runId = props.runBySpec[spec.specId];
+                const runId = runsAvailable ? props.runBySpec[spec.specId] : undefined;
                 const href =
-                  runId === undefined
-                    ? `/projects/${props.project.projectId}/specs/new`
-                    : `/projects/${props.project.projectId}/runs/${runId}`;
+                  runsAvailable && runId !== undefined
+                    ? `/projects/${props.project.projectId}/runs/${runId}`
+                    : `/projects/${props.project.projectId}/specs/${spec.specId}`;
                 const showError = props.error !== undefined && props.errorSpecId === spec.specId;
+                const runLabel =
+                  runsAvailable && runId !== undefined ? "run ↗" : runsAvailable ? "no runs" : "runs unavailable";
                 return (
                   <>
                     {showError && <div class="row-error">{props.error}</div>}
@@ -243,21 +257,23 @@ export function SpecListBody(props: {
                             {spec.acceptanceCriteria.length} criteria · {spec.dependsOn.length} deps
                           </div>
                         </div>
-                        <span class="d">{runId === undefined ? "no runs" : "run ↗"}</span>
+                        <span class="d">{runLabel}</span>
                         <span class="arrow" style="color:var(--ember-08)">
                           ↗
                         </span>
                       </a>
-                      <form
-                        class="run-trigger"
-                        method="post"
-                        action={`/projects/${props.project.projectId}/specs/${spec.specId}/run`}
-                      >
-                        <CsrfField token={props.csrfToken} />
-                        <button class="btn ghost" type="submit" title="start a live run from this spec">
-                          ▶ start a run
-                        </button>
-                      </form>
+                      {runsAvailable ? (
+                        <form
+                          class="run-trigger"
+                          method="post"
+                          action={`/projects/${props.project.projectId}/specs/${spec.specId}/run`}
+                        >
+                          <CsrfField token={props.csrfToken} />
+                          <button class="btn ghost" type="submit" title="start a live run from this spec">
+                            ▶ start a run
+                          </button>
+                        </form>
+                      ) : null}
                     </div>
                   </>
                 );

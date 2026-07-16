@@ -4,29 +4,22 @@
  * patches the cost bar, trajectory spine, run status, and per-moment events in
  * place — no page reload, no client router.
  *
- * The server renders the full initial view; this island only reconciles the
- * deltas the SSE frames carry. Frame contract (`SseEventName`):
+ * Cost state is keyed/upserted by exact bigint-decimal row identity (never
+ * append-summed), so same-id null→known reconciliation applies once and
+ * reconnect cannot double-count. Terminal status does not abort delivery —
+ * server stream closure is authoritative.
+ *
+ * Frame contract (`SseEventName`):
  *   - `snapshot` { run, tasks, recentEvents, costs }  (initial, full)
  *   - `status`   { runId, status, outcome }
  *   - `task`     <TaskTimelineEntry>                   (single changed task)
  *   - `events`   { events: [...] }                     (new event rows)
- *   - `costs`    { costs: [...] }                       (new cost records)
+ *   - `costs`    { costs: [...] }                       (new/reconciled cost records)
  *   - `heartbeat`{ ts }
- *
- * It never invents data — it only writes values carried by the frames into the
- * `data-rd="..."` hooks the server emitted. Trajectory-row selection (click)
- * is wired here too so the reasoning pane swaps without a round-trip is left to
- * a full navigation in v0; clicking a moment reloads with `?moment=` so the
- * server re-renders the pane (keeps the reasoning derivation server-side and
- * contract-typed).
  */
 
-interface BillingAgg {
-  tokens: number;
-  usd: number;
-}
-
 interface CostRecordFrame {
+  id?: string | number;
   billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
   model: string;
   inputTokens: number;
@@ -44,8 +37,17 @@ interface TaskFrame {
   endedAt: string | null;
 }
 
+interface BillingAgg {
+  tokens: number;
+  knownUsd: number;
+  unknownRecords: number;
+  pricedRecords: number;
+}
+
 interface CostTotalsState {
-  perTokenUsd: number;
+  perTokenKnownUsd: number;
+  perTokenUnknown: number;
+  perTokenPriced: number;
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
@@ -57,7 +59,6 @@ const COST_SOURCE_VAR: Record<CostRecordFrame["billingMode"], string> = {
   per_token: "var(--cost-token)",
   subscription: "var(--cost-window)",
   self_hosted: "var(--cost-opportunity)",
-  // BUDGET-SAFETY C1: an unrecognized credential ref (a misconfig) — distinct color.
   unattributed: "var(--cost-unattributed, var(--status-fail))",
 };
 const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
@@ -66,6 +67,14 @@ const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
   self_hosted: "self-hosted",
   unattributed: "unattributed",
 };
+
+/**
+ * Run statuses that mark a run finished. Drives both the "● final" paint and
+ * the stream's terminal-seen flag (the latter gates EOF close — see
+ * `RunStreamReducer`). Centralized so the SSE client and its reducer cannot
+ * drift on what "terminal" means.
+ */
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "halted", "cancelled"]);
 
 function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -76,9 +85,17 @@ function formatUsd(amount: number): string {
   return `$${amount.toFixed(4)}`;
 }
 
+function formatCostLabel(totals: CostTotalsState): string {
+  if (totals.perTokenPriced === 0 && totals.perTokenUnknown > 0) return "unknown";
+  if (totals.perTokenUnknown > 0) return `${formatUsd(totals.perTokenKnownUsd)} known`;
+  return formatUsd(totals.perTokenKnownUsd);
+}
+
 function emptyTotals(): CostTotalsState {
   return {
-    perTokenUsd: 0,
+    perTokenKnownUsd: 0,
+    perTokenUnknown: 0,
+    perTokenPriced: 0,
     inputTokens: 0,
     outputTokens: 0,
     cachedInputTokens: 0,
@@ -87,18 +104,55 @@ function emptyTotals(): CostTotalsState {
   };
 }
 
-function applyCost(totals: CostTotalsState, cost: CostRecordFrame): void {
-  const usd = cost.costUsd === null ? 0 : Number.parseFloat(cost.costUsd);
-  const usdSafe = Number.isFinite(usd) ? usd : 0;
-  totals.inputTokens += cost.inputTokens;
-  totals.outputTokens += cost.outputTokens;
-  totals.cachedInputTokens += cost.cachedInputTokens;
-  totals.totalTokens += cost.totalTokens;
-  if (cost.billingMode === "per_token") totals.perTokenUsd += usdSafe;
-  const src = totals.bySource.get(cost.billingMode) ?? { tokens: 0, usd: 0 };
-  src.tokens += cost.totalTokens;
-  src.usd += usdSafe;
-  totals.bySource.set(cost.billingMode, src);
+function costIdentity(cost: CostRecordFrame, fallbackIndex: number): string {
+  if (cost.id !== undefined && cost.id !== null && String(cost.id) !== "") {
+    return String(cost.id);
+  }
+  // Frames without an id (legacy/test) still need a stable upsert key per frame.
+  return `__anon_${fallbackIndex}`;
+}
+
+/** Recompute aggregates from the upsert map — never append-sum frames. */
+function recomputeTotals(byId: Map<string, CostRecordFrame>): CostTotalsState {
+  const totals = emptyTotals();
+  for (const cost of byId.values()) {
+    const parsed = cost.costUsd === null ? null : Number.parseFloat(cost.costUsd);
+    const knownUsd = parsed !== null && Number.isFinite(parsed) ? parsed : null;
+    totals.inputTokens += cost.inputTokens;
+    totals.outputTokens += cost.outputTokens;
+    totals.cachedInputTokens += cost.cachedInputTokens;
+    totals.totalTokens += cost.totalTokens;
+    if (cost.billingMode === "per_token") {
+      if (knownUsd === null) totals.perTokenUnknown += 1;
+      else {
+        totals.perTokenKnownUsd += knownUsd;
+        totals.perTokenPriced += 1;
+      }
+    }
+    const src = totals.bySource.get(cost.billingMode) ?? {
+      tokens: 0,
+      knownUsd: 0,
+      unknownRecords: 0,
+      pricedRecords: 0,
+    };
+    src.tokens += cost.totalTokens;
+    if (knownUsd === null) src.unknownRecords += 1;
+    else {
+      src.knownUsd += knownUsd;
+      src.pricedRecords += 1;
+    }
+    totals.bySource.set(cost.billingMode, src);
+  }
+  return totals;
+}
+
+function formatSourceAmt(agg: BillingAgg): string {
+  // Coverage from priced/unknown **counts**, never dollar magnitude.
+  let usd = "";
+  if (agg.pricedRecords === 0 && agg.unknownRecords > 0) usd = " · unknown";
+  else if (agg.pricedRecords > 0 && agg.unknownRecords > 0) usd = ` · ${formatUsd(agg.knownUsd)} known`;
+  else if (agg.pricedRecords > 0) usd = ` · ${formatUsd(agg.knownUsd)}`;
+  return `${formatTokens(agg.tokens)} tok${usd}`;
 }
 
 function setText(root: HTMLElement, key: string, text: string): void {
@@ -107,7 +161,7 @@ function setText(root: HTMLElement, key: string, text: string): void {
 }
 
 function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
-  setText(root, "cost-per-token", formatUsd(totals.perTokenUsd));
+  setText(root, "cost-per-token", formatCostLabel(totals));
   setText(root, "cost-tokens", `${formatTokens(totals.inputTokens)} / ${formatTokens(totals.outputTokens)}`);
   const sources = root.querySelector<HTMLElement>('[data-rd="cost-sources"]');
   if (sources !== null) {
@@ -122,7 +176,7 @@ function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
       label.textContent = COST_SOURCE_LABEL[mode];
       const amt = document.createElement("span");
       amt.className = "amt";
-      amt.textContent = `${formatTokens(agg.tokens)} tok${agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}`;
+      amt.textContent = formatSourceAmt(agg);
       row.append(sw, label, amt);
       sources.append(row);
     }
@@ -142,7 +196,7 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
     chip.append(`run · ${status}${outcome === null ? "" : ` · ${outcome}`}`);
   }
   setText(root, "header-status", status);
-  if (["completed", "failed", "halted", "cancelled", "done"].includes(status)) {
+  if (TERMINAL_RUN_STATUSES.has(status)) {
     const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
     if (flag !== null) flag.textContent = "● final";
   }
@@ -176,31 +230,76 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
   row.classList.toggle("queued", state === "queued");
 }
 
-export function initRunStream(): void {
-  const root = document.querySelector<HTMLElement>('[data-island="run-stream"]');
-  if (root === null) return;
-  const url = root.dataset["streamUrl"];
-  if (url === undefined || url === "") return;
-  if (typeof EventSource === "undefined") return;
+/**
+ * Pure frame-sequence state for the run-detail SSE island. Owns the
+ * exact-identity cost upsert map + the terminal-seen flag so the SSE frame
+ * contract — terminal status does NOT abort delivery; the server stream close
+ * (EOF) is authoritative — is unit-testable without a DOM/EventSource. A final
+ * same-id cost reconciliation (null→known) arriving AFTER a terminal status
+ * frame still applies, because nothing here (or in `initRunStream`) drops
+ * frames once terminal is seen; only an EOF closes the stream.
+ */
+export class RunStreamReducer {
+  private readonly costsById = new Map<string, CostRecordFrame>();
+  private anonSeq = 0;
+  private terminalSeen = false;
 
-  const totals = emptyTotals();
-  const source = new EventSource(url, { withCredentials: true });
+  get totals(): CostTotalsState {
+    return recomputeTotals(this.costsById);
+  }
 
+  get isTerminal(): boolean {
+    return this.terminalSeen;
+  }
+
+  /** Reset + upsert a full snapshot's cost rows by exact identity. */
+  ingestSnapshotCosts(costs: CostRecordFrame[] | undefined): void {
+    this.costsById.clear();
+    this.anonSeq = 0;
+    this.ingestCosts(costs);
+  }
+
+  /** Upsert cost deltas/reconciliations by exact identity (never append-sum). */
+  ingestCosts(costs: CostRecordFrame[] | undefined): void {
+    for (const cost of costs ?? []) {
+      this.costsById.set(costIdentity(cost, this.anonSeq++), cost);
+    }
+  }
+
+  /** Record a status frame. Returns true once a terminal status has been seen. */
+  ingestStatus(status: string): boolean {
+    if (TERMINAL_RUN_STATUSES.has(status)) this.terminalSeen = true;
+    return this.terminalSeen;
+  }
+}
+
+interface RunStreamView {
+  paint(): void;
+  applyStatus(status: string, outcome: string | null): void;
+  applyTask(task: TaskFrame): void;
+}
+
+/**
+ * Register the production EventSource listeners. Kept as one coordinator so the
+ * snapshot/status/error close contract is exercised through the same wiring that
+ * `initRunStream` installs in the browser.
+ */
+export function wireRunStreamListeners(source: EventSource, reducer: RunStreamReducer, view: RunStreamView): void {
   source.addEventListener("snapshot", (event) => {
     try {
       const data: {
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
       } = JSON.parse(event.data);
-      totals.perTokenUsd = 0;
-      totals.inputTokens = 0;
-      totals.outputTokens = 0;
-      totals.cachedInputTokens = 0;
-      totals.totalTokens = 0;
-      totals.bySource.clear();
-      for (const cost of data.costs ?? []) applyCost(totals, cost);
-      renderCostBar(root, totals);
-      if (data.run !== undefined) applyStatus(root, data.run.status, data.run.outcome);
+      reducer.ingestSnapshotCosts(data.costs);
+      view.paint();
+      if (data.run !== undefined) {
+        view.applyStatus(data.run.status, data.run.outcome);
+        // The snapshot is authoritative run state too. A terminal run may emit no
+        // later changed `status` frame before EOF, so feed the exact painted status
+        // through the reducer's close gate.
+        reducer.ingestStatus(data.run.status);
+      }
     } catch {
       /* ignore malformed frame */
     }
@@ -209,8 +308,8 @@ export function initRunStream(): void {
   source.addEventListener("costs", (event) => {
     try {
       const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
-      for (const cost of data.costs ?? []) applyCost(totals, cost);
-      renderCostBar(root, totals);
+      reducer.ingestCosts(data.costs);
+      view.paint();
     } catch {
       /* ignore */
     }
@@ -222,10 +321,10 @@ export function initRunStream(): void {
         status: string;
         outcome: string | null;
       } = JSON.parse(event.data);
-      applyStatus(root, data.status, data.outcome);
-      if (["completed", "failed", "halted", "cancelled", "done"].includes(data.status)) {
-        source.close();
-      }
+      view.applyStatus(data.status, data.outcome);
+      // Mark terminal but do not close yet — final tasks/events/costs may still
+      // arrive if the server reorders poorly; server EOF is authoritative.
+      reducer.ingestStatus(data.status);
     } catch {
       /* ignore */
     }
@@ -234,19 +333,50 @@ export function initRunStream(): void {
   source.addEventListener("task", (event) => {
     try {
       const frame: TaskFrame = JSON.parse(event.data);
-      applyTask(root, frame);
+      view.applyTask(frame);
     } catch {
       /* ignore */
     }
   });
 
   source.addEventListener("error", () => {
-    // EventSource auto-reconnects on transient errors; nothing to do.
+    // After a terminal status, treat stream error/EOF as authoritative close
+    // (prevents infinite reconnect on a finished run without aborting
+    // mid-delivery of final cost reconciliations).
+    if (reducer.isTerminal) {
+      source.close();
+    }
+  });
+}
+
+export function initRunStream(): void {
+  const root = document.querySelector<HTMLElement>('[data-island="run-stream"]');
+  if (root === null) return;
+  const url = root.dataset["streamUrl"];
+  if (url === undefined || url === "") return;
+  if (typeof EventSource === "undefined") return;
+
+  /** Exact bigint-decimal cost identity → latest record (upsert, never append-sum). */
+  const reducer = new RunStreamReducer();
+  // Server stream closure is authoritative. We only close after terminal status
+  // once the EventSource reports a close/error, so final cost frames delivered
+  // before or with the terminal status still apply.
+  const source = new EventSource(url, { withCredentials: true });
+
+  const paint = (): void => {
+    renderCostBar(root, reducer.totals);
+  };
+
+  wireRunStreamListeners(source, reducer, {
+    paint,
+    applyStatus: (status, outcome) => {
+      applyStatus(root, status, outcome);
+    },
+    applyTask: (task) => {
+      applyTask(root, task);
+    },
   });
 
-  // Click a trajectory moment → re-render the reasoning pane server-side with
-  // the selected moment (keeps the reasoning derivation contract-typed on the
-  // server rather than reshaping payloads client-side).
   root.addEventListener("click", (clickEvent) => {
     const moment = (clickEvent.target as HTMLElement).closest<HTMLElement>("[data-rd-moment]");
     if (moment === null) return;
@@ -256,4 +386,16 @@ export function initRunStream(): void {
     params.set("moment", taskId);
     window.location.search = params.toString();
   });
+}
+
+/** Test seam: recompute totals from upserted cost frames (count-based coverage). */
+export function recomputeTotalsFromFrames(costs: CostRecordFrame[]): CostTotalsState {
+  const byId = new Map<string, CostRecordFrame>();
+  let i = 0;
+  for (const cost of costs) byId.set(costIdentity(cost, i++), cost);
+  return recomputeTotals(byId);
+}
+
+export function formatSourceAmtForTest(agg: BillingAgg): string {
+  return formatSourceAmt(agg);
 }

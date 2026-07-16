@@ -55,12 +55,15 @@ export function handleRunReadSql(
     return { rows, rowCount: rows.length };
   }
 
-  // --- events (SSE delta: id > sinceId) ---
-  if (/FROM events WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY ts ASC, id ASC LIMIT 200/u.test(sql)) {
-    const [runId, sinceId] = params as [string, number];
+  // --- events (SSE delta: id > sinceId as decimal text / ::bigint) ---
+  if (
+    /FROM events WHERE run_id = \$1 AND org_id = \$3 AND id > \$2(?:::bigint)? ORDER BY id ASC LIMIT 200/u.test(sql)
+  ) {
+    const [runId, sinceId] = params as [string, string | number];
+    const since = BigInt(String(sinceId));
     const rows = events()
-      .filter((e) => e.run_id === runId && e.id > sinceId)
-      .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id);
+      .filter((e) => e.run_id === runId && BigInt(e.id) > since)
+      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0));
     return { rows, rowCount: rows.length };
   }
 
@@ -82,16 +85,17 @@ export function handleRunReadSql(
     return { rows, rowCount: rows.length };
   }
 
-  // --- cost_records (SSE delta: id > sinceId) ---
+  // --- cost_records (SSE delta: id > sinceId as decimal text / ::bigint) ---
   if (
-    /FROM cost_records WHERE run_id = \$1 AND org_id = \$3 AND id > \$2 ORDER BY recorded_at ASC, id ASC LIMIT 200/u.test(
+    /FROM cost_records WHERE run_id = \$1 AND org_id = \$3 AND id > \$2(?:::bigint)? ORDER BY id ASC LIMIT 200/u.test(
       sql,
     )
   ) {
-    const [runId, sinceId] = params as [string, number];
+    const [runId, sinceId] = params as [string, string | number];
+    const since = BigInt(String(sinceId));
     const rows = costRecords()
-      .filter((c) => c.run_id === runId && c.id > sinceId)
-      .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || a.id - b.id);
+      .filter((c) => c.run_id === runId && BigInt(c.id) > since)
+      .sort((a, b) => (BigInt(a.id) < BigInt(b.id) ? -1 : BigInt(a.id) > BigInt(b.id) ? 1 : 0));
     return { rows, rowCount: rows.length };
   }
 
@@ -108,7 +112,7 @@ export function handleRunReadSql(
 }
 
 // selectListForProject: project + org, optional status/spec predicates, with the
-// spec-title join and the per-run cost / last-event aggregate subqueries.
+// constrained spec-title join and the per-run cost / last-event aggregate subqueries.
 function runListProjection(
   db: MemoryDb,
   scopedRuns: RunRecord[],
@@ -117,7 +121,8 @@ function runListProjection(
   sql: string,
   params: readonly unknown[],
 ): QueryResult {
-  const [projectId, , maybeStatus, maybeSpec] = params as [string, string, string?, string?];
+  const [projectId, _orgId, maybeStatus, maybeSpec] = params as [string, string, string?, string?];
+  void _orgId;
   // Re-derive which optional predicates were bound from the SQL shape.
   const hasStatus = /r\.status = \$/u.test(sql);
   const hasSpec = /r\.spec_id = \$/u.test(sql);
@@ -129,9 +134,15 @@ function runListProjection(
   }
   rows.sort((a, b) => b.started_at.getTime() - a.started_at.getTime() || a.run_id.localeCompare(b.run_id));
   const projected = rows.map((r) => {
-    const specTitle = db.specs.find((s) => s.spec_id === r.spec_id)?.title ?? null;
+    // Match production: s.spec_id AND s.project_id AND s.org_id = $2.
+    const specTitle = db.specs.find((s) => s.spec_id === r.spec_id && s.project_id === r.project_id)?.title ?? null;
     const runCosts = scopedCosts.filter((c) => c.run_id === r.run_id);
-    const costTotal = runCosts.reduce((sum, c) => sum + Number(c.cost_usd), 0);
+    const costTotal =
+      runCosts.length === 0
+        ? "0"
+        : runCosts.some((c) => c.cost_usd === null)
+          ? null
+          : runCosts.reduce((sum, c) => sum + Number(c.cost_usd), 0).toFixed(2);
     const lastEvent = scopedEvents
       .filter((e) => e.run_id === r.run_id)
       .reduce<Date | null>((max, e) => (max === null || e.ts > max ? e.ts : max), null);
@@ -147,8 +158,7 @@ function runListProjection(
       started_at: r.started_at,
       ended_at: r.ended_at,
       spec_title: specTitle,
-      // Match the SQL's `::text` cast (COALESCE(SUM(...),0)::text).
-      cost_total_usd: runCosts.length > 0 ? costTotal.toFixed(2) : "0",
+      cost_total_usd: costTotal,
       last_event_at: lastEvent,
     };
   });

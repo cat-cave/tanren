@@ -37,16 +37,10 @@ import {
   type SseEventName,
   type TaskTimelineEntry,
 } from "./contract.js";
-import { CostStore, EventStore } from "../../engine/repositories/index.js";
+import { EventStore } from "../../engine/repositories/index.js";
 import { RawEventRowSchema, scalarText } from "./rowSchemas.js";
 import { systemActor } from "../../engine/state/actor.js";
-import {
-  decodeCostRow,
-  fetchRunCostsForSnapshot,
-  fetchRunEventsForSnapshot,
-  fetchRunSummary,
-  fetchRunTasks,
-} from "./list.js";
+import { fetchRunCostsForSnapshot, fetchRunEventsForSnapshot, fetchRunSummary, fetchRunTasks } from "./list.js";
 
 interface SseStreamArgs {
   pool: pg.Pool;
@@ -97,8 +91,12 @@ export async function handleSseStream(c: Context, args: SseStreamArgs): Promise<
 // real HTTP response. The driver collects frames via a writer callback; the
 // route handler hands it a streaming writer, tests hand it an array push.
 export class SseDriver {
-  private lastEventId = 0;
-  private lastCostId = 0;
+  // bigserial cursor keys — keep exact decimal text end-to-end. Number(...)
+  // would lose precision above Number.MAX_SAFE_INTEGER and skip/replay deltas.
+  private lastEventId = "0";
+  private lastCostId = "0";
+  /** Per-cost-row identity fingerprint so same-id reconciliation (null→known) emits once. */
+  private lastCostFingerprint = new Map<string, string>();
   private lastTaskFingerprint = new Map<string, string>();
   private lastStatusFingerprint = "";
   private lastEmitAt: number;
@@ -157,10 +155,17 @@ export class SseDriver {
     for (const task of tasks) {
       this.lastTaskFingerprint.set(task.taskId, fingerprintTask(task));
     }
-    const lastEvent = recentEvents.at(-1);
-    this.lastEventId = lastEvent === undefined ? 0 : Number(lastEvent.id);
-    const lastCost = costs.at(-1);
-    this.lastCostId = lastCost === undefined ? 0 : Number(lastCost.id);
+    this.lastEventId = maxCursor(
+      "0",
+      recentEvents.map((event) => event.id),
+    );
+    this.lastCostId = maxCursor(
+      "0",
+      costs.map((cost) => cost.id),
+    );
+    for (const cost of costs) {
+      this.lastCostFingerprint.set(String(cost.id), fingerprintCost(cost));
+    }
 
     if (TERMINAL_STATUSES.has(run.status)) {
       this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
@@ -227,33 +232,31 @@ export class SseDriver {
   }
 
   // tick polls for deltas; returns true when the loop should terminate.
+  // Truth frames (task/events/costs, including same-id cost reconciliation)
+  // always drain before a terminal status frame so the browser never closes on
+  // an early status and misses final cost truth.
   async tick(): Promise<boolean> {
     // RLS R2 cohort-1: each poll batches its reads (runs + tasks + events deltas,
-    // plus the still-pool-cohort cost deltas) into one short org-scoped
-    // transaction. Inert in R1; same rows as the pool path.
+    // plus cost reconciliation) into one short org-scoped transaction.
     const polled = await runWithOrgScope(
       this.args.pool,
       this.args.orgId,
       async (
         client,
       ): Promise<
-        { run: RunSummary; tasks: TaskTimelineEntry[]; newEvents: RunEventRow[]; newCosts: RunCostRecord[] } | undefined
+        | { run: RunSummary; tasks: TaskTimelineEntry[]; newEvents: RunEventRow[]; costDeltas: RunCostRecord[] }
+        | undefined
       > => {
         const run = await fetchRunSummary(client, this.args.runId, this.args.orgId);
         if (run === undefined) return undefined;
         const tasks = await fetchRunTasks(client, this.args.runId, this.args.orgId);
         const newEvents = await this.pollNewEvents(client);
-        const newCosts = await this.pollNewCosts(client);
-        return { run, tasks, newEvents, newCosts };
+        const costDeltas = await this.pollCostDeltas(client);
+        return { run, tasks, newEvents, costDeltas };
       },
     );
     if (polled === undefined) return true;
-    const { run, tasks, newEvents, newCosts } = polled;
-    const fp = `${run.status}:${run.outcome ?? ""}`;
-    if (fp !== this.lastStatusFingerprint) {
-      await this.emit("status", { runId: run.runId, status: run.status, outcome: run.outcome });
-      this.lastStatusFingerprint = fp;
-    }
+    const { run, tasks, newEvents, costDeltas } = polled;
     const changed: TaskTimelineEntry[] = [];
     for (const task of tasks) {
       const fpTask = fingerprintTask(task);
@@ -265,15 +268,25 @@ export class SseDriver {
     for (const task of changed) {
       await this.emit("task", task);
     }
-    const lastNewEvent = newEvents.at(-1);
-    if (lastNewEvent !== undefined) {
+    if (newEvents.length > 0) {
+      this.lastEventId = maxCursor(
+        this.lastEventId,
+        newEvents.map((event) => event.id),
+      );
       await this.emit("events", { events: newEvents });
-      this.lastEventId = Number(lastNewEvent.id);
     }
-    const lastNewCost = newCosts.at(-1);
-    if (lastNewCost !== undefined) {
-      await this.emit("costs", { costs: newCosts });
-      this.lastCostId = Number(lastNewCost.id);
+    if (costDeltas.length > 0) {
+      this.lastCostId = maxCursor(
+        this.lastCostId,
+        costDeltas.map((cost) => cost.id),
+      );
+      await this.emit("costs", { costs: costDeltas });
+    }
+    const fp = `${run.status}:${run.outcome ?? ""}`;
+    if (fp !== this.lastStatusFingerprint) {
+      // Status after tasks/events/costs so terminal status cannot preempt final truth.
+      await this.emit("status", { runId: run.runId, status: run.status, outcome: run.outcome });
+      this.lastStatusFingerprint = fp;
     }
     if (this.nowMs() - this.lastEmitAt >= HEARTBEAT_INTERVAL_MS) {
       await this.emit("heartbeat", { ts: this.args.now?.() ?? new Date() });
@@ -338,16 +351,24 @@ export class SseDriver {
     return out;
   }
 
-  private async pollNewCosts(client: QueryClient): Promise<RunCostRecord[]> {
-    // cost_records is a later cohort; it rides the same org-scoped client here
-    // (inert) purely so the per-tick reads share one transaction.
-    const rows = await CostStore.selectNewForRunSince(
-      client,
-      { runId: this.args.runId, orgId: this.args.orgId, sinceId: this.lastCostId },
-      systemActor,
-    );
-    // Same boundary decode as the snapshot path — enums + tokens via Zod, no `as`.
-    return rows.map((row) => decodeCostRow(row));
+  /**
+   * Cost deltas for this run: brand-new inserts (`id > lastCostId`) plus same-id
+   * reconciliation when a previously-seen row's fingerprint changes (e.g.
+   * costUsd null → known). Uses the run-scoped snapshot (bounded to one run),
+   * not an unbounded org walk. Emits each changed identity at most once per
+   * fingerprint value.
+   */
+  private async pollCostDeltas(client: QueryClient): Promise<RunCostRecord[]> {
+    const rows = await fetchRunCostsForSnapshot(client, this.args.runId, this.args.orgId);
+    const deltas: RunCostRecord[] = [];
+    for (const cost of rows) {
+      const id = String(cost.id);
+      const fp = fingerprintCost(cost);
+      if (this.lastCostFingerprint.get(id) === fp) continue;
+      this.lastCostFingerprint.set(id, fp);
+      deltas.push(cost);
+    }
+    return deltas;
   }
 
   private async emit(name: SseEventName, data: unknown): Promise<void> {
@@ -372,6 +393,42 @@ function fingerprintTask(task: TaskTimelineEntry): string {
     task.startedAt?.toISOString() ?? "",
     task.endedAt?.toISOString() ?? "",
   ].join("|");
+}
+
+/** Stable per-row identity fingerprint for same-id cost reconciliation. */
+function fingerprintCost(cost: RunCostRecord): string {
+  return [
+    cost.costUsd ?? "",
+    cost.notionalCostUsd ?? "",
+    cost.inputTokens,
+    cost.cachedInputTokens,
+    cost.cacheCreationTokens,
+    cost.outputTokens,
+    cost.reasoningOutputTokens,
+    cost.totalTokens,
+    cost.billingMode,
+    cost.costBasis,
+  ].join("|");
+}
+
+/** Canonical decimal text for a bigserial cursor id (safe int or digit string). */
+function canonicalCursor(value: number | string): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error("unsafe SSE cursor id");
+    return String(value);
+  }
+  if (!/^(0|[1-9][0-9]*)$/u.test(value)) throw new Error("invalid SSE cursor id");
+  return BigInt(value).toString();
+}
+
+/** Monotonic max of bigserial cursors as exact decimal text. */
+function maxCursor(current: string, ids: ReadonlyArray<number | string>): string {
+  let max = BigInt(current);
+  for (const id of ids) {
+    const candidate = BigInt(canonicalCursor(id));
+    if (candidate > max) max = candidate;
+  }
+  return max.toString();
 }
 
 // JSON.stringify drops the Date wrapper; we keep ISO strings so the

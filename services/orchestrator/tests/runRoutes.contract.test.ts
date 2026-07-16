@@ -348,8 +348,14 @@ describe("P2A-0014 run-detail API — events pagination", () => {
     const ts = new Date("2026-05-27T12:34:56.000Z");
     const encoded = encodeCursor({ ts, id: 42 });
     const decoded = decodeCursor(encoded);
-    expect(decoded.id).toBe(42);
+    expect(decoded.id).toBe("42");
     expect(decoded.ts.toISOString()).toBe(ts.toISOString());
+  });
+
+  it("preserves a bigint cursor id above JavaScript's safe-integer range", () => {
+    const ts = new Date("2026-05-27T12:34:56.000Z");
+    const id = "9007199254740993";
+    expect(decodeCursor(encodeCursor({ ts, id }))).toEqual({ ts, id });
   });
 });
 

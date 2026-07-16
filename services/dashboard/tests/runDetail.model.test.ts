@@ -12,6 +12,7 @@ import {
   reviewMergeStateFromEvents,
   runFailed,
   spineProgress,
+  formatSourceAmt,
   summarizeCosts,
   taskState,
 } from "../src/components/runDetail/model.js";
@@ -151,16 +152,127 @@ describe("summarizeCosts — cost bar across all sources", () => {
     expect(totals.totalTokens).toBe(530);
     expect(totals.bySource.get("per_token")?.tokens).toBe(150);
     expect(totals.bySource.get("subscription")?.tokens).toBe(300);
+    expect(totals.bySource.get("subscription")?.unknownRecords).toBe(1);
     expect(totals.bySource.get("self_hosted")?.tokens).toBe(80);
     expect(totals.byModel.get("claude-y")?.provider).toBe("anthropic");
     // never invents an unknown source: only the three real billing modes appear
     expect([...totals.bySource.keys()].sort()).toEqual(["per_token", "self_hosted", "subscription"]);
   });
 
-  it("treats a null/non-numeric costUsd as zero dollars without dropping tokens", () => {
+  it("never launders null costUsd into $0 — tokens still aggregate", () => {
     const totals = summarizeCosts([cost({ costUsd: null, totalTokens: 42 })]);
-    expect(totals.perTokenUsd).toBe(0);
+    expect(totals.perTokenUsd).toBeNull();
+    expect(totals.perTokenHasUnknown).toBe(true);
+    expect(totals.perTokenKnownUsd).toBe(0);
     expect(totals.totalTokens).toBe(42);
+  });
+
+  it("keeps a known subtotal when some USD is unknown (partial coverage)", () => {
+    const totals = summarizeCosts([
+      cost({ id: 1, costUsd: "0.05", totalTokens: 10 }),
+      cost({ id: 2, costUsd: null, totalTokens: 20 }),
+    ]);
+    expect(totals.perTokenUsd).toBeCloseTo(0.05, 5);
+    expect(totals.perTokenHasUnknown).toBe(true);
+    expect(totals.perTokenKnownUsd).toBeCloseTo(0.05, 5);
+    expect(totals.totalTokens).toBe(30);
+  });
+
+  it("preserves a genuine known zero", () => {
+    const totals = summarizeCosts([cost({ costUsd: "0", totalTokens: 5 })]);
+    expect(totals.perTokenUsd).toBe(0);
+    expect(totals.perTokenHasUnknown).toBe(false);
+  });
+
+  it("four per-source coverage cases: known-zero, all-null, partial-nonzero, partial-known-zero", () => {
+    // known-zero (priced $0 only)
+    expect(formatSourceAmt({ tokens: 5, knownUsd: 0, unknownRecords: 0, pricedRecords: 1 })).toContain("$0.0000");
+    expect(formatSourceAmt({ tokens: 5, knownUsd: 0, unknownRecords: 0, pricedRecords: 1 })).not.toContain("unknown");
+    // all-null
+    expect(formatSourceAmt({ tokens: 10, knownUsd: 0, unknownRecords: 2, pricedRecords: 0 })).toContain("unknown");
+    expect(formatSourceAmt({ tokens: 10, knownUsd: 0, unknownRecords: 2, pricedRecords: 0 })).not.toContain("$0");
+    // partial-nonzero (priced + null)
+    const partial = formatSourceAmt({ tokens: 30, knownUsd: 0.05, unknownRecords: 1, pricedRecords: 1 });
+    expect(partial).toContain("$0.0500 known");
+    // partial-known-zero (priced $0 + null) — must NOT read wholly unknown
+    const partialZero = formatSourceAmt({ tokens: 20, knownUsd: 0, unknownRecords: 1, pricedRecords: 1 });
+    expect(partialZero).toContain("$0.0000 known");
+    expect(partialZero).not.toMatch(/tok · unknown$/u);
+
+    // SSR summarizeCosts tracks pricedRecords per source for the same cases
+    const knownZero = summarizeCosts([cost({ costUsd: "0", billingMode: "subscription" })]);
+    expect(knownZero.bySource.get("subscription")?.pricedRecords).toBe(1);
+    expect(knownZero.bySource.get("subscription")?.knownUsd).toBe(0);
+
+    const allNull = summarizeCosts([
+      cost({ id: 1, costUsd: null, billingMode: "subscription" }),
+      cost({ id: 2, costUsd: null, billingMode: "subscription" }),
+    ]);
+    expect(allNull.bySource.get("subscription")?.pricedRecords).toBe(0);
+    expect(allNull.bySource.get("subscription")?.unknownRecords).toBe(2);
+
+    const partialNonzero = summarizeCosts([
+      cost({ id: 1, costUsd: "0.05", billingMode: "per_token" }),
+      cost({ id: 2, costUsd: null, billingMode: "per_token" }),
+    ]);
+    expect(partialNonzero.bySource.get("per_token")?.pricedRecords).toBe(1);
+    expect(partialNonzero.bySource.get("per_token")?.unknownRecords).toBe(1);
+    expect(partialNonzero.bySource.get("per_token")?.knownUsd).toBeCloseTo(0.05, 5);
+
+    const partialKnownZero = summarizeCosts([
+      cost({ id: 1, costUsd: "0", billingMode: "per_token" }),
+      cost({ id: 2, costUsd: null, billingMode: "per_token" }),
+    ]);
+    expect(partialKnownZero.bySource.get("per_token")?.pricedRecords).toBe(1);
+    expect(partialKnownZero.bySource.get("per_token")?.unknownRecords).toBe(1);
+    expect(partialKnownZero.bySource.get("per_token")?.knownUsd).toBe(0);
+    expect(formatSourceAmt(partialKnownZero.bySource.get("per_token")!)).toContain("$0.0000 known");
+  });
+});
+
+describe("runStream browser coverage (count-based, upsert)", () => {
+  it("four per-source cases + same-id null→known upsert once", async () => {
+    const { formatSourceAmtForTest, recomputeTotalsFromFrames } = await import("../src/client/runStream.js");
+    expect(formatSourceAmtForTest({ tokens: 1, knownUsd: 0, unknownRecords: 0, pricedRecords: 1 })).toContain(
+      "$0.0000",
+    );
+    expect(formatSourceAmtForTest({ tokens: 1, knownUsd: 0, unknownRecords: 1, pricedRecords: 0 })).toContain(
+      "unknown",
+    );
+    expect(formatSourceAmtForTest({ tokens: 1, knownUsd: 0.04, unknownRecords: 1, pricedRecords: 1 })).toContain(
+      "known",
+    );
+    expect(formatSourceAmtForTest({ tokens: 1, knownUsd: 0, unknownRecords: 1, pricedRecords: 1 })).toContain(
+      "$0.0000 known",
+    );
+
+    // Upsert same id: null then $1.00 — counts once priced, not double-summed.
+    const after = recomputeTotalsFromFrames([
+      {
+        id: "9007199254740993",
+        billingMode: "per_token",
+        model: "m",
+        inputTokens: 1,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        totalTokens: 1,
+        costUsd: null,
+      },
+      {
+        id: "9007199254740993",
+        billingMode: "per_token",
+        model: "m",
+        inputTokens: 1,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        totalTokens: 1,
+        costUsd: "1.00",
+      },
+    ]);
+    expect(after.perTokenPriced).toBe(1);
+    expect(after.perTokenUnknown).toBe(0);
+    expect(after.perTokenKnownUsd).toBeCloseTo(1, 5);
+    expect(after.totalTokens).toBe(1);
   });
 });
 

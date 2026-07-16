@@ -1,13 +1,6 @@
 /**
- * Pure presentation helpers for the run-detail surface. These take
- * the contract-typed run-detail payload and derive the view-model
- * the TSX renders: the unified cost bar, the trajectory spine, and the
- * reasoning pane for a selected moment. No DOM, no JSX — kept pure so the unit
- * tests can assert the derivation without rendering.
- *
- * Every field read here is contract-typed (see `../../api/types.ts`). The API
- * ships data; this module composes presentation. No UI-specific shaping is
- * requested back into the API.
+ * Pure run-detail presentation helpers (cost bar, trajectory, reasoning).
+ * Contract-typed inputs only; no DOM/JSX. See `../../api/types.ts`.
  */
 
 import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
@@ -50,52 +43,101 @@ export function costSourceLabel(mode: RunCostRecord["billingMode"]): string {
   }
 }
 
+export interface SourceAgg {
+  tokens: number;
+  /** Known real-dollar subtotal only (null costUsd rows contribute nothing). */
+  knownUsd: number;
+  /** Count of records whose costUsd is null (unknown — not zero). */
+  unknownRecords: number;
+  /** Count of records with a finite priced costUsd (including genuine $0). */
+  pricedRecords: number;
+}
+
 export interface CostTotals {
-  /** Real-dollar spend (per-token records with a parsed costUsd). */
-  perTokenUsd: number;
+  /**
+   * Known per-token real-dollar spend. Null when every per_token row is unpriced.
+   * A numeric zero is a genuine known zero (no per_token rows, or priced $0).
+   * Partial coverage still surfaces the known subtotal via `perTokenKnownUsd`
+   * while `perTokenHasUnknown` is true.
+   */
+  perTokenUsd: number | null;
+  perTokenKnownUsd: number;
+  perTokenHasUnknown: boolean;
+  perTokenPriced: number;
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
   totalTokens: number;
   /** Per-source token totals, keyed by billing mode. */
-  bySource: Map<RunCostRecord["billingMode"], { tokens: number; usd: number }>;
+  bySource: Map<RunCostRecord["billingMode"], SourceAgg>;
   /** Per-model token totals (model → tokens), newest order preserved. */
-  byModel: Map<string, { tokens: number; usd: number; provider: string }>;
+  byModel: Map<string, SourceAgg & { provider: string }>;
 }
 
 /** Sum the typed cost records into the unified cost-bar totals. */
 export function summarizeCosts(costs: RunCostRecord[]): CostTotals {
-  const bySource = new Map<RunCostRecord["billingMode"], { tokens: number; usd: number }>();
-  const byModel = new Map<string, { tokens: number; usd: number; provider: string }>();
-  let perTokenUsd = 0;
+  const bySource = new Map<RunCostRecord["billingMode"], SourceAgg>();
+  const byModel = new Map<string, SourceAgg & { provider: string }>();
+  let perTokenKnownUsd = 0;
+  let perTokenPriced = 0;
+  let perTokenUnknown = 0;
   let inputTokens = 0;
   let outputTokens = 0;
   let cachedInputTokens = 0;
   let totalTokens = 0;
 
   for (const cost of costs) {
-    const usd = cost.costUsd === null ? 0 : Number.parseFloat(cost.costUsd);
-    const usdSafe = Number.isFinite(usd) ? usd : 0;
+    const parsed = cost.costUsd === null ? null : Number.parseFloat(cost.costUsd);
+    const knownUsd = parsed !== null && Number.isFinite(parsed) ? parsed : null;
     inputTokens += cost.inputTokens;
     outputTokens += cost.outputTokens;
     cachedInputTokens += cost.cachedInputTokens;
     totalTokens += cost.totalTokens;
     if (cost.billingMode === "per_token") {
-      perTokenUsd += usdSafe;
+      if (knownUsd === null) perTokenUnknown += 1;
+      else {
+        perTokenKnownUsd += knownUsd;
+        perTokenPriced += 1;
+      }
     }
-    const src = bySource.get(cost.billingMode) ?? { tokens: 0, usd: 0 };
+    const src = bySource.get(cost.billingMode) ?? {
+      tokens: 0,
+      knownUsd: 0,
+      unknownRecords: 0,
+      pricedRecords: 0,
+    };
     src.tokens += cost.totalTokens;
-    src.usd += usdSafe;
+    if (knownUsd === null) src.unknownRecords += 1;
+    else {
+      src.knownUsd += knownUsd;
+      src.pricedRecords += 1;
+    }
     bySource.set(cost.billingMode, src);
 
-    const model = byModel.get(cost.model) ?? { tokens: 0, usd: 0, provider: cost.provider };
+    const model = byModel.get(cost.model) ?? {
+      tokens: 0,
+      knownUsd: 0,
+      unknownRecords: 0,
+      pricedRecords: 0,
+      provider: cost.provider,
+    };
     model.tokens += cost.totalTokens;
-    model.usd += usdSafe;
+    if (knownUsd === null) model.unknownRecords += 1;
+    else {
+      model.knownUsd += knownUsd;
+      model.pricedRecords += 1;
+    }
     byModel.set(cost.model, model);
   }
 
+  // All-unknown per_token → null (never $0). Known zero when no per_token rows
+  // or every priced row is $0. Partial keeps the known subtotal + hasUnknown.
+  const perTokenUsd = perTokenPriced === 0 && perTokenUnknown > 0 ? null : perTokenKnownUsd;
   return {
     perTokenUsd,
+    perTokenKnownUsd,
+    perTokenHasUnknown: perTokenUnknown > 0,
+    perTokenPriced,
     inputTokens,
     outputTokens,
     cachedInputTokens,
@@ -105,9 +147,30 @@ export function summarizeCosts(costs: RunCostRecord[]): CostTotals {
   };
 }
 
-/** Format a USD amount with a leading `$` and four decimals (sub-cent precision). */
+/** Format a known USD amount; use `formatCostUsd` for null/partial. */
 export function formatUsd(amount: number): string {
   return `$${amount.toFixed(4)}`;
+}
+
+/**
+ * Render known / partial / unknown real-dollar spend without laundering null
+ * into `$0.0000`. Tokens are formatted separately.
+ */
+export function formatCostUsd(
+  totals: Pick<CostTotals, "perTokenKnownUsd" | "perTokenHasUnknown" | "perTokenPriced">,
+): string {
+  if (totals.perTokenPriced === 0 && totals.perTokenHasUnknown) return "unknown";
+  if (totals.perTokenHasUnknown) return `${formatUsd(totals.perTokenKnownUsd)} known`;
+  return formatUsd(totals.perTokenKnownUsd);
+}
+
+/** Tokens + USD from priced/unknown counts (never magnitude; $0+null → partial). */
+export function formatSourceAmt(agg: SourceAgg): string {
+  let usd = "";
+  if (agg.pricedRecords === 0 && agg.unknownRecords > 0) usd = " · unknown";
+  else if (agg.pricedRecords > 0 && agg.unknownRecords > 0) usd = ` · ${formatUsd(agg.knownUsd)} known`;
+  else if (agg.pricedRecords > 0) usd = ` · ${formatUsd(agg.knownUsd)}`;
+  return `${formatTokens(agg.tokens)} tok${usd}`;
 }
 
 /** Compact token-count formatting (e.g. 12.4k, 1.2M). */

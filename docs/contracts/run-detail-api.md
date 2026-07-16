@@ -138,8 +138,44 @@ Cursor-paginated cost records for a run.
 
 - Disjoint token buckets: `inputTokens`, `cachedInputTokens`, `cacheCreationTokens`, `outputTokens`, `reasoningOutputTokens`, `totalTokens`.
 - `costUsd`: a fixed-precision dollar string, or `null` when cost is unknown (best-effort).
+- `notionalCostUsd`: list-priced API-equivalent value, or `null` when no provider rate is known. It is not real spend and is never used by the budget gate.
 - `billingMode`: `per_token` | `subscription` | `self_hosted` | `unattributed`.
 - `costBasis`: `ccusage` | `provider_response` | `credits` | `unknown` | `unattributed` (`unknown` ⇒ `costUsd` is null).
+
+---
+
+## Addendum: `GET /orgs/:orgId/costs`
+
+The history & costs screen and `/costs/export.csv` use this bounded org-scoped
+read instead of walking projects, runs, and per-run cost pages. The client walks
+the opaque keyset cursor to exhaustion and discards partial data on any failed,
+malformed, or non-advancing page.
+
+**Response**: `OrgCosts`
+
+```ts
+{
+  orgId: string,             // exact authorized path org (client domain binding)
+  costs: RunCostRecord[],    // bounded page, oldest → newest
+  runs: RunListItem[],       // bounded page, newest → oldest
+  nextCursor: string | null, // opaque dual-stream keyset cursor
+}
+```
+
+The actor must have access to `orgId`; otherwise the endpoint returns
+`403 org_access_denied` before any read-model query runs. Every query is run in
+`runWithOrgScope`, has an explicit `org_id` predicate, and keeps that predicate
+inside the correlated cost and event aggregates. Each store query fetches at
+most `pageSize + 1` rows (default 50, maximum 200), and the two query results in
+a page share a repeatable-read transaction snapshot. `cost_source_raw` remains
+database-only and is never part of this response.
+
+`RunListItem.costTotalUsd` is nullable. A run with no cost records has the known
+total `"0"`; a run with any `cost_usd IS NULL` record has `null`, because its
+complete real-dollar total is unknown. Mixed priced/unpriced rows never collapse
+to a misleading known subtotal. Cursor bigserial ids remain decimal strings
+through decode and PostgreSQL `::bigint` binding, including values above
+JavaScript's safe-integer range.
 
 ---
 

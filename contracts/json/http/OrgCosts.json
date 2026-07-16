@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "costs": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "billingMode": {
+            "enum": [
+              "per_token",
+              "subscription",
+              "self_hosted",
+              "unattributed"
+            ],
+            "type": "string"
+          },
+          "cacheCreationTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cachedInputTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cli": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "costBasis": {
+            "enum": [
+              "ccusage",
+              "provider_response",
+              "credits",
+              "unknown",
+              "unattributed"
+            ],
+            "type": "string"
+          },
+          "costUsd": {
+            "anyOf": [
+              {
+                "pattern": "^\\d+(?:\\.\\d+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "pattern": "^\\d+$",
+                "type": "string"
+              }
+            ]
+          },
+          "inputTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "model": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "notionalCostUsd": {
+            "anyOf": [
+              {
+                "pattern": "^\\d+(?:\\.\\d+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outputTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "projectId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "provider": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reasoningOutputTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "recordedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "taskId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "totalTokens": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "runId",
+          "taskId",
+          "projectId",
+          "cli",
+          "provider",
+          "model",
+          "inputTokens",
+          "cachedInputTokens",
+          "cacheCreationTokens",
+          "outputTokens",
+          "reasoningOutputTokens",
+          "totalTokens",
+          "costUsd",
+          "notionalCostUsd",
+          "billingMode",
+          "costBasis",
+          "recordedAt"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "nextCursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "orgId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "runs": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "branch": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "costTotalUsd": {
+            "anyOf": [
+              {
+                "pattern": "^\\d+(?:\\.\\d+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "endedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastEventAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "needsReview": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "halted",
+                  "escape_hatch_hit",
+                  "retry_budget_exhausted",
+                  "convergence_stalled",
+                  "window_exhausted",
+                  "window_paused",
+                  "awaiting_review",
+                  "cancelled",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "prUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "projectId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "runId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "specId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "specTitle": {
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "running",
+              "paused",
+              "halted",
+              "completed",
+              "failed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "trigger": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "runId",
+          "specId",
+          "projectId",
+          "branch",
+          "trigger",
+          "status",
+          "outcome",
+          "startedAt",
+          "endedAt",
+          "prUrl",
+          "specTitle",
+          "costTotalUsd",
+          "lastEventAt",
+          "needsReview"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "orgId",
+    "costs",
+    "runs",
+    "nextCursor"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.http.OrgCosts"
+}

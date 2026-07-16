@@ -124,9 +124,15 @@ async function loadSpecDetail(
   const spec = allSpecs.find((s) => s.specId === specId);
   if (spec === undefined) return undefined;
 
-  // Spec-scoped runs drive the history + economics panels; project-wide runs
-  // only colour dependency chips. Either failure degrades its own surface.
+  // Two INDEPENDENT run-list planes feed this view, and a failure on one must
+  // NEVER discard a successful list on the other:
+  //   - spec-local runs (`specRunsMaybe`) drive run-history + economics panels;
+  //   - project-wide runs (`allRunsMaybe`) colour dependency chips.
+  // Each availability flag derives from its OWN plane only, and each successful
+  // list is kept even when the sibling plane failed — otherwise a completed dep
+  // could be re-rendered as a fake "queued" (or a failed plane faked all-clear).
   const runsAvailable = specRunsMaybe !== undefined;
+  const depsRunsAvailable = allRunsMaybe !== undefined;
   const specRuns = specRunsMaybe ?? [];
   const allRuns = allRunsMaybe ?? [];
 
@@ -136,10 +142,23 @@ async function loadSpecDetail(
   }
   const statusBySpecId = new Map<string, DagStatus>();
   for (const other of allSpecs) {
-    statusBySpecId.set(other.specId, depStatus(other, latestBySpec.get(other.specId)));
+    // Dependency chips are coloured from the project-wide plane ONLY. When that
+    // plane is unavailable the entry is left absent so `depChip` renders the
+    // explicit "unavailable" state (via depsRunsAvailable=false) — never a fake
+    // "queued" invented from an empty map.
+    if (depsRunsAvailable) {
+      statusBySpecId.set(other.specId, depStatus(other, latestBySpec.get(other.specId)));
+    }
   }
 
-  return buildSpecDetail({ spec, allSpecs, runs: specRuns, statusBySpecId, runsAvailable });
+  return buildSpecDetail({
+    spec,
+    allSpecs,
+    runs: specRuns,
+    statusBySpecId,
+    runsAvailable,
+    depsRunsAvailable,
+  });
 }
 
 // HALTED-outcome policy set imported from @tanren/db — the prior private copy

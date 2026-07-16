@@ -12,12 +12,12 @@ type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 const SELECT_COST_COLUMNS = `id, task_id, run_id, project_id, cli, provider, model,
             input_tokens, cached_input_tokens, cache_creation_tokens, output_tokens, reasoning_output_tokens, total_tokens,
-            cost_usd, billing_mode, cost_basis, recorded_at`;
+            cost_usd, notional_cost_usd, billing_mode, cost_basis, recorded_at`;
 
 /** A keyset cursor over the (recorded_at, id) ordering the paginated read uses. */
 export interface CostCursor {
   ts: Date;
-  id: number;
+  id: string;
 }
 
 export const CostStore = {
@@ -44,14 +44,14 @@ export const CostStore = {
    */
   async selectNewForRunSince(
     client: QueryClient,
-    args: { runId: string; orgId: string; sinceId: number },
+    args: { runId: string; orgId: string; sinceId: string },
     _actor: ActorRef,
   ): Promise<ReadonlyArray<Record<string, unknown>>> {
     const result = await client.query<Record<string, unknown>>(
       `SELECT ${SELECT_COST_COLUMNS}
          FROM cost_records
-        WHERE run_id = $1 AND org_id = $3 AND id > $2
-        ORDER BY recorded_at ASC, id ASC
+        WHERE run_id = $1 AND org_id = $3 AND id > $2::bigint
+        ORDER BY id ASC
         LIMIT 200`,
       [args.runId, args.sinceId, args.orgId],
     );
@@ -79,6 +79,35 @@ export const CostStore = {
       `SELECT ${SELECT_COST_COLUMNS}
        FROM cost_records
       WHERE run_id = $1 AND org_id = $2${cursorClause}
+      ORDER BY recorded_at ASC, id ASC
+      LIMIT $${params.length}`,
+      params,
+    );
+    return result.rows;
+  },
+
+  /**
+   * Forward keyset page across an organization's cost ledger. This is the sole
+   * cost-record authority used by the org costs read model; the route never
+   * issues a parallel inline query. Every statement remains explicitly
+   * tenant-bound even while running on an org-scoped client.
+   */
+  async selectPageForOrg(
+    client: QueryClient,
+    args: { orgId: string; cursor: CostCursor | undefined; limit: number },
+    _actor: ActorRef,
+  ): Promise<ReadonlyArray<Record<string, unknown>>> {
+    const params: unknown[] = [args.orgId];
+    let cursorClause = "";
+    if (args.cursor !== undefined) {
+      params.push(args.cursor.ts, args.cursor.id);
+      cursorClause = ` AND (recorded_at, id) > ($${params.length - 1}::timestamptz, $${params.length}::bigint)`;
+    }
+    params.push(args.limit + 1);
+    const result = await client.query<Record<string, unknown>>(
+      `SELECT ${SELECT_COST_COLUMNS}
+       FROM cost_records
+      WHERE org_id = $1${cursorClause}
       ORDER BY recorded_at ASC, id ASC
       LIMIT $${params.length}`,
       params,
