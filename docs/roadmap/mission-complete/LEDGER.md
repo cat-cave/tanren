@@ -26,11 +26,11 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | integrations | 22 | 22 | 2 (in-1,in-2) | 0 | 0 |
 | back-half | 35 | 14 | 0 | 0 | 21 (bh-15..35) |
 | design-system | 9 | 6 | 0 | 0 | 0 |
-| governance | 34 | 15 | 3 (gv-1,4,5) | 1 (gv-2) | 19 (gv-16..34) |
-| **Total** | **142** | **~78** | **6** | **3** | **40** |
+| governance | 34 | 15 | 4 (gv-1,2,4,5) | 0 | 19 (gv-16..34) |
+| **Total** | **142** | **~78** | **7** | **2** | **40** |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
-² Strict completion **6/142 = 4.2%**. The 3 in-flight worktrees (rv-4, gv-2, mq-2) + the in-7 event substrate are the immediate frontier. in-1 (the integrations foundation) merged via #966 on 2026-07-16.
+² Strict completion **7/142 = 4.9%**. The 2 in-flight worktrees (rv-4, mq-2) + the in-7 event substrate are the immediate frontier. in-1 (#966) + gv-2 (#968) merged 2026-07-16.
 
 > **Honesty flag — the 142 is partly aspirational.** The **MVP tier (~78 nodes, the
 > v97 acceptance target) is fully specced.** The **full tier has 40 nodes of spec
@@ -45,7 +45,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | --- | --- | --- |
 | ~~`in-1-final-fold`~~ | in-1 | ✅ **MERGED #966** (2026-07-16) — org-costs FK reconciled, 22-table RLS proof, grok GO. Worktree retired. |
 | `rv-4-final` | rv-4 | Clean, audit GO; needs post-in-1 rebase + migration/HTTP/UI tail. |
-| `gv-2-final` | gv-2 | Audit GO; 6 spelling-only dirty paths; needs rebase + commit + gates. |
+| ~~`gv-2-final`~~ | gv-2 | ✅ **MERGED #968** (2026-07-16) — rebased onto post-in-1, cred-ref reconcile, intent_pending cosplay removed, grok GO. Worktree retired. |
 | `mq-2-final` | mq-2 | Real multi-member authority; collides with in-1/rv-4 → re-port clean over them. |
 | `in-7-evsub-w1a` | (in-7 substrate) | Event substrate, ci passed; 0 node credit until in-7 producer+HTTP+UI+apex lands. |
 
@@ -169,7 +169,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | Node | Phase | Status | Purpose | Deps |
 | --- | --- | --- | --- | --- |
 | gv-1 | MVP | ✅ done | auditPosture write-guard safety repair (close PATCH authz bypass) | SP·3/4 |
-| gv-2 | MVP | 🟡 in-flight | Strict simulated-review forge publication (real APPROVE/REQUEST_CHANGES) | SP·3/4 |
+| gv-2 | MVP | ✅ done | Strict simulated-review forge publication (real APPROVE/REQUEST_CHANGES) (#968) | SP·3/4 |
 | gv-3 | MVP | ⬜ todo | Real policy/gate hashes (replace schema literal `1` + empty CI hash) | SP·3/4 |
 | gv-4 | MVP | ✅ done | Transitive stack retarget safety repair (full ancestor member vector) | SP·3/4 |
 | gv-5 | MVP | ✅ done | Truthful budget-held event (`readyHeldBack` no longer always zero) | SP·3/4 |
