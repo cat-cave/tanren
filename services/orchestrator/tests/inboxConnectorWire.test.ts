@@ -18,6 +18,7 @@ import {
   createSentryConnector,
   IntakeSourceAuthError,
   IntakeSourceFetchError,
+  UnsupportedInboxProviderError,
   type InboxSource,
   type SentryHttpClient,
   type SentryHttpRequest,
@@ -88,18 +89,24 @@ const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAu
 describe("github issues connector — request wire shape", () => {
   it("rejects removed bare-secret-ref providers before provider I/O", async () => {
     const { client, calls } = recordGitHub([]);
-    await expect(
-      createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch({
-        ...githubSource,
-        config: {
-          provider: "linear",
-          owner: "cat-cave",
-          repo: "app",
-          tokenRef: "credential/linear/x",
-        },
-      }),
-    ).rejects.toThrow(/github/u);
-    expect(calls).toHaveLength(0);
+    const secretRead = vi.spyOn(secrets, "get");
+    try {
+      await expect(
+        createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch({
+          ...githubSource,
+          config: {
+            provider: "linear",
+            owner: "cat-cave",
+            repo: "app",
+            tokenRef: "credential/linear/x",
+          },
+        }),
+      ).rejects.toThrow(UnsupportedInboxProviderError);
+      expect(secretRead).not.toHaveBeenCalled();
+      expect(calls).toHaveLength(0);
+    } finally {
+      secretRead.mockRestore();
+    }
   });
 
   it("issues a GET to the repo issues endpoint carrying state=open, per_page=50, the resolved token and a refresh supplier", async () => {

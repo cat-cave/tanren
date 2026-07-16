@@ -22,6 +22,45 @@
 export type IntakeSourceProvider = "github" | "sentry";
 
 /**
+ * An `issues` source asked for a provider/credential shape that Tanren does not
+ * support. Linear/Jira bare-token intake was deleted rather than adapted onto
+ * the integration-grant plane; this error keeps a persisted stale config from
+ * being mistaken for a transient GitHub failure.
+ */
+export class UnsupportedInboxProviderError extends Error {
+  readonly retriable = false as const;
+  readonly requestedProvider: string | null;
+
+  constructor(requestedProvider: string | null, detail: string) {
+    super(`unsupported inbox provider configuration: ${detail}`);
+    this.name = "UnsupportedInboxProviderError";
+    this.requestedProvider = requestedProvider;
+  }
+}
+
+/**
+ * Reject the deleted provider/authority shapes before any secret or provider
+ * I/O. Other malformed GitHub fields remain the connector schema's concern.
+ */
+export function assertSupportedIssuesProvider(config: unknown): void {
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return;
+  const record = config as Record<string, unknown>;
+  if (Object.hasOwn(record, "tokenRef")) {
+    throw new UnsupportedInboxProviderError(
+      typeof record["provider"] === "string" ? record["provider"] : null,
+      "raw tokenRef authority is not supported; configure the GitHub issues provider",
+    );
+  }
+  const provider = record["provider"];
+  if (provider !== undefined && provider !== "github") {
+    throw new UnsupportedInboxProviderError(
+      typeof provider === "string" ? provider : null,
+      `issues sources support only provider 'github' (received ${typeof provider === "string" ? `'${provider}'` : "a non-string provider"})`,
+    );
+  }
+}
+
+/**
  * A 401/403 from an intake source: the credential is missing, expired, or denied.
  * This is a CREDENTIAL-RESOLUTION failure (a misconfiguration the operator must
  * fix — rotate/re-grant the token), so `isCredentialResolutionError` classes it

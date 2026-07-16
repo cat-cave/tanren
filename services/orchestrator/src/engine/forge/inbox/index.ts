@@ -22,7 +22,9 @@ export { buildTriagePrompt } from "./prompt.js";
 export {
   IntakeSourceAuthError,
   IntakeSourceFetchError,
+  UnsupportedInboxProviderError,
   assertIntakeResponseOk,
+  assertSupportedIssuesProvider,
   type IntakeSourceProvider,
 } from "./connectorErrors.js";
 
