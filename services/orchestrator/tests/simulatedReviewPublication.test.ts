@@ -102,8 +102,8 @@ describe("assertStrictForgeReceipt", () => {
 describe("resolveDistinctSimulatedReviewerToken", () => {
   it("uses explicit reviewerGithubCredentialRef when it is a different login", async () => {
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/writer", token: "ghp_writer_token" });
-    await storeGithubToken(secrets, { ref: "credential/github/reviewer", token: "ghp_reviewer_token" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/o1/writer", token: "ghp_writer_token" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/o1/reviewer", token: "ghp_reviewer_token" });
     const http = identityHttp({
       ghp_writer_token: "writer-bot",
       ghp_reviewer_token: "reviewer-bot",
@@ -112,8 +112,9 @@ describe("resolveDistinctSimulatedReviewerToken", () => {
     const resolved = await resolveDistinctSimulatedReviewerToken({
       secrets,
       githubHttp: http,
-      writerStaticRef: "credential/github/writer",
-      reviewerGithubCredentialRef: "credential/github/reviewer",
+      orgId: "o1",
+      writerStaticRef: "credential/github/org/o1/writer",
+      reviewerGithubCredentialRef: "credential/github/org/o1/reviewer",
     });
 
     expect(resolved.writerLogin).toBe("writer-bot");
@@ -123,29 +124,31 @@ describe("resolveDistinctSimulatedReviewerToken", () => {
 
   it("rejects same-identity explicit reviewer", async () => {
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/same", token: "ghp_same_token" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/o1/same", token: "ghp_same_token" });
     const http = identityHttp({ ghp_same_token: "same-bot" });
 
     await expect(
       resolveDistinctSimulatedReviewerToken({
         secrets,
         githubHttp: http,
-        writerStaticRef: "credential/github/same",
-        reviewerGithubCredentialRef: "credential/github/same",
+        orgId: "o1",
+        writerStaticRef: "credential/github/org/o1/same",
+        reviewerGithubCredentialRef: "credential/github/org/o1/same",
       }),
     ).rejects.toThrow(/same-identity/iu);
   });
 
   it("fails closed when only a single static credential exists (no App dual-seam)", async () => {
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/only", token: "ghp_only" });
+    await storeGithubToken(secrets, { ref: "credential/github/org/o1/only", token: "ghp_only" });
     const http = identityHttp({ ghp_only: "only-bot" });
 
     await expect(
       resolveDistinctSimulatedReviewerToken({
         secrets,
         githubHttp: http,
-        writerStaticRef: "credential/github/only",
+        orgId: "o1",
+        writerStaticRef: "credential/github/org/o1/only",
       }),
     ).rejects.toThrow(/distinct reviewer identity/iu);
   });
@@ -172,6 +175,7 @@ describe("resolveDistinctSimulatedReviewerToken", () => {
     const resolved = await resolveDistinctSimulatedReviewerToken({
       secrets,
       githubHttp: http,
+      orgId: "o1",
       writerInstallation: {
         installationId: "42",
         appId: "1",
@@ -213,6 +217,7 @@ describe("resolveDistinctSimulatedReviewerToken", () => {
       resolveDistinctSimulatedReviewerToken({
         secrets,
         githubHttp: http,
+        orgId: "o1",
         writerInstallation: {
           installationId: "42",
           appId: "1",

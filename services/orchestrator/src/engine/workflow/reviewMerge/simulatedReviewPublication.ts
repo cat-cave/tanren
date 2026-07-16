@@ -184,6 +184,8 @@ export function assertStrictForgeReceipt(input: {
 export interface ResolveSimulatedReviewerTokenInput {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
+  /** Authenticated organization that owns every reviewer/writer credential coordinate. */
+  orgId: string;
   /** Writer / PR-creation credential context (App install + optional static). */
   writerInstallation?: OrgGithubAppInstallation;
   writerStaticRef?: string;
@@ -215,6 +217,7 @@ export async function resolveDistinctSimulatedReviewerToken(
 ): Promise<{ reviewer: StaticSimulatedReviewerTokenSnapshot; writerLogin: string; reviewerLogin: string }> {
   const writer = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
+    orgId: input.orgId,
     installation: input.writerInstallation,
     staticRef: input.writerStaticRef,
     minter: input.githubAppMinter,
@@ -278,6 +281,7 @@ async function resolveReviewerToken(
     // at that ref, not the writer App install.
     return resolveVcsToken(input.githubHttp, {
       secrets: input.secrets,
+      orgId: input.orgId,
       staticRef: explicitReviewerRef,
     });
   }
@@ -294,6 +298,7 @@ async function resolveReviewerToken(
     }
     return resolveVcsToken(input.githubHttp, {
       secrets: input.secrets,
+      orgId: input.orgId,
       staticRef: staticReviewerRef,
     });
   }

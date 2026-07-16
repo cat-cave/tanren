@@ -77,6 +77,7 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
   const { secrets, githubHttp, githubAppMinter, context, repo, pullNumber } = input;
   const resolved = await resolveVcsToken(githubHttp, {
     secrets,
+    orgId: context.orgId,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
     minter: githubAppMinter,
@@ -88,6 +89,7 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
     const resolvedReviewer = await resolveDistinctSimulatedReviewerToken({
       secrets,
       githubHttp,
+      orgId: context.orgId,
       writerInstallation: context.installation,
       writerStaticRef: context.staticCredentialRef,
       githubAppMinter,
