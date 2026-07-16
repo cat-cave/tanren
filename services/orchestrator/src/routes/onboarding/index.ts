@@ -42,6 +42,7 @@ import {
   MissingProjectSlugError,
   ProjectBootstrapIncompleteError,
   ProjectDerivationConflictError,
+  ProjectDesignElaborationStateUnknownError,
   runRound,
   UnresolvableLifecycleError,
   type DeployPreflightCallback,
@@ -305,6 +306,17 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       }
       if (error instanceof ProjectBootstrapIncompleteError) {
         return respond({ error: "project_bootstrap_incomplete", bootstrap: error.bootstrap }, 503);
+      }
+      if (error instanceof ProjectDesignElaborationStateUnknownError) {
+        return respond(
+          {
+            error: "project_design_elaboration_state_unknown",
+            reason: "state_unknown",
+            derivationId: error.derivationId,
+            message: error.message,
+          },
+          409,
+        );
       }
       // The architecture step never captured a project lifecycle — the scaffold
       // can't author a justfile without it. A bad/incomplete capture (400), NOT a

@@ -29,13 +29,14 @@ activate completely; binding workers remain schema-only for later slices.
 This Slice 1 ships as one cumulative clean-replacement PR from exact
 `origin/main` (`9f20c3ea9a4d972a2564374abd16c63ed5f6fe87`). It is not a final-repair
 delta layered on an undeclared branch. The complete comparison contains exactly
-151 paths: 59 additions, 89 modifications, and 3 deletions. The deleted paths are
+202 paths: 72 additions, 126 modifications, and 4 deletions. The deleted paths are
 `db/src/schemaIntegrations.ts`,
 `services/orchestrator/src/engine/repositories/orgIntegrations.ts`, and
-`services/orchestrator/tests/conformance/integrationRepositories.conformance.test.ts`.
+`services/orchestrator/tests/conformance/integrationRepositories.conformance.test.ts`,
+plus `services/orchestrator/src/routes/projects/greenfieldDeployDestroy.ts`.
 
 The manifest below is exhaustive for `origin/main...candidate`, including the
-three deletions. No changed path may sit outside it. This remains a bounded P1
+four deletions. No changed path may sit outside it. This remains a bounded P1
 Slice 1 foundation: binding workers, rotation UI, the complete lifecycle event
 surface, and the full callable/visible exercise remain downstream. Therefore the
 strict number of fully completed consumer DAG nodes claimed by this PR is **0**.
@@ -43,7 +44,7 @@ That count cannot advance before exact-candidate independent audit, live proof,
 CI, shared smoke, and hosted merge; even then, IN-1 remains incomplete until the
 downstream binding activation and remaining cutover slices land.
 
-### Exhaustive 151-path manifest
+### Exhaustive 202-path manifest
 
 <!-- final-freeze-manifest:start -->
 
@@ -198,6 +199,57 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/tests/resolveAppEnv.test.ts`
 - `services/orchestrator/tests/vercelDeployProvisionerPager.test.ts`
 - `services/orchestrator/tests/workerBoot.test.ts`
+- `services/orchestrator/src/engine/contracts/codeHost.ts`
+- `services/orchestrator/src/engine/contracts/codeHostTypes.ts`
+- `services/orchestrator/src/engine/contracts/dagWalker.ts`
+- `services/orchestrator/src/engine/dag/walker.ts`
+- `services/orchestrator/src/engine/dag/walkerPg.ts`
+- `services/orchestrator/src/engine/design/designPhase.ts`
+- `services/orchestrator/src/engine/forge/interview/deriveBehaviorSpec.ts`
+- `services/orchestrator/src/engine/forge/interview/deriveDesignContract.ts`
+- `services/orchestrator/src/engine/forge/interview/deriveEntityGraph.ts`
+- `services/orchestrator/src/engine/forge/interview/deriveProductGraph.ts`
+- `services/orchestrator/src/engine/providers/githubCodeHost.ts`
+- `services/orchestrator/src/engine/providers/githubRepoCreate.ts`
+- `services/orchestrator/src/engine/repositories/projectDerivationReceipts.ts`
+- `services/orchestrator/src/engine/repositories/projectDerivations.ts`
+- `services/orchestrator/src/engine/templates/fragments/materialize.ts`
+- `services/orchestrator/src/engine/workflow/projectCreate.ts`
+- `services/orchestrator/src/engine/workflow/projectDerivationShell.ts`
+- `services/orchestrator/src/engine/workflow/projectSpec.ts`
+- `services/orchestrator/src/engine/workflow/projectSpecRowSchema.ts`
+- `services/orchestrator/src/routes/onboarding/materializeTemplate.ts`
+- `services/orchestrator/src/routes/projects/greenfieldCreateStateMachine.ts`
+- `services/orchestrator/src/routes/projects/greenfieldRepoCreate.ts`
+- `services/orchestrator/src/routes/projects/lifecycle.ts`
+- `services/orchestrator/tests/conformance/conformanceMemoryDb.ts`
+- `services/orchestrator/tests/conformance/dagWalker.conformance.test.ts`
+- `services/orchestrator/tests/conformance/fakes/fakeRepoCreateHttp.ts`
+- `services/orchestrator/tests/dagSpeculation.test.ts`
+- `services/orchestrator/tests/dagWalkerAncestorNotReadyBackoff.test.ts`
+- `services/orchestrator/tests/dagWalkerConcurrentTickTolerance.test.ts`
+- `services/orchestrator/tests/dagWalkerPlan.test.ts`
+- `services/orchestrator/tests/dagWalkerSpeculative.test.ts`
+- `services/orchestrator/tests/fixtures/projectDerivationLifecycle.ts`
+- `services/orchestrator/tests/greenfieldCreateIdempotency.test.ts`
+- `services/orchestrator/tests/helpers/progressRoutesPool.ts`
+- `services/orchestrator/tests/helpers/recoveryMemoryPool.ts`
+- `services/orchestrator/tests/helpers/routesPoolDerivationEvidence.ts`
+- `services/orchestrator/tests/helpers/routesPoolProjectDerivations.ts`
+- `services/orchestrator/tests/helpers/workerPool.ts`
+- `services/orchestrator/tests/intakeProjectPlacement.test.ts`
+- `services/orchestrator/tests/loadSpecWithProjectProvenance.test.ts`
+- `services/orchestrator/tests/materializeTemplateReconcile.test.ts`
+- `services/orchestrator/tests/operatorLive.contract.test.ts`
+- `services/orchestrator/tests/projectDerivationActivationEvidence.rls.integration.test.ts`
+- `services/orchestrator/tests/projectDerivationLifecycle.rls.integration.test.ts`
+- `services/orchestrator/tests/projectDerivationResponseLoss.test.ts`
+- `services/orchestrator/tests/projectLifecycleRoutes.test.ts`
+- `services/orchestrator/tests/projectSpecWorkflow.test.ts`
+- `services/orchestrator/tests/specProgress.test.ts`
+- `services/orchestrator/tests/visionInterview.test.ts`
+- `services/orchestrator/tests/visionInterviewDesignContract.test.ts`
+- `services/orchestrator/tests/visionInterviewLifecycleDrift.test.ts`
 <!-- final-freeze-manifest:end -->
 
 Clean replacement also removes the old stable-path helper, incomplete

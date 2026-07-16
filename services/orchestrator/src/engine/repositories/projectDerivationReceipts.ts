@@ -4,6 +4,7 @@ import type { DeriveResult } from "../forge/interview/derive.js";
 import type { SeededTemplate } from "../templates/index.js";
 import type { ProvisionAutonomousProjectResult } from "../workflow/provisionAutonomousProject.js";
 import type { CreatedRepository } from "../contracts/codeHostTypes.js";
+import { DesignAgentAnswer } from "../answerers/schemas/designAgent.js";
 
 export const DerivationKindSchema = z.enum(["direct_greenfield", "interview"]);
 export type DerivationKind = z.infer<typeof DerivationKindSchema>;
@@ -62,20 +63,18 @@ const ProvisionedOutcomeSchema = z
   })
   .strict();
 const PreparedDeploySchema = z.object({ outcome: ProvisionedOutcomeSchema, projectConfig: JsonRecord }).strict();
-const BootstrapSchema = z
+export const BootstrapSchema = z
   .object({
-    inboxSource: z.object({ id: NonEmpty, created: z.boolean() }).strict().optional(),
+    inboxSource: z.object({ id: NonEmpty, created: z.boolean() }).strict(),
     notificationRoute: z
-      .object({ targetId: NonEmpty, created: z.boolean(), events: z.number().int().nonnegative() })
-      .strict()
-      .optional(),
+      .object({ targetId: NonEmpty, created: z.boolean(), events: z.number().int().positive() })
+      .strict(),
     auditCatalog: z
       .object({
-        jobs: z.number().int().nonnegative(),
+        jobs: z.number().int().positive(),
         created: z.array(z.enum(["security", "deps", "a11y", "mutation", "perf", "license", "stale_specs"])),
       })
-      .strict()
-      .optional(),
+      .strict(),
     errors: z.array(
       z.object({ seed: z.enum(["auditCatalog", "notificationRoute", "inbox"]), message: NonEmpty }).strict(),
     ),
@@ -90,7 +89,7 @@ const GraphResultSchema = z
     personaIds: z.array(NonEmpty),
     behaviorIds: z.array(NonEmpty),
     milestoneIds: z.array(NonEmpty),
-    designContractId: NonEmpty.optional(),
+    designContractId: NonEmpty,
     templateSeed: SeededTemplateSchema.optional(),
     bootstrap: BootstrapSchema.optional(),
   })
@@ -99,11 +98,18 @@ const GraphResultSchema = z
 const envelope = <T extends z.ZodType>(receipt: string, value: T) =>
   z.object({ receipt: z.literal(receipt), binding: BindingSchema, value }).strict();
 
+const DesignIntentSchema = z
+  .object({ effect: z.literal("design"), idempotencyKey: NonEmpty, inputDigest: FingerprintSchema })
+  .strict();
+const DesignResultSchema = z.object({ inputDigest: FingerprintSchema, answer: DesignAgentAnswer }).strict();
+
 const ResultEnvelopeSchemas = {
   repository: envelope("repository", RepositorySchema),
   template_intent: envelope("template_intent", EffectIntentSchema),
   deploy_intent: envelope("deploy_intent", EffectIntentSchema),
   deploy: envelope("deploy", PreparedDeploySchema),
+  design_intent: envelope("design_intent", DesignIntentSchema),
+  design: envelope("design", DesignResultSchema),
   graph: envelope("graph", GraphResultSchema),
   bootstrap: envelope("bootstrap", BootstrapSchema),
 } as const;
@@ -114,6 +120,8 @@ export interface DerivationReceiptValueByKey {
   template_intent: { effect: "template"; idempotencyKey: string };
   deploy_intent: { effect: "deploy"; idempotencyKey: string };
   deploy: PreparedGreenfieldDeploy;
+  design_intent: { effect: "design"; idempotencyKey: string; inputDigest: string };
+  design: { inputDigest: string; answer: z.infer<typeof DesignAgentAnswer> };
   graph: DeriveResult;
   bootstrap: ProvisionAutonomousProjectResult;
 }
@@ -127,6 +135,8 @@ interface StoredEnvelope<T> {
 
 export interface DecodedDerivationReceipts {
   kind: DerivationKind;
+  designMode: "captured" | "provider" | undefined;
+  designInputDigest: string | undefined;
   ownership: DerivationOwnershipReceipt;
   template?: SeededTemplate;
   results: Partial<DerivationReceiptValueByKey>;
@@ -140,7 +150,13 @@ export interface CompleteDirectDerivation extends DecodedDerivationReceipts {
 export interface CompleteInterviewDerivation extends DecodedDerivationReceipts {
   kind: "interview";
   template: SeededTemplate;
-  results: Required<DerivationReceiptValueByKey>;
+  results: Required<
+    Pick<
+      DerivationReceiptValueByKey,
+      "repository" | "template_intent" | "deploy_intent" | "deploy" | "graph" | "bootstrap"
+    >
+  > &
+    Partial<Pick<DerivationReceiptValueByKey, "design_intent" | "design">>;
 }
 
 export type CompleteProjectDerivation = CompleteDirectDerivation | CompleteInterviewDerivation;
@@ -148,7 +164,15 @@ export type CompleteProjectDerivation = CompleteDirectDerivation | CompleteInter
 export function completeDerivationReceipts(decoded: DecodedDerivationReceipts): CompleteProjectDerivation | undefined {
   const required =
     decoded.kind === "interview"
-      ? (["repository", "template_intent", "deploy_intent", "deploy", "graph", "bootstrap"] as const)
+      ? ([
+          "repository",
+          "template_intent",
+          "deploy_intent",
+          "deploy",
+          ...(decoded.designMode === "provider" ? (["design_intent", "design"] as const) : []),
+          "graph",
+          "bootstrap",
+        ] as const)
       : (["repository", "deploy_intent", "deploy", "bootstrap"] as const);
   if (
     required.some((key) => decoded.results[key] === undefined) ||
@@ -186,6 +210,29 @@ export function repositoryOwnershipMarker(fingerprint: string): string {
 
 export function explicitRepositoryMarker(fingerprint: string): string {
   return `tanren:explicit:${FingerprintSchema.parse(fingerprint)}`;
+}
+
+export function derivationJson(value: unknown): string {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new TypeError("project derivation receipt must be JSON-serializable");
+  return encoded;
+}
+
+export function canonicalizeDerivation(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonicalizeDerivation(item));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalizeDerivation(item)]),
+    );
+  }
+  return value;
+}
+
+export function canonicalDerivationJson(value: unknown): string {
+  return JSON.stringify(canonicalizeDerivation(value));
 }
 
 export function buildDerivationOwnership(input: {
@@ -263,7 +310,17 @@ function assertSameBinding(
   }
 }
 
-function requestedProvider(kind: DerivationKind, sanitizedInput: Record<string, unknown>): string | undefined {
+function requestedDeploy(
+  kind: DerivationKind,
+  sanitizedInput: Record<string, unknown>,
+):
+  | {
+      providerKind: string;
+      mode: "greenfield" | "brownfield";
+      connectionId?: string;
+      grantId?: string;
+    }
+  | undefined {
   const value =
     kind === "interview"
       ? sanitizedInput["deploy"]
@@ -271,8 +328,36 @@ function requestedProvider(kind: DerivationKind, sanitizedInput: Record<string, 
         ? (sanitizedInput["input"] as Record<string, unknown>)["deploy"]
         : undefined;
   if (typeof value !== "object" || value === null) return undefined;
-  const provider = (value as Record<string, unknown>)["providerKind"];
-  return typeof provider === "string" ? provider : undefined;
+  const deploy = value as Record<string, unknown>;
+  const providerKind = deploy["providerKind"];
+  const mode = deploy["mode"] ?? "greenfield";
+  if (typeof providerKind !== "string" || (mode !== "greenfield" && mode !== "brownfield")) return undefined;
+  const connectionId = deploy["connectionId"];
+  const grantId = deploy["grantId"];
+  if (
+    (connectionId !== undefined && typeof connectionId !== "string") ||
+    (grantId !== undefined && typeof grantId !== "string")
+  ) {
+    return undefined;
+  }
+  return {
+    providerKind,
+    mode,
+    ...(connectionId === undefined ? {} : { connectionId }),
+    ...(grantId === undefined ? {} : { grantId }),
+  };
+}
+
+function requestedDesign(input: Record<string, unknown>): {
+  mode: "captured" | "provider";
+  inputDigest: string;
+} {
+  const mode = input["designMode"];
+  const inputDigest = input["designInputDigest"];
+  if ((mode !== "captured" && mode !== "provider") || typeof inputDigest !== "string") {
+    fail("invalid_receipt", "interview derivation has no exact design mode/input digest");
+  }
+  return { mode, inputDigest: FingerprintSchema.parse(inputDigest) };
 }
 
 export function decodeDerivationReceipts(input: {
@@ -310,7 +395,7 @@ export function decodeDerivationReceipts(input: {
 
     const allowed =
       kind === "interview"
-        ? ["repository", "template_intent", "deploy_intent", "deploy", "graph", "bootstrap"]
+        ? ["repository", "template_intent", "deploy_intent", "deploy", "design_intent", "design", "graph", "bootstrap"]
         : ["repository", "deploy_intent", "deploy", "bootstrap"];
     for (const key of Object.keys(input.resultReceipt)) {
       if (!allowed.includes(key)) fail("invalid_receipt", `receipt '${key}' is not valid for ${kind}`);
@@ -333,7 +418,8 @@ export function decodeDerivationReceipts(input: {
     if (
       repository !== undefined &&
       (repository.fullName !== ownership.repository.fullName ||
-        canonicalRepoUrl(repository.repoUrl) !== canonicalRepoUrl(ownership.repoUrl))
+        canonicalRepoUrl(repository.repoUrl) !== canonicalRepoUrl(ownership.repoUrl) ||
+        repository.defaultBranch !== ownership.repository.requestedDefaultBranch)
     ) {
       fail("binding_mismatch", "repository receipt does not match the owned repository");
     }
@@ -349,13 +435,42 @@ export function decodeDerivationReceipts(input: {
     if (results.graph !== undefined && results.graph.projectId !== input.projectId) {
       fail("binding_mismatch", "graph receipt belongs to another project");
     }
-    const providerKind = requestedProvider(kind, input.sanitizedInput);
-    if (providerKind === undefined) fail("invalid_receipt", "derivation input has no exact deploy provider");
-    if (results.deploy !== undefined && results.deploy.outcome.providerKind !== providerKind) {
-      fail("binding_mismatch", "deploy receipt belongs to another provider");
+    const design = kind === "interview" ? requestedDesign(input.sanitizedInput) : undefined;
+    if (design !== undefined) {
+      const intent = results.design_intent;
+      const result = results.design;
+      if (design.mode === "captured" && (intent !== undefined || result !== undefined)) {
+        fail("binding_mismatch", "captured design mode cannot carry provider design evidence");
+      }
+      if (result !== undefined && intent === undefined) {
+        fail("invalid_receipt", "design result has no durable design intent");
+      }
+      if (
+        (intent !== undefined &&
+          (intent.effect !== "design" ||
+            intent.idempotencyKey !== `${input.idempotencyFingerprint}:design` ||
+            intent.inputDigest !== design.inputDigest)) ||
+        (result !== undefined && result.inputDigest !== design.inputDigest)
+      ) {
+        fail("binding_mismatch", "design evidence does not match the derivation design intent");
+      }
+    }
+    const deployRequest = requestedDeploy(kind, input.sanitizedInput);
+    if (deployRequest === undefined) fail("invalid_receipt", "derivation input has no exact deploy request");
+    const deploy = results.deploy?.outcome;
+    if (
+      deploy !== undefined &&
+      (deploy.providerKind !== deployRequest.providerKind ||
+        deploy.mode !== deployRequest.mode ||
+        (deployRequest.connectionId !== undefined && deploy.authority.connectionId !== deployRequest.connectionId) ||
+        (deployRequest.grantId !== undefined && deploy.authority.grantId !== deployRequest.grantId))
+    ) {
+      fail("binding_mismatch", "deploy receipt does not match the exact requested deployment authority");
     }
     return {
       kind,
+      designMode: design?.mode,
+      designInputDigest: design?.inputDigest,
       ownership,
       ...(templateEnvelope === undefined ? {} : { template: templateEnvelope.value }),
       results,

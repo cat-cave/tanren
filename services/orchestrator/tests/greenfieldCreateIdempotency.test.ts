@@ -161,12 +161,7 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
         if (bootstrapAttempts === 1) {
           return { errors: [{ seed: "auditCatalog", message: "postgres unavailable" }] };
         }
-        return {
-          inboxSource: { id: `src_${input.projectId}`, created: true },
-          notificationRoute: { targetId: `notif_${input.orgId}`, created: true, events: 8 },
-          auditCatalog: { jobs: 4, created: ["security", "deps", "mutation", "stale_specs"] },
-          errors: [],
-        };
+        return pool.seedDerivationBootstrap(input.orgId, input.projectId);
       },
     });
     const body = JSON.stringify({

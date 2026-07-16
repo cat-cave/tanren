@@ -17,8 +17,10 @@ import type { DeriveInput, DeriveResult } from "./derive.js";
 import type { ScaffoldSpecDef } from "./deriveScaffoldSpecs.js";
 import type { SeededTemplate } from "../../templates/index.js";
 import type { CreatedRepository } from "../../contracts/codeHostTypes.js";
+import type { DesignAgentAnswer } from "../../design/designAgent.js";
 import type { InterviewCapture } from "./types.js";
 import { ProjectDerivationStore, type ProjectDerivationRow } from "../../repositories/projectDerivations.js";
+import { buildDerivationDesignPlan, type DerivationDesignPlan } from "./deriveDesignContract.js";
 
 /** Graph rows and their durable receipt commit or roll back as one org-scoped unit. */
 export async function buildEntityGraphWithReceipt(
@@ -32,7 +34,9 @@ export async function buildEntityGraphWithReceipt(
   actor: ActorContext,
   scaffoldSpecs: ScaffoldSpecDef[],
   operation: ProjectDerivationRow,
+  designAnswer?: DesignAgentAnswer,
 ): Promise<{ graph: DeriveResult; operation: ProjectDerivationRow }> {
+  const designPlan = buildDerivationDesignPlan(capture, operation.idempotencyFingerprint);
   return runWithOrgScope(pool, input.orgId, async (client) => {
     const graph = await buildEntityGraphOnClient(
       client,
@@ -44,6 +48,8 @@ export async function buildEntityGraphWithReceipt(
       projectId,
       actor,
       scaffoldSpecs,
+      designPlan,
+      designAnswer,
     );
     const updated = await ProjectDerivationStore.recordReceiptOnClient(client, operation, "graph", graph, "graph");
     return { graph, operation: updated };
@@ -60,13 +66,19 @@ export async function buildEntityGraphOnClient(
   projectId: string,
   actor: ActorContext,
   scaffoldSpecs: ScaffoldSpecDef[],
+  designPlan: DerivationDesignPlan,
+  designAnswer?: DesignAgentAnswer,
 ): Promise<DeriveResult> {
   // 1 · personas (project-scoped).
   const personaIdByName = new Map<string, string>();
   for (const persona of capture.personas) {
+    const personaKey = persona.name.trim().toLowerCase();
+    const plannedPersonaId = designPlan.personaIdByName.get(personaKey);
+    if (plannedPersonaId === undefined) throw new Error(`missing planned identity for persona '${persona.name}'`);
     const row = await PersonaStore.create(
       pool,
       PersonaCreateInput.parse({
+        id: plannedPersonaId,
         scope: "project",
         orgId: input.orgId,
         projectId,
@@ -76,7 +88,7 @@ export async function buildEntityGraphOnClient(
       }),
       actor,
     );
-    personaIdByName.set(persona.name.toLowerCase(), row.id);
+    personaIdByName.set(personaKey, row.id);
   }
 
   // 2 · foundation milestone + scaffold specs.
@@ -132,6 +144,7 @@ export async function buildEntityGraphOnClient(
     capture,
     scaffoldSpecIds,
     personaIdByName,
+    plannedBehaviorIdByKey: designPlan.behaviorIdByKey,
     actor,
   });
   specIds.push(...ifaceResult.specIds);
@@ -143,9 +156,8 @@ export async function buildEntityGraphOnClient(
     orgId: input.orgId,
     projectId,
     capture: capture.designContract,
-    personaIdByName,
-    behaviorIdByKey: ifaceResult.behaviorIdByKey,
-    ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent, actor }),
+    designPlan,
+    ...(designAnswer === undefined ? {} : { designAnswer }),
   });
 
   return {
