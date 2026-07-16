@@ -161,8 +161,10 @@ describe("project derivation — provider response loss at receipt boundaries", 
     const projectId = [...state.projects][0];
     if (projectId === undefined) throw new Error("deriving shell was not persisted");
     const interrupted = await ProjectDerivationStore.findForProject(pool, "org_a", projectId);
-    expect(interrupted?.templateReceipt).toBeNull();
-    expect(interrupted?.resultReceipt["template_intent"]).toMatchObject({
+    if (interrupted === undefined) throw new Error("interrupted derivation missing");
+    const decoded = ProjectDerivationStore.decode(interrupted);
+    expect(interrupted.templateReceipt).toBeNull();
+    expect(decoded.results.template_intent).toMatchObject({
       effect: "template",
       idempotencyKey: expect.stringMatching(/:template$/u),
     });
@@ -217,8 +219,10 @@ describe("project derivation — provider response loss at receipt boundaries", 
     const projectId = [...state.projects][0];
     if (projectId === undefined) throw new Error("deriving shell was not persisted");
     const interrupted = await ProjectDerivationStore.findForProject(pool, "org_a", projectId);
-    expect(interrupted?.resultReceipt["deploy"]).toBeUndefined();
-    expect(interrupted?.resultReceipt["deploy_intent"]).toMatchObject({
+    if (interrupted === undefined) throw new Error("interrupted derivation missing");
+    const decoded = ProjectDerivationStore.decode(interrupted);
+    expect(decoded.results.deploy).toBeUndefined();
+    expect(decoded.results.deploy_intent).toMatchObject({
       effect: "deploy",
       idempotencyKey: expect.stringMatching(/:deploy$/u),
     });

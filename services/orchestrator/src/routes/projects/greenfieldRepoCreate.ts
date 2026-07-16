@@ -19,6 +19,7 @@ import {
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { buildProjectHostSeams } from "../../engine/providers/hostFactory.js";
+import { readOwnedGitHubRepository } from "../../engine/providers/githubRepoCreate.js";
 
 export interface GreenfieldRepositoryCreateDeps {
   pool: pg.Pool;
@@ -69,7 +70,20 @@ export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreat
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
   };
   const { codeHost } = buildProjectHostSeams(githubHttp, () => resolveVcsToken(githubHttp, creds));
-  const created = await codeHost.createRepo(input);
+  let created: Awaited<ReturnType<typeof codeHost.createRepo>>;
+  try {
+    created = await codeHost.createRepo(input);
+  } catch (error) {
+    if (input.ownershipMarker === undefined) throw error;
+    const token = await resolveVcsToken(githubHttp, creds);
+    const reconciled = await readOwnedGitHubRepository(
+      githubHttp,
+      { owner: input.owner, name: input.name, ownershipMarker: input.ownershipMarker },
+      { token: token.token, refresh: token.refresh },
+    );
+    if (reconciled === undefined) throw error;
+    return reconciled;
+  }
   // Map the provider-neutral `CreatedHostRepo` back onto the greenfield
   // `CreatedRepository` shape (`fullName` = `owner/name`). The typed
   // `RepositoryAlreadyExistsError` (422) / `RepositoryCreationForbiddenError` (403)

@@ -27,6 +27,13 @@ export function handleProjectDerivationQuery(
 ): QueryResult | undefined {
   if (sql.startsWith("SELECT") && sql.includes("FROM project_derivations")) {
     if (sql.includes("AND id = $2")) return single(rows.get(`${String(params[0])}:${String(params[1])}`));
+    if (sql.includes("idempotency_fingerprint = $2")) {
+      return single(
+        [...rows.values()].find(
+          (item) => item.org_id === String(params[0]) && item.idempotency_fingerprint === String(params[1]),
+        ),
+      );
+    }
     const row = [...rows.values()]
       .filter((item) => item.org_id === String(params[0]) && item.project_id === String(params[1]))
       .sort((left, right) => right.created_at.getTime() - left.created_at.getTime())[0];

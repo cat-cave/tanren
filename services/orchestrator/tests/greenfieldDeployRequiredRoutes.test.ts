@@ -165,14 +165,19 @@ describe("greenfield/apex deploy dependency routes", () => {
       inboxSource: { created: boolean };
     };
     expect(githubHttp.createdRepositories).toEqual([
-      { owner: "cat-cave", name: "apex-url-shortener-v22", private: true },
+      {
+        owner: "cat-cave",
+        name: "apex-url-shortener-v22",
+        private: true,
+        ownershipMarker: expect.stringMatching(/^https:\/\/tanren\.dev\/derivations\/[0-9a-f]{64}$/u),
+      },
     ]);
     expect(body.repository).toEqual({
       fullName: "cat-cave/apex-url-shortener-v22",
       repoUrl: "https://github.com/cat-cave/apex-url-shortener-v22",
       defaultBranch: "main",
     });
-    expect(pool.projects.get(body.projectId)?.repo_url).toBe("https://github.com/cat-cave/apex-url-shortener-v22");
+    expect(pool.projects.get(body.projectId)?.repo_url).toBe("https://github.com/cat-cave/apex-url-shortener-v22.git");
     expect(pool.specs.size).toBeGreaterThan(0);
     expect(pool.inboxSources).toHaveLength(1);
     expect(body.inboxSource.created).toBe(true);
@@ -203,7 +208,8 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string; requiredPermission: string };
     expect(body.error).toBe("repository_creation_forbidden");
     expect(body.requiredPermission).toBe("administration:write");
-    expect(pool.projects.size).toBe(0);
+    expect(pool.projects.size).toBe(1);
+    expect([...pool.projects.values()][0]?.lifecycle).toBe("deriving");
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
   });
@@ -234,7 +240,12 @@ describe("greenfield/apex deploy dependency routes", () => {
     // No App, but a static github_token org default IS configured → repo created.
     expect(res.status).toBe(201);
     expect(githubHttp.createdRepositories).toEqual([
-      { owner: "cat-cave", name: "apex-url-shortener-v22", private: true },
+      {
+        owner: "cat-cave",
+        name: "apex-url-shortener-v22",
+        private: true,
+        ownershipMarker: expect.stringMatching(/^https:\/\/tanren\.dev\/derivations\/[0-9a-f]{64}$/u),
+      },
     ]);
     expect(pool.specs.size).toBeGreaterThan(0);
   });
@@ -264,7 +275,8 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("github_credential_missing");
     expect(githubHttp.createdRepositories).toEqual([]);
-    expect(pool.projects.size).toBe(0);
+    expect(pool.projects.size).toBe(1);
+    expect([...pool.projects.values()][0]?.lifecycle).toBe("deriving");
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
   });

@@ -147,6 +147,7 @@ export class GitHubCodeHost implements CodeHost {
         private: input.private,
         autoInit: input.autoInit,
         ...(input.description !== undefined && { description: input.description }),
+        ...(input.ownershipMarker !== undefined && { ownershipMarker: input.ownershipMarker }),
       },
       { token: token.token, ...(token.refresh !== undefined && { refresh: token.refresh }) },
     );
