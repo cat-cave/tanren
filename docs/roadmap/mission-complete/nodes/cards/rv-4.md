@@ -2,7 +2,7 @@
 
 **Bucket**: runtime verification
 **Phase**: MVP / Wave 2 consumer
-**State**: exclusive core audited and held; serialized tail blocked by IN-1;
+**State**: retained-core P1 correction active; serialized tail blocked by IN-1;
 no node credit until merged
 **Base**: `origin/main` / `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
 **Exclusive core**: `63000a1a70ce2e276af51f0143b0d82a7f1ec1f1`
@@ -19,10 +19,15 @@ the sole SP-3 CAS, and appends the frozen
 digest is the event's `analysisId`; there is no second proof store or mutable
 selection row.
 
-A behavior is excluded only when persisted coverage edges prove it unreachable.
-Unknown targets, uncovered active revisions, dangling dependencies, empty
-target sets, corrupt rows, stale graph/head bindings, CAS failures, and event
-append failures never produce a green omission.
+A behavior is excluded only when persisted coverage edges prove it unreachable
+inside a sealed-complete graph generation and the requested targets exactly
+match the content-addressed target receipt server-stamped on the integration
+node. The authority fingerprint binds both receipts to the exact org, project,
+base, integration node, head, tree, and member identity. Caller-supplied targets
+are only a probe until that fingerprint validates. Unknown or omitted targets,
+missing/unsealed/stale graph completeness, uncovered active revisions, dangling
+dependencies, empty target sets, corrupt rows, stale bindings, CAS failures, and
+event append failures never produce a green omission.
 
 ## Inputs, outputs, and dependencies
 
@@ -32,6 +37,9 @@ append failures never produce a green omission.
 - SP-3 `CasByteStore`, `Digest`, canonical JSON, and the production
   `PgCasByteStore` landed by IN-2 / #961.
 - SP-5 `behavior_coverage_edges` and unified `integration_nodes` contracts.
+- The unified integration node's server-stamped `affected_fingerprint`. RV-4
+  recognizes only its versioned target-receipt + graph-generation seal; an
+  empty, unrelated, malformed, or stale fingerprint expands all behaviors.
 - SP-8's already-catalogued strict W0 event
   `behavior.coverage.selection_analyzed` and the sole `PgEventStore` writer.
 - Existing actor/org/project authorization and `runWithOrgScope` RLS boundary.
@@ -131,11 +139,16 @@ Execute it in this order; stop on any conflict or contract discrepancy:
 
 1. Authorize both the path org and path project before reading the graph.
 2. Load a ready/landed integration node from that same org/project; server-stamp
-   its head, tree, and member key rather than trusting caller-supplied values.
+   its base, head, tree, member key, and affected fingerprint rather than
+   trusting caller-supplied values.
 3. Read active behavior revisions with content digests and every project edge
    in deterministic order. Reject partial, duplicate, or cross-scope rows.
-4. Select affected revisions. Empty targets and unknown impact expand; zero
-   active revisions is visibly `no_active_behaviors`, never a passing proof.
+4. Canonically hash the requested target receipt and complete graph generation,
+   then validate both against the integration node's versioned affected
+   fingerprint. Only an exact double match can authorize targeted exclusions.
+   Missing, malformed, omitted-target, graph-drift, or binding-drift evidence
+   expands the full active set. Empty targets and unknown impact also expand;
+   zero active revisions is visibly `no_active_behaviors`, never a passing proof.
 5. Canonically encode the complete bound fact and put it in the sole SP-3 CAS.
 6. Re-lock the graph and integration-node tables, re-read, and compare the
    exact bound input. If it changed during analysis, abort as stale.
@@ -173,10 +186,15 @@ fact never renders as absent merely because current graph refresh failed.
 ## Proof and negative controls
 
 - Known target selects direct coverage plus every transitive dependent; a
-  fully edged unreachable revision is excluded with inspected edge IDs.
+  fully edged unreachable revision is excluded with inspected edge IDs only
+  under exact target-provenance and sealed-generation receipts.
+- Omitting one changed target from the request invalidates target provenance and
+  expands every active revision.
 - Mutating the target to an unknown ref expands to every active revision.
-- Deleting an edge selects the uncovered revision; dangling dependency input
-  is rejected at write and fails closed if encountered on read.
+- Deleting a relevant edge while an unrelated edge remains invalidates the
+  sealed generation and expands every active revision; deleting the sole edge
+  likewise selects the now-uncovered revision. Dangling dependency input is
+  rejected at write and fails closed if encountered on read.
 - Mutating content digest, edge set, active revision set, node head/tree/member
   key, CAS bytes, event payload, or event scope makes replay stale/unavailable.
 - Event append failure yields no 2xx and no returned selection.
@@ -197,7 +215,7 @@ fact never renders as absent merely because current graph refresh failed.
   metadata fallback, or legacy `spec_behaviors` path.
 - No compatibility shim, dual path, fabricated empty response, fake event
   recorder in production, or selection that is not bound to an integration
-  node and exact head.
+  node and exact base/head/tree/member identity.
 - No IN-1, IN-2, MQ-1, GV-1, or #856-owned path outside an explicit serialized
   lease.
 
