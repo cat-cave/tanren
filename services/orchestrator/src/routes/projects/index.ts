@@ -82,9 +82,10 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json(configCheck.response, 400);
     }
     const scopedActor: ActorContext = { ...actor, orgId };
-    const projectInput =
-      configCheck.config === undefined ? parsed.data : { ...parsed.data, config: configCheck.config };
-    const project = await createProject(options.pool, projectInput, scopedActor);
+    // Pass the caller raw body (not the migrated check snapshot): createProject
+    // re-asserts + migrates. Passing a full migrated blob would re-flag defaulted
+    // governance nests (e.g. auditPosture) as "caller-supplied" and false-reject.
+    const project = await createProject(options.pool, parsed.data, scopedActor);
     return c.json(project, 201);
   });
 
@@ -228,7 +229,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_governance", issues: parsed.error.issues }, 400);
     }
-    return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
+    return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data, actor.userId);
   });
 
   // The project LIFECYCLE surface: archive PAUSES the project (cancels its in-flight

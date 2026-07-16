@@ -5,6 +5,7 @@
 
 import type pg from "pg";
 import { handleConfigCasSql } from "./routesPoolConfigCas.js";
+import { isEventStoreAppend, recordRouteEvent } from "./routesPoolEvents.js";
 
 interface QueryResult {
   rows: unknown[];
@@ -182,6 +183,10 @@ export class RoutesPool {
     if (notify !== null) {
       this.notifies.push({ channel: notify[1]!, payload: notify[2] ?? "" });
       return { rows: [], rowCount: 0 };
+    }
+
+    if (isEventStoreAppend(trimmed)) {
+      return recordRouteEvent(this.events, params);
     }
 
     // organizations

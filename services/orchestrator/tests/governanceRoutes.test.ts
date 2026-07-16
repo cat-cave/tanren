@@ -1,17 +1,15 @@
-// Route tests for the per-project GOVERNANCE surface (apex.md "missing endpoint →
-// add it"): the supported way to flip an existing project to autonomous without a
-// hand-crafted full-config PATCH. Drives the REAL project route handlers against
-// the in-memory RoutesPool (mirrors budgetRoutes.test.ts):
-//   - GET  /:orgId/projects/:projectId/governance → reviewPolicy/mergeIntegration/posture;
-//   - PUT  sets the three settings (read-back reflects them; omitted keys untouched);
-//   - a non-admin actor is rejected with 403 on the MUTATION (org-admin authorized);
-//   - an unknown project 404s.
+// Route tests for the per-project GOVERNANCE surface + gv-1 auditPosture authority:
+//   - GET/PUT governance settings via revision CAS
+//   - org-admin mutation; member PATCH cannot change auditPosture
+//   - actual auditPosture transition emits governance.audit_posture.updated once
+//   - rejected / no-op / event-fail paths leave no success fact (and fail closed)
 
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
+import { isEventStoreAppend } from "./helpers/routesPoolEvents.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
 const admin: ActorContext = {
@@ -30,11 +28,51 @@ const memberOnly: ActorContext = {
   source: "session",
 };
 
-function buildHarness(boundActor: ActorContext = admin) {
-  const pool = new RoutesPool();
+const STRICT_POSTURE = {
+  blockReviewAt: "P3" as const,
+  p2p3Handling: "route-to-dag" as const,
+  autonomousRemediation: true,
+};
+
+const DEFAULT_POSTURE = {
+  blockReviewAt: "P1" as const,
+  p2p3Handling: "fix-if-idle" as const,
+  autonomousRemediation: false,
+};
+
+/** Memory-pool that restores config on ROLLBACK so event-append failure is fail-closed. */
+class EventFailingRoutesPool extends RoutesPool {
+  private configSnapshot: unknown;
+  private revisionSnapshot = 1;
+
+  override async query(sql: string, params: unknown[] = []) {
+    const trimmed = sql.trim();
+    if (trimmed === "BEGIN") {
+      const project = this.projects.get("proj_1");
+      this.configSnapshot = structuredClone(project?.config);
+      this.revisionSnapshot = project?.config_revision ?? 1;
+    }
+    if (isEventStoreAppend(trimmed)) {
+      throw new Error("simulated event append failure");
+    }
+    const result = await super.query(sql, params);
+    if (trimmed === "ROLLBACK") {
+      const project = this.projects.get("proj_1");
+      if (project !== undefined) {
+        project.config = structuredClone(this.configSnapshot);
+        project.config_revision = this.revisionSnapshot;
+      }
+    }
+    return result;
+  }
+}
+
+function buildHarness(boundActor: ActorContext = admin, pool: RoutesPool = new RoutesPool()) {
   pool.seedOrg({ id: "org_acme" });
   pool.seedMembership("org_acme", boundActor.userId, boundActor.scopes.includes("org:admin") ? "admin" : "member");
-  pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
+  if (!pool.projects.has("proj_1")) {
+    pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
+  }
 
   const app = new Hono<ActorContextEnv>();
   app.use(
@@ -50,8 +88,6 @@ function buildHarness(boundActor: ActorContext = admin) {
       localDevActor: boundActor,
     }),
   );
-  // `secrets`/`githubHttp` are only used by the greenfield create path, never by
-  // the governance routes — stubbed for construction only.
   app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets: {} as never, githubHttp: {} as never }));
   return { app, pool };
 }
@@ -86,6 +122,10 @@ async function putJson(
   return { status: res.status, body: await res.json().catch(() => null) };
 }
 
+function auditPostureEvents(pool: RoutesPool): Array<Record<string, unknown>> {
+  return pool.events.filter((event) => event["event_type"] === "governance.audit_posture.updated");
+}
+
 describe("project governance routes", () => {
   it("reads the schema defaults when no governance is configured", async () => {
     const { app } = buildHarness();
@@ -94,6 +134,8 @@ describe("project governance routes", () => {
     expect(body.reviewPolicy).toBe("human");
     expect(body.mergeIntegration).toBe("not_configured");
     expect(body.governancePosture).toBe("strict");
+    expect(body.auditPosture).toEqual(DEFAULT_POSTURE);
+    expect(body.revision).toBe("1");
   });
 
   it("flips a project to autonomous and the read-back reflects it (round-trip)", async () => {
@@ -105,7 +147,6 @@ describe("project governance routes", () => {
     expect(put.status).toBe(200);
     expect(put.body.reviewPolicy).toBe("auto");
     expect(put.body.mergeIntegration).toBe("native_queue");
-    // Unset field keeps its current (default) value.
     expect(put.body.governancePosture).toBe("strict");
 
     const get = await getJson(app, "/orgs/org_acme/projects/proj_1/governance");
@@ -127,10 +168,96 @@ describe("project governance routes", () => {
     expect(put.body.governancePosture).toBe("open");
   });
 
+  it("an admin PUT changes auditPosture and appends its one typed mutation fact", async () => {
+    const { app, pool } = buildHarness();
+    const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
+      auditPosture: STRICT_POSTURE,
+    });
+    expect(put.status).toBe(200);
+    expect(put.body.auditPosture).toEqual(STRICT_POSTURE);
+    expect(put.body.revision).toBe("2");
+
+    const get = await getJson(app, "/orgs/org_acme/projects/proj_1/governance");
+    expect(get.body.auditPosture).toEqual(STRICT_POSTURE);
+    expect(auditPostureEvents(pool)).toEqual([
+      expect.objectContaining({
+        org_id: "org_acme",
+        project_id: "proj_1",
+        event_type: "governance.audit_posture.updated",
+        payload: {
+          actorUserId: "user_alice",
+          previous: DEFAULT_POSTURE,
+          current: STRICT_POSTURE,
+        },
+      }),
+    ]);
+  });
+
+  it("does not fabricate a mutation fact for an auditPosture no-op", async () => {
+    const { app, pool } = buildHarness();
+    expect(
+      (await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { auditPosture: STRICT_POSTURE })).status,
+    ).toBe(200);
+    expect(auditPostureEvents(pool)).toHaveLength(1);
+    expect(
+      (await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { auditPosture: STRICT_POSTURE })).status,
+    ).toBe(200);
+    expect(auditPostureEvents(pool)).toHaveLength(1);
+  });
+
+  it("non-admin PUT cannot mutate posture or fabricate its success event", async () => {
+    const { app, pool } = buildHarness(memberOnly);
+    const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
+      auditPosture: STRICT_POSTURE,
+    });
+    expect(put.status).toBe(403);
+    expect(put.body.error).toBe("org_admin_required");
+    expect(pool.projects.get("proj_1")?.config).toEqual({ version: 1 });
+    expect(auditPostureEvents(pool)).toEqual([]);
+  });
+
+  it("stale revision returns 409 with no event", async () => {
+    const { app, pool } = buildHarness();
+    const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
+      revision: "999",
+      auditPosture: STRICT_POSTURE,
+    });
+    expect(put.status).toBe(409);
+    expect(put.body.error).toBe("project_config_conflict");
+    expect(pool.projects.get("proj_1")?.config).toEqual({ version: 1 });
+    expect(auditPostureEvents(pool)).toEqual([]);
+  });
+
+  it("foreign-org path is denied (403) with no event and no write", async () => {
+    const { app, pool } = buildHarness();
+    const put = await putJson(app, "/orgs/org_other/projects/proj_1/governance", {
+      auditPosture: STRICT_POSTURE,
+    });
+    // actorIsOrgAdmin is org-bound; a different path org is not admin-writable.
+    expect(put.status).toBe(403);
+    expect(pool.projects.get("proj_1")?.config).toEqual({ version: 1 });
+    expect(auditPostureEvents(pool)).toEqual([]);
+  });
+
+  it("event-append failure rolls back the posture CAS (no partial write)", async () => {
+    const pool = new EventFailingRoutesPool();
+    const { app } = buildHarness(admin, pool);
+    // Hono surfaces the thrown append failure as 500; the org-scope ROLLBACK
+    // must restore both config and revision so no partial write remains.
+    const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
+      auditPosture: STRICT_POSTURE,
+    });
+    expect(put.status).toBe(500);
+    expect(pool.projects.get("proj_1")?.config).toEqual({ version: 1 });
+    expect(pool.projects.get("proj_1")?.config_revision).toBe(1);
+    expect(auditPostureEvents(pool)).toEqual([]);
+  });
+
   it("rejects an unknown reviewPolicy value with 400", async () => {
-    const { app } = buildHarness();
+    const { app, pool } = buildHarness();
     const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { reviewPolicy: "nope" });
     expect(put.status).toBe(400);
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 
   it("404s an unknown project", async () => {
@@ -153,8 +280,7 @@ describe("project governance routes", () => {
   });
 
   it("missing revision on governance PUT returns 400 (bypasses helper auto-fill)", async () => {
-    const { app } = buildHarness();
-    // Raw request — do not use putJson, which injects the current revision.
+    const { app, pool } = buildHarness();
     const res = await app.request("/orgs/org_acme/projects/proj_1/governance", {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -163,5 +289,6 @@ describe("project governance routes", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error?: string };
     expect(body.error).toBeDefined();
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 });

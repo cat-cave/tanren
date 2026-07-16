@@ -20,6 +20,7 @@ import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { OrgConfig } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ConfigView, type ConfigDiffLine, type ConfigHistoryEntry } from "../../components/config/ConfigView.js";
+import { mountGovernanceScreen } from "../governance/index.js";
 
 function readClient(c: Context, deps: ShellDeps): OrchestratorClient {
   return new OrchestratorClient({
@@ -58,6 +59,9 @@ const PLACEHOLDER_HISTORY: ConfigHistoryEntry[] = [
 ];
 
 export function mountConfigScreen(app: Hono, deps: ShellDeps): void {
+  // gv-1 thin wire: register /settings/governance without editing leased screens.ts.
+  mountGovernanceScreen(app, deps);
+
   // -------------------------------------------------------------------------
   // GET /settings/config — the config-as-code surface.
   // -------------------------------------------------------------------------

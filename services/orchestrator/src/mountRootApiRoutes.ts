@@ -81,9 +81,9 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }
-    const projectInput =
-      configCheck.config === undefined ? parsed.data : { ...parsed.data, config: configCheck.config };
-    return c.json(await createProject(pool, projectInput, actorOf(c)), 201);
+    // Pass caller raw body (not the migrated check snapshot) so createProject's
+    // re-assert does not false-flag defaulted governance nests like auditPosture.
+    return c.json(await createProject(pool, parsed.data, actorOf(c)), 201);
   });
 
   app.post("/specs", async (c) => {

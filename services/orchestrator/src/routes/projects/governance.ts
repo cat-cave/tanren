@@ -11,7 +11,10 @@
 //        { revision, reviewPolicy?, mergeIntegration?, governancePosture?,
 //          auditPosture?, insightThresholds? }
 //     → the same shape after a one-shot revision CAS. Omitted fields untouched.
+//       An actual auditPosture transition appends governance.audit_posture.updated
+//       in the same org-scoped transaction as the CAS (gv-1).
 
+import { runWithOrgScope } from "@tanren/db";
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -23,6 +26,7 @@ import {
   migrateProjectConfig,
   ReviewPolicy,
 } from "../../engine/config/index.js";
+import { PgEventStore } from "../../engine/eventStore.js";
 import { InsightThresholdsConfig } from "../../engine/insights/thresholds.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
@@ -62,6 +66,17 @@ function toView(config: ReturnType<typeof migrateProjectConfig>, revision: strin
   };
 }
 
+function auditPostureChanged(
+  previous: GovernanceView["auditPosture"],
+  current: GovernanceView["auditPosture"],
+): boolean {
+  return (
+    previous.blockReviewAt !== current.blockReviewAt ||
+    previous.p2p3Handling !== current.p2p3Handling ||
+    previous.autonomousRemediation !== current.autonomousRemediation
+  );
+}
+
 /** GET handler: resolve the project's config + render the governance settings. */
 export async function handleGovernanceGet(
   c: Context,
@@ -84,6 +99,7 @@ export async function handleGovernanceGet(
 /**
  * PUT handler: one-shot revision CAS over named governance keys on projects.config.
  * Field-merge is applied once against the snapshot matching `body.revision`.
+ * An actual auditPosture transition appends the typed mutation fact in-transaction.
  */
 export async function handleGovernancePut(
   c: Context,
@@ -91,37 +107,53 @@ export async function handleGovernancePut(
   orgId: string,
   projectId: string,
   body: z.infer<typeof GovernancePutSchema>,
+  actorUserId: string,
 ): Promise<Response> {
-  const ownership = await ProjectStore.getOwnership(pool, projectId, systemActor);
-  if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
-    return c.json({ error: "project_not_found" }, 404);
-  }
+  return runWithOrgScope(pool, orgId, async (client) => {
+    const ownership = await ProjectStore.getOwnership(client, projectId, systemActor);
+    if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
+      return c.json({ error: "project_not_found" }, 404);
+    }
 
-  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
-  if (snapshot === undefined) {
-    return c.json({ error: "project_not_found" }, 404);
-  }
-  if (snapshot.revision !== body.revision) {
-    return c.json(projectConfigConflict(orgId, projectId, snapshot.revision), 409);
-  }
+    const snapshot = await ProjectStore.getConfigSnapshot(client, projectId, systemActor);
+    if (snapshot === undefined) {
+      return c.json({ error: "project_not_found" }, 404);
+    }
+    if (snapshot.revision !== body.revision) {
+      return c.json(projectConfigConflict(orgId, projectId, snapshot.revision), 409);
+    }
 
-  const current = migrateProjectConfig(snapshot.config);
-  const nextConfig = {
-    ...current,
-    ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
-    ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
-    ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
-    ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
-    ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
-  };
-  const validated = migrateProjectConfig(nextConfig);
-  const outcome = await ProjectStore.compareAndSwapConfig(pool, projectId, body.revision, validated, systemActor);
-  if (outcome.status === "not_found") {
-    return c.json({ error: "project_not_found" }, 404);
-  }
-  if (outcome.status === "conflict") {
-    return c.json(projectConfigConflict(orgId, projectId, outcome.current.revision), 409);
-  }
+    const current = migrateProjectConfig(snapshot.config);
+    const nextConfig = {
+      ...current,
+      ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
+      ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
+      ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
+      ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
+      ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
+    };
+    const validated = migrateProjectConfig(nextConfig);
+    const outcome = await ProjectStore.compareAndSwapConfig(client, projectId, body.revision, validated, systemActor);
+    if (outcome.status === "not_found") {
+      return c.json({ error: "project_not_found" }, 404);
+    }
+    if (outcome.status === "conflict") {
+      return c.json(projectConfigConflict(orgId, projectId, outcome.current.revision), 409);
+    }
 
-  return c.json(toView(validated, outcome.revision));
+    if (auditPostureChanged(current.auditPosture, validated.auditPosture)) {
+      await new PgEventStore(client).append({
+        orgId,
+        projectId,
+        eventType: "governance.audit_posture.updated",
+        payload: {
+          actorUserId,
+          previous: current.auditPosture,
+          current: validated.auditPosture,
+        },
+      });
+    }
+
+    return c.json(toView(validated, outcome.revision));
+  });
 }
