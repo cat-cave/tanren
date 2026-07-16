@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resetSystemPool } from "@tanren/db";
 import { bootRunWorker, runWorkerEnabled, RunWorker } from "../src/engine/worker/index.js";
+import { IntegrationSecretCleanupReaper } from "../src/engine/integrations/integrationSecretCleanupReaper.js";
 
 const TEST_DB_URL = "postgres://tanren_app:tanren_app@127.0.0.1:5/tanren_planesplit_boot_test";
 
@@ -114,10 +115,13 @@ describe("plane-split P1 — standalone worker boot", () => {
       // The boot wires BOTH the worker and the lease reaper — the data plane's
       // crash-recovery side. `stop` must drain both without throwing.
       expect(booted.reaper).toBeDefined();
+      expect(booted.integrationSecretCleanupReaper).toBeInstanceOf(IntegrationSecretCleanupReaper);
+      expect(booted.integrationSecretCleanupReaper.isRunning).toBe(true);
     } finally {
       await booted.stop();
     }
     expect(booted.worker.isDraining).toBe(true);
+    expect(booted.integrationSecretCleanupReaper.isRunning).toBe(false);
   });
 
   it("seeds the runner identity secret from a key FILE (the MOUNTED secret) under the default ref", async () => {

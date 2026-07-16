@@ -5,16 +5,33 @@ export { EventStore, type EventCursor, type RawEventRow } from "./events.js";
 export { CostStore, type CostCursor } from "./costs.js";
 export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
-export { ProjectRow, ProjectStore, type ProjectLifecycle } from "./projects.js";
+export {
+  mutateProjectConfig,
+  ProjectRow,
+  ProjectStore,
+  type ProjectConfigSnapshot,
+  type ProjectLifecycle,
+} from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
-// Integration-provisioning foundation (+): the org-level
-// integration registry (Plane A) + the built product's app-environment store
-// (Plane B).
-export { OrgIntegrationsStore, type OrgIntegration, type OrgIntegrationStatus } from "./orgIntegrations.js";
+// Integration lifecycle foundation: a connection owns authentication identity;
+// explicit grants own plane/environment/capability authority.
+export {
+  IntegrationConnectionsStore,
+  type IntegrationConnectionHealth,
+  type IntegrationConnectionInventoryRow,
+  type IntegrationConnectionStatus,
+  type IntegrationGrantStatus,
+} from "./integrationConnections.js";
 // Org-row reads on the seam: `getLogin(orgId)` for deploy-app namespacing
 // (the global-namespace collision fix; see `flyDeployProvisioner.ts`).
 export { OrganizationsStore, OrganizationNotFoundError } from "./organizations.js";
-export { AppEnvironmentStore, type AppEnvEntry, type AppEnvScope, type AppEnvSource } from "./appEnvironment.js";
+export {
+  AppEnvironmentStore,
+  type AppEnvironment,
+  type AppEnvEntry,
+  type AppEnvScope,
+  type AppEnvSource,
+} from "./appEnvironment.js";
 // Tanren-native templating (fragment doctrine, docs/roadmap/templating-system.md):
 // the org-scoped fragment store — bundled core fragments shadowed/extended by
 // org-authored fragments produced by the per-fragment authoring DAG (F2).

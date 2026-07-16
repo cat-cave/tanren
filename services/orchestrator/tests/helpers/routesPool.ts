@@ -298,6 +298,9 @@ export class RoutesPool {
     if (trimmed.startsWith("UPDATE projects SET config")) {
       const project = this.projects.get(String(params[1]));
       if (project === undefined) return { rows: [], rowCount: 0 };
+      if (params[2] !== undefined && JSON.stringify(project.config) !== JSON.stringify(JSON.parse(String(params[2])))) {
+        return { rows: [], rowCount: 0 };
+      }
       project.config = JSON.parse(String(params[0])) as unknown;
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
     }

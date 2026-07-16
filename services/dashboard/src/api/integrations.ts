@@ -14,20 +14,36 @@
 
 /** A single org grant as returned by `GET /orgs/:orgId/integrations`. */
 export interface OrgIntegrationSummary {
-  id: string;
+  connectionId: string;
+  grantId?: string;
   orgId: string;
   providerKind: string;
-  /** Secret-store REF name only — never a secret value. */
-  credentialRef: string;
-  /** Keys present in the grant metadata; values are never echoed. */
-  metadataKeys: string[];
-  capabilities: string[];
-  status: string;
+  providerPrincipalId: string;
+  principalKind: string;
+  displayName: string;
+  health: string;
+  connectionStatus: string;
+  currentAuthGeneration?: number;
+  grantGeneration?: number;
+  grantStatus?: string;
+  authExpiresAt?: string;
+  providerScopes: string[];
+  pendingOperation?: { operationId: string; stage: string; status: string };
+  selectedForProject: boolean;
+}
+
+export interface IntegrationLifecycleInventory {
+  projectId: string;
+  requirements: { total: number; needsAttention: number };
+  capabilityNodes: { total: number; awaitingGrant: number; ready: number; needsAttention: number };
+  bindings: { total: number; ready: number; drifted: number; needsAttention: number };
+  deliveries: { total: number; completed: number; degraded: number; needsAttention: number };
 }
 
 /** `GET /orgs/:orgId/integrations` envelope. */
 export interface OrgIntegrationsList {
   integrations: OrgIntegrationSummary[];
+  lifecycle?: IntegrationLifecycleInventory;
 }
 
 /**
@@ -47,14 +63,35 @@ export interface NotLinkedOutcome {
 }
 
 export interface LinkedProvisionOutcome {
-  status: string;
+  status: "provisioned";
   capability?: string;
   providerKind?: string;
   /** Opaque refs / surface ids — never secret material. */
   [key: string]: unknown;
 }
 
-export type ProvisionOutcome = NotLinkedOutcome | LinkedProvisionOutcome;
+export interface GrantSelectionCandidate {
+  connectionId: string;
+  grantId: string;
+  providerKind: string;
+  providerPrincipalId: string;
+  displayName?: string;
+  ineligibilityReasons?: string[];
+  health: string;
+  authGeneration: number;
+  grantGeneration: number;
+}
+
+export interface SelectionRequiredOutcome {
+  status: "selection_required";
+  capability?: string;
+  providerKind: string;
+  reason: "selection_missing" | "multiple_eligible" | "selected_grant_unavailable";
+  message?: string;
+  candidates: GrantSelectionCandidate[];
+}
+
+export type ProvisionOutcome = NotLinkedOutcome | SelectionRequiredOutcome | LinkedProvisionOutcome;
 
 export interface DiscoverOutcome {
   status: string;
@@ -62,6 +99,8 @@ export interface DiscoverOutcome {
   providerKind?: string;
   resources?: unknown[];
   message?: string;
+  reason?: SelectionRequiredOutcome["reason"];
+  candidates?: GrantSelectionCandidate[];
   linkAffordance?: {
     kind: string;
     providerKind: string;
@@ -69,13 +108,52 @@ export interface DiscoverOutcome {
   };
 }
 
-/** Result of POST link — refs only. */
+/** Sanitized multi-principal candidate — never secret refs or generations. */
+export interface PrincipalSelectionCandidate {
+  providerPrincipalId: string;
+  principalKind: string;
+  displayName: string;
+  metadata?: Record<string, string>;
+}
+
+/** Result of POST link — refs only; never tokens/generation display authority. */
 export interface LinkOutcome {
   status: string;
+  providerKind?: string;
+  operationId?: string;
+  operationUrl?: string;
+  connectionId?: string;
+  grantId?: string;
+  authGeneration?: number;
+  grantGeneration?: number;
+  capabilities?: string[];
+  metadataKeys?: string[];
+  candidates?: PrincipalSelectionCandidate[];
+  reason?: string;
+  displayName?: string;
+  providerPrincipalId?: string;
+  idempotentReplay?: boolean;
+}
+
+export interface SelectPrincipalOutcome {
+  status: string;
+  operationId?: string;
+  connectionId?: string;
+  providerPrincipalId?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface SelectGrantOutcome {
+  status: "selected";
   providerKind: string;
-  credentialRef: string;
-  capabilities: string[];
-  metadataKeys: string[];
+  connectionId: string;
+  grantId: string;
+  providerPrincipalId: string;
+  displayName?: string;
+  ineligibilityReasons?: string[];
+  authGeneration: number;
+  grantGeneration: number;
 }
 
 /**

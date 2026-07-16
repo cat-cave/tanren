@@ -1,25 +1,7 @@
-// Deploy-on-merge (apex "a deploy happened"): once a run's PR merges onto the
-// default branch, this watcher attaches the project's runtime app env and THEN
-// TRIGGERS a real deploy of the merged commit onto the project's deploy app
-// (Vercel/Fly) — env-before-trigger, so the released deployment actually carries its
-// runtime secrets — so the live product reflects the merge. It reacts on the SAME
-// `merge.completed` run-activity bus the post-merge issue-watcher uses — no new poller.
-//
-// GATED via a THREE-WAY intent resolution — NONE (legitimate no-op, LOGGED) /
-// INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED (fires) — so a
-// misconfigured-but-expected deploy can NEVER silently skip and make a run (apex) look
-// "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
-//
-// DURABLE FAILURE: once a target resolves (a deploy is EXPECTED), ANY throw — verify
-// exhaustion OR a trigger/attach failure — records a durable `deploy.failed` (→ a `warn`)
-// BEFORE re-throwing, never a swallowed log line that leaves the merge looking "done".
-// IDEMPOTENT per merge: gates on a prior TERMINAL `deploy.verified`/`deploy.failed` and
-// resumes a prior unverified `deploy.triggered` — one deploy per merge.
-//
-// SECRET DISCIPLINE: the runtime env VALUES flow only into `attachRuntimeAppEnv`'s
-// provider set-env request; the deploy token only into the provider's bearer. The emitted
-// `deploy.triggered` carries provider + app id + resolved URL + deployment id — all
-// non-secret — never a token/value.
+// After merge, attach runtime env with the project's exact deploy grant, trigger
+// the merged revision, and verify it live. Three-way intent resolution prevents a
+// configured-but-broken deploy from skipping; terminal events make retries
+// idempotent. Events carry references only, never tokens or environment values.
 
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -37,6 +19,7 @@ import {
   verifyDeployUntilConverged,
 } from "./deployOnMergeReads.js";
 import type { SecretStore } from "../contracts/secretStore.js";
+import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import {
   type DeployTargetResolution,
   grantsSignalDeployIntent,
@@ -45,7 +28,7 @@ import {
 import { type EgressPolicy, defaultEgressPolicy } from "../security/egressPolicy.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import type { FlyImageBuilder } from "../provisioners/flyImageBuilder.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
@@ -243,11 +226,11 @@ export class DeployOnMergeWatcher {
       );
     }
 
-    const grant = await this.loadGrant(target);
+    const grant = await this.loadGrant(merged.projectId, target);
     if (grant === undefined) {
       throw new Error(
         `deployOnMerge: project '${merged.projectId}' configures deploy '${target.provider}' but org ` +
-          `'${target.orgId}' has no matching grant in org_integrations`,
+          `'${target.orgId}' has no matching grant in the active connection authority`,
       );
     }
 
@@ -256,7 +239,7 @@ export class DeployOnMergeWatcher {
     // already-released deployment — it does NOT re-trigger.
     const priorDeploymentId = await this.priorTriggeredDeploymentId(runId);
     if (priorDeploymentId !== undefined) {
-      await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, priorDeploymentId, recorded);
+      await this.verifyWithRetry(runId, merged.projectId, target, grant, priorDeploymentId, recorded);
       return;
     }
 
@@ -283,6 +266,7 @@ export class DeployOnMergeWatcher {
         projectId: merged.projectId,
         orgId: target.orgId,
         deployRef: { provider: target.provider, appId: target.appId },
+        grant,
         actor: systemActor,
       });
     });
@@ -323,7 +307,7 @@ export class DeployOnMergeWatcher {
     // A configured deploy that never becomes ready (or whose URL never serves) throws
     // LOUD here — `deploy.triggered` is no longer the end; `deploy.verified` is the
     // proof. On success emit `deploy.verified` (provider + url + state, non-secret).
-    await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, result.deploymentId, recorded);
+    await this.verifyWithRetry(runId, merged.projectId, target, grant, result.deploymentId, recorded);
   }
 
   /**
@@ -340,14 +324,14 @@ export class DeployOnMergeWatcher {
     runId: string,
     projectId: string,
     target: ProjectDeployTarget,
-    providerKind: string,
+    grant: OrgGrant,
     deploymentId: string,
     recorded: { verifyPhase: boolean },
   ): Promise<void> {
     await verifyDeployUntilConverged(
       this.verifyCtx,
-      { runId, projectId, target, providerKind, deploymentId, recorded },
-      () => this.loadGrant(target),
+      { runId, projectId, target, providerKind: grant.providerKind, deploymentId, recorded },
+      () => Promise.resolve(grant),
     );
   }
 
@@ -394,11 +378,10 @@ export class DeployOnMergeWatcher {
       return { kind: "ok", info: { projectId: row.project_id, repoSlug, ref } };
     });
   }
-
   /**
    * Resolve the project's deploy intent on merge (system-scoped) into the THREE-WAY
    * {@link DeployTargetResolution}. Reads the project config + probes the org's
-   * `org_integrations` grants for deploy intent, then defers the configured/none/
+   * active control grants for deploy intent, then defers the configured/none/
    * incomplete decision to {@link resolveDeployTarget} (full rationale there).
    */
   private async loadDeployTarget(projectId: string): Promise<DeployTargetResolution> {
@@ -419,11 +402,16 @@ export class DeployOnMergeWatcher {
       // Probe whether a deploy is EXPECTED: does the org link a deploy-capable
       // integration grant? Only consulted to distinguish an incomplete-but-expected
       // deploy (LOUD) from a legitimate "no deploy configured" no-op.
-      const grants = await OrgIntegrationsStore.list(client, orgId, systemActor);
-      return resolveDeployTarget({ orgId, config, deployIntent: grantsSignalDeployIntent(grants) });
+      const grants = await IntegrationConnectionsStore.listExactControlGrants(client, orgId);
+      return resolveDeployTarget({
+        orgId,
+        config,
+        deployIntent: grantsSignalDeployIntent(
+          grants.map((grant) => ({ providerKind: grant.providerKind, capabilities: ["deploy"] })),
+        ),
+      });
     });
   }
-
   /**
    * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live),
    * `deploy.failed` (verify retry exhausted / trigger failure), OR `deploy.skipped`
@@ -441,7 +429,6 @@ export class DeployOnMergeWatcher {
       return result.rows[0] !== undefined;
     });
   }
-
   /** The latest `deploy.triggered` deploymentId, if any — drives the RESUME (re-verify) path. */
   private async priorTriggeredDeploymentId(runId: string): Promise<string | undefined> {
     return runWithSystemScope(this.deps.pool, async (client): Promise<string | undefined> => {
@@ -456,14 +443,33 @@ export class DeployOnMergeWatcher {
       return typeof deploymentId === "string" && deploymentId.trim() !== "" ? deploymentId : undefined;
     });
   }
-
-  private async loadGrant(target: ProjectDeployTarget) {
-    return runWithSystemScope(this.deps.pool, async (client) =>
-      OrgIntegrationsStore.getGrant(client, target.orgId, target.provider, systemActor),
-    );
+  private async loadGrant(projectId: string, target: ProjectDeployTarget) {
+    return runWithSystemScope(this.deps.pool, async (client) => {
+      const authority = new (await import("../integrations/integrationAuthorityImpl.js")).PgIntegrationAuthority();
+      const resolution = await authority.authorizeOperation(client, {
+        orgId: target.orgId,
+        projectId,
+        providerKind: target.provider,
+        capability: "deploy",
+        operation: "provision",
+        actor: systemActor,
+      });
+      if (resolution.status === "selection_required") {
+        throw new Error(
+          `deployOnMerge: project '${projectId}' requires an explicit active '${target.provider}' account selection (${resolution.reason})`,
+        );
+      }
+      if (resolution.status === "ineligible") {
+        throw new Error(
+          `deployOnMerge: project '${projectId}' deploy grant ineligible (${resolution.reasons.join(",")})`,
+        );
+      }
+      return resolution.status === "eligible"
+        ? IntegrationConnectionsStore.orgGrantFromLease(resolution.lease)
+        : undefined;
+    });
   }
 }
-
 /**
  * Build the production deploy-on-merge watcher with the default deploy transport —
  * a thin factory so the autonomy-loops boot imports ONE symbol (keeps that file
@@ -489,7 +495,6 @@ export function buildDeployOnMergeWatcher(deps: {
     ...(deps.flyImageBuilder !== undefined && { flyImageBuilder: deps.flyImageBuilder }),
   });
 }
-
 // Re-export the demo-on-deploy watcher factory off this same module so the autonomy-loops
 // boot imports both deploy-path watchers from ONE symbol source (the max-dependencies cap).
 export { buildDemoOnDeployWatcher } from "./demoOnDeploy.js";

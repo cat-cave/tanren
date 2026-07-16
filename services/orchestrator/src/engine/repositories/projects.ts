@@ -5,8 +5,23 @@ import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-/** A project's operator lifecycle: the autonomous-walker-driven default, or paused. */
-const ProjectLifecycleEnum = z.enum(["active", "archived"]);
+/** Narrow structural port shared by pg clients and integration-scoped clients. */
+export interface ProjectConfigQueryClient {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
+}
+
+export interface ProjectConfigSnapshot {
+  config: unknown;
+}
+
+function json(value: unknown): string {
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) throw new TypeError("project config must be JSON-serializable");
+  return encoded;
+}
+
+/** A project's lifecycle: deriving, autonomous-walker-driven, or operator-paused. */
+const ProjectLifecycleEnum = z.enum(["deriving", "active", "archived"]);
 export type ProjectLifecycle = z.infer<typeof ProjectLifecycleEnum>;
 
 // The project row as the HTTP project/brownfield routes read it. `config` is an
@@ -24,8 +39,8 @@ export const ProjectRow = z.object({
   runnerImage: z.string(),
   allocator: z.string(),
   config: z.unknown(),
-  // Operator lifecycle: `active` (default) or `archived` (paused). Defaults to
-  // `active` when the column is absent on a row (e.g. a test fake that predates it).
+  // Lifecycle: `deriving`, `active` (default), or `archived` (paused). Defaults
+  // to `active` when the column is absent on a row (e.g. a test fake that predates it).
   lifecycle: ProjectLifecycleEnum.default("active"),
   // Present only on the single-project read (which selects it for the tenant
   // check); null when the column is absent/unset.
@@ -170,12 +185,32 @@ export const ProjectStore = {
     return result.rows[0]?.config;
   },
 
-  /** Overwrite a project's `config` blob (the project PATCH + brownfield posture write). */
-  async updateConfig(client: QueryClient, projectId: string, config: unknown, _actor: ActorRef): Promise<void> {
-    await client.query("UPDATE projects SET config = $1::jsonb WHERE project_id = $2", [
-      JSON.stringify(config),
-      projectId,
-    ]);
+  /** Read the exact state a subsequent config compare-and-swap must match. */
+  async getConfigSnapshot(
+    client: ProjectConfigQueryClient,
+    projectId: string,
+    _actor: ActorRef,
+  ): Promise<ProjectConfigSnapshot | undefined> {
+    const result = await client.query("SELECT config FROM projects WHERE project_id = $1", [projectId]);
+    const row = result.rows[0];
+    return row === undefined ? undefined : { config: z.object({ config: z.unknown() }).parse(row).config };
+  },
+
+  /** Exact-state CAS: never erases a config mutation committed after the snapshot. */
+  async updateConfigIfCurrent(
+    client: ProjectConfigQueryClient,
+    projectId: string,
+    snapshot: ProjectConfigSnapshot,
+    config: unknown,
+    _actor: ActorRef,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `UPDATE projects SET config = $1::jsonb
+       WHERE project_id = $2 AND config = $3::jsonb
+       RETURNING project_id`,
+      [json(config), projectId, json(snapshot.config)],
+    );
+    return (result.rowCount ?? 0) === 1;
   },
 
   /** Set a project's repo URL (the brownfield link write). */
@@ -183,3 +218,18 @@ export const ProjectStore = {
     await client.query("UPDATE projects SET repo_url = $1 WHERE project_id = $2", [repoUrl, projectId]);
   },
 } as const;
+
+/** Progress-based CAS merge: every failed attempt proves another writer advanced. */
+export async function mutateProjectConfig<T>(
+  client: ProjectConfigQueryClient,
+  projectId: string,
+  actor: ActorRef,
+  mutate: (current: unknown) => T,
+): Promise<T> {
+  for (;;) {
+    const snapshot = await ProjectStore.getConfigSnapshot(client, projectId, actor);
+    if (snapshot === undefined) throw new Error("project_config_missing");
+    const next = mutate(snapshot.config);
+    if (await ProjectStore.updateConfigIfCurrent(client, projectId, snapshot, next, actor)) return next;
+  }
+}

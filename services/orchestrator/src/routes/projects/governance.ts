@@ -35,7 +35,7 @@ import {
   ReviewPolicy,
 } from "../../engine/config/index.js";
 import { InsightThresholdsConfig } from "../../engine/insights/thresholds.js";
-import { ProjectStore } from "../../engine/repositories/index.js";
+import { mutateProjectConfig, ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 
 // Every field is optional: a PUT overrides only the settings it names; omitted
@@ -102,19 +102,17 @@ export async function handleGovernancePut(
     return c.json({ error: "project_not_found" }, 404);
   }
 
-  const current = migrateProjectConfig(await ProjectStore.getConfig(pool, projectId, systemActor));
-  const nextConfig = {
-    ...current,
-    ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
-    ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
-    ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
-    ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
-    ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
-  };
-  // Round-trip through the versioned parser so the persisted blob is always a valid
-  // ProjectConfigV1.
-  const validated = migrateProjectConfig(nextConfig);
-  await ProjectStore.updateConfig(pool, projectId, validated, systemActor);
+  const validated = await mutateProjectConfig(pool, projectId, systemActor, (raw) => {
+    const current = migrateProjectConfig(raw);
+    return migrateProjectConfig({
+      ...current,
+      ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
+      ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
+      ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
+      ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
+      ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
+    });
+  });
 
   return c.json(toView(validated));
 }

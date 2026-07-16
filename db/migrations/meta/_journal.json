@@ -274,6 +274,13 @@
       "when": 1783868406045,
       "tag": "0040_event_vocabulary",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1784159528180,
+      "tag": "0041_integration_lifecycle",
+      "breakpoints": true
     }
   ]
 }

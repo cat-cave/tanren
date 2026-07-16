@@ -23,17 +23,15 @@
 // asserted to match the resolved provisioner, so a wrong-provider config can never
 // silently attach to the wrong app.
 
-import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
+import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { EventStore } from "../eventStore.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { resolveAppEnvForScope } from "./resolveAppEnv.js";
 import type { DeployEnvVar } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "./deployProvisionerFor.js";
 import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /**
  * The `deployRef` the deploy provisioner wrote into `projects.config`:
@@ -47,7 +45,7 @@ export interface DeployArtifactRef {
 
 export interface AttachRuntimeAppEnvInput {
   /** Org-scoped query client (RLS gates the app-env + org-grant reads). */
-  client: QueryClient;
+  client: IntegrationQueryClient;
   /** The SecretStore runtime secret refs (and the org deploy token) resolve against. */
   secrets: SecretStore;
   /** The deploy transport the provisioner runs over (scripted fake in tests). */
@@ -56,10 +54,12 @@ export interface AttachRuntimeAppEnvInput {
   events: EventStore;
   /** The Tanren project whose runtime env is being attached. */
   projectId: string;
-  /** The project's org (resolves the deploy org grant from org_integrations). */
+  /** The project's org (resolves the deploy provider's active control grant). */
   orgId: string;
   /** The deploy artifact ref from the project's config (the deployRef). */
   deployRef: DeployArtifactRef;
+  /** Exact project-selected deploy authority, resolved once by the caller. */
+  grant: OrgGrant;
   actor: ActorRef;
 }
 
@@ -78,7 +78,7 @@ export interface AttachRuntimeAppEnvResult {
  *
  * Steps: (1) resolve the RUNTIME-scoped app env (only entries whose scopes include
  * `runtime`; secret values from the SecretStore); (2) resolve the deploy org grant
- * for the deployRef's provider from `org_integrations`; (3) assert the grant's
+ * for the deployRef's provider from the connection authority; (3) assert the grant's
  * provider matches the deployRef provider (no wrong-app attach); (4) hand the vars
  * to the provider's `attachRuntimeEnv` (the values go ONLY there); (5) emit
  * `app_env.runtime_attached` with the deploy target + KEY NAMES only.
@@ -92,7 +92,9 @@ export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Prom
   const env = await resolveAppEnvForScope({
     client: input.client,
     secrets: input.secrets,
+    orgId: input.orgId,
     projectId: input.projectId,
+    environment: "production",
     scope: "runtime",
     actor: input.actor,
   });
@@ -103,15 +105,10 @@ export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Prom
     return { provider: input.deployRef.provider, appId: input.deployRef.appId, attachedKeys: [] };
   }
 
-  // (2) The deploy org grant for THIS provider (credential ref + non-secret
-  // metadata; never the token value).
-  const grant = await OrgIntegrationsStore.getGrant(input.client, input.orgId, input.deployRef.provider, input.actor);
-  if (grant === undefined) {
-    throw new Error(
-      `attachRuntimeAppEnv: org '${input.orgId}' has no '${input.deployRef.provider}' grant to attach runtime env under`,
-    );
-  }
-  // (3) The grant's provider must match the deployRef's — a guard against attaching
+  // The caller resolves one exact project selection and threads it through env
+  // attach and deploy, preventing mixed-account work across the two effects.
+  const grant = input.grant;
+  // The grant's provider must match the deployRef's — a guard against attaching
   // this project's runtime env onto an app under the wrong provider's grant.
   if (grant.providerKind !== input.deployRef.provider) {
     throw new Error(

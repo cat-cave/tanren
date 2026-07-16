@@ -169,9 +169,10 @@ dashboard + hi-fi both still lack a fragment-library surface."
   hardcoded connectors). The hi-fi has **no notion of the org-grant plane** (link a
   provider once at the org) feeding a **per-project capability provisioning plane**
   (enable "error tracking" / "notify on Slack" / "deploy" for a project).
-- **Built code path**: the two-plane model — **plane 1** the org grant registry
-  (`org_integrations`, linked via `POST /:orgId/integrations/:providerKind` in
-  `routes/integrations/index.ts`, token stored as a secret REF only) and **plane 2**
+- **Built code path**: the two-plane model — **plane 1** versioned org connections
+  and grants, linked via `POST /:orgId/integrations/:providerKind` in
+  `routes/integrations/index.ts` with one secret ref per upstream account and an
+  exact per-project connection/grant selection before provider I/O; and **plane 2**
   the per-project capability engine (`engine/integrations/provisioningEngine.ts`:
   capability → provisioner, confirm-with-smart-default greenfield-create /
   brownfield-bind, persists over inbox-sources / notification-targets /

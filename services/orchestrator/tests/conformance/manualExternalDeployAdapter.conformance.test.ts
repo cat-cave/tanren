@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // ManualExternalDeployAdapter conformance: the OPERATOR-CONFIRMATION lifecycle
 // (Codex H3 Surface 7 #20 / #21). `deploy()` records a
 // `pending_manual_confirmation` attestation in the DURABLE store + emits
@@ -338,11 +339,12 @@ describe("ManualExternalDeployAdapter — demo surface", () => {
 describe("ManualExternalDeployAdapter — loud fail on missing config", () => {
   it("throws a typed config error when no target URL is declared", async () => {
     const { instance } = adapter();
-    const noUrl: OrgGrant = {
+    const noUrl = testOrgGrant({
       providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
-      credentialRef: "secret://none",
+      credentialRef: "secret://none/g/1",
       metadata: {},
-    };
+      capability: "deploy",
+    });
     await expect(instance.provisionOrBind(noUrl, ctx("proj_1"), { mode: "provision" })).rejects.toThrow(
       /required config 'manualExternalUrl' is not set/u,
     );

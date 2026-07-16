@@ -13,22 +13,22 @@
 //   - org-scope: the persisted rows carry the request's org_id.
 
 import { describe, expect, it } from "vitest";
-import type pg from "pg";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { EventStore } from "./fakes/fakeEventStore.js";
-import { FakeEventStore } from "./fakes/fakeEventStore.js";
+import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { FakeSentryProvisioner } from "./fakes/fakeSentryProvisioner.js";
 import type { IntegrationProvisioner } from "../src/engine/contracts/integrationProvisioner.js";
+import type { IntegrationQueryClient, IntegrationQueryResult } from "../src/engine/repositories/integrationQuery.js";
 import {
   provisionCapability,
   resolveProviderKind,
   type ProvisioningEngineDeps,
 } from "../src/engine/integrations/provisioningEngine.js";
+import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
 
 const ORG = "org_int_1";
 const PROJECT = "proj_int_1";
 const ACTOR = { kind: "operator", id: "user_a" } as const;
-const TOKEN_REF = "org/org_int_1/sentry/token";
+const TOKEN_REF = "org/org_int_1/sentry/token/g/1";
 
 // The exact `inbox_sources_kind_check` set (migration 0024). The stub pool below
 // enforces it so a provisioner emitting a CHECK-violating inbox kind (the capability-onboarding
@@ -42,43 +42,73 @@ interface StubState {
   inboxSources: Array<{ id: string; org_id: string; project_id: string; kind: string; name: string; config: string }>;
   notificationTargets: Array<{ id: string; org_id: string; channel_kind: string; destination: string; label: string }>;
   projectConfig: Record<string, unknown> | null;
+  configCasInterleave?: Record<string, unknown>;
 }
 
-function stubPool(state: StubState): pg.Pool {
+function stubClient(state: StubState): IntegrationQueryClient {
   let seq = 0;
-  const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
-    // OrganizationsStore.getLogin (task #27 — deploy-app namespacing).
-    if (text.includes("SELECT login FROM organizations")) {
-      const orgId = String(params[0]);
-      // Stub a deterministic test-org login so the deploy-namespacing rule has a
-      // valid prefix; the SENTRY/SLACK provisioners in this file ignore it.
-      return { rows: [{ login: orgId === ORG ? "test-tanren" : "unknown" }], rowCount: 1 };
+  const query = async (text: string, params: unknown[] = []): Promise<IntegrationQueryResult> => {
+    if (text.includes("SELECT p.project_id, o.login AS org_slug")) {
+      const found = params[0] === ORG && params[1] === PROJECT;
+      return { rows: found ? [{ project_id: PROJECT, org_slug: "test-tanren" }] : [], rowCount: found ? 1 : 0 };
     }
-    // getGrant → OrgIntegrationsStore.get
-    if (text.includes("FROM org_integrations") && text.includes("provider_kind = $2")) {
-      const match = state.integrations.find((r) => r.org_id === params[0] && r.provider_kind === params[1]);
-      if (match === undefined) return { rows: [], rowCount: 0 };
+    if (text.includes("SELECT connection_id, grant_id FROM project_integration_grant_selections")) {
+      const match = state.integrations.find((row) => row.org_id === params[0] && row.provider_kind === params[2]);
       return {
-        rows: [
-          {
-            id: "oi_1",
-            org_id: match.org_id,
-            provider_kind: match.provider_kind,
-            credential_ref: match.credential_ref,
-            metadata: match.metadata,
-            capabilities: [],
-            status: "linked",
-          },
-        ],
-        rowCount: 1,
+        rows: match === undefined ? [] : [{ connection_id: "connection_1", grant_id: "grant_1" }],
+        rowCount: match === undefined ? 0 : 1,
+      };
+    }
+    if (text.includes("FROM org_integration_connections c")) {
+      const matches = state.integrations.filter(
+        (row) => row.org_id === params[0] && (params[2] === undefined || row.provider_kind === params[2]),
+      );
+      return {
+        rows: matches.map((match) => ({
+          connection_id: "connection_1",
+          provider_kind: match.provider_kind,
+          provider_principal_id: "account_1",
+          display_name: "account_1",
+          principal_metadata: match.metadata,
+          connection_health: "healthy",
+          connection_status: "active",
+          current_auth_generation: 1,
+          grant_id: "grant_1",
+          grant_current_generation: 1,
+          grant_status: "active",
+          plane: "control",
+          environment: "control",
+          credential_ref: match.credential_ref.endsWith("/g/1") ? match.credential_ref : `${match.credential_ref}/g/1`,
+          auth_expires_at: null,
+          auth_status: "active",
+          capabilities: ["errors", "notify", "deploy"],
+          operations: ["discover", "provision", "bind", "teardown"],
+          provider_scopes: ["project:read", "project:write"],
+          resource_constraints: {},
+          policy_revision: "integration-catalog.v1",
+          consent_revision: "consent.test",
+          grant_expires_at: null,
+          grant_generation_status: "active",
+          selected_auth_generation: 1,
+          selected_grant_generation: 1,
+          selected_connection_id: "connection_1",
+          selected_grant_id: "grant_1",
+        })),
+        rowCount: matches.length,
       };
     }
     if (text.includes("SELECT config FROM projects")) {
       return { rows: [{ config: state.projectConfig }], rowCount: state.projectConfig === null ? 1 : 1 };
     }
     if (text.startsWith("UPDATE projects SET config")) {
+      if (state.configCasInterleave !== undefined) {
+        state.projectConfig = { ...state.projectConfig, ...state.configCasInterleave };
+        state.configCasInterleave = undefined;
+      }
+      const expected = JSON.parse(String(params[2])) as Record<string, unknown> | null;
+      if (JSON.stringify(expected) !== JSON.stringify(state.projectConfig)) return { rows: [], rowCount: 0 };
       state.projectConfig = JSON.parse(String(params[0])) as Record<string, unknown>;
-      return { rows: [], rowCount: 1 };
+      return { rows: [{ project_id: PROJECT }], rowCount: 1 };
     }
     // inbox source: INSERT ... ON CONFLICT (org_id, project_id, kind) DO UPDATE.
     // The stub MIRRORS the real DB constraints so a bad kind can't pass silently:
@@ -133,7 +163,55 @@ function stubPool(state: StubState): pg.Pool {
     }
     return { rows: [], rowCount: 0 };
   };
-  return { query } as unknown as pg.Pool;
+  return { query };
+}
+
+class StubDatabase {
+  inScope = false;
+  readonly client: IntegrationQueryClient;
+
+  constructor(state: StubState) {
+    this.client = stubClient(state);
+  }
+
+  async withOrgScope<T>(_orgId: string, work: (client: IntegrationQueryClient) => Promise<T>): Promise<T> {
+    this.inScope = true;
+    try {
+      return await work(this.client);
+    } finally {
+      this.inScope = false;
+    }
+  }
+}
+
+class OutsideTransactionProvisioner implements IntegrationProvisioner {
+  constructor(
+    private readonly inner: IntegrationProvisioner,
+    private readonly database: StubDatabase,
+  ) {}
+
+  capability(): string[] {
+    return this.inner.capability();
+  }
+
+  discover(...args: Parameters<IntegrationProvisioner["discover"]>) {
+    this.assertOutsideScope();
+    return this.inner.discover(...args);
+  }
+
+  provision(...args: Parameters<IntegrationProvisioner["provision"]>) {
+    this.assertOutsideScope();
+    return this.inner.provision(...args);
+  }
+
+  bind(...args: Parameters<IntegrationProvisioner["bind"]>) {
+    this.assertOutsideScope();
+    return this.inner.bind(...args);
+  }
+
+  private assertOutsideScope(): void {
+    if (this.database.inScope) throw new Error("provider I/O ran inside an org-scoped database transaction");
+  }
 }
 
 function freshState(linked: boolean): StubState {
@@ -162,12 +240,14 @@ function depsFor(state: StubState): {
   const secrets = new InMemorySecretStore();
   const events = new FakeEventStore();
   const provisioner = new FakeSentryProvisioner(secrets);
+  const database = new StubDatabase(state);
   const deps: ProvisioningEngineDeps = {
-    client: stubPool(state),
+    database,
     secrets,
-    events: events as unknown as EventStore,
+    events,
     actor: ACTOR,
-    buildProvisioner: () => provisioner,
+    authority: new PgIntegrationAuthority(),
+    buildProvisioner: () => new OutsideTransactionProvisioner(provisioner, database),
   };
   return { deps, events, provisioner };
 }
@@ -222,12 +302,27 @@ describe("provisionCapability — greenfield enable sentry", () => {
     expect(JSON.stringify(outcome)).not.toContain(stored!.value);
 
     // The event carries refs only — never the DSN value.
-    expect(events.appended).toHaveLength(1);
-    const ev = events.appended[0]!;
+    expect(events.events).toHaveLength(1);
+    const ev = events.events[0]!;
     expect(ev.eventType).toBe("integration.provisioned");
     expect(ev.projectId).toBe(PROJECT);
     expect(JSON.stringify(ev.payload)).not.toContain(stored!.value);
     expect((ev.payload as { secretRefNames: string[] }).secretRefNames).toEqual([dsnRef]);
+  });
+
+  it("re-reads after a config CAS loss and preserves the concurrent governance write", async () => {
+    const state = freshState(true);
+    state.configCasInterleave = { governancePosture: "warn" };
+    const { deps } = depsFor(state);
+    const outcome = await provisionCapability(deps, {
+      orgId: ORG,
+      projectId: PROJECT,
+      capability: "errors",
+      mode: "greenfield",
+      name: "acme-web",
+    });
+    expect(outcome.status).toBe("provisioned");
+    expect(state.projectConfig).toMatchObject({ governancePosture: "warn", sentryProjectSlug: "acme-web" });
   });
 });
 
@@ -277,7 +372,7 @@ describe("provisionCapability — not linked", () => {
     expect(provisioner.created).toEqual([]);
     expect(provisioner.bound).toEqual([]);
     expect(state.inboxSources).toHaveLength(0);
-    expect(events.appended).toHaveLength(0);
+    expect(events.events).toHaveLength(0);
   });
 });
 
@@ -320,10 +415,11 @@ describe("provisionCapability — inbox kind CHECK realism", () => {
       bind: async () => ({ inboxSource: { kind: "sentry", config: {} } }),
     };
     const deps: ProvisioningEngineDeps = {
-      client: stubPool(state),
+      database: new StubDatabase(state),
       secrets,
-      events: events as unknown as EventStore,
+      events,
       actor: ACTOR,
+      authority: new PgIntegrationAuthority(),
       buildProvisioner: () => badKindProvisioner,
     };
     await expect(

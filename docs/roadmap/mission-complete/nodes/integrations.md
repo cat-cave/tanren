@@ -242,7 +242,9 @@ The matrix covers the integration-lifecycle and workflow capabilities of Zapier,
 
 ## (3) DATA MODEL (tables/migrations, entities, org-scoping)
 
-Current `org_integrations` permits only one row per `(org_id, provider_kind)` and carries a single broad credential reference. [schemaIntegrations.ts:35–66](/home/trevor/projects/tanren/db/src/schemaIntegrations.ts:35) That cannot model multiple Slack workspaces/accounts, separate product/control grants, scope revisions, or environment authority.
+IN-1 clean-replaces the former one-row-per-provider registry. Its connection/grant
+authority models multiple upstream accounts, account-specific credentials,
+separate product/control grants, scope revisions, and environment authority.
 
 Create a new schema module, kept under the 500-line cap, and one serialized migration using the next available migration number.
 
@@ -253,7 +255,7 @@ Create a new schema module, kept under the 500-line cap, and one serialized migr
 | `capability_nodes`                          | Direct `org_id`, project, requirement, environment, executor kind, desired hash, status, wait reason, priority, generation. One active node per requirement/environment/generation.                                        |
 | `capability_node_dependencies`              | Capability-to-capability edges, direct `org_id`; cycle checked during graph materialization.                                                                                                                               |
 | `spec_capability_dependencies`              | Direct `org_id`, spec, capability node; makes ordinary spec readiness depend on a prepared binding.                                                                                                                        |
-| `org_integration_connections`               | Migrated from `org_integrations`: provider, upstream account/workspace identity, auth kind, credential ref, auth generation, owner, expiry, health, metadata. Multiple accounts per provider.                              |
+| `org_integration_connections`               | Provider, upstream account/workspace identity, auth kind, account-specific credential ref, auth generation, owner, expiry, health, metadata. Multiple accounts per provider.                                               |
 | `org_integration_grants`                    | Connection, plane, environment, permitted capabilities/operations/provider scopes/resource constraints, policy/consent revision, status, expiry/revocation. No credential value.                                           |
 | `integration_bindings`                      | Requirement, grant, environment, provider/adapter versions, external resource ID/name, ownership (`created/adopted/shared`), teardown policy, desired/observed hashes and generations, provider ETag, status, drift state. |
 | `integration_binding_env`                   | Binding output → logical key → `project_app_env` row; scope, classification, required flag, materialized generation.                                                                                                       |
@@ -275,7 +277,8 @@ Its existing secret-ref/plain-value XOR remains. Secret values continue to live 
 
 ### Migration and tenancy rules
 
-- Backfill current `org_integrations` into one connection plus one grant per row; retain compatibility views/routes during rollout.
+- Drop the former registry and recreate the authority directly; zero users means
+  no backfill, compatibility view, dual-write, or renamed legacy facade.
 - Replace the one-provider-per-org unique index with upstream-account identity uniqueness.
 - Every new hot table carries direct, mandatory, indexed `org_id`; do not rely solely on FK traversal.
 - Add composite unique keys `(org_id, id)` and composite FKs so a binding cannot reference another org’s grant or requirement.

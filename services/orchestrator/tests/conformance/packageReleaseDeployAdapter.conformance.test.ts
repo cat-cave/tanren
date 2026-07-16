@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // PackageReleaseDeployAdapter conformance: provisionOrBind binds the package coordinate;
 // deploy publishes to the registry; verify POLLS until the version is RESOLVABLE (failing
 // LOUD on a never-resolvable budget); demoSurface resolves a `package` surface (registry +
@@ -21,14 +22,17 @@ const TOKEN_VALUE = "npm_super_secret_publish_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const grant: OrgGrant = {
+const grant = testOrgGrant({
   providerKind: PACKAGE_RELEASE_PROVIDER_KIND,
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { packageRegistry: "npm", packageName: "@acme/web" },
-};
+  capability: "deploy",
+});
 
 const ctx = (name: string): ProjectContext => ({
   projectId: `proj_${name}`,
@@ -131,6 +135,6 @@ describe("PackageReleaseDeployAdapter — loud fail on missing config", () => {
       secrets: new InMemorySecretStore(),
       poll: instantVerifyPollPolicy(),
     });
-    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/required config 'credentialRef' is not set/u);
+    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

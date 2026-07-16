@@ -24,7 +24,12 @@ import { mergeCapture, resolveLifecycle } from "./capture.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import type { DesignAgent } from "../../design/designAgent.js";
 import { deriveProductGraph, type DeriveResult } from "./derive.js";
-import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
+import type {
+  DeployPreflightCallback,
+  GreenfieldDeployDependency,
+  PersistDeploySelectionCallback,
+  PrepareDeployCallback,
+} from "./deployDependency.js";
 import type { DeleteRepositoryCallback, DestroyDeployAppCallback } from "./deriveCompensation.js";
 import type { FragmentAuthoring, FragmentLibrary, MaterializeTemplate } from "../../templates/fragments/index.js";
 import {
@@ -161,6 +166,7 @@ export interface DeriveFromCaptureInput {
   // or `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
+  persistDeploySelection?: PersistDeploySelectionCallback;
   // COMPENSATION (task #78 — derive atomic rollback). Threaded into
   // `deriveProductGraph` so the derive registers a rollback for the provisioned
   // deploy app + destroys it if a later step throws. Required in production
@@ -200,6 +206,7 @@ export async function deriveFromCapture(
     ...(input.probeRepoBareAutoInit === undefined ? {} : { probeRepoBareAutoInit: input.probeRepoBareAutoInit }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
+    ...(input.persistDeploySelection === undefined ? {} : { persistDeploySelection: input.persistDeploySelection }),
     ...(input.destroyDeployApp === undefined ? {} : { destroyDeployApp: input.destroyDeployApp }),
     ...(input.materializeTemplate === undefined ? {} : { materializeTemplate: input.materializeTemplate }),
     ...(input.fragmentLibrary === undefined ? {} : { fragmentLibrary: input.fragmentLibrary }),

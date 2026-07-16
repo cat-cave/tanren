@@ -17,7 +17,7 @@ import { createAuthMiddleware, type ActorContextEnv } from "../../src/middleware
 import { createOnboardingRoutes, type OnboardingRoutesOptions } from "../../src/routes/onboarding/index.js";
 import { createProjectRoutes } from "../../src/routes/projects/index.js";
 import { FakeRepoCreateHttp } from "../conformance/fakes/fakeRepoCreateHttp.js";
-import type { RoutesPool } from "./routesPool.js";
+import { RoutesPool } from "./routesPool.js";
 
 // The org-default static `github_token` ref `seedStaticTokenOrg` configures — the
 // repo-create static-credential fallback path. Seeded into the secret store so the
@@ -66,7 +66,10 @@ export function appWithGreenfieldRoutes(
   pool: RoutesPool,
   githubHttp: FakeRepoCreateHttp = new FakeRepoCreateHttp(),
   onboardingOverrides: Partial<
-    Pick<OnboardingRoutesOptions, "preflightDeploy" | "prepareDeploy" | "materializeTemplate" | "runFragmentAuthoring">
+    Pick<
+      OnboardingRoutesOptions,
+      "preflightDeploy" | "prepareDeploy" | "persistDeploySelection" | "materializeTemplate" | "runFragmentAuthoring"
+    >
   > = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
   // secret read THROWS — exercising the no_silent_fallbacks fix that a token-resolution
@@ -108,6 +111,7 @@ export function appWithGreenfieldRoutes(
       answererFactory: () => completingAnswerer,
       githubHttp,
       githubAppMinter,
+      persistDeploySelection: async () => {},
       // Compose+materialize stub: every greenfield derive composes a
       // fragment-based template; the stub returns a fixture seed without
       // touching GitHub. Overridable per test.
@@ -132,6 +136,13 @@ export function preparedDeploy(
       providerKind,
       action: "provision",
       mode: "greenfield",
+      authority: {
+        connectionId: "connection_1",
+        grantId: "grant_1",
+        providerPrincipalId: "account_1",
+        authGeneration: 1,
+        grantGeneration: 1,
+      },
       secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
       surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
     },
@@ -210,4 +221,99 @@ export function seedStaticTokenOrg(pool: RoutesPool): void {
     id: "org_acme",
     config: { version: 1, defaultCredentials: { github_token: "credential/github/org/org_acme/default" } },
   });
+}
+
+export class LinkedDeployRoutesPool extends RoutesPool {
+  override async query(sql: string, params: unknown[] = []) {
+    const text = sql.replaceAll(/\s+/gu, " ").trim();
+    // Inventory for listExactControlGrants (never a lease).
+    if (
+      text.includes("FROM org_integration_connections c") &&
+      text.includes("LEFT JOIN org_integration_grants g") &&
+      text.includes("display_name")
+    ) {
+      const orgId = String(params[0]);
+      return {
+        rows: [
+          {
+            connection_id: "connection_1",
+            grant_id: "grant_1",
+            org_id: orgId,
+            provider_kind: "deploy.vercel",
+            provider_principal_id: "account_1",
+            principal_kind: "team",
+            display_name: "account_1",
+            health: "healthy",
+            connection_status: "active",
+            current_auth_generation: 1,
+            grant_generation: 1,
+            grant_status: "active",
+            auth_expires_at: null,
+            provider_scopes: [],
+            operation_id: null,
+            operation_stage: null,
+            operation_status: null,
+            selected_for_project: false,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    // authorizeOperation eligibility — selected generations match.
+    if (text.includes("FROM org_integration_connections c") && text.includes("project_integration_grant_selections")) {
+      return {
+        rows: [
+          {
+            connection_id: "connection_1",
+            provider_kind: "deploy.vercel",
+            provider_principal_id: "account_1",
+            display_name: "account_1",
+            principal_metadata: {},
+            connection_health: "healthy",
+            connection_status: "active",
+            current_auth_generation: 1,
+            grant_id: "grant_1",
+            grant_current_generation: 1,
+            grant_status: "active",
+            plane: "control",
+            environment: "control",
+            credential_ref: "secret://missing/deploy-token/g/1",
+            auth_expires_at: null,
+            auth_status: "active",
+            capabilities: ["deploy"],
+            operations: ["discover", "provision", "bind", "teardown"],
+            provider_scopes: [],
+            resource_constraints: {},
+            policy_revision: "integration-catalog.v1",
+            consent_revision: "consent.test",
+            grant_expires_at: null,
+            grant_generation_status: "active",
+            selected_auth_generation: 1,
+            selected_grant_generation: 1,
+            selected_connection_id: "connection_1",
+            selected_grant_id: "grant_1",
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    // selectControlGrant persistence for greenfield project selection.
+    if (text.includes("INSERT INTO project_integration_grant_selections")) {
+      return {
+        rows: [
+          {
+            connection_id: "connection_1",
+            grant_id: "grant_1",
+            auth_generation: 1,
+            grant_generation: 1,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (text.includes("SELECT provider_principal_id FROM org_integration_connections")) {
+      return { rows: [{ provider_principal_id: "account_1" }], rowCount: 1 };
+    }
+    return super.query(sql, params);
+  }
 }

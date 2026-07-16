@@ -1,25 +1,10 @@
-// GREENFIELD: the project-create path that needs NO existing repo. An end user
-// posts `{ name, owner, greenfield: true, private?, defaultBranch?, description? }`
-// (no repoUrl) and Tanren creates a brand-new GitHub repo via the minimal
-// `CodeHost.createRepo` seam (decomposition PR-3) — the route constructs the
-// `CodeHost` from the shared GitHub HTTP client + the standalone `resolveVcsToken`
-// credential supplier (decomposition §5a/PR-2), authenticating with the org's
-// GitHub App installation token when the App is installed, ELSE the org-default
-// static `github_token` (a PAT with repo-create scope) — then binds a new project to
-// the real new repoUrl. Extracted from `index.ts` so that file stays under the
-// per-file line cap. Org-scoping is preserved: the token resolves against THIS org's
-// App-installation/credentials, and `createProject` persists the row under the org
-// actor's RLS scope.
+// Greenfield anchors an org-authorized repo and exact deploy account in one project.
 
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import {
-  buildIntegrationProvisioner,
-  resolveSmartDefault,
-  type ProvisionedArtifact,
-} from "../../engine/contracts/integrationProvisioner.js";
+import { migrateProjectConfig } from "../../engine/config/index.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
   GreenfieldRepoNotEmptyError,
@@ -32,27 +17,26 @@ import {
   type GreenfieldRepositoryCreateDeps,
 } from "./greenfieldRepoCreate.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
-import { OrganizationsStore, OrgIntegrationsStore } from "../../engine/repositories/index.js";
-import {
-  productionProvisionerDeps,
-  type NotLinkedResult,
-  type ProvisionedResult,
-} from "../../engine/integrations/provisioningEngine.js";
 import {
   DeployProviderInvalidError,
   DeployProviderMissingError,
-  isDeployNotLinked,
+  isDeployUnavailable,
   missingDeployProviderError,
   resolveGreenfieldDeployDependency,
   type PreparedGreenfieldDeploy,
 } from "../../engine/forge/interview/index.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import { githubHttpsRemote } from "../../engine/providers/github.js";
-import { ProjectStore } from "../../engine/repositories/projects.js";
+import { mutateProjectConfig, ProjectStore } from "../../engine/repositories/projects.js";
 import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
+import { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
+import { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
+
+export { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
+export { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
 
 export const SUPPORTED_DEPLOY_PROVIDER_KINDS = ["deploy.vercel", "deploy.flyio"] as const;
 
@@ -61,10 +45,21 @@ export const GreenfieldDeploySchema = z
     providerKind: z.enum(SUPPORTED_DEPLOY_PROVIDER_KINDS),
     mode: z.enum(["greenfield", "brownfield"]).default("greenfield"),
     chosenResourceId: z.string().min(1).max(200).optional(),
+    connectionId: z.string().min(1).max(200).optional(),
+    grantId: z.string().min(1).max(200).optional(),
     stack: z.string().min(1).max(64).optional(),
     name: z.string().min(1).max(200).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    if ((value.connectionId === undefined) !== (value.grantId === undefined)) {
+      context.addIssue({
+        code: "custom",
+        message: "connectionId and grantId must be supplied together",
+        path: value.connectionId === undefined ? ["connectionId"] : ["grantId"],
+      });
+    }
+  });
 
 /**
  * The greenfield create body: NO repoUrl. `owner` is the GitHub org/user login
@@ -100,9 +95,7 @@ export interface GreenfieldCreateDeps {
   input: GreenfieldCreateInput;
 }
 
-// The repo-create step (credential-resolve + `CodeHost.createRepo`) lives in
-// `greenfieldRepoCreate.ts`; re-exported here so existing consumers (onboarding
-// derive + template create) keep importing it from the greenfield surface.
+// Public repo-create seam used by onboarding and template creation.
 export { createGreenfieldRepository, GithubCredentialMissingError };
 export type { GreenfieldRepositoryCreateDeps };
 
@@ -178,9 +171,22 @@ export async function handleGreenfieldCreate(
   if (deploy === undefined) {
     return greenfieldDeployErrorResponse(c, missingDeployProviderError());
   }
-  const notLinked = await preflightGreenfieldDeploy(pool, orgId, deploy.providerKind, actor.userId);
-  if (notLinked !== undefined) {
-    return c.json({ error: "deploy_not_linked", ...notLinked }, 409);
+  const unavailable = await preflightGreenfieldDeploy({
+    client: pool,
+    orgId,
+    providerKind: deploy.providerKind,
+    actorId: actor.userId,
+    ...(deploy.connectionId === undefined ? {} : { connectionId: deploy.connectionId }),
+    ...(deploy.grantId === undefined ? {} : { grantId: deploy.grantId }),
+  });
+  if (unavailable !== undefined) {
+    return c.json(
+      {
+        error: unavailable.status === "not_linked" ? "deploy_not_linked" : "deploy_selection_required",
+        ...unavailable,
+      },
+      409,
+    );
   }
 
   // IDEMPOTENT GREENFIELD CREATE (audit §3.10). The deterministic repo URL
@@ -237,47 +243,50 @@ export async function handleGreenfieldCreate(
     }
   }
 
-  // Provision deploy ONLY now (after the repo exists) so the deploy app is the LAST
-  // external resource before the durable project row — minimizing the window where a
-  // crash could strand a deploy app without an anchor. (A resume past this point is
-  // handled by the project-replay branch above.)
-  let preparedDeploy: PreparedGreenfieldDeploy;
-  try {
-    const prepared = await prepareGreenfieldDeploy({
-      pool,
-      secrets,
-      orgId,
-      actorId: actor.userId,
-      projectKey: `${input.owner}/${input.name}`,
-      projectName: input.name,
-      deploy,
-    });
-    if (isDeployNotLinked(prepared)) {
-      return c.json({ error: "deploy_not_linked", ...prepared }, 409);
-    }
-    preparedDeploy = prepared;
-  } catch (error) {
-    return c.json({ error: "deploy_provision_failed", message: messageOf(error) }, 502);
-  }
-
-  // Bind a new project to the REAL new repoUrl. createProject persists under the
-  // org actor's RLS scope (it self-scopes on the actor's orgId).
+  // Project shell first — provider I/O requires a real project selection anchor.
+  // Deploy config is merged after authorizeOperation + provision (never before).
   const project = await createProject(
     pool,
     {
       name: input.name,
       repoUrl: created.repoUrl,
       defaultBranch: input.defaultBranch ?? created.defaultBranch,
-      // GREENFIELD MARKER: this project has NO pre-existing repo/lockfile — Tanren
-      // authors the toolchain live. Persisted so the run's in-loop deps-ensure uses
-      // a NON-FROZEN install (a writer-added devDep without a regenerated lockfile
-      // still installs), while brownfield keeps the frozen, lockfile-safe default.
-      config: { version: 1, greenfield: true, ...preparedDeploy.projectConfig },
+      config: { version: 1, greenfield: true },
       ...(input.runnerImage === undefined ? {} : { runnerImage: input.runnerImage }),
       ...(input.allocator === undefined ? {} : { allocator: input.allocator }),
     },
     scopedActor,
     { configWriteProof: provisionedGreenfieldProjectConfigProof },
+  );
+
+  let preparedDeploy: PreparedGreenfieldDeploy;
+  try {
+    const prepared = await prepareGreenfieldDeploy({
+      pool,
+      secrets,
+      orgId,
+      projectId: project.projectId,
+      actorId: actor.userId,
+      projectKey: `${input.owner}/${input.name}`,
+      projectName: input.name,
+      deploy,
+    });
+    if (isDeployUnavailable(prepared)) {
+      return c.json(
+        { error: prepared.status === "not_linked" ? "deploy_not_linked" : "deploy_selection_required", ...prepared },
+        409,
+      );
+    }
+    preparedDeploy = prepared;
+  } catch (error) {
+    return c.json(
+      { error: "deploy_provision_failed", message: error instanceof Error ? error.message : String(error) },
+      502,
+    );
+  }
+
+  await mutateProjectConfig(pool, project.projectId, { kind: "operator", id: actor.userId }, (raw) =>
+    migrateProjectConfig({ ...migrateProjectConfig(raw), greenfield: true, ...preparedDeploy.projectConfig }),
   );
 
   // SHARED bootstrap (Codex round-4): seed the COMPLETE autonomous-project set —
@@ -341,29 +350,6 @@ async function greenfieldCreateReplayResponse(
   );
 }
 
-export async function preflightGreenfieldDeploy(
-  pool: pg.Pool,
-  orgId: string,
-  providerKind: "deploy.vercel" | "deploy.flyio",
-  actorId: string,
-): Promise<NotLinkedResult | undefined> {
-  const grant = await OrgIntegrationsStore.getGrant(pool, orgId, providerKind, { kind: "operator", id: actorId });
-  if (grant !== undefined) return undefined;
-  return deployNotLinkedOutcome(orgId, providerKind);
-}
-
-export function deployNotLinkedOutcome(orgId: string, providerKind: "deploy.vercel" | "deploy.flyio"): NotLinkedResult {
-  return {
-    status: "not_linked",
-    capability: "deploy",
-    providerKind,
-    message:
-      `link ${providerKind} at the org level first — greenfield/apex creation requires a real ` +
-      `deploy target, but org ${orgId} has no ${providerKind} grant in org_integrations.`,
-    linkAffordance: { kind: "org_integration_link", providerKind, orgId },
-  };
-}
-
 function greenfieldDeployErrorResponse(c: Context<ActorContextEnv>, error: unknown): Response {
   if (error instanceof DeployProviderMissingError) {
     return c.json(
@@ -388,86 +374,4 @@ function greenfieldDeployErrorResponse(c: Context<ActorContextEnv>, error: unkno
     );
   }
   throw error;
-}
-
-export async function prepareGreenfieldDeploy(input: {
-  pool: pg.Pool;
-  secrets: SecretStore;
-  orgId: string;
-  actorId: string;
-  projectKey: string;
-  projectName: string;
-  deploy: {
-    providerKind: "deploy.vercel" | "deploy.flyio";
-    mode: "greenfield" | "brownfield";
-    chosenResourceId?: string;
-    stack?: string;
-    name?: string;
-  };
-}): Promise<NotLinkedResult | PreparedGreenfieldDeploy> {
-  const providerKind = input.deploy.providerKind;
-  const grant = await OrgIntegrationsStore.getGrant(input.pool, input.orgId, providerKind, {
-    kind: "operator",
-    id: input.actorId,
-  });
-  if (grant === undefined) return deployNotLinkedOutcome(input.orgId, providerKind);
-
-  const provisioner = buildIntegrationProvisioner(providerKind, productionProvisionerDeps(input.secrets));
-  // task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`
-  // so a bare `linkly` cannot collide on Fly's GLOBAL app-name namespace. Resolve
-  // the Tanren org slug (`organizations.login`) up front and thread it through the
-  // project context — the provisioner's `deployAppName` reads it.
-  const orgSlug = await OrganizationsStore.getLogin(input.pool, input.orgId, { kind: "operator", id: input.actorId });
-  const projectCtx = {
-    projectId: `pending:${input.projectKey}`,
-    orgId: input.orgId,
-    orgSlug,
-    ...(input.deploy.stack === undefined ? {} : { stack: input.deploy.stack }),
-    name: input.deploy.name ?? input.projectName,
-  };
-  let action: "provision" | "bind";
-  let artifact: ProvisionedArtifact;
-  try {
-    if (input.deploy.chosenResourceId !== undefined && input.deploy.chosenResourceId !== "") {
-      action = "bind";
-      artifact = await provisioner.bind(grant, input.deploy.chosenResourceId, projectCtx);
-    } else {
-      const discovered = await provisioner.discover(grant);
-      const smart = resolveSmartDefault(discovered, input.deploy.mode, { name: projectCtx.name });
-      if (smart.action === "bind") {
-        action = "bind";
-        artifact = await provisioner.bind(grant, smart.resourceId, projectCtx);
-      } else {
-        action = "provision";
-        artifact = await provisioner.provision(grant, projectCtx);
-      }
-    }
-  } catch (error) {
-    throw new Error(`deploy provision failed: ${messageOf(error)}`, { cause: error });
-  }
-  const projectConfig = artifact.projectConfig ?? {};
-  if (
-    artifact.deployRef === undefined ||
-    projectConfig["deployProvider"] === undefined ||
-    projectConfig["deployAppId"] === undefined
-  ) {
-    throw new Error(`deploy provision failed: ${providerKind} returned no deploy target config`);
-  }
-  const outcome: ProvisionedResult = {
-    status: "provisioned",
-    capability: "deploy",
-    providerKind,
-    action,
-    mode: input.deploy.mode,
-    secretRefNames: Object.values(artifact.secretRefs ?? {}),
-    surfaces: {
-      projectConfigKeys: Object.keys(projectConfig),
-      deployRef: `${artifact.deployRef.provider}:${artifact.deployRef.appId}`,
-    },
-  };
-  return { outcome, projectConfig };
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
