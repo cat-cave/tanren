@@ -125,13 +125,32 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
     expect(state.forgePublication?.headSha).toBe(headSha);
   });
 
-  it("gv-2: incomplete forge fields are never complete (loud UI path)", () => {
+  it("gv-2 former-bug: terminal review with ZERO forge fields is unpublished (undefined), not danger-partial", () => {
+    // A human/auto terminal review.approved carrying no forge receipt must NOT
+    // render as the loud "partial forge fields present" danger — there is no
+    // receipt at all, so the neutral unpublished state (undefined) holds.
+    const state = reviewMergeStateFromEvents([ev("review.approved", { prUrl: "u", prNumber: 7 })]);
+    expect(state.phase).toBe("approved");
+    expect(state.forgePublication).toBeUndefined();
+  });
+
+  it("gv-2 former-bug: a lone reviewer (no receipt fields) is still unpublished", () => {
+    // Only a non-receipt field present — there is still no id/state/url/headSha
+    // receipt, so this is unpublished, never the danger partial-receipt state.
+    const state = reviewMergeStateFromEvents([
+      ev("review.changes_requested", { prUrl: "u", prNumber: 7, reviewer: "human", message: "nits" }),
+    ]);
+    expect(state.phase).toBe("changes_requested");
+    expect(state.forgePublication).toBeUndefined();
+  });
+
+  it("gv-2: partial forge fields are never complete (loud UI path)", () => {
     const state = reviewMergeStateFromEvents([
       ev("review.approved", {
         prUrl: "u",
         prNumber: 7,
         forgeReviewId: "9001",
-        // missing state/url/head
+        // missing state/url/head — a strict subset is a malformed receipt
       }),
     ]);
     expect(state.forgePublication?.complete).toBe(false);

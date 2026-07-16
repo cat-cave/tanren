@@ -9,7 +9,16 @@
 // inspectable from this screen including the rejection loop" — is exercised.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { build, mockOrchestrator, mockOrchestratorWithProject, RUN_ID } from "./runDetail.render.fixtures.js";
+import {
+  build,
+  mockOrchestrator,
+  mockOrchestratorWithProject,
+  ORG,
+  PROJECT,
+  RUN_DETAIL,
+  RUN_ID,
+} from "./runDetail.render.fixtures.js";
+import type { RunEventRow } from "../src/api/types.js";
 
 beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
@@ -230,5 +239,120 @@ describe("P3-0025 live preview-deploy pane", () => {
     expect(html).not.toContain('class="preview-iframe"');
     // device tabs still render (they re-width the placeholder)
     expect(html).toContain('data-review="device-tabs"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gv-2 forge publication honesty: the forge-publication panel renders the
+// honest tri-state. The proof is driven by production HTTP-derived payloads
+// (review events inside the run-detail response the orchestrator ships), not a
+// private helper-only assertion.
+// ---------------------------------------------------------------------------
+
+function reviewEvent(eventType: string, payload: Record<string, unknown>): RunEventRow {
+  return {
+    id: 9001,
+    ts: new Date().toISOString(),
+    runId: RUN_ID,
+    taskId: null,
+    specId: "spec_settings",
+    projectId: PROJECT.projectId,
+    eventType,
+    payload,
+    redactedPaths: [],
+  };
+}
+
+/**
+ * Stub the orchestrator so the run-detail HTTP response carries the given
+ * terminal review events (appended to the base fixture's recentEvents). This is
+ * the same path production takes — the dashboard derives the panel from the
+ * HTTP-delivered `recentEvents`.
+ */
+function mockOrchestratorWithReviewEvents(reviewEvents: RunEventRow[]): void {
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.endsWith("/auth/me")) {
+      return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), { status: 200 });
+    }
+    if (url.endsWith("/orgs")) {
+      return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+    }
+    if (url.endsWith(`/orgs/${ORG.id}/runs/${RUN_ID}/location`))
+      return new Response(JSON.stringify({ orgId: ORG.id, projectId: PROJECT.projectId }), { status: 200 });
+    if (/\/orgs\/[^/]+\/runs\/[^/]+\/location$/u.test(url)) {
+      return new Response(JSON.stringify({ error: "run_not_found" }), { status: 404 });
+    }
+    if (url.includes(`/runs/${RUN_ID}`) && !url.includes("/stream")) {
+      return new Response(
+        JSON.stringify({ ...RUN_DETAIL, recentEvents: [...RUN_DETAIL.recentEvents, ...reviewEvents] }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith("/healthz")) {
+      return new Response("ok", { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
+describe("gv-2 forge publication panel — honest tri-state (copy + severity)", () => {
+  it("ZERO receipt fields → neutral unpublished (warn), never the danger partial-receipt copy", async () => {
+    // Former bug: a human/auto terminal review.approved with no forge receipt
+    // rendered as danger "partial forge fields present". Honest truth: there is
+    // no receipt at all, so the neutral unpublished state must render.
+    mockOrchestratorWithReviewEvents([reviewEvent("review.approved", { prUrl: "u", prNumber: 142 })]);
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
+    expect(html).toContain('data-review="forge-publication"');
+    expect(html).toContain('data-state="unpublished"');
+    expect(html).toContain("forge publication · unpublished");
+    expect(html).toContain("no durable forge receipt");
+    // NEVER the loud danger copy for a receipt-less event
+    expect(html).not.toContain('data-state="malformed"');
+    expect(html).not.toContain("incomplete receipt");
+    expect(html).not.toContain("Partial forge fields present");
+    // not painted as forge success either
+    expect(html).not.toContain('data-state="published"');
+  });
+
+  it("a STRICT SUBSET of receipt fields → loud incomplete receipt (danger)", async () => {
+    mockOrchestratorWithReviewEvents([
+      reviewEvent("review.approved", { prUrl: "u", prNumber: 142, forgeReviewId: "9001" }),
+    ]);
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
+    expect(html).toContain('data-state="malformed"');
+    expect(html).toContain("forge publication · incomplete receipt");
+    expect(html).toContain("Partial forge fields present");
+    // never neutral unpublished, never success
+    expect(html).not.toContain('data-state="unpublished"');
+    expect(html).not.toContain('data-state="published"');
+  });
+
+  it("the FULL valid receipt tuple → published success with reviewer/id/head/link", async () => {
+    const headSha = "c".repeat(40);
+    mockOrchestratorWithReviewEvents([
+      reviewEvent("review.approved", {
+        prUrl: "u",
+        prNumber: 142,
+        reviewer: "tanren-reviewer[bot]",
+        forgeReviewId: "9001",
+        forgeReviewState: "approved",
+        forgeReviewUrl: "https://github.com/o/r/pull/142#pullrequestreview-9001",
+        headSha,
+      }),
+    ]);
+    const app = await build();
+    const html = await (await app.request(`/runs/${RUN_ID}/review`)).text();
+    expect(html).toContain('data-state="published"');
+    expect(html).toContain("forge publication · approved");
+    expect(html).toContain("tanren-reviewer[bot]");
+    expect(html).toContain('data-review="forge-reviewer"');
+    expect(html).toContain('data-review="forge-review-id"');
+    expect(html).toContain("9001");
+    expect(html).toContain('data-review="forge-review-link"');
+    expect(html).not.toContain('data-state="unpublished"');
+    expect(html).not.toContain('data-state="malformed"');
   });
 });

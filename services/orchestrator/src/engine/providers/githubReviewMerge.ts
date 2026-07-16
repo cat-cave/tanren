@@ -52,11 +52,14 @@ function repoPath(repo: GitHubRepository, suffix: string): string {
 }
 
 /**
- * Review GitHub operations: mark a draft PR ready-for-review, read the latest
- * reviews to derive a verdict, and submit a review (the simulated-reviewer COMMENT
- * audit artifact). The host-merge/mergeability/update-branch operations were removed
- * by the VcsProvider→CodeHost decomposition (the native `MergeAuthority` + jj own
- * the land + freshness path).
+ * Review GitHub operations: mark a draft PR ready for review, read the latest
+ * reviews to derive a verdict, and submit a review. Strict simulated review
+ * (gv-2) posts REAL `APPROVE` / `REQUEST_CHANGES` (the land-authoritative
+ * artifact) with a distinct reviewer identity; `COMMENT` remains only a
+ * best-effort forge-UI mirror that is never land-authoritative. The host-merge
+ * /mergeability/update-branch operations were removed by the VcsProvider→
+ * CodeHost decomposition (the native `MergeAuthority` + jj own the land +
+ * freshness path).
  */
 export class GitHubReviewMergeService {
   constructor(private readonly http: GitHubHttpClient) {}
