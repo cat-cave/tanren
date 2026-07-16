@@ -71,6 +71,7 @@ terminal `review.*` event, sequential land TOCTOU on `reviewedHeadSha`.
 | `services/orchestrator/tests/simulatedReviewPublication.test.ts`                                                         |
 | `services/orchestrator/tests/simulatedReviewPublishFence.test.ts`                                                        |
 | `services/orchestrator/tests/gv2StrictForgeExactHead.test.ts` (named mutation gate)                                      |
+| `services/orchestrator/tests/simulatedReviewReviewerRotation.test.ts` (pinned credential / retry mutation gate)          |
 | `services/orchestrator/tests/runDetailReviewReceipt.contract.test.ts` (real GET/redaction proof)                         |
 | `services/orchestrator/tests/runFailureClassifierTypedArms.test.ts` (safe public classification)                         |
 | `services/orchestrator/tests/runFinalizeAuthority.test.ts` (retriable vs permanent disposition)                          |
