@@ -159,6 +159,7 @@ describe("jj-local bootstrap assembly (real jj) — ancestor-stack assembly conf
       { branch: "feat-a", file: "a.txt", contents: "a\n" },
       { branch: "feat-b", file: "b.txt", contents: "b\n" },
     ]);
+    const expectedBaseSha = readSha(originPath, "main");
     const { live, released } = liveLocalJj();
     const stack: AncestorStack = [
       { specId: "spec-a", runId: "run-a", branch: "feat-a", headSha: "" },
@@ -178,6 +179,7 @@ describe("jj-local bootstrap assembly (real jj) — ancestor-stack assembly conf
     // The assembled head is a real 40-hex sha + tree (read from the LOCAL rev after rebase).
     expect(result.headSha).toMatch(/^[0-9a-f]{40}$/u);
     expect(result.treeHash).toMatch(/^[0-9a-f]{40}$/u);
+    expect(result.baseSha).toBe(expectedBaseSha);
     // The run branch was created (handed back), and the LOCAL assembly bookmark is the
     // deterministic bootstrap name — NEVER a `tanren/integ|batch` host ref.
     expect(result.runBranch).toBe("dep-run");

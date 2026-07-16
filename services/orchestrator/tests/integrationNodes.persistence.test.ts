@@ -111,6 +111,7 @@ const APP_PASSWORD = process.env["TANREN_APP_DB_PASSWORD"] ?? "tanren_app";
 
 const ORG = "org_inodes";
 const PROJECT = `proj_${ORG}`;
+const PROJECT_OTHER = `proj_other_${ORG}`;
 const SPEC_ANCESTOR = `spec_ancestor_${ORG}`;
 const SPEC_DEP = `spec_dep_${ORG}`;
 const RUN_DEP = `run_dep_${ORG}`;
@@ -183,6 +184,11 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
        VALUES ($1, 'p', 'https://example.test/r', 'main', 'runner:v0', $2, '{"version":1}'::jsonb)`,
       [PROJECT, ORG],
+    );
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+       VALUES ($1, 'p-other', 'https://example.test/other', 'main', 'runner:v0', $2, '{"version":1}'::jsonb)`,
+      [PROJECT_OTHER, ORG],
     );
     for (const sid of [SPEC_ANCESTOR, SPEC_DEP]) {
       await ownerPool.query(
@@ -263,6 +269,59 @@ describeDb("integration-nodes persistence (real DB + fail-closed RLS)", () => {
       return r.rows[0]?.c as number;
     });
     expect(count).toBe(1);
+  });
+
+  it("preserves an authority stamp only for an exact unchanged binding and clears it on drift", async () => {
+    const baseSha = "3".repeat(40);
+    const memberSha = "4".repeat(40);
+    const headSha = "5".repeat(40);
+    const treeHash = "6".repeat(40);
+    const input = {
+      projectId: PROJECT,
+      orgId: ORG,
+      baseBranch: "main",
+      baseSha,
+      ref: "tanren/authority-preservation",
+      purpose: "merge_batch" as const,
+      members: [{ specId: "spec_stamp", runId: RUN_DEP, branch: "stamp", headSha: memberSha }],
+      headSha,
+      treeHash,
+      status: "ready" as const,
+    };
+    const key = memberKey(baseSha, [memberSha]);
+
+    await model.upsertNode({ ...input, affectedFingerprint: "sealed-generation-a" });
+    await model.upsertNode(input);
+    expect((await model.findByMemberKey(ORG, key))?.affectedFingerprint).toBe("sealed-generation-a");
+
+    // Same member key but another prepared product identity: never carry the prior seal.
+    await model.upsertNode({ ...input, headSha: "7".repeat(40) });
+    expect((await model.findByMemberKey(ORG, key))?.affectedFingerprint).toBe("");
+
+    // A producer may restore authority only by explicitly recomputing a new stamp.
+    await model.upsertNode({ ...input, headSha: "7".repeat(40), affectedFingerprint: "sealed-generation-b" });
+    expect((await model.findByMemberKey(ORG, key))?.affectedFingerprint).toBe("sealed-generation-b");
+  });
+
+  it("fails closed instead of mutating another project's colliding org/member identity", async () => {
+    const input = {
+      orgId: ORG,
+      baseBranch: "main",
+      baseSha: "8".repeat(40),
+      ref: "tanren/project-collision",
+      purpose: "merge_batch" as const,
+      members: [{ specId: "spec_collision", runId: RUN_DEP, branch: "collision", headSha: "9".repeat(40) }],
+      headSha: "a".repeat(40),
+      treeHash: "b".repeat(40),
+      status: "ready" as const,
+    };
+    await model.upsertNode({ ...input, projectId: PROJECT, affectedFingerprint: "project-a-seal" });
+    await expect(model.upsertNode({ ...input, projectId: PROJECT_OTHER })).rejects.toThrow("collides outside project");
+    const row = await ownerPool.query<{ project_id: string; affected_fingerprint: string }>(
+      "SELECT project_id, affected_fingerprint FROM integration_nodes WHERE org_id = $1 AND member_key = $2",
+      [ORG, memberKey(input.baseSha, [input.members[0]!.headSha])],
+    );
+    expect(row.rows[0]).toEqual({ project_id: PROJECT, affected_fingerprint: "project-a-seal" });
   });
 
   it("(b) records a proof keyed by proofReuseKey: same base+members → cache HIT; one member sha changes → MISS", async () => {

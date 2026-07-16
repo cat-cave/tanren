@@ -19,11 +19,10 @@
 
 import type { BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
 import type { CiConfigV1 } from "../ci/index.js";
-import type { IntegrationNode } from "../contracts/integrationNodes.js";
+import type { IntegrationNode, IntegrationNodeMember } from "../contracts/integrationNodes.js";
 import { memberKey } from "../contracts/integrationNodes.js";
 import type { EventStore } from "../eventStore.js";
 import type { LiveJjWorkspace, LiveJjWorkspaceDeps } from "../providers/liveJjWorkspace.js";
-import type { IntegrationNodeUpsert } from "../dag/integrationNodesPg.js";
 import type { ProofStorePort } from "../dag/integrationProofReuse.js";
 import {
   type JjIntegrationMember,
@@ -33,6 +32,7 @@ import {
 } from "../dag/jjLocalIntegration.js";
 import { resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
 import { decideProofReuse, recordProofVerdict } from "../dag/integrationProofReuse.js";
+import type { CoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
 
 /** The local bookmark name the prospective merged state materializes as (NEVER pushed). */
 export function batchLocalIntegrationRef(tailSpecId: string): string {
@@ -82,12 +82,10 @@ export type GateBatchWorkspace = (live: LiveJjWorkspace) => Promise<{ verdict: B
 export type JjIntegratePort = typeof withJjLocalIntegration;
 
 /**
- * The integration-node store the drive needs — UPSERT the node + read it back by
- * memberKey, plus the proof-store ports (find/record). The `PgIntegrationNodeModel`
- * satisfies this structurally; a fake satisfies it for the unit tests.
+ * The integration-node store the drive needs after the authority materializer owns the
+ * ready write: read by memberKey plus proof-store ports (find/record).
  */
 export interface BatchNodeStore extends ProofStorePort {
-  upsertNode(input: IntegrationNodeUpsert): Promise<string>;
   findByMemberKey(orgId: string, key: string): Promise<IntegrationNode | undefined>;
 }
 
@@ -98,6 +96,8 @@ export interface BatchNodeDriveDeps {
   jjWorkspaceDeps: LiveJjWorkspaceDeps;
   resolveConfig: ResolveBatchGateConfig;
   gate: GateBatchWorkspace;
+  /** Sole ready-node producer: derives the exact diff + stamps the canonical graph seal. */
+  materializeReadyNode: CoverageAuthorityReadyNodeMaterializer;
   /** The jj-local integration runner (defaults to the real A1-backed `withJjLocalIntegration`). */
   integrate?: JjIntegratePort;
 }
@@ -143,25 +143,36 @@ async function verdictForIntegrated(
   live: LiveJjWorkspace,
   integrated: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
 ): Promise<BatchCheckVerdict> {
-  // 2. UPSERT the node — its memberKey is the integrated-content identity the proof keys on.
-  await deps.nodes.upsertNode({
+  // The host head was read before allocation/clone. If the clone imported another base,
+  // never bind its product diff or proof to the stale pre-clone identity; hold and re-drive.
+  if (integrated.baseSha !== facts.baseSha) {
+    return {
+      result: "infra-error",
+      message: `batch base moved from ${facts.baseSha} to cloned ${integrated.baseSha}; re-drive on the exact base`,
+      retriable: true,
+    };
+  }
+
+  const members = membersForIntegratedNode(facts, integrated);
+  // 2. Materialize ready through the sole authority producer. It derives base→head targets
+  // from THIS still-open workspace and atomically stamps the canonical coverage graph.
+  await deps.materializeReadyNode({
     projectId: facts.projectId,
     orgId: facts.orgId,
     baseBranch: facts.baseBranch,
-    baseSha: facts.baseSha,
+    baseSha: integrated.baseSha,
     ref: integrated.localRef,
     purpose: "merge_batch",
-    members: facts.members.map((m) => ({
-      specId: m.specId,
-      runId: facts.tailSpecId,
-      branch: m.branch,
-      headSha: integrated.memberHeadShas[m.specId] ?? "",
-    })),
+    members,
     headSha: integrated.headSha,
     treeHash: integrated.treeHash,
-    status: "ready",
+    workspace: {
+      ssh: deps.jjWorkspaceDeps.ssh,
+      target: live.target,
+      workspacePath: live.workspacePath,
+    },
   });
-  const node = await deps.nodes.findByMemberKey(facts.orgId, memberKeyForNode(facts, integrated));
+  const node = await deps.nodes.findByMemberKey(facts.orgId, memberKeyForNode(integrated.baseSha, members));
 
   // 3. Resolve the gate config from the workspace (the gateConfigHash key component).
   const config = await deps.resolveConfig(live);
@@ -234,12 +245,23 @@ function conflictVerdict(
  * frozen `memberKey(baseSha, ordered member headShas)`), so the read-back lookup hits
  * the row we just wrote (the UPSERT keys on `(org, member_key)`).
  */
-function memberKeyForNode(
+function membersForIntegratedNode(
   facts: BatchNodeDriveFacts,
   integration: Extract<JjLocalIntegrationResult, { outcome: "integrated" }>,
-): string {
+): IntegrationNodeMember[] {
+  return facts.members.flatMap((member) => {
+    const headSha = integration.memberHeadShas[member.specId];
+    // Missing means the member was proven merged-and-dropped during live assembly; its
+    // content is already represented by the exact cloned baseSha, not a phantom empty SHA.
+    return headSha === undefined
+      ? []
+      : [{ specId: member.specId, runId: facts.tailSpecId, branch: member.branch, headSha }];
+  });
+}
+
+function memberKeyForNode(baseSha: string, members: ReadonlyArray<IntegrationNodeMember>): string {
   return memberKey(
-    facts.baseSha,
-    facts.members.map((m) => integration.memberHeadShas[m.specId] ?? ""),
+    baseSha,
+    members.map((member) => member.headSha),
   );
 }

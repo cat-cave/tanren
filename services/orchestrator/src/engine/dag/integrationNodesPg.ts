@@ -149,11 +149,21 @@ export async function upsertIntegrationNodeOnClient(
        members = EXCLUDED.members,
        gate_config_hash = EXCLUDED.gate_config_hash,
        policy_version = EXCLUDED.policy_version,
-       affected_fingerprint = EXCLUDED.affected_fingerprint,
+       affected_fingerprint = CASE
+         WHEN EXCLUDED.affected_fingerprint <> '' THEN EXCLUDED.affected_fingerprint
+         WHEN integration_nodes.project_id = EXCLUDED.project_id
+          AND integration_nodes.base_sha = EXCLUDED.base_sha
+          AND integration_nodes.member_key = EXCLUDED.member_key
+          AND integration_nodes.head_sha IS NOT DISTINCT FROM EXCLUDED.head_sha
+          AND integration_nodes.tree_hash IS NOT DISTINCT FROM EXCLUDED.tree_hash
+           THEN integration_nodes.affected_fingerprint
+         ELSE ''
+       END,
        head_sha = EXCLUDED.head_sha,
        tree_hash = EXCLUDED.tree_hash,
        status = EXCLUDED.status,
        updated_at = now()
+     WHERE integration_nodes.project_id = EXCLUDED.project_id
      RETURNING node_id`,
     [
       nodeId,
@@ -173,7 +183,11 @@ export async function upsertIntegrationNodeOnClient(
       input.status ?? "building",
     ],
   );
-  return result.rows[0]?.node_id ?? nodeId;
+  const persistedNodeId = result.rows[0]?.node_id;
+  if (persistedNodeId === undefined) {
+    throw new Error(`integration node member identity collides outside project ${input.projectId}`);
+  }
+  return persistedNodeId;
 }
 
 /**

@@ -40,6 +40,7 @@ import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
+import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
 
 const log = createLogger("merge");
 
@@ -255,6 +256,7 @@ export class PgBatchChecker implements BatchChecker {
           },
           resolveConfig: batchNodeResolveConfig(gateDeps),
           gate: batchNodeGate(gateDeps),
+          materializeReadyNode: buildCoverageAuthorityReadyNodeMaterializer(this.deps.pool),
         },
       ),
     );

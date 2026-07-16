@@ -29,6 +29,7 @@ export function out(stdout: string): CommandResult {
 }
 
 export const ASSEMBLED_HEAD = "a".repeat(40);
+export const BASE_SHA = "e".repeat(40);
 export const MEMBER_SHA = "b".repeat(40);
 export const TREE_HASH = "d".repeat(40);
 export const CLONE_HEAD = "c".repeat(40);
@@ -54,6 +55,9 @@ export class DispatchingSsh implements CommandSubstrate {
     this.commands.push({ target: sshTarget, command });
     const cmd = command.command;
     if (cmd.includes("conflicted") && cmd.includes("clean")) return out("change0\tclean");
+    if (cmd.includes("git diff --no-renames --name-only -z")) return out("src/affected.ts\0");
+    // The exact cloned base bookmark is read before the local integration branch exists.
+    if (cmd.includes("jj log -r 'main'") && cmd.includes("commit_id")) return out(BASE_SHA);
     // The per-member PRISTINE head read (`jj log -r '<branch>@origin' -T 'commit_id'`) ⇒ a
     // member sha — checked BEFORE the bare `commit_id` branch (both use the commit_id
     // template; the `@origin` revset disambiguates the member read from the head read).

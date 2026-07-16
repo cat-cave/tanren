@@ -100,7 +100,8 @@ export interface JjLocalIntegrationInput {
 
 /**
  * The result of a jj-local integration. On `integrated`: the materialized `headSha` +
- * `treeHash` of the locally-stacked node, the per-member head SHAs captured at
+ * `treeHash` of the locally-stacked node, the exact cloned base commit the stack was
+ * assembled over, the per-member head SHAs captured at
  * integration time (the divergence key), and the (LOCAL) ref name. On `conflict`: the
  * spec-vs-spec pair jj recorded (the member that conflicted with an earlier-stacked one).
  */
@@ -108,6 +109,8 @@ export type JjLocalIntegrationResult =
   | {
       outcome: "integrated";
       localRef: string;
+      /** The exact cloned `baseBranch` bookmark commit, before any local working commit. */
+      baseSha: string;
       headSha: string;
       treeHash: string;
       memberHeadShas: Record<string, string>;
@@ -176,6 +179,10 @@ export async function integrateOverWorkspace(
 ): Promise<JjLocalIntegrationResult> {
   const { core, workspacePath, target } = live;
   const ws = await core.openWorkspace({ repoUrl: input.repoUrl, baseBranch: input.baseBranch, path: workspacePath });
+  // Capture the exact base bookmark imported by THIS clone before `core.branch` creates
+  // a distinct local working commit on top of it. This is the authoritative provenance
+  // for the base→integrated-head product diff; a pre-clone host read can race the clone.
+  const baseSha = await readBookmarkSha(ssh, target, workspacePath, input.baseBranch);
   // NEVER-DISCARD RACE (tanren-owns-the-engine.md §3): a member's `<branch>@origin` may have
   // VANISHED between enqueue and now — its PR merged and the merge deleted the head branch
   // WHILE this dependent was in-flight assembling against it. Resolve the LIVE member set
@@ -257,6 +264,7 @@ export async function integrateOverWorkspace(
   return {
     outcome: "integrated",
     localRef: input.localRef,
+    baseSha,
     headSha: exported.headSha,
     treeHash,
     memberHeadShas,
