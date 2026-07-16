@@ -47,6 +47,23 @@ export {
   type ForgeReviewPublication,
 } from "./simulatedReviewPublication.js";
 export {
+  InMemorySimulatedReviewIntentRepository,
+  PgSimulatedReviewIntentRepository,
+  REVIEW_SIMULATED_INTENT_EVENT,
+  parseSimulatedReviewIntent,
+  simulatedReviewIntentKey,
+  type SimulatedReviewIntent,
+  type SimulatedReviewIntentRepository,
+} from "./simulatedReviewIntent.js";
+export {
+  InMemorySimulatedReviewPublishFence,
+  PgAdvisorySimulatedReviewPublishFence,
+  SIMULATED_REVIEW_PUBLISH_FENCE_NAMESPACE,
+  simulatedReviewPublishFenceMaterial,
+  type SimulatedReviewPublishFence,
+  type SimulatedReviewPublishFenceKey,
+} from "./simulatedReviewPublishFence.js";
+export {
   mergeForRun,
   dispatchedIntegrationFor,
   type MergeAuthorityBundle,

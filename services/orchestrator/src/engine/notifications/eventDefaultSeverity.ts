@@ -239,6 +239,8 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "review.approved": "ok",
   "review.auto_approved": "ok",
   "review.changes_requested": "warn",
+  // gv-2 intended-verdict fence (pre-publish, not land-authoritative) — info.
+  "review.simulated_intent": "info",
 
   // Notification meta — opted off by default; severity floor will mask them
   // even on routes that accidentally enable them, since the dispatcher does

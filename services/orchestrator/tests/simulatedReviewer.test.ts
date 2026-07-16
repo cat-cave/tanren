@@ -45,6 +45,8 @@ function receiptFor(
   };
 }
 
+const FIXTURE_REVIEWER_LOGIN = "tanren-reviewer[bot]";
+
 function simulatedProbe(
   captured: { diff: string; submitted: SubmittedReview[]; fetchedDiff: boolean; headSha: string },
   opts: {
@@ -63,6 +65,7 @@ function simulatedProbe(
       return captured.diff;
     },
     fetchHeadSha: async () => captured.headSha,
+    resolveReviewerLogin: async () => FIXTURE_REVIEWER_LOGIN,
     submitReview: async (event, body, headSha) => {
       captured.submitted.push({ event, body, headSha });
       if (opts.failSubmit) {
@@ -373,6 +376,7 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
       fetchVerdict: async () => ({ verdict: "pending" }),
       fetchDiff: async () => "diff",
       fetchHeadSha: async () => HEAD,
+      resolveReviewerLogin: async () => FIXTURE_REVIEWER_LOGIN,
       // no submitReview
     };
 

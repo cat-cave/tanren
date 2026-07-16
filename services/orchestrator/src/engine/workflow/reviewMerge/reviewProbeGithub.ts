@@ -38,6 +38,11 @@ export interface ReviewProbe {
   /** Exact PR head SHA the simulated review is bound to. */
   fetchHeadSha?(): Promise<string>;
   /**
+   * Distinct reviewer login for the durable intent fence. Production resolves
+   * the dual-credential seam; test probes may hard-code the fixture login.
+   */
+  resolveReviewerLogin?(): Promise<string>;
+  /**
    * Strict forge publication: posts the event (or reclaims an existing exact
    * match) and returns a durable receipt. Must throw (not swallow) on failure
    * — no best-effort path for simulated land.
@@ -67,6 +72,22 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
   const repoFullName = `${repo.owner}/${repo.name}`;
   const { codeHost, visibility } = projectHostSeamsOver(githubHttp, async () => resolved);
   const reviewMerge = new GitHubReviewMergeService(githubHttp);
+  let cachedReviewer:
+    | { reviewer: Awaited<ReturnType<typeof resolveDistinctSimulatedReviewerToken>>["reviewer"]; reviewerLogin: string }
+    | undefined;
+  async function loadReviewer() {
+    if (cachedReviewer !== undefined) return cachedReviewer;
+    const resolvedReviewer = await resolveDistinctSimulatedReviewerToken({
+      secrets,
+      githubHttp,
+      writerInstallation: context.installation,
+      writerStaticRef: context.staticCredentialRef,
+      githubAppMinter,
+      reviewerGithubCredentialRef: input.reviewerGithubCredentialRef,
+    });
+    cachedReviewer = { reviewer: resolvedReviewer.reviewer, reviewerLogin: resolvedReviewer.reviewerLogin };
+    return cachedReviewer;
+  }
   return {
     markReady: async () => {
       await visibility.markChangeRequestReady({ repoFullName, changeRequestNumber: pullNumber });
@@ -83,6 +104,10 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
       const { headSha } = await readChangeRequestShas(githubHttp, pr, resolved);
       return headSha;
     },
+    resolveReviewerLogin: async () => {
+      const { reviewerLogin } = await loadReviewer();
+      return reviewerLogin;
+    },
     submitReview: async (event, body, headSha) => {
       if (event === "COMMENT") {
         throw new SimulatedReviewPublicationError(
@@ -95,15 +120,10 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
           `strict simulated review body missing durable Tanren marker for ${expectedState}`,
         );
       }
-      const { reviewer, reviewerLogin } = await resolveDistinctSimulatedReviewerToken({
-        secrets,
-        githubHttp,
-        writerInstallation: context.installation,
-        writerStaticRef: context.staticCredentialRef,
-        githubAppMinter,
-        reviewerGithubCredentialRef: input.reviewerGithubCredentialRef,
-      });
+      const { reviewer, reviewerLogin } = await loadReviewer();
       try {
+        // list→POST convergence lives here; the stage wraps this call in the
+        // cross-process advisory publish fence so concurrent workers serialize.
         return await publishSimulatedReviewConvergent({
           expectedState,
           expectedHeadSha: headSha,

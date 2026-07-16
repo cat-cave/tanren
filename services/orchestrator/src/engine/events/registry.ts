@@ -104,6 +104,7 @@ import {
   ReviewAutoApprovedPayload,
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
+  ReviewSimulatedIntentPayload,
 } from "./schemas/integrations.js";
 import {
   MergeBatchBisectingPayload,
@@ -308,12 +309,12 @@ export const EventRegistry = {
   "gate.quarantine_excluded": GateQuarantineExcludedPayload,
   "gate.publish_failed": GatePublishFailedPayload,
   "gate.verdict": GateVerdictPayload,
-  // Review lifecycle
+  // Review lifecycle (+ gv-2 non-terminal intent fence)
   "review.requested": ReviewRequestedPayload,
   "review.approved": ReviewApprovedPayload,
   "review.auto_approved": ReviewAutoApprovedPayload,
   "review.changes_requested": ReviewChangesRequestedPayload,
-  // merge stage: per-repo integration dispatch + conflict scaffolding
+  "review.simulated_intent": ReviewSimulatedIntentPayload,
   "merge.scheduled": MergeScheduledPayload,
   "merge.queued": MergeQueuedPayload,
   "merge.completed": MergeCompletedPayload,
@@ -452,9 +453,7 @@ export const EventRegistry = {
   // addressed the blocker and re-queued the spec (needs_attention → open), resetting
   // its bounded re-enqueue budget so the DagWalker genuinely re-runs it.
   "dag.spec.attention_resolved": DagSpecAttentionResolvedPayload,
-
-  // Plane B app environment: the project's runtime-scoped app env was attached to the DEPLOYED
-  // app (Vercel/Fly). Records the deploy target + env KEY NAMES only — never a secret value.
+  // Plane B: runtime app env attached (key names only — never secret values).
   "app_env.runtime_attached": AppEnvRuntimeAttachedPayload,
 } as const satisfies Record<string, z.ZodTypeAny>;
 
@@ -490,7 +489,7 @@ export interface RawEventRow {
   payload: unknown;
 }
 
-// decodeEvent parses a DB row payload through the registered Zod schema (defense-in-depth for replay/import; write-time producers are already validated).
+/** Decode a DB event row through the registered Zod schema (replay defense-in-depth). */
 export function decodeEvent(row: RawEventRow): TypedEvent {
   if (!isEventName(row.event_type)) {
     throw new UnknownEventTypeError(row.event_type);

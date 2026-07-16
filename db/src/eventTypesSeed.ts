@@ -151,6 +151,7 @@ export const eventTypesSeed = [
   { name: "review.auto_approved", defaultSeverity: "ok" },
   { name: "review.changes_requested", defaultSeverity: "warn" },
   { name: "review.requested", defaultSeverity: "info" },
+  { name: "review.simulated_intent", defaultSeverity: "info" },
   { name: "run.cancelled", defaultSeverity: "info" },
   { name: "run.completed", defaultSeverity: "ok" },
   { name: "run.failed", defaultSeverity: "fail" },

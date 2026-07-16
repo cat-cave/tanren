@@ -36,4 +36,14 @@ export const reviewSensitivityRules: SensitivityRule[] = [
     ["forgeReviewUrl", "public"],
     ["headSha", "public"],
   ]),
+  // gv-2 intent fence — non-secret publication identity (never a token).
+  ...rulesFor("review.simulated_intent", [
+    ["headSha", "public"],
+    ["state", "public"],
+    ["event", "public"],
+    ["body", "public"],
+    ["message", "public"],
+    ["reviewerLogin", "public"],
+    ["marker", "public"],
+  ]),
 ];

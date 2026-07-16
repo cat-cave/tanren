@@ -52,6 +52,33 @@ describe("ReviewApprovedPayload forge publication all-or-nothing", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("rejects non-40-hex durable receipt headSha at the schema boundary", () => {
+    expect(
+      ReviewApprovedPayload.safeParse({
+        prUrl: "https://x",
+        prNumber: 1,
+        ...COMPLETE,
+        headSha: "not-a-sha",
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewApprovedPayload.safeParse({
+        prUrl: "https://x",
+        prNumber: 1,
+        ...COMPLETE,
+        headSha: "abc",
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewApprovedPayload.safeParse({
+        prUrl: "https://x",
+        prNumber: 1,
+        ...COMPLETE,
+        headSha: "g".repeat(40),
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("ReviewChangesRequestedPayload forge publication all-or-nothing", () => {

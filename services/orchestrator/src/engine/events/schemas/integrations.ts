@@ -71,14 +71,14 @@ export const ReviewRequestedPayload = z
   })
   .strict();
 
-// gv-2: forge receipt is ALL-OR-NOTHING (union of complete receipt vs absent).
-// Partial id/state/url/headSha tuples are rejected at the schema boundary.
+// gv-2: forge receipt all-or-nothing; headSha exactly 40 hex at schema boundary.
+const forgeHeadSha = z.string().regex(/^[0-9a-fA-F]{40}$/u, "forge receipt headSha must be exactly 40 hex");
 const forgeReceipt = z
   .object({
     forgeReviewId: z.string().min(1),
     forgeReviewState: z.enum(["approved", "changes_requested"]),
     forgeReviewUrl: z.string().min(1),
-    headSha: z.string().min(1),
+    headSha: forgeHeadSha,
   })
   .strict();
 const reviewApprovedBase = z
@@ -94,6 +94,18 @@ const reviewChangesBase = z
   })
   .strict();
 export const ReviewChangesRequestedPayload = z.union([reviewChangesBase.merge(forgeReceipt), reviewChangesBase]);
+// gv-2 intent fence (not terminal land authority).
+export const ReviewSimulatedIntentPayload = z
+  .object({
+    headSha: forgeHeadSha,
+    state: z.enum(["approved", "changes_requested"]),
+    event: z.enum(["APPROVE", "REQUEST_CHANGES"]),
+    body: z.string().min(1),
+    message: z.string(),
+    reviewerLogin: z.string().min(1),
+    marker: z.string().min(1),
+  })
+  .strict();
 
 // Emitted when a project's reviewPolicy is `auto`: the review stage approved the
 // PR without polling GitHub (the no-review tier). Distinct from `review.approved`
