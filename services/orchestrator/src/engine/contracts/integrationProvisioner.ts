@@ -55,6 +55,7 @@
 
 import { SentryProvisioner, type SentryProvisionerDeps } from "../providers/sentryProvisioner.js";
 
+import type { EligibleOperationLease } from "./integrationAuthority.js";
 import type { SecretStore } from "./secretStore.js";
 import { DeployProvisioner } from "../provisioners/deployProvisioner.js";
 import { FlyDeployProvisioner, FLY_PROVIDER_KIND } from "../provisioners/flyDeployProvisioner.js";
@@ -78,22 +79,22 @@ export type CapabilityId = string;
 export type ProvisionMode = "greenfield" | "brownfield";
 
 /**
- * The org-level active control grant resolved from the connection authority: the managed
- * credential REF (resolved against the SecretStore by the provider — never the
- * secret value) plus the NON-SECRET org metadata (sentry org slug, slack
- * workspace id, …). This is what every provisioner method runs under.
+ * The org-level active control grant resolved ONLY from IntegrationAuthority.
+ * No naked credential ref — secret reads require the opaque eligible operation
+ * lease through IntegrationSecretStore.getExact.
  */
 export interface OrgGrant {
   connectionId: string;
   grantId: string;
   providerKind: string;
-  upstreamAccountId: string;
+  /** Provider-verified principal id (Slack team_id, Sentry org id, …). */
+  providerPrincipalId: string;
   authGeneration: number;
   grantGeneration: number;
-  /** Secret-manager ref for the org credential. NEVER the secret value itself. */
-  credentialRef: string;
-  /** Non-secret org metadata (sentry org slug, slack workspace id, hetzner project, …). */
+  /** Non-secret principal metadata (display names, slugs). Never tokens. */
   metadata: Record<string, unknown>;
+  /** Opaque lease — sole credential coordinate for secret/provider construction. */
+  eligibleOperation: EligibleOperationLease;
 }
 
 /**

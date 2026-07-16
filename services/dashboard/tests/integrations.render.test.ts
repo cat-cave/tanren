@@ -37,18 +37,15 @@ const LINKED_INTEGRATIONS = {
       grantId: "grant_sentry",
       orgId: "org_acme",
       providerKind: "sentry",
-      upstreamAccountId: "sentry_acme",
-      authKind: "api_key",
-      authGeneration: 2,
-      ownerId: "user_alice",
-      metadataKeys: ["orgSlug"],
-      capabilities: ["errors"],
-      operations: ["errors"],
-      providerScopes: [],
+      providerPrincipalId: "sentry_acme",
+      principalKind: "organization",
+      displayName: "Acme Sentry",
       health: "healthy",
       connectionStatus: "active",
+      currentAuthGeneration: 2,
       grantGeneration: 3,
       grantStatus: "active",
+      providerScopes: [],
       selectedForProject: true,
     },
     {
@@ -56,18 +53,15 @@ const LINKED_INTEGRATIONS = {
       grantId: "grant_slack",
       orgId: "org_acme",
       providerKind: "slack",
-      upstreamAccountId: "workspace_acme",
-      authKind: "bot_token",
-      authGeneration: 1,
-      ownerId: "user_alice",
-      metadataKeys: [],
-      capabilities: ["notify"],
-      operations: ["notify"],
-      providerScopes: ["chat:write"],
+      providerPrincipalId: "workspace_acme",
+      principalKind: "team",
+      displayName: "Acme Slack",
       health: "healthy",
       connectionStatus: "active",
+      currentAuthGeneration: 1,
       grantGeneration: 1,
       grantStatus: "active",
+      providerScopes: ["chat:write"],
       selectedForProject: true,
     },
     {
@@ -75,18 +69,15 @@ const LINKED_INTEGRATIONS = {
       grantId: "grant_vercel",
       orgId: "org_acme",
       providerKind: "deploy.vercel",
-      upstreamAccountId: "team_abc",
-      authKind: "api_key",
-      authGeneration: 1,
-      ownerId: "user_alice",
-      metadataKeys: ["teamId"],
-      capabilities: ["deploy"],
-      operations: ["deploy"],
-      providerScopes: [],
+      providerPrincipalId: "team_abc",
+      principalKind: "team",
+      displayName: "Acme Vercel",
       health: "unknown",
       connectionStatus: "active",
+      currentAuthGeneration: 1,
       grantGeneration: 1,
       grantStatus: "active",
+      providerScopes: [],
       selectedForProject: false,
     },
   ],
@@ -232,11 +223,11 @@ describe("integrations two-plane panel (/integrations)", () => {
     expect(html).toContain('data-provider="slack"');
     expect(html).toContain('data-provider="deploy.vercel"');
     expect(html).not.toContain("secret://org/");
-    expect(html).toContain("account · sentry_acme");
+    expect(html).toContain("verified principal · Acme Sentry");
     expect(html).toContain("auth generation 2 · grant generation 3");
-    expect(html).toContain("capabilities · errors");
+    expect(html).toContain("scopes · chat:write");
     expect(html).toContain("selected for project");
-    expect(html).toContain("use this account");
+    expect(html).toContain("use this principal");
     // Only explicitly selected capabilities show ready state + enable form.
     expect(html).toContain('data-capability="errors"');
     expect(html).toContain("account selected");
@@ -256,10 +247,10 @@ describe("integrations two-plane panel (/integrations)", () => {
     const selected = await app.request("/integrations/select", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "projectId=project_easy&providerKind=deploy.vercel&connectionId=connection_vercel&grantId=grant_vercel",
+      body: "projectId=project_easy&providerKind=deploy.vercel&connectionId=connection_vercel&grantId=grant_vercel&authGeneration=1&grantGeneration=1",
     });
     expect(selected.status).toBe(303);
-    expect(selected.headers.get("location")).toContain("selected%20deploy.vercel%20account");
+    expect(selected.headers.get("location")).toContain("selected%20deploy.vercel%20principal");
 
     provisionBody = {
       status: "selection_required",

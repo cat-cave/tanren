@@ -15,22 +15,20 @@
 /** A single org grant as returned by `GET /orgs/:orgId/integrations`. */
 export interface OrgIntegrationSummary {
   connectionId: string;
-  grantId: string;
+  grantId?: string;
   orgId: string;
   providerKind: string;
-  upstreamAccountId: string;
-  authKind: string;
-  authGeneration: number;
-  ownerId: string;
-  /** Keys present in the grant metadata; values are never echoed. */
-  metadataKeys: string[];
-  capabilities: string[];
-  operations: string[];
-  providerScopes: string[];
+  providerPrincipalId: string;
+  principalKind: string;
+  displayName: string;
   health: string;
   connectionStatus: string;
-  grantGeneration: number;
-  grantStatus: string;
+  currentAuthGeneration?: number;
+  grantGeneration?: number;
+  grantStatus?: string;
+  authExpiresAt?: string;
+  providerScopes: string[];
+  pendingOperation?: { operationId: string; stage: string; status: string };
   selectedForProject: boolean;
 }
 
@@ -76,7 +74,9 @@ export interface GrantSelectionCandidate {
   connectionId: string;
   grantId: string;
   providerKind: string;
-  upstreamAccountId: string;
+  providerPrincipalId: string;
+  displayName?: string;
+  ineligibilityReasons?: string[];
   health: string;
   authGeneration: number;
   grantGeneration: number;
@@ -125,7 +125,9 @@ export interface SelectGrantOutcome {
   providerKind: string;
   connectionId: string;
   grantId: string;
-  upstreamAccountId: string;
+  providerPrincipalId: string;
+  displayName?: string;
+  ineligibilityReasons?: string[];
   authGeneration: number;
   grantGeneration: number;
 }

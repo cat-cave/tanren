@@ -258,9 +258,9 @@ export class SentryProvisioner implements IntegrationProvisioner {
    * in the artifact, logged, or persisted to DB config.
    */
   private async resolveToken(grant: OrgGrant): Promise<string> {
-    const secret = await this.secrets.get(grant.credentialRef);
+    const secret = await this.secrets.get(grant.eligibleOperation.credentialRef);
     if (secret === undefined) {
-      throw new Error(`sentry provisioner: no org token at credential ref ${grant.credentialRef}`);
+      throw new Error(`sentry provisioner: no org token at credential ref ${grant.eligibleOperation.credentialRef}`);
     }
     return secret.value;
   }
@@ -385,7 +385,7 @@ export class SentryProvisioner implements IntegrationProvisioner {
         config: {
           org: meta.orgSlug,
           project: slug,
-          tokenRef: grant.credentialRef,
+          tokenRef: grant.eligibleOperation.credentialRef,
           baseUrl: this.baseUrl(meta),
         },
       },

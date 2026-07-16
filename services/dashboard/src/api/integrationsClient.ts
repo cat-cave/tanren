@@ -40,9 +40,7 @@ export class IntegrationsClient extends OrchestratorHttpClient {
     providerKind: string,
     input: {
       token: string;
-      upstreamAccountId: string;
-      authKind: "api_key" | "oauth2" | "bot_token" | "webhook" | "workload_identity";
-      metadata?: Record<string, unknown>;
+      idempotencyKey: string;
     },
   ): Promise<{ ok: boolean; status: number; body: LinkOutcome | undefined }> {
     const r = await this.sendJson<LinkOutcome>(
@@ -83,7 +81,7 @@ export class IntegrationsClient extends OrchestratorHttpClient {
     orgId: string,
     projectId: string,
     providerKind: string,
-    input: { connectionId: string; grantId: string },
+    input: { connectionId: string; grantId: string; authGeneration: number; grantGeneration: number },
   ): Promise<{ ok: boolean; status: number; body: SelectGrantOutcome | undefined }> {
     const r = await this.sendJson<SelectGrantOutcome>(
       "PUT",

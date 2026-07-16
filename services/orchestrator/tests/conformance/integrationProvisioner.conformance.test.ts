@@ -1,3 +1,5 @@
+/* eslint-disable import/max-dependencies -- multi-provider conformance registry */
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // Per-implementation invocations of the IntegrationProvisioner conformance suite
 // + the registry / resolveSmartDefault unit coverage. The foundation wave has NO
 // real provider, so the contract is proven against the in-memory fake (the shape a
@@ -27,11 +29,13 @@ import { SlackProvisioner } from "../../src/engine/integrations/slack/slackProvi
 import { ScriptedSlackTransport } from "./fakes/scriptedSlackTransport.js";
 import { describeIntegrationProvisionerConformance } from "./integrationProvisionerConformance.js";
 
-const grant = (): OrgGrant => ({
-  providerKind: "sentry",
-  credentialRef: "secret://org/sentry-token",
-  metadata: { orgSlug: "acme" },
-});
+const grant = (): OrgGrant =>
+  testOrgGrant({
+    providerKind: "sentry",
+    credentialRef: "secret://org/sentry-token/g/1",
+    metadata: { orgSlug: "acme" },
+    capability: "errors",
+  });
 
 const projectCtx = (projectId: string): ProjectContext => ({
   projectId,
@@ -59,17 +63,18 @@ const SENTRY_TOKEN_REF = "secret://org/sentry-token";
 const SENTRY_SEEDED_SLUG = "acme-web";
 
 function sentryGrant(): OrgGrant {
-  return {
+  return testOrgGrant({
     providerKind: "sentry",
-    credentialRef: SENTRY_TOKEN_REF,
+    credentialRef: SENTRY_TOKEN_REF.includes("/g/") ? SENTRY_TOKEN_REF : `${SENTRY_TOKEN_REF}/g/1`,
     metadata: { orgSlug: "acme", team: "platform" },
-  };
+    capability: "errors",
+  });
 }
 
 function makeSentry(): SentryProvisioner {
   const secrets = new InMemorySecretStore();
   // The org grant token lives in the secret store (resolved by ref, never inline).
-  void secrets.put({ ref: SENTRY_TOKEN_REF, value: "org-token-value" });
+  void secrets.put({ ref: `${SENTRY_TOKEN_REF}/g/1`, value: "org-token-value" });
   const transport = new ScriptedSentryTransport({
     existing: [{ slug: SENTRY_SEEDED_SLUG, name: "acme-web", platform: "node" }],
   });
@@ -91,7 +96,7 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
 
   it("provision() find-or-create is idempotent — a 2nd provision creates NO 2nd project", async () => {
     const secrets = new InMemorySecretStore();
-    await secrets.put({ ref: SENTRY_TOKEN_REF, value: "org-token-value" });
+    await secrets.put({ ref: `${SENTRY_TOKEN_REF}/g/1`, value: "org-token-value" });
     const transport = new ScriptedSentryTransport();
     const provisioner = new SentryProvisioner(transport, secrets);
     const ctx = projectCtx("billing");
@@ -107,7 +112,7 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
 
   it("provision() stores the DSN in the secret manager and the artifact carries ONLY the ref (never the DSN value)", async () => {
     const secrets = new InMemorySecretStore();
-    await secrets.put({ ref: SENTRY_TOKEN_REF, value: "org-token-value" });
+    await secrets.put({ ref: `${SENTRY_TOKEN_REF}/g/1`, value: "org-token-value" });
     const transport = new ScriptedSentryTransport();
     const provisioner = new SentryProvisioner(transport, secrets);
 
@@ -132,7 +137,7 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
     expect(artifact.inboxSource?.config).toMatchObject({
       org: "acme",
       project: "billing",
-      tokenRef: SENTRY_TOKEN_REF,
+      tokenRef: `${SENTRY_TOKEN_REF}/g/1`,
     });
     // The inbox source carries the token REF, never the resolved token value.
     expect(JSON.stringify(artifact.inboxSource)).not.toContain("org-token-value");
@@ -166,15 +171,17 @@ describe("SentryProvisioner — Sentry-specific behavior", () => {
 const DEPLOY_TOKEN_REF = "secret://org/deploy-token";
 const SEEDED_DEPLOY_APP = "seeded-app";
 
-const deployGrant = (kind: string, metadata: Record<string, unknown>): OrgGrant => ({
-  providerKind: kind,
-  credentialRef: DEPLOY_TOKEN_REF,
-  metadata,
-});
+const deployGrant = (kind: string, metadata: Record<string, unknown>): OrgGrant =>
+  testOrgGrant({
+    providerKind: kind,
+    credentialRef: `${DEPLOY_TOKEN_REF}/g/1`,
+    metadata,
+    capability: "deploy",
+  });
 
 function deploySecrets(): InMemorySecretStore {
   const secrets = new InMemorySecretStore();
-  void secrets.put({ ref: DEPLOY_TOKEN_REF, value: "super-secret-deploy-token-value" });
+  void secrets.put({ ref: `${DEPLOY_TOKEN_REF}/g/1`, value: "super-secret-deploy-token-value" });
   return secrets;
 }
 
@@ -204,11 +211,13 @@ describeIntegrationProvisionerConformance("FlyDeployProvisioner", {
 // Driven against the scripted Slack transport (no real Slack call in CI). Seeded
 // with one brownfield channel so the bind spec has a target. Each make() gets its
 // own transport so the per-instance state (provision → discover) is isolated.
-const slackGrant = (): OrgGrant => ({
-  providerKind: "slack",
-  credentialRef: "secret://org/slack-bot-token",
-  metadata: { workspaceId: "T123" },
-});
+const slackGrant = (): OrgGrant =>
+  testOrgGrant({
+    providerKind: "slack",
+    credentialRef: "secret://org/slack-bot-token/g/1",
+    metadata: { workspaceId: "T123" },
+    capability: "notify",
+  });
 
 const SLACK_SEEDED_ID = "C_existing-team";
 

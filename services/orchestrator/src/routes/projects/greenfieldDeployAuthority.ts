@@ -1,5 +1,9 @@
 import type { OrgGrant } from "../../engine/contracts/integrationProvisioner.js";
-import type { NotLinkedResult, SelectionRequiredResult } from "../../engine/integrations/provisioningEngine.js";
+import type {
+  IneligibleResult,
+  NotLinkedResult,
+  SelectionRequiredResult,
+} from "../../engine/integrations/provisioningEngine.js";
 import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../../engine/repositories/integrationQuery.js";
 import { OrganizationsStore } from "../../engine/repositories/organizations.js";
@@ -27,10 +31,26 @@ function notLinked(orgId: string, providerKind: DeployProviderKind): NotLinkedRe
   };
 }
 
+function asCandidates(
+  candidates: Awaited<ReturnType<typeof IntegrationConnectionsStore.listExactControlGrants>>,
+): SelectionRequiredResult["candidates"] {
+  return candidates.map((candidate) => ({
+    connectionId: candidate.connectionId,
+    grantId: candidate.grantId,
+    providerKind: candidate.providerKind,
+    providerPrincipalId: candidate.providerPrincipalId,
+    displayName: candidate.displayName,
+    health: candidate.health,
+    authGeneration: candidate.authGeneration,
+    grantGeneration: candidate.grantGeneration,
+    ineligibilityReasons: [],
+  }));
+}
+
 function selectionRequired(
   providerKind: DeployProviderKind,
   reason: SelectionRequiredResult["reason"],
-  candidates: Awaited<ReturnType<typeof IntegrationConnectionsStore.listControlGrants>>,
+  candidates: Awaited<ReturnType<typeof IntegrationConnectionsStore.listExactControlGrants>>,
 ): SelectionRequiredResult {
   return {
     status: "selection_required",
@@ -38,24 +58,17 @@ function selectionRequired(
     providerKind,
     reason,
     message: `choose an exact active ${providerKind} account before greenfield provider operations run.`,
-    candidates: candidates.map((candidate) => ({
-      connectionId: candidate.connectionId,
-      grantId: candidate.grantId,
-      providerKind: candidate.providerKind,
-      upstreamAccountId: candidate.upstreamAccountId,
-      health: candidate.health,
-      authGeneration: candidate.authGeneration,
-      grantGeneration: candidate.grantGeneration,
-    })),
+    candidates: asCandidates(candidates),
   };
 }
 
 export async function resolveGreenfieldDeployGrant(
   input: GreenfieldGrantInput,
-): Promise<OrgGrant | NotLinkedResult | SelectionRequiredResult> {
-  const actor = { kind: "operator" as const, id: input.actorId };
-  const candidates = (await IntegrationConnectionsStore.listControlGrants(input.client, input.orgId, actor)).filter(
-    (candidate) => candidate.providerKind === input.providerKind,
+): Promise<OrgGrant | NotLinkedResult | SelectionRequiredResult | IneligibleResult> {
+  const candidates = await IntegrationConnectionsStore.listExactControlGrants(
+    input.client,
+    input.orgId,
+    input.providerKind,
   );
   if (candidates.length === 0) return notLinked(input.orgId, input.providerKind);
   const hasExactChoice = input.connectionId !== undefined && input.grantId !== undefined;
@@ -71,20 +84,29 @@ export async function resolveGreenfieldDeployGrant(
   if (candidate === undefined) {
     return selectionRequired(input.providerKind, "selected_grant_unavailable", candidates);
   }
-  const grant = await IntegrationConnectionsStore.getControlGrantByIds(
-    input.client,
-    input.orgId,
-    input.providerKind,
-    candidate.connectionId,
-    candidate.grantId,
-    actor,
-  );
-  return grant ?? selectionRequired(input.providerKind, "selected_grant_unavailable", candidates);
+  const grant = await IntegrationConnectionsStore.resolveExactControlGrant(input.client, {
+    orgId: input.orgId,
+    providerKind: input.providerKind,
+    connectionId: candidate.connectionId,
+    grantId: candidate.grantId,
+    capability: "deploy",
+    operation: "provision",
+  });
+  if (grant === undefined) {
+    return {
+      status: "ineligible",
+      capability: "deploy",
+      providerKind: input.providerKind,
+      reasons: ["grant_not_eligible"],
+      message: `deploy grant is not eligible for provision`,
+    };
+  }
+  return grant;
 }
 
 export async function preflightGreenfieldDeploy(
   input: GreenfieldGrantInput,
-): Promise<NotLinkedResult | SelectionRequiredResult | undefined> {
+): Promise<NotLinkedResult | SelectionRequiredResult | IneligibleResult | undefined> {
   const resolved = await resolveGreenfieldDeployGrant(input);
   return "status" in resolved ? resolved : undefined;
 }
@@ -101,6 +123,8 @@ export async function persistGreenfieldDeploySelection(
     providerKind: string;
     connectionId: string;
     grantId: string;
+    authGeneration: number;
+    grantGeneration: number;
   },
   actorId: string,
 ): Promise<void> {

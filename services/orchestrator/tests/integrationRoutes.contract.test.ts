@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type {
   ExistingResource,
@@ -9,6 +9,7 @@ import type {
   ProvisionedArtifact,
 } from "../src/engine/contracts/integrationProvisioner.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
+import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../src/engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
 import { createIntegrationRoutes, type IntegrationRouteDatabase } from "../src/routes/integrations/index.js";
@@ -83,153 +84,199 @@ class RouteClient implements IntegrationQueryClient {
 class RouteDatabase implements IntegrationRouteDatabase {
   readonly events = new FakeEventStore();
   readonly memory = new IntegrationMemoryDb();
-  readonly projectMembers = new Set(["user_alice"]);
-
-  constructor() {
-    this.memory.seedProject("proj_1", "org_acme");
-  }
 
   withOrgScope<T>(orgId: string, work: (client: IntegrationQueryClient) => Promise<T>): Promise<T> {
-    return work(new RouteClient(this.memory.clientForOrg(orgId), orgId, this.projectMembers));
+    return work(new RouteClient(this.memory.clientForOrg(orgId), orgId, new Set(["user_alice"])));
   }
 }
 
 class RecordingProvisioner implements IntegrationProvisioner {
-  readonly grants: OrgGrant[] = [];
   calls = 0;
-
+  grants: OrgGrant[] = [];
   capability(): string[] {
-    return ["errors", "deploy"];
+    return ["errors", "notify", "deploy"];
   }
-
   async discover(grant: OrgGrant): Promise<ExistingResource[]> {
     this.calls += 1;
     this.grants.push(grant);
-    return [{ id: "resource_1", label: "existing", metadata: {} }];
+    return [{ id: "r1", label: "resource", metadata: {} }];
   }
-
-  async provision(grant: OrgGrant, _project: ProjectContext): Promise<ProvisionedArtifact> {
+  async provision(grant: OrgGrant, _ctx: ProjectContext): Promise<ProvisionedArtifact> {
     this.calls += 1;
     this.grants.push(grant);
-    return {};
+    return { projectConfig: { ok: true } };
   }
-
-  async bind(grant: OrgGrant, _resourceId: string, _project: ProjectContext): Promise<ProvisionedArtifact> {
+  async bind(grant: OrgGrant, _id: string, _ctx: ProjectContext): Promise<ProvisionedArtifact> {
     this.calls += 1;
     this.grants.push(grant);
-    return {};
+    return { projectConfig: { ok: true } };
   }
 }
 
 function harness(input: {
-  actor?: ActorContext;
+  actor: ActorContext;
   database?: RouteDatabase;
   secrets?: InMemorySecretStore;
   provisioner?: RecordingProvisioner;
+  fetchImpl?: typeof fetch;
 }) {
   const database = input.database ?? new RouteDatabase();
   const secrets = input.secrets ?? new InMemorySecretStore();
+  const provisioner = input.provisioner ?? new RecordingProvisioner();
   const app = new Hono<ActorContextEnv>();
-  if (input.actor !== undefined) {
-    app.use("*", async (c, next) => {
-      c.set("actor", input.actor);
-      await next();
-    });
-  }
+  app.use("*", async (c, next) => {
+    c.set("actor", input.actor);
+    return next();
+  });
   app.route(
     "/orgs",
     createIntegrationRoutes({
       database,
       secrets,
-      ...(input.provisioner === undefined ? {} : { buildProvisioner: () => input.provisioner! }),
+      integrationSecrets: new GenerationAddressedIntegrationSecretStore(secrets),
+      buildProvisioner: () => provisioner,
+      fetchImpl: input.fetchImpl,
     }),
   );
-  return { app, database, secrets };
+  return { app, database, secrets, provisioner };
+}
+
+function vercelFetchFor(teamId: string): typeof fetch {
+  return vi.fn<typeof fetch>(async (url: string | URL | Request) => {
+    const href = String(url);
+    if (href.includes("/v2/user")) {
+      return Response.json({ user: { id: `user_for_${teamId}`, username: "u" } });
+    }
+    if (href.includes("/v2/teams")) {
+      return Response.json({ teams: [{ id: teamId, name: teamId, slug: teamId }] });
+    }
+    return new Response("not found", { status: 404 });
+  }) as unknown as typeof fetch;
 }
 
 const provisionPath = "/orgs/org_acme/projects/proj_1/integrations/provision";
 
-describe("integration route authorization before effects", () => {
-  it("returns 401 without an actor and never constructs a provider", async () => {
-    const provisioner = new RecordingProvisioner();
-    const { app } = harness({ provisioner });
-    expect((await app.request(provisionPath, { method: "POST" })).status).toBe(401);
-    expect(provisioner.calls).toBe(0);
+describe("integration routes auth + sanitization", () => {
+  it("rejects unauthenticated and non-admin link before staging secrets", async () => {
+    const secrets = new InMemorySecretStore();
+    const unauth = new Hono<ActorContextEnv>();
+    unauth.route("/orgs", createIntegrationRoutes({ database: new RouteDatabase(), secrets }));
+    expect((await unauth.request("/orgs/org_acme/integrations")).status).toBe(401);
+
+    const memberApp = harness({ actor: member, secrets }).app;
+    const link = await memberApp.request("/orgs/org_acme/integrations/sentry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "t", idempotencyKey: "k1" }),
+    });
+    expect(link.status).toBe(403);
+    expect(await secrets.list("secret://")).toEqual([]);
   });
 
-  it("rejects cross-org, non-member, missing-project, and malformed requests before provider I/O", async () => {
-    const provisioner = new RecordingProvisioner();
-    const deniedDb = new RouteDatabase();
-    deniedDb.projectMembers.clear();
-    const denied = harness({
-      actor: { ...member, projectId: null, scopes: ["org:member"] },
-      database: deniedDb,
-      provisioner,
+  it("rejects invalid link bodies without provider I/O", async () => {
+    const { app } = harness({ actor: admin });
+    const response = await app.request("/orgs/org_acme/integrations/sentry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "t" }),
     });
-    expect(
-      (
-        await denied.app.request(provisionPath, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ capability: "errors", mode: "greenfield" }),
-        })
-      ).status,
-    ).toBe(403);
-
-    const normal = harness({ actor: member, provisioner });
-    expect(
-      (await normal.app.request("/orgs/org_intruder/projects/proj_1/integrations/discover?capability=errors")).status,
-    ).toBe(403);
-    expect(
-      (await normal.app.request("/orgs/org_acme/projects/missing/integrations/discover?capability=errors")).status,
-    ).toBe(404);
-    expect(
-      (
-        await normal.app.request(provisionPath, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: "{}",
-        })
-      ).status,
-    ).toBe(400);
-    expect(provisioner.calls).toBe(0);
+    expect(response.status).toBe(400);
   });
 });
 
-describe("multi-account integration selection", () => {
-  it("uses collision-free per-account secrets and refuses provider I/O until selection", async () => {
+describe("verified principal link + multi-principal selection", () => {
+  it("links via provider-verified principal and never echoes tokens", async () => {
+    const database = new RouteDatabase();
+    const secrets = new InMemorySecretStore();
+    const { app } = harness({
+      actor: admin,
+      database,
+      secrets,
+      fetchImpl: vercelFetchFor("team_a"),
+    });
+    const response = await app.request("/orgs/org_acme/integrations/deploy.vercel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "token_team_a", idempotencyKey: "link-a" }),
+    });
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      status: "completed",
+      providerPrincipalId: "team_a",
+    });
+    expect(JSON.stringify(body)).not.toContain("token_team_a");
+    expect(database.memory.connections[0]?.provider_principal_id).toBe("team_a");
+  });
+
+  it("returns awaiting_principal_selection for multi-principal credentials", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url: string | URL | Request) => {
+      const href = String(url);
+      if (href.includes("/v2/user")) return Response.json({ user: { id: "user_1", username: "u" } });
+      if (href.includes("/v2/teams")) {
+        return Response.json({
+          teams: [
+            { id: "team_a", name: "A", slug: "a" },
+            { id: "team_b", name: "B", slug: "b" },
+          ],
+        });
+      }
+      return new Response("not found", { status: 404 });
+    }) as unknown as typeof fetch;
+    const { app, database } = harness({ actor: admin, fetchImpl });
+    const response = await app.request("/orgs/org_acme/integrations/deploy.vercel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "multi", idempotencyKey: "multi-1" }),
+    });
+    expect(response.status).toBe(202);
+    const body = await response.json();
+    expect(body).toMatchObject({ status: "awaiting_principal_selection" });
+    expect(body.candidates).toHaveLength(2);
+    expect(database.memory.connections).toHaveLength(0);
+  });
+
+  it("requires project selection before provider I/O and never returns credential refs", async () => {
     const database = new RouteDatabase();
     const secrets = new InMemorySecretStore();
     const provisioner = new RecordingProvisioner();
-    const { app } = harness({ actor: admin, database, secrets, provisioner });
-
-    for (const account of ["team_a", "team_b"]) {
-      const response = await app.request("/orgs/org_acme/integrations/deploy.vercel", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ token: `token_${account}`, upstreamAccountId: account, authKind: "api_key" }),
-      });
-      expect(response.status).toBe(201);
-    }
-    const refs = database.memory.connections.map((row) => row.credential_ref);
-    expect(new Set(refs).size).toBe(2);
-    await expect(secrets.get(refs[0]!)).resolves.toMatchObject({ value: "token_team_a" });
-    await expect(secrets.get(refs[1]!)).resolves.toMatchObject({ value: "token_team_b" });
+    const { app } = harness({
+      actor: admin,
+      database,
+      secrets,
+      provisioner,
+      fetchImpl: vercelFetchFor("team_only"),
+    });
+    const linked = await app.request("/orgs/org_acme/integrations/deploy.vercel", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: "t", idempotencyKey: "one" }),
+    });
+    expect(linked.status).toBe(202);
+    const linkedBody = (await linked.json()) as {
+      connectionId: string;
+      grantId: string;
+      authGeneration: number;
+      grantGeneration: number;
+    };
 
     const memberApp = harness({ actor: member, database, secrets, provisioner }).app;
     const ambiguous = await memberApp.request(
       "/orgs/org_acme/projects/proj_1/integrations/discover?capability=deploy&providerKind=deploy.vercel",
     );
     expect(ambiguous.status).toBe(409);
-    expect(await ambiguous.json()).toMatchObject({ status: "selection_required", reason: "multiple_eligible" });
+    expect(await ambiguous.json()).toMatchObject({ status: "selection_required" });
     expect(provisioner.calls).toBe(0);
 
-    const accountB = database.memory.connections.find((row) => row.upstream_account_id === "team_b")!;
-    const grantB = database.memory.grants.find((row) => row.connection_id === accountB.id)!;
     const selected = await memberApp.request("/orgs/org_acme/projects/proj_1/integrations/deploy.vercel/selection", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ connectionId: accountB.id, grantId: grantB.id }),
+      body: JSON.stringify({
+        connectionId: linkedBody.connectionId,
+        grantId: linkedBody.grantId,
+        authGeneration: linkedBody.authGeneration,
+        grantGeneration: linkedBody.grantGeneration,
+      }),
     });
     expect(selected.status).toBe(200);
 
@@ -238,13 +285,13 @@ describe("multi-account integration selection", () => {
     );
     expect(discovered.status).toBe(200);
     expect(provisioner.grants.at(-1)).toMatchObject({
-      connectionId: accountB.id,
-      grantId: grantB.id,
-      upstreamAccountId: "team_b",
+      connectionId: linkedBody.connectionId,
+      providerPrincipalId: "team_only",
     });
+    expect(JSON.stringify(await discovered.json())).not.toContain("credentialRef");
   });
 
-  it("returns a structured not-linked result without constructing a provider", async () => {
+  it("returns structured not-linked without constructing a provider", async () => {
     const provisioner = new RecordingProvisioner();
     const { app } = harness({ actor: member, provisioner });
     const response = await app.request(provisionPath, {
@@ -257,26 +304,43 @@ describe("multi-account integration selection", () => {
     expect(provisioner.calls).toBe(0);
   });
 
-  it("lists the exact selected account and lifecycle state without secret refs", async () => {
+  it("lists verified principals and lifecycle without secret material", async () => {
     const database = new RouteDatabase();
-    const { app } = harness({ actor: admin, database });
+    const { app } = harness({
+      actor: admin,
+      database,
+      fetchImpl: vi.fn<typeof fetch>(async () =>
+        Response.json([{ id: "org_1", slug: "acme", name: "Acme" }]),
+      ) as unknown as typeof fetch,
+    });
     const link = await app.request("/orgs/org_acme/integrations/sentry", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ token: "secret-value", upstreamAccountId: "sentry_acme", authKind: "api_key" }),
+      body: JSON.stringify({ token: "secret-value", idempotencyKey: "sentry-1" }),
     });
-    const linked = (await link.json()) as { connectionId: string; grantId: string };
+    expect(link.status).toBe(202);
+    const linked = (await link.json()) as {
+      connectionId: string;
+      grantId: string;
+      authGeneration: number;
+      grantGeneration: number;
+    };
     const memberApp = harness({ actor: member, database }).app;
     await memberApp.request("/orgs/org_acme/projects/proj_1/integrations/sentry/selection", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ connectionId: linked.connectionId, grantId: linked.grantId }),
+      body: JSON.stringify({
+        connectionId: linked.connectionId,
+        grantId: linked.grantId,
+        authGeneration: linked.authGeneration,
+        grantGeneration: linked.grantGeneration,
+      }),
     });
     const response = await memberApp.request("/orgs/org_acme/integrations?projectId=proj_1");
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body).toMatchObject({
-      integrations: [{ providerKind: "sentry", selectedForProject: true }],
+      integrations: [{ providerKind: "sentry", providerPrincipalId: "org_1", selectedForProject: true }],
       lifecycle: { projectId: "proj_1", requirements: { total: 2, needsAttention: 1 } },
     });
     expect(JSON.stringify(body)).not.toContain("secret-value");

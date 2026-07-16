@@ -378,7 +378,6 @@ export class DeployOnMergeWatcher {
       return { kind: "ok", info: { projectId: row.project_id, repoSlug, ref } };
     });
   }
-
   /**
    * Resolve the project's deploy intent on merge (system-scoped) into the THREE-WAY
    * {@link DeployTargetResolution}. Reads the project config + probes the org's
@@ -403,11 +402,16 @@ export class DeployOnMergeWatcher {
       // Probe whether a deploy is EXPECTED: does the org link a deploy-capable
       // integration grant? Only consulted to distinguish an incomplete-but-expected
       // deploy (LOUD) from a legitimate "no deploy configured" no-op.
-      const grants = await IntegrationConnectionsStore.listControlGrants(client, orgId, systemActor);
-      return resolveDeployTarget({ orgId, config, deployIntent: grantsSignalDeployIntent(grants) });
+      const grants = await IntegrationConnectionsStore.listExactControlGrants(client, orgId);
+      return resolveDeployTarget({
+        orgId,
+        config,
+        deployIntent: grantsSignalDeployIntent(
+          grants.map((grant) => ({ providerKind: grant.providerKind, capabilities: ["deploy"] })),
+        ),
+      });
     });
   }
-
   /**
    * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live),
    * `deploy.failed` (verify retry exhausted / trigger failure), OR `deploy.skipped`
@@ -425,7 +429,6 @@ export class DeployOnMergeWatcher {
       return result.rows[0] !== undefined;
     });
   }
-
   /** The latest `deploy.triggered` deploymentId, if any — drives the RESUME (re-verify) path. */
   private async priorTriggeredDeploymentId(runId: string): Promise<string | undefined> {
     return runWithSystemScope(this.deps.pool, async (client): Promise<string | undefined> => {
@@ -440,26 +443,33 @@ export class DeployOnMergeWatcher {
       return typeof deploymentId === "string" && deploymentId.trim() !== "" ? deploymentId : undefined;
     });
   }
-
   private async loadGrant(projectId: string, target: ProjectDeployTarget) {
     return runWithSystemScope(this.deps.pool, async (client) => {
-      const resolution = await IntegrationConnectionsStore.resolveControlGrant(
-        client,
-        target.orgId,
+      const authority = new (await import("../integrations/integrationAuthorityImpl.js")).PgIntegrationAuthority();
+      const resolution = await authority.authorizeOperation(client, {
+        orgId: target.orgId,
         projectId,
-        target.provider,
-        systemActor,
-      );
+        providerKind: target.provider,
+        capability: "deploy",
+        operation: "provision",
+        actor: systemActor,
+      });
       if (resolution.status === "selection_required") {
         throw new Error(
           `deployOnMerge: project '${projectId}' requires an explicit active '${target.provider}' account selection (${resolution.reason})`,
         );
       }
-      return resolution.status === "selected" ? resolution.grant : undefined;
+      if (resolution.status === "ineligible") {
+        throw new Error(
+          `deployOnMerge: project '${projectId}' deploy grant ineligible (${resolution.reasons.join(",")})`,
+        );
+      }
+      return resolution.status === "eligible"
+        ? IntegrationConnectionsStore.orgGrantFromLease(resolution.lease)
+        : undefined;
     });
   }
 }
-
 /**
  * Build the production deploy-on-merge watcher with the default deploy transport —
  * a thin factory so the autonomy-loops boot imports ONE symbol (keeps that file
@@ -485,7 +495,6 @@ export function buildDeployOnMergeWatcher(deps: {
     ...(deps.flyImageBuilder !== undefined && { flyImageBuilder: deps.flyImageBuilder }),
   });
 }
-
 // Re-export the demo-on-deploy watcher factory off this same module so the autonomy-loops
 // boot imports both deploy-path watchers from ONE symbol source (the max-dependencies cap).
 export { buildDemoOnDeployWatcher } from "./demoOnDeploy.js";

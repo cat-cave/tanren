@@ -1,3 +1,4 @@
+/* eslint-disable import/max-dependencies -- integration HTTP surface wires authority + inventory + provision */
 import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -8,23 +9,22 @@ import {
   type IntegrationProvisioner,
 } from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
-import type { EventStore } from "../../engine/eventStore.js";
-import { PgEventStore } from "../../engine/eventStore.js";
+import type { IntegrationSecretStore } from "../../engine/contracts/integrationSecretStore.js";
+import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
+import { PgIntegrationAuthority } from "../../engine/integrations/integrationAuthorityImpl.js";
+import { GenerationAddressedIntegrationSecretStore } from "../../engine/integrations/integrationSecretStoreImpl.js";
 import {
-  capabilitiesForProviderKind,
   productionProvisionerDeps,
   provisionCapability,
   resolveProviderKind,
 } from "../../engine/integrations/provisioningEngine.js";
-import {
-  credentialRefForIntegrationAccount,
-  IntegrationConnectionsStore,
-} from "../../engine/repositories/integrationConnections.js";
+import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import { IntegrationLifecycleInventoryStore } from "../../engine/repositories/integrationLifecycleInventory.js";
 import { integrationProjectAccess } from "../../engine/repositories/integrationProjectAccess.js";
 import type { IntegrationQueryClient } from "../../engine/repositories/integrationQuery.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
+import { actorCanAccessOrg } from "../orgs/access.js";
+import { mountIntegrationAuthorityWrites } from "./authorityWrites.js";
 
 export interface IntegrationRouteDatabase {
   events: EventStore;
@@ -33,22 +33,16 @@ export interface IntegrationRouteDatabase {
 
 interface SharedRouteOptions {
   secrets: SecretStore;
+  integrationSecrets?: IntegrationSecretStore;
   /** Test seam; production omits this and uses the real registry. */
   buildProvisioner?: (kind: string) => IntegrationProvisioner;
+  fetchImpl?: typeof fetch;
 }
 
 export type IntegrationRoutesOptions = SharedRouteOptions &
   ({ pool: pg.Pool; database?: never } | { database: IntegrationRouteDatabase; pool?: never });
 
 const ProvisionMode = z.enum(["greenfield", "brownfield"]);
-const LinkBody = z
-  .object({
-    token: z.string().min(1).max(4096),
-    upstreamAccountId: z.string().min(1).max(200),
-    authKind: z.enum(["api_key", "oauth2", "bot_token", "webhook", "workload_identity"]),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-  })
-  .strict();
 const ProvisionBody = z
   .object({
     capability: z.string().min(1).max(64),
@@ -58,9 +52,6 @@ const ProvisionBody = z
     stack: z.string().min(1).max(64).optional(),
     name: z.string().min(1).max(200).optional(),
   })
-  .strict();
-const SelectionBody = z
-  .object({ connectionId: z.string().min(1).max(200), grantId: z.string().min(1).max(200) })
   .strict();
 
 function databaseFor(options: IntegrationRoutesOptions): IntegrationRouteDatabase {
@@ -80,11 +71,17 @@ function databaseFor(options: IntegrationRoutesOptions): IntegrationRouteDatabas
   };
 }
 
+function integrationSecretsFor(options: IntegrationRoutesOptions): IntegrationSecretStore {
+  return options.integrationSecrets ?? new GenerationAddressedIntegrationSecretStore(options.secrets);
+}
+
 export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
   const database = databaseFor(options);
+  const integrationSecrets = integrationSecretsFor(options);
+  const authority = new PgIntegrationAuthority();
+  const fetchImpl = options.fetchImpl ?? fetch;
 
-  // Keep this surface safe even when mounted without the global auth middleware.
   app.use("*", async (c, next) => {
     if (c.var.actor === undefined) return c.json({ error: "authentication_required" }, 401);
     return next();
@@ -102,7 +99,7 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
         if (access !== "allowed") return { access } as const;
       }
       const operator = { kind: "operator" as const, id: actor.userId };
-      const rows = await IntegrationConnectionsStore.listControlGrants(client, orgId, operator, projectId);
+      const rows = await IntegrationConnectionsStore.listInventory(client, orgId, projectId);
       const lifecycle =
         projectId === undefined || projectId === ""
           ? undefined
@@ -120,18 +117,17 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       grantId: row.grantId,
       orgId: row.orgId,
       providerKind: row.providerKind,
-      upstreamAccountId: row.upstreamAccountId,
-      authKind: row.authKind,
-      authGeneration: row.authGeneration,
-      ownerId: row.ownerId,
-      metadataKeys: Object.keys(row.metadata),
-      capabilities: row.capabilities,
-      operations: row.operations,
-      providerScopes: row.providerScopes,
+      providerPrincipalId: row.providerPrincipalId,
+      principalKind: row.principalKind,
+      displayName: row.displayName,
       health: row.health,
       connectionStatus: row.connectionStatus,
+      currentAuthGeneration: row.currentAuthGeneration,
       grantGeneration: row.grantGeneration,
       grantStatus: row.grantStatus,
+      authExpiresAt: row.authExpiresAt,
+      providerScopes: row.providerScopes,
+      pendingOperation: row.pendingOperation,
       selectedForProject: row.selectedForProject,
     }));
     return c.json({ integrations, ...(loaded.lifecycle === undefined ? {} : { lifecycle: loaded.lifecycle }) }, 200);
@@ -160,19 +156,21 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
           secrets: options.secrets,
           events: database.events,
           actor: { kind: "operator", id: actor.userId },
+          authority,
           ...(options.buildProvisioner === undefined ? {} : { buildProvisioner: options.buildProvisioner }),
         },
         { projectId, orgId, ...parsed.data },
       );
       if (outcome.status === "not_linked") return c.json(outcome, 200);
       if (outcome.status === "selection_required") return c.json(outcome, 409);
+      if (outcome.status === "ineligible") return c.json(outcome, 409);
       return c.json(outcome, 201);
     } catch {
       return c.json({ error: "provision_failed" }, 500);
     }
   });
 
-  mountIntegrationAuthorityWrites(app, database, options);
+  mountIntegrationAuthorityWrites(app, database, options, authority, integrationSecrets, fetchImpl);
 
   app.get("/:orgId/projects/:projectId/integrations/discover", async (c) => {
     const actor = requireActor(c);
@@ -191,9 +189,13 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       return c.json({ error: "unresolvable_capability", message: messageOf(error) }, 400);
     }
     const resolution = await database.withOrgScope(orgId, (client) =>
-      IntegrationConnectionsStore.resolveControlGrant(client, orgId, projectId, providerKind, {
-        kind: "operator",
-        id: actor.userId,
+      authority.authorizeOperation(client, {
+        orgId,
+        projectId,
+        providerKind,
+        capability,
+        operation: "discover",
+        actor: { kind: "operator", id: actor.userId },
       }),
     );
     if (resolution.status === "not_linked") {
@@ -208,25 +210,26 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
         200,
       );
     }
-    if (resolution.status === "selection_required") {
+    if (resolution.status === "selection_required" || resolution.status === "ineligible") {
       return c.json({ capability, providerKind, ...resolution }, 409);
     }
     try {
+      const grant = IntegrationConnectionsStore.orgGrantFromLease(resolution.lease);
       const provisioner =
         options.buildProvisioner?.(providerKind) ??
         buildIntegrationProvisioner(providerKind, productionProvisionerDeps(options.secrets));
-      const resources = await provisioner.discover(resolution.grant);
+      const resources = await provisioner.discover(grant);
       return c.json(
         {
           status: "discovered",
           capability,
           providerKind,
           authority: {
-            connectionId: resolution.grant.connectionId,
-            grantId: resolution.grant.grantId,
-            upstreamAccountId: resolution.grant.upstreamAccountId,
-            authGeneration: resolution.grant.authGeneration,
-            grantGeneration: resolution.grant.grantGeneration,
+            connectionId: grant.connectionId,
+            grantId: grant.grantId,
+            providerPrincipalId: grant.providerPrincipalId,
+            authGeneration: grant.authGeneration,
+            grantGeneration: grant.grantGeneration,
           },
           resources,
         },
@@ -238,97 +241,6 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
   });
 
   return app;
-}
-
-function mountIntegrationAuthorityWrites(
-  app: Hono<ActorContextEnv>,
-  database: IntegrationRouteDatabase,
-  options: IntegrationRoutesOptions,
-): void {
-  app.post("/:orgId/integrations/:providerKind", async (c) => {
-    const actor = requireActor(c);
-    const orgId = c.req.param("orgId");
-    const providerKind = c.req.param("providerKind");
-    if (!actorIsOrgAdmin(actor, orgId)) return c.json({ error: "org_admin_required" }, 403);
-    let capabilities: string[];
-    try {
-      capabilities = capabilitiesForProviderKind(providerKind);
-    } catch (error) {
-      return c.json({ error: "unknown_provider_kind", message: messageOf(error) }, 400);
-    }
-    const parsed = LinkBody.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: "invalid_link", issues: parsed.error.issues }, 400);
-
-    const credentialRef = credentialRefForIntegrationAccount(orgId, providerKind, parsed.data.upstreamAccountId);
-    try {
-      await options.secrets.put({ ref: credentialRef, value: parsed.data.token });
-      const grant = await database.withOrgScope(orgId, (client) =>
-        IntegrationConnectionsStore.linkControlGrant(
-          client,
-          {
-            orgId,
-            providerKind,
-            upstreamAccountId: parsed.data.upstreamAccountId,
-            authKind: parsed.data.authKind,
-            credentialRef,
-            metadata: parsed.data.metadata ?? {},
-            capabilities,
-          },
-          { kind: "operator", id: actor.userId },
-        ),
-      );
-      return c.json(
-        {
-          status: "linked",
-          providerKind,
-          connectionId: grant.connectionId,
-          grantId: grant.grantId,
-          upstreamAccountId: grant.upstreamAccountId,
-          authGeneration: grant.authGeneration,
-          grantGeneration: grant.grantGeneration,
-          capabilities,
-          metadataKeys: Object.keys(grant.metadata),
-        },
-        201,
-      );
-    } catch {
-      return c.json({ error: "link_failed" }, 500);
-    }
-  });
-
-  app.put("/:orgId/projects/:projectId/integrations/:providerKind/selection", async (c) => {
-    const actor = requireActor(c);
-    const orgId = c.req.param("orgId");
-    const projectId = c.req.param("projectId");
-    const providerKind = c.req.param("providerKind");
-    if (!actorCanAccessOrg(actor, orgId)) return c.json({ error: "org_access_denied" }, 403);
-    const access = await projectAccess(database, orgId, projectId, actor);
-    if (access === "not_found") return c.json({ error: "project_not_found" }, 404);
-    if (access === "denied") return c.json({ error: "project_access_denied" }, 403);
-    const parsed = SelectionBody.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: "invalid_selection", issues: parsed.error.issues }, 400);
-
-    const selected = await database.withOrgScope(orgId, (client) =>
-      IntegrationConnectionsStore.selectControlGrant(
-        client,
-        { orgId, projectId, providerKind, ...parsed.data },
-        { kind: "operator", id: actor.userId },
-      ),
-    );
-    if (selected === undefined) return c.json({ error: "selection_conflict" }, 409);
-    return c.json(
-      {
-        status: "selected",
-        providerKind,
-        connectionId: selected.connectionId,
-        grantId: selected.grantId,
-        upstreamAccountId: selected.upstreamAccountId,
-        authGeneration: selected.authGeneration,
-        grantGeneration: selected.grantGeneration,
-      },
-      200,
-    );
-  });
 }
 
 async function projectAccess(

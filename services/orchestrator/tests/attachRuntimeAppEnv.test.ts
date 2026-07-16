@@ -10,7 +10,6 @@ import type { IntegrationQueryClient } from "../src/engine/repositories/integrat
 import { systemActor } from "../src/engine/state/actor.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import { AppEnvironmentStore } from "../src/engine/repositories/appEnvironment.js";
-import { IntegrationConnectionsStore } from "../src/engine/repositories/integrationConnections.js";
 import { attachRuntimeAppEnv } from "../src/engine/workflow/attachRuntimeAppEnv.js";
 import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -201,35 +200,20 @@ async function seedAppEnv(db: AttachDb): Promise<void> {
   );
 }
 
-async function seedGrant(db: AttachDb, providerKind: string, metadata: Record<string, unknown>): Promise<OrgGrant> {
-  const linked = await IntegrationConnectionsStore.linkControlGrant(
-    db,
-    {
-      orgId: "org_1",
-      providerKind,
-      upstreamAccountId: "account-1",
-      authKind: "api_key",
-      credentialRef: "secret://org/deploy-token",
-      metadata,
-      capabilities: ["deploy"],
-    },
-    systemActor,
-  );
-  return {
-    connectionId: linked.connectionId,
-    grantId: linked.grantId,
-    providerKind: linked.providerKind,
-    upstreamAccountId: linked.upstreamAccountId,
-    credentialRef: linked.credentialRef,
-    authGeneration: linked.authGeneration,
-    grantGeneration: linked.grantGeneration,
-    metadata: linked.metadata,
-  };
+async function seedGrant(_db: AttachDb, providerKind: string, metadata: Record<string, unknown>): Promise<OrgGrant> {
+  const { testOrgGrant } = await import("./helpers/orgGrant.js");
+  return testOrgGrant({
+    providerKind,
+    providerPrincipalId: "account-1",
+    credentialRef: "secret://org/deploy-token/g/1",
+    metadata,
+    capability: "deploy",
+  });
 }
 
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
-  void store.put({ ref: "secret://org/deploy-token", value: "deploy_token_value" });
+  void store.put({ ref: "secret://org/deploy-token/g/1", value: "deploy_token_value" });
   void store.put({ ref: "secret://proj/resend", value: RUNTIME_SECRET });
   return store;
 }

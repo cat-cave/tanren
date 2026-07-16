@@ -23,6 +23,7 @@ import {
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import {
   productionProvisionerDeps,
+  type IneligibleResult,
   type NotLinkedResult,
   type ProvisionedResult,
   type SelectionRequiredResult,
@@ -312,6 +313,8 @@ export async function handleGreenfieldCreate(
       providerKind: preparedDeploy.outcome.providerKind,
       connectionId: preparedDeploy.outcome.authority.connectionId,
       grantId: preparedDeploy.outcome.authority.grantId,
+      authGeneration: preparedDeploy.outcome.authority.authGeneration,
+      grantGeneration: preparedDeploy.outcome.authority.grantGeneration,
     },
     actor.userId,
   );
@@ -402,7 +405,6 @@ function greenfieldDeployErrorResponse(c: Context<ActorContextEnv>, error: unkno
   }
   throw error;
 }
-
 export async function prepareGreenfieldDeploy(input: {
   pool: pg.Pool;
   secrets: SecretStore;
@@ -419,7 +421,7 @@ export async function prepareGreenfieldDeploy(input: {
     stack?: string;
     name?: string;
   };
-}): Promise<NotLinkedResult | SelectionRequiredResult | PreparedGreenfieldDeploy> {
+}): Promise<NotLinkedResult | SelectionRequiredResult | IneligibleResult | PreparedGreenfieldDeploy> {
   const providerKind = input.deploy.providerKind;
   const resolved = await resolveGreenfieldDeployGrant({
     client: input.pool,
@@ -431,7 +433,6 @@ export async function prepareGreenfieldDeploy(input: {
   });
   if ("status" in resolved) return resolved;
   const grant = resolved;
-
   const provisioner = buildIntegrationProvisioner(providerKind, productionProvisionerDeps(input.secrets));
   // task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`
   // so a bare `linkly` cannot collide on Fly's GLOBAL app-name namespace. Resolve
@@ -482,7 +483,7 @@ export async function prepareGreenfieldDeploy(input: {
     authority: {
       connectionId: grant.connectionId,
       grantId: grant.grantId,
-      upstreamAccountId: grant.upstreamAccountId,
+      providerPrincipalId: grant.providerPrincipalId,
       authGeneration: grant.authGeneration,
       grantGeneration: grant.grantGeneration,
     },
@@ -494,7 +495,6 @@ export async function prepareGreenfieldDeploy(input: {
   };
   return { outcome, projectConfig };
 }
-
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

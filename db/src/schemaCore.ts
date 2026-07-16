@@ -41,9 +41,9 @@ export const projects = pgTable(
     config: jsonb("config")
       .notNull()
       .default(sql`'{"version":1}'::jsonb`),
-    // Operator lifecycle: 'active' (the default — the autonomous walker drives it)
-    // or 'archived' (the walker + strand reconciler skip it; in-flight runs/specs
-    // are cancelled on archive). Flipped only through the dedicated archive surface.
+    // Operator lifecycle: 'deriving' (greenfield graph incomplete), 'active'
+    // (the autonomous walker drives it), or 'archived' (walker + strand
+    // reconciler skip it; in-flight runs/specs are cancelled on archive).
     lifecycle: text("lifecycle").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     orgId: text("org_id")
@@ -53,6 +53,7 @@ export const projects = pgTable(
   (table) => [
     uniqueIndex("projects_org_project_unique").on(table.orgId, table.projectId),
     index("projects_org_id").on(table.orgId),
+    check("projects_lifecycle_check", sql`${table.lifecycle} IN ('deriving','active','archived')`),
   ],
 );
 
@@ -455,7 +456,6 @@ export const integrationNodes = pgTable(
     uniqueIndex("integration_nodes_org_member_key_unique").on(table.orgId, table.memberKey),
   ],
 );
-
 // tanren-owns-the-engine.md §3 proof reuse: a gate/CI verdict on a node is reused
 // ONLY when EVERY component of the `proofReuseKey` matches (member_key +
 // gate_config_hash + policy_version + runner image + app-env + quarantine). This

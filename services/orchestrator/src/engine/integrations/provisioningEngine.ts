@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { IntegrationAuthority } from "../contracts/integrationAuthority.js";
 import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { ChannelKind } from "../notifications/schemas.js";
@@ -45,29 +46,6 @@ const CAPABILITY_DEFAULT_PROVIDER: Readonly<Record<string, string>> = {
 
 /** The deploy provider kinds a `deploy` capability may resolve to. */
 const DEPLOY_PROVIDER_KINDS = new Set(["deploy.vercel", "deploy.flyio"]);
-
-/**
- * The capability a provider kind satisfies — the inverse of
- * {@link CAPABILITY_DEFAULT_PROVIDER}, used by the integration-LINK route to record
- * the grant's `capabilities`. A deploy provider kind maps to `deploy`; the canonical
- * single-provider capabilities map back from their default. An unknown provider kind
- * is REJECTED (throws) — linking a provider Tanren has no provisioner for is an
- * operator error, surfaced as a 400, never a silent empty-capability grant.
- */
-export function capabilitiesForProviderKind(providerKind: string): string[] {
-  if (DEPLOY_PROVIDER_KINDS.has(providerKind)) {
-    return ["deploy"];
-  }
-  for (const [capability, kind] of Object.entries(CAPABILITY_DEFAULT_PROVIDER)) {
-    if (kind === providerKind) {
-      return [capability];
-    }
-  }
-  throw new Error(
-    `unknown provider kind '${providerKind}' — expected one of: ` +
-      [...DEPLOY_PROVIDER_KINDS, ...Object.values(CAPABILITY_DEFAULT_PROVIDER)].join(", "),
-  );
-}
 
 /**
  * Resolve the provider kind for a (capability, optional explicit provider). An
@@ -150,11 +128,21 @@ export interface SelectionRequiredResult {
     connectionId: string;
     grantId: string;
     providerKind: string;
-    upstreamAccountId: string;
+    providerPrincipalId: string;
+    displayName: string;
     health: string;
     authGeneration: number;
     grantGeneration: number;
+    ineligibilityReasons: string[];
   }>;
+}
+
+export interface IneligibleResult {
+  status: "ineligible";
+  capability: string;
+  providerKind: string;
+  reasons: string[];
+  message: string;
 }
 
 /** A successful provision/bind, by REFERENCE only — no secret values. */
@@ -167,7 +155,7 @@ export interface ProvisionedResult {
   authority: {
     connectionId: string;
     grantId: string;
-    upstreamAccountId: string;
+    providerPrincipalId: string;
     authGeneration: number;
     grantGeneration: number;
   };
@@ -181,7 +169,7 @@ export interface ProvisionedResult {
   };
 }
 
-export type ProvisionOutcome = NotLinkedResult | SelectionRequiredResult | ProvisionedResult;
+export type ProvisionOutcome = NotLinkedResult | SelectionRequiredResult | IneligibleResult | ProvisionedResult;
 
 /** The engine's injected collaborators. `buildProvisioner` defaults to the real
  * registry wired with production deps; tests inject a fake provisioner + an
@@ -194,6 +182,8 @@ export interface ProvisioningEngineDeps {
   secrets: SecretStore;
   events: EventStore;
   actor: ActorRef;
+  /** Sole eligibility authority — required for any secret/provider construction. */
+  authority: IntegrationAuthority;
   /** Override the provisioner construction (tests pass a fake); prod uses the registry. */
   buildProvisioner?: (kind: string) => IntegrationProvisioner;
 }
@@ -211,7 +201,7 @@ export async function provisionCapability(
 
   // Complete all authority reads in a short transaction, then release it before
   // any provider network I/O. A foreign/missing project cannot reach a provider.
-  const authority = await deps.database.withOrgScope(request.orgId, async (client) => {
+  const authorized = await deps.database.withOrgScope(request.orgId, async (client) => {
     const project = await client.query(
       `SELECT p.project_id, o.login AS org_slug
        FROM projects p JOIN organizations o ON o.id = p.org_id
@@ -222,16 +212,23 @@ export async function provisionCapability(
     if (!parsed.success) {
       throw new Error(`project '${request.projectId}' is not owned by org '${request.orgId}'`);
     }
-    const resolution = await IntegrationConnectionsStore.resolveControlGrant(
-      client,
-      request.orgId,
-      request.projectId,
+    const operation =
+      request.chosenResourceId !== undefined && request.chosenResourceId !== ""
+        ? "bind"
+        : request.mode === "brownfield"
+          ? "discover"
+          : "provision";
+    const resolution = await deps.authority.authorizeOperation(client, {
+      orgId: request.orgId,
+      projectId: request.projectId,
       providerKind,
-      deps.actor,
-    );
+      capability: request.capability,
+      operation: operation === "discover" ? "provision" : operation,
+      actor: deps.actor,
+    });
     return { resolution, orgSlug: parsed.data.org_slug };
   });
-  const { resolution } = authority;
+  const { resolution } = authorized;
   if (resolution.status === "not_linked") {
     return {
       status: "not_linked",
@@ -253,7 +250,16 @@ export async function provisionCapability(
       candidates: resolution.candidates,
     };
   }
-  const grant = resolution.grant;
+  if (resolution.status === "ineligible") {
+    return {
+      status: "ineligible",
+      capability: request.capability,
+      providerKind,
+      reasons: resolution.reasons,
+      message: `integration grant is not eligible for ${providerKind}/${request.capability}: ${resolution.reasons.join(",")}`,
+    };
+  }
+  const grant = IntegrationConnectionsStore.orgGrantFromLease(resolution.lease);
 
   // 2. Build the provisioner with PRODUCTION deps (or the test override).
   const provisioner =
@@ -264,7 +270,7 @@ export async function provisionCapability(
   const projectCtx = {
     projectId: request.projectId,
     orgId: request.orgId,
-    orgSlug: authority.orgSlug,
+    orgSlug: authorized.orgSlug,
     ...(request.stack === undefined ? {} : { stack: request.stack }),
     ...(request.name === undefined ? {} : { name: request.name }),
   };
@@ -326,7 +332,7 @@ export async function provisionCapability(
     authority: {
       connectionId: grant.connectionId,
       grantId: grant.grantId,
-      upstreamAccountId: grant.upstreamAccountId,
+      providerPrincipalId: grant.providerPrincipalId,
       authGeneration: grant.authGeneration,
       grantGeneration: grant.grantGeneration,
     },
@@ -385,7 +391,6 @@ async function persistArtifact(
 
   return result;
 }
-
 /** The marker every provisioner-managed artifact row carries, so the idempotency
  * unique indexes (migration 0054) are PARTIAL — scoped to provisioner-managed rows
  * only. This keeps operator-created inbox sources (which may legitimately repeat a
@@ -393,7 +398,6 @@ async function persistArtifact(
  * onboarding-provisioner's own rows are deduped on re-onboard. The runtime
  * connectors ignore this extra non-secret config key. */
 const MANAGED_BY = "integration-provisioner";
-
 /**
  * Idempotent upsert of the inbox source for this (project, kind): a re-onboard
  * updates the existing row's config/name rather than inserting a second source.
@@ -428,7 +432,6 @@ async function upsertInboxSource(
   }
   return z.object({ id: z.string() }).parse(row).id;
 }
-
 /**
  * Idempotent upsert of the notification target for this org+channel+destination.
  * The provisioner's `notificationTarget` carries `{ kind, config }`; we map the
@@ -466,7 +469,6 @@ async function upsertNotificationTarget(
   }
   return z.object({ id: z.string() }).parse(row).id;
 }
-
 /**
  * Derive the notification-target `destination` from the provisioner's target
  * config: prefer an explicit credential ref (a webhook secret ref the send adapter
@@ -480,7 +482,6 @@ function notificationTargetDestination(config: Record<string, unknown>): string 
   }
   return ref;
 }
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }

@@ -1,3 +1,4 @@
+/* eslint-disable import/max-dependencies -- derive wires deploy/authority/graph seams */
 // Completed vision capture → fragment-composed project repo → durable project and
 // product graph. All entities use the canonical creation paths. Missing fragments
 // are authored and composition is pushed directly to the project repo; there is no
@@ -35,6 +36,7 @@ import {
   type PrepareDeployCallback,
   type PersistDeploySelectionCallback,
 } from "./deployDependency.js";
+import { DeployIneligibleError } from "./deployIneligibleError.js";
 import {
   DeriveRollbackError,
   newDeriveCompensation,
@@ -341,6 +343,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     });
     if (unavailable?.status === "not_linked") throw new DeployNotLinkedError(unavailable);
     if (unavailable?.status === "selection_required") throw new DeploySelectionRequiredError(unavailable);
+    if (unavailable?.status === "ineligible") throw new DeployIneligibleError(unavailable);
   }
 
   // TASK #78 — TRANSACTIONAL ROLLBACK. Build a compensation stack covering every
@@ -405,7 +408,8 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
     });
     if (isDeployUnavailable(preparedDeploy)) {
       if (preparedDeploy.status === "not_linked") throw new DeployNotLinkedError(preparedDeploy);
-      throw new DeploySelectionRequiredError(preparedDeploy);
+      if (preparedDeploy.status === "selection_required") throw new DeploySelectionRequiredError(preparedDeploy);
+      throw new DeployIneligibleError(preparedDeploy);
     }
     // TRANSACTIONAL ROLLBACK (task #78): register the deploy app compensation
     // IMMEDIATELY after a successful provision. The `deployAppId` + `deployAppName`
@@ -471,6 +475,8 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       providerKind: deploy.providerKind,
       connectionId: preparedDeploy.outcome.authority.connectionId,
       grantId: preparedDeploy.outcome.authority.grantId,
+      authGeneration: preparedDeploy.outcome.authority.authGeneration,
+      grantGeneration: preparedDeploy.outcome.authority.grantGeneration,
     });
     const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
     return await buildEntityGraph(pool, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs);

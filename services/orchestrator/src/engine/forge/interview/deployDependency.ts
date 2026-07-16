@@ -1,13 +1,14 @@
 import type { ProvisionMode } from "../../contracts/integrationProvisioner.js";
 import {
   resolveProviderKind,
+  type IneligibleResult,
   type NotLinkedResult,
   type ProvisionedResult,
   type SelectionRequiredResult,
 } from "../../integrations/provisioningEngine.js";
 
 type DeployAuthorityChoice = { connectionId?: string; grantId?: string };
-export type GreenfieldDeployUnavailable = NotLinkedResult | SelectionRequiredResult;
+export type GreenfieldDeployUnavailable = NotLinkedResult | SelectionRequiredResult | IneligibleResult;
 
 export interface GreenfieldDeployDependency extends DeployAuthorityChoice {
   providerKind?: string;
@@ -40,7 +41,10 @@ export interface PreparedGreenfieldDeploy {
 export function isDeployUnavailable(
   value: GreenfieldDeployUnavailable | PreparedGreenfieldDeploy,
 ): value is GreenfieldDeployUnavailable {
-  return "status" in value && (value.status === "not_linked" || value.status === "selection_required");
+  return (
+    "status" in value &&
+    (value.status === "not_linked" || value.status === "selection_required" || value.status === "ineligible")
+  );
 }
 
 export type PrepareDeployCallback = (input: {
@@ -63,6 +67,8 @@ export type PersistDeploySelectionCallback = (input: {
   providerKind: "deploy.vercel" | "deploy.flyio";
   connectionId: string;
   grantId: string;
+  authGeneration: number;
+  grantGeneration: number;
 }) => Promise<void>;
 
 export class DeployProviderMissingError extends Error {}

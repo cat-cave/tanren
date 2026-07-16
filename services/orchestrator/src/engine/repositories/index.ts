@@ -11,11 +11,10 @@ export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./project
 // explicit grants own plane/environment/capability authority.
 export {
   IntegrationConnectionsStore,
-  type IntegrationConnectionGrant,
   type IntegrationConnectionHealth,
+  type IntegrationConnectionInventoryRow,
   type IntegrationConnectionStatus,
   type IntegrationGrantStatus,
-  type LinkControlIntegrationInput,
 } from "./integrationConnections.js";
 // Org-row reads on the seam: `getLogin(orgId)` for deploy-app namespacing
 // (the global-namespace collision fix; see `flyDeployProvisioner.ts`).

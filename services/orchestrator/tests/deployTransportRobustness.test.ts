@@ -1,3 +1,4 @@
+import { testOrgGrant } from "./helpers/orgGrant.js";
 // §3.9e deploy-path robustness: the production fetch-backed deploy transport + URL
 // smoke probe must TIME OUT a hung outbound request (an AbortSignal-bounded fetch) so a
 // stuck provider endpoint can never wedge the post-merge deploy path; the Vercel
@@ -10,7 +11,6 @@ import { fetchDeployTransport, DEFAULT_DEPLOY_REQUEST_ABORT_MS } from "../src/en
 import { fetchUrlReachabilityProbe } from "../src/engine/deploy/buildDeployAdapter.js";
 import { VercelDeployProvisioner } from "../src/engine/provisioners/vercelDeployProvisioner.js";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { OrgGrant } from "../src/engine/contracts/integrationProvisioner.js";
 
 // A fetch that NEVER resolves on its own — it only rejects when its AbortSignal fires.
 // This proves the transport/probe bounds the request itself (rather than hanging forever).
@@ -47,10 +47,10 @@ describe("deploy transport robustness — per-request fetch abort (§3.9e)", () 
 
 describe("Vercel listApps pagination (§3.9e)", () => {
   it("follows pagination.next across pages so a later-page app is found", async () => {
-    const TOKEN_REF = "secret://org/deploy-token";
+    const TOKEN_REF = "secret://org/deploy-token/g/1";
     const store = new InMemorySecretStore();
     void store.put({ ref: TOKEN_REF, value: "vercel_token" });
-    const grant: OrgGrant = { providerKind: "deploy.vercel", credentialRef: TOKEN_REF, metadata: {} };
+    const grant = testOrgGrant({ providerKind: "deploy.vercel", credentialRef: TOKEN_REF, capability: "deploy" });
 
     // Page 1 returns one project + a `next` token; page 2 (fetched via `from=tok2`)
     // returns the TARGET project and terminates pagination (`next: null`).

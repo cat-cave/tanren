@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // AUDIT FINDING #8 — DeployProvisioner.destroyApp drops the listApps gate.
 // The prior shape `listApps + find + return-if-absent` hid three real failure
 // classes behind silent compensation-success: paginated listings where the id
@@ -25,7 +26,7 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { FlyDeployProvisioner } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { VercelDeployProvisioner } from "../../src/engine/provisioners/vercelDeployProvisioner.js";
 import type { DeployHttpRequest, DeployHttpResponse } from "../../src/engine/provisioners/deployTransport.js";
@@ -37,20 +38,23 @@ const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const vercelGrant: OrgGrant = {
+const vercelGrant = testOrgGrant({
   providerKind: "deploy.vercel",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { teamId: "team_abc", slug: "acme" },
-};
+  capability: "deploy",
+});
 
-const flyGrant: OrgGrant = {
+const flyGrant = testOrgGrant({
   providerKind: "deploy.flyio",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { orgSlug: "acme" },
-};
+  capability: "deploy",
+});
 
 const ctx = (name: string): ProjectContext => ({
   projectId: `proj_${name}`,

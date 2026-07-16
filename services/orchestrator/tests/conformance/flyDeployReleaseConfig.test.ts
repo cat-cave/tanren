@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // Fly Machines RELEASE CONFIG + shared-IPv4 allocation specifics, split out of
 // deployProvisioner.test.ts to keep that file under the 500-line architecture cap (same
 // pattern as deployProvisionerDestroyApp.test.ts). Two load-bearing changes for a Fly
@@ -14,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { FlyDeployProvisioner, flyMachineConfig } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 
@@ -24,14 +25,17 @@ const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const flyGrant: OrgGrant = {
+const flyGrant = testOrgGrant({
   providerKind: "deploy.flyio",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { orgSlug: "acme" },
-};
+  capability: "deploy",
+});
 
 // `orgSlug: "tanren"` is the test-org slug; task #27 prefixes the created app with it, so
 // projectName "acme-web" becomes the real app name "tanren-acme-web".
@@ -74,10 +78,12 @@ describe("flyMachineConfig (release config shape)", () => {
 
 // grant carrying a release image + a provisioner with the static-deploy opt-in ON, so the
 // deploy path reaches `triggerDeploy` (where allocation now lives).
-const flyGrantWithImage: OrgGrant = {
-  ...flyGrant,
-  metadata: { ...flyGrant.metadata, image: "registry.fly.io/acme-web:deployment-1" },
-};
+const flyGrantWithImage = testOrgGrant({
+  providerKind: flyGrant.providerKind,
+  credentialRef: flyGrant.eligibleOperation.credentialRef,
+  metadata: { ...flyGrant.metadata, image: "registry.fly.io/tanren-acme-web:deadbeefcafe" },
+  capability: "deploy",
+});
 function staticProv(transport: ReturnType<typeof scriptedDeployTransport>): FlyDeployProvisioner {
   return new FlyDeployProvisioner({ transport, secrets: secrets(), allowFlyStaticDeploy: true });
 }

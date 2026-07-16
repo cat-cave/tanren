@@ -103,13 +103,29 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const providerKind = formField(form, "providerKind").trim();
     const connectionId = formField(form, "connectionId").trim();
     const grantId = formField(form, "grantId").trim();
-    if (projectId === "" || providerKind === "" || connectionId === "" || grantId === "") {
+    const authGeneration = Number(formField(form, "authGeneration").trim());
+    const grantGeneration = Number(formField(form, "grantGeneration").trim());
+    if (
+      projectId === "" ||
+      providerKind === "" ||
+      connectionId === "" ||
+      grantId === "" ||
+      !Number.isInteger(authGeneration) ||
+      authGeneration < 1 ||
+      !Number.isInteger(grantGeneration) ||
+      grantGeneration < 1
+    ) {
       return redirectTo(c, "/integrations", "missing account selection fields");
     }
     const client = await writeClient(c, deps);
-    const result = await client.selectGrant(orgId, projectId, providerKind, { connectionId, grantId });
+    const result = await client.selectGrant(orgId, projectId, providerKind, {
+      connectionId,
+      grantId,
+      authGeneration,
+      grantGeneration,
+    });
     return result.ok
-      ? redirectTo(c, "/integrations", `selected ${providerKind} account`)
+      ? redirectTo(c, "/integrations", `selected ${providerKind} principal`)
       : redirectTo(c, "/integrations", `account selection failed (${result.status})`);
   });
 
@@ -122,19 +138,28 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     }
     const form = await c.req.parseBody();
     const providerKind = formField(form, "providerKind").trim();
-    const upstreamAccountId = formField(form, "upstreamAccountId").trim();
-    const authKind = parseAuthKind(formField(form, "authKind").trim());
     const token = formField(form, "token");
-    if (providerKind === "" || upstreamAccountId === "" || authKind === undefined || token === "") {
-      return redirectTo(c, "/integrations", "missing provider, account, auth kind, or token");
+    const idempotencyKey = formField(form, "idempotencyKey").trim() || `link-${providerKind}-${Date.now()}`;
+    if (providerKind === "" || token === "") {
+      return redirectTo(c, "/integrations", "missing provider or token");
     }
     const client = await writeClient(c, deps);
-    const result = await client.link(orgId, providerKind, { token, upstreamAccountId, authKind });
+    const result = await client.link(orgId, providerKind, { token, idempotencyKey });
     if (result.status === 403) {
       return redirectTo(c, "/integrations", "org admin required to link");
     }
     if (!result.ok) {
       return redirectTo(c, "/integrations", `link failed (${result.status})`);
+    }
+    const bodyStatus =
+      result.body !== undefined && typeof result.body === "object" && "status" in result.body
+        ? String((result.body as { status?: unknown }).status)
+        : "completed";
+    if (bodyStatus === "awaiting_principal_selection") {
+      return redirectTo(c, "/integrations", `${providerKind} requires principal selection`);
+    }
+    if (bodyStatus === "failed") {
+      return redirectTo(c, "/integrations", `${providerKind} verification failed`);
     }
     return redirectTo(c, "/integrations", `linked ${providerKind}`);
   });
@@ -181,19 +206,4 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     }
     return redirectTo(c, "/integrations", `enabled ${capability}${providerKind === "" ? "" : ` via ${providerKind}`}`);
   });
-}
-
-function parseAuthKind(
-  value: string,
-): "api_key" | "oauth2" | "bot_token" | "webhook" | "workload_identity" | undefined {
-  switch (value) {
-    case "api_key":
-    case "oauth2":
-    case "bot_token":
-    case "webhook":
-    case "workload_identity":
-      return value;
-    default:
-      return undefined;
-  }
 }

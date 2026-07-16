@@ -48,17 +48,15 @@ export interface GreenfieldDeployDestroyDeps {
  */
 export async function destroyGreenfieldDeployApp(deps: GreenfieldDeployDestroyDeps): Promise<void> {
   const { pool, secrets, orgId, actorId, target } = deps;
-  const grant = await IntegrationConnectionsStore.getControlGrantByIds(
-    pool,
+  const grant = await IntegrationConnectionsStore.resolveExactControlGrant(pool, {
     orgId,
-    target.providerKind,
-    target.connectionId,
-    target.grantId,
-    {
-      kind: "operator",
-      id: actorId,
-    },
-  );
+    providerKind: target.providerKind,
+    connectionId: target.connectionId,
+    grantId: target.grantId,
+    capability: "deploy",
+    operation: "teardown",
+  });
+  void actorId;
   if (grant === undefined) {
     throw new Error(
       `${target.providerKind}: cannot destroy deploy app '${target.appName}' (id '${target.appId}') — the org grant ` +

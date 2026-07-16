@@ -1,5 +1,5 @@
 {
-  "id": "d5c4c3b7-95ea-4b18-a18e-ad8168a89e9b",
+  "id": "b026634d-4dbc-463a-a261-2e7c42f64383",
   "prevId": "549d5d6b-82cd-45ab-a5b6-caf327dcd5f4",
   "version": "7",
   "dialect": "postgresql",
@@ -5391,7 +5391,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "projects_lifecycle_check": {
+          "name": "projects_lifecycle_check",
+          "value": "\"projects\".\"lifecycle\" IN ('deriving','active','archived')"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.quarantined_tests": {
@@ -7237,6 +7242,1123 @@
       },
       "isRLSEnabled": false
     },
+    "public.org_integration_connection_auth_generations": {
+      "name": "org_integration_connection_auth_generations",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "credential_ref": {
+          "name": "credential_ref",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_kind": {
+          "name": "auth_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "org_integration_connection_auth_generations_org_id": {
+          "name": "org_integration_connection_auth_generations_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_integration_connection_auth_generations_org_id_organizations_id_fk": {
+          "name": "org_integration_connection_auth_generations_org_id_organizations_id_fk",
+          "tableFrom": "org_integration_connection_auth_generations",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_integration_connection_auth_generations_connection_fk": {
+          "name": "org_integration_connection_auth_generations_connection_fk",
+          "tableFrom": "org_integration_connection_auth_generations",
+          "tableTo": "org_integration_connections",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "org_integration_connection_auth_generations_org_id_provider_kind_connection_id_generation_pk": {
+          "name": "org_integration_connection_auth_generations_org_id_provider_kind_connection_id_generation_pk",
+          "columns": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "generation"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"org_integration_connection_auth_generations\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"org_integration_connection_auth_generations\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "org_integration_connection_auth_generations_generation_check": {
+          "name": "org_integration_connection_auth_generations_generation_check",
+          "value": "\"org_integration_connection_auth_generations\".\"generation\" >= 1"
+        },
+        "org_integration_connection_auth_generations_auth_kind_check": {
+          "name": "org_integration_connection_auth_generations_auth_kind_check",
+          "value": "\"org_integration_connection_auth_generations\".\"auth_kind\" IN ('api_key','oauth2','bot_token','webhook','workload_identity')"
+        },
+        "org_integration_connection_auth_generations_status_check": {
+          "name": "org_integration_connection_auth_generations_status_check",
+          "value": "\"org_integration_connection_auth_generations\".\"status\" IN ('pending','active','superseded')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.org_integration_connection_operations": {
+      "name": "org_integration_connection_operations",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "operation_kind": {
+          "name": "operation_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stage": {
+          "name": "stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_auth_generation": {
+          "name": "target_auth_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "staged_secret_handle": {
+          "name": "staged_secret_handle",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "candidate_principals": {
+          "name": "candidate_principals",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "selected_principal_id": {
+          "name": "selected_principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "failure_classification": {
+          "name": "failure_classification",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "compensation_state": {
+          "name": "compensation_state",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "org_integration_connection_operations_idempotency_unique": {
+          "name": "org_integration_connection_operations_idempotency_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_connection_operations_org_id": {
+          "name": "org_integration_connection_operations_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_connection_operations_org_provider": {
+          "name": "org_integration_connection_operations_org_provider",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_integration_connection_operations_org_id_organizations_id_fk": {
+          "name": "org_integration_connection_operations_org_id_organizations_id_fk",
+          "tableFrom": "org_integration_connection_operations",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_integration_connection_operations_connection_fk": {
+          "name": "org_integration_connection_operations_connection_fk",
+          "tableFrom": "org_integration_connection_operations",
+          "tableTo": "org_integration_connections",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "org_integration_connection_operations_org_id_id_pk": {
+          "name": "org_integration_connection_operations_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"org_integration_connection_operations\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"org_integration_connection_operations\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "org_integration_connection_operations_kind_check": {
+          "name": "org_integration_connection_operations_kind_check",
+          "value": "\"org_integration_connection_operations\".\"operation_kind\" IN ('link','rotate','select_principal')"
+        },
+        "org_integration_connection_operations_stage_check": {
+          "name": "org_integration_connection_operations_stage_check",
+          "value": "\"org_integration_connection_operations\".\"stage\" IN ('created','credential_staged','verifying','awaiting_principal_selection','finalizing','completed','failed','compensated')"
+        },
+        "org_integration_connection_operations_status_check": {
+          "name": "org_integration_connection_operations_status_check",
+          "value": "\"org_integration_connection_operations\".\"status\" IN ('pending','in_progress','awaiting_principal_selection','completed','failed','compensated')"
+        },
+        "org_integration_connection_operations_target_generation_check": {
+          "name": "org_integration_connection_operations_target_generation_check",
+          "value": "\"org_integration_connection_operations\".\"target_auth_generation\" IS NULL OR \"org_integration_connection_operations\".\"target_auth_generation\" >= 1"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.org_integration_connections": {
+      "name": "org_integration_connections",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_principal_id": {
+          "name": "provider_principal_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_kind": {
+          "name": "principal_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "principal_metadata": {
+          "name": "principal_metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "health": {
+          "name": "health",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unknown'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "current_auth_generation": {
+          "name": "current_auth_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "owner_id": {
+          "name": "owner_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "org_integration_connections_principal_unique": {
+          "name": "org_integration_connections_principal_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_principal_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_connections_provider_id_unique": {
+          "name": "org_integration_connections_provider_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_connections_org_id": {
+          "name": "org_integration_connections_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_connections_org_provider": {
+          "name": "org_integration_connections_org_provider",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_integration_connections_org_id_organizations_id_fk": {
+          "name": "org_integration_connections_org_id_organizations_id_fk",
+          "tableFrom": "org_integration_connections",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "org_integration_connections_org_id_id_pk": {
+          "name": "org_integration_connections_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"org_integration_connections\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"org_integration_connections\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "org_integration_connections_current_auth_generation_check": {
+          "name": "org_integration_connections_current_auth_generation_check",
+          "value": "\"org_integration_connections\".\"current_auth_generation\" IS NULL OR \"org_integration_connections\".\"current_auth_generation\" >= 1"
+        },
+        "org_integration_connections_principal_kind_check": {
+          "name": "org_integration_connections_principal_kind_check",
+          "value": "\"org_integration_connections\".\"principal_kind\" IN ('team','organization','user')"
+        },
+        "org_integration_connections_health_check": {
+          "name": "org_integration_connections_health_check",
+          "value": "\"org_integration_connections\".\"health\" IN ('unknown','healthy','degraded','invalid')"
+        },
+        "org_integration_connections_status_check": {
+          "name": "org_integration_connections_status_check",
+          "value": "\"org_integration_connections\".\"status\" IN ('active','revoked')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.org_integration_grant_generations": {
+      "name": "org_integration_grant_generations",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grant_id": {
+          "name": "grant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capabilities": {
+          "name": "capabilities",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "operations": {
+          "name": "operations",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "provider_scopes": {
+          "name": "provider_scopes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "resource_constraints": {
+          "name": "resource_constraints",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "policy_revision": {
+          "name": "policy_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_revision": {
+          "name": "consent_revision",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consent_actor_id": {
+          "name": "consent_actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consented_at": {
+          "name": "consented_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "org_integration_grant_generations_org_id": {
+          "name": "org_integration_grant_generations_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_integration_grant_generations_org_id_organizations_id_fk": {
+          "name": "org_integration_grant_generations_org_id_organizations_id_fk",
+          "tableFrom": "org_integration_grant_generations",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_integration_grant_generations_grant_fk": {
+          "name": "org_integration_grant_generations_grant_fk",
+          "tableFrom": "org_integration_grant_generations",
+          "tableTo": "org_integration_grants",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "org_integration_grant_generations_org_id_provider_kind_connection_id_grant_id_generation_pk": {
+          "name": "org_integration_grant_generations_org_id_provider_kind_connection_id_grant_id_generation_pk",
+          "columns": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id",
+            "generation"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"org_integration_grant_generations\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"org_integration_grant_generations\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "org_integration_grant_generations_generation_check": {
+          "name": "org_integration_grant_generations_generation_check",
+          "value": "\"org_integration_grant_generations\".\"generation\" >= 1"
+        },
+        "org_integration_grant_generations_status_check": {
+          "name": "org_integration_grant_generations_status_check",
+          "value": "\"org_integration_grant_generations\".\"status\" IN ('pending','active','superseded','expired','revoked')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.org_integration_grants": {
+      "name": "org_integration_grants",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "plane": {
+          "name": "plane",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "current_generation": {
+          "name": "current_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "org_integration_grants_connection_id_unique": {
+          "name": "org_integration_grants_connection_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_grants_provider_connection_id_unique": {
+          "name": "org_integration_grants_provider_connection_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "provider_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_grants_active_unique": {
+          "name": "org_integration_grants_active_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "plane",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status = 'active'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_grants_org_id": {
+          "name": "org_integration_grants_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "org_integration_grants_org_connection": {
+          "name": "org_integration_grants_org_connection",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "org_integration_grants_org_id_organizations_id_fk": {
+          "name": "org_integration_grants_org_id_organizations_id_fk",
+          "tableFrom": "org_integration_grants",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "org_integration_grants_connection_fk": {
+          "name": "org_integration_grants_connection_fk",
+          "tableFrom": "org_integration_grants",
+          "tableTo": "org_integration_connections",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "org_integration_grants_org_id_id_pk": {
+          "name": "org_integration_grants_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"org_integration_grants\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"org_integration_grants\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "org_integration_grants_plane_check": {
+          "name": "org_integration_grants_plane_check",
+          "value": "\"org_integration_grants\".\"plane\" IN ('control','product')"
+        },
+        "org_integration_grants_environment_check": {
+          "name": "org_integration_grants_environment_check",
+          "value": "\"org_integration_grants\".\"environment\" IN ('control','test','preview','production')"
+        },
+        "org_integration_grants_plane_environment_check": {
+          "name": "org_integration_grants_plane_environment_check",
+          "value": "(\"org_integration_grants\".\"plane\" = 'control' AND \"org_integration_grants\".\"environment\" = 'control') OR (\"org_integration_grants\".\"plane\" = 'product' AND \"org_integration_grants\".\"environment\" <> 'control')"
+        },
+        "org_integration_grants_current_generation_check": {
+          "name": "org_integration_grants_current_generation_check",
+          "value": "\"org_integration_grants\".\"current_generation\" IS NULL OR \"org_integration_grants\".\"current_generation\" >= 1"
+        },
+        "org_integration_grants_status_check": {
+          "name": "org_integration_grants_status_check",
+          "value": "\"org_integration_grants\".\"status\" IN ('pending','active','expired','revoked')"
+        }
+      },
+      "isRLSEnabled": true
+    },
     "public.behavior_integration_requirements": {
       "name": "behavior_integration_requirements",
       "schema": "",
@@ -7718,16 +8840,18 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "capability_nodes_requirement_fk": {
-          "name": "capability_nodes_requirement_fk",
+        "capability_nodes_requirement_lineage_fk": {
+          "name": "capability_nodes_requirement_lineage_fk",
           "tableFrom": "capability_nodes",
           "tableTo": "integration_requirements",
           "columnsFrom": [
             "org_id",
+            "project_id",
             "requirement_id"
           ],
           "columnsTo": [
             "org_id",
+            "project_id",
             "id"
           ],
           "onDelete": "no action",
@@ -7784,467 +8908,6 @@
         "capability_nodes_generation_check": {
           "name": "capability_nodes_generation_check",
           "value": "\"capability_nodes\".\"generation\" >= 1"
-        }
-      },
-      "isRLSEnabled": true
-    },
-    "public.integration_binding_env": {
-      "name": "integration_binding_env",
-      "schema": "",
-      "columns": {
-        "org_id": {
-          "name": "org_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_id": {
-          "name": "binding_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key": {
-          "name": "key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "classification": {
-          "name": "classification",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "required": {
-          "name": "required",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "scopes": {
-          "name": "scopes",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_binding_env_org_id": {
-          "name": "integration_binding_env_org_id",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "integration_binding_env_org_id_organizations_id_fk": {
-          "name": "integration_binding_env_org_id_organizations_id_fk",
-          "tableFrom": "integration_binding_env",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "org_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "integration_binding_env_binding_fk": {
-          "name": "integration_binding_env_binding_fk",
-          "tableFrom": "integration_binding_env",
-          "tableTo": "integration_bindings",
-          "columnsFrom": [
-            "org_id",
-            "binding_id"
-          ],
-          "columnsTo": [
-            "org_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "integration_binding_env_org_id_binding_id_key_pk": {
-          "name": "integration_binding_env_org_id_binding_id_key_pk",
-          "columns": [
-            "org_id",
-            "binding_id",
-            "key"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {
-        "rls_org_isolation": {
-          "name": "rls_org_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "\"integration_binding_env\".\"org_id\" = current_setting('app.current_org_id', true)",
-          "withCheck": "\"integration_binding_env\".\"org_id\" = current_setting('app.current_org_id', true)"
-        }
-      },
-      "checkConstraints": {
-        "integration_binding_env_classification_check": {
-          "name": "integration_binding_env_classification_check",
-          "value": "\"integration_binding_env\".\"classification\" IN ('secret','non_secret')"
-        },
-        "integration_binding_env_required_check": {
-          "name": "integration_binding_env_required_check",
-          "value": "\"integration_binding_env\".\"required\" IN (0,1)"
-        }
-      },
-      "isRLSEnabled": true
-    },
-    "public.integration_bindings": {
-      "name": "integration_bindings",
-      "schema": "",
-      "columns": {
-        "org_id": {
-          "name": "org_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "project_id": {
-          "name": "project_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "requirement_id": {
-          "name": "requirement_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "grant_id": {
-          "name": "grant_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "environment": {
-          "name": "environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider_kind": {
-          "name": "provider_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "adapter_version": {
-          "name": "adapter_version",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "external_resource_id": {
-          "name": "external_resource_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "external_resource_name": {
-          "name": "external_resource_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ownership": {
-          "name": "ownership",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "teardown_policy": {
-          "name": "teardown_policy",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "desired_state_hash": {
-          "name": "desired_state_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "observed_state_hash": {
-          "name": "observed_state_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "generation": {
-          "name": "generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "observed_generation": {
-          "name": "observed_generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "provider_etag": {
-          "name": "provider_etag",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "drift_state": {
-          "name": "drift_state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'unknown'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "integration_bindings_requirement_generation_unique": {
-          "name": "integration_bindings_requirement_generation_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "requirement_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "generation",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "integration_bindings_org_id": {
-          "name": "integration_bindings_org_id",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "integration_bindings_org_project": {
-          "name": "integration_bindings_org_project",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "project_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "integration_bindings_org_id_organizations_id_fk": {
-          "name": "integration_bindings_org_id_organizations_id_fk",
-          "tableFrom": "integration_bindings",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "org_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "integration_bindings_project_fk": {
-          "name": "integration_bindings_project_fk",
-          "tableFrom": "integration_bindings",
-          "tableTo": "projects",
-          "columnsFrom": [
-            "org_id",
-            "project_id"
-          ],
-          "columnsTo": [
-            "org_id",
-            "project_id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "integration_bindings_requirement_fk": {
-          "name": "integration_bindings_requirement_fk",
-          "tableFrom": "integration_bindings",
-          "tableTo": "integration_requirements",
-          "columnsFrom": [
-            "org_id",
-            "requirement_id"
-          ],
-          "columnsTo": [
-            "org_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "integration_bindings_grant_fk": {
-          "name": "integration_bindings_grant_fk",
-          "tableFrom": "integration_bindings",
-          "tableTo": "org_integration_grants",
-          "columnsFrom": [
-            "org_id",
-            "grant_id"
-          ],
-          "columnsTo": [
-            "org_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "integration_bindings_org_id_id_pk": {
-          "name": "integration_bindings_org_id_id_pk",
-          "columns": [
-            "org_id",
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {
-        "rls_org_isolation": {
-          "name": "rls_org_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "\"integration_bindings\".\"org_id\" = current_setting('app.current_org_id', true)",
-          "withCheck": "\"integration_bindings\".\"org_id\" = current_setting('app.current_org_id', true)"
-        }
-      },
-      "checkConstraints": {
-        "integration_bindings_environment_check": {
-          "name": "integration_bindings_environment_check",
-          "value": "\"integration_bindings\".\"environment\" IN ('test','preview','production')"
-        },
-        "integration_bindings_ownership_check": {
-          "name": "integration_bindings_ownership_check",
-          "value": "\"integration_bindings\".\"ownership\" IN ('created','adopted','shared')"
-        },
-        "integration_bindings_teardown_check": {
-          "name": "integration_bindings_teardown_check",
-          "value": "\"integration_bindings\".\"teardown_policy\" IN ('delete','retain')"
-        },
-        "integration_bindings_desired_hash_check": {
-          "name": "integration_bindings_desired_hash_check",
-          "value": "\"integration_bindings\".\"desired_state_hash\" ~ '^sha256:[0-9a-f]{64}$'"
-        },
-        "integration_bindings_observed_hash_check": {
-          "name": "integration_bindings_observed_hash_check",
-          "value": "\"integration_bindings\".\"observed_state_hash\" IS NULL OR \"integration_bindings\".\"observed_state_hash\" ~ '^sha256:[0-9a-f]{64}$'"
-        },
-        "integration_bindings_generation_check": {
-          "name": "integration_bindings_generation_check",
-          "value": "\"integration_bindings\".\"generation\" >= 1"
-        },
-        "integration_bindings_observed_generation_check": {
-          "name": "integration_bindings_observed_generation_check",
-          "value": "\"integration_bindings\".\"observed_generation\" IS NULL OR \"integration_bindings\".\"observed_generation\" >= 1"
-        },
-        "integration_bindings_status_check": {
-          "name": "integration_bindings_status_check",
-          "value": "\"integration_bindings\".\"status\" IN ('pending','ready','drifted','needs_attention','retired')"
-        },
-        "integration_bindings_drift_check": {
-          "name": "integration_bindings_drift_check",
-          "value": "\"integration_bindings\".\"drift_state\" IN ('unknown','in_sync','drifted')"
         }
       },
       "isRLSEnabled": true
@@ -8347,6 +9010,33 @@
         }
       },
       "indexes": {
+        "integration_requirements_project_id_unique": {
+          "name": "integration_requirements_project_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "integration_requirements_active_source_unique": {
           "name": "integration_requirements_active_source_unique",
           "columns": [
@@ -8523,583 +9213,6 @@
       },
       "isRLSEnabled": true
     },
-    "public.org_integration_connections": {
-      "name": "org_integration_connections",
-      "schema": "",
-      "columns": {
-        "org_id": {
-          "name": "org_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "provider_kind": {
-          "name": "provider_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "upstream_account_id": {
-          "name": "upstream_account_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "auth_kind": {
-          "name": "auth_kind",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "credential_ref": {
-          "name": "credential_ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "auth_generation": {
-          "name": "auth_generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "owner_id": {
-          "name": "owner_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "health": {
-          "name": "health",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'unknown'"
-        },
-        "metadata": {
-          "name": "metadata",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "org_integration_connections_account_unique": {
-          "name": "org_integration_connections_account_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "provider_kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "upstream_account_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_connections_provider_id_unique": {
-          "name": "org_integration_connections_provider_id_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "provider_kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_connections_org_id": {
-          "name": "org_integration_connections_org_id",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_connections_org_provider": {
-          "name": "org_integration_connections_org_provider",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "provider_kind",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "org_integration_connections_org_id_organizations_id_fk": {
-          "name": "org_integration_connections_org_id_organizations_id_fk",
-          "tableFrom": "org_integration_connections",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "org_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "org_integration_connections_org_id_id_pk": {
-          "name": "org_integration_connections_org_id_id_pk",
-          "columns": [
-            "org_id",
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {
-        "rls_org_isolation": {
-          "name": "rls_org_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "\"org_integration_connections\".\"org_id\" = current_setting('app.current_org_id', true)",
-          "withCheck": "\"org_integration_connections\".\"org_id\" = current_setting('app.current_org_id', true)"
-        }
-      },
-      "checkConstraints": {
-        "org_integration_connections_auth_generation_check": {
-          "name": "org_integration_connections_auth_generation_check",
-          "value": "\"org_integration_connections\".\"auth_generation\" >= 1"
-        },
-        "org_integration_connections_auth_kind_check": {
-          "name": "org_integration_connections_auth_kind_check",
-          "value": "\"org_integration_connections\".\"auth_kind\" IN ('api_key','oauth2','bot_token','webhook','workload_identity')"
-        },
-        "org_integration_connections_health_check": {
-          "name": "org_integration_connections_health_check",
-          "value": "\"org_integration_connections\".\"health\" IN ('unknown','healthy','degraded','invalid')"
-        },
-        "org_integration_connections_status_check": {
-          "name": "org_integration_connections_status_check",
-          "value": "\"org_integration_connections\".\"status\" IN ('active','revoked')"
-        }
-      },
-      "isRLSEnabled": true
-    },
-    "public.org_integration_grants": {
-      "name": "org_integration_grants",
-      "schema": "",
-      "columns": {
-        "org_id": {
-          "name": "org_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "connection_id": {
-          "name": "connection_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "plane": {
-          "name": "plane",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "environment": {
-          "name": "environment",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "capabilities": {
-          "name": "capabilities",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
-        "operations": {
-          "name": "operations",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
-        "provider_scopes": {
-          "name": "provider_scopes",
-          "type": "text[]",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::text[]"
-        },
-        "resource_constraints": {
-          "name": "resource_constraints",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "policy_revision": {
-          "name": "policy_revision",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "consent_revision": {
-          "name": "consent_revision",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "generation": {
-          "name": "generation",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "status": {
-          "name": "status",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'active'"
-        },
-        "expires_at": {
-          "name": "expires_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "revoked_at": {
-          "name": "revoked_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "org_integration_grants_generation_unique": {
-          "name": "org_integration_grants_generation_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "plane",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "generation",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_grants_connection_id_unique": {
-          "name": "org_integration_grants_connection_id_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_grants_active_unique": {
-          "name": "org_integration_grants_active_unique",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "plane",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "environment",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "where": "status = 'active'",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_grants_org_id": {
-          "name": "org_integration_grants_org_id",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "org_integration_grants_org_connection": {
-          "name": "org_integration_grants_org_connection",
-          "columns": [
-            {
-              "expression": "org_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "connection_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "org_integration_grants_org_id_organizations_id_fk": {
-          "name": "org_integration_grants_org_id_organizations_id_fk",
-          "tableFrom": "org_integration_grants",
-          "tableTo": "organizations",
-          "columnsFrom": [
-            "org_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "org_integration_grants_connection_fk": {
-          "name": "org_integration_grants_connection_fk",
-          "tableFrom": "org_integration_grants",
-          "tableTo": "org_integration_connections",
-          "columnsFrom": [
-            "org_id",
-            "connection_id"
-          ],
-          "columnsTo": [
-            "org_id",
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "org_integration_grants_org_id_id_pk": {
-          "name": "org_integration_grants_org_id_id_pk",
-          "columns": [
-            "org_id",
-            "id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {
-        "rls_org_isolation": {
-          "name": "rls_org_isolation",
-          "as": "PERMISSIVE",
-          "for": "ALL",
-          "to": [
-            "public"
-          ],
-          "using": "\"org_integration_grants\".\"org_id\" = current_setting('app.current_org_id', true)",
-          "withCheck": "\"org_integration_grants\".\"org_id\" = current_setting('app.current_org_id', true)"
-        }
-      },
-      "checkConstraints": {
-        "org_integration_grants_plane_check": {
-          "name": "org_integration_grants_plane_check",
-          "value": "\"org_integration_grants\".\"plane\" IN ('control','product')"
-        },
-        "org_integration_grants_environment_check": {
-          "name": "org_integration_grants_environment_check",
-          "value": "\"org_integration_grants\".\"environment\" IN ('control','test','preview','production')"
-        },
-        "org_integration_grants_plane_environment_check": {
-          "name": "org_integration_grants_plane_environment_check",
-          "value": "(\"org_integration_grants\".\"plane\" = 'control' AND \"org_integration_grants\".\"environment\" = 'control') OR (\"org_integration_grants\".\"plane\" = 'product' AND \"org_integration_grants\".\"environment\" <> 'control')"
-        },
-        "org_integration_grants_generation_check": {
-          "name": "org_integration_grants_generation_check",
-          "value": "\"org_integration_grants\".\"generation\" >= 1"
-        },
-        "org_integration_grants_status_check": {
-          "name": "org_integration_grants_status_check",
-          "value": "\"org_integration_grants\".\"status\" IN ('pending','active','expired','revoked')"
-        },
-        "org_integration_grants_revoked_check": {
-          "name": "org_integration_grants_revoked_check",
-          "value": "(\"org_integration_grants\".\"status\" = 'revoked' AND \"org_integration_grants\".\"revoked_at\" IS NOT NULL) OR (\"org_integration_grants\".\"status\" <> 'revoked' AND \"org_integration_grants\".\"revoked_at\" IS NULL)"
-        }
-      },
-      "isRLSEnabled": true
-    },
     "public.spec_capability_dependencies": {
       "name": "spec_capability_dependencies",
       "schema": "",
@@ -9239,6 +9352,1037 @@
       "checkConstraints": {},
       "isRLSEnabled": true
     },
+    "public.integration_binding_env": {
+      "name": "integration_binding_env",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_id": {
+          "name": "binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key": {
+          "name": "key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "classification": {
+          "name": "classification",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "required": {
+          "name": "required",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "scopes": {
+          "name": "scopes",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_binding_env_output_unique": {
+          "name": "integration_binding_env_output_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_generation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_binding_env_org_id": {
+          "name": "integration_binding_env_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_binding_env_org_id_organizations_id_fk": {
+          "name": "integration_binding_env_org_id_organizations_id_fk",
+          "tableFrom": "integration_binding_env",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_binding_env_binding_generation_fk": {
+          "name": "integration_binding_env_binding_generation_fk",
+          "tableFrom": "integration_binding_env",
+          "tableTo": "integration_binding_generations",
+          "columnsFrom": [
+            "org_id",
+            "binding_id",
+            "binding_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "binding_id",
+            "generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "integration_binding_env_org_id_binding_id_binding_generation_key_pk": {
+          "name": "integration_binding_env_org_id_binding_id_binding_generation_key_pk",
+          "columns": [
+            "org_id",
+            "binding_id",
+            "binding_generation",
+            "key"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"integration_binding_env\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"integration_binding_env\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "integration_binding_env_generation_check": {
+          "name": "integration_binding_env_generation_check",
+          "value": "\"integration_binding_env\".\"binding_generation\" >= 1"
+        },
+        "integration_binding_env_classification_check": {
+          "name": "integration_binding_env_classification_check",
+          "value": "\"integration_binding_env\".\"classification\" IN ('secret','non_secret')"
+        },
+        "integration_binding_env_required_check": {
+          "name": "integration_binding_env_required_check",
+          "value": "\"integration_binding_env\".\"required\" IN (0,1)"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.integration_binding_generations": {
+      "name": "integration_binding_generations",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requirement_id": {
+          "name": "requirement_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_id": {
+          "name": "binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "generation": {
+          "name": "generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth_generation": {
+          "name": "auth_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grant_id": {
+          "name": "grant_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grant_generation": {
+          "name": "grant_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "adapter_version": {
+          "name": "adapter_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_resource_id": {
+          "name": "external_resource_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_resource_name": {
+          "name": "external_resource_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ownership": {
+          "name": "ownership",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "teardown_policy": {
+          "name": "teardown_policy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "desired_state_hash": {
+          "name": "desired_state_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "observed_state_hash": {
+          "name": "observed_state_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "observed_generation": {
+          "name": "observed_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_etag": {
+          "name": "provider_etag",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "drift_state": {
+          "name": "drift_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unknown'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_binding_generations_binding_generation_unique": {
+          "name": "integration_binding_generations_binding_generation_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "generation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_binding_generations_org_id": {
+          "name": "integration_binding_generations_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_binding_generations_org_id_organizations_id_fk": {
+          "name": "integration_binding_generations_org_id_organizations_id_fk",
+          "tableFrom": "integration_binding_generations",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_binding_generations_binding_fk": {
+          "name": "integration_binding_generations_binding_fk",
+          "tableFrom": "integration_binding_generations",
+          "tableTo": "integration_bindings",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "requirement_id",
+            "environment",
+            "binding_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "requirement_id",
+            "environment",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_binding_generations_auth_generation_fk": {
+          "name": "integration_binding_generations_auth_generation_fk",
+          "tableFrom": "integration_binding_generations",
+          "tableTo": "org_integration_connection_auth_generations",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "auth_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_binding_generations_grant_generation_fk": {
+          "name": "integration_binding_generations_grant_generation_fk",
+          "tableFrom": "integration_binding_generations",
+          "tableTo": "org_integration_grant_generations",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id",
+            "grant_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id",
+            "generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_binding_generations_grant_fk": {
+          "name": "integration_binding_generations_grant_fk",
+          "tableFrom": "integration_binding_generations",
+          "tableTo": "org_integration_grants",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "integration_binding_generations_org_id_project_id_requirement_id_environment_binding_id_generation_pk": {
+          "name": "integration_binding_generations_org_id_project_id_requirement_id_environment_binding_id_generation_pk",
+          "columns": [
+            "org_id",
+            "project_id",
+            "requirement_id",
+            "environment",
+            "binding_id",
+            "generation"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"integration_binding_generations\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"integration_binding_generations\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "integration_binding_generations_environment_check": {
+          "name": "integration_binding_generations_environment_check",
+          "value": "\"integration_binding_generations\".\"environment\" IN ('test','preview','production')"
+        },
+        "integration_binding_generations_generation_check": {
+          "name": "integration_binding_generations_generation_check",
+          "value": "\"integration_binding_generations\".\"generation\" >= 1"
+        },
+        "integration_binding_generations_auth_generation_check": {
+          "name": "integration_binding_generations_auth_generation_check",
+          "value": "\"integration_binding_generations\".\"auth_generation\" >= 1"
+        },
+        "integration_binding_generations_grant_generation_check": {
+          "name": "integration_binding_generations_grant_generation_check",
+          "value": "\"integration_binding_generations\".\"grant_generation\" >= 1"
+        },
+        "integration_binding_generations_ownership_check": {
+          "name": "integration_binding_generations_ownership_check",
+          "value": "\"integration_binding_generations\".\"ownership\" IN ('created','adopted','shared')"
+        },
+        "integration_binding_generations_teardown_check": {
+          "name": "integration_binding_generations_teardown_check",
+          "value": "\"integration_binding_generations\".\"teardown_policy\" IN ('delete','retain')"
+        },
+        "integration_binding_generations_desired_hash_check": {
+          "name": "integration_binding_generations_desired_hash_check",
+          "value": "\"integration_binding_generations\".\"desired_state_hash\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "integration_binding_generations_observed_hash_check": {
+          "name": "integration_binding_generations_observed_hash_check",
+          "value": "\"integration_binding_generations\".\"observed_state_hash\" IS NULL OR \"integration_binding_generations\".\"observed_state_hash\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "integration_binding_generations_observed_generation_check": {
+          "name": "integration_binding_generations_observed_generation_check",
+          "value": "\"integration_binding_generations\".\"observed_generation\" IS NULL OR \"integration_binding_generations\".\"observed_generation\" >= 1"
+        },
+        "integration_binding_generations_status_check": {
+          "name": "integration_binding_generations_status_check",
+          "value": "\"integration_binding_generations\".\"status\" IN ('pending','ready','drifted','needs_attention','retired')"
+        },
+        "integration_binding_generations_ready_resource_check": {
+          "name": "integration_binding_generations_ready_resource_check",
+          "value": "\"integration_binding_generations\".\"status\" <> 'ready' OR (\"integration_binding_generations\".\"external_resource_id\" <> '' AND \"integration_binding_generations\".\"external_resource_name\" <> '')"
+        },
+        "integration_binding_generations_ownership_teardown_check": {
+          "name": "integration_binding_generations_ownership_teardown_check",
+          "value": "(\"integration_binding_generations\".\"ownership\" = 'created' AND \"integration_binding_generations\".\"teardown_policy\" IN ('delete','retain')) OR (\"integration_binding_generations\".\"ownership\" IN ('adopted','shared') AND \"integration_binding_generations\".\"teardown_policy\" = 'retain')"
+        },
+        "integration_binding_generations_drift_check": {
+          "name": "integration_binding_generations_drift_check",
+          "value": "\"integration_binding_generations\".\"drift_state\" IN ('unknown','in_sync','drifted')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.integration_bindings": {
+      "name": "integration_bindings",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requirement_id": {
+          "name": "requirement_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "environment": {
+          "name": "environment",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_kind": {
+          "name": "provider_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "connection_id": {
+          "name": "connection_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "current_generation": {
+          "name": "current_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "drift_state": {
+          "name": "drift_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unknown'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "integration_bindings_lineage_unique": {
+          "name": "integration_bindings_lineage_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requirement_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_bindings_requirement_generation_unique": {
+          "name": "integration_bindings_requirement_generation_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "requirement_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "environment",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status IN ('pending','ready','drifted','needs_attention')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_bindings_org_id": {
+          "name": "integration_bindings_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "integration_bindings_org_project": {
+          "name": "integration_bindings_org_project",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "integration_bindings_org_id_organizations_id_fk": {
+          "name": "integration_bindings_org_id_organizations_id_fk",
+          "tableFrom": "integration_bindings",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_bindings_project_fk": {
+          "name": "integration_bindings_project_fk",
+          "tableFrom": "integration_bindings",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_bindings_requirement_lineage_fk": {
+          "name": "integration_bindings_requirement_lineage_fk",
+          "tableFrom": "integration_bindings",
+          "tableTo": "integration_requirements",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "requirement_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "integration_bindings_connection_fk": {
+          "name": "integration_bindings_connection_fk",
+          "tableFrom": "integration_bindings",
+          "tableTo": "org_integration_connections",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "integration_bindings_org_id_id_pk": {
+          "name": "integration_bindings_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"integration_bindings\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"integration_bindings\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "integration_bindings_environment_check": {
+          "name": "integration_bindings_environment_check",
+          "value": "\"integration_bindings\".\"environment\" IN ('test','preview','production')"
+        },
+        "integration_bindings_current_generation_check": {
+          "name": "integration_bindings_current_generation_check",
+          "value": "\"integration_bindings\".\"current_generation\" IS NULL OR \"integration_bindings\".\"current_generation\" >= 1"
+        },
+        "integration_bindings_status_check": {
+          "name": "integration_bindings_status_check",
+          "value": "\"integration_bindings\".\"status\" IN ('pending','ready','drifted','needs_attention','retired')"
+        },
+        "integration_bindings_drift_check": {
+          "name": "integration_bindings_drift_check",
+          "value": "\"integration_bindings\".\"drift_state\" IN ('unknown','in_sync','drifted')"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.delivery_run_bindings": {
+      "name": "delivery_run_bindings",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "delivery_run_id": {
+          "name": "delivery_run_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_id": {
+          "name": "binding_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "delivery_run_bindings_set_unique": {
+          "name": "delivery_run_bindings_set_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "delivery_run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "binding_generation",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "delivery_run_bindings_org_id": {
+          "name": "delivery_run_bindings_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "delivery_run_bindings_org_id_organizations_id_fk": {
+          "name": "delivery_run_bindings_org_id_organizations_id_fk",
+          "tableFrom": "delivery_run_bindings",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "delivery_run_bindings_run_fk": {
+          "name": "delivery_run_bindings_run_fk",
+          "tableFrom": "delivery_run_bindings",
+          "tableTo": "delivery_runs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "delivery_run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "delivery_run_bindings_binding_generation_fk": {
+          "name": "delivery_run_bindings_binding_generation_fk",
+          "tableFrom": "delivery_run_bindings",
+          "tableTo": "integration_binding_generations",
+          "columnsFrom": [
+            "org_id",
+            "binding_id",
+            "binding_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "binding_id",
+            "generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "delivery_run_bindings_binding_fk": {
+          "name": "delivery_run_bindings_binding_fk",
+          "tableFrom": "delivery_run_bindings",
+          "tableTo": "integration_bindings",
+          "columnsFrom": [
+            "org_id",
+            "binding_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "delivery_run_bindings_org_id_delivery_run_id_binding_id_binding_generation_pk": {
+          "name": "delivery_run_bindings_org_id_delivery_run_id_binding_id_binding_generation_pk",
+          "columns": [
+            "org_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"delivery_run_bindings\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"delivery_run_bindings\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "delivery_run_bindings_generation_check": {
+          "name": "delivery_run_bindings_generation_check",
+          "value": "\"delivery_run_bindings\".\"binding_generation\" >= 1"
+        }
+      },
+      "isRLSEnabled": true
+    },
     "public.delivery_runs": {
       "name": "delivery_runs",
       "schema": "",
@@ -9270,12 +10414,6 @@
         "merge_sha": {
           "name": "merge_sha",
           "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "binding_generations": {
-          "name": "binding_generations",
-          "type": "jsonb",
           "primaryKey": false,
           "notNull": true
         },
@@ -9332,6 +10470,33 @@
         }
       },
       "indexes": {
+        "delivery_runs_project_id_unique": {
+          "name": "delivery_runs_project_id_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "delivery_runs_authority_decision_unique": {
           "name": "delivery_runs_authority_decision_unique",
           "columns": [
@@ -9756,6 +10921,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "phase": {
           "name": "phase",
           "type": "text",
@@ -9947,32 +11118,36 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_reconciliations_requirement_fk": {
-          "name": "integration_reconciliations_requirement_fk",
+        "integration_reconciliations_requirement_lineage_fk": {
+          "name": "integration_reconciliations_requirement_lineage_fk",
           "tableFrom": "integration_reconciliations",
           "tableTo": "integration_requirements",
           "columnsFrom": [
             "org_id",
+            "project_id",
             "requirement_id"
           ],
           "columnsTo": [
             "org_id",
+            "project_id",
             "id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_reconciliations_binding_fk": {
-          "name": "integration_reconciliations_binding_fk",
+        "integration_reconciliations_binding_generation_fk": {
+          "name": "integration_reconciliations_binding_generation_fk",
           "tableFrom": "integration_reconciliations",
-          "tableTo": "integration_bindings",
+          "tableTo": "integration_binding_generations",
           "columnsFrom": [
             "org_id",
-            "binding_id"
+            "binding_id",
+            "binding_generation"
           ],
           "columnsTo": [
             "org_id",
-            "id"
+            "binding_id",
+            "generation"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -10012,6 +11187,10 @@
         "integration_reconciliations_progress_signature_check": {
           "name": "integration_reconciliations_progress_signature_check",
           "value": "\"integration_reconciliations\".\"progress_signature\" IS NULL OR \"integration_reconciliations\".\"progress_signature\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "integration_reconciliations_binding_generation_check": {
+          "name": "integration_reconciliations_binding_generation_check",
+          "value": "(\"integration_reconciliations\".\"binding_id\" IS NULL AND \"integration_reconciliations\".\"binding_generation\" IS NULL) OR (\"integration_reconciliations\".\"binding_id\" IS NOT NULL AND \"integration_reconciliations\".\"binding_generation\" >= 1)"
         },
         "integration_reconciliations_claim_check": {
           "name": "integration_reconciliations_claim_check",
@@ -10059,6 +11238,12 @@
         "binding_id": {
           "name": "binding_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "binding_generation": {
+          "name": "binding_generation",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -10218,32 +11403,36 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_resource_snapshots_requirement_fk": {
-          "name": "integration_resource_snapshots_requirement_fk",
+        "integration_resource_snapshots_requirement_lineage_fk": {
+          "name": "integration_resource_snapshots_requirement_lineage_fk",
           "tableFrom": "integration_resource_snapshots",
           "tableTo": "integration_requirements",
           "columnsFrom": [
             "org_id",
+            "project_id",
             "requirement_id"
           ],
           "columnsTo": [
             "org_id",
+            "project_id",
             "id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_resource_snapshots_binding_fk": {
-          "name": "integration_resource_snapshots_binding_fk",
+        "integration_resource_snapshots_binding_generation_fk": {
+          "name": "integration_resource_snapshots_binding_generation_fk",
           "tableFrom": "integration_resource_snapshots",
-          "tableTo": "integration_bindings",
+          "tableTo": "integration_binding_generations",
           "columnsFrom": [
             "org_id",
-            "binding_id"
+            "binding_id",
+            "binding_generation"
           ],
           "columnsTo": [
             "org_id",
-            "id"
+            "binding_id",
+            "generation"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -10275,6 +11464,10 @@
         "integration_resource_snapshots_hash_check": {
           "name": "integration_resource_snapshots_hash_check",
           "value": "\"integration_resource_snapshots\".\"observed_state_hash\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "integration_resource_snapshots_binding_generation_check": {
+          "name": "integration_resource_snapshots_binding_generation_check",
+          "value": "(\"integration_resource_snapshots\".\"binding_id\" IS NULL AND \"integration_resource_snapshots\".\"binding_generation\" IS NULL) OR (\"integration_resource_snapshots\".\"binding_id\" IS NOT NULL AND \"integration_resource_snapshots\".\"binding_generation\" >= 1)"
         },
         "integration_resource_snapshots_health_check": {
           "name": "integration_resource_snapshots_health_check",
@@ -10617,47 +11810,57 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_validation_proofs_requirement_fk": {
-          "name": "integration_validation_proofs_requirement_fk",
+        "integration_validation_proofs_requirement_lineage_fk": {
+          "name": "integration_validation_proofs_requirement_lineage_fk",
           "tableFrom": "integration_validation_proofs",
           "tableTo": "integration_requirements",
           "columnsFrom": [
             "org_id",
+            "project_id",
             "requirement_id"
           ],
           "columnsTo": [
             "org_id",
+            "project_id",
             "id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_validation_proofs_binding_fk": {
-          "name": "integration_validation_proofs_binding_fk",
+        "integration_validation_proofs_binding_generation_fk": {
+          "name": "integration_validation_proofs_binding_generation_fk",
           "tableFrom": "integration_validation_proofs",
-          "tableTo": "integration_bindings",
+          "tableTo": "integration_binding_generations",
           "columnsFrom": [
             "org_id",
-            "binding_id"
+            "binding_id",
+            "binding_generation"
           ],
           "columnsTo": [
             "org_id",
-            "id"
+            "binding_id",
+            "generation"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "integration_validation_proofs_delivery_run_fk": {
-          "name": "integration_validation_proofs_delivery_run_fk",
+        "integration_validation_proofs_delivery_binding_set_fk": {
+          "name": "integration_validation_proofs_delivery_binding_set_fk",
           "tableFrom": "integration_validation_proofs",
-          "tableTo": "delivery_runs",
+          "tableTo": "delivery_run_bindings",
           "columnsFrom": [
             "org_id",
-            "delivery_run_id"
+            "project_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
           ],
           "columnsTo": [
             "org_id",
-            "id"
+            "project_id",
+            "delivery_run_id",
+            "binding_id",
+            "binding_generation"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -10926,11 +12129,13 @@
           "columnsFrom": [
             "org_id",
             "binding_id",
+            "binding_generation",
             "key"
           ],
           "columnsTo": [
             "org_id",
             "binding_id",
+            "binding_generation",
             "key"
           ],
           "onDelete": "no action",
@@ -10962,7 +12167,7 @@
       "checkConstraints": {
         "project_app_env_environment_check": {
           "name": "project_app_env_environment_check",
-          "value": "\"project_app_env\".\"environment\" IN ('dev','test','preview','production')"
+          "value": "\"project_app_env\".\"environment\" IN ('test','preview','production') OR (\"project_app_env\".\"source\" = 'byo' AND \"project_app_env\".\"environment\" = 'dev')"
         },
         "project_app_env_source_check": {
           "name": "project_app_env_source_check",
@@ -10974,7 +12179,7 @@
         },
         "project_app_env_binding_check": {
           "name": "project_app_env_binding_check",
-          "value": "(\"project_app_env\".\"source\" = 'byo' AND \"project_app_env\".\"binding_id\" IS NULL AND \"project_app_env\".\"binding_generation\" IS NULL) OR (\"project_app_env\".\"source\" = 'provisioned' AND \"project_app_env\".\"binding_id\" IS NOT NULL AND \"project_app_env\".\"binding_generation\" >= 1)"
+          "value": "(\"project_app_env\".\"source\" = 'byo' AND \"project_app_env\".\"binding_id\" IS NULL AND \"project_app_env\".\"binding_generation\" IS NULL) OR (\"project_app_env\".\"source\" = 'provisioned' AND \"project_app_env\".\"binding_id\" IS NOT NULL AND \"project_app_env\".\"binding_generation\" >= 1 AND \"project_app_env\".\"environment\" IN ('test','preview','production'))"
         },
         "project_app_env_secret_generation_check": {
           "name": "project_app_env_secret_generation_check",
@@ -11011,9 +12216,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "auth_generation": {
+          "name": "auth_generation",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
         "grant_id": {
           "name": "grant_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grant_generation": {
+          "name": "grant_generation",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -11122,6 +12339,25 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "project_integration_grant_selections_auth_generation_fk": {
+          "name": "project_integration_grant_selections_auth_generation_fk",
+          "tableFrom": "project_integration_grant_selections",
+          "tableTo": "org_integration_connection_auth_generations",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "auth_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "generation"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "project_integration_grant_selections_grant_fk": {
           "name": "project_integration_grant_selections_grant_fk",
           "tableFrom": "project_integration_grant_selections",
@@ -11135,6 +12371,27 @@
             "org_id",
             "connection_id",
             "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_integration_grant_selections_grant_generation_fk": {
+          "name": "project_integration_grant_selections_grant_generation_fk",
+          "tableFrom": "project_integration_grant_selections",
+          "tableTo": "org_integration_grant_generations",
+          "columnsFrom": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id",
+            "grant_generation"
+          ],
+          "columnsTo": [
+            "org_id",
+            "provider_kind",
+            "connection_id",
+            "grant_id",
+            "generation"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -11163,7 +12420,268 @@
           "withCheck": "\"project_integration_grant_selections\".\"org_id\" = current_setting('app.current_org_id', true)"
         }
       },
-      "checkConstraints": {},
+      "checkConstraints": {
+        "project_integration_grant_selections_auth_generation_check": {
+          "name": "project_integration_grant_selections_auth_generation_check",
+          "value": "\"project_integration_grant_selections\".\"auth_generation\" >= 1"
+        },
+        "project_integration_grant_selections_grant_generation_check": {
+          "name": "project_integration_grant_selections_grant_generation_check",
+          "value": "\"project_integration_grant_selections\".\"grant_generation\" >= 1"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.project_derivations": {
+      "name": "project_derivations",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_fingerprint": {
+          "name": "idempotency_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "phase": {
+          "name": "phase",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "sanitized_input": {
+          "name": "sanitized_input",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "sanitized_error": {
+          "name": "sanitized_error",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "template_receipt": {
+          "name": "template_receipt",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "result_receipt": {
+          "name": "result_receipt",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ownership_receipt": {
+          "name": "ownership_receipt",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "project_derivations_idempotency_unique": {
+          "name": "project_derivations_idempotency_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "idempotency_fingerprint",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_derivations_active_project_unique": {
+          "name": "project_derivations_active_project_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "status IN ('pending','in_progress')",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_derivations_org_id": {
+          "name": "project_derivations_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_derivations_org_project": {
+          "name": "project_derivations_org_project",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_derivations_org_id_organizations_id_fk": {
+          "name": "project_derivations_org_id_organizations_id_fk",
+          "tableFrom": "project_derivations",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "project_derivations_project_fk": {
+          "name": "project_derivations_project_fk",
+          "tableFrom": "project_derivations",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "project_derivations_org_id_id_pk": {
+          "name": "project_derivations_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"project_derivations\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"project_derivations\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "project_derivations_phase_check": {
+          "name": "project_derivations_phase_check",
+          "value": "\"project_derivations\".\"phase\" IN ('shell','template','graph','activate','compensate')"
+        },
+        "project_derivations_status_check": {
+          "name": "project_derivations_status_check",
+          "value": "\"project_derivations\".\"status\" IN ('pending','in_progress','succeeded','failed','compensated')"
+        },
+        "project_derivations_fingerprint_check": {
+          "name": "project_derivations_fingerprint_check",
+          "value": "\"project_derivations\".\"idempotency_fingerprint\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "project_derivations_completed_check": {
+          "name": "project_derivations_completed_check",
+          "value": "(\"project_derivations\".\"status\" IN ('succeeded','failed','compensated') AND \"project_derivations\".\"completed_at\" IS NOT NULL) OR (\"project_derivations\".\"status\" IN ('pending','in_progress') AND \"project_derivations\".\"completed_at\" IS NULL)"
+        }
+      },
       "isRLSEnabled": true
     }
   },

@@ -160,12 +160,12 @@ export class MobileReleaseDeployAdapter implements DeployAdapter {
   }
 
   private async token(grant: OrgGrant): Promise<string> {
-    const secret = await this.deps.secrets.get(grant.credentialRef);
+    const secret = await this.deps.secrets.get(grant.eligibleOperation.credentialRef);
     if (secret === undefined) {
       throw new DeployAdapterConfigError(
         MOBILE_RELEASE_ADAPTER_KIND,
         "credentialRef",
-        `the org grant credentialRef '${grant.credentialRef}' is not present in the secret store (the distribution channel API key)`,
+        `the org grant credentialRef '${grant.eligibleOperation.credentialRef}' is not present in the secret store (the distribution channel API key)`,
       );
     }
     return secret.value;

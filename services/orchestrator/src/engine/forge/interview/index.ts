@@ -34,6 +34,7 @@ export {
   type PersistDeploySelectionCallback,
   type PreparedGreenfieldDeploy,
 } from "./deployDependency.js";
+export { DeployIneligibleError } from "./deployIneligibleError.js";
 
 // TRANSACTIONAL ROLLBACK (task #78) — the compensation primitives the derive uses
 // to atomically delete every external resource it created when a later step fails.

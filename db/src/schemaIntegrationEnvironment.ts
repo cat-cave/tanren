@@ -11,7 +11,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { organizations, projects } from "./schemaCore.js";
-import { integrationBindingEnv } from "./schemaIntegrationLifecycle.js";
+import { integrationBindingEnv } from "./schemaIntegrationBindings.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
 
 export const projectAppEnv = pgTable(
@@ -46,8 +46,13 @@ export const projectAppEnv = pgTable(
       name: "project_app_env_project_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.key],
-      foreignColumns: [integrationBindingEnv.orgId, integrationBindingEnv.bindingId, integrationBindingEnv.key],
+      columns: [table.orgId, table.bindingId, table.bindingGeneration, table.key],
+      foreignColumns: [
+        integrationBindingEnv.orgId,
+        integrationBindingEnv.bindingId,
+        integrationBindingEnv.bindingGeneration,
+        integrationBindingEnv.key,
+      ],
       name: "project_app_env_binding_output_fk",
     }),
     uniqueIndex("project_app_env_project_environment_key_unique").on(
@@ -58,7 +63,10 @@ export const projectAppEnv = pgTable(
     ),
     index("project_app_env_org_id").on(table.orgId),
     index("project_app_env_org_project").on(table.orgId, table.projectId),
-    check("project_app_env_environment_check", sql`${table.environment} IN ('dev','test','preview','production')`),
+    check(
+      "project_app_env_environment_check",
+      sql`${table.environment} IN ('test','preview','production') OR (${table.source} = 'byo' AND ${table.environment} = 'dev')`,
+    ),
     check("project_app_env_source_check", sql`${table.source} IN ('byo','provisioned')`),
     check(
       "project_app_env_value_xor_check",
@@ -66,7 +74,7 @@ export const projectAppEnv = pgTable(
     ),
     check(
       "project_app_env_binding_check",
-      sql`(${table.source} = 'byo' AND ${table.bindingId} IS NULL AND ${table.bindingGeneration} IS NULL) OR (${table.source} = 'provisioned' AND ${table.bindingId} IS NOT NULL AND ${table.bindingGeneration} >= 1)`,
+      sql`(${table.source} = 'byo' AND ${table.bindingId} IS NULL AND ${table.bindingGeneration} IS NULL) OR (${table.source} = 'provisioned' AND ${table.bindingId} IS NOT NULL AND ${table.bindingGeneration} >= 1 AND ${table.environment} IN ('test','preview','production'))`,
     ),
     check(
       "project_app_env_secret_generation_check",

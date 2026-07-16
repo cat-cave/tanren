@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // PulumiDeployAdapter conformance: provisionOrBind select-or-inits the stack; deploy
 // runs `pulumi up` and returns the update id + endpoint; verify POLLS the update to a
 // SUCCEEDED terminal + smoke-checks the endpoint (failing LOUD on a FAILED terminal, a
@@ -19,14 +20,17 @@ const TOKEN_VALUE = "pul-super-secret-access-token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const grant: OrgGrant = {
+const grant = testOrgGrant({
   providerKind: PULUMI_PROVIDER_KIND,
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { pulumiBackend: "https://api.pulumi.com", pulumiProject: "acme-infra" },
-};
+  capability: "deploy",
+});
 
 const ctx = (name: string): ProjectContext => ({
   projectId: `proj_${name}`,

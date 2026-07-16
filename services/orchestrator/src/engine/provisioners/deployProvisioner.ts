@@ -390,10 +390,10 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
    * never placed in an artifact, logged, or returned.
    */
   private async resolveToken(grant: OrgGrant): Promise<string> {
-    const secret = await this.secrets.get(grant.credentialRef);
+    const secret = await this.secrets.get(grant.eligibleOperation.credentialRef);
     if (secret === undefined) {
       throw new Error(
-        `${this.api.providerKind}: org grant credentialRef '${grant.credentialRef}' is not present in the secret store`,
+        `${this.api.providerKind}: org grant credentialRef '${grant.eligibleOperation.credentialRef}' is not present in the secret store`,
       );
     }
     return secret.value;
@@ -427,7 +427,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     const tokenAliasRef = `secret://deploy/${this.api.providerKind}/${app.appId}/token`;
     // The alias points at the org credential ref (a POINTER string), never the
     // token value — same write-only model the Slack/Sentry artifacts use.
-    await this.secrets.put({ ref: tokenAliasRef, value: grant.credentialRef });
+    await this.secrets.put({ ref: tokenAliasRef, value: grant.eligibleOperation.credentialRef });
     return {
       deployRef: {
         provider: this.api.providerKind,

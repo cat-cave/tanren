@@ -75,35 +75,55 @@ function fakePool(state: PoolState): pg.Pool {
         : { rows: [], rowCount: 0 };
     }
     if (/FROM org_integration_connections c/u.test(sql)) {
-      return state.grant === undefined
-        ? { rows: [], rowCount: 0 }
-        : {
-            rows: [
-              {
-                connection_id: "connection_demo",
-                grant_id: "grant_demo",
-                org_id: ORG_ID,
-                provider_kind: state.grant.provider_kind,
-                upstream_account_id: "account_demo",
-                auth_kind: "api_key",
-                credential_ref: state.grant.credential_ref,
-                auth_generation: 1,
-                owner_id: "user_demo",
-                health: "healthy",
-                connection_status: "active",
-                metadata: state.grant.metadata,
-                plane: "control",
-                environment: "control",
-                capabilities: ["deploy"],
-                operations: ["deploy"],
-                provider_scopes: [],
-                grant_generation: 1,
-                grant_status: "active",
-                selected_for_project: true,
-              },
-            ],
-            rowCount: 1,
-          };
+      if (state.grant === undefined) return { rows: [], rowCount: 0 };
+      if (/credential_ref/u.test(sql) && /capabilities/u.test(sql)) {
+        return {
+          rows: [
+            {
+              connection_id: "connection_demo",
+              provider_kind: state.grant.provider_kind,
+              provider_principal_id: "account_demo",
+              principal_metadata: state.grant.metadata ?? {},
+              current_auth_generation: 1,
+              grant_id: "grant_demo",
+              grant_generation: 1,
+              credential_ref: (state.grant.credential_ref ?? "secret://org/deploy-token/g/1").includes("/g/")
+                ? (state.grant.credential_ref ?? "secret://org/deploy-token/g/1")
+                : `${state.grant.credential_ref ?? "secret://org/deploy-token"}/g/1`,
+              policy_revision: "integration-catalog.v1",
+              consent_revision: "consent.test",
+              capabilities: ["deploy"],
+              operations: ["discover", "provision", "bind", "teardown"],
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return {
+        rows: [
+          {
+            connection_id: "connection_demo",
+            grant_id: "grant_demo",
+            org_id: ORG_ID,
+            provider_kind: state.grant.provider_kind,
+            provider_principal_id: "account_demo",
+            principal_kind: "team",
+            display_name: "account_demo",
+            health: "healthy",
+            connection_status: "active",
+            current_auth_generation: 1,
+            grant_generation: 1,
+            grant_status: "active",
+            auth_expires_at: null,
+            provider_scopes: [],
+            operation_id: null,
+            operation_stage: null,
+            operation_status: null,
+            selected_for_project: true,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     if (/FROM behaviors b/u.test(sql) || /INNER JOIN spec_behaviors/u.test(sql)) {
       return {
@@ -143,7 +163,7 @@ class RecordingEventStore implements EventStore {
 
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
-  void store.put({ ref: "secret://org/deploy-token", value: "deploy_token" });
+  void store.put({ ref: "secret://org/deploy-token/g/1", value: "deploy_token" });
   return store;
 }
 
@@ -200,7 +220,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       deploymentId: "@acme/web@1.2.3",
       grant: {
         provider_kind: "deploy.package_release",
-        credential_ref: "secret://org/deploy-token",
+        credential_ref: "secret://org/deploy-token/g/1",
         metadata: {},
       },
       behaviors: [{ id: "beh_install", title: "install the CLI" }],
@@ -259,7 +279,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       deploymentId: "manual:proj_demo@main",
       grant: {
         provider_kind: MANUAL_EXTERNAL_PROVIDER_KIND,
-        credential_ref: "secret://org/deploy-token",
+        credential_ref: "secret://org/deploy-token/g/1",
         metadata: { manualExternalUrl: "https://attested.example.dev", manualExternalKind: "web_url" },
       },
       behaviors: [{ id: "beh_home", title: "home loads" }],
@@ -290,7 +310,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       deploymentId: "d_1",
       grant: {
         provider_kind: "deploy.mystery",
-        credential_ref: "secret://org/deploy-token",
+        credential_ref: "secret://org/deploy-token/g/1",
         metadata: {},
       },
       behaviors: [{ id: "b", title: "B" }],

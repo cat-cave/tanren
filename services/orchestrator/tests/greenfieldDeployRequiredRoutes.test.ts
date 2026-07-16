@@ -17,6 +17,28 @@ class LinkedDeployRoutesPool extends RoutesPool {
     if (text.includes("FROM org_integration_connections c")) {
       const orgId = String(params[0]);
       const providerKind = "deploy.vercel";
+      // Inventory shape (listExactControlGrants) vs exact-grant resolve shape.
+      if (text.includes("provider_principal_id") && text.includes("credential_ref")) {
+        return {
+          rows: [
+            {
+              connection_id: "connection_1",
+              provider_kind: providerKind,
+              provider_principal_id: "account_1",
+              principal_metadata: {},
+              current_auth_generation: 1,
+              grant_id: "grant_1",
+              grant_generation: 1,
+              credential_ref: "secret://missing/deploy-token/g/1",
+              policy_revision: "integration-catalog.v1",
+              consent_revision: "consent.test",
+              capabilities: ["deploy"],
+              operations: ["discover", "provision", "bind", "teardown"],
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       return {
         rows: [
           {
@@ -24,21 +46,19 @@ class LinkedDeployRoutesPool extends RoutesPool {
             grant_id: "grant_1",
             org_id: orgId,
             provider_kind: providerKind,
-            upstream_account_id: "account_1",
-            auth_kind: "api_key",
-            credential_ref: "secret://missing/deploy-token",
-            auth_generation: 1,
-            owner_id: "user_alice",
+            provider_principal_id: "account_1",
+            principal_kind: "team",
+            display_name: "account_1",
             health: "healthy",
             connection_status: "active",
-            metadata: {},
-            plane: "control",
-            environment: "control",
-            capabilities: ["deploy"],
-            operations: ["deploy"],
-            provider_scopes: [],
+            current_auth_generation: 1,
             grant_generation: 1,
             grant_status: "active",
+            auth_expires_at: null,
+            provider_scopes: [],
+            operation_id: null,
+            operation_stage: null,
+            operation_status: null,
             selected_for_project: false,
           },
         ],

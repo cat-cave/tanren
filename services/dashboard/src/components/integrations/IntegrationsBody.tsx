@@ -126,28 +126,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                     </select>
                   </div>
                   <div class="field">
-                    <label for="upstreamAccountId">account / workspace id</label>
-                    <input
-                      id="upstreamAccountId"
-                      name="upstreamAccountId"
-                      type="text"
-                      required
-                      autocomplete="off"
-                      placeholder="provider account id"
-                    />
-                  </div>
-                  <div class="field">
-                    <label for="authKind">auth kind</label>
-                    <select id="authKind" name="authKind" required>
-                      <option value="api_key">api key</option>
-                      <option value="bot_token">bot token</option>
-                      <option value="webhook">webhook</option>
-                      <option value="oauth2">oauth 2</option>
-                      <option value="workload_identity">workload identity</option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label for="token">token (write-only)</label>
+                    <label for="token">token (write-only · never echoed)</label>
                     <input
                       id="token"
                       name="token"
@@ -157,8 +136,9 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                       placeholder="provider API token"
                     />
                   </div>
+                  <input type="hidden" name="idempotencyKey" value={`link-${Date.now()}`} />
                   <button class="btn primary" type="submit">
-                    link
+                    link &amp; verify principal
                   </button>
                 </form>
               ) : null}
@@ -169,8 +149,8 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                 </div>
               ) : (
                 <div class="note">
-                  <b>↑ plane a.</b> The token is stored under a secret REF and never echoed. Metadata values stay
-                  server-side; only keys surface on the grant card. Hetzner is out of scope here.
+                  <b>↑ plane a.</b> The provider verifies the principal; the token is staged and generation-addressed
+                  and never echoed. Multi-principal credentials require explicit selection.
                 </div>
               )}
             </div>
@@ -304,27 +284,43 @@ function GrantCard(props: { row: OrgIntegrationSummary; projectId: string; csrfT
   return (
     <div class={`int-card${active ? " linked" : ""}`} data-provider={row.providerKind}>
       <span class="label">{providerLabel(row.providerKind)}</span>
-      <span class={`value${active ? "" : " empty"}`}>{statusLabel(row.grantStatus)}</span>
-      <span class="sub">capabilities · {capabilitiesLabel(row.capabilities)}</span>
-      <span class="ref">account · {row.upstreamAccountId}</span>
+      <span class={`value${active ? "" : " empty"}`}>{statusLabel(row.grantStatus ?? row.connectionStatus)}</span>
+      <span class="ref">
+        verified principal · {row.displayName} ({row.principalKind} · {row.providerPrincipalId})
+      </span>
       <span class="sub">
-        {row.authKind} · auth generation {row.authGeneration} · grant generation {row.grantGeneration}
+        auth generation {row.currentAuthGeneration ?? "—"} · grant generation {row.grantGeneration ?? "—"}
       </span>
       <span class="sub">health · {statusLabel(row.health)}</span>
+      {row.authExpiresAt === undefined ? null : <span class="sub">expires · {row.authExpiresAt}</span>}
+      {row.providerScopes.length === 0 ? null : (
+        <span class="sub">scopes · {capabilitiesLabel(row.providerScopes)}</span>
+      )}
+      {row.pendingOperation === undefined ? null : (
+        <span class="state need-link" data-pending-operation={row.pendingOperation.status}>
+          pending · {row.pendingOperation.stage} ({row.pendingOperation.status})
+        </span>
+      )}
       {row.selectedForProject ? <span class="state ready">selected for project</span> : null}
-      {active && projectId !== "" && !row.selectedForProject ? (
+      {active &&
+      projectId !== "" &&
+      !row.selectedForProject &&
+      row.grantId !== undefined &&
+      row.currentAuthGeneration !== undefined &&
+      row.grantGeneration !== undefined ? (
         <form method="post" action="/integrations/select">
           <CsrfField token={csrfToken} />
           <input type="hidden" name="projectId" value={projectId} />
           <input type="hidden" name="providerKind" value={row.providerKind} />
           <input type="hidden" name="connectionId" value={row.connectionId} />
           <input type="hidden" name="grantId" value={row.grantId} />
+          <input type="hidden" name="authGeneration" value={String(row.currentAuthGeneration)} />
+          <input type="hidden" name="grantGeneration" value={String(row.grantGeneration)} />
           <button class="btn" type="submit">
-            use this account
+            use this principal
           </button>
         </form>
       ) : null}
-      {row.metadataKeys.length > 0 ? <span class="sub">metadata keys · {row.metadataKeys.join(", ")}</span> : null}
     </div>
   );
 }

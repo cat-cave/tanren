@@ -1,3 +1,4 @@
+import { testOrgGrant } from "./helpers/orgGrant.js";
 // Vercel project-list pager (audit lane C3 F1): the pager MUST list a team with
 // >100 projects (the prior `VERCEL_MAX_PROJECT_PAGES = 100` cap was a disguised loop
 // cap per the timeout-eradication doctrine — a Vercel team with >100 projects would
@@ -11,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { OrgGrant } from "../src/engine/contracts/integrationProvisioner.js";
+
 import type {
   DeployHttpRequest,
   DeployHttpResponse,
@@ -25,14 +26,17 @@ const TOKEN_VALUE = "vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const grant: OrgGrant = {
+const grant = testOrgGrant({
   providerKind: "deploy.vercel",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { teamId: "team_abc", slug: "acme" },
-};
+  capability: "deploy",
+});
 
 /** Parse the `from` cursor out of a project-list URL (undefined = the first page). */
 function parseFrom(url: string): string | undefined {

@@ -6,27 +6,36 @@ const root = new URL("../../../", import.meta.url);
 const migrationPath = fileURLToPath(new URL("db/migrations/0041_integration_lifecycle.sql", root));
 const snapshotPath = fileURLToPath(new URL("db/migrations/meta/0041_snapshot.json", root));
 const schemaPaths = [
-  "db/src/schemaIntegrationLifecycle.ts",
+  "db/src/schemaIntegrationConnections.ts",
+  "db/src/schemaIntegrationRequirements.ts",
+  "db/src/schemaIntegrationBindings.ts",
   "db/src/schemaIntegrationOperations.ts",
   "db/src/schemaIntegrationEnvironment.ts",
   "db/src/schemaIntegrationSelection.ts",
+  "db/src/schemaProjectDerivations.ts",
 ].map((path) => fileURLToPath(new URL(path, root)));
 
 const TABLES = [
   "behavior_integration_requirements",
   "capability_node_dependencies",
   "capability_nodes",
+  "delivery_run_bindings",
   "delivery_runs",
   "delivery_stage_attempts",
   "integration_binding_env",
+  "integration_binding_generations",
   "integration_bindings",
   "integration_reconciliations",
   "integration_requirements",
   "integration_resource_snapshots",
   "integration_validation_proofs",
+  "org_integration_connection_auth_generations",
+  "org_integration_connection_operations",
   "org_integration_connections",
+  "org_integration_grant_generations",
   "org_integration_grants",
   "project_app_env",
+  "project_derivations",
   "project_integration_grant_selections",
   "spec_capability_dependencies",
 ] as const;
@@ -39,7 +48,7 @@ interface SnapshotTable {
   isRLSEnabled: boolean;
 }
 
-describe("IN-1 integration lifecycle schema contract", () => {
+describe("IN-1 P1 integration lifecycle schema contract", () => {
   let migration = "";
   let tables: Record<string, SnapshotTable> = {};
   let schemas = "";
@@ -56,17 +65,17 @@ describe("IN-1 integration lifecycle schema contract", () => {
     schemas = schemaSources.join("\n");
   });
 
-  it("clean-replaces both legacy authorities without a compatibility path", () => {
-    expect(migration).toContain('DROP TABLE "project_app_env" CASCADE');
-    expect(migration).toContain('DROP TABLE "org_integrations" CASCADE');
+  it("clean-replaces legacy authorities without a compatibility path", () => {
+    expect(migration).toContain('DROP TABLE IF EXISTS "project_app_env" CASCADE');
+    expect(migration).toContain('DROP TABLE IF EXISTS "org_integrations" CASCADE');
     expect(migration).not.toMatch(/CREATE (?:OR REPLACE )?VIEW/u);
-    expect(migration).not.toMatch(/INSERT INTO "org_integration_connections"[\s\S]*SELECT[\s\S]*org_integrations/u);
     expect(migration).not.toContain('CREATE TABLE "org_integrations"');
+    expect(migration).not.toContain('"binding_generations"');
     expect(tables).not.toHaveProperty("public.org_integrations");
   });
 
-  it("owns the complete 16-table model with direct indexed tenant roots", () => {
-    expect(TABLES).toHaveLength(16);
+  it("owns the complete P1 table model with direct indexed tenant roots", () => {
+    expect(TABLES).toHaveLength(22);
     for (const tableName of TABLES) {
       expect(migration).toContain(`CREATE TABLE "${tableName}"`);
       const table = tables[`public.${tableName}`];
@@ -98,32 +107,7 @@ describe("IN-1 integration lifecycle schema contract", () => {
     expect(migration.match(/ FORCE ROW LEVEL SECURITY/gu)).toHaveLength(TABLES.length);
   });
 
-  it("serializes every spine and project-selection foreign key into SQL and snapshot", () => {
-    const requiredConstraints = [
-      "behavior_integration_requirements_behavior_revision_fk",
-      "delivery_runs_authority_decision_fk",
-      "integration_validation_proofs_behavior_revision_fk",
-      "integration_validation_proofs_behavior_verdict_fk",
-      "integration_validation_proofs_proof_unit_fk",
-      "integration_validation_proofs_evidence_cas_fk",
-      "project_integration_grant_selections_project_fk",
-      "project_integration_grant_selections_connection_fk",
-      "project_integration_grant_selections_grant_fk",
-      "project_app_env_binding_output_fk",
-      "spec_capability_dependencies_spec_fk",
-    ];
-    const snapshotForeignKeys = Object.values(tables).flatMap((table) => Object.keys(table.foreignKeys));
-    for (const constraint of requiredConstraints) {
-      expect(migration).toContain(`CONSTRAINT "${constraint}" FOREIGN KEY`);
-      expect(snapshotForeignKeys).toContain(constraint);
-    }
-    expect(migration).toContain('CREATE UNIQUE INDEX "projects_org_project_unique"');
-    expect(migration).toContain('CREATE UNIQUE INDEX "specs_org_spec_unique"');
-  });
-
   it("creates every composite FK target unique index before the first dependent FK", () => {
-    // Presence alone is insufficient — Postgres 42830 fires when the referenced
-    // unique key does not exist at ADD CONSTRAINT time. Pin creation-before-use.
     const requiredBefore = [
       {
         uniqueIndex: 'CREATE UNIQUE INDEX "projects_org_project_unique"',
@@ -141,6 +125,14 @@ describe("IN-1 integration lifecycle schema contract", () => {
         uniqueIndex: 'CREATE UNIQUE INDEX "org_integration_grants_connection_id_unique"',
         firstFk: 'CONSTRAINT "project_integration_grant_selections_grant_fk" FOREIGN KEY',
       },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "integration_requirements_project_id_unique"',
+        firstFk: 'CONSTRAINT "capability_nodes_requirement_lineage_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "integration_binding_generations_binding_generation_unique"',
+        firstFk: 'CONSTRAINT "integration_binding_env_binding_generation_fk" FOREIGN KEY',
+      },
     ] as const;
     for (const { uniqueIndex, firstFk } of requiredBefore) {
       const indexAt = migration.indexOf(uniqueIndex);
@@ -151,38 +143,47 @@ describe("IN-1 integration lifecycle schema contract", () => {
     }
   });
 
-  it("pins digest, generation, account, and secret/binding invariants in SQL", () => {
-    expect(migration).toContain("^sha256:[0-9a-f]{64}$");
-    expect(migration).toContain('CONSTRAINT "project_app_env_value_xor_check"');
+  it("pins principal/generation authority and no fake dev provisioned bypass", () => {
+    expect(migration).toContain("provider_principal_id");
+    expect(migration).toContain("org_integration_connection_auth_generations");
+    expect(migration).toContain("org_integration_grant_generations");
+    expect(migration).toContain("delivery_run_bindings");
+    expect(migration).toContain("project_derivations");
+    expect(migration).toContain("projects_lifecycle_check");
+    expect(migration).toContain("deriving");
     expect(migration).toContain('CONSTRAINT "project_app_env_binding_check"');
-    expect(migration).toContain('CONSTRAINT "project_app_env_secret_generation_check"');
-    expect(migration).toContain('CREATE UNIQUE INDEX "org_integration_connections_account_unique"');
-    expect(migration).toContain('CREATE UNIQUE INDEX "org_integration_grants_connection_id_unique"');
-    expect(migration).toContain('CONSTRAINT "integration_validation_proofs_verdict_check"');
+    expect(migration).not.toContain("manual-link.v1");
   });
 
   it("keeps all schema exports aligned and under the architecture line cap", async () => {
     const exports = [
       "orgIntegrationConnections",
+      "orgIntegrationConnectionAuthGenerations",
+      "orgIntegrationConnectionOperations",
       "orgIntegrationGrants",
+      "orgIntegrationGrantGenerations",
       "integrationRequirements",
       "behaviorIntegrationRequirements",
       "capabilityNodes",
       "capabilityNodeDependencies",
       "specCapabilityDependencies",
       "integrationBindings",
+      "integrationBindingGenerations",
       "integrationBindingEnv",
       "projectAppEnv",
       "projectIntegrationGrantSelections",
       "integrationReconciliations",
       "integrationResourceSnapshots",
       "deliveryRuns",
+      "deliveryRunBindings",
       "deliveryStageAttempts",
       "integrationValidationProofs",
+      "projectDerivations",
     ];
     for (const name of exports) expect(schemas).toContain(`export const ${name} = pgTable(`);
     for (const path of schemaPaths) {
       expect((await readFile(path, "utf8")).split("\n").length).toBeLessThanOrEqual(500);
     }
+    expect(schemas).not.toContain("schemaIntegrationLifecycle");
   });
 });

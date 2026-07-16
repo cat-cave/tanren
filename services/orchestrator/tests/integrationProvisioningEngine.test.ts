@@ -23,11 +23,12 @@ import {
   resolveProviderKind,
   type ProvisioningEngineDeps,
 } from "../src/engine/integrations/provisioningEngine.js";
+import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
 
 const ORG = "org_int_1";
 const PROJECT = "proj_int_1";
 const ACTOR = { kind: "operator", id: "user_a" } as const;
-const TOKEN_REF = "org/org_int_1/sentry/token";
+const TOKEN_REF = "org/org_int_1/sentry/token/g/1";
 
 // The exact `inbox_sources_kind_check` set (migration 0024). The stub pool below
 // enforces it so a provisioner emitting a CHECK-violating inbox kind (the capability-onboarding
@@ -58,29 +59,39 @@ function stubClient(state: StubState): IntegrationQueryClient {
       };
     }
     if (text.includes("FROM org_integration_connections c")) {
-      const matches = state.integrations.filter((row) => row.org_id === params[0]);
+      const matches = state.integrations.filter(
+        (row) => row.org_id === params[0] && (params[2] === undefined || row.provider_kind === params[2]),
+      );
       return {
         rows: matches.map((match) => ({
           connection_id: "connection_1",
-          grant_id: "grant_1",
-          org_id: match.org_id,
           provider_kind: match.provider_kind,
-          upstream_account_id: "account_1",
-          auth_kind: "api_key",
-          credential_ref: match.credential_ref,
-          auth_generation: 1,
-          owner_id: "user_a",
-          health: "healthy",
+          provider_principal_id: "account_1",
+          display_name: "account_1",
+          principal_metadata: match.metadata,
+          connection_health: "healthy",
           connection_status: "active",
-          metadata: match.metadata,
+          current_auth_generation: 1,
+          grant_id: "grant_1",
+          grant_current_generation: 1,
+          grant_status: "active",
           plane: "control",
           environment: "control",
-          capabilities: [],
-          operations: [],
-          provider_scopes: [],
-          grant_generation: 1,
-          grant_status: "active",
-          selected_for_project: true,
+          credential_ref: match.credential_ref.endsWith("/g/1") ? match.credential_ref : `${match.credential_ref}/g/1`,
+          auth_expires_at: null,
+          auth_status: "active",
+          capabilities: ["errors", "notify", "deploy"],
+          operations: ["discover", "provision", "bind", "teardown"],
+          provider_scopes: ["project:read", "project:write", "project:admin"],
+          resource_constraints: {},
+          policy_revision: "integration-catalog.v1",
+          consent_revision: "consent.test",
+          grant_expires_at: null,
+          grant_generation_status: "active",
+          selected_auth_generation: 1,
+          selected_grant_generation: 1,
+          selected_connection_id: "connection_1",
+          selected_grant_id: "grant_1",
         })),
         rowCount: matches.length,
       };
@@ -228,6 +239,7 @@ function depsFor(state: StubState): {
     secrets,
     events,
     actor: ACTOR,
+    authority: new PgIntegrationAuthority(),
     buildProvisioner: () => new OutsideTransactionProvisioner(provisioner, database),
   };
   return { deps, events, provisioner };
@@ -385,6 +397,7 @@ describe("provisionCapability — inbox kind CHECK realism", () => {
       secrets,
       events,
       actor: ACTOR,
+      authority: new PgIntegrationAuthority(),
       buildProvisioner: () => badKindProvisioner,
     };
     await expect(
