@@ -1,25 +1,7 @@
-// Deploy-on-merge (apex "a deploy happened"): once a run's PR merges onto the
-// default branch, this watcher attaches the project's runtime app env and THEN
-// TRIGGERS a real deploy of the merged commit onto the project's deploy app
-// (Vercel/Fly) — env-before-trigger, so the released deployment actually carries its
-// runtime secrets — so the live product reflects the merge. It reacts on the SAME
-// `merge.completed` run-activity bus the post-merge issue-watcher uses — no new poller.
-//
-// GATED via a THREE-WAY intent resolution — NONE (legitimate no-op, LOGGED) /
-// INCOMPLETE-but-expected (LOUD fail-closed) / CONFIGURED (fires) — so a
-// misconfigured-but-expected deploy can NEVER silently skip and make a run (apex) look
-// "done" without a live deployment. Full rationale in `deployTargetResolution.ts`.
-//
-// DURABLE FAILURE: once a target resolves (a deploy is EXPECTED), ANY throw — verify
-// exhaustion OR a trigger/attach failure — records a durable `deploy.failed` (→ a `warn`)
-// BEFORE re-throwing, never a swallowed log line that leaves the merge looking "done".
-// IDEMPOTENT per merge: gates on a prior TERMINAL `deploy.verified`/`deploy.failed` and
-// resumes a prior unverified `deploy.triggered` — one deploy per merge.
-//
-// SECRET DISCIPLINE: the runtime env VALUES flow only into `attachRuntimeAppEnv`'s
-// provider set-env request; the deploy token only into the provider's bearer. The emitted
-// `deploy.triggered` carries provider + app id + resolved URL + deployment id — all
-// non-secret — never a token/value.
+// After merge, attach runtime env with the project's exact deploy grant, trigger
+// the merged revision, and verify it live. Three-way intent resolution prevents a
+// configured-but-broken deploy from skipping; terminal events make retries
+// idempotent. Events carry references only, never tokens or environment values.
 
 import { runWithJobOrgId, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
@@ -32,6 +14,10 @@ import {
   appendDeploySkipped,
   deployAuditEnvelope,
   type DeployVerifyContext,
+  loadValidatedRunEvent,
+  type ValidatedRunLineage,
+  type UrlReachabilityProbe,
+  type VerifyPollPolicy,
   mergeShaFromPayload,
   repoSlugFromPrUrl,
   verifyDeployUntilConverged,
@@ -45,11 +31,11 @@ import {
 import { type EgressPolicy, defaultEgressPolicy } from "../security/egressPolicy.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import type { FlyImageBuilder } from "../provisioners/flyImageBuilder.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
-import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import { createLogger } from "../observability/logger.js";
+import { loadDeployOperationGrant, missingDeployGrantError } from "./deployOnMergeAuthority.js";
 const log = createLogger("deploy-on-merge");
 
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
@@ -68,8 +54,7 @@ export interface ProjectDeployTarget {
 }
 
 /** The merged-run coordinates a deploy is triggered FROM. */
-interface MergedRunInfo {
-  projectId: string;
+interface MergedRunInfo extends ValidatedRunLineage {
   /** The merged repo, `owner/name`. */
   repoSlug: string;
   /** The git ref the provider builds + releases (the run's branch / the default branch). */
@@ -83,7 +68,7 @@ interface MergedRunInfo {
  */
 type MergedRunResult =
   | { kind: "not_merged" }
-  | { kind: "no_sha"; projectId: string }
+  | { kind: "no_sha"; lineage: ValidatedRunLineage }
   | { kind: "ok"; info: MergedRunInfo };
 
 export interface DeployOnMergeWatcherDeps {
@@ -148,9 +133,10 @@ export class DeployOnMergeWatcher {
     const merged = await this.loadMergedRun(runId);
     if (merged.kind === "not_merged") return;
 
-    const projectId = merged.kind === "ok" ? merged.info.projectId : merged.projectId;
+    const lineage = merged.kind === "ok" ? merged.info : merged.lineage;
+    const { projectId } = lineage;
 
-    const resolved = await this.loadDeployTarget(projectId);
+    const resolved = await this.loadDeployTarget(lineage);
     if (resolved.kind === "none") {
       // No deploy EXPECTED (no config, no linked deploy integration) — a legitimate no-op.
       log.info("merged with no deploy configured/linked — skipping deploy (legitimate no-op)", { runId, projectId });
@@ -169,7 +155,7 @@ export class DeployOnMergeWatcher {
     // wakes the subscriber; without the gate it would re-verify + re-append). One append per
     // merge suffices — the throw at the pre-resolution branches is fail-loud, not a signal
     // to re-drive.
-    if (await this.alreadyTerminal(runId)) return;
+    if (await this.alreadyTerminal(lineage)) return;
 
     // A merge with NO mergeSha cannot deploy — DURABLE `deploy.skipped` then fail LOUD.
     if (merged.kind === "no_sha") {
@@ -201,6 +187,9 @@ export class DeployOnMergeWatcher {
     }
     const target = resolved.target;
     const mergedInfo = merged.info;
+    if (target.orgId !== mergedInfo.orgId) {
+      throw new Error(`deployOnMerge: target organization does not match validated run '${runId}'`);
+    }
 
     // FAIL-CLOSED + LOUD + DURABLE: a deploy is now genuinely EXPECTED (a target
     // resolved). ANY throw — denied egress, a missing/lost grant, the provider
@@ -243,20 +232,12 @@ export class DeployOnMergeWatcher {
       );
     }
 
-    const grant = await this.loadGrant(target);
-    if (grant === undefined) {
-      throw new Error(
-        `deployOnMerge: project '${merged.projectId}' configures deploy '${target.provider}' but org ` +
-          `'${target.orgId}' has no matching grant in org_integrations`,
-      );
-    }
-
     // RESUME: a prior trigger that never reached `deploy.verified` (transient verify
     // failure / a crash between trigger and verify) re-runs VERIFICATION ONLY against the
     // already-released deployment — it does NOT re-trigger.
-    const priorDeploymentId = await this.priorTriggeredDeploymentId(runId);
+    const priorDeploymentId = await this.priorTriggeredDeploymentId(merged);
     if (priorDeploymentId !== undefined) {
-      await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, priorDeploymentId, recorded);
+      await this.verifyWithRetry(runId, merged.projectId, target, priorDeploymentId, recorded);
       return;
     }
 
@@ -274,6 +255,11 @@ export class DeployOnMergeWatcher {
     // deployment WITHOUT its runtime env (e.g. the merge introducing the Slack token would
     // ship a deploy that can't reach Slack until a later re-deploy). System-scoped read;
     // the values flow only into the provider set-env request. A failure throws LOUD.
+    const attachGrant = await loadDeployOperationGrant(this.deps.pool, merged.projectId, target, "attach_runtime_env", {
+      resourceId: target.appId,
+      environment: "production",
+    });
+    if (attachGrant === undefined) throw missingDeployGrantError(merged.projectId, target, "attach_runtime_env");
     await runWithSystemScope(this.deps.pool, async (client) => {
       await attachRuntimeAppEnv({
         client,
@@ -283,6 +269,7 @@ export class DeployOnMergeWatcher {
         projectId: merged.projectId,
         orgId: target.orgId,
         deployRef: { provider: target.provider, appId: target.appId },
+        grant: attachGrant,
         actor: systemActor,
       });
     });
@@ -290,7 +277,13 @@ export class DeployOnMergeWatcher {
     // Trigger the real build + release of the merged ref onto the app (now that the
     // runtime env is attached). A configured deploy that fails to release throws here
     // (LOUD) — never a silent no-op.
-    const result = await provisioner.deploy(grant, target.appId, { repo: merged.repoSlug, ref: merged.ref });
+    const deployGrant = await loadDeployOperationGrant(this.deps.pool, merged.projectId, target, "deploy", {
+      resourceId: target.appId,
+      sourceRepo: merged.repoSlug,
+      sourceRef: merged.ref,
+    });
+    if (deployGrant === undefined) throw missingDeployGrantError(merged.projectId, target, "deploy");
+    const result = await provisioner.deploy(deployGrant, target.appId, { repo: merged.repoSlug, ref: merged.ref });
 
     // Record the deploy — the deploy target + resolved live URL + deployment id, all
     // non-secret. Under the run's org scope so the tenant `events` write is allowed.
@@ -323,7 +316,7 @@ export class DeployOnMergeWatcher {
     // A configured deploy that never becomes ready (or whose URL never serves) throws
     // LOUD here — `deploy.triggered` is no longer the end; `deploy.verified` is the
     // proof. On success emit `deploy.verified` (provider + url + state, non-secret).
-    await this.verifyWithRetry(runId, merged.projectId, target, grant.providerKind, result.deploymentId, recorded);
+    await this.verifyWithRetry(runId, merged.projectId, target, result.deploymentId, recorded);
   }
 
   /**
@@ -340,14 +333,17 @@ export class DeployOnMergeWatcher {
     runId: string,
     projectId: string,
     target: ProjectDeployTarget,
-    providerKind: string,
     deploymentId: string,
     recorded: { verifyPhase: boolean },
   ): Promise<void> {
     await verifyDeployUntilConverged(
       this.verifyCtx,
-      { runId, projectId, target, providerKind, deploymentId, recorded },
-      () => this.loadGrant(target),
+      { runId, projectId, target, providerKind: target.provider, deploymentId, recorded },
+      () =>
+        loadDeployOperationGrant(this.deps.pool, projectId, target, "verify", {
+          resourceId: target.appId,
+          deploymentId,
+        }),
     );
   }
 
@@ -369,48 +365,41 @@ export class DeployOnMergeWatcher {
    */
   private async loadMergedRun(runId: string): Promise<MergedRunResult> {
     return runWithSystemScope(this.deps.pool, async (client) => {
-      const merge = await client.query<{ payload: unknown }>(
-        `SELECT payload FROM events WHERE run_id = $1 AND event_type = 'merge.completed'
-           ORDER BY ts DESC, id DESC LIMIT 1`,
-        [runId],
-      );
-      if (merge.rows[0] === undefined) return { kind: "not_merged" };
-      const run = await client.query<{ project_id: string; pr_url: string | null }>(
-        `SELECT r.project_id, r.pr_url FROM runs r WHERE r.run_id = $1`,
-        [runId],
-      );
-      const row = run.rows[0];
-      if (row === undefined || row.pr_url === null) return { kind: "not_merged" };
-      const repoSlug = repoSlugFromPrUrl(row.pr_url);
+      const merged = await loadValidatedRunEvent(client, {
+        runId,
+        eventType: "merge.completed",
+        requireEventSpec: true,
+      });
+      if (merged === undefined || merged.prUrl === null) return { kind: "not_merged" };
+      const repoSlug = repoSlugFromPrUrl(merged.prUrl);
       if (repoSlug === undefined) return { kind: "not_merged" };
       // Deploy the MERGED COMMIT SHA recorded on `merge.completed` — NOT the run's PR
       // branch (squash-merge deletes it) nor the mutable default-branch HEAD (drifts
       // to a LATER merge before verify). A merge that recorded none is a wiring bug —
       // `check()` records a durable `deploy.skipped` then fails LOUD (no silent fallback).
-      const ref = mergeShaFromPayload(merge.rows[0].payload);
+      const ref = mergeShaFromPayload(merged.payload);
       if (ref === undefined) {
-        return { kind: "no_sha", projectId: row.project_id };
+        return { kind: "no_sha", lineage: merged.lineage };
       }
-      return { kind: "ok", info: { projectId: row.project_id, repoSlug, ref } };
+      return { kind: "ok", info: { ...merged.lineage, repoSlug, ref } };
     });
   }
-
   /**
    * Resolve the project's deploy intent on merge (system-scoped) into the THREE-WAY
    * {@link DeployTargetResolution}. Reads the project config + probes the org's
-   * `org_integrations` grants for deploy intent, then defers the configured/none/
+   * active control grants for deploy intent, then defers the configured/none/
    * incomplete decision to {@link resolveDeployTarget} (full rationale there).
    */
-  private async loadDeployTarget(projectId: string): Promise<DeployTargetResolution> {
+  private async loadDeployTarget(lineage: ValidatedRunLineage): Promise<DeployTargetResolution> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ config: unknown; org_id: string | null }>(
-        "SELECT config, org_id FROM projects WHERE project_id = $1",
-        [projectId],
+        "SELECT config, org_id FROM projects WHERE project_id = $1 AND org_id = $2",
+        [lineage.projectId, lineage.orgId],
       );
       const row = result.rows[0];
-      // A project row with no org cannot resolve any tenant deploy grant — there is
-      // no deploy intent to honor, so this is a legitimate no-op.
-      if (row === undefined || row.org_id === null) return { kind: "none" };
+      if (row === undefined || row.org_id !== lineage.orgId) {
+        throw new Error(`deployOnMerge: validated run '${lineage.runId}' lost its project ownership`);
+      }
       const orgId = row.org_id;
       const config =
         row.config !== null && typeof row.config === "object" && !Array.isArray(row.config)
@@ -419,11 +408,16 @@ export class DeployOnMergeWatcher {
       // Probe whether a deploy is EXPECTED: does the org link a deploy-capable
       // integration grant? Only consulted to distinguish an incomplete-but-expected
       // deploy (LOUD) from a legitimate "no deploy configured" no-op.
-      const grants = await OrgIntegrationsStore.list(client, orgId, systemActor);
-      return resolveDeployTarget({ orgId, config, deployIntent: grantsSignalDeployIntent(grants) });
+      const grants = await IntegrationConnectionsStore.listExactControlGrants(client, orgId);
+      return resolveDeployTarget({
+        orgId,
+        config,
+        deployIntent: grantsSignalDeployIntent(
+          grants.map((grant) => ({ providerKind: grant.providerKind, capabilities: grant.capabilities })),
+        ),
+      });
     });
   }
-
   /**
    * Whether this run reached a TERMINAL deploy outcome — `deploy.verified` (proven live),
    * `deploy.failed` (verify retry exhausted / trigger failure), OR `deploy.skipped`
@@ -432,23 +426,23 @@ export class DeployOnMergeWatcher {
    * without the terminal gate the next pass would re-enter the same branch, re-append, and
    * self-loop (a per-merge `warn` storm to the operator). One terminal append per merge.
    */
-  private async alreadyTerminal(runId: string): Promise<boolean> {
+  private async alreadyTerminal(lineage: ValidatedRunLineage): Promise<boolean> {
     return runWithSystemScope(this.deps.pool, async (client) => {
       const result = await client.query<{ id: string }>(
-        "SELECT id FROM events WHERE run_id = $1 AND event_type IN ('deploy.verified', 'deploy.failed', 'deploy.skipped') LIMIT 1",
-        [runId],
+        "SELECT id FROM events WHERE run_id = $1 AND org_id = $2 AND project_id = $3 AND event_type IN ('deploy.verified', 'deploy.failed', 'deploy.skipped') LIMIT 1",
+        [lineage.runId, lineage.orgId, lineage.projectId],
       );
       return result.rows[0] !== undefined;
     });
   }
-
   /** The latest `deploy.triggered` deploymentId, if any — drives the RESUME (re-verify) path. */
-  private async priorTriggeredDeploymentId(runId: string): Promise<string | undefined> {
+  private async priorTriggeredDeploymentId(lineage: ValidatedRunLineage): Promise<string | undefined> {
     return runWithSystemScope(this.deps.pool, async (client): Promise<string | undefined> => {
       const result = await client.query<{ payload: unknown }>(
-        `SELECT payload FROM events WHERE run_id = $1 AND event_type = 'deploy.triggered'
+        `SELECT payload FROM events WHERE run_id = $1 AND org_id = $2 AND project_id = $3
+           AND event_type = 'deploy.triggered'
            ORDER BY ts DESC, id DESC LIMIT 1`,
-        [runId],
+        [lineage.runId, lineage.orgId, lineage.projectId],
       );
       const payload = result.rows[0]?.payload;
       if (typeof payload !== "object" || payload === null) return undefined;
@@ -456,14 +450,7 @@ export class DeployOnMergeWatcher {
       return typeof deploymentId === "string" && deploymentId.trim() !== "" ? deploymentId : undefined;
     });
   }
-
-  private async loadGrant(target: ProjectDeployTarget) {
-    return runWithSystemScope(this.deps.pool, async (client) =>
-      OrgIntegrationsStore.getGrant(client, target.orgId, target.provider, systemActor),
-    );
-  }
 }
-
 /**
  * Build the production deploy-on-merge watcher with the default deploy transport —
  * a thin factory so the autonomy-loops boot imports ONE symbol (keeps that file
@@ -489,7 +476,6 @@ export function buildDeployOnMergeWatcher(deps: {
     ...(deps.flyImageBuilder !== undefined && { flyImageBuilder: deps.flyImageBuilder }),
   });
 }
-
 // Re-export the demo-on-deploy watcher factory off this same module so the autonomy-loops
 // boot imports both deploy-path watchers from ONE symbol source (the max-dependencies cap).
 export { buildDemoOnDeployWatcher } from "./demoOnDeploy.js";

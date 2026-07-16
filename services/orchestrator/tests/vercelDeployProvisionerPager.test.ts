@@ -1,3 +1,4 @@
+import { testOrgGrant } from "./helpers/orgGrant.js";
 // Vercel project-list pager (audit lane C3 F1): the pager MUST list a team with
 // >100 projects (the prior `VERCEL_MAX_PROJECT_PAGES = 100` cap was a disguised loop
 // cap per the timeout-eradication doctrine — a Vercel team with >100 projects would
@@ -11,13 +12,14 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { OrgGrant } from "../src/engine/contracts/integrationProvisioner.js";
+
 import type {
   DeployHttpRequest,
   DeployHttpResponse,
   DeployHttpTransport,
 } from "../src/engine/provisioners/deployTransport.js";
 import { VercelDeployProvisioner } from "../src/engine/provisioners/vercelDeployProvisioner.js";
+import type { ProjectContext } from "../src/engine/contracts/integrationProvisioner.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "vercel_super_secret_token";
@@ -25,14 +27,29 @@ const TOKEN_VALUE = "vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const grant: OrgGrant = {
-  providerKind: "deploy.vercel",
-  credentialRef: TOKEN_REF,
-  metadata: { teamId: "team_abc", slug: "acme" },
+const projectCtx: ProjectContext = {
+  orgId: "org_1",
+  projectId: "project_1",
+  orgSlug: "tanren",
+  name: "pager",
 };
+
+const discoverGrant = () =>
+  testOrgGrant({
+    providerKind: "deploy.vercel",
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata: { teamId: "team_abc", slug: "acme" },
+    capability: "deploy",
+    operation: "discover",
+    target: {},
+    orgId: projectCtx.orgId,
+    projectId: projectCtx.projectId,
+  });
 
 /** Parse the `from` cursor out of a project-list URL (undefined = the first page). */
 function parseFrom(url: string): string | undefined {
@@ -95,7 +112,7 @@ describe("VercelDeployProvisioner pager (audit C3 F1 — retryUntilConverged ove
     const { transport } = paginatedListTransport(pages);
     // Provisioner needs at least the list flow — `discover()` calls `listApps`.
     const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
-    const discovered = await prov.discover(grant);
+    const discovered = await prov.discover(await discoverGrant(), projectCtx);
     expect(discovered).toHaveLength(pageCount);
     expect(discovered.map((r) => r.label)).toEqual(pages.map((p) => p.ids[0]));
   });
@@ -107,7 +124,7 @@ describe("VercelDeployProvisioner pager (audit C3 F1 — retryUntilConverged ove
     for (const terminal of [null, undefined, ""] as const) {
       const { transport } = paginatedListTransport([{ ids: ["p0"], from: undefined, next: terminal }]);
       const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
-      const discovered = await prov.discover(grant);
+      const discovered = await prov.discover(await discoverGrant(), projectCtx);
       expect(discovered).toHaveLength(1);
       expect(discovered[0]?.label).toBe("p0");
     }
@@ -126,8 +143,8 @@ describe("VercelDeployProvisioner pager (audit C3 F1 — retryUntilConverged ove
     ];
     const { transport } = paginatedListTransport(pages);
     const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
-    await expect(prov.discover(grant)).rejects.toThrow(/cur1/u);
-    await expect(prov.discover(grant)).rejects.toThrow(/did not advance|stuck/u);
+    await expect(prov.discover(await discoverGrant(), projectCtx)).rejects.toThrow(/cur1/u);
+    await expect(prov.discover(await discoverGrant(), projectCtx)).rejects.toThrow(/did not advance|stuck/u);
   });
 
   it("propagates a non-2xx page fetch as a LOUD failure (never a silent 'ended pagination')", async () => {
@@ -139,6 +156,6 @@ describe("VercelDeployProvisioner pager (audit C3 F1 — retryUntilConverged ove
       },
     };
     const prov = new VercelDeployProvisioner({ transport, secrets: secrets() });
-    await expect(prov.discover(grant)).rejects.toThrow(/vercel list projects failed: 500/u);
+    await expect(prov.discover(await discoverGrant(), projectCtx)).rejects.toThrow(/vercel list projects failed: 500/u);
   });
 });

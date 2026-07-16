@@ -9,6 +9,7 @@
  *   POST /inbox/candidates/:id/fold            fold into a live run
  *   POST /inbox/candidates/:id/dismiss         dismiss
  *   POST /inbox/candidates/:id/close-duplicate close as duplicate
+ *   POST /inbox/sources/:id/recover             retry a repaired terminal source
  *
  * The inbox client is its OWN api module (`api/inboxClient.ts`) per the screen-isolation
  * integration lesson; the route instantiates it with the forwarded cookie.
@@ -48,11 +49,18 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
       );
     }
     const snapshot = (await readClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
+    const recovery = recoveryMessage(c.req.query("recovery"));
     return renderShell(
       c,
       ctx,
       { title: "tanren · candidate inbox" },
-      <InboxBody orgId={ctx.org.id} snapshot={snapshot} csrfToken={ctx.csrfToken} />,
+      <InboxBody
+        orgId={ctx.org.id}
+        snapshot={snapshot}
+        csrfToken={ctx.csrfToken}
+        {...(recovery.kind === "notice" ? { notice: recovery.message } : {})}
+        {...(recovery.kind === "error" ? { error: recovery.message } : {})}
+      />,
     );
   });
 
@@ -65,4 +73,35 @@ export function mountInboxScreens(app: Hono, deps: ShellDeps): void {
       return c.redirect("/inbox");
     });
   }
+
+  app.post("/inbox/sources/:id/recover", async (c) => {
+    const ctx = await loadShellContext(c, deps, { activeNavId: "inbox" });
+    if (ctx.org === undefined) return c.redirect("/inbox?recovery=failed");
+    const body = await c.req.parseBody();
+    const expectedObservedAt = body["expectedObservedAt"];
+    if (typeof expectedObservedAt !== "string") return c.redirect("/inbox?recovery=failed");
+    try {
+      const result = await (await writeClient(c, deps)).recover(ctx.org.id, c.req.param("id"), expectedObservedAt);
+      if (result.ok) return c.redirect("/inbox?recovery=success");
+      if (result.error === "source_recovery_conflict") return c.redirect("/inbox?recovery=conflict");
+      if (result.error === "source_recovery_not_supported") return c.redirect("/inbox?recovery=not-supported");
+    } catch {
+      return c.redirect("/inbox?recovery=malformed-response");
+    }
+    return c.redirect("/inbox?recovery=failed");
+  });
+}
+
+type RecoveryMessage = { kind: "none" } | { kind: "notice" | "error"; message: string };
+
+function recoveryMessage(value: string | undefined): RecoveryMessage {
+  if (value === "success") return { kind: "notice", message: "Source recovery applied. Intake is active again." };
+  if (value === "conflict")
+    return { kind: "error", message: "Source recovery conflicted with a newer repair state. Refresh and retry." };
+  if (value === "not-supported")
+    return { kind: "error", message: "This source must be edited or recreated before intake can resume." };
+  if (value === "malformed-response")
+    return { kind: "error", message: "Source recovery returned an invalid acknowledgement." };
+  if (value === "failed") return { kind: "error", message: "Source recovery could not be applied." };
+  return { kind: "none" };
 }

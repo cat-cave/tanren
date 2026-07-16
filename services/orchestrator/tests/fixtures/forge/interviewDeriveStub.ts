@@ -9,6 +9,21 @@
 // the thenable-object lint does not apply to this plain data literal.
 
 import type pg from "pg";
+import type { DeriveInput } from "../../../src/engine/forge/interview/derive.js";
+import { handleConfigCasSql } from "../../helpers/routesPoolConfigCas.js";
+import { RoutesPoolDerivationEvidence } from "../../helpers/routesPoolDerivationEvidence.js";
+
+export const successfulBootstrapProject: NonNullable<DeriveInput["bootstrapProject"]> = async (input) => {
+  const fixture = input.pool as pg.Pool & {
+    seedDerivationBootstrap?: (orgId: string, projectId: string) => Promise<unknown> | unknown;
+  };
+  if (fixture.seedDerivationBootstrap === undefined) {
+    throw new Error("successfulBootstrapProject requires a derivation-evidence test pool");
+  }
+  return (await fixture.seedDerivationBootstrap(input.orgId, input.projectId)) as Awaited<
+    ReturnType<NonNullable<DeriveInput["bootstrapProject"]>>
+  >;
+};
 
 // What the stub observed across the derive's create calls.
 export interface StubState {
@@ -28,6 +43,11 @@ export interface StubState {
   designContracts: Array<Record<string, unknown>>;
 }
 
+function restoreMap<K, V>(target: Map<K, V>, source: Map<K, V>): void {
+  target.clear();
+  for (const [key, value] of source) target.set(key, value);
+}
+
 // A `prepareDeploy` outcome fixture (a provisioned deploy + the project config it
 // surfaces) so a derive test exercises the success path without a provisioner.
 export function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = "deploy.vercel") {
@@ -38,6 +58,13 @@ export function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = 
       providerKind,
       action: "provision" as const,
       mode: "greenfield" as const,
+      authority: {
+        connectionId: "connection_1",
+        grantId: "grant_1",
+        providerPrincipalId: "account_1",
+        authGeneration: 1,
+        grantGeneration: 1,
+      },
       secretRefNames: [`secret://deploy/${providerKind}/app_1/token`],
       surfaces: { projectConfigKeys: ["deployProvider", "deployAppId"], deployRef: `${providerKind}:app_1` },
     },
@@ -69,16 +96,222 @@ export function stubPool(): {
     designContracts: [],
   };
   const configs = new Map<string, Record<string, unknown>>();
+  const evidence = new RoutesPoolDerivationEvidence();
+  const inboxSources: Array<Record<string, unknown>> = [];
+  const specRows = new Map<string, { spec_id: string; project_id: string }>();
+  const projects = new Map<
+    string,
+    {
+      project_id: string;
+      org_id: string;
+      name: string;
+      repo_url: string;
+      default_branch: string;
+      runner_image: string;
+      allocator: string;
+      config: Record<string, unknown>;
+      config_revision: number;
+      lifecycle: string;
+    }
+  >();
+  const derivations = new Map<string, Record<string, unknown>>();
   const personaIds = new Set<string>();
+  let graphSnapshot:
+    | {
+        specs: typeof state.specs;
+        specRows: typeof specRows;
+        personaIds: Set<string>;
+        personas: typeof evidence.personas;
+        behaviors: typeof evidence.behaviors;
+        milestones: typeof evidence.milestones;
+        designContracts: typeof evidence.designContracts;
+        personaCount: number;
+        personaMetadata: typeof state.personaMetadata;
+        behaviorCount: number;
+        milestoneCount: number;
+        designContractValues: typeof state.designContracts;
+        specMilestones: number;
+        specBehaviors: number;
+      }
+    | undefined;
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
+    if (sql === "BEGIN") {
+      graphSnapshot = {
+        specs: new Map(state.specs),
+        specRows: new Map(specRows),
+        personaIds: new Set(personaIds),
+        personas: new Map(evidence.personas),
+        behaviors: new Map(evidence.behaviors),
+        milestones: new Map(evidence.milestones),
+        designContracts: new Map(evidence.designContracts),
+        personaCount: state.personas,
+        personaMetadata: [...state.personaMetadata],
+        behaviorCount: state.behaviors,
+        milestoneCount: state.milestones,
+        designContractValues: [...state.designContracts],
+        specMilestones: state.specMilestones,
+        specBehaviors: state.specBehaviors,
+      };
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql === "COMMIT") {
+      graphSnapshot = undefined;
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql === "ROLLBACK") {
+      if (graphSnapshot !== undefined) {
+        restoreMap(state.specs, graphSnapshot.specs);
+        restoreMap(specRows, graphSnapshot.specRows);
+        personaIds.clear();
+        for (const id of graphSnapshot.personaIds) personaIds.add(id);
+        restoreMap(evidence.personas, graphSnapshot.personas);
+        restoreMap(evidence.behaviors, graphSnapshot.behaviors);
+        restoreMap(evidence.milestones, graphSnapshot.milestones);
+        restoreMap(evidence.designContracts, graphSnapshot.designContracts);
+        state.personas = graphSnapshot.personaCount;
+        state.personaMetadata = graphSnapshot.personaMetadata;
+        state.behaviors = graphSnapshot.behaviorCount;
+        state.milestones = graphSnapshot.milestoneCount;
+        state.designContracts = graphSnapshot.designContractValues;
+        state.specMilestones = graphSnapshot.specMilestones;
+        state.specBehaviors = graphSnapshot.specBehaviors;
+      }
+      graphSnapshot = undefined;
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
+    const cas = handleConfigCasSql(sql, params, new Map(), projects);
+    if (cas !== undefined) {
+      const projectId = String(sql.startsWith("UPDATE projects") ? params[1] : params[0]);
+      const project = projects.get(projectId);
+      if (project !== undefined) configs.set(projectId, project.config);
+      return cas;
+    }
+    if (!sql.startsWith("INSERT INTO")) {
+      const evidenceResult = evidence.handle(sql, params, { projects, specs: specRows, inboxSources });
+      if (evidenceResult !== undefined) return evidenceResult;
+    }
+    if (sql.includes("FROM project_derivations")) {
+      const row = sql.includes("AND id = $2")
+        ? derivations.get(String(params[1]))
+        : sql.includes("idempotency_fingerprint = $2")
+          ? [...derivations.values()].find(
+              (candidate) => candidate["org_id"] === params[0] && candidate["idempotency_fingerprint"] === params[1],
+            )
+          : [...derivations.values()].find(
+              (candidate) => candidate["org_id"] === params[0] && candidate["project_id"] === params[1],
+            );
+      return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("INSERT INTO project_derivations")) {
+      const existing = [...derivations.values()].find(
+        (candidate) => candidate["org_id"] === params[0] && candidate["idempotency_fingerprint"] === params[3],
+      );
+      if (existing !== undefined) return { rows: [existing], rowCount: 1 };
+      const row: Record<string, unknown> = {
+        org_id: params[0],
+        id: params[1],
+        project_id: params[2],
+        idempotency_fingerprint: params[3],
+        phase: "shell",
+        status: "in_progress",
+        sanitized_input: JSON.parse(String(params[4])) as unknown,
+        sanitized_error: null,
+        ownership_receipt: JSON.parse(String(params[5])) as unknown,
+        template_receipt: params[6] === null ? null : (JSON.parse(String(params[6])) as unknown),
+        result_receipt: {},
+        created_at: new Date(),
+        updated_at: new Date(),
+        completed_at: null,
+      };
+      derivations.set(String(params[1]), row);
+      return { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("UPDATE project_derivations")) {
+      const row = derivations.get(String(params[1]));
+      if (row === undefined || row["status"] !== "in_progress") return { rows: [], rowCount: 0 };
+      if (sql.includes("template_receipt =")) {
+        row["template_receipt"] = JSON.parse(String(params[2])) as unknown;
+        row["phase"] = params[3];
+      } else if (sql.includes("result_receipt = jsonb_set")) {
+        (row["result_receipt"] as Record<string, unknown>)[String(params[2])] = JSON.parse(
+          String(params[3]),
+        ) as unknown;
+        row["phase"] = params[4];
+      } else if (sql.includes("sanitized_error = $3")) {
+        row["sanitized_error"] = JSON.parse(String(params[2])) as unknown;
+        return { rows: [], rowCount: 1 };
+      } else if (sql.includes("status = 'succeeded'")) {
+        row["phase"] = "activate";
+        row["status"] = "succeeded";
+        row["completed_at"] = new Date();
+      }
+      row["sanitized_error"] = null;
+      row["updated_at"] = new Date();
+      return { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT project_id, name, repo_url") && sql.includes("regexp_replace(repo_url")) {
+      const canonical = String(params[0]).replace(/\.git$/u, "");
+      const rows = [...projects.values()].filter(
+        (item) => item.repo_url.replace(/\.git$/u, "") === canonical && item.org_id === String(params[1]),
+      );
+      return sql.includes("LIMIT 1")
+        ? rows[0] === undefined
+          ? { rows: [], rowCount: 0 }
+          : { rows: [rows[0]], rowCount: 1 }
+        : { rows, rowCount: rows.length };
+    }
     if (sql.startsWith("INSERT INTO projects")) {
       state.projects.add(String(params[0]));
       const rawConfig = params[6];
       if (typeof rawConfig === "string") {
         configs.set(String(params[0]), JSON.parse(rawConfig) as Record<string, unknown>);
       }
+      projects.set(String(params[0]), {
+        project_id: String(params[0]),
+        name: String(params[1]),
+        repo_url: String(params[2]),
+        default_branch: String(params[3]),
+        runner_image: String(params[4]),
+        allocator: String(params[5]),
+        config: configs.get(String(params[0])) ?? {},
+        config_revision: 1,
+        lifecycle: String(params[7]),
+        org_id: String(params[8]),
+      });
       return { rows: [], rowCount: 1 };
+    }
+    // Compatibility read for non-CAS project-config consumers.
+    if (sql.startsWith("SELECT config FROM projects")) {
+      const projectId = String(params[0]);
+      return configs.has(projectId)
+        ? { rows: [{ config: configs.get(projectId) }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
+    if (sql.startsWith("UPDATE projects") && sql.includes("lifecycle = 'active'")) {
+      const project = projects.get(String(params[1]));
+      if (project === undefined || project.org_id !== String(params[0]) || project.lifecycle !== "deriving") {
+        return { rows: [], rowCount: 0 };
+      }
+      project.lifecycle = "active";
+      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT lifecycle") && sql.includes("FROM projects") && sql.includes("org_id = $1")) {
+      const project = projects.get(String(params[1]));
+      return project === undefined
+        ? { rows: [], rowCount: 0 }
+        : {
+            rows: [
+              {
+                lifecycle: project.lifecycle,
+                name: project.name,
+                repo_url: project.repo_url,
+                default_branch: project.default_branch,
+              },
+            ],
+            rowCount: 1,
+          };
     }
     if (sql.startsWith("INSERT INTO project_members")) return { rows: [], rowCount: 1 };
     if (sql.startsWith("SELECT project_id FROM projects")) {
@@ -109,6 +342,7 @@ export function stubPool(): {
       const acceptanceCriteria = typeof params[5] === "string" ? (JSON.parse(params[5]) as string[]) : [];
       const dependsOn = (params[6] as string[]) ?? [];
       state.specs.set(specId, { dependsOn, title, description, acceptanceCriteria });
+      specRows.set(specId, { spec_id: specId, project_id: String(params[1]) });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO design_contracts")) {
@@ -118,6 +352,14 @@ export function stubPool(): {
       const rawContract = params[4];
       const contract = typeof rawContract === "string" ? (JSON.parse(rawContract) as Record<string, unknown>) : {};
       state.designContracts.push(contract);
+      evidence.designContracts.set(String(params[0]), {
+        id: String(params[0]),
+        orgId: String(params[1]),
+        projectId: String(params[2]),
+        version: 1,
+        domain: String(params[3]),
+        contract,
+      });
       return {
         rows: [
           {
@@ -135,6 +377,11 @@ export function stubPool(): {
     if (sql.startsWith("INSERT INTO personas")) {
       state.personas += 1;
       personaIds.add(String(params[0]));
+      evidence.personas.set(String(params[0]), {
+        id: String(params[0]),
+        orgId: String(params[2]),
+        projectId: String(params[3]),
+      });
       // The metadata jsonb is the 7th column (params[6], JSON text) — capture it so
       // a test can assert the persona `surface` is persisted there (no `surface` column).
       const rawMeta = params[6];
@@ -178,6 +425,7 @@ export function stubPool(): {
     }
     if (sql.startsWith("INSERT INTO behaviors")) {
       state.behaviors += 1;
+      evidence.behaviors.set(String(params[0]), { id: String(params[0]), personaId: String(params[1]) });
       return {
         rows: [
           {
@@ -198,6 +446,7 @@ export function stubPool(): {
     }
     if (sql.startsWith("INSERT INTO milestones")) {
       state.milestones += 1;
+      evidence.milestones.set(String(params[0]), { id: String(params[0]), projectId: String(params[1]) });
       return {
         rows: [
           {
@@ -227,8 +476,15 @@ export function stubPool(): {
     }
     return { rows: [], rowCount: 0 };
   };
+  const pool = {
+    query,
+    connect: async () => ({ query, release() {} }),
+    seedDerivationBootstrap(orgId: string, projectId: string) {
+      return evidence.seedBootstrap(orgId, projectId, inboxSources);
+    },
+  } as unknown as pg.Pool;
   return {
-    pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool,
+    pool,
     state,
     configs,
   };

@@ -13,7 +13,17 @@
  */
 
 import { OrchestratorHttpClient } from "./httpClient.js";
-import type { Candidate, InboxSnapshot } from "./inboxTypes.js";
+import {
+  Candidate,
+  InboxRecoveryErrorResponse,
+  InboxSnapshot,
+  InboxSourceResponse,
+  type InboxSource,
+} from "./inboxTypes.js";
+
+export type InboxRecoveryResult =
+  | { ok: true; source: InboxSource }
+  | { ok: false; status: number; error: string; message?: string };
 
 export class InboxClient extends OrchestratorHttpClient {
   private base(orgId: string): string {
@@ -22,7 +32,8 @@ export class InboxClient extends OrchestratorHttpClient {
 
   /** The source list + candidate stream for the org. */
   async snapshot(orgId: string): Promise<InboxSnapshot | undefined> {
-    return this.getJson<InboxSnapshot>(this.base(orgId));
+    const raw = await this.getJson<unknown>(this.base(orgId));
+    return raw === undefined ? undefined : InboxSnapshot.parse(raw);
   }
 
   /** Pull → triage → upsert a source's candidates. */
@@ -41,15 +52,13 @@ export class InboxClient extends OrchestratorHttpClient {
       placementLabel: string;
     },
   ): Promise<{ ok: boolean; candidate?: Candidate }> {
-    const r = await this.sendJson<{ candidate?: Candidate }>(
+    const r = await this.sendJson(
       "POST",
       `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/accept`,
       input,
     );
-    return {
-      ok: r.ok,
-      ...(r.body?.candidate === undefined ? {} : { candidate: r.body.candidate }),
-    };
+    const candidate = candidateFromResponse(r.body);
+    return { ok: r.ok, ...(candidate === undefined ? {} : { candidate }) };
   }
 
   /** Fold / dismiss / close-as-duplicate — the three status-transition actions. */
@@ -58,13 +67,40 @@ export class InboxClient extends OrchestratorHttpClient {
     candidateId: string,
     verb: "fold" | "dismiss" | "close-duplicate",
   ): Promise<{ ok: boolean; candidate?: Candidate }> {
-    const r = await this.sendJson<{ candidate?: Candidate }>(
-      "POST",
-      `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`,
-    );
+    const r = await this.sendJson("POST", `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`);
+    const candidate = candidateFromResponse(r.body);
+    return { ok: r.ok, ...(candidate === undefined ? {} : { candidate }) };
+  }
+
+  /** Compare-and-set recovery of a repaired terminal source. */
+  async recover(orgId: string, sourceId: string, expectedObservedAt: string): Promise<InboxRecoveryResult> {
+    const r = await this.sendJson("POST", `${this.base(orgId)}/sources/${encodeURIComponent(sourceId)}/recover`, {
+      expectedObservedAt,
+    });
+    if (r.ok) {
+      // A 2xx acknowledgement is authoritative only when the complete strict
+      // lifecycle DTO is present. Malformed success must fail visibly.
+      return { ok: true, source: InboxSourceResponse.parse(r.body).source };
+    }
+    const parsed = InboxRecoveryErrorResponse.safeParse(r.body);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        status: r.status,
+        error: r.status === 0 ? "source_recovery_unreachable" : "source_recovery_failed",
+      };
+    }
     return {
-      ok: r.ok,
-      ...(r.body?.candidate === undefined ? {} : { candidate: r.body.candidate }),
+      ok: false,
+      status: r.status,
+      error: parsed.data.error,
+      ...(parsed.data.message === undefined ? {} : { message: parsed.data.message }),
     };
   }
+}
+
+function candidateFromResponse(body: unknown): Candidate | undefined {
+  if (typeof body !== "object" || body === null || !("candidate" in body)) return undefined;
+  const parsed = Candidate.safeParse((body as { candidate?: unknown }).candidate);
+  return parsed.success ? parsed.data : undefined;
 }

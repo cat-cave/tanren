@@ -28,15 +28,16 @@ const ACTOR: ActorContext = {
 // create/lookup, and config update (the rotation we assert never happens on 422).
 function stubPool(orgConfig: unknown): {
   pool: pg.Pool;
-  configUpdates: Array<{ id: string; config: unknown }>;
+  webhookWrites: Array<{ id: string; ref: string }>;
 } {
-  const configUpdates: Array<{ id: string; config: unknown }> = [];
+  const webhookWrites: Array<{ id: string; ref: string }> = [];
   const sources = new Map<string, Record<string, unknown>>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.startsWith("SET LOCAL")) {
       return { rows: [], rowCount: 0 };
     }
+    if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_a" }], rowCount: 1 };
     if (sql.startsWith("SELECT config FROM organizations")) return { rows: [{ config: orgConfig }], rowCount: 1 };
     if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
       return { rows: [...sources.values()].filter((s) => s["org_id"] === params[0]), rowCount: sources.size };
@@ -57,19 +58,25 @@ function stubPool(orgConfig: unknown): {
         config: JSON.parse(config),
         enabled: "true",
         auto_route: "false",
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       };
       sources.set(id, row);
       return { rows: [row], rowCount: 1 };
     }
-    if (sql.startsWith("UPDATE inbox_sources SET config")) {
-      const [id, config] = params as string[];
-      configUpdates.push({ id, config: JSON.parse(config) });
+    if (sql.startsWith("UPDATE inbox_sources SET webhook_secret_ref")) {
+      const [id, _orgId, ref] = params as string[];
+      webhookWrites.push({ id, ref });
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: 0 };
   };
   const pool = { query, connect: async () => ({ query, release() {} }) };
-  return { pool: pool as unknown as pg.Pool, configUpdates };
+  return { pool: pool as unknown as pg.Pool, webhookWrites };
 }
 
 function fakeGithub(handler: (req: GitHubHttpRequest) => GitHubHttpResponse): {
@@ -110,10 +117,11 @@ function withActor(secrets: FakeSecretStore, gh: GitHubHttpClient, pool: pg.Pool
 
 describe("§3.6 fix 5 — provision retry doesn't brick the secret", () => {
   it("a hook-create 422 does NOT rotate the stored secret nor stamp the source config", async () => {
-    const orgConfig = { version: 1, defaultCredentials: { github_token: "gh-pat" } };
-    const { pool, configUpdates } = stubPool(orgConfig);
+    const credentialRef = "credential/github/org/org_a/default";
+    const orgConfig = { version: 1, defaultCredentials: { github_token: credentialRef } };
+    const { pool, webhookWrites } = stubPool(orgConfig);
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "gh-pat", value: "pat" });
+    await secrets.put({ ref: credentialRef, value: "pat" });
     const gh = fakeGithub((req) => {
       if (req.method === "POST" && req.path.endsWith("/hooks")) return { status: 422, body: { message: "exists" } };
       return { status: 200, body: {} };
@@ -132,20 +140,21 @@ describe("§3.6 fix 5 — provision retry doesn't brick the secret", () => {
     expect(gh.requests.find((r) => r.path.endsWith("/hooks"))).toBeDefined();
     // …but because GitHub rejected it, the stored secret was NOT rotated (the only
     // secret in the store is the pre-existing PAT — no `webhook/issues/*` ref landed).
-    expect(await secrets.get("gh-pat")).toBeDefined();
+    expect(await secrets.get(credentialRef)).toBeDefined();
     const secretCall = gh.requests.find((r) => r.path.endsWith("/hooks"));
     const candidateSecret = (secretCall!.body as { config: { secret: string } }).config.secret;
     expect(await secrets.get(`webhook/issues/`)).toBeUndefined();
     expect(candidateSecret).toBeTruthy();
-    // And the source config was NOT stamped webhook-driven (not bricked).
-    expect(configUpdates.length).toBe(0);
+    // And the source metadata was NOT stamped webhook-driven (not bricked).
+    expect(webhookWrites).toHaveLength(0);
   });
 
   it("a successful hook create DOES rotate the secret + stamp the config", async () => {
-    const orgConfig = { version: 1, defaultCredentials: { github_token: "gh-pat" } };
-    const { pool, configUpdates } = stubPool(orgConfig);
+    const credentialRef = "credential/github/org/org_a/default";
+    const orgConfig = { version: 1, defaultCredentials: { github_token: credentialRef } };
+    const { pool, webhookWrites } = stubPool(orgConfig);
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "gh-pat", value: "pat" });
+    await secrets.put({ ref: credentialRef, value: "pat" });
     const gh = fakeGithub((req) => {
       if (req.method === "POST" && req.path.endsWith("/hooks")) return { status: 201, body: { id: 9001 } };
       return { status: 200, body: {} };
@@ -159,9 +168,10 @@ describe("§3.6 fix 5 — provision retry doesn't brick the secret", () => {
     });
 
     expect(res.status).toBe(201);
-    const json = (await res.json()) as { webhookSecretRef: string };
-    // The secret was rotated AFTER GitHub confirmed, and the config was stamped.
-    expect(await secrets.get(json.webhookSecretRef)).toBeDefined();
-    expect(configUpdates.length).toBe(1);
+    const json = (await res.json()) as { sourceId: string };
+    // The secret was rotated AFTER GitHub confirmed, and internal metadata was stamped.
+    const secretRef = `webhook/issues/${json.sourceId}`;
+    expect(await secrets.get(secretRef)).toBeDefined();
+    expect(webhookWrites).toEqual([{ id: json.sourceId, ref: secretRef }]);
   });
 });

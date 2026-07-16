@@ -40,7 +40,7 @@ function projectConfig(): unknown {
     governancePosture: "open",
     reviewPolicy: "auto",
     credentials: {
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_yield/dev",
       defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     },
   };
@@ -69,6 +69,9 @@ function fakePool(): pg.Pool {
         spec_id: SPEC_ID,
         project_id: PROJECT_ID,
         org_id: ORG_ID,
+        project_org_id: ORG_ID,
+        spec_org_id: ORG_ID,
+        spec_project_id: PROJECT_ID,
         pr_url: PR_URL,
         branch: "feat/x",
         config: projectConfig(),

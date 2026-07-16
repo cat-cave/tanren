@@ -55,6 +55,7 @@ export async function createGitHubRepository(
       private: input.private,
       auto_init: input.autoInit,
       ...(input.description !== undefined && input.description.length > 0 && { description: input.description }),
+      ...(input.ownershipMarker !== undefined && { homepage: input.ownershipMarker }),
     },
   });
 
@@ -75,6 +76,39 @@ export async function createGitHubRepository(
     typeof body.default_branch !== "string"
   ) {
     throw new TypeError("GitHub repository create returned no full_name/html_url/default_branch");
+  }
+  return { fullName: body.full_name, repoUrl: body.html_url, defaultBranch: body.default_branch };
+}
+
+/** Reconcile an ambiguous create only when the host atomically persisted this derivation's exact marker. */
+export async function readOwnedGitHubRepository(
+  http: GitHubHttpClient,
+  target: { owner: string; name: string; ownershipMarker: string },
+  token: RepoCreateToken,
+): Promise<CreatedRepository | undefined> {
+  const response = await http.request({
+    method: "GET",
+    path: `/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.name)}`,
+    token: token.token,
+    refreshToken: token.refresh,
+  });
+  if (response.status === 404) return undefined;
+  if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
+    throw new Error(`GitHub repository ownership read failed: HTTP ${response.status}`);
+  }
+  const body = response.body as {
+    full_name?: unknown;
+    html_url?: unknown;
+    default_branch?: unknown;
+    homepage?: unknown;
+  };
+  if (body.homepage !== target.ownershipMarker) return undefined;
+  if (
+    typeof body.full_name !== "string" ||
+    typeof body.html_url !== "string" ||
+    typeof body.default_branch !== "string"
+  ) {
+    throw new TypeError("GitHub repository ownership read returned an incomplete repository");
   }
   return { fullName: body.full_name, repoUrl: body.html_url, defaultBranch: body.default_branch };
 }

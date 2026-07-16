@@ -6,6 +6,7 @@
 // probe — no Postgres, no real provider, no live HTTP.
 
 import { describe, expect, it } from "vitest";
+import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
 import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
@@ -39,23 +40,51 @@ interface PoolState {
    * storms `warn`s per merge.
    */
   alreadyTerminalDemo?: boolean;
-  /** The org grant row (org_integrations) for the deploy provider. */
+  /** The org connection/grant authority row for the deploy provider. */
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
   /** The spec's behaviors (returned by BehaviorStore.listForSpec). */
   behaviors: BehaviorSeed[];
+  projectOwnerOrgId?: string;
+  authorityReads?: { count: number };
 }
 
 const VERCEL_GRANT = {
   provider_kind: "deploy.vercel",
-  credential_ref: "secret://org/deploy-token",
+  credential_ref: "secret://org/deploy-token/g/1",
   metadata: { teamId: "team_abc", slug: "acme" },
 };
 
 function fakePool(state: PoolState): pg.Pool {
   // eslint-disable-next-line @typescript-eslint/require-await
-  const query = async (sql: string, _params?: readonly unknown[]) => {
+  const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
+    if (/FROM events e/u.test(sql) && params[1] === "deploy.verified") {
+      if (!state.verified) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            event_run_id: RUN_ID,
+            event_spec_id: null,
+            event_project_id: PROJECT_ID,
+            event_org_id: ORG_ID,
+            payload: { provider: "deploy.vercel", appId: APP_ID, deploymentId: DEPLOYMENT_ID },
+            run_id: RUN_ID,
+            run_spec_id: SPEC_ID,
+            run_project_id: PROJECT_ID,
+            run_org_id: ORG_ID,
+            pr_url: "https://github.com/acme/widget/pull/1",
+            project_org_id: state.projectOwnerOrgId ?? ORG_ID,
+            spec_org_id: ORG_ID,
+            spec_project_id: PROJECT_ID,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (/SELECT EXISTS \(/u.test(sql) && /demo\.completed/u.test(sql)) {
+      return { rows: [{ demoed: state.alreadyTerminalDemo === true }], rowCount: 1 };
+    }
     // loadVerifiedDeploy: the deploy.verified event + run/project + a prior TERMINAL
     // demo flag. The `demoed` EXISTS subquery targets `demo.completed` OR
     // `demo.failed` — both wake the run-activity bus, so gating on the failed
@@ -77,10 +106,81 @@ function fakePool(state: PoolState): pg.Pool {
     }
     // The org grant lookup (demoSurface resolution). `status` is NOT NULL DEFAULT
     // 'linked' on the real row; the store decodes it via the validated read seam.
-    if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
-      return state.grant === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ status: "linked", ...state.grant }], rowCount: 1 };
+    if (/SELECT connection_id, grant_id FROM project_integration_grant_selections/u.test(sql)) {
+      const selected = state.grant !== undefined && state.grant.provider_kind === params[2];
+      return selected
+        ? { rows: [{ connection_id: "connection_demo", grant_id: "grant_demo" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
+    if (/FROM org_integration_connections c/u.test(sql)) {
+      if (state.authorityReads !== undefined) state.authorityReads.count += 1;
+      if (state.grant === undefined) return { rows: [], rowCount: 0 };
+      // authorizeOperation eligibility row (selected generations match).
+      if (/project_integration_grant_selections/u.test(sql) || /selected_auth_generation/u.test(sql)) {
+        const credentialRef = (state.grant.credential_ref ?? "secret://org/deploy-token/g/1").includes("/g/")
+          ? (state.grant.credential_ref ?? "secret://org/deploy-token/g/1")
+          : `${state.grant.credential_ref ?? "secret://org/deploy-token"}/g/1`;
+        return {
+          rows: [
+            {
+              connection_id: "connection_demo",
+              provider_kind: state.grant.provider_kind,
+              provider_principal_id: "account_demo",
+              display_name: "account_demo",
+              principal_metadata: state.grant.metadata ?? {},
+              connection_health: "healthy",
+              connection_status: "active",
+              current_auth_generation: 1,
+              grant_id: "grant_demo",
+              grant_current_generation: 1,
+              grant_status: "active",
+              plane: "control",
+              environment: "control",
+              credential_ref: credentialRef,
+              auth_expires_at: null,
+              auth_status: "active",
+              capabilities: ["deploy"],
+              operations: ["resolve_demo_surface"],
+              provider_scopes: [],
+              resource_constraints: defaultIntegrationResourceConstraints(),
+              policy_revision: "integration-catalog.v2",
+              consent_revision: "consent.test",
+              grant_expires_at: null,
+              grant_generation_status: "active",
+              selected_auth_generation: 1,
+              selected_grant_generation: 1,
+              selected_connection_id: "connection_demo",
+              selected_grant_id: "grant_demo",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return {
+        rows: [
+          {
+            connection_id: "connection_demo",
+            grant_id: "grant_demo",
+            org_id: ORG_ID,
+            provider_kind: state.grant.provider_kind,
+            provider_principal_id: "account_demo",
+            principal_kind: "team",
+            display_name: "account_demo",
+            health: "healthy",
+            connection_status: "active",
+            current_auth_generation: 1,
+            grant_generation: 1,
+            grant_status: "active",
+            auth_expires_at: null,
+            provider_scopes: [],
+            operation_id: null,
+            operation_stage: null,
+            operation_status: null,
+            selected_for_project: true,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     // BehaviorStore.listForSpec join.
     if (/FROM behaviors b/u.test(sql) || /INNER JOIN spec_behaviors/u.test(sql)) {
@@ -122,7 +222,7 @@ class RecordingEventStore implements EventStore {
 
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
-  void store.put({ ref: "secret://org/deploy-token", value: "deploy_token" });
+  void store.put({ ref: "secret://org/deploy-token/g/1", value: "deploy_token" });
   return store;
 }
 
@@ -139,11 +239,16 @@ function scriptedProbe(byPath: Record<string, number>): DemoWebProbe & { probed:
   };
 }
 
-async function run(state: PoolState, probe: DemoWebProbe, events: RecordingEventStore): Promise<void> {
+async function run(
+  state: PoolState,
+  probe: DemoWebProbe,
+  events: RecordingEventStore,
+  transport = scriptedDeployTransport("vercel", ["acme-web"]),
+): Promise<void> {
   const watcher = new DemoOnDeployWatcher({
     pool: fakePool(state),
     secrets: secrets(),
-    transport: scriptedDeployTransport("vercel", ["acme-web"]),
+    transport,
     eventStore: events,
     webProbe: probe,
   });
@@ -270,5 +375,22 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
     expect(failed!.payload["surfaceKind"]).toBeUndefined();
     // No secret material reached the event.
     expect(JSON.stringify(failed)).not.toContain("deploy_token");
+  });
+
+  it("rejects a foreign project owner before demo authority or provider I/O", async () => {
+    const authorityReads = { count: 0 };
+    const transport = scriptedDeployTransport("vercel", ["acme-web"]);
+    const events = new RecordingEventStore();
+    await expect(
+      run(
+        { verified: true, behaviors: [], projectOwnerOrgId: "org_foreign", authorityReads },
+        scriptedProbe({}),
+        events,
+        transport,
+      ),
+    ).rejects.toThrow(/run lineage mismatch.*does not own its project/u);
+    expect(authorityReads.count).toBe(0);
+    expect(transport.requestLog()).toEqual([]);
+    expect(events.appends).toEqual([]);
   });
 });

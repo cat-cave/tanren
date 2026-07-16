@@ -36,7 +36,7 @@ const CORRUPT_ORG_CONFIG = { version: 99 } as const;
 
 const ORG_CONFIG_WITH_DEFAULT = {
   version: 1,
-  defaultCredentials: { github_token: "credential/github/org-default" },
+  defaultCredentials: { github_token: "credential/github/org/org_test/org-default" },
 } as const;
 
 afterEach(() => {
@@ -64,33 +64,42 @@ describe("resolveGithubStaticRef — PROPAGATE on a corrupt project config (wron
   for (const [name, resolve] of [["batchChecker", resolveGithubStaticRefBatch]] as const) {
     it(`${name}: THROWS on a corrupt project config instead of using the org-default token`, () => {
       // An unsupported version → UnknownConfigVersionError.
-      expect(() => resolve(CORRUPT_PROJECT_CONFIG, ORG_CONFIG_WITH_DEFAULT)).toThrow(/unknown config version/iu);
+      expect(() => resolve(CORRUPT_PROJECT_CONFIG, ORG_CONFIG_WITH_DEFAULT, "org_test")).toThrow(
+        /unknown config version/iu,
+      );
       // A version:1 body that fails the V1 schema → a Zod parse error (non-empty message).
-      expect(() => resolve(CORRUPT_V1_BODY, ORG_CONFIG_WITH_DEFAULT)).toThrow(/\S/u);
+      expect(() => resolve(CORRUPT_V1_BODY, ORG_CONFIG_WITH_DEFAULT, "org_test")).toThrow(/\S/u);
     });
 
     it(`${name}: an ABSENT project config falls through to the org default (legitimate)`, () => {
-      expect(resolve(ABSENT_PROJECT_CONFIG, ORG_CONFIG_WITH_DEFAULT)).toBe("credential/github/org-default");
+      expect(resolve(ABSENT_PROJECT_CONFIG, ORG_CONFIG_WITH_DEFAULT, "org_test")).toBe(
+        "credential/github/org/org_test/org-default",
+      );
     });
 
     it(`${name}: a clean project config with a bound ref returns that ref`, () => {
-      const projectConfig = { version: 1, credentials: { githubCredentialRef: "credential/github/project" } };
-      expect(resolve(projectConfig, ORG_CONFIG_WITH_DEFAULT)).toBe("credential/github/project");
+      const projectConfig = {
+        version: 1,
+        credentials: { githubCredentialRef: "credential/github/org/org_test/project" },
+      };
+      expect(resolve(projectConfig, ORG_CONFIG_WITH_DEFAULT, "org_test")).toBe(
+        "credential/github/org/org_test/project",
+      );
     });
 
     it(`${name}: PROPAGATES on a corrupt ORG config (never silently disables creds)`, () => {
       // Project config ABSENT → resolution falls through to the org default,
       // where a present-but-unparseable org config must THROW (loud, fail-closed),
       // not be swallowed to undefined.
-      expect(() => resolve(ABSENT_PROJECT_CONFIG, CORRUPT_ORG_CONFIG)).toThrow(/unknown config version/iu);
+      expect(() => resolve(ABSENT_PROJECT_CONFIG, CORRUPT_ORG_CONFIG, "org_test")).toThrow(/unknown config version/iu);
     });
 
     it(`${name}: an ABSENT org config resolves to undefined (legitimate "no org default")`, () => {
       // A missing `organizations.config` reads back as `undefined`; bind it through a
       // typed value so the lint stays clean while still exercising the undefined case.
       const missingOrgConfig: unknown = undefined as unknown;
-      expect(resolve(ABSENT_PROJECT_CONFIG, null)).toBeUndefined();
-      expect(resolve(ABSENT_PROJECT_CONFIG, missingOrgConfig)).toBeUndefined();
+      expect(resolve(ABSENT_PROJECT_CONFIG, null, "org_test")).toBeUndefined();
+      expect(resolve(ABSENT_PROJECT_CONFIG, missingOrgConfig, "org_test")).toBeUndefined();
     });
   }
 });

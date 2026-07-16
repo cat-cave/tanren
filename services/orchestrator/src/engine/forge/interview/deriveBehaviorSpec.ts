@@ -1,19 +1,13 @@
-// Derive helpers split out of `derive.ts` to keep it under the 500-line cap:
-//   - `deriveBehaviorSpec`: create one behavior spec + persist+link the behavior row.
-//   - `resumeDerivedProject`: the idempotent-resume result for a retried derive whose
-//     project already exists (audit §3.10).
-// Both are pure compositions over the existing entity-creation paths — no new write
-// surface, just a relocation behind the per-file line cap.
+// Behavior-spec derivation is split out of `derive.ts` to keep it under the
+// 500-line cap. It composes the existing entity-creation paths and adds no write
+// authority of its own.
 
-import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
-import { parseGitHubRepository } from "../../providers/github.js";
-import { createSpec, type SpecContract } from "../../workflow/projectSpec.js";
-import { behaviorKey } from "./deriveDesignContract.js";
-import type { DeriveResult } from "./derive.js";
+import { createSpecOnClient, type ProjectSpecQueryClient, type SpecContract } from "../../workflow/projectSpec.js";
+import { behaviorKey, DanglingDesignRefError } from "./deriveDesignContract.js";
 import type { CaptureBehavior, CaptureInterface, InterviewCapture } from "./types.js";
 
 // Re-export the design-contract derive helpers (native design subsystem, WS-D1)
@@ -76,35 +70,6 @@ function acceptanceFor(behavior: CaptureBehavior): string[] {
   return [`given ${given}, when ${when}, then ${then}`];
 }
 
-// IDEMPOTENT RESUME (audit §3.10): a derive whose project ALREADY exists for the
-// deterministic repo URL is a retry of a completed derive. Return the existing project
-// (id + the repo it is bound to) instead of re-provisioning the repo/deploy or
-// re-creating the entity graph (which would duplicate personas/specs). The derived
-// entity ids are not re-enumerated here — the project + its DAG already exist and are
-// read back through the project-DAG endpoint; the resume only needs to identify the
-// project so the caller does not double-provision.
-export function resumeDerivedProject(existing: {
-  projectId: string;
-  name: string;
-  repoUrl: string;
-  defaultBranch: string;
-}): DeriveResult {
-  const parsed = parseGitHubRepository(existing.repoUrl);
-  return {
-    projectId: existing.projectId,
-    projectName: existing.name,
-    repository: {
-      fullName: `${parsed.owner}/${parsed.name}`,
-      repoUrl: existing.repoUrl,
-      defaultBranch: existing.defaultBranch,
-    },
-    specIds: [],
-    personaIds: [],
-    behaviorIds: [],
-    milestoneIds: [],
-  };
-}
-
 export interface DeriveBehaviorSpecInput {
   projectId: string;
   orgId: string;
@@ -112,16 +77,17 @@ export interface DeriveBehaviorSpecInput {
   milestoneId: string;
   dependsOn: string[];
   personaIdByName: Map<string, string>;
+  behaviorId: string;
   actor: ActorContext;
 }
 
 // Create the spec for one behavior, persist the behavior under its persona, and
 // link the two (spec ⇄ behavior) so the DAG shows the b-tag tie.
 export async function deriveBehaviorSpec(
-  pool: pg.Pool,
+  pool: ProjectSpecQueryClient,
   input: DeriveBehaviorSpecInput,
 ): Promise<SpecContract & { behaviorId?: string }> {
-  const spec = await createSpec(
+  const spec = await createSpecOnClient(
     pool,
     {
       projectId: input.projectId,
@@ -143,6 +109,7 @@ export async function deriveBehaviorSpec(
   const behaviorRow = await BehaviorStore.create(
     pool,
     BehaviorCreateInput.parse({
+      id: input.behaviorId,
       personaId,
       title: input.behavior.title,
       given: input.behavior.given,
@@ -181,6 +148,7 @@ export interface InterfaceMilestonesInput {
   capture: InterviewCapture;
   scaffoldSpecIds: string[];
   personaIdByName: Map<string, string>;
+  plannedBehaviorIdByKey: Map<string, string>;
   actor: ActorContext;
 }
 
@@ -197,7 +165,7 @@ export interface InterfaceMilestonesResult {
 // per-interface schema spec + a spec per behavior tied to a persona whose surface
 // matches that interface. Extracted from `derive.ts` for the per-file line cap.
 export async function deriveInterfaceMilestones(
-  pool: pg.Pool,
+  pool: ProjectSpecQueryClient,
   input: InterfaceMilestonesInput,
 ): Promise<InterfaceMilestonesResult> {
   const { projectId, capture, scaffoldSpecIds, personaIdByName, actor } = input;
@@ -223,7 +191,7 @@ export async function deriveInterfaceMilestones(
     milestoneIds.push(milestone.id);
 
     // Per-interface schema spec: depends on the scaffold (critical path).
-    const schemaSpec = await createSpec(
+    const schemaSpec = await createSpecOnClient(
       pool,
       {
         projectId,
@@ -241,6 +209,9 @@ export async function deriveInterfaceMilestones(
       (b) => interfaceForBehavior(b, capture, interfaces)?.name === iface.name,
     );
     for (const behavior of ifaceBehaviors) {
+      const key = behaviorKey(behavior.persona, behavior.title);
+      const plannedBehaviorId = input.plannedBehaviorIdByKey.get(key);
+      if (plannedBehaviorId === undefined) throw new DanglingDesignRefError("behavior", key);
       const behaviorSpec = await deriveBehaviorSpec(pool, {
         projectId,
         orgId: input.orgId,
@@ -248,13 +219,14 @@ export async function deriveInterfaceMilestones(
         milestoneId: milestone.id,
         dependsOn: [...scaffoldSpecIds, schemaSpec.specId],
         personaIdByName,
+        behaviorId: plannedBehaviorId,
         actor,
       });
       specIds.push(behaviorSpec.specId);
       const bId = behaviorSpec.behaviorId;
       if (bId === undefined) continue;
       behaviorIds.push(bId);
-      behaviorIdByKey.set(behaviorKey(behavior.persona, behavior.title), bId);
+      behaviorIdByKey.set(key, bId);
     }
   }
   return { specIds, milestoneIds, behaviorIds, behaviorIdByKey };

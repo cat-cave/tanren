@@ -38,10 +38,14 @@ function node(specId: string, phase: DagSpecNode["phase"], dependsOn: string[], 
 class FixedReadModel implements DagReadModel {
   constructor(
     private readonly nodes: DagSpecNode[],
-    private readonly archived = false,
+    private readonly projectLifecycle: DagSnapshot["projectLifecycle"] = "active",
   ) {}
   async loadSnapshot(projectId: string): Promise<DagSnapshot> {
-    return { projectId, nodes: this.nodes.map((n) => ({ ...n })), archived: this.archived };
+    return {
+      projectId,
+      nodes: this.nodes.map((item) => ({ ...item })),
+      projectLifecycle: this.projectLifecycle,
+    };
   }
 }
 
@@ -154,7 +158,7 @@ function makeWalker(opts: {
   threshold: SpeculationThreshold;
   depthCap?: number;
   ceiling?: number;
-  archived?: boolean;
+  projectLifecycle?: DagSnapshot["projectLifecycle"];
 }): {
   walker: EventEmittingDagWalker;
   enqueuer: RecordingEnqueuer;
@@ -165,7 +169,7 @@ function makeWalker(opts: {
   const emitter = new RecordingEmitter();
   const stackResolver = new FakeStackResolver();
   const walker = new EventEmittingDagWalker({
-    readModel: new FixedReadModel(opts.nodes, opts.archived ?? false),
+    readModel: new FixedReadModel(opts.nodes, opts.projectLifecycle),
     lifecycleReadModel: new FixedLifecycle(opts.lifecycle),
     enqueuer,
     events: emitter,
@@ -311,7 +315,7 @@ describe("DagWalker speculative execution (§2c)", () => {
       nodes: [node("spec_ready", "pending", [], 0)],
       lifecycle: { spec_ready: "pending" },
       threshold: "moderate",
-      archived: true,
+      projectLifecycle: "archived",
     });
     const result = await walker.walk(PROJECT);
 
@@ -322,5 +326,20 @@ describe("DagWalker speculative execution (§2c)", () => {
     expect(enqueuer.records).toEqual([]);
     expect(emitter.enqueued).toEqual([]);
     expect(emitter.drained).toEqual([]);
+  });
+
+  it("a DERIVING project enqueues nothing — only active projects are runnable", async () => {
+    const { walker, enqueuer } = makeWalker({
+      nodes: [node("spec_ready", "pending", [], 0)],
+      lifecycle: { spec_ready: "pending" },
+      threshold: "moderate",
+      projectLifecycle: "deriving",
+    });
+
+    const result = await walker.walk(PROJECT);
+
+    expect(result.status).toBe("deriving");
+    expect(result.enqueuedSpecIds).toEqual([]);
+    expect(enqueuer.records).toEqual([]);
   });
 });

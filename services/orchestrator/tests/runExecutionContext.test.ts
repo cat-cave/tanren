@@ -53,7 +53,7 @@ function fullRow(overrides: Record<string, unknown> = {}): Record<string, unknow
       version: 1,
       credentials: {
         defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
-        githubCredentialRef: "cred/gh",
+        githubCredentialRef: "gh",
       },
     },
     // A run is ALWAYS tenant-scoped (`runs.org_id` / `projects.org_id` are NOT-NULL).
@@ -90,7 +90,7 @@ describe("loadRunExecutionContext", () => {
       acceptanceCriteria: ["marker exists", "ci green"],
       runnerImage: "ghcr.io/acme/runner:1",
       identitySecretRef: "runner/test/identity",
-      githubCredentialRef: "cred/gh",
+      githubCredentialRef: "credential/github/org/org_42/gh",
       defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     });
     expect(projectConfig.version).toBe(1);
@@ -108,7 +108,7 @@ describe("loadRunExecutionContext", () => {
       version: 1,
       credentials: {
         defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
-        githubCredentialRef: "cred/gh",
+        githubCredentialRef: "gh",
       },
       auditPosture: AUTONOMOUS_AUDIT_POSTURE,
       convergencePolicy: {
@@ -235,7 +235,7 @@ describe("loadRunExecutionContext", () => {
       github_app: {
         appId: "12345",
         installationId: "67890",
-        credentialRef: "credential/github_app/test",
+        credentialRef: "credential/github_app/org/org_42/test",
         installedAt: "2026-01-01T00:00:00Z",
       },
     };
@@ -284,7 +284,7 @@ describe("loadRunExecutionContext", () => {
       version: 1,
       credentials: {
         defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
-        githubCredentialRef: "cred/gh",
+        githubCredentialRef: "gh",
       },
       routing: {
         write: { chain: [{ cli: "opencode", model: "zai/glm-5.1", authRef: "cred/opencode" }] },
@@ -334,7 +334,7 @@ function configWithToolchain(): Record<string, unknown> {
     version: 1,
     credentials: {
       defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
-      githubCredentialRef: "cred/gh",
+      githubCredentialRef: "gh",
     },
     lifecycle: {
       stack: "ts-pnpm",

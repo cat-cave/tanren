@@ -29,7 +29,7 @@ import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { DemoSurface, DeployRef } from "../contracts/deployAdapter.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
-import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
+import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import { systemActor } from "../state/actor.js";
 import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
@@ -241,15 +241,35 @@ export class DemoOnDeployWatcher {
    * production yet".
    */
   private async resolveSurface(verified: VerifiedDeploy): Promise<DemoSurface> {
-    const grant = await runWithSystemScope(this.deps.pool, (client) =>
-      OrgIntegrationsStore.getGrant(client, verified.orgId, verified.provider, systemActor),
-    );
-    if (grant === undefined) {
-      throw new Error(
-        `demoOnDeploy: run '${verified.runId}' has a verified deploy on '${verified.provider}' but org ` +
-          `'${verified.orgId}' has no matching grant — cannot resolve the demo surface`,
-      );
-    }
+    const grant = await runWithSystemScope(this.deps.pool, async (client) => {
+      const authority = new (await import("../integrations/integrationAuthorityImpl.js")).PgIntegrationAuthority();
+      const resolution = await authority.authorizeOperation(client, {
+        orgId: verified.orgId,
+        projectId: verified.projectId,
+        providerKind: verified.provider,
+        capability: "deploy",
+        operation: "resolve_demo_surface",
+        target: { resourceId: verified.appId, deploymentId: verified.deploymentId },
+        actor: systemActor,
+      });
+      if (resolution.status === "not_linked") {
+        throw new Error(
+          `demoOnDeploy: run '${verified.runId}' has a verified deploy on '${verified.provider}' but org ` +
+            `'${verified.orgId}' has no matching grant — cannot resolve the demo surface`,
+        );
+      }
+      if (resolution.status === "selection_required") {
+        throw new Error(
+          `demoOnDeploy: project '${verified.projectId}' requires an explicit active '${verified.provider}' account selection (${resolution.reason})`,
+        );
+      }
+      if (resolution.status === "ineligible") {
+        throw new Error(
+          `demoOnDeploy: project '${verified.projectId}' deploy grant ineligible (${resolution.reasons.join(",")})`,
+        );
+      }
+      return IntegrationConnectionsStore.orgGrantFromLease(resolution.lease);
+    });
     const adapterKind = adapterKindForProviderKind(verified.provider);
     const adapter = buildDeployAdapter(adapterKind, {
       provisioner: { transport: this.deps.transport, secrets: this.deps.secrets },

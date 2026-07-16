@@ -15,13 +15,12 @@
 // carries only the secret REF, never the DSN value. The DSN is a Plane-A project
 // artifact secret (Tanren's intake DSN), distinct from Plane-B app env.
 //
-// REQUIRED SENTRY TOKEN SCOPES — this is a PROVISIONING token, not an intake one.
-// `discover` needs `project:read`; `provision`/`bind` CREATE resources and need
-// `project:write` (create project under a team) + `project:admin` (create/read a
-// project client key/DSN). `team:read` is needed if the configured team must be
-// resolved. The runtime `sentryConnector` (intake) needs only `event:read` /
-// `project:read` — a strictly narrower set. Document this for the operator when
-// they grant the org token in `org_integrations`.
+// REQUIRED SENTRY TOKEN SCOPES — `discover`/`bind` need `project:read` and remain
+// non-mutating. `provision` creates projects/client keys and needs `project:write`
+// (official create-project + create-client-key also accept project:admin, which
+// Tanren deliberately does not require).
+// `team:read` is needed if the configured team must be resolved. The runtime
+// `sentryConnector` (intake) needs only `event:read` / `project:read`.
 //
 // IDEMPOTENCY (mandatory, per the port contract): `provision` finds the existing
 // project whose slug matches the stable Tanren-derived slug and reuses it; a
@@ -38,6 +37,12 @@ import type {
   ProjectContext,
   ProvisionedArtifact,
 } from "../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type EligibleOperationExpectation,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../contracts/integrationAuthority.js";
 
 /**
  * The injectable Sentry transport for provisioning. Mirrors the runtime
@@ -213,10 +218,9 @@ export class SentryProvisioner implements IntegrationProvisioner {
     return [CAPABILITY_ERRORS];
   }
 
-  async discover(grant: OrgGrant): Promise<ExistingResource[]> {
+  async discover(grant: OrgGrant, projectCtx: ProjectContext): Promise<ExistingResource[]> {
     const meta = readGrantMetadata(grant);
-    const token = await this.resolveToken(grant);
-    const projects = await this.listOrgProjects(meta, token);
+    const projects = await this.listOrgProjects(grant, projectCtx, "discover", {}, meta);
     return projects.map((project) => {
       const slug = asString(project.slug) ?? "";
       return {
@@ -229,27 +233,28 @@ export class SentryProvisioner implements IntegrationProvisioner {
 
   async provision(grant: OrgGrant, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
     const meta = readGrantMetadata(grant);
-    const token = await this.resolveToken(grant);
+    const target = projectIntegrationOperationTarget(projectCtx);
     const desiredSlug = stableProjectSlug(projectCtx);
 
     // Find-or-create keyed on the stable slug (idempotency): a second provision
     // for the same project reuses the existing project, never mints a duplicate.
-    const existing = await this.findProjectBySlug(meta, token, desiredSlug);
-    const slug = existing === undefined ? await this.createProject(meta, token, desiredSlug, projectCtx) : existing;
+    const existing = await this.findProjectBySlug(grant, projectCtx, "provision", target, meta, desiredSlug);
+    const slug =
+      existing === undefined ? await this.createProject(grant, projectCtx, target, meta, desiredSlug) : existing;
 
-    return this.artifactFor(grant, meta, token, slug);
+    return this.artifactFor(grant, projectCtx, "provision", target, meta, slug, true);
   }
 
   async bind(grant: OrgGrant, existingResourceId: string, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
     const meta = readGrantMetadata(grant);
-    const token = await this.resolveToken(grant);
+    const target = projectIntegrationOperationTarget(projectCtx, existingResourceId);
     // Verify the resource exists before binding — never bind a phantom (the
     // contract requires bind of an unknown id to reject, no silent success).
-    const found = await this.findProjectBySlug(meta, token, existingResourceId);
+    const found = await this.findProjectBySlug(grant, projectCtx, "bind", target, meta, existingResourceId);
     if (found === undefined) {
       throw new Error(`sentry provisioner: cannot bind unknown project '${existingResourceId}'`);
     }
-    return this.artifactFor(grant, meta, token, found, projectCtx);
+    return this.artifactFor(grant, projectCtx, "bind", target, meta, found, false);
   }
 
   /**
@@ -257,19 +262,53 @@ export class SentryProvisioner implements IntegrationProvisioner {
    * read here and passed down to the transport per request; it is NEVER returned
    * in the artifact, logged, or persisted to DB config.
    */
-  private async resolveToken(grant: OrgGrant): Promise<string> {
-    const secret = await this.secrets.get(grant.credentialRef);
-    if (secret === undefined) {
-      throw new Error(`sentry provisioner: no org token at credential ref ${grant.credentialRef}`);
-    }
-    return secret.value;
+  private async resolveToken(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): Promise<string> {
+    // Exact generation only — never naked SecretStore.get of a non-generation ref.
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
+    const { assertOrgGrantMatchesLease, secretValueForLease } =
+      await import("../repositories/integrationConnectionResolve.js");
+    assertOrgGrantMatchesLease(grant);
+    const expected: EligibleOperationExpectation = {
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+      providerKind: "sentry",
+      capability: CAPABILITY_ERRORS,
+      operation,
+      target,
+    };
+    return secretValueForLease(
+      new GenerationAddressedIntegrationSecretStore(this.secrets),
+      grant.eligibleOperation,
+      expected,
+    );
   }
 
-  private async listOrgProjects(meta: SentryGrantMetadata, token: string): Promise<RawSentryProject[]> {
-    const response = await this.http.request({
+  private async request(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+    input: Omit<SentryProvisionHttpRequest, "token">,
+  ): Promise<SentryProvisionHttpResponse> {
+    const token = await this.resolveToken(grant, projectCtx, operation, target);
+    return this.http.request({ ...input, token });
+  }
+
+  private async listOrgProjects(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+    meta: SentryGrantMetadata,
+  ): Promise<RawSentryProject[]> {
+    const response = await this.request(grant, projectCtx, operation, target, {
       method: "GET",
       path: `/api/0/organizations/${encodeURIComponent(meta.orgSlug)}/projects/`,
-      token,
       baseUrl: this.baseUrl(meta),
     });
     if (response.status !== 200 || !Array.isArray(response.body)) {
@@ -278,28 +317,35 @@ export class SentryProvisioner implements IntegrationProvisioner {
     return response.body as RawSentryProject[];
   }
 
-  private async findProjectBySlug(meta: SentryGrantMetadata, token: string, slug: string): Promise<string | undefined> {
-    const projects = await this.listOrgProjects(meta, token);
+  private async findProjectBySlug(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+    meta: SentryGrantMetadata,
+    slug: string,
+  ): Promise<string | undefined> {
+    const projects = await this.listOrgProjects(grant, projectCtx, operation, target, meta);
     const match = projects.find((project) => asString(project.slug) === slug);
     return match === undefined ? undefined : slug;
   }
 
   /** Create a Sentry project under the configured team (platform from the stack). */
   private async createProject(
-    meta: SentryGrantMetadata,
-    token: string,
-    slug: string,
+    grant: OrgGrant,
     projectCtx: ProjectContext,
+    target: IntegrationOperationTarget,
+    meta: SentryGrantMetadata,
+    slug: string,
   ): Promise<string> {
     if (meta.team === undefined) {
       throw new Error(
         "sentry provisioner: grant metadata is missing `team` — a Sentry team is required to create a project",
       );
     }
-    const response = await this.http.request({
+    const response = await this.request(grant, projectCtx, "provision", target, {
       method: "POST",
       path: `/api/0/teams/${encodeURIComponent(meta.orgSlug)}/${encodeURIComponent(meta.team)}/projects/`,
-      token,
       baseUrl: this.baseUrl(meta),
       body: {
         name: projectCtx.name ?? slug,
@@ -319,12 +365,19 @@ export class SentryProvisioner implements IntegrationProvisioner {
    * Ensure a client key/DSN for the project (find-or-create) and return the
    * public DSN value. Reuses an existing key's DSN rather than minting a second.
    */
-  private async ensureDsn(meta: SentryGrantMetadata, token: string, slug: string): Promise<string> {
+  private async resolveDsn(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: "provision" | "bind",
+    target: IntegrationOperationTarget,
+    meta: SentryGrantMetadata,
+    slug: string,
+    allowCreate: boolean,
+  ): Promise<string> {
     const keysPath = `/api/0/projects/${encodeURIComponent(meta.orgSlug)}/${encodeURIComponent(slug)}/keys/`;
-    const list = await this.http.request({
+    const list = await this.request(grant, projectCtx, operation, target, {
       method: "GET",
       path: keysPath,
-      token,
       baseUrl: this.baseUrl(meta),
     });
     if (list.status === 200 && Array.isArray(list.body) && list.body.length > 0) {
@@ -333,11 +386,12 @@ export class SentryProvisioner implements IntegrationProvisioner {
         return dsn;
       }
     }
-    // None usable — create one.
-    const created = await this.http.request({
+    if (!allowCreate) {
+      throw new Error(`sentry provisioner: project '${slug}' has no existing client key; bind is non-mutating`);
+    }
+    const created = await this.request(grant, projectCtx, "provision", target, {
       method: "POST",
       path: keysPath,
-      token,
       baseUrl: this.baseUrl(meta),
       body: { name: "tanren-intake" },
     });
@@ -354,28 +408,28 @@ export class SentryProvisioner implements IntegrationProvisioner {
   /**
    * Build the uniform artifact for a (possibly just-created) project: store the
    * DSN in the secret manager and emit ONLY its ref + the projectConfig + the
-   * `inbox_sources` row referencing the project slug and the org token ref. The
+   * `inbox_sources` row referencing the project slug. The
    * DSN VALUE never appears in the returned artifact.
    */
   private async artifactFor(
     grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: "provision" | "bind",
+    target: IntegrationOperationTarget,
     meta: SentryGrantMetadata,
-    token: string,
     slug: string,
-    projectCtx?: ProjectContext,
+    allowKeyCreation: boolean,
   ): Promise<ProvisionedArtifact> {
-    const dsn = await this.ensureDsn(meta, token, slug);
-    const metaOrgId = (grant.metadata as { orgId?: unknown }).orgId;
-    const orgId = projectCtx?.orgId ?? (typeof metaOrgId === "string" ? metaOrgId : meta.orgSlug);
-    const ref = dsnSecretRef(orgId, slug);
+    const dsn = await this.resolveDsn(grant, projectCtx, operation, target, meta, slug, allowKeyCreation);
+    const ref = dsnSecretRef(projectCtx.orgId, slug);
     // The DSN → secret manager (managed cred ref), never DB/log/artifact value.
     await this.secrets.put({ ref, value: dsn });
     return {
       projectConfig: { sentryProjectSlug: slug },
       secretRefs: { SENTRY_DSN: ref },
       // The inbox_sources row the runtime `sentryConnector` consumes: it carries
-      // the Sentry org + project slug and the ORG TOKEN REF (intake reuses the
-      // same org grant credential) — never a token value. `kind: "errors"` is the
+      // the Sentry org + project slug. Intake obtains its own fresh exact lease;
+      // no reusable credential ref is persisted here. `kind: "errors"` is the
       // source-kind the connector map registers Sentry under (connectorMap.ts) AND
       // the only Sentry-valid value in `inbox_sources_kind_check` (migration 0024;
       // the set is issues|errors|system|manual|scheduled_audit). Emitting "sentry"
@@ -385,7 +439,6 @@ export class SentryProvisioner implements IntegrationProvisioner {
         config: {
           org: meta.orgSlug,
           project: slug,
-          tokenRef: grant.credentialRef,
           baseUrl: this.baseUrl(meta),
         },
       },

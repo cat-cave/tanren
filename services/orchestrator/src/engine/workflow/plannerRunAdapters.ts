@@ -288,6 +288,7 @@ async function resolveOverLiveJj(
     githubHttp: input.githubHttp,
     ...(input.githubAppMinter !== undefined && { githubAppMinter: input.githubAppMinter }),
     facts: {
+      orgId: context.orgId,
       repoUrl: context.repoUrl,
       baseBranch: context.targetBranch,
       // The merge-time base the PR head rebases onto (never-discard, conflict recorded).

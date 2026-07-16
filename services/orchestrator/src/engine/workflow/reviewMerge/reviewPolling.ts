@@ -412,6 +412,7 @@ async function buildGitHubProbe(
 ): Promise<ReviewProbe> {
   const resolved = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
+    orgId: context.orgId,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
     minter: input.githubAppMinter,

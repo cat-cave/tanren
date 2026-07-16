@@ -101,6 +101,8 @@ export interface GitHubHttpRequest {
    * not change state).
    */
   retryTransient?: boolean;
+  /** Surface classified 403/429 to a durable caller without sleeping/retrying. */
+  retryRateLimit?: boolean;
 }
 
 export interface GitHubHttpResponse {
@@ -112,6 +114,8 @@ export interface GitHubHttpResponse {
    * body (the bounded secondary default).
    */
   retryAfterMs?: number;
+  /** Bounded in-request wait; durable callers use the exact `retryAfterMs`. */
+  retryBackoffMs?: number;
   /**
    * Enriched non-2xx detail (the GitHub `message` + rate-limit headers) so a thrown `HTTP
    * <status>` carries WHY (the apex-v35 raw-`HTTP 403` diagnosis gap). `undefined` on a 2xx.
@@ -156,15 +160,13 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     let token = input.token;
     let refreshed = false;
     // TIMEOUT-ERADICATION (feedback_no_timeouts_progress_based, BINDING): NO fixed retry COUNT.
-    // A transient signal (a rate-limited 403/429, a 5xx, a transport throw) retries UNBOUNDED
-    // while making PROGRESS, spaced by its backoff; it surfaces LOUDLY only on non-convergence
-    // (the SAME signal stuck at the saturated backoff — a proven fixed point), never a 3-strikes
-    // count. See `githubRetry.ts` for the full rationale + the convergence detector. The two
-    // signature streams below are judged for convergence INDEPENDENTLY (§4: a transient 503 burst
-    // must never deny a later 429 its honored `Retry-After`). The 401 re-mint stays one-shot.
+    // Transients retry while making progress and surface only at a saturated fixed point.
+    // Rate-limit and gateway signature streams remain independent, so a 503 burst never
+    // denies a later 429 its honored `Retry-After`. The 401 re-mint stays one-shot.
     const transientSignatures: string[] = [];
     const rateLimitSignatures: string[] = [];
     const retryTransient = input.retryTransient !== false;
+    const retryRateLimit = input.retryRateLimit !== false;
     for (;;) {
       let response: GitHubHttpResponse;
       try {
@@ -191,36 +193,24 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
         token = await input.refreshToken();
         continue;
       }
-      // rate-limited — honor Retry-After / X-RateLimit-Reset / a secondary-limit body, back off,
-      // and retry on the rate-limit signal indefinitely (its OWN signature stream, independent
-      // of any prior transient 503 retries) rather than hammering GitHub. Checked BEFORE the 403
-      // force-mint so a secondary-rate-limit 403 backs off (re-minting would not clear a rate
-      // limit). Escalates LOUDLY only when the rate-limit signal is non-converging at the
-      // saturated backoff (a sustained outage — GitHub never clearing the window).
+      // Rate limits own an independent convergence stream and precede 403 force-mint.
+      // Durable intake can surface the response; other callers retain bounded backoff.
       if (response.retryAfterMs !== undefined) {
+        if (!retryRateLimit) return response;
         rateLimitSignatures.push(`rate-limit-${response.status}`);
         if (transientFixedPointReached(rateLimitSignatures)) {
           throw new GitHubOutageError(`rate-limit-${response.status}`, rateLimitSignatures.length - 1);
         }
-        await this.sleep(response.retryAfterMs);
+        await this.sleep(response.retryBackoffMs ?? response.retryAfterMs);
         continue;
       }
-      // 403 with a token supplier, NOT a rate limit: an installation token can edge-case a 403
-      // (instead of a 401) when revoked/rotated mid-flight. Force-mint ONCE and retry — mirroring
-      // the 401 path, sharing the one-shot `refreshed` flag so we never loop. A 403 that PERSISTS
-      // after the re-mint (or one already classified rate-limit above) falls through to surface
-      // LOUDLY — a genuine permission error is never silently retried forever.
+      // A non-rate-limit 403 may be an expired installation token: force-mint once.
       if (response.status === 403 && input.refreshToken !== undefined && !refreshed) {
         refreshed = true;
         token = await input.refreshToken();
         continue;
       }
-      // GitHub-5xx resilience: a transient gateway failure (502/503/504/408) self-heals on an
-      // immediate retry. Back off (500ms→1s→2s, saturating) and retry on the 5xx signal
-      // UNBOUNDED while it is making progress; escalate to a loud `GitHubOutageError` ONLY when
-      // the SAME 5xx is stuck at the saturated backoff (intelligent non-convergence — a proven
-      // outage), never a count. Opt-out (`retryTransient: false`) lets a non-idempotent write
-      // handle its own 5xx. A NON-transient response (a real 4xx) falls through and surfaces.
+      // Transient gateways retry while structurally progressing; non-idempotent writes opt out.
       if (retryTransient && isTransientStatus(response.status)) {
         transientSignatures.push(`http-${response.status}`);
         if (transientFixedPointReached(transientSignatures)) {
@@ -252,10 +242,21 @@ export class FetchGitHubHttpClient implements GitHubHttpClient {
     const text = await response.text();
     const responseBody = text === "" ? undefined : JSON.parse(text);
     const getHeader = headerGetter(response.headers);
+    const retryBackoffMs = rateLimitBackoffMs(response.status, getHeader, this.now(), responseBody);
+    const retryAfterHeader = getHeader("retry-after");
+    const retryAfterSeconds =
+      retryAfterHeader === null || retryAfterHeader.trim() === "" ? NaN : Number(retryAfterHeader);
+    const exactRetryAfterMs =
+      (response.status === 403 || response.status === 429) &&
+      Number.isFinite(retryAfterSeconds) &&
+      retryAfterSeconds >= 0
+        ? Math.max(1_000, Math.ceil(retryAfterSeconds * 1_000))
+        : retryBackoffMs;
     return {
       status: response.status,
       body: responseBody,
-      retryAfterMs: rateLimitBackoffMs(response.status, getHeader, this.now(), responseBody),
+      retryAfterMs: exactRetryAfterMs,
+      retryBackoffMs,
       ...(response.status >= 400 && { errorDetail: buildErrorDetail(response.status, responseBody, getHeader) }),
     };
   }

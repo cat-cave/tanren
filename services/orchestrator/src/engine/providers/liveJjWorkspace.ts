@@ -190,6 +190,7 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
     const staticRef = facts.githubCredentialRef.trim();
     const identity = await resolveBotPushIdentity({
       secrets: deps.secrets,
+      orgId: facts.orgId,
       githubHttp: deps.githubHttp,
       ...(facts.installation !== undefined && { installation: facts.installation }),
       githubCredentialRef: facts.githubCredentialRef,
@@ -213,6 +214,7 @@ export async function buildLiveJjWorkspace(deps: LiveJjWorkspaceDeps): Promise<L
             token: (
               await resolveVcsToken(deps.githubHttp, {
                 secrets: deps.secrets,
+                orgId: facts.orgId,
                 ...(facts.installation !== undefined && { installation: facts.installation }),
                 ...(staticRef !== "" && { staticRef }),
                 ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),

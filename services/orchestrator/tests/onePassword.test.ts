@@ -47,6 +47,24 @@ describe("onePasswordTitleFromRef", () => {
 });
 
 describe("OnePasswordStore wire contract", () => {
+  it("fails create-only closed without provider I/O, including concurrent attempts", async () => {
+    const { fetchImpl, calls } = recordingOpFetch("vault-uuid");
+    const store = new OnePasswordStore({ ...opts, fetchImpl });
+    const attempts = await Promise.allSettled([
+      store.putCreateOnly({ ref: "immutable/g/1", value: "left" }),
+      store.putCreateOnly({ ref: "immutable/g/1", value: "right" }),
+    ]);
+    expect(attempts).toEqual([
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ status: "rejected" }),
+    ]);
+    for (const attempt of attempts) {
+      expect((attempt as PromiseRejectedResult).reason).toMatchObject({ writeState: "definitely_unwritten" });
+    }
+    expect(store.createOnlyAtomicity).toBe("unsupported");
+    expect(calls).toEqual([]);
+  });
+
   it("looks up by title filter then POSTs a new PASSWORD item with a CONCEALED field", async () => {
     const { fetchImpl, calls } = recordingOpFetch("vault-uuid");
     const store = new OnePasswordStore({ ...opts, fetchImpl });

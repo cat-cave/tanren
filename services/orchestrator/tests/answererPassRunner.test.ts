@@ -36,7 +36,7 @@ const fakeAuditAnswerer: AuditAnswerer = {
 // A secret store returning a fake token for the org's default github credential
 // ref, so `resolveGithubToken` (static path) resolves without a real provider.
 const fakeSecrets = {
-  get: async (ref: string) => (ref === "gh/org" ? { value: "ghs_fake" } : undefined),
+  get: async (ref: string) => (ref === "credential/github/org/org_a/default" ? { ref, value: "ghs_fake" } : undefined),
 } as never;
 
 // A repo stub whose `projects` row reports the given `default_branch` (the column
@@ -53,7 +53,17 @@ function repoStubQueryWith(defaultBranch: string | null) {
     }
     if (sql.includes("SELECT config FROM organizations")) {
       // No App installation, an org-default static github credential ref.
-      return { rows: [{ config: { version: 1, defaultCredentials: { github_token: "gh/org" } } }], rowCount: 1 };
+      return {
+        rows: [
+          {
+            config: {
+              version: 1,
+              defaultCredentials: { github_token: "credential/github/org/org_a/default" },
+            },
+          },
+        ],
+        rowCount: 1,
+      };
     }
     return { rows: [], rowCount: 0 };
   };

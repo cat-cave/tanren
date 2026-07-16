@@ -16,6 +16,8 @@ const describeDb = enabled ? describe : describe.skip;
 const OTHER_ORG = "org_p3_rw_other";
 const OTHER_PROJECT = "proj_p3_rw_other_same_org";
 const OTHER_SPEC = "spec_p3_rw_other";
+const OTHER_ORG_SPEC = "spec_p3_rw_other_org";
+const OTHER_PROJECT_SPEC = "spec_p3_rw_other_project";
 
 function enqueued(specId: string, runId: string, taskId: string): ConflictRecoveryReceipt {
   return {
@@ -63,7 +65,7 @@ async function seedExtraRun(
       [projectId, orgId],
     );
   }
-  if (orgId !== ORG) {
+  if (specId !== SPEC) {
     await owner.query(
       `INSERT INTO specs (spec_id, project_id, org_id, title, description, status)
        VALUES ($1, $2, $3, 't', 'd', 'in_flight') ON CONFLICT (spec_id) DO NOTHING`,
@@ -143,15 +145,34 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
 
   it("rejects a cross-org/project run even when its spec id matches exactly", async () => {
     const runId = "run_evidence_wrong_org";
+    const taskId = "task_evidence_wrong_org";
+    await expect(
+      seedExtraRun(owner(), {
+        runId,
+        orgId: OTHER_ORG,
+        // Deliberately cross-link the independently-valid SPEC from ORG/PROJECT
+        // to a run owned by OTHER_ORG/its project. The composite FK must reject
+        // the impossible tuple before it can become recovery evidence.
+        specId: SPEC,
+        status: "running",
+        taskId,
+        taskKind: "plan",
+      }),
+    ).rejects.toMatchObject({ code: "23503", constraint: "runs_spec_lineage_fk" });
+    const rejectedRun = await owner().query("SELECT run_id FROM runs WHERE run_id = $1", [runId]);
+    const rejectedTask = await owner().query("SELECT task_id FROM tasks WHERE task_id = $1", [taskId]);
+    expect({ runs: rejectedRun.rowCount, tasks: rejectedTask.rowCount }).toEqual({ runs: 0, tasks: 0 });
+
+    // Retain the system-scope port proof with a fully valid foreign lineage. A
+    // structurally plausible local receipt cannot claim that foreign run/task.
+    const foreignRunId = "run_evidence_foreign_org";
+    const foreignTaskId = "task_evidence_foreign_org";
     await seedExtraRun(owner(), {
-      runId,
+      runId: foreignRunId,
       orgId: OTHER_ORG,
-      // Deliberately cross-link the independently-valid SPEC from ORG/PROJECT to
-      // a run owned by OTHER_ORG/its project. System scope can see it; only the
-      // explicit org+project+spec predicate rejects it.
-      specId: SPEC,
+      specId: OTHER_ORG_SPEC,
       status: "running",
-      taskId: "task_evidence_wrong_org",
+      taskId: foreignTaskId,
       taskKind: "plan",
     });
     const port = new PgRecoveryEvidencePort(owner());
@@ -160,18 +181,33 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
         expectedOrgId: ORG,
         expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
-        receipt: enqueued(SPEC, runId, "task_evidence_wrong_org"),
+        receipt: enqueued(SPEC, foreignRunId, foreignTaskId),
       }),
     ).resolves.toBeUndefined();
   });
 
   it("rejects a same-org run with the exact spec but a different project", async () => {
     const runId = "run_evidence_wrong_project";
+    await expect(
+      seedExtraRun(owner(), {
+        runId,
+        orgId: ORG,
+        projectId: OTHER_PROJECT,
+        specId: SPEC,
+        status: "running",
+      }),
+    ).rejects.toMatchObject({ code: "23503", constraint: "runs_spec_lineage_fk" });
+    const rejectedRun = await owner().query("SELECT run_id FROM runs WHERE run_id = $1", [runId]);
+    expect(rejectedRun.rowCount).toBe(0);
+
+    // A distinct spec makes the other-project lineage valid; the port's exact
+    // project/spec predicates must still reject a local receipt naming its run.
+    const foreignRunId = "run_evidence_foreign_project";
     await seedExtraRun(owner(), {
-      runId,
+      runId: foreignRunId,
       orgId: ORG,
       projectId: OTHER_PROJECT,
-      specId: SPEC,
+      specId: OTHER_PROJECT_SPEC,
       status: "running",
     });
     const port = new PgRecoveryEvidencePort(owner());
@@ -180,7 +216,7 @@ describeDb("PgRecoveryEvidencePort — real PG ownership/RLS negatives", () => {
         expectedOrgId: ORG,
         expectedProjectId: PROJECT,
         expectedSpecId: SPEC,
-        receipt: alreadyRunning(SPEC, runId),
+        receipt: alreadyRunning(SPEC, foreignRunId),
       }),
     ).resolves.toBeUndefined();
   });

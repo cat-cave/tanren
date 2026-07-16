@@ -146,6 +146,7 @@ async function resolveTokenFor(deps: AnswererPassRunnerDeps, orgId: string): Pro
   const staticRef = installation === undefined ? await loadOrgDefaultGithubCredentialRef(deps.pool, orgId) : undefined;
   return resolveGithubToken({
     secrets: deps.secrets,
+    orgId,
     ...(installation === undefined ? {} : { installation }),
     ...(staticRef === undefined ? {} : { staticRef }),
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),

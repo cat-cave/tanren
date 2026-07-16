@@ -15,11 +15,23 @@
 // versioned entity is the durable artifact later workstreams inject into the
 // writer (WS-D2) + verify with a design oracle (WS-D4) — the clean seam left here.
 
-import type pg from "pg";
-import type { ActorContext } from "../../../auth/schemas.js";
-import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } from "../../design/designContract.js";
-import type { CapturedDesignSeed, DesignAgent } from "../../design/designAgent.js";
-import { runDesignPhase } from "../../design/designPhase.js";
+import { createHash } from "node:crypto";
+import type { ProjectSpecQueryClient } from "../../workflow/projectSpec.js";
+import {
+  DESIGN_CONTRACT_VERSION,
+  designContractDigest,
+  normalizeDesignContract,
+  parseDesignContract,
+  type DesignContractV1,
+} from "../../design/designContract.js";
+import type {
+  CapturedDesignSeed,
+  DesignAgentAnswer,
+  DesignAgentBehavior,
+  DesignAgentInput,
+  DesignAgentPersona,
+} from "../../design/designAgent.js";
+import { designContractFromAnswer } from "../../design/designPhase.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import type { CaptureDesignContract, InterviewCapture } from "./types.js";
 
@@ -141,6 +153,83 @@ function toDesignSeed(capture: CaptureDesignContract): CapturedDesignSeed {
   };
 }
 
+export interface DerivationDesignPlan {
+  inputDigest: string;
+  agentInput: DesignAgentInput;
+  personaIdByName: Map<string, string>;
+  behaviorIdByKey: Map<string, string>;
+}
+
+export interface DerivationDesignResult {
+  inputDigest: string;
+  contract: DesignContractV1;
+  contractDigest: string;
+}
+
+function plannedId(kind: "persona" | "behavior", fingerprint: string, key: string): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(["tanren.derivation-graph-identity.v1", fingerprint, kind, key]), "utf8")
+    .digest("hex");
+  return `${kind}_${digest.slice(0, 32)}`;
+}
+
+/** Preassign the identities a provider-authored design may reference before graph I/O. */
+export function buildDerivationDesignPlan(capture: InterviewCapture, fingerprint: string): DerivationDesignPlan {
+  if (capture.designContract === null) throw new MissingDesignContractError();
+  const personaIdByName = new Map<string, string>();
+  const personas: DesignAgentPersona[] = capture.personas.map((persona) => {
+    const key = persona.name.trim().toLowerCase();
+    if (personaIdByName.has(key)) throw new Error(`duplicate captured persona '${persona.name}'`);
+    const id = plannedId("persona", fingerprint, key);
+    personaIdByName.set(key, id);
+    return { id, name: persona.name, description: persona.description };
+  });
+
+  const behaviorIdByKey = new Map<string, string>();
+  const behaviors: DesignAgentBehavior[] = capture.behaviors.map((behavior) => {
+    const key = behaviorKey(behavior.persona, behavior.title);
+    if (behaviorIdByKey.has(key)) throw new Error(`duplicate captured behavior '${key}'`);
+    const personaId = personaIdByName.get(behavior.persona.trim().toLowerCase());
+    if (personaId === undefined) {
+      throw new DanglingDesignRefError("persona", behavior.persona);
+    }
+    const id = plannedId("behavior", fingerprint, key);
+    behaviorIdByKey.set(key, id);
+    return {
+      id,
+      personaId,
+      title: behavior.title,
+      given: behavior.given,
+      when: behavior.when,
+      thenOutcome: behavior.then,
+    };
+  });
+  const agentInput: DesignAgentInput = {
+    seed: toDesignSeed(capture.designContract),
+    personas,
+    behaviors,
+  };
+  const inputDigest = `sha256:${createHash("sha256")
+    .update(JSON.stringify(["tanren.derivation-design-input.v1", agentInput]), "utf8")
+    .digest("hex")}`;
+  return { inputDigest, agentInput, personaIdByName, behaviorIdByKey };
+}
+
+export function capturedDesignResult(
+  capture: CaptureDesignContract,
+  plan: DerivationDesignPlan,
+): DerivationDesignResult {
+  const contract = normalizeDesignContract(toDesignContract(capture, plan.personaIdByName, plan.behaviorIdByKey));
+  return { inputDigest: plan.inputDigest, contract, contractDigest: designContractDigest(contract) };
+}
+
+export function providerDesignResult(answer: DesignAgentAnswer, plan: DerivationDesignPlan): DerivationDesignResult {
+  const contract = normalizeDesignContract(
+    designContractFromAnswer({ answer, personas: plan.agentInput.personas, behaviors: plan.agentInput.behaviors }),
+  );
+  return { inputDigest: plan.inputDigest, contract, contractDigest: designContractDigest(contract) };
+}
+
 // Persist the project's first-class `DesignContract` entity (WS-D1/WS-D3), returning
 // the HEAD record's id. The captured contract is REQUIRED (the derive guards it with
 // `MissingDesignContractError` before reaching here) — a null capture is a LOUD failure,
@@ -155,44 +244,18 @@ function toDesignSeed(capture: CaptureDesignContract): CapturedDesignSeed {
 // exactly like the optional `templateRegistryQuery`/`createTemplateForNoMatch`
 // seams), the thin captured contract is persisted verbatim as version 1.
 export async function persistDesignContract(
-  pool: pg.Pool,
+  pool: ProjectSpecQueryClient,
   input: {
     orgId: string;
     projectId: string;
-    capture: CaptureDesignContract | null;
-    personaIdByName: Map<string, string>;
-    behaviorIdByKey: Map<string, string>;
-    // WS-D3: the design agent that elaborates the captured intent into the designed
-    // contract. Production wires a real provider answerer; absent on engine-graph
-    // test paths (the thin-capture-only seam).
-    designAgent?: DesignAgent;
-    // The org-scope carrier for the design phase's persona/behavior entity reads.
-    actor?: ActorContext;
+    design: DerivationDesignResult;
   },
-): Promise<string> {
-  // The contract is REQUIRED — the derive guards null upstream
-  // (`MissingDesignContractError`); this is defence-in-depth on the helper boundary so a
-  // null capture is a LOUD failure here too, never a silently-skipped design row.
-  if (input.capture === null) throw new MissingDesignContractError();
-
-  // WS-D3 DESIGN PHASE — elaborate the thin capture into the designed HEAD contract.
-  if (input.designAgent !== undefined) {
-    if (input.actor === undefined) {
-      throw new Error("design phase: an actor is required to resolve the project's persona/behavior graph");
-    }
-    const result = await runDesignPhase({
-      client: pool,
-      orgId: input.orgId,
-      projectId: input.projectId,
-      agent: input.designAgent,
-      actor: input.actor,
-      actorRef: { kind: "operator" },
-      seed: toDesignSeed(input.capture),
-    });
-    return result.record.id;
-  }
-
-  // No agent wired (engine-graph test seam) — persist the thin captured contract.
+): Promise<{ id: string; version: number; domain: string; digest: string }> {
+  const contract = normalizeDesignContract(input.design.contract);
+  const digest = designContractDigest(contract);
+  if (digest !== input.design.contractDigest) throw new Error("design result contract digest mismatch");
+  // The provider call (when present) already completed behind the derivation's
+  // durable result boundary. This transaction only persists the validated answer.
   // The design contract is PROJECT-scoped (H2 BLOCKING unify): the whole-product
   // contract lives at a single per-project head (migration 0028 collapsed the
   // broken mode-keying), shared across every spec type in the project.
@@ -201,9 +264,9 @@ export async function persistDesignContract(
     {
       orgId: input.orgId,
       projectId: input.projectId,
-      contract: toDesignContract(input.capture, input.personaIdByName, input.behaviorIdByKey),
+      contract,
     },
     { kind: "operator" },
   );
-  return record.id;
+  return { id: record.id, version: record.version, domain: record.domain, digest };
 }

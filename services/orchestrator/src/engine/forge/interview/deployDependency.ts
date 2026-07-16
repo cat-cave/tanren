@@ -1,11 +1,16 @@
 import type { ProvisionMode } from "../../contracts/integrationProvisioner.js";
 import {
   resolveProviderKind,
+  type IneligibleResult,
   type NotLinkedResult,
   type ProvisionedResult,
+  type SelectionRequiredResult,
 } from "../../integrations/provisioningEngine.js";
 
-export interface GreenfieldDeployDependency {
+type DeployAuthorityChoice = { connectionId?: string; grantId?: string };
+export type GreenfieldDeployUnavailable = NotLinkedResult | SelectionRequiredResult | IneligibleResult;
+
+export interface GreenfieldDeployDependency extends DeployAuthorityChoice {
   providerKind?: string;
   mode?: ProvisionMode;
   chosenResourceId?: string;
@@ -13,7 +18,7 @@ export interface GreenfieldDeployDependency {
   name?: string;
 }
 
-export interface ResolvedGreenfieldDeployDependency {
+export interface ResolvedGreenfieldDeployDependency extends DeployAuthorityChoice {
   providerKind: "deploy.vercel" | "deploy.flyio";
   mode: ProvisionMode;
   chosenResourceId?: string;
@@ -24,28 +29,51 @@ export interface ResolvedGreenfieldDeployDependency {
 export type DeployPreflightCallback = (input: {
   orgId: string;
   providerKind: "deploy.vercel" | "deploy.flyio";
-}) => Promise<NotLinkedResult | undefined>;
+  connectionId?: string;
+  grantId?: string;
+}) => Promise<GreenfieldDeployUnavailable | undefined>;
 
 export interface PreparedGreenfieldDeploy {
   outcome: ProvisionedResult;
   projectConfig: Record<string, unknown>;
 }
 
-export function isDeployNotLinked(value: NotLinkedResult | PreparedGreenfieldDeploy): value is NotLinkedResult {
-  return "status" in value && value.status === "not_linked";
+export function isDeployUnavailable(
+  value: GreenfieldDeployUnavailable | PreparedGreenfieldDeploy,
+): value is GreenfieldDeployUnavailable {
+  return (
+    "status" in value &&
+    (value.status === "not_linked" || value.status === "selection_required" || value.status === "ineligible")
+  );
 }
 
 export type PrepareDeployCallback = (input: {
   orgId: string;
+  /** Real project id — required for authorizeOperation after selection. */
+  projectId: string;
   capability: "deploy";
   providerKind: "deploy.vercel" | "deploy.flyio";
   mode: ProvisionMode;
+  /** Stable derivation intent identity used to reconcile a lost provider response. */
+  idempotencyKey?: string;
   projectKey: string;
   projectName: string;
+  connectionId?: string;
+  grantId?: string;
   chosenResourceId?: string;
   stack?: string;
   name?: string;
-}) => Promise<NotLinkedResult | PreparedGreenfieldDeploy>;
+}) => Promise<GreenfieldDeployUnavailable | PreparedGreenfieldDeploy>;
+
+export type PersistDeploySelectionCallback = (input: {
+  orgId: string;
+  projectId: string;
+  providerKind: "deploy.vercel" | "deploy.flyio";
+  connectionId: string;
+  grantId: string;
+  authGeneration: number;
+  grantGeneration: number;
+}) => Promise<void>;
 
 export class DeployProviderMissingError extends Error {}
 
@@ -53,6 +81,12 @@ export class DeployProviderInvalidError extends Error {}
 
 export class DeployNotLinkedError extends Error {
   constructor(readonly outcome: NotLinkedResult) {
+    super(outcome.message);
+  }
+}
+
+export class DeploySelectionRequiredError extends Error {
+  constructor(readonly outcome: SelectionRequiredResult) {
     super(outcome.message);
   }
 }
@@ -92,6 +126,8 @@ export function resolveGreenfieldDeployDependency(
   return {
     providerKind,
     mode: deploy.mode ?? "greenfield",
+    ...(deploy.connectionId === undefined ? {} : { connectionId: deploy.connectionId }),
+    ...(deploy.grantId === undefined ? {} : { grantId: deploy.grantId }),
     ...(deploy.chosenResourceId === undefined ? {} : { chosenResourceId: deploy.chosenResourceId }),
     ...(deploy.stack === undefined ? {} : { stack: deploy.stack }),
     ...(deploy.name === undefined ? {} : { name: deploy.name }),

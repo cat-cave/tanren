@@ -27,6 +27,8 @@ interface FakeProject {
 export interface ScriptedSentryOptions {
   /** Pre-existing org projects (brownfield discovery + bind targets). */
   existing?: FakeProject[];
+  /** Seed an existing client key for each brownfield project (default true). */
+  seedKeys?: boolean;
 }
 
 /**
@@ -39,10 +41,15 @@ export class ScriptedSentryTransport implements SentryProvisionHttpClient {
   private readonly keys = new Map<string, string[]>();
   /** How many project-create POSTs landed — asserts idempotency mints no dup. */
   projectCreates = 0;
+  /** How many client-key POSTs landed — bind must leave this at zero. */
+  clientKeyCreates = 0;
 
   constructor(options: ScriptedSentryOptions = {}) {
     for (const project of options.existing ?? []) {
       this.projects.set(project.slug, project);
+      if (options.seedKeys ?? true) {
+        this.keys.set(project.slug, [`https://${project.slug}-public@o0.ingest.sentry.io/1`]);
+      }
     }
   }
 
@@ -97,6 +104,7 @@ export class ScriptedSentryTransport implements SentryProvisionHttpClient {
     }
     const existing = this.keys.get(slug) ?? [];
     const dsn = `https://${slug}-public@o0.ingest.sentry.io/${existing.length + 1}`;
+    this.clientKeyCreates += 1;
     this.keys.set(slug, [...existing, dsn]);
     return { status: 201, body: { id: `key-${dsn}`, dsn: { public: dsn } } };
   }

@@ -272,13 +272,15 @@ history onto:
 <a id="s1d"></a>Issue/signal intake runs **without an operator clicking
 `ingest`**, in two modes per source:
 
-- **Webhook receivers (push)** where the source supports them — GitHub issues /
-  Sentry / Linear webhooks land on a receiver route. An event arrives → real-LLM
+- **Webhook receivers (push)** where the source supports them — GitHub issues
+  currently land on a receiver route. An event arrives → real-LLM
   triage → `auto_routable` candidates become specs **inserted into the DAG** with
   dependencies + priority; everything else lands in the candidate inbox for
   operator review (with the 1-click/chat affordance).
 - **Polling (pull) fallback** for sources/configs without a webhook — a scheduled
-  poller on a per-source interval.
+  poller on a per-source interval. Additional providers must enter through the
+  integration connection/grant authority; raw per-source token references are
+  not a provider extension mechanism.
 
 Both honor rate limits + budget. This closes the issue-driven loop autonomously,
 preferring real-time push over polling where the integration allows.

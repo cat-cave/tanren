@@ -13,12 +13,9 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { eventTypes } from "./schemaEventTypes.js";
 import { stateEnumLists } from "./stateEnums.js";
 import {
   enumCheck,
-  integrationNodes,
-  integrationProofs,
   mergeQueue,
   mergeQueueHolds,
   organizations,
@@ -28,6 +25,8 @@ import {
   specs,
   users,
 } from "./schemaCore.js";
+import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js";
+import { events } from "./schemaEvents.js";
 
 // Core identity + project/spec/run tables live in schemaCore.ts (cycle-avoidance
 // — sub-schemas can reference them without importing schema.ts); re-exported so
@@ -44,6 +43,7 @@ export {
   runs,
   specs,
   users,
+  events,
 };
 
 export const tasks = pgTable(
@@ -137,51 +137,6 @@ export const costRecords = pgTable(
     ),
     index("cost_records_org_id").on(table.orgId),
     index("cost_records_org_run").on(table.orgId, table.runId),
-  ],
-);
-
-export const events = pgTable(
-  "events",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
-    runId: text("run_id"),
-    taskId: text("task_id"),
-    specId: text("spec_id"),
-    projectId: text("project_id"),
-    orgId: text("org_id")
-      .notNull()
-      .references(() => organizations.id),
-    // SP-8: FK to the platform-global event_types catalog (migration 0040)
-    // REPLACES the former generated events_event_type_check CHECK constraint —
-    // the FK is now the sole event-name enforcement.
-    eventType: text("event_type")
-      .notNull()
-      .references(() => eventTypes.name),
-    payload: jsonb("payload")
-      .notNull()
-      .default(sql`'{}'::jsonb`),
-    userId: text("user_id"),
-    // Round-3 H-R3.2 dedup key for the `priorEvents` bundle; NULL on non-prior events.
-    idempotencyKey: text("idempotency_key"),
-  },
-  (table) => [
-    index("events_run_id_ts").on(table.runId, table.ts),
-    index("events_event_type").on(table.eventType),
-    index("events_org_id").on(table.orgId),
-    index("events_org_run_ts").on(table.orgId, table.runId, table.ts),
-    index("events_org_project_ts").on(table.orgId, table.projectId, table.ts),
-    // Terminal task/run events AT MOST ONCE per type (#40 Class B + #48); run.resumed too (mig 0033).
-    uniqueIndex("events_task_terminal_unique")
-      .on(table.taskId, table.eventType)
-      .where(sql`${table.eventType} IN ('task.completed', 'task.failed', 'task.cancelled')`),
-    uniqueIndex("events_run_terminal_unique")
-      .on(table.runId, table.eventType)
-      .where(sql`${table.eventType} IN ('run.completed', 'run.failed', 'run.cancelled', 'run.resumed')`),
-    // Round-3 H-R3.2: priorEvents dedupe on (run_id, idempotency_key).
-    uniqueIndex("events_prior_idempotency_unique")
-      .on(table.runId, table.idempotencyKey)
-      .where(sql`${table.idempotencyKey} IS NOT NULL`),
   ],
 );
 
@@ -480,7 +435,13 @@ export { workflowInsights, quarantinedTests, ciTestResults } from "./schemaInsig
 export { inboxSources, candidates, webhookEvents } from "./schemaInbox.js";
 export { auditJobs } from "./schemaAudits.js";
 export { experiments, experimentCells, experimentTrials } from "./schemaBenchmark.js";
-export { orgIntegrations, projectAppEnv } from "./schemaIntegrations.js";
+export * from "./schemaIntegrationConnections.js";
+export * from "./schemaIntegrationRequirements.js";
+export * from "./schemaIntegrationBindings.js";
+export * from "./schemaIntegrationOperations.js";
+export * from "./schemaIntegrationEnvironment.js";
+export * from "./schemaIntegrationSelection.js";
+export * from "./schemaProjectDerivations.js";
 export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";

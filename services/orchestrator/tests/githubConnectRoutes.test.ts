@@ -10,7 +10,7 @@
 
 import { generateKeyPairSync } from "node:crypto";
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { DEFAULT_MANAGED_CREDENTIAL_REF } from "../src/engine/config/managedProvider.js";
 import { migrateOrgConfig } from "../src/engine/config/orgConfig.js";
@@ -197,6 +197,24 @@ describe("connect GitHub — App install mode", () => {
     const post = await reqJson(app, "POST", "/orgs/org_acme/github", { installationId: "987", appId: "999999" });
     expect(post.status).toBe(400);
     expect(post.body.error).toBe("github_app_id_mismatch");
+  });
+
+  it("rejects a foreign-org App ref before secret load or token mint", async () => {
+    const { app, secrets, pool } = await buildHarness();
+    const foreignRef = "credential/github_app/org/org_other/default";
+    await storeGithubAppCredential(secrets, { ref: foreignRef, appId: "123456", privateKeyPem: pem() });
+    const secretRead = vi.spyOn(secrets, "get");
+
+    const post = await reqJson(app, "POST", "/orgs/org_acme/github", {
+      installationId: "987",
+      appId: "123456",
+      credentialRef: foreignRef,
+    });
+
+    expect(post.status).toBe(400);
+    expect(post.body.error).toBe("github_app_credential_not_owned");
+    expect(secretRead).not.toHaveBeenCalled();
+    expect(migrateOrgConfig(pool.orgs.get("org_acme")?.config).github_app).toBeUndefined();
   });
 });
 

@@ -136,6 +136,7 @@ async function publishReGateVerdict(
   }
   const token = await resolveVcsToken(deps.githubHttp, {
     secrets: deps.secrets,
+    orgId: deps.orgId,
     ...(ctx.installation !== undefined && { installation: ctx.installation }),
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),

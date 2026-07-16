@@ -29,12 +29,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -45,7 +47,13 @@ import type {
 } from "../contracts/deployAdapter.js";
 import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../contracts/integrationAuthority.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
+import { assertDeployOperationAuthority } from "../provisioners/deployOperationAuthority.js";
 import type { EventStore } from "../eventStore.js";
 import { serviceAuditActor } from "../events/schemas/audit.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
@@ -171,11 +179,27 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
 
   constructor(private readonly deps: ManualExternalDeployAdapterDeps) {}
 
+  private assertAuthority(
+    grant: OrgGrant,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): void {
+    assertDeployOperationAuthority(MANUAL_EXTERNAL_PROVIDER_KIND, grant, operation, target);
+    if (grant.orgId !== this.deps.ownerScope.orgId || grant.projectId !== this.deps.ownerScope.projectId) {
+      throw new Error("manual external adapter owner scope does not match eligible operation lease");
+    }
+  }
+
   async provisionOrBind(
     grant: OrgGrant,
     projectCtx: ProjectContext,
     input: ProvisionOrBindInput,
   ): Promise<ProvisionedArtifact> {
+    this.assertAuthority(
+      grant,
+      input.mode === "bind" ? "bind" : "provision",
+      projectIntegrationOperationTarget(projectCtx, input.mode === "bind" ? input.existingResourceId : undefined),
+    );
     // Read (and validate) the operator's declared target up front — provisioning a
     // manual_external deploy with no declared target is a loud config error, not a
     // silent partial setup.
@@ -194,6 +218,11 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
   }
 
   async deploy(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<DeployResult> {
+    this.assertAuthority(grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: source.repo,
+      sourceRef: source.ref,
+    });
     const url = declaredUrl(grant);
     const surfaceKind = declaredSurfaceKind(grant);
     // The operator performs the deploy OUT-OF-BAND; here we RECORD a
@@ -245,13 +274,26 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     return { deploymentId, url, state: "pending_manual_confirmation" };
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const deployed = await this.deploy(grant, ref, source);
-    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
     return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
+    this.assertAuthority(grant, "resolve_artifact_identity", { resourceId: ref.appId, deploymentId });
+    return this.declaredIdentity(ref, deploymentId, grant);
+  }
+
+  private async declaredIdentity(ref: DeployRef, deploymentId: string, grant: OrgGrant): Promise<ArtifactIdentity> {
     // A manual, out-of-band delivery has no provider to read an artifact identity from,
     // so the OPERATOR declares it on the org grant metadata; we assert the deployment was
     // recorded (LOUD when not) and then validate + brand the declared identity. Reading
@@ -274,7 +316,12 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     };
   }
 
-  async applyPreview(_grant: OrgGrant, _ref: DeployRef, _input: ApplyPreviewInput): Promise<PreviewRelease> {
+  async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
+    this.assertAuthority(grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: input.source.repo,
+      sourceRef: input.source.ref,
+    });
     // An out-of-band manual release has no environment or traffic surface to preview.
     throw new DeployAdapterOperationError(
       MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -282,7 +329,8 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     );
   }
 
-  async promote(_grant: OrgGrant, _ref: DeployRef, _input: PromoteInput): Promise<ReleaseTransition> {
+  async promote(grant: OrgGrant, ref: DeployRef, input: PromoteInput): Promise<ReleaseTransition> {
+    this.assertAuthority(grant, "promote", { resourceId: ref.appId, deploymentId: input.deploymentId });
     // An out-of-band manual release has no environment or traffic surface to promote.
     throw new DeployAdapterOperationError(
       MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -290,7 +338,11 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     );
   }
 
-  async rollback(_grant: OrgGrant, _ref: DeployRef, _input: RollbackInput): Promise<ReleaseTransition> {
+  async rollback(grant: OrgGrant, ref: DeployRef, input: RollbackInput): Promise<ReleaseTransition> {
+    this.assertAuthority(grant, "rollback", {
+      resourceId: ref.appId,
+      deploymentId: input.targetReleaseInstanceId,
+    });
     // An out-of-band manual release has no environment or traffic surface to roll back.
     throw new DeployAdapterOperationError(
       MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -298,7 +350,8 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     );
   }
 
-  async teardownPreview(_grant: OrgGrant, _ref: DeployRef, _previewId: string): Promise<void> {
+  async teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void> {
+    this.assertAuthority(grant, "teardown_deployment", { resourceId: ref.appId, deploymentId: previewId });
     // An out-of-band manual release has no environment or traffic surface to tear down.
     throw new DeployAdapterOperationError(
       MANUAL_EXTERNAL_ADAPTER_KIND,
@@ -306,7 +359,8 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     );
   }
 
-  async status(_grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {
+  async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {
+    this.assertAuthority(grant, "verify", { resourceId: ref.appId, deploymentId });
     const record = await this.loadRecord(ref, deploymentId);
     // status is a non-polling read. It reports the persisted lifecycle state so a
     // caller can distinguish "waiting on operator" from "confirmed but not
@@ -315,7 +369,8 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     return { state: record.state, ready: false, failed: false, url: record.attestation.url };
   }
 
-  async demoSurface(_grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface> {
+  async demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface> {
+    this.assertAuthority(grant, "resolve_demo_surface", { resourceId: ref.appId, deploymentId });
     const record = await this.loadRecord(ref, deploymentId);
     if (record.attestation.url === "") {
       throw new DeployAdapterOperationError(
@@ -328,7 +383,11 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       : { kind: "web_url", url: record.attestation.url };
   }
 
-  async verify(_grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     // Phase 1: wait for OPERATOR CONFIRMATION. Poll the persistent store until an
     // operator flips the row to `confirmed` via the confirmation route. NO count,
     // NO deadline (feedback_no_timeouts_progress_based) — a genuine fixed point
@@ -338,6 +397,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     // `verified` for a row still in pending state.
     await pollUntilTerminal({
       readState: async () => {
+        this.assertAuthority(await grantForAttempt(), "verify", { resourceId: ref.appId, deploymentId });
         const rec = await this.loadRecord(ref, deploymentId);
         return { state: rec.state, ready: rec.state === "confirmed", failed: false };
       },
@@ -356,6 +416,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       intervalMs: this.deps.poll.intervalMs,
     });
     // Re-load the record to get the CURRENT attested URL post-confirmation.
+    this.assertAuthority(await grantForAttempt(), "verify", { resourceId: ref.appId, deploymentId });
     const record = await this.loadRecord(ref, deploymentId);
     if (record.attestation.url === "") {
       throw new DeployAdapterOperationError(
@@ -371,6 +432,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     let lastStatus = 0;
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
+        this.assertAuthority(await grantForAttempt(), "verify", { resourceId: ref.appId, deploymentId });
         const probeStatus = await this.deps.urlProbe.probe(record.attestation.url);
         lastStatus = probeStatus;
         const reachable = (probeStatus >= 200 && probeStatus < 400) || probeStatus === 401 || probeStatus === 403;
@@ -398,6 +460,16 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       throw new DeployAdapterOperationError(
         MANUAL_EXTERNAL_ADAPTER_KIND,
         `no recorded attestation for deployment '${deploymentId}' on '${ref.appId}' (was deploy() called to record the operator's declared target?)`,
+      );
+    }
+    if (
+      record.orgId !== this.deps.ownerScope.orgId ||
+      record.projectId !== this.deps.ownerScope.projectId ||
+      record.appId !== ref.appId
+    ) {
+      throw new DeployAdapterOperationError(
+        MANUAL_EXTERNAL_ADAPTER_KIND,
+        `attestation '${deploymentId}' does not belong to '${this.deps.ownerScope.orgId}/${this.deps.ownerScope.projectId}/${ref.appId}'`,
       );
     }
     return record;

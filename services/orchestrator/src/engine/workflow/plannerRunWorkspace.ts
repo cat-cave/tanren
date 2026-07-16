@@ -391,6 +391,7 @@ async function resolveCloneCredential(input: RunPlannerLoopInput): Promise<Resol
   const http = input.githubHttp;
   const resolved = await resolveVcsToken(http, {
     secrets: input.secrets,
+    orgId: input.context.orgId,
     ...(input.context.installation !== undefined && { installation: input.context.installation }),
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),

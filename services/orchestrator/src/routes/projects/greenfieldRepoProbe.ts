@@ -48,6 +48,7 @@ export async function probeGreenfieldRepositoryBareAutoInit(deps: GreenfieldRepo
   }
   const creds = {
     secrets,
+    orgId,
     ...(installation !== undefined && { installation }),
     ...(staticRef !== undefined && { staticRef }),
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),

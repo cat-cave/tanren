@@ -16,12 +16,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -74,9 +76,17 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     return deployProvisionerFor(ref.provider, this.deps.provisioner).deploy(grant, ref.appId, source);
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const deployed = await this.deploy(grant, ref, source);
-    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
     return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
@@ -91,12 +101,10 @@ export class DirectApiDeployAdapter implements DeployAdapter {
 
   async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
     const deployed = await this.deploy(grant, ref, input.source);
-    const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
-    const status = await provisioner.deploymentStatus(grant, ref.appId, deployed.deploymentId);
-    this.assertResolvedUrl(ref, deployed.deploymentId, status.url, "apply preview");
+    this.assertResolvedUrl(ref, deployed.deploymentId, deployed.url, "apply preview");
     return {
       deploymentId: deployed.deploymentId,
-      url: status.url,
+      url: deployed.url,
       environment: "preview",
       artifactDigest: input.artifactDigest,
       state: "preview",
@@ -149,7 +157,7 @@ export class DirectApiDeployAdapter implements DeployAdapter {
    */
   async demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface> {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
-    const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId);
+    const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId, "resolve_demo_surface");
     if (read.url === "") {
       throw new Error(
         `demoSurface: deployment '${deploymentId}' on '${ref.provider}/${ref.appId}' has no resolved URL — no web surface to exercise`,
@@ -166,11 +174,15 @@ export class DirectApiDeployAdapter implements DeployAdapter {
    * provider state advances (BUILDING → QUEUED → …) — a slow-but-progressing deploy is
    * never declared failed on a count. The success result is the PROOF the deploy is live.
    */
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await provisioner.deploymentStatus(grant, ref.appId, deploymentId);
+        const read = await provisioner.deploymentStatus(await grantForAttempt(), ref.appId, deploymentId);
         return { state: read.state, ready: read.terminalReady, failed: read.terminalFailed, url: read.url };
       },
       onFailureTerminal: (state) =>

@@ -53,6 +53,8 @@ export interface GithubChecksChannelDeps {
   // ambient per-event org scope (getJobOrgId) — NOT a global/deploy token (which
   // would be a cross-tenant leak). Tests inject installation/staticRef directly.
   pool?: pg.Pool;
+  /** Explicit credential owner for injected/test credentials; production uses the ambient job org. */
+  orgId?: string;
 }
 
 const STATUS_CONTEXT = "tanren";
@@ -74,6 +76,7 @@ export class GithubChecksChannel implements NotificationChannel {
   private readonly http: GitHubHttpClient;
   private readonly staticRef: string | undefined;
   private readonly pool: pg.Pool | undefined;
+  private readonly orgId: string | undefined;
 
   constructor(deps: GithubChecksChannelDeps) {
     this.secrets = deps.secrets;
@@ -82,6 +85,7 @@ export class GithubChecksChannel implements NotificationChannel {
     this.http = deps.http ?? new FetchGitHubHttpClient();
     this.staticRef = deps.staticRef;
     this.pool = deps.pool;
+    this.orgId = deps.orgId;
   }
 
   async publish(target: NotificationTargetRow, payload: NotificationPayload): Promise<void> {
@@ -114,17 +118,19 @@ export class GithubChecksChannel implements NotificationChannel {
     // org A's credential, never a shared one.
     let installation = this.installation;
     let staticRef = this.staticRef;
+    const orgId = this.orgId ?? getJobOrgId();
+    if (orgId === undefined) {
+      throw new Error("github_checks credential resolution requires an organization owner");
+    }
     if (installation === undefined && staticRef === undefined && this.pool !== undefined) {
-      const orgId = getJobOrgId();
-      if (orgId !== undefined) {
-        installation = await loadOrgGithubAppInstallation(this.pool, orgId);
-        if (installation === undefined) {
-          staticRef = await loadOrgDefaultGithubCredentialRef(this.pool, orgId);
-        }
+      installation = await loadOrgGithubAppInstallation(this.pool, orgId);
+      if (installation === undefined) {
+        staticRef = await loadOrgDefaultGithubCredentialRef(this.pool, orgId);
       }
     }
     return resolveGithubToken({
       secrets: this.secrets,
+      orgId,
       minter: this.minter,
       ...(installation === undefined ? {} : { installation }),
       ...(staticRef === undefined ? {} : { staticRef }),

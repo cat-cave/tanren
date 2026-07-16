@@ -72,7 +72,7 @@ export const target: RunnerHandle = {
 };
 
 export const codexCredentialRef = "credential/codex/dev";
-export const githubCredentialRef = "credential/github/dev";
+export const githubCredentialRef = "credential/github/org/org_worker_seed/dev";
 
 function healthyWindow(): WindowObservation {
   return {
@@ -231,7 +231,13 @@ export async function setupSeededRun() {
         },
       },
     },
-    undefined,
+    {
+      userId: "user_worker_fixture",
+      orgId: SEEDED_ORG_ID,
+      projectId: null,
+      scopes: ["org:admin"],
+      source: "session",
+    },
     { configWriteProof: provisionedGreenfieldProjectConfigProof },
   );
   const spec = await createSpec(pool.asPgPool(), {

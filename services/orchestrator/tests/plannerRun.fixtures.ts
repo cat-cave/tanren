@@ -85,7 +85,7 @@ export function context(): PlannerRunContext {
     acceptanceCriteria: ["status.ts exports ok()", "status.ts exports fail()"],
     runnerImage: "ghcr.io/cat-cave/tanren-runner:test",
     identitySecretRef: "runner/test/identity",
-    githubCredentialRef: "credential/github/dev",
+    githubCredentialRef: "credential/github/org/org_planner_test/dev",
   };
 }
 
@@ -180,7 +180,7 @@ export function directMergeConfig(): Record<string, unknown> {
     version: 1,
     mergeIntegration: "direct_merge",
     governancePosture: "open",
-    credentials: { githubCredentialRef: "credential/github/dev" },
+    credentials: { githubCredentialRef: "credential/github/org/org_planner_test/dev" },
   };
 }
 

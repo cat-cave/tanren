@@ -195,6 +195,7 @@ export async function buildBundleForMergeStage(
     resolveToken: () =>
       resolveVcsToken(input.githubHttp, {
         secrets: input.secrets,
+        orgId: row.org_id,
         installation: context.installation,
         staticRef: context.staticCredentialRef,
         minter: input.githubAppMinter,

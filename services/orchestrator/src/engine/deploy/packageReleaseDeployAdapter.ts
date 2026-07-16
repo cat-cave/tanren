@@ -21,12 +21,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -36,10 +38,19 @@ import type {
 } from "../contracts/deployAdapter.js";
 import { parseDigest, parseProviderChecksum } from "../contracts/cas.js";
 import type { OrgGrant, ProjectContext, ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../contracts/integrationAuthority.js";
 import type { DeployResult, DeploySource } from "../provisioners/deployProvisioner.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { DeployAdapterConfigError, DeployAdapterOperationError } from "./deployAdapterErrors.js";
 import { pollUntilTerminal } from "./pollUntilTerminal.js";
+import {
+  assertDeployOperationAuthority,
+  secretValueForDeployOperation,
+} from "../provisioners/deployOperationAuthority.js";
 
 /** The adapter-class kind this impl registers under. */
 export const PACKAGE_RELEASE_ADAPTER_KIND = "package_release";
@@ -151,23 +162,25 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     );
   }
 
-  private async token(grant: OrgGrant): Promise<string> {
-    const secret = await this.deps.secrets.get(grant.credentialRef);
-    if (secret === undefined) {
-      throw new DeployAdapterConfigError(
-        PACKAGE_RELEASE_ADAPTER_KIND,
-        "credentialRef",
-        `the org grant credentialRef '${grant.credentialRef}' is not present in the secret store (the registry publish token)`,
-      );
-    }
-    return secret.value;
+  private async token(
+    grant: OrgGrant,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): Promise<string> {
+    return secretValueForDeployOperation(this.deps.secrets, PACKAGE_RELEASE_PROVIDER_KIND, grant, operation, target);
   }
 
   async provisionOrBind(
     grant: OrgGrant,
-    _projectCtx: ProjectContext,
+    projectCtx: ProjectContext,
     input: ProvisionOrBindInput,
   ): Promise<ProvisionedArtifact> {
+    assertDeployOperationAuthority(
+      PACKAGE_RELEASE_PROVIDER_KIND,
+      grant,
+      input.mode === "bind" ? "bind" : "provision",
+      projectIntegrationOperationTarget(projectCtx, input.mode === "bind" ? input.existingResourceId : undefined),
+    );
     const registry = this.registryName(grant);
     // bind links an already-discovered package coordinate; provision binds the
     // grant-declared package name. There is no registry-side "create" — a package
@@ -187,22 +200,37 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
 
   async deploy(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<DeployResult> {
     const registry = this.registryName(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: source.repo,
+      sourceRef: source.ref,
+    });
     const result = await this.deps.registry.publish({ registry, packageName: ref.appId, token, source });
     // The "url" of a package deploy is its installable coordinate (the package surface's
     // reach handle); the deploymentId is the coordinate the verify poll keys on.
     return { deploymentId: result.coordinate, url: result.coordinate, state: "published" };
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const deployed = await this.deploy(grant, ref, source);
-    const identity = await this.resolveArtifactDigest(grant, ref, deployed.deploymentId);
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
     return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
     const registry = this.registryName(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, "resolve_artifact_identity", {
+      resourceId: ref.appId,
+      deploymentId,
+    });
     const identity = await this.deps.registry.resolveArtifactIdentity({
       registry,
       packageName: ref.appId,
@@ -215,7 +243,12 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     };
   }
 
-  async applyPreview(_grant: OrgGrant, _ref: DeployRef, _input: ApplyPreviewInput): Promise<PreviewRelease> {
+  async applyPreview(grant: OrgGrant, ref: DeployRef, input: ApplyPreviewInput): Promise<PreviewRelease> {
+    assertDeployOperationAuthority(PACKAGE_RELEASE_PROVIDER_KIND, grant, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: input.source.repo,
+      sourceRef: input.source.ref,
+    });
     // A package registry has no environment or traffic surface to preview.
     throw new DeployAdapterOperationError(
       PACKAGE_RELEASE_ADAPTER_KIND,
@@ -223,7 +256,11 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     );
   }
 
-  async promote(_grant: OrgGrant, _ref: DeployRef, _input: PromoteInput): Promise<ReleaseTransition> {
+  async promote(grant: OrgGrant, ref: DeployRef, input: PromoteInput): Promise<ReleaseTransition> {
+    assertDeployOperationAuthority(PACKAGE_RELEASE_PROVIDER_KIND, grant, "promote", {
+      resourceId: ref.appId,
+      deploymentId: input.deploymentId,
+    });
     // A package registry has no environment or traffic surface to promote.
     throw new DeployAdapterOperationError(
       PACKAGE_RELEASE_ADAPTER_KIND,
@@ -231,7 +268,11 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     );
   }
 
-  async rollback(_grant: OrgGrant, _ref: DeployRef, _input: RollbackInput): Promise<ReleaseTransition> {
+  async rollback(grant: OrgGrant, ref: DeployRef, input: RollbackInput): Promise<ReleaseTransition> {
+    assertDeployOperationAuthority(PACKAGE_RELEASE_PROVIDER_KIND, grant, "rollback", {
+      resourceId: ref.appId,
+      deploymentId: input.targetReleaseInstanceId,
+    });
     // A package registry has no environment or traffic surface to roll back.
     throw new DeployAdapterOperationError(
       PACKAGE_RELEASE_ADAPTER_KIND,
@@ -239,7 +280,11 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     );
   }
 
-  async teardownPreview(_grant: OrgGrant, _ref: DeployRef, _previewId: string): Promise<void> {
+  async teardownPreview(grant: OrgGrant, ref: DeployRef, previewId: string): Promise<void> {
+    assertDeployOperationAuthority(PACKAGE_RELEASE_PROVIDER_KIND, grant, "teardown_deployment", {
+      resourceId: ref.appId,
+      deploymentId: previewId,
+    });
     // A package registry has no environment or traffic surface to tear down.
     throw new DeployAdapterOperationError(
       PACKAGE_RELEASE_ADAPTER_KIND,
@@ -248,7 +293,7 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
   }
 
   async status(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployStatus> {
-    const read = await this.read(grant, ref, deploymentId);
+    const read = await this.read(grant, ref, deploymentId, "verify");
     return {
       state: read.resolvable ? "resolvable" : "pending",
       ready: read.resolvable,
@@ -259,7 +304,7 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
 
   async demoSurface(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DemoSurface> {
     const registry = this.registryName(grant);
-    const read = await this.read(grant, ref, deploymentId);
+    const read = await this.read(grant, ref, deploymentId, "resolve_demo_surface");
     if (read.coordinate === "") {
       throw new DeployAdapterOperationError(
         PACKAGE_RELEASE_ADAPTER_KIND,
@@ -269,14 +314,18 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     return { kind: "package", registry, coordinate: read.coordinate };
   }
 
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     // A registry has no FAILURE terminal — a version is either RESOLVABLE (the registry
     // indexed it) or simply not-yet-resolvable (pending). So the poll succeeds on resolvable
     // and escalates LOUD only when the version is a PROVEN stuck non-terminal (never indexed,
     // no advancement) — never "failed after N polls".
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await this.read(grant, ref, deploymentId);
+        const read = await this.read(await grantForAttempt(), ref, deploymentId, "verify");
         return {
           state: read.resolvable ? "resolvable" : "pending",
           ready: read.resolvable,
@@ -303,9 +352,14 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
     return { ready: true, state: "resolvable", url: poll.coordinate, pollCount, smokeStatus: 200 };
   }
 
-  private async read(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<PackageVersionStatus> {
+  private async read(
+    grant: OrgGrant,
+    ref: DeployRef,
+    deploymentId: string,
+    operation: "verify" | "resolve_demo_surface",
+  ): Promise<PackageVersionStatus> {
     const registry = this.registryName(grant);
-    const token = await this.token(grant);
+    const token = await this.token(grant, operation, { resourceId: ref.appId, deploymentId });
     return this.deps.registry.versionStatus({
       registry,
       packageName: ref.appId,

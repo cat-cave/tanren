@@ -2,7 +2,7 @@ import type pg from "pg";
 
 // Shared with runWorker.test.ts: the github credential ref the seeded run's
 // project config carries, echoed back from the CI-poll run⋈project read.
-export const githubCredentialRef = "credential/github/dev";
+export const githubCredentialRef = "credential/github/org/org_worker_seed/dev";
 
 // In-memory pg substitute covering exactly the SQL the seam emits:
 // createProject/createSpec/createQueuedRunFromSpec inserts + reads, the
@@ -14,6 +14,7 @@ interface ProjectRow {
   default_branch: string;
   runner_image: string;
   config: unknown;
+  lifecycle: string;
   org_id: string | null;
 }
 interface SpecRow {
@@ -92,7 +93,8 @@ export class WorkerPool {
         default_branch: String(params[3]),
         runner_image: String(params[4]),
         config: JSON.parse(String(params[6])) as unknown,
-        org_id: params[7] === null ? null : String(params[7]),
+        lifecycle: String(params[7]),
+        org_id: params[8] === null ? null : String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -156,6 +158,7 @@ export class WorkerPool {
         runner_image: project.runner_image,
         allocator: "local-docker",
         config: project.config,
+        lifecycle: project.lifecycle,
         spec_id: spec.spec_id,
         title: spec.title,
         description: spec.description,
@@ -362,6 +365,7 @@ export class WorkerPool {
       const runId = String(params[0]);
       const run = this.runs.get(runId)!;
       const project = this.projects.get(run.project_id);
+      const orgId = this.forcedProjectOrgId ?? project?.org_id ?? "org_fake";
       // The project's stored config already carries credentials.githubCredentialRef
       // (CI poll takes its cred ref from the workflow's explicit override). Return
       // it verbatim — a synthesized top-level key would trip the strict V1 parse.
@@ -371,7 +375,10 @@ export class WorkerPool {
         spec_id: run.spec_id,
         project_id: run.project_id,
         // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
-        org_id: this.forcedProjectOrgId ?? project?.org_id ?? "org_fake",
+        org_id: orgId,
+        project_org_id: orgId,
+        spec_org_id: orgId,
+        spec_project_id: run.project_id,
         pr_url: this.prUrl,
         branch: run.branch,
         config: storedConfig,

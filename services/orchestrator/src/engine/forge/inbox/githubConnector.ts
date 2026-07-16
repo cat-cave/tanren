@@ -14,25 +14,8 @@ import type { OrgGithubAppInstallation } from "../../config/orgConfig.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
-import { z } from "zod";
-import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
-import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
-
-// The `config` shape a GitHub Issues source carries. `owner`/`repo` name the
-// repository; `labels` (optional) filters to `spec-candidate`-style labels;
-// `staticRef`/`installation` pick the auth path (mirrors the resolver inputs).
-// `provider` is optional (the `issues` dispatcher keyed on it); absent on
-// existing GitHub sources, so they keep parsing unchanged.
-export const GitHubIssuesConfig = z
-  .object({
-    provider: z.literal("github").optional(),
-    owner: z.string().min(1),
-    repo: z.string().min(1),
-    labels: z.array(z.string().min(1)).default([]),
-    staticRef: z.string().min(1).optional(),
-  })
-  .strict();
-export type GitHubIssuesConfig = z.infer<typeof GitHubIssuesConfig>;
+import { assertIntakeResponseOk, assertSupportedIssuesProvider, IntakeSourceFetchError } from "./connectorErrors.js";
+import { ActiveGitHubIssuesConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
 
 export interface GitHubConnectorDeps {
   secrets: SecretStore;
@@ -40,10 +23,8 @@ export interface GitHubConnectorDeps {
   // Optional org App installation; when present the resolver mints an App token.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
-  // The org-default static credential ref, used when no App is installed and the
-  // source pins no own `config.staticRef`. The intake poller threads the org's
-  // resolved default here (App-installation-OR-org-default-static, the engine's
-  // standard GitHub resolution); the source's own `staticRef` takes precedence.
+  // The organization-bound static credential ref, resolved from the source's
+  // org by the intake seam. Source JSON can never override this coordinate.
   defaultStaticRef?: string;
 }
 
@@ -79,16 +60,19 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
   return {
     kind: "issues",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
-      const config = GitHubIssuesConfig.parse(source.config);
-      // The source's own `staticRef` takes precedence; else the org-default static
-      // ref the poller resolved (App-installation-OR-org-default-static). When
-      // neither is present and no App is installed, `resolveGithubToken` raises a
-      // LOUD `NoGithubCredentialConfiguredError` — never a silent empty fetch.
-      const staticRef = config.staticRef ?? deps.defaultStaticRef;
+      // The clean-replaced Linear/Jira connectors must fail as unsupported at
+      // the authority boundary, before config parsing can look like a generic
+      // GitHub failure and before any credential/provider I/O occurs.
+      assertSupportedIssuesProvider(source.config);
+      const config = ActiveGitHubIssuesConfig.parse(source.config);
+      // Credential authority is bound to the source organization: an App
+      // installation or the org-default ref selected by the intake seam. The
+      // source config has no credential coordinate and cannot become a deputy.
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
+        orgId: source.orgId,
         ...(deps.installation === undefined ? {} : { installation: deps.installation }),
-        ...(staticRef === undefined ? {} : { staticRef }),
+        ...(deps.defaultStaticRef === undefined ? {} : { staticRef: deps.defaultStaticRef }),
         minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets }),
       });
 
@@ -102,13 +86,16 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         path,
         token: resolved.token,
         refreshToken: resolved.refresh,
+        // The durable intake scheduler owns rate-limit delays. Surface the raw
+        // classified response so this source never sleeps ahead of its peers.
+        retryRateLimit: false,
       });
       // No-silent-fallbacks: a non-200 is a LOUD throw (a 401/403 ⇒ auth error
       // the poller re-throws; any other non-200 ⇒ a transient fetch error), NEVER
       // an empty list masking a failed fetch. Only a genuine 200-with-an-array is
       // an empty result. A 200 whose body is not the expected array is itself a
       // failed read (the API shape changed / an error envelope) — also LOUD.
-      assertIntakeResponseOk("github", response.status);
+      assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
       if (!Array.isArray(response.body)) {
         throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
       }

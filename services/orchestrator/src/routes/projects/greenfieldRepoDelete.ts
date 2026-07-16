@@ -47,6 +47,7 @@ export async function deleteGreenfieldRepository(deps: GreenfieldRepositoryDelet
   }
   const creds = {
     secrets,
+    orgId,
     ...(installation !== undefined && { installation }),
     ...(staticRef !== undefined && { staticRef }),
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),

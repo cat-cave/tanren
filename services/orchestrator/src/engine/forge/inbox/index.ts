@@ -3,7 +3,13 @@
 
 export {
   SourceKind,
+  InboxSourceState,
   InboxSource,
+  InboxSourceAttention,
+  ActiveGitHubIssuesConfig,
+  ActiveSentryConfig,
+  parseInboxSourceCreateConfig,
+  parsePersistedInboxSourceConfig,
   TriageVerdict,
   TriageRoutableSpec,
   TriageEntityAnchor,
@@ -21,44 +27,29 @@ export { buildTriagePrompt } from "./prompt.js";
 
 export {
   IntakeSourceAuthError,
+  IntakeSourceAuthorityError,
   IntakeSourceFetchError,
+  IntakeSourceRateLimitError,
+  IntakeSourceResourceError,
+  UnsupportedInboxProviderError,
   assertIntakeResponseOk,
+  assertNoSourceCredentialOverride,
+  assertSupportedIssuesProvider,
   type IntakeSourceProvider,
 } from "./connectorErrors.js";
 
-export { GitHubIssuesConfig, createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
+export { createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
 
 export {
-  SentryConfig,
   createSentryConnector,
+  buildPgSentryIntakeAuthority,
   FetchSentryHttpClient,
   type SentryConnectorDeps,
+  type SentryIntakeAuthority,
   type SentryHttpClient,
   type SentryHttpRequest,
   type SentryHttpResponse,
 } from "./sentryConnector.js";
-
-export {
-  LinearConfig,
-  createLinearConnector,
-  FetchLinearHttpClient,
-  type LinearConnectorDeps,
-  type LinearHttpClient,
-  type LinearHttpRequest,
-  type LinearHttpResponse,
-} from "./linearConnector.js";
-
-export {
-  JiraConfig,
-  createJiraConnector,
-  FetchJiraHttpClient,
-  type JiraConnectorDeps,
-  type JiraHttpClient,
-  type JiraHttpRequest,
-  type JiraHttpResponse,
-} from "./jiraConnector.js";
-
-export { createIssuesConnector, type IssuesConnectorDeps } from "./issuesConnector.js";
 
 export { buildInboxConnectorMap, type BuildConnectorMapDeps } from "./connectorMap.js";
 

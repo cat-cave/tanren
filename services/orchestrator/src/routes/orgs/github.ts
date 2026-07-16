@@ -21,7 +21,12 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { defaultManagedProviderConfig } from "../../engine/config/managedProvider.js";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../../engine/config/orgConfig.js";
+import {
+  bindOrgGithubCredentialRefs,
+  migrateOrgConfig,
+  type OrgConfigV1,
+  type OrgGithubAppInstallation,
+} from "../../engine/config/orgConfig.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import { loadGithubAppCredential } from "../../engine/credentials/githubApp.js";
 import { probeGithubAppCapability, probeGithubTokenCapability } from "../../engine/credentials/githubCapability.js";
@@ -32,7 +37,7 @@ import {
   persistOrgDefaultGithubCredentialRef,
   persistOrgGithubAppInstallation,
 } from "../../engine/credentials/orgGithubApp.js";
-import { deriveCredentialRef } from "../../engine/credentials/refNamespace.js";
+import { canonicalOrgGithubCredentialRef, deriveCredentialRef } from "../../engine/credentials/refNamespace.js";
 import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
 import { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
@@ -133,7 +138,12 @@ export function createGithubConnectRoutes(options: GithubConnectRoutesOptions) {
     if (configResult.rows[0] === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    const config = migrateOrgConfig(configResult.rows[0].config);
+    let config: OrgConfigV1;
+    try {
+      config = bindOrgGithubCredentialRefs(migrateOrgConfig(configResult.rows[0].config), orgId);
+    } catch {
+      return c.json({ error: "invalid_org_config" }, 409);
+    }
 
     let github: GithubConnectionStatus;
     try {
@@ -242,9 +252,16 @@ async function connectViaApp(
   orgId: string,
   body: z.infer<typeof InstallConnectSchema>,
 ): Promise<Response> {
-  const credentialRef = body.credentialRef ?? options.appCredentialRef;
-  if (credentialRef === undefined || credentialRef === "") {
+  const suppliedRef = body.credentialRef ?? options.appCredentialRef;
+  if (suppliedRef === undefined || suppliedRef === "") {
     return c.json({ error: "github_app_credential_unconfigured" }, 400);
+  }
+
+  let credentialRef: string;
+  try {
+    credentialRef = canonicalOrgGithubCredentialRef({ orgId, supplied: suppliedRef, kind: "github_app" });
+  } catch {
+    return c.json({ error: "github_app_credential_not_owned" }, 400);
   }
 
   let appId: string;

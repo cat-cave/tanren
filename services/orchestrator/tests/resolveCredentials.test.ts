@@ -96,12 +96,12 @@ describe("resolveCredentialsForRun", () => {
     const resolved = await resolveCredentialsForRun(pool, {
       projectConfig,
       orgScope: orgScope("org_1"),
-      override: { githubCredentialRef: "credential/github/me/pin" },
+      override: { githubCredentialRef: "credential/github/org/org_1/pin" },
     });
     expect(resolved).toEqual({
       defaultLlm: codexEntry(codexProjectRef),
-      github: { kind: "static", ref: "credential/github/me/pin" },
-      githubCredentialRef: "credential/github/me/pin",
+      github: { kind: "static", ref: "credential/github/org/org_1/pin" },
+      githubCredentialRef: "credential/github/org/org_1/pin",
       providerMode: "byok",
     });
   });
@@ -143,7 +143,7 @@ describe("resolveCredentialsForRun", () => {
   const githubAppBlock = {
     installationId: "12345678",
     appId: "987654",
-    credentialRef: "credential/github_app/org_1/private_key",
+    credentialRef: "credential/github_app/org/org_1/private_key",
     installedAt: "2026-06-08T00:00:00.000Z",
   };
 
@@ -237,7 +237,7 @@ describe("resolveCredentialsForRun", () => {
     expect(() => orgScopeFromRunOrgId(absentOrgId)).toThrow(UnscopedOrgError);
   });
 
-  it("the EXPLICIT { kind: 'unscopedPlatform' } scope resolves project-config-only with no org read (the one legitimate org-less path)", async () => {
+  it("rejects GitHub resolution in the explicit org-less platform scope", async () => {
     // The org-less mode is reached only by NAMING it — never by coercing an absent
     // org to "". No org row exists; resolution uses project config + the byok default.
     const pool = fakePool({});
@@ -245,16 +245,12 @@ describe("resolveCredentialsForRun", () => {
       version: 1,
       credentials: { defaultLlm: codexEntry(codexProjectRef), githubCredentialRef: githubProjectRef },
     });
-    const resolved = await resolveCredentialsForRun(pool, {
-      projectConfig,
-      orgScope: { kind: "unscopedPlatform" },
-    });
-    expect(resolved).toEqual({
-      defaultLlm: codexEntry(codexProjectRef),
-      github: { kind: "static", ref: githubProjectRef },
-      githubCredentialRef: githubProjectRef,
-      providerMode: "byok",
-    });
+    await expect(
+      resolveCredentialsForRun(pool, {
+        projectConfig,
+        orgScope: { kind: "unscopedPlatform" },
+      }),
+    ).rejects.toBeInstanceOf(UnscopedOrgError);
   });
 
   it("names the default LLM vs GitHub in the MissingCredentialError message", async () => {

@@ -340,20 +340,21 @@ describe("resolveScopedRunCredentials / applyScopedRunCredentials", () => {
 describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", () => {
   it("mints a scoped token, emits the audit event (no token value), and reads the run's github ref via the scoped store", async () => {
     const { ctx, pool, events, allocator, ssh } = await setup();
-    ctx.orgId = "org-acme";
-    ctx.githubCredentialRef = GH_REF;
-    ctx.defaultLlm = { cli: "codex", model: "default", authRef: CODEX_REF };
+    const workflowGithubRef = `credential/github/org/${ctx.orgId}/bot`;
+    const workflowCodexRef = `credential/codex/org/${ctx.orgId}/default`;
+    ctx.githubCredentialRef = workflowGithubRef;
+    ctx.defaultLlm = { cli: "codex", model: "default", authRef: workflowCodexRef };
 
     // The scoped store + minter share ONE recording Vault transport; the run's
     // github token is seeded there so the clone-token resolution reads it via the
     // SCOPED token. A SEPARATE broad store (different transport) is injected as
     // `input.secrets`; if the de-privilege works it is never used for the read.
     const vault = vaultTokenFetch();
-    vault.seed(GH_REF, "ghp_secretToken");
+    vault.seed(workflowGithubRef, "ghp_secretToken");
     const minter = new VaultRunTokenMinter({ addr: "http://vault:8200", token: "BROAD", fetchImpl: vault.fetch });
 
     const broad = vaultTokenFetch();
-    broad.seed(GH_REF, "ghp_BROAD_should_not_be_read");
+    broad.seed(workflowGithubRef, "ghp_BROAD_should_not_be_read");
     const broadSecrets = new VaultSecretStore({ addr: "http://vault:8200", token: "BROAD", fetchImpl: broad.fetch });
 
     const result = await runPlannerLoopScoped({
@@ -387,7 +388,7 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
     const minted = events.events.filter((e) => e.eventType === "credential.scoped_token_minted");
     expect(minted).toHaveLength(1);
     const payload = minted[0]!.payload as { refPaths: string[]; ttlSeconds: number; numUses: number };
-    expect(payload.refPaths).toContain(GH_REF);
+    expect(payload.refPaths).toContain(workflowGithubRef);
     // r6 §2: the minted TTL EQUALS the injected-env ceiling (8h), proving the token
     // lifetime derives from the seam's pinned env value — not a re-read of the global
     // process.env (which here has no TANREN_MAX_RUN_HOURS, so a re-read would give 6h).
@@ -398,7 +399,7 @@ describe("runPlannerLoopWorkflow — per-run credential de-privilege wiring", ()
     expect(JSON.stringify(events.events)).not.toContain("BROAD");
 
     // The github ref was read through the SCOPED transport (the clone token).
-    expect(vault.authorizedReads).toContain(GH_REF);
+    expect(vault.authorizedReads).toContain(workflowGithubRef);
     // The BROAD store's transport was NEVER used for a KV read.
     expect(broad.authorizedReads).toHaveLength(0);
   });

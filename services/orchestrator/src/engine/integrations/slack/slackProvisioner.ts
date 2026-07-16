@@ -28,6 +28,10 @@ import type {
   ProjectContext,
   ProvisionedArtifact,
 } from "../../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type EligibleOperationExpectation,
+} from "../../contracts/integrationAuthority.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { CreateConversationInput, SlackApiTransport, SlackConversation } from "./slackApiTransport.js";
 
@@ -38,7 +42,10 @@ import type { CreateConversationInput, SlackApiTransport, SlackConversation } fr
  * transport. Injecting the FACTORY (not a single transport) keeps the provisioner
  * grant-scoped — each call runs under the right org's token.
  */
-export type SlackTransportFactory = (grant: OrgGrant) => Promise<SlackApiTransport>;
+export type SlackTransportFactory = (
+  grant: OrgGrant,
+  expected: EligibleOperationExpectation,
+) => Promise<SlackApiTransport>;
 
 export interface SlackProvisionerOptions {
   /** Resolves the per-grant Slack Web API transport (token-scoped). */
@@ -91,8 +98,15 @@ export class SlackProvisioner implements IntegrationProvisioner {
     return [SLACK_NOTIFY_CAPABILITY];
   }
 
-  async discover(grant: OrgGrant): Promise<ExistingResource[]> {
-    const transport = await this.transportFactory(grant);
+  async discover(grant: OrgGrant, projectCtx: ProjectContext): Promise<ExistingResource[]> {
+    const transport = await this.transportFactory(grant, {
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+      providerKind: "slack",
+      capability: SLACK_NOTIFY_CAPABILITY,
+      operation: "discover",
+      target: {},
+    });
     const channels = await this.listAllChannels(transport);
     return channels.map((channel) => ({
       id: channel.id,
@@ -102,15 +116,29 @@ export class SlackProvisioner implements IntegrationProvisioner {
   }
 
   async provision(grant: OrgGrant, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
-    const transport = await this.transportFactory(grant);
+    const transport = await this.transportFactory(grant, {
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+      providerKind: "slack",
+      capability: SLACK_NOTIFY_CAPABILITY,
+      operation: "provision",
+      target: projectIntegrationOperationTarget(projectCtx),
+    });
     const channelName = tanrenNotifyChannelName(projectCtx);
     const channel = await this.findOrCreateChannel(transport, channelName);
     await this.ensureBotMember(transport, channel);
     return this.artifactFor(grant, channel);
   }
 
-  async bind(grant: OrgGrant, existingResourceId: string, _projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
-    const transport = await this.transportFactory(grant);
+  async bind(grant: OrgGrant, existingResourceId: string, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
+    const transport = await this.transportFactory(grant, {
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+      providerKind: "slack",
+      capability: SLACK_NOTIFY_CAPABILITY,
+      operation: "bind",
+      target: projectIntegrationOperationTarget(projectCtx, existingResourceId),
+    });
     const channels = await this.listAllChannels(transport);
     const channel = channels.find((candidate) => candidate.id === existingResourceId);
     if (channel === undefined) {
@@ -188,15 +216,14 @@ export class SlackProvisioner implements IntegrationProvisioner {
         slackChannelId: channel.id,
         slackChannelName: channel.name,
       },
-      secretRefs: { botToken: grant.credentialRef },
+      secretRefs: { botToken: grant.eligibleOperation.credentialRef },
       notificationTarget: {
         kind: "slack",
         config: {
           channelId: channel.id,
           channelName: channel.name,
-          // The send adapter resolves the bot token from this ref to post via
-          // `chat.postMessage`. A ref, never the value.
-          botTokenRef: grant.credentialRef,
+          // Generation-addressed ref only — never a secret value.
+          botTokenRef: grant.eligibleOperation.credentialRef,
         },
       },
     };
@@ -216,13 +243,19 @@ function isNameTaken(error: unknown): boolean {
  */
 export function secretStoreSlackTransportFactory(
   secrets: SecretStore,
-  makeTransport: (botToken: string) => SlackApiTransport,
+  makeTransport: (tokenForAttempt: () => Promise<string>) => SlackApiTransport,
 ): SlackTransportFactory {
-  return async (grant: OrgGrant): Promise<SlackApiTransport> => {
-    const secret = await secrets.get(grant.credentialRef);
-    if (secret === undefined) {
-      throw new Error(`missing Slack bot-token credential ref: ${grant.credentialRef}`);
-    }
-    return makeTransport(secret.value);
+  return async (grant: OrgGrant, expected: EligibleOperationExpectation): Promise<SlackApiTransport> => {
+    return makeTransport(async () => {
+      const { GenerationAddressedIntegrationSecretStore } = await import("../integrationSecretStoreImpl.js");
+      const { assertOrgGrantMatchesLease, secretValueForLease } =
+        await import("../../repositories/integrationConnectionResolve.js");
+      assertOrgGrantMatchesLease(grant);
+      return secretValueForLease(
+        new GenerationAddressedIntegrationSecretStore(secrets),
+        grant.eligibleOperation,
+        expected,
+      );
+    });
   };
 }

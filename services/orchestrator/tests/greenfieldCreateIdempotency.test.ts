@@ -14,6 +14,253 @@ import { apexCapture, appWithGreenfieldRoutes, preparedDeploy, seedGithubAppOrg 
 const JSON_HEADERS = { "content-type": "application/json" };
 
 describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
+  it("retries a failed direct-greenfield deploy from the deriving receipt without duplicate repo effects", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const githubHttp = new FakeRepoCreateHttp();
+    let deployAttempts = 0;
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployAttempts += 1;
+        if (deployAttempts === 1) throw new Error("provider temporarily unavailable");
+        return preparedDeploy();
+      },
+    });
+    const body = JSON.stringify({
+      name: "receipt-retry",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel", connectionId: "connection_1", grantId: "grant_1" },
+    });
+
+    const failed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(failed.status).toBe(502);
+    const shell = [...pool.projects.values()][0];
+    expect(shell?.lifecycle).toBe("deriving");
+
+    const resumed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(resumed.status).toBe(200);
+    expect((await resumed.json()) as unknown).toMatchObject({ lifecycle: "active", idempotentReplay: true });
+    expect(githubHttp.createdRepositories).toHaveLength(1);
+    expect(deployAttempts).toBe(2);
+    expect(shell?.lifecycle).toBe("active");
+    const operation = [...pool.projectDerivations.values()][0];
+    expect(operation).toMatchObject({ status: "succeeded", phase: "activate" });
+  });
+
+  it("never grafts a fingerprint retry onto a different project bound to the canonical repo", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let deployAttempts = 0;
+    const { app, githubHttp } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployAttempts += 1;
+        throw new Error("hold derivation after repository receipt");
+      },
+    });
+    const body = JSON.stringify({
+      name: "binding-guard",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel" },
+    });
+    const first = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(first.status).toBe(502);
+    const original = [...pool.projects.values()][0]!;
+    const canonicalRepoUrl = original.repo_url;
+    original.repo_url = "https://github.com/cat-cave/moved-binding";
+    pool.seedProject({
+      project_id: "project_other_binding",
+      org_id: "org_acme",
+      name: "binding-guard",
+      repo_url: canonicalRepoUrl,
+      config: { version: 1, greenfield: true },
+      lifecycle: "deriving",
+    });
+
+    const retry = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toMatchObject({
+      error: "greenfield_derivation_conflict",
+      reason: "repo_bound_without_derivation",
+    });
+    expect(deployAttempts).toBe(1);
+    expect(githubHttp.createdRepositories).toHaveLength(1);
+    expect([...pool.projectDerivations.values()][0]?.project_id).toBe(original.project_id);
+  });
+
+  it("reconciles a lost GitHub create response only through the exact ownership marker", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const githubHttp = new FakeRepoCreateHttp("response_lost");
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        return preparedDeploy();
+      },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: "lost-create-response",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(githubHttp.createdRepositories).toEqual([
+      expect.objectContaining({
+        owner: "cat-cave",
+        name: "lost-create-response",
+        ownershipMarker: expect.stringMatching(/^https:\/\/tanren\.dev\/derivations\/[0-9a-f]{64}$/u),
+      }),
+    ]);
+    expect([...pool.projects.values()][0]?.lifecycle).toBe("active");
+  });
+
+  it("does not activate until bootstrap is complete and reuses the deploy receipt on retry", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let deployAttempts = 0;
+    let bootstrapAttempts = 0;
+    const { app, githubHttp } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployAttempts += 1;
+        return preparedDeploy();
+      },
+      async bootstrapProject(input) {
+        bootstrapAttempts += 1;
+        if (bootstrapAttempts === 1) {
+          return { errors: [{ seed: "auditCatalog", message: "postgres unavailable" }] };
+        }
+        return pool.seedDerivationBootstrap(input.orgId, input.projectId);
+      },
+    });
+    const body = JSON.stringify({
+      name: "bootstrap-retry",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel", connectionId: "connection_1", grantId: "grant_1" },
+    });
+
+    const failed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(failed.status).toBe(503);
+    const shell = [...pool.projects.values()][0];
+    expect(shell?.lifecycle).toBe("deriving");
+
+    const resumed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(resumed.status).toBe(200);
+    expect(shell?.lifecycle).toBe("active");
+    expect(deployAttempts).toBe(1);
+    expect(bootstrapAttempts).toBe(2);
+    expect(githubHttp.createdRepositories).toHaveLength(1);
+  });
+
+  it("rejects an unrelated same-name repo even when it is bare and never reaches deploy", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let deployEffects = 0;
+    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp("exists", true), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployEffects += 1;
+        return preparedDeploy();
+      },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: "occupied",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "repository_already_exists" });
+    expect([...pool.projects.values()][0]?.lifecycle).toBe("deriving");
+    expect(deployEffects).toBe(0);
+  });
+
+  it("rejects a same-org deriving project that is not this exact greenfield shell", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    pool.seedProject({
+      project_id: "project_wrong_shell",
+      org_id: "org_acme",
+      name: "another-project",
+      repo_url: "https://github.com/cat-cave/claimed",
+      config: { version: 1, greenfield: true },
+      lifecycle: "deriving",
+    });
+    const { app, githubHttp } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        throw new Error("wrong shell must not reach deploy");
+      },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: "claimed",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "greenfield_derivation_conflict",
+      reason: "repo_bound_without_derivation",
+    });
+    expect(githubHttp.createdRepositories).toHaveLength(0);
+    expect(pool.projectDerivations.size).toBe(0);
+  });
+
   it("a retried onboarding derive is IDEMPOTENT — re-attaches to the project, no second repo or deploy app", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
@@ -64,6 +311,60 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     expect(pool.projects.size).toBe(1);
   });
 
+  it("returns the typed state_unknown contract and never replays an ambiguous design-provider call", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let designCalls = 0;
+    let deployProvisions = 0;
+    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployProvisions += 1;
+        return preparedDeploy();
+      },
+      designAgentFactory: () => ({
+        async elaborate() {
+          designCalls += 1;
+          throw new Error("provider response became ambiguous");
+        },
+      }),
+    });
+    const body = JSON.stringify({
+      capture: apexCapture(),
+      owner: "cat-cave",
+      deploy: { providerKind: "deploy.vercel" },
+    });
+
+    const first = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(first.status).toBe(409);
+    const firstBody = (await first.json()) as Record<string, unknown>;
+    expect(firstBody).toMatchObject({
+      error: "project_design_elaboration_state_unknown",
+      reason: "state_unknown",
+      derivationId: expect.stringMatching(/^derivation_/u),
+      message: expect.stringContaining("replay is forbidden"),
+    });
+
+    const retry = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(retry.status).toBe(409);
+    await expect(retry.json()).resolves.toMatchObject({
+      error: "project_design_elaboration_state_unknown",
+      reason: "state_unknown",
+      derivationId: firstBody["derivationId"],
+    });
+    expect(designCalls).toBe(1);
+    expect(deployProvisions).toBe(1);
+  });
+
   it("NORMALIZES an unsafe (LLM-authored) slug into a hostname-safe repo name", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
@@ -91,7 +392,14 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     });
     expect(res.status).toBe(201);
     // The repo was created under the NORMALIZED slug (no spaces/uppercase/punctuation).
-    expect(githubHttp.createdRepositories).toEqual([{ owner: "cat-cave", name: "my-cool-app", private: true }]);
+    expect(githubHttp.createdRepositories).toEqual([
+      {
+        owner: "cat-cave",
+        name: "my-cool-app",
+        private: true,
+        ownershipMarker: expect.stringMatching(/^https:\/\/tanren\.dev\/derivations\/[0-9a-f]{64}$/u),
+      },
+    ]);
   });
 
   it("REJECTS a slug with no hostname-safe content (never ships an empty/invalid repo name)", async () => {

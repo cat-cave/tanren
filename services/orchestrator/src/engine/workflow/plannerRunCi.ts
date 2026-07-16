@@ -400,6 +400,7 @@ async function doPublishMergeVerdict(
   }
   const token = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
+    orgId: context.orgId,
     ...(context.installation !== undefined && { installation: context.installation }),
     ...(staticRef.trim() !== "" && { staticRef }),
     ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),

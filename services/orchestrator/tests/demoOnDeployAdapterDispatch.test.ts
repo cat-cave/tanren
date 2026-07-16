@@ -14,6 +14,7 @@
 // asserts the fixture-only refusal.
 
 import { describe, expect, it } from "vitest";
+import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
 import type pg from "pg";
 import { getJobOrgId } from "@tanren/db";
 import { DemoOnDeployWatcher } from "../src/engine/postMerge/demoOnDeploy.js";
@@ -50,9 +51,32 @@ interface PoolState {
 
 function fakePool(state: PoolState): pg.Pool {
   // eslint-disable-next-line @typescript-eslint/require-await
-  const query = async (sql: string) => {
+  const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
+    if (/FROM events e/u.test(sql) && params[1] === "deploy.verified") {
+      if (!state.verified) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            event_run_id: RUN_ID,
+            event_spec_id: null,
+            event_project_id: PROJECT_ID,
+            event_org_id: ORG_ID,
+            payload: { provider: state.provider, appId: state.appId, deploymentId: state.deploymentId },
+            run_id: RUN_ID,
+            run_spec_id: SPEC_ID,
+            run_project_id: PROJECT_ID,
+            run_org_id: ORG_ID,
+            pr_url: "https://github.com/acme/widget/pull/1",
+            project_org_id: ORG_ID,
+            spec_org_id: ORG_ID,
+            spec_project_id: PROJECT_ID,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
     if (/event_type = 'deploy\.verified'/u.test(sql)) {
       if (!state.verified) return { rows: [], rowCount: 0 };
       return {
@@ -68,10 +92,79 @@ function fakePool(state: PoolState): pg.Pool {
         rowCount: 1,
       };
     }
-    if (/FROM org_integrations WHERE org_id = \$1 AND provider_kind = \$2/u.test(sql)) {
-      return state.grant === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ status: "linked", ...state.grant }], rowCount: 1 };
+    if (/SELECT connection_id, grant_id FROM project_integration_grant_selections/u.test(sql)) {
+      const selected = state.grant !== undefined && state.grant.provider_kind === params[2];
+      return selected
+        ? { rows: [{ connection_id: "connection_demo", grant_id: "grant_demo" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
+    if (/FROM org_integration_connections c/u.test(sql)) {
+      if (state.grant === undefined) return { rows: [], rowCount: 0 };
+      if (/project_integration_grant_selections/u.test(sql) || /selected_auth_generation/u.test(sql)) {
+        const credentialRef = (state.grant.credential_ref ?? "secret://org/deploy-token/g/1").includes("/g/")
+          ? (state.grant.credential_ref ?? "secret://org/deploy-token/g/1")
+          : `${state.grant.credential_ref ?? "secret://org/deploy-token"}/g/1`;
+        return {
+          rows: [
+            {
+              connection_id: "connection_demo",
+              provider_kind: state.grant.provider_kind,
+              provider_principal_id: "account_demo",
+              display_name: "account_demo",
+              principal_metadata: state.grant.metadata ?? {},
+              connection_health: "healthy",
+              connection_status: "active",
+              current_auth_generation: 1,
+              grant_id: "grant_demo",
+              grant_current_generation: 1,
+              grant_status: "active",
+              plane: "control",
+              environment: "control",
+              credential_ref: credentialRef,
+              auth_expires_at: null,
+              auth_status: "active",
+              capabilities: ["deploy"],
+              operations: ["resolve_demo_surface"],
+              provider_scopes: [],
+              resource_constraints: defaultIntegrationResourceConstraints(),
+              policy_revision: "integration-catalog.v2",
+              consent_revision: "consent.test",
+              grant_expires_at: null,
+              grant_generation_status: "active",
+              selected_auth_generation: 1,
+              selected_grant_generation: 1,
+              selected_connection_id: "connection_demo",
+              selected_grant_id: "grant_demo",
+            },
+          ],
+          rowCount: 1,
+        };
+      }
+      return {
+        rows: [
+          {
+            connection_id: "connection_demo",
+            grant_id: "grant_demo",
+            org_id: ORG_ID,
+            provider_kind: state.grant.provider_kind,
+            provider_principal_id: "account_demo",
+            principal_kind: "team",
+            display_name: "account_demo",
+            health: "healthy",
+            connection_status: "active",
+            current_auth_generation: 1,
+            grant_generation: 1,
+            grant_status: "active",
+            auth_expires_at: null,
+            provider_scopes: [],
+            operation_id: null,
+            operation_stage: null,
+            operation_status: null,
+            selected_for_project: true,
+          },
+        ],
+        rowCount: 1,
+      };
     }
     if (/FROM behaviors b/u.test(sql) || /INNER JOIN spec_behaviors/u.test(sql)) {
       return {
@@ -111,7 +204,7 @@ class RecordingEventStore implements EventStore {
 
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
-  void store.put({ ref: "secret://org/deploy-token", value: "deploy_token" });
+  void store.put({ ref: "secret://org/deploy-token/g/1", value: "deploy_token" });
   return store;
 }
 
@@ -168,7 +261,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       deploymentId: "@acme/web@1.2.3",
       grant: {
         provider_kind: "deploy.package_release",
-        credential_ref: "secret://org/deploy-token",
+        credential_ref: "secret://org/deploy-token/g/1",
         metadata: {},
       },
       behaviors: [{ id: "beh_install", title: "install the CLI" }],
@@ -227,7 +320,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       deploymentId: "manual:proj_demo@main",
       grant: {
         provider_kind: MANUAL_EXTERNAL_PROVIDER_KIND,
-        credential_ref: "secret://org/deploy-token",
+        credential_ref: "secret://org/deploy-token/g/1",
         metadata: { manualExternalUrl: "https://attested.example.dev", manualExternalKind: "web_url" },
       },
       behaviors: [{ id: "beh_home", title: "home loads" }],
@@ -258,7 +351,7 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       deploymentId: "d_1",
       grant: {
         provider_kind: "deploy.mystery",
-        credential_ref: "secret://org/deploy-token",
+        credential_ref: "secret://org/deploy-token/g/1",
         metadata: {},
       },
       behaviors: [{ id: "b", title: "B" }],
@@ -270,7 +363,8 @@ describe("DemoOnDeployWatcher — dispatches to the matching adapter class (Bug 
       eventStore: events,
       webProbe: stubWebProbe,
     });
-    await expect(watcher.check(RUN_ID)).rejects.toThrow(/no registered DeployAdapter class/u);
+    // Unknown provider kinds fail closed at authorizeOperation (no fabricated lease).
+    await expect(watcher.check(RUN_ID)).rejects.toThrow(/deploy grant ineligible|unknown_provider_kind/u);
     const failed = events.appends.find((a) => a.eventType === "demo.failed");
     expect(failed).toBeDefined();
     expect(failed!.payload["reason"]).toBe("resolve_surface_failed");

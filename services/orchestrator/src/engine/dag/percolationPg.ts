@@ -23,8 +23,8 @@ import { projectSpecLifecycle, type ReviewVerdict, type SpecLifecycle } from "..
 import type { RepoRef } from "../contracts/codeHostTypes.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import { installationFromOrgConfig, migrateOrgConfig } from "../config/orgConfig.js";
-import { migrateProjectConfig } from "../config/projectConfig.js";
+import { bindOrgGithubCredentialRefs, migrateOrgConfig } from "../config/orgConfig.js";
+import { bindProjectGithubCredentialRefs, migrateProjectConfig } from "../config/projectConfig.js";
 import { GitHubCodeHost } from "../providers/githubCodeHost.js";
 import { parseGitHubRepository, type GitHubHttpClient, type GithubAppTokenMinter } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
@@ -281,10 +281,11 @@ export class PgPercolationReadModel implements PercolationReadModel {
         };
       },
     );
-    const installation = orgGithubApp(orgConfig);
-    const staticRef = githubStaticRef(projectConfig, orgConfig);
+    const installation = orgGithubApp(orgConfig, orgId);
+    const staticRef = githubStaticRef(projectConfig, orgConfig, orgId);
     const token = await resolveVcsToken(this.deps.githubHttp, {
       secrets: this.deps.secrets,
+      orgId,
       ...(installation !== undefined && { installation }),
       ...(staticRef !== undefined && { staticRef }),
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
@@ -334,8 +335,12 @@ export type { PgPercolationEventEmitterDeps } from "./percolationEventEmitterPg.
  * `undefined`, which would silently disable App auth and degrade percolation's
  * token resolution to a static/unauthenticated read.
  */
-function orgGithubApp(orgConfig: unknown): ReturnType<typeof migrateOrgConfig>["github_app"] | undefined {
-  return installationFromOrgConfig(orgConfig);
+function orgGithubApp(
+  orgConfig: unknown,
+  orgId: string,
+): ReturnType<typeof migrateOrgConfig>["github_app"] | undefined {
+  if (orgConfig === null || orgConfig === undefined) return undefined;
+  return bindOrgGithubCredentialRefs(migrateOrgConfig(orgConfig), orgId).github_app;
 }
 
 /**
@@ -348,16 +353,17 @@ function orgGithubApp(orgConfig: unknown): ReturnType<typeof migrateOrgConfig>["
  * ABSENT (`null`/`undefined`) config or a parseable config with no ref configured
  * resolves to `undefined` (the legitimate "no static ref" case).
  */
-function githubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
+function githubStaticRef(projectConfig: unknown, orgConfig: unknown, orgId: string): string | undefined {
   // An ABSENT project config (`null`/`undefined`) legitimately has no project ref —
   // fall through to the org default. A PRESENT project config is migrated, and a
   // parse error PROPAGATES loudly (never swallowed to skip to the org default).
   if (projectConfig !== null && projectConfig !== undefined) {
-    const projectRef = migrateProjectConfig(projectConfig).credentials?.githubCredentialRef;
+    const projectRef = bindProjectGithubCredentialRefs(migrateProjectConfig(projectConfig), orgId).credentials
+      ?.githubCredentialRef;
     if (projectRef !== undefined) return projectRef;
   }
   if (orgConfig === null || orgConfig === undefined) return undefined;
-  return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
+  return bindOrgGithubCredentialRefs(migrateOrgConfig(orgConfig), orgId).defaultCredentials?.github_token;
 }
 
 /**

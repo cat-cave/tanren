@@ -38,6 +38,10 @@ const payload: NotificationPayload = {
   url: "https://tanren.example/runs/run_1",
 };
 
+const TEST_ORG_ID = "org";
+const STATIC_REF = `credential/github/org/${TEST_ORG_ID}/default`;
+const APP_REF = `credential/github_app/org/${TEST_ORG_ID}/cat-cave`;
+
 class MemorySecrets implements SecretStore {
   constructor(private readonly map: Record<string, string>) {}
   async get(ref: string): Promise<SecretValue | undefined> {
@@ -70,8 +74,8 @@ function prAndStatusResponder(headSha: string): (req: GitHubHttpRequest) => GitH
 describe("GithubChecksChannel", () => {
   it("posts a commit status to the PR head sha via the static token path", async () => {
     const http = new FakeGitHubHttp(prAndStatusResponder("deadbeef"));
-    const secrets = new MemorySecrets({ "credential/github/default": "static-token-123" });
-    const channel = new GithubChecksChannel({ secrets, http, staticRef: "credential/github/default" });
+    const secrets = new MemorySecrets({ [STATIC_REF]: "static-token-123" });
+    const channel = new GithubChecksChannel({ secrets, http, staticRef: STATIC_REF, orgId: TEST_ORG_ID });
 
     await channel.publish(target(), payload);
 
@@ -102,9 +106,10 @@ describe("GithubChecksChannel", () => {
     for (const [severity, expected] of cases) {
       const http = new FakeGitHubHttp(prAndStatusResponder("sha1"));
       const channel = new GithubChecksChannel({
-        secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+        secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
         http,
-        staticRef: "credential/github/default",
+        staticRef: STATIC_REF,
+        orgId: TEST_ORG_ID,
       });
       await channel.publish(target(), { ...payload, severity });
       const post = http.requests.find((r) => r.method === "POST")!;
@@ -118,7 +123,7 @@ describe("GithubChecksChannel", () => {
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
     const secrets = new MemorySecrets({
-      "credential/github_app/cat-cave": JSON.stringify({ appId: "123456", privateKeyPem: pem }),
+      [APP_REF]: JSON.stringify({ appId: "123456", privateKeyPem: pem }),
     });
     let mintCalls = 0;
     const mintFetch: typeof fetch = async () => {
@@ -131,11 +136,11 @@ describe("GithubChecksChannel", () => {
     const installation: OrgGithubAppInstallation = {
       installationId: "987",
       appId: "123456",
-      credentialRef: "credential/github_app/cat-cave",
+      credentialRef: APP_REF,
       installedAt: "2026-01-01T00:00:00Z",
     };
     const http = new FakeGitHubHttp(prAndStatusResponder("appsha"));
-    const channel = new GithubChecksChannel({ secrets, installation, minter, http });
+    const channel = new GithubChecksChannel({ secrets, installation, minter, http, orgId: TEST_ORG_ID });
 
     await channel.publish(target(), payload);
 
@@ -151,9 +156,10 @@ describe("GithubChecksChannel", () => {
       return { status: 403, body: { message: "forbidden" } };
     });
     const channel = new GithubChecksChannel({
-      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
       http,
-      staticRef: "credential/github/default",
+      staticRef: STATIC_REF,
+      orgId: TEST_ORG_ID,
     });
     await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks publish failed: HTTP 403/u);
   });
@@ -161,9 +167,10 @@ describe("GithubChecksChannel", () => {
   it("sets the status description to the (truncated) payload title and context to tanren", async () => {
     const http = new FakeGitHubHttp(prAndStatusResponder("sha"));
     const channel = new GithubChecksChannel({
-      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
       http,
-      staticRef: "credential/github/default",
+      staticRef: STATIC_REF,
+      orgId: TEST_ORG_ID,
     });
     await channel.publish(target(), { ...payload, title: "x".repeat(200) });
     const post = http.requests.find((r) => r.method === "POST")!;
@@ -176,9 +183,10 @@ describe("GithubChecksChannel", () => {
   it("omits target_url when payload.url is unset", async () => {
     const http = new FakeGitHubHttp(prAndStatusResponder("sha"));
     const channel = new GithubChecksChannel({
-      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
       http,
-      staticRef: "credential/github/default",
+      staticRef: STATIC_REF,
+      orgId: TEST_ORG_ID,
     });
     const { url: _url, ...noUrl } = payload;
     await channel.publish(target(), noUrl);
@@ -189,9 +197,10 @@ describe("GithubChecksChannel", () => {
   it("uses the GET pull endpoint then the POST statuses endpoint on the resolved head sha", async () => {
     const http = new FakeGitHubHttp(prAndStatusResponder("deadbeef"));
     const channel = new GithubChecksChannel({
-      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
       http,
-      staticRef: "credential/github/default",
+      staticRef: STATIC_REF,
+      orgId: TEST_ORG_ID,
     });
     await channel.publish(target({ destination: "https://github.com/org/repo/pull/7" }), payload);
     expect(http.requests[0]!.path).toBe("/repos/org/repo/pulls/7");
@@ -201,9 +210,10 @@ describe("GithubChecksChannel", () => {
   it("throws when the PR lookup does not return 200", async () => {
     const http = new FakeGitHubHttp(() => ({ status: 404, body: { message: "not found" } }));
     const channel = new GithubChecksChannel({
-      secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+      secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
       http,
-      staticRef: "credential/github/default",
+      staticRef: STATIC_REF,
+      orgId: TEST_ORG_ID,
     });
     await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR fetch failed: HTTP 404/u);
   });
@@ -229,9 +239,10 @@ describe("GithubChecksChannel", () => {
         return { status: 201, body: {} };
       });
       const channel = new GithubChecksChannel({
-        secrets: new MemorySecrets({ "credential/github/default": "tok" }),
+        secrets: new MemorySecrets({ [STATIC_REF]: "tok" }),
         http,
-        staticRef: "credential/github/default",
+        staticRef: STATIC_REF,
+        orgId: TEST_ORG_ID,
       });
       await expect(channel.publish(target(), payload)).rejects.toThrow(/github_checks PR response missing head sha/u);
       // The status POST must NOT fire when the head sha is unresolved.

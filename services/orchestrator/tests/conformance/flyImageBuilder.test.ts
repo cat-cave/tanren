@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // FlyImageBuilder seam — the merge-reflecting build path for a Fly release (PR2).
 // Split out of `deployProvisioner.test.ts` (which is at the 500-line architecture cap)
 // and `flyDeployReleaseConfig.test.ts` (which pins the static-image + IPv4 paths): this
@@ -9,11 +10,12 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { FlyDeployProvisioner, flyMachineConfig } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { FlyImageBuildFailedError } from "../../src/engine/provisioners/flyImageBuilder.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { scriptedFlyImageBuilder } from "./fakes/scriptedFlyImageBuilder.js";
+import { projectIntegrationOperationTarget } from "../../src/engine/contracts/integrationAuthority.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
@@ -21,14 +23,10 @@ const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
-
-const flyGrant: OrgGrant = {
-  providerKind: "deploy.flyio",
-  credentialRef: TOKEN_REF,
-  metadata: { orgSlug: "acme" },
-};
 
 // `orgSlug: "tanren"` → the deploy-app namespacing rule prefixes the created app, so a
 // projectName "acme-web" becomes the real app name "tanren-acme-web".
@@ -39,16 +37,45 @@ const ctx = (name: string): ProjectContext => ({
   stack: "node",
   name,
 });
+const projectCtx = ctx("acme-web");
+
+const provisionGrant = () =>
+  testOrgGrant({
+    providerKind: "deploy.flyio",
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata: { orgSlug: "acme" },
+    capability: "deploy",
+    operation: "provision",
+    target: projectIntegrationOperationTarget(projectCtx),
+    orgId: projectCtx.orgId,
+    projectId: projectCtx.projectId,
+  });
+
+const deployGrant = (source: { repo: string; ref: string }) =>
+  testOrgGrant({
+    providerKind: "deploy.flyio",
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata: { orgSlug: "acme" },
+    capability: "deploy",
+    operation: "deploy",
+    target: { resourceId: "fly_app_1", sourceRepo: source.repo, sourceRef: source.ref },
+    orgId: projectCtx.orgId,
+    projectId: projectCtx.projectId,
+  });
+
+async function provisionApp(prov: FlyDeployProvisioner): Promise<void> {
+  await prov.provision(await provisionGrant(), projectCtx);
+}
 
 describe("FlyDeployProvisioner — merge-reflecting image builder (triggerDeploy)", () => {
   it("calls builder.build with the merged { repo, ref, appName, flyToken } and releases the BUILT imageRef", async () => {
     const transport = scriptedDeployTransport("fly");
     const builder = scriptedFlyImageBuilder();
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), flyImageBuilder: builder });
-    await prov.provision(flyGrant, ctx("acme-web"));
+    await provisionApp(prov);
 
     const source = { repo: "acme/acme-web", ref: "deadbeefcafe" };
-    await prov.deploy(flyGrant, "fly_app_1", source);
+    await prov.deploy(await deployGrant(source), "fly_app_1", source);
 
     // The builder received the merged source + the namespaced app name + the deploy token.
     expect(builder.buildRequests).toHaveLength(1);
@@ -75,9 +102,10 @@ describe("FlyDeployProvisioner — merge-reflecting image builder (triggerDeploy
       flyImageBuilder: builder,
       allowFlyStaticDeploy: false,
     });
-    await prov.provision(flyGrant, ctx("acme-web"));
+    await provisionApp(prov);
 
-    await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "acme/acme-web", ref: "abc123" })).resolves.toBeDefined();
+    const source = { repo: "acme/acme-web", ref: "abc123" };
+    await expect(prov.deploy(await deployGrant(source), "fly_app_1", source)).resolves.toBeDefined();
     expect(builder.buildRequests).toHaveLength(1);
     expect(transport.deploysTriggered()[0]!.body["config"]).toEqual(
       flyMachineConfig("registry.fly.io/tanren-acme-web:abc123"),
@@ -89,9 +117,10 @@ describe("FlyDeployProvisioner — merge-reflecting image builder (triggerDeploy
     const builder = scriptedFlyImageBuilder();
     builder.scriptFailure("docker buildx exited 1");
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), flyImageBuilder: builder });
-    await prov.provision(flyGrant, ctx("acme-web"));
+    await provisionApp(prov);
 
-    await expect(prov.deploy(flyGrant, "fly_app_1", { repo: "acme/acme-web", ref: "deadbeef" })).rejects.toBeInstanceOf(
+    const source = { repo: "acme/acme-web", ref: "deadbeef" };
+    await expect(prov.deploy(await deployGrant(source), "fly_app_1", source)).rejects.toBeInstanceOf(
       FlyImageBuildFailedError,
     );
     // No release fired — the build aborts BEFORE the Machines POST.
@@ -102,9 +131,10 @@ describe("FlyDeployProvisioner — merge-reflecting image builder (triggerDeploy
     const transport = scriptedDeployTransport("fly");
     const builder = scriptedFlyImageBuilder();
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), flyImageBuilder: builder });
-    await prov.provision(flyGrant, ctx("acme-web"));
+    await provisionApp(prov);
 
-    await prov.deploy(flyGrant, "fly_app_1", { repo: "acme/acme-web", ref: "feat-1" });
+    const source = { repo: "acme/acme-web", ref: "feat-1" };
+    await prov.deploy(await deployGrant(source), "fly_app_1", source);
     const config = transport.deploysTriggered()[0]!.body["config"] as Record<string, unknown>;
     // The full PR1 release shape is asserted by value in flyDeployReleaseConfig.test.ts;
     // here we pin that the builder path produces the SAME port-mapped config (only the image differs).
@@ -126,9 +156,10 @@ describe("FlyDeployProvisioner — merge-reflecting image builder (triggerDeploy
     const transport = scriptedDeployTransport("fly");
     const builder = scriptedFlyImageBuilder();
     const prov = new FlyDeployProvisioner({ transport, secrets: secrets(), flyImageBuilder: builder });
-    await prov.provision(flyGrant, ctx("acme-web"));
+    await provisionApp(prov);
 
-    const result = await prov.deploy(flyGrant, "fly_app_1", { repo: "acme/acme-web", ref: "deadbeef" });
+    const source = { repo: "acme/acme-web", ref: "deadbeef" };
+    const result = await prov.deploy(await deployGrant(source), "fly_app_1", source);
     // The result carries the app URL + a machine id + state — NEVER the token or a raw ref dump.
     expect(result.url).toBe("https://tanren-acme-web.fly.dev");
     expect(result.deploymentId).toMatch(/^fly_deploy_/u);

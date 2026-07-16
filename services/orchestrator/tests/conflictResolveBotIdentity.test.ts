@@ -45,7 +45,7 @@ class RecordingSubstrate extends FakeCommandSubstrate {
   }
 }
 
-const AUTHENTICATED_REF = "credential/github/dev";
+const AUTHENTICATED_REF = "credential/github/org/org_x/dev";
 
 describe("conflict-resolve bot identity (finding #7)", () => {
   it("live jj workspace: sets the BOT identity as the jj commit author (not tanren@local)", async () => {

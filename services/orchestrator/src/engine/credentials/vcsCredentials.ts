@@ -30,6 +30,7 @@ import type { ActorIdentity, ResolvedVcsToken, VcsCredentialContext } from "../c
 export async function resolveVcsToken(http: GitHubHttpClient, creds: VcsCredentialContext): Promise<ResolvedVcsToken> {
   const resolved = await resolveGithubToken({
     secrets: creds.secrets,
+    orgId: creds.orgId,
     installation: creds.installation,
     staticRef: creds.staticRef,
     minter: creds.minter,

@@ -1,10 +1,50 @@
+import { timingSafeEqual } from "node:crypto";
+
 export interface SecretValue {
   ref: string;
   value: string;
 }
 
+/**
+ * Create-only write result. Never includes secret values.
+ * - created: path was empty and write accepted
+ * - already_exists_identical: path occupied with the same value (idempotent success)
+ * - conflict_different_value: path occupied with a different value (hard conflict)
+ */
+export type PutCreateOnlyResult =
+  | { status: "created" }
+  | { status: "already_exists_identical" }
+  | { status: "conflict_different_value" };
+
+export type SecretWriteState = "definitely_unwritten" | "unknown";
+
+/** A create-only transport failure classified by whether Vault may have committed. */
+export class SecretStoreWriteError extends Error {
+  public override readonly name = "SecretStoreWriteError";
+
+  public constructor(
+    message: string,
+    public readonly writeState: SecretWriteState,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
+export function isSecretStoreWriteError(error: unknown): error is SecretStoreWriteError {
+  return error instanceof SecretStoreWriteError;
+}
+
 export interface SecretStore {
+  /** Whether putCreateOnly is backed by a provider-atomic create primitive. */
+  readonly createOnlyAtomicity?: "atomic" | "unsupported";
   put(secret: SecretValue): Promise<void>;
+  /**
+   * Create-only write. Must not overwrite an existing coordinate.
+   * Vault KV v2 uses `options.cas = 0`. Identical prior write is idempotent success.
+   * Never logs or returns plaintext beyond the status discriminant.
+   */
+  putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult>;
   get(ref: string): Promise<SecretValue | undefined>;
   delete(ref: string): Promise<void>;
   /**
@@ -25,10 +65,23 @@ export interface VaultSecretStoreOptions {
 }
 
 export class InMemorySecretStore implements SecretStore {
+  readonly createOnlyAtomicity = "atomic" as const;
   private readonly values = new Map<string, string>();
 
   async put(secret: SecretValue): Promise<void> {
     this.values.set(secret.ref, secret.value);
+  }
+
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    const existing = this.values.get(secret.ref);
+    if (existing === undefined) {
+      this.values.set(secret.ref, secret.value);
+      return { status: "created" };
+    }
+    if (existing === secret.value) {
+      return { status: "already_exists_identical" };
+    }
+    return { status: "conflict_different_value" };
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {
@@ -48,6 +101,7 @@ export class InMemorySecretStore implements SecretStore {
 export class FakeSecretStore extends InMemorySecretStore {}
 
 export class VaultSecretStore implements SecretStore {
+  readonly createOnlyAtomicity = "atomic" as const;
   private readonly fetchImpl: typeof fetch;
   private readonly mount: string;
 
@@ -63,6 +117,63 @@ export class VaultSecretStore implements SecretStore {
       body: JSON.stringify({ data: { value: secret.value } }),
     });
     await assertVaultOk(response, `store secret ${secret.ref}`);
+  }
+
+  /**
+   * Vault KV v2 create-only via `options.cas = 0` (write only when version is 0 /
+   * path does not exist). On the exact typed CAS-mismatch response, read back and
+   * classify identical vs different
+   * without returning plaintext. Response-loss after accept: readback of identical
+   * value is idempotent success — never delete an ambiguous write.
+   */
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(this.url(secret.ref), {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify({ options: { cas: 0 }, data: { value: secret.value } }),
+      });
+    } catch (error) {
+      // Accepted-but-response-lost / network blip: read back without deleting.
+      return this.classifyCreateOnlyReadback(secret, error);
+    }
+    if (response.ok) {
+      return { status: "created" };
+    }
+    const failure = await readVaultFailure(response);
+    if (isVaultCasMismatch(response.status, failure.errors)) {
+      return this.classifyCreateOnlyReadback(secret);
+    }
+    const writeState: SecretWriteState = response.status >= 500 ? "unknown" : "definitely_unwritten";
+    throw new SecretStoreWriteError(
+      `Vault create-only secret ${secret.ref} failed: ${response.status} ${failure.summary}`,
+      writeState,
+    );
+  }
+
+  private async classifyCreateOnlyReadback(secret: SecretValue, cause?: unknown): Promise<PutCreateOnlyResult> {
+    let existing: SecretValue | undefined;
+    try {
+      existing = await this.get(secret.ref);
+    } catch (error) {
+      throw new SecretStoreWriteError(
+        `Vault create-only secret ${secret.ref} has unknown write state after unreadable readback`,
+        "unknown",
+        { cause: cause ?? error },
+      );
+    }
+    if (existing === undefined) {
+      throw new SecretStoreWriteError(
+        `Vault create-only secret ${secret.ref} has unknown write state after empty readback`,
+        "unknown",
+        cause === undefined ? undefined : { cause },
+      );
+    }
+    if (constantTimeBytesEqual(existing.value, secret.value)) {
+      return { status: "already_exists_identical" };
+    }
+    return { status: "conflict_different_value" };
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {
@@ -141,6 +252,41 @@ export class VaultSecretStore implements SecretStore {
   private url(ref: string): string {
     return `${this.options.addr.replace(/\/$/u, "")}/v1/${encodePath(this.mount)}/data/${encodePath(vaultKeyPath(ref))}`;
   }
+}
+
+const VAULT_CAS_MISMATCH = "check-and-set parameter did not match the current version";
+
+interface VaultFailure {
+  errors: string[];
+  summary: string;
+}
+
+async function readVaultFailure(response: Response): Promise<VaultFailure> {
+  const raw = await response.text();
+  try {
+    const parsed = JSON.parse(raw) as { errors?: unknown };
+    if (Array.isArray(parsed.errors) && parsed.errors.every((item): item is string => typeof item === "string")) {
+      return { errors: parsed.errors, summary: parsed.errors.join("; ") };
+    }
+  } catch {
+    // Non-JSON Vault/proxy errors remain ordinary failures, never CAS conflicts.
+  }
+  return { errors: [], summary: raw.slice(0, 300) };
+}
+
+function isVaultCasMismatch(status: number, errors: readonly string[]): boolean {
+  return (status === 400 || status === 412) && errors.length === 1 && errors[0] === VAULT_CAS_MISMATCH;
+}
+
+function constantTimeBytesEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  const width = Math.max(leftBytes.length, rightBytes.length, 1);
+  const leftPadded = Buffer.alloc(width);
+  const rightPadded = Buffer.alloc(width);
+  leftBytes.copy(leftPadded);
+  rightBytes.copy(rightPadded);
+  return timingSafeEqual(leftPadded, rightPadded) && leftBytes.length === rightBytes.length;
 }
 
 interface VaultKvResponse {

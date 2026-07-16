@@ -312,8 +312,6 @@ class ContractPool {
     return { rows: [], rowCount: 0 };
   }
 
-  // A client VIEW sharing `query` but with NO `connect` (like a real PoolClient),
-  // so the RLS write-path `isPool` discriminator uses a handed-in client verbatim.
   async connect() {
     return { query: (s: string, p?: unknown[]) => this.query(s, p ?? []), release: () => {} } as never;
   }
@@ -361,6 +359,7 @@ class ContractPool {
       runner_image: project.runnerImage,
       allocator: project.allocator,
       config: project.config,
+      lifecycle: "active",
       spec_id: spec.specId,
       title: spec.title,
       description: spec.description,

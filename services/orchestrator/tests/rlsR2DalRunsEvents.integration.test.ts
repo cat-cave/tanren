@@ -23,7 +23,7 @@
 
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, runWithOrgScope } from "@tanren/db";
+import { migrate, NOTIFICATION_CHANNEL, RUN_ACTIVITY_CHANNEL, runWithOrgScope } from "@tanren/db";
 import type { ActorContext } from "../src/auth/schemas.js";
 import { MissingOrgScopeError, resolveQueryClient } from "../src/engine/data/orgScopedDb.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
@@ -265,47 +265,87 @@ describeDb("RLS R2 cohort-1 — runs + events through the org-scoped client", ()
   // denied (apex v68 halt: `interview_derive_failed: new row violates row-level
   // security policy for table "events"`). The fix: the caller supplies `orgId`
   // explicitly; the INSERT uses that parameter directly. This test asserts that
-  // an org-scoped append (no projectId) lands cleanly under the org's scope.
-  it("(v68 fix) accepts an ORG-SCOPED append (no projectId) and the row lands under the org's scope", async () => {
-    // Fragment-authoring events fire OUTSIDE any project; the runId is a
-    // placeholder string the F2 emitter uses ("fragment-authoring"). Mirror that
-    // shape here exactly, but use a unique run id so the count assertion does
-    // not collide with the run.completed event the prior test appended on RUN_A.
-    const placeholderRunId = "fragment-authoring-v68";
-    await runWithOrgScope(runtimePool, ORG_A, async (client) => {
-      await new PgEventStore(runtimePool).append({
-        orgId: ORG_A,
-        runId: placeholderRunId,
-        eventType: "fragment.authoring.started",
-        payload: {
-          orgId: ORG_A,
-          fragmentId: "frag_v68",
-          kind: "runtime",
-          label: "runtime-python",
-        },
+  // an org-scoped append (no invented run/spec/project lineage) lands cleanly
+  // under the org's scope and remains invisible to every other org.
+  it("(v68 fix) accepts a genuinely ORG-SCOPED append with nullable lineage", async () => {
+    // Fragment-authoring events fire before any run, spec, or project exists.
+    // Mirror the production emitter exactly: orgId is the sole lineage key and
+    // fragmentId identifies this event inside the org-scoped stream.
+    const fragmentId = "frag_v68";
+    const listener = await ownerPool.connect();
+    const receivedChannels: string[] = [];
+    let wakeTimeout: ReturnType<typeof setTimeout> | undefined;
+    let eventId: string | undefined;
+    let resolveGlobalWake: ((payload: string) => void) | undefined;
+    const notificationHandler = (message: { channel: string; payload?: string }) => {
+      receivedChannels.push(message.channel);
+      if (message.channel === NOTIFICATION_CHANNEL) {
+        clearTimeout(wakeTimeout);
+        resolveGlobalWake?.(message.payload ?? "");
+      }
+    };
+    try {
+      await listener.query(`LISTEN ${NOTIFICATION_CHANNEL}`);
+      await listener.query(`LISTEN ${RUN_ACTIVITY_CHANNEL}`);
+      const globalWake = new Promise<string>((resolve, reject) => {
+        resolveGlobalWake = resolve;
+        wakeTimeout = setTimeout(() => reject(new Error("timed out waiting for fragment-authoring event wake")), 5_000);
       });
-      // VISIBLE in the SAME org-scoped transaction → the INSERT used that client.
-      const within = await client.query<{ n: string }>(
-        "SELECT count(*)::text AS n FROM events WHERE run_id = $1 AND event_type = 'fragment.authoring.started'",
-        [placeholderRunId],
-      );
-      expect(Number(within.rows[0]?.n)).toBe(1);
-      // The row carries the EXPLICIT org_id we passed (NOT NULL on the column,
-      // and NOT derived via a subquery on a non-existent project).
-      const orgRow = await client.query<{ org_id: string | null; project_id: string | null }>(
-        "SELECT org_id, project_id FROM events WHERE run_id = $1 AND event_type = 'fragment.authoring.started'",
-        [placeholderRunId],
-      );
-      expect(orgRow.rows[0]?.org_id).toBe(ORG_A);
-      // And project_id is genuinely NULL (the column is nullable on the events table).
-      expect(orgRow.rows[0]?.project_id).toBeNull();
-    });
+      listener.on("notification", notificationHandler);
+
+      await runWithOrgScope(runtimePool, ORG_A, async (client) => {
+        await new PgEventStore(runtimePool).append({
+          orgId: ORG_A,
+          eventType: "fragment.authoring.started",
+          payload: {
+            orgId: ORG_A,
+            fragmentId,
+            kind: "runtime",
+            label: "runtime-python",
+          },
+        });
+        // VISIBLE in the SAME org-scoped transaction → the INSERT used that client.
+        const within = await client.query<{
+          id: string;
+          org_id: string;
+          run_id: string | null;
+          spec_id: string | null;
+          project_id: string | null;
+        }>(
+          `SELECT id::text AS id, org_id, run_id, spec_id, project_id
+           FROM events
+           WHERE event_type = 'fragment.authoring.started'
+             AND payload->>'fragmentId' = $1`,
+          [fragmentId],
+        );
+        expect(within.rows).toHaveLength(1);
+        const row = within.rows[0];
+        eventId = row?.id;
+        expect(row).toEqual({ id: eventId, org_id: ORG_A, run_id: null, spec_id: null, project_id: null });
+      });
+
+      // A runless event still wakes the global notification dispatcher with its
+      // durable event id, but emits no fictitious per-run wake.
+      await expect(globalWake).resolves.toBe(eventId);
+      expect(receivedChannels).toEqual([NOTIFICATION_CHANNEL]);
+    } finally {
+      if (wakeTimeout !== undefined) {
+        clearTimeout(wakeTimeout);
+      }
+      await listener.query("UNLISTEN *");
+      listener.off("notification", notificationHandler);
+      listener.release();
+    }
 
     // Org B's scope must NOT see org A's row (RLS denies under enforced policies).
     await runWithOrgScope(runtimePool, ORG_B, async (client) => {
-      const visible = await client.query<{ n: string }>("SELECT count(*)::text AS n FROM events WHERE run_id = $1", [
-        placeholderRunId,
-      ]);
+      const visible = await client.query<{ n: string }>(
+        `SELECT count(*)::text AS n
+         FROM events
+         WHERE event_type = 'fragment.authoring.started'
+           AND payload->>'fragmentId' = $1`,
+        [fragmentId],
+      );
       expect(Number(visible.rows[0]?.n)).toBe(0);
     });
   });

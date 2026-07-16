@@ -154,9 +154,9 @@ export function buildLiveFragmentAuthoringDeps(
     async emit(event) {
       // The fragment.authoring.* events are registered in the event vocabulary
       // (services/orchestrator/src/engine/events/schemas/templates.ts) so the
-      // event store accepts them. The synthetic "fragment-authoring" runId is
-      // a placeholder — these events fire OUTSIDE a real run; the dashboard
-      // surfaces them via the org-scoped event stream.
+      // event store accepts them. They fire before a run, spec, or project
+      // exists, so they are genuinely org-scoped and carry no invented lineage;
+      // the dashboard surfaces them via the org-scoped event stream.
       const payload =
         event.kind === "fragment.authoring.started"
           ? { orgId: event.orgId, fragmentId: event.fragmentId, kind: event.spec.kind, label: event.spec.label }
@@ -181,7 +181,6 @@ export function buildLiveFragmentAuthoringDeps(
       // NULL here and trip RLS; that was apex v68's halt).
       await eventStore.append({
         orgId,
-        runId: "fragment-authoring",
         eventType: event.kind,
         payload,
       });

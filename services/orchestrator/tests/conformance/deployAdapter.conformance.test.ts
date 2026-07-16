@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // DeployAdapter conformance (the deployment seam above IntegrationProvisioner): the
 // `direct_api` adapter must DELEGATE provisionOrBind/deploy/status to the wrapped
 // Vercel/Fly provisioners, and `verify` must POLL the provider to a READY terminal +
@@ -5,32 +6,18 @@
 // budget exhaustion, or an unreachable URL. Driven entirely over the scripted in-
 // memory deploy transport + a scripted URL probe — NO live Vercel/Fly/network calls.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
-import { buildDeployAdapter } from "../../src/engine/deploy/buildDeployAdapter.js";
-import { DirectApiDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../../src/engine/deploy/directApiDeployAdapter.js";
-import { PulumiDeployAdapter, PULUMI_ADAPTER_KIND } from "../../src/engine/deploy/pulumiDeployAdapter.js";
 import {
-  PackageReleaseDeployAdapter,
-  PACKAGE_RELEASE_ADAPTER_KIND,
-} from "../../src/engine/deploy/packageReleaseDeployAdapter.js";
-import {
-  MobileReleaseDeployAdapter,
-  MOBILE_RELEASE_ADAPTER_KIND,
-} from "../../src/engine/deploy/mobileReleaseDeployAdapter.js";
-import {
-  InMemoryManualAttestationStore,
-  MANUAL_EXTERNAL_ADAPTER_KIND,
-} from "../../src/engine/deploy/manualExternalDeployAdapter.js";
+  projectIntegrationOperationTarget,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../../src/engine/contracts/integrationAuthority.js";
+import { DirectApiDeployAdapter } from "../../src/engine/deploy/directApiDeployAdapter.js";
 import { scriptedDeployTransport, type ScriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
-import {
-  scriptedPulumiRunner,
-  scriptedPackageRegistry,
-  scriptedMobileDistribution,
-} from "./fakes/scriptedDeployDrivers.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
@@ -38,20 +25,10 @@ const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
-
-const vercelGrant: OrgGrant = {
-  providerKind: "deploy.vercel",
-  credentialRef: TOKEN_REF,
-  metadata: { teamId: "team_abc", slug: "acme" },
-};
-
-const flyGrant: OrgGrant = {
-  providerKind: "deploy.flyio",
-  credentialRef: TOKEN_REF,
-  metadata: { orgSlug: "acme", image: "registry.fly.io/acme-web:deployment-1" },
-};
 
 // task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`.
 // These adapter tests are about the verify/deploy LIFECYCLE (not the naming), but
@@ -64,6 +41,40 @@ const ctx = (name: string): ProjectContext => ({
   stack: "node",
   name,
 });
+type DirectProviderKind = "deploy.vercel" | "deploy.flyio";
+const providerMetadata = (kind: DirectProviderKind) =>
+  kind === "deploy.vercel"
+    ? { teamId: "team_abc", slug: "acme" }
+    : { orgSlug: "acme", image: "registry.fly.io/acme-web:deployment-1" };
+const authorityCtx = ctx("authority");
+
+const operationGrant = (
+  kind: DirectProviderKind,
+  operation: IntegrationPrivilegedOperation,
+  target: IntegrationOperationTarget,
+  owner: ProjectContext = authorityCtx,
+) =>
+  testOrgGrant({
+    providerKind: kind,
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata: providerMetadata(kind),
+    capability: "deploy",
+    operation,
+    target,
+    orgId: owner.orgId,
+    projectId: owner.projectId,
+  });
+
+const provisionGrant = (kind: DirectProviderKind, projectCtx: ProjectContext) =>
+  operationGrant(kind, "provision", projectIntegrationOperationTarget(projectCtx), projectCtx);
+const deployGrant = (kind: DirectProviderKind, ref: DeployRef, source: { repo: string; ref: string }) =>
+  operationGrant(kind, "deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref });
+const deploymentGrant = (
+  kind: DirectProviderKind,
+  operation: "verify" | "resolve_demo_surface",
+  ref: DeployRef,
+  deploymentId: string,
+) => operationGrant(kind, operation, { resourceId: ref.appId, deploymentId });
 
 // The Fly arm is NOT merge-reflecting and refuses to trigger unless the operator opts
 // into the static-image semantics. These conformance tests exercise the adapter wiring
@@ -82,7 +93,10 @@ describe("DirectApiDeployAdapter — delegation", () => {
   it("provisionOrBind(provision) delegates to the provisioner's find-or-create", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    const projectCtx = ctx("acme-web");
+    const artifact = await instance.provisionOrBind(await provisionGrant("deploy.vercel", projectCtx), projectCtx, {
+      mode: "provision",
+    });
     expect(artifact.deployRef?.provider).toBe("deploy.vercel");
     // task #27: every deploy app is namespaced with the tanren org slug.
     expect(transport.appNames()).toEqual(["tanren-acme-web"]);
@@ -93,10 +107,17 @@ describe("DirectApiDeployAdapter — delegation", () => {
     const transport = scriptedDeployTransport("vercel", ["existing-proj"]);
     const { instance } = adapter(transport);
     const existingId = `vercel_app_1`;
-    const artifact = await instance.provisionOrBind(vercelGrant, ctx("whatever"), {
-      mode: "bind",
-      existingResourceId: existingId,
-    });
+    const projectCtx = ctx("whatever");
+    const artifact = await instance.provisionOrBind(
+      await operationGrant(
+        "deploy.vercel",
+        "bind",
+        projectIntegrationOperationTarget(projectCtx, existingId),
+        projectCtx,
+      ),
+      projectCtx,
+      { mode: "bind", existingResourceId: existingId },
+    );
     expect(artifact.deployRef?.appId).toBe(existingId);
     // bind never creates a second app.
     expect(transport.appNames()).toEqual(["existing-proj"]);
@@ -105,9 +126,13 @@ describe("DirectApiDeployAdapter — delegation", () => {
   it("deploy TRIGGERS a build of the merged ref via the wrapped provisioner", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    const projectCtx = ctx("acme-web");
+    const artifact = await instance.provisionOrBind(await provisionGrant("deploy.vercel", projectCtx), projectCtx, {
+      mode: "provision",
+    });
     const ref: DeployRef = { provider: "deploy.vercel", appId: artifact.deployRef!.appId };
-    const result = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "deadbeef" });
+    const source = { repo: "acme/acme-web", ref: "deadbeef" };
+    const result = await instance.deploy(await deployGrant("deploy.vercel", ref, source), ref, source);
     const triggered = transport.deploysTriggered();
     expect(triggered).toHaveLength(1);
     // The REAL v13 github gitSource shape: org (owner) + bare repo + the commit in sha.
@@ -124,12 +149,20 @@ describe("DirectApiDeployAdapter — delegation", () => {
   it("status reads a deployment's current provider state without polling", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+    const projectCtx = ctx("acme-web");
+    const artifact = await instance.provisionOrBind(await provisionGrant("deploy.vercel", projectCtx), projectCtx, {
+      mode: "provision",
+    });
     const appId = artifact.deployRef!.appId;
     const ref: DeployRef = { provider: "deploy.vercel", appId };
-    const { deploymentId } = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "main" });
+    const source = { repo: "acme/acme-web", ref: "main" };
+    const { deploymentId } = await instance.deploy(await deployGrant("deploy.vercel", ref, source), ref, source);
     transport.scriptDeploymentStates(deploymentId, ["BUILDING"]);
-    const status = await instance.status(vercelGrant, ref, deploymentId);
+    const status = await instance.status(
+      await deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(status.state).toBe("BUILDING");
     expect(status.ready).toBe(false);
     expect(status.failed).toBe(false);
@@ -139,25 +172,28 @@ describe("DirectApiDeployAdapter — delegation", () => {
 });
 
 describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
-  async function provisionAndDeploy(
-    transport: ScriptedDeployTransport,
-    instance: DirectApiDeployAdapter,
-    grant: OrgGrant,
-    name: string,
-  ) {
-    const artifact = await instance.provisionOrBind(grant, ctx(name), { mode: "provision" });
-    const ref: DeployRef = { provider: grant.providerKind, appId: artifact.deployRef!.appId };
-    const { deploymentId } = await instance.deploy(grant, ref, { repo: `acme/${name}`, ref: "main" });
+  async function provisionAndDeploy(instance: DirectApiDeployAdapter, kind: DirectProviderKind, name: string) {
+    const projectCtx = ctx(name);
+    const artifact = await instance.provisionOrBind(await provisionGrant(kind, projectCtx), projectCtx, {
+      mode: "provision",
+    });
+    const ref: DeployRef = { provider: kind, appId: artifact.deployRef!.appId };
+    const source = { repo: `acme/${name}`, ref: "main" };
+    const { deploymentId } = await instance.deploy(await deployGrant(kind, ref, source), ref, source);
     return { ref, deploymentId };
   }
 
   it("polls the provider through BUILDING→READY then smoke-checks the resolved URL", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance, probe } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["QUEUED", "BUILDING", "BUILDING", "READY"]);
 
-    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    const verification = await instance.verify(
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
 
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("READY");
@@ -170,12 +206,67 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     expect(probe.probed[0]).not.toContain("{branch}");
   });
 
+  it("performs no next status read when reauthorization reports revocation between polls", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["BUILDING", "READY"]);
+    const grant = await deploymentGrant("deploy.vercel", "verify", ref, deploymentId);
+    let authorityAttempts = 0;
+
+    await expect(
+      instance.verify(
+        async () => {
+          authorityAttempts += 1;
+          if (authorityAttempts > 1) throw new Error("selected grant revoked");
+          return grant;
+        },
+        ref,
+        deploymentId,
+      ),
+    ).rejects.toThrow(/revoked/u);
+    expect(authorityAttempts).toBe(2);
+    expect(transport.statusPolls(deploymentId)).toBe(1);
+  });
+
+  it("performs no next status read when a fixed lease expires between polls", async () => {
+    vi.useFakeTimers();
+    try {
+      const issuedAt = new Date("2030-01-01T00:00:00.000Z");
+      vi.setSystemTime(issuedAt);
+      const transport = scriptedDeployTransport("vercel");
+      const { instance } = adapter(transport);
+      const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
+      transport.scriptDeploymentStates(deploymentId, ["BUILDING", "READY"]);
+      const grant = await deploymentGrant("deploy.vercel", "verify", ref, deploymentId);
+      let authorityAttempts = 0;
+
+      await expect(
+        instance.verify(
+          async () => {
+            authorityAttempts += 1;
+            if (authorityAttempts > 1) vi.setSystemTime(new Date(issuedAt.getTime() + 31_000));
+            return grant;
+          },
+          ref,
+          deploymentId,
+        ),
+      ).rejects.toThrow(/expired/u);
+      expect(authorityAttempts).toBe(2);
+      expect(transport.statusPolls(deploymentId)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails LOUD when the deployment reaches a FAILURE terminal", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance, probe } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["BUILDING", "ERROR"]);
-    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/FAILURE state 'ERROR'/u);
+    await expect(
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/FAILURE state 'ERROR'/u);
     // A failed deploy is never smoke-checked.
     expect(probe.probed).toEqual([]);
   });
@@ -183,12 +274,16 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
   it("keeps polling UNBOUNDED while the state advances — succeeds well past the old poll cap", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     // A genuinely SLOW deploy: BUILDING for 20 polls (well past the old maxPolls=10 cap),
     // each poll a fresh advancing state so the convergence loop reads PROGRESS, then READY.
     const slowButProgressing = Array.from({ length: 20 }, (_v, i) => `BUILDING-${String(i)}`);
     transport.scriptDeploymentStates(deploymentId, [...slowButProgressing, "READY"]);
-    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    const verification = await instance.verify(
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("READY");
     // 21 polls — a count that would have FAILED under the old maxPolls=10/3 budget.
@@ -199,32 +294,36 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
   it("escalates LOUD as STUCK (not on a count) when the state never advances", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     // The deployment never advances past BUILDING — a PROVEN fixed point (same state, no
     // advancement), escalated as a stuck-deploy via intelligent non-convergence, NOT a cap.
     transport.scriptDeploymentStates(deploymentId, ["BUILDING"]);
-    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(
-      /is STUCK in non-terminal state 'BUILDING'/u,
-    );
+    await expect(
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/is STUCK in non-terminal state 'BUILDING'/u);
   });
 
   it("fails LOUD when READY but the URL smoke check is unreachable", async () => {
     const transport = scriptedDeployTransport("vercel");
     // The deployed URL answers 503 (not reachable).
     const { instance } = adapter(transport, 503);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(
-      /not reachable \(smoke check returned HTTP 503\)/u,
-    );
+    await expect(
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/not reachable \(smoke check returned HTTP 503\)/u);
   });
 
   it("Fly: polls machine state to 'started' then smoke-checks the app URL", async () => {
     const transport = scriptedDeployTransport("fly");
     const { instance, probe } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, flyGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.flyio", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["created", "starting", "started"]);
-    const verification = await instance.verify(flyGrant, ref, deploymentId);
+    const verification = await instance.verify(
+      () => deploymentGrant("deploy.flyio", "verify", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("started");
     // task #27: the Fly URL uses the namespaced app name (`tanren-acme-web`).
@@ -237,9 +336,13 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     // gate — the 401 PROVES the server is up. Verify must NOT fail-verify on it.
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport, 401);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    const verification = await instance.verify(
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(verification.ready).toBe(true);
     expect(verification.smokeStatus).toBe(401);
   });
@@ -247,35 +350,49 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
   it("still fails LOUD on a non-protection error status (e.g. 500)", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport, 500);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    await expect(instance.verify(vercelGrant, ref, deploymentId)).rejects.toThrow(/not reachable .*HTTP 500/u);
+    await expect(
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/not reachable .*HTTP 500/u);
   });
 
   it("the deploy token VALUE is never returned in a verification result", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance, vercelGrant, "acme-web");
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    const verification = await instance.verify(vercelGrant, ref, deploymentId);
+    const verification = await instance.verify(
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(JSON.stringify(verification)).not.toContain(TOKEN_VALUE);
   });
 });
 
 describe("DirectApiDeployAdapter — demoSurface (the demo exercise surface)", () => {
-  async function provisionAndDeploy(transport: ScriptedDeployTransport, instance: DirectApiDeployAdapter) {
-    const artifact = await instance.provisionOrBind(vercelGrant, ctx("acme-web"), { mode: "provision" });
+  async function provisionAndDeploy(instance: DirectApiDeployAdapter) {
+    const projectCtx = ctx("acme-web");
+    const artifact = await instance.provisionOrBind(await provisionGrant("deploy.vercel", projectCtx), projectCtx, {
+      mode: "provision",
+    });
     const ref: DeployRef = { provider: "deploy.vercel", appId: artifact.deployRef!.appId };
-    const { deploymentId } = await instance.deploy(vercelGrant, ref, { repo: "acme/acme-web", ref: "main" });
+    const source = { repo: "acme/acme-web", ref: "main" };
+    const { deploymentId } = await instance.deploy(await deployGrant("deploy.vercel", ref, source), ref, source);
     return { ref, deploymentId };
   }
 
   it("resolves the live web_url surface from the deployment status (the same resolved URL)", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance);
+    const { ref, deploymentId } = await provisionAndDeploy(instance);
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    const surface = await instance.demoSurface(vercelGrant, ref, deploymentId);
+    const surface = await instance.demoSurface(
+      await deploymentGrant("deploy.vercel", "resolve_demo_surface", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(surface.kind).toBe("web_url");
     expect(surface.url).toMatch(/^https:\/\//u);
     // demoSurface is a READ — no second deploy was triggered.
@@ -285,109 +402,13 @@ describe("DirectApiDeployAdapter — demoSurface (the demo exercise surface)", (
   it("never returns the deploy token VALUE in a surface", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance } = adapter(transport);
-    const { ref, deploymentId } = await provisionAndDeploy(transport, instance);
+    const { ref, deploymentId } = await provisionAndDeploy(instance);
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
-    const surface = await instance.demoSurface(vercelGrant, ref, deploymentId);
+    const surface = await instance.demoSurface(
+      await deploymentGrant("deploy.vercel", "resolve_demo_surface", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(JSON.stringify(surface)).not.toContain(TOKEN_VALUE);
-  });
-});
-
-describe("buildDeployAdapter (registry/factory)", () => {
-  it("builds the direct_api adapter", () => {
-    const built = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
-      provisioner: { transport: scriptedDeployTransport("vercel"), secrets: secrets() },
-      urlProbe: scriptedUrlProbe(),
-      poll: instantVerifyPollPolicy(),
-    });
-    expect(built.kind).toBe("direct_api");
-  });
-
-  it("fails LOUD for an unknown adapter class (never a silent default)", () => {
-    expect(() =>
-      buildDeployAdapter("does_not_exist", {
-        provisioner: { transport: scriptedDeployTransport("vercel"), secrets: secrets() },
-      }),
-    ).toThrow(/adapter class 'does_not_exist' is not a registered deploy adapter/u);
-  });
-
-  it("builds the manual_external class when wired (Codex H3 #22: the only non-direct_api production class)", () => {
-    const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
-    const probe = scriptedUrlProbe();
-    const poll = instantVerifyPollPolicy();
-    expect(
-      buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, {
-        provisioner: base,
-        urlProbe: probe,
-        poll,
-        manualAttestations: new InMemoryManualAttestationStore(),
-        manualOwnerScope: { orgId: "org_test", projectId: "proj_test" },
-      }).kind,
-    ).toBe(MANUAL_EXTERNAL_ADAPTER_KIND);
-  });
-
-  it("fails LOUD when manual_external is selected without its durable attestation store", () => {
-    const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
-    // Codex H3 #20: manual_external MUST supply a durable attestation store — the
-    // in-memory default is gone.
-    expect(() => buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /required config 'manualAttestations' is not set/u,
-    );
-    // Codex H3 #20: manual_external ALSO requires an explicit tenant scope (an
-    // unscoped adapter would silently write cross-tenant rows).
-    expect(() =>
-      buildDeployAdapter(MANUAL_EXTERNAL_ADAPTER_KIND, {
-        provisioner: base,
-        manualAttestations: new InMemoryManualAttestationStore(),
-      }),
-    ).toThrow(/required config 'manualOwnerScope' is not set/u);
-  });
-
-  // Codex H3 #22 closure: the pulumi / package_release / mobile_release adapter CLASSES
-  // exist (with a scripted conformance suite), but their external drivers have no
-  // concrete production impl on `main`. Registering them in the production catalog
-  // would create the exact "class-can-be-selected-but-not-built" split #22 flagged.
-  // The factory refuses them LOUD with a clear "fixture-only" diagnostic; tests exercise
-  // them via direct `new PulumiDeployAdapter({...})` (no factory-shaped seam).
-  it("refuses the fixture-only pulumi / package_release / mobile_release classes with a clear diagnostic", () => {
-    const base = { transport: scriptedDeployTransport("vercel"), secrets: secrets() };
-    expect(() => buildDeployAdapter(PULUMI_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /adapter class 'pulumi' is fixture-only/u,
-    );
-    expect(() => buildDeployAdapter(PACKAGE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /adapter class 'package_release' is fixture-only/u,
-    );
-    expect(() => buildDeployAdapter(MOBILE_RELEASE_ADAPTER_KIND, { provisioner: base })).toThrow(
-      /adapter class 'mobile_release' is fixture-only/u,
-    );
-  });
-
-  // The classes stay CONSTRUCTIBLE via direct injection so their conformance suites
-  // keep running against scripted drivers. This is the "tests can use them via
-  // explicit injection" contract Codex H3 #22 preserves.
-  it("still constructs the fixture-only classes directly (their conformance suites drive them)", () => {
-    const probe = scriptedUrlProbe();
-    const poll = instantVerifyPollPolicy();
-    expect(
-      new PulumiDeployAdapter({
-        runner: scriptedPulumiRunner(),
-        secrets: secrets(),
-        urlProbe: probe,
-        poll,
-      }).kind,
-    ).toBe(PULUMI_ADAPTER_KIND);
-    expect(
-      new PackageReleaseDeployAdapter({
-        registry: scriptedPackageRegistry(),
-        secrets: secrets(),
-        poll,
-      }).kind,
-    ).toBe(PACKAGE_RELEASE_ADAPTER_KIND);
-    expect(
-      new MobileReleaseDeployAdapter({
-        distribution: scriptedMobileDistribution(),
-        secrets: secrets(),
-        poll,
-      }).kind,
-    ).toBe(MOBILE_RELEASE_ADAPTER_KIND);
   });
 });

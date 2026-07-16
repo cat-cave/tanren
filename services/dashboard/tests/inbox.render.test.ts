@@ -34,9 +34,13 @@ const SNAPSHOT = {
       kind: "issues",
       name: "github · cat-cave",
       detail: "issues labeled spec-candidate · 6 open",
-      config: {},
+      config: { owner: "cat-cave", repo: "app", labels: ["spec-candidate"] },
       enabled: true,
       autoRoute: false,
+      state: "active",
+      attention: null,
+      retryNotBefore: null,
+      webhookConfigured: false,
     },
     {
       id: "src_audit",
@@ -48,6 +52,48 @@ const SNAPSHOT = {
       config: {},
       enabled: true,
       autoRoute: true,
+      state: "active",
+      attention: null,
+      retryNotBefore: null,
+      webhookConfigured: false,
+    },
+    {
+      id: "src_bad",
+      orgId: "org_acme",
+      projectId: "project_easy",
+      kind: "issues",
+      name: "stale issues source",
+      detail: "disabled by intake authority",
+      config: null,
+      enabled: false,
+      autoRoute: false,
+      state: "needs_attention",
+      attention: {
+        code: "invalid_config",
+        message: "This source configuration is invalid. Recreate it with required fields.",
+        observedAt: "2026-07-16T12:00:00.000Z",
+      },
+      retryNotBefore: null,
+      webhookConfigured: false,
+    },
+    {
+      id: "src_recoverable",
+      orgId: "org_acme",
+      projectId: "project_easy",
+      kind: "issues",
+      name: "credential-repair source",
+      detail: "credential was rotated",
+      config: { owner: "cat-cave", repo: "app", labels: [] },
+      enabled: false,
+      autoRoute: false,
+      state: "needs_attention",
+      attention: {
+        code: "credential_unavailable",
+        message: "Repair the organization credential and retry.",
+        observedAt: "2026-07-16T12:02:00.000Z",
+      },
+      retryNotBefore: null,
+      webhookConfigured: false,
     },
   ],
   candidates: [
@@ -68,6 +114,8 @@ const SNAPSHOT = {
         verdict: "auto_routable",
         duplicateOfSpecId: null,
         discoveryVariant: "feature",
+        routableSpec: null,
+        entityAnchor: null,
       },
       resolvedSpecId: null,
       sourceName: "scheduled audits",
@@ -90,6 +138,8 @@ const SNAPSHOT = {
         verdict: "needs_call",
         duplicateOfSpecId: null,
         discoveryVariant: "feature",
+        routableSpec: null,
+        entityAnchor: null,
       },
       resolvedSpecId: null,
       sourceName: "github · cat-cave",
@@ -112,6 +162,8 @@ const SNAPSHOT = {
         verdict: "dedupe_close",
         duplicateOfSpecId: "spec_a4f",
         discoveryVariant: "feature",
+        routableSpec: null,
+        entityAnchor: null,
       },
       resolvedSpecId: null,
       sourceName: "github · cat-cave",
@@ -124,7 +176,22 @@ function stubPool(): pg.Pool {
   return { query: async () => ({ rows: [{ ok: 1 }], rowCount: 1 }) } as unknown as pg.Pool;
 }
 
-function mockOrchestrator(snapshot: unknown = SNAPSHOT): void {
+const RECOVERY_SUCCESS = {
+  status: 200,
+  body: {
+    source: {
+      ...SNAPSHOT.sources[3],
+      enabled: true,
+      state: "active",
+      attention: null,
+    },
+  },
+};
+
+function mockOrchestrator(
+  snapshot: unknown = SNAPSHOT,
+  recovery: { status: number; body: unknown } = RECOVERY_SUCCESS,
+): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -135,6 +202,9 @@ function mockOrchestrator(snapshot: unknown = SNAPSHOT): void {
       return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
     if (/\/orgs\/[^/]+\/inbox$/u.test(url) && method === "GET")
       return new Response(JSON.stringify(snapshot), { status: 200 });
+    if (/\/orgs\/[^/]+\/inbox\/sources\/[^/]+\/recover$/u.test(url) && method === "POST") {
+      return new Response(JSON.stringify(recovery.body), { status: recovery.status });
+    }
     if (/\/inbox\/candidates\/[^/]+\/(fold|dismiss|close-duplicate)$/u.test(url) && method === "POST") {
       return new Response(JSON.stringify({ candidate: {} }), { status: 200 });
     }
@@ -167,6 +237,10 @@ describe("candidate inbox surface", () => {
     expect(html).toContain("scheduled audits");
     expect(html).toContain("auto");
     expect(html).toContain("no hardcoded sources");
+    expect(html).toContain('data-source-attention="invalid_config"');
+    expect(html).toContain("needs attention · This source configuration is invalid");
+    expect(html.match(/retry after repair/gu)).toHaveLength(1);
+    expect(html).toContain("credential-repair source");
   });
 
   it("renders each candidate's triage read-out (dedupe / match / placement)", async () => {
@@ -209,5 +283,49 @@ describe("candidate inbox surface", () => {
     const html = await (await app.request("/inbox")).text();
     expect(html).toContain("No candidates yet");
     expect(html).toContain("no sources yet");
+  });
+
+  it("surfaces a successful source recovery through the redirect and page banner", async () => {
+    const app = await build();
+    const response = await app.request("/inbox/sources/src_recoverable/recover", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "expectedObservedAt=2026-07-16T12%3A02%3A00.000Z",
+      redirect: "manual",
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/inbox?recovery=success");
+    const html = await (await app.request("/inbox?recovery=success")).text();
+    expect(html).toContain("Source recovery applied");
+    expect(html).toContain("data-recovery-notice");
+  });
+
+  it("surfaces a stale recovery conflict instead of silently redirecting", async () => {
+    mockOrchestrator(SNAPSHOT, { status: 409, body: { error: "source_recovery_conflict" } });
+    const app = await build();
+    const response = await app.request("/inbox/sources/src_recoverable/recover", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "expectedObservedAt=2026-07-16T12%3A02%3A00.000Z",
+      redirect: "manual",
+    });
+    expect(response.headers.get("location")).toBe("/inbox?recovery=conflict");
+    const html = await (await app.request("/inbox?recovery=conflict")).text();
+    expect(html).toContain("conflicted with a newer repair state");
+    expect(html).toContain("data-recovery-error");
+  });
+
+  it("rejects a malformed 2xx recovery acknowledgement and displays the error", async () => {
+    mockOrchestrator(SNAPSHOT, { status: 200, body: { source: {} } });
+    const app = await build();
+    const response = await app.request("/inbox/sources/src_recoverable/recover", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "expectedObservedAt=2026-07-16T12%3A02%3A00.000Z",
+      redirect: "manual",
+    });
+    expect(response.headers.get("location")).toBe("/inbox?recovery=malformed-response");
+    const html = await (await app.request("/inbox?recovery=malformed-response")).text();
+    expect(html).toContain("invalid acknowledgement");
   });
 });

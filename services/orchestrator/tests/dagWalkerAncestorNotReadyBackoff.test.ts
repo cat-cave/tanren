@@ -69,7 +69,7 @@ class MutableLifecycle implements DagLifecycleReadModel {
 class MutableReadModel implements DagReadModel {
   constructor(public nodes: DagSpecNode[]) {}
   async loadSnapshot(projectId: string): Promise<DagSnapshot> {
-    return { projectId, nodes: this.nodes.map((n) => ({ ...n })), archived: false };
+    return { projectId, nodes: this.nodes.map((item) => ({ ...item })), projectLifecycle: "active" };
   }
 }
 

@@ -28,6 +28,19 @@ export type NamespacedCredentialKind =
 
 export type CredentialScope = "org" | "me";
 
+/** A persisted credential coordinate escaped the authenticated tenant namespace. */
+export class CredentialRefOwnershipError extends Error {
+  readonly retriable = false as const;
+
+  constructor(
+    readonly credentialKind: NamespacedCredentialKind,
+    options?: ErrorOptions,
+  ) {
+    super("credential ref does not belong to the authenticated owner", options);
+    this.name = "CredentialRefOwnershipError";
+  }
+}
+
 /** The Vault path slug used for each kind. Stable; do not renumber. */
 const KIND_SLUG: Record<NamespacedCredentialKind, string> = {
   codex_chatgpt_auth: "codex",
@@ -113,4 +126,27 @@ export function deriveImportRef(args: {
 }): string {
   const name = resolveCredentialName(args);
   return deriveCredentialRef({ kind: args.kind, scope: args.scope, ownerId: args.ownerId, name });
+}
+
+/**
+ * Canonicalize an org-owned GitHub credential coordinate. Bare names are
+ * server-derived into the org namespace; full refs must reproduce that exact
+ * namespace byte-for-byte. The supplied coordinate is deliberately omitted
+ * from the typed error so a hostile cross-tenant ref is never echoed.
+ */
+export function canonicalOrgGithubCredentialRef(args: {
+  orgId: string;
+  supplied: string;
+  kind: "github_token" | "github_app";
+}): string {
+  try {
+    return deriveImportRef({
+      supplied: args.supplied,
+      kind: args.kind,
+      scope: "org",
+      ownerId: args.orgId,
+    });
+  } catch (error) {
+    throw new CredentialRefOwnershipError(args.kind, { cause: error });
+  }
 }

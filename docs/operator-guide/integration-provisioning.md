@@ -1,8 +1,9 @@
 # Integration provisioning boundaries
 
 > **Status — built (design-of-record).** The provisioner substrate is shipped:
-> the `org_integrations` table + repo, the `IntegrationProvisioner` contract +
-> registry, the Sentry / Slack / Fly / Vercel provisioners, the `hetznerAllocator`,
+> versioned org connections and grants, an explicit per-project grant selection,
+> the `IntegrationProvisioner` contract + registry, the Sentry / Slack / Fly /
+> Vercel provisioners, the `hetznerAllocator`,
 > and the per-project **App Environment** store
 > (`engine/repositories/appEnvironment.ts` +
 > `engine/workflow/{attachRuntimeAppEnv,resolveAppEnv}.ts`, injected over SSH by
@@ -29,10 +30,12 @@ There are **two separate kinds** of integration/secret, and they are configured,
 stored, and injected differently:
 
 - **Plane A — Tanren's own integrations** (the rest of this doc): the integrations
-  **Tanren** uses to operate on the user's behalf — ingest issues (Sentry/Linear),
+  **Tanren** uses to operate on the user's behalf — ingest issues (GitHub/Sentry),
   notify + interact (Slack as a Forge interaction plane), provision compute + run
   (cloud allocators), deploy (Vercel/Fly), VCS (the GitHub App). Org-granted,
-  Tanren-managed via `org_integrations` + the `IntegrationProvisioner` port.
+  Tanren-managed through `org_integration_connections`,
+  `org_integration_grants`, and the `IntegrationProvisioner` port. A project
+  selects one exact active connection/grant before any provider operation.
 
 - **Plane B — the built project's app environment** (see "Project app environment"
   below): the environment variables + secrets the **product Tanren is building**
@@ -49,7 +52,7 @@ is Plane B. They are configured and injected independently.
 ## Project app environment (Plane B — the built product's own secrets)
 
 A per-project **App Environment** store holds the building product's env vars +
-secrets, distinct from `org_integrations`:
+secrets, distinct from Tanren's connection/grant authority:
 
 - **Entry shape:** `{ key (e.g. RESEND_API_KEY), value (secret → secret manager;
 non-secret config → projects.config), scopes: [build | test | runtime | dev],
@@ -86,11 +89,11 @@ product's Slack bot token + any app env are Plane B).
 
 ## Boundary model
 
-| Layer            | Stored where                                                              | Examples                                                                                                                             | Rule                                                           |
-| ---------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
-| Org grant        | `organizations.config` points at managed credentials                      | GitHub App install, Sentry org token, Slack app/bot token, Hetzner project token, deploy provider token                              | Human grants this once. It can authorize resource creation.    |
-| Project artifact | `projects.config`, `inbox_sources`, notification targets, deploy metadata | Sentry project slug + DSN, Linear team/project filters, Slack channel or webhook, PagerDuty service/routing key, preview URL pattern | Tanren creates or discovers this from the org grant.           |
-| Runtime secret   | Secret manager only                                                       | App private key, API tokens, DSNs, webhooks, routing keys                                                                            | Never stored in DB config or env except test import/bootstrap. |
+| Layer            | Stored where                                                                                                       | Examples                                                                                                | Rule                                                           |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Org grant        | `org_integration_connections`, immutable auth generations, and `org_integration_grants`; credential bytes in Vault | GitHub App install, Sentry org token, Slack app/bot token, Hetzner project token, deploy provider token | Human grants this once. It can authorize resource creation.    |
+| Project artifact | `projects.config`, `inbox_sources`, notification targets, deploy metadata                                          | Sentry project slug + DSN, Slack channel, PagerDuty service/routing key, preview URL pattern            | Tanren creates or discovers this from the org grant.           |
+| Runtime secret   | Secret manager only                                                                                                | App private key, API tokens, DSNs, webhooks, routing keys                                               | Never stored in DB config or env except test import/bootstrap. |
 
 ## Integration matrix
 
@@ -106,9 +109,9 @@ worthwhile per provider — not missing foundations.
 | GitHub App                | App id + private key + installation id in org config                                            | Repo access, issue webhook sources, PR branches/statuses                     | Per-org installation token minting ships. Add repo-access checks + least-privilege install guidance; avoid PAT as a primary path.                                                                                                                                          |
 | GitHub Issues intake      | Reuse GitHub App installation                                                                   | `inbox_sources` per project/repo and webhook secret per source               | Intake ships. Auto-create the project inbox source when a repo is linked.                                                                                                                                                                                                  |
 | Sentry                    | Org/internal integration token with read/write project scopes                                   | Sentry project, client key/DSN, optional service hook, project inbox source  | **Shipped** (`providers/sentryProvisioner.ts`): create/list project, create client key, store DSN, create inbox source. Refine: tighter scopes + discovery.                                                                                                                |
-| Linear                    | Workspace OAuth/app token or org-level API grant                                                | Team/project mapping, labels/states filters, source config                   | Connector uses `teamId`/`projectId` when provided. Add discovery/provisioning: list teams/projects, bind/create a Linear project, store IDs.                                                                                                                               |
-| Jira                      | Site-level API/OAuth grant                                                                      | Jira project key/issue type/webhook/source config                            | Connector is project-key oriented. Treat the Jira site as the org grant; add project discovery/create or explicit bind at onboarding.                                                                                                                                      |
-| Slack notifications       | Slack app/bot token, plus incoming-webhook capability when used                                 | Channel, incoming webhook, or app channel membership per Tanren project      | **Shipped** (`integrations/slack/slackProvisioner.ts`): select/create channel, authorize the app, store webhook or use bot `chat.postMessage`.                                                                                                                             |
+| Linear                    | Workspace OAuth/app token or org-level API grant                                                | Team/project mapping, labels/states filters, source config                   | **Not currently supported.** The former raw-`tokenRef` intake connector was removed; reintroduction requires catalogued connection/grant lifecycle, exact operation leases, and provider conformance.                                                                      |
+| Jira                      | Site-level API/OAuth grant                                                                      | Jira project key/issue type/webhook/source config                            | **Not currently supported.** The former raw-`tokenRef` intake connector was removed; reintroduction requires catalogued connection/grant lifecycle, exact operation leases, and provider conformance.                                                                      |
+| Slack notifications       | Slack app/bot token, plus incoming-webhook capability when used                                 | Channel, incoming webhook, or app channel membership per Tanren project      | Channel discovery/provisioning ships. Bot delivery remains hard-disabled until the notification adapter consumes an exact grant and `chat.postMessage` receipt; it does not reinterpret a bot token as a webhook URL.                                                      |
 | Slack project secret      | Slack app/bot token                                                                             | App-specific project secret injected into generated product                  | Generated projects can request a Slack capability; Tanren provisions/stores the project secret and emits setup env. Refine: broaden capability surface.                                                                                                                    |
 | Discord notifications     | Bot token or server-level webhook-management grant if available; otherwise user-created webhook | Channel webhook URL                                                          | Manual webhook is the acceptable fallback (Discord webhook creation often needs interactive consent). If a bot flow lands, create webhooks/channels via bot permission.                                                                                                    |
 | Teams notifications       | Microsoft app/Graph credential or incoming webhook URL                                          | Channel/webhook URL                                                          | Webhook delivery ships. Add a Graph-based provider if Teams matters; otherwise keep manual webhook as the fallback artifact.                                                                                                                                               |
@@ -132,9 +135,11 @@ worthwhile per provider — not missing foundations.
 
 The boundary model above is realized by:
 
-1. The `org_integrations` config surface (separate from `inbox_sources` and
-   notification targets): non-secret provider metadata + refs to managed
-   credentials, behind the `org_integrations` table + repository.
+1. The connection/grant authority (separate from `inbox_sources` and
+   notification targets): one connection per upstream account, account-specific
+   managed-credential refs, versioned grants, and an exact per-project selection.
+   Multiple accounts for one provider never share a credential ref, and no
+   consumer silently chooses a newest row.
 2. The `IntegrationProvisioner` contract + registry — provider provisioner ports
    separate from the runtime poll/send adapters (Sentry / Slack / Fly / Vercel
    provisioners + the `hetznerAllocator`).
@@ -144,7 +149,8 @@ The boundary model above is realized by:
    Autonomous greenfield/apex creation also requests `deploy` up front. The
    caller must name `deploy.vercel` or `deploy.flyio`; when the org has not linked
    that provider, creation returns structured `not_linked` evidence instead of
-   creating a project with no deploy path.
+   creating a project with no deploy path. When more than one account is eligible,
+   the surface returns `selection_required` before provider I/O.
 4. Leaf-resource manual entry (BYO) remains the path for providers that do not
    expose provisioning APIs or require workspace-owner interactive consent.
 
@@ -163,8 +169,10 @@ The correct Sentry flow is:
    project it is creating or importing.
 3. Tanren creates or finds a Sentry project under the configured Sentry team.
 4. Tanren creates a client key and stores the DSN as a project secret/artifact.
-5. Tanren creates an `inbox_sources` row for that Tanren project using the
-   Sentry project slug and the org token ref.
+5. Tanren creates an `inbox_sources` row for that Tanren project using only the
+   Sentry organization/project slugs. Intake resolves the exact current project
+   selection and immutable grant/auth generations at execution time; no reusable
+   token reference is persisted on the source.
 
 Sentry's API supports the required pieces: create project under a team, create a
 project client key/DSN, list organization projects, and register service hooks.

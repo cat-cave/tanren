@@ -26,6 +26,7 @@ import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import {
   intakeAutoRouteDeps,
+  loadRunnableInboxSource,
   processWebhookEvent,
   verifyGithubSignature,
   type WebhookProcessorDeps,
@@ -34,14 +35,9 @@ import { pgRepositories } from "../../engine/contracts/repositories.js";
 import { type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
 import type { AutoRouteDeps } from "../../engine/forge/inbox/index.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
-import { z } from "zod";
 import { createLogger } from "../../engine/observability/logger.js";
 
 const log = createLogger("issue-webhook");
-
-// The webhook secret ref the source carries on its `config`. A source with no
-// `webhookSecretRef` cannot receive a webhook (the receiver rejects it 401).
-const WebhookSourceConfig = z.object({ webhookSecretRef: z.string().min(1).optional() }).passthrough();
 
 export interface IssueWebhookRouteDeps {
   pool: pg.Pool;
@@ -56,7 +52,9 @@ export interface IssueWebhookRouteDeps {
 
 /** Resolve a source system-scoped (the receiver has no tenant context in the path). */
 async function resolveSource(pool: pg.Pool, sourceId: string): Promise<InboxSource | undefined> {
-  return runWithSystemScope(pool, (client) => pgRepositories.inbox.getSource(client, sourceId));
+  const identified = await runWithSystemScope(pool, (client) => pgRepositories.inbox.getSource(client, sourceId));
+  if (identified === undefined) return undefined;
+  return runWithSystemScope(pool, (client) => loadRunnableInboxSource(client, { sourceId, orgId: identified.orgId }));
 }
 
 export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
@@ -77,8 +75,9 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
 
     // Mandatory signature verification (§1d). Resolve the source's secret; a
     // source with no secret, or a bad signature, is rejected — no intake.
-    const config = WebhookSourceConfig.safeParse(source.config);
-    const secretRef = config.success ? config.data.webhookSecretRef : undefined;
+    const secretRef = await runWithSystemScope(deps.pool, (client) =>
+      pgRepositories.inbox.getWebhookSecretRef(client, source.id, source.orgId),
+    );
     const secret = secretRef === undefined ? undefined : await deps.secrets.get(secretRef);
     const check = verifyGithubSignature({
       rawBody,

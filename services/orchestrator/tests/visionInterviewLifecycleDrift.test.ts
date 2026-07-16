@@ -28,7 +28,7 @@ import {
   type InterviewCapture,
 } from "../src/engine/forge/interview/index.js";
 import type { MaterializeTemplate } from "../src/engine/templates/index.js";
-import { preparedDeploy, stubPool } from "./fixtures/forge/interviewDeriveStub.js";
+import { preparedDeploy, stubPool, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
 
 // PR-G (task #77) — opaque composed-template identifier; no GitHub repo at this ref.
 const stubMaterialize = (): MaterializeTemplate => async (input) => ({
@@ -216,6 +216,7 @@ describe("deriveProductGraph · emits EXACTLY the captured lifecycle (no re-deri
         owner: "cat-cave",
         deploy: { providerKind: "deploy.vercel" },
         materializeTemplate: stubMaterialize(),
+        bootstrapProject: successfulBootstrapProject,
       },
     );
     const config = configs.get(derived.projectId) as { lifecycle?: CaptureLifecycle } | undefined;

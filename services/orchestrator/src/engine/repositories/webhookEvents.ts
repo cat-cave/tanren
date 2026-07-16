@@ -80,6 +80,13 @@ export interface PersistWebhookEventInput {
   payload: unknown;
 }
 
+export class WebhookEventLineageError extends Error {
+  constructor() {
+    super("webhook event org does not match an active inbox source");
+    this.name = "WebhookEventLineageError";
+  }
+}
+
 const RETURN_COLS = `id, source_id, org_id, event_type, delivery_id, payload, status, attempts, last_error`;
 
 export const WebhookEventStore = {
@@ -89,11 +96,18 @@ export const WebhookEventStore = {
     const id = `whk_${randomUUID()}`;
     const result = await client.query<WebhookEventRow>(
       `INSERT INTO webhook_events (id, source_id, org_id, event_type, delivery_id, payload, status, attempts)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, 'received', 0)
+       SELECT $1, s.id, s.org_id, $4, $5, $6::jsonb, 'received', 0
+         FROM inbox_sources s
+        WHERE s.id = $2 AND s.org_id = $3 AND s.enabled = 'true' AND s.state = 'active'
+          AND (s.project_id IS NULL OR EXISTS (
+            SELECT 1 FROM projects p WHERE p.project_id = s.project_id AND p.org_id = s.org_id
+          ))
        RETURNING ${RETURN_COLS}`,
       [id, input.sourceId, input.orgId, input.eventType, input.deliveryId, JSON.stringify(input.payload ?? {})],
     );
-    return mapRow(result.rows[0]!);
+    const row = result.rows[0];
+    if (row === undefined) throw new WebhookEventLineageError();
+    return mapRow(row);
   },
 
   // The sweeper read: pull undriven (`received`/`failed`) rows for one org,

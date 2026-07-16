@@ -2,33 +2,31 @@
 // the transactional-rollback wrapper (task #78, which spans through `createProject`)
 // stays under the 500-line file cap.
 //
-// SCOPE: this runs ONLY after `createProject` has landed the durable project
-// row. The compensation stack from task #78 covers the EXTERNAL-RESOURCE window
-// up through `createProject`; failures in THIS module leave the project row +
-// external resources intact and the existing `resumeDerivedProject` returns the
-// project idempotently on retry. A partial entity graph here is a known
-// pre-existing limitation (the resume returns the project without re-running
-// these creates) and is out of scope for the transactional-rollback patch.
+// SCOPE: this runs only after the durable deriving project shell exists. Every
+// graph row is written through one org-scoped transaction. A failure rolls the
+// whole graph attempt back while retaining the shell and earlier external-effect
+// receipts, so retry can rebuild the graph without duplicating partial entities.
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { MilestoneCreateInput, MilestoneStore, PersonaCreateInput, PersonaStore } from "../../entities/index.js";
-import { createSpec } from "../../workflow/projectSpec.js";
+import { createSpecOnClient, type ProjectSpecQueryClient } from "../../workflow/projectSpec.js";
 import { deriveInterfaceMilestones, persistDesignContract } from "./deriveBehaviorSpec.js";
 import type { DeriveInput, DeriveResult } from "./derive.js";
 import type { ScaffoldSpecDef } from "./deriveScaffoldSpecs.js";
 import type { SeededTemplate } from "../../templates/index.js";
 import type { CreatedRepository } from "../../contracts/codeHostTypes.js";
 import type { InterviewCapture } from "./types.js";
+import { ProjectDerivationStore, type ProjectDerivationRow } from "../../repositories/projectDerivations.js";
+import {
+  buildDerivationDesignPlan,
+  type DerivationDesignPlan,
+  type DerivationDesignResult,
+} from "./deriveDesignContract.js";
 
-/**
- * Build out the entity graph (personas + milestones + scaffold specs + interface
- * milestones + design contract) for the just-created project row, and assemble
- * the `DeriveResult`. The caller (`deriveProductGraph`) is responsible for the
- * external-resource creates + the transactional rollback that wraps them; this
- * function is the durable, idempotency-resume-handled tail.
- */
-export async function buildEntityGraph(
+/** Graph rows and their durable receipt commit or roll back as one org-scoped unit. */
+export async function buildEntityGraphWithReceipt(
   pool: pg.Pool,
   input: DeriveInput,
   capture: InterviewCapture,
@@ -38,13 +36,52 @@ export async function buildEntityGraph(
   projectId: string,
   actor: ActorContext,
   scaffoldSpecs: ScaffoldSpecDef[],
+  operation: ProjectDerivationRow,
+  design: DerivationDesignResult,
+): Promise<{ graph: DeriveResult; operation: ProjectDerivationRow }> {
+  const designPlan = buildDerivationDesignPlan(capture, operation.idempotencyFingerprint);
+  return runWithOrgScope(pool, input.orgId, async (client) => {
+    const graph = await buildEntityGraphOnClient(
+      client,
+      input,
+      capture,
+      slug,
+      seed,
+      repository,
+      projectId,
+      actor,
+      scaffoldSpecs,
+      designPlan,
+      design,
+    );
+    const updated = await ProjectDerivationStore.recordReceiptOnClient(client, operation, "graph", graph, "graph");
+    return { graph, operation: updated };
+  });
+}
+
+export async function buildEntityGraphOnClient(
+  pool: ProjectSpecQueryClient,
+  input: DeriveInput,
+  capture: InterviewCapture,
+  slug: string,
+  seed: SeededTemplate,
+  repository: CreatedRepository | undefined,
+  projectId: string,
+  actor: ActorContext,
+  scaffoldSpecs: ScaffoldSpecDef[],
+  designPlan: DerivationDesignPlan,
+  design: DerivationDesignResult,
 ): Promise<DeriveResult> {
   // 1 · personas (project-scoped).
   const personaIdByName = new Map<string, string>();
   for (const persona of capture.personas) {
+    const personaKey = persona.name.trim().toLowerCase();
+    const plannedPersonaId = designPlan.personaIdByName.get(personaKey);
+    if (plannedPersonaId === undefined) throw new Error(`missing planned identity for persona '${persona.name}'`);
     const row = await PersonaStore.create(
       pool,
       PersonaCreateInput.parse({
+        id: plannedPersonaId,
         scope: "project",
         orgId: input.orgId,
         projectId,
@@ -54,7 +91,7 @@ export async function buildEntityGraph(
       }),
       actor,
     );
-    personaIdByName.set(persona.name.toLowerCase(), row.id);
+    personaIdByName.set(personaKey, row.id);
   }
 
   // 2 · foundation milestone + scaffold specs.
@@ -78,7 +115,7 @@ export async function buildEntityGraph(
   for (const def of scaffoldSpecs) {
     const dependsOn =
       def.dependsOnPrev === true && previousScaffoldSpecId !== undefined ? [previousScaffoldSpecId] : [];
-    const spec = await createSpec(
+    const spec = await createSpecOnClient(
       pool,
       {
         projectId,
@@ -110,6 +147,7 @@ export async function buildEntityGraph(
     capture,
     scaffoldSpecIds,
     personaIdByName,
+    plannedBehaviorIdByKey: designPlan.behaviorIdByKey,
     actor,
   });
   specIds.push(...ifaceResult.specIds);
@@ -117,13 +155,10 @@ export async function buildEntityGraph(
   const behaviorIds = ifaceResult.behaviorIds;
 
   // 4 · design contract.
-  const designContractId = await persistDesignContract(pool, {
+  const designContract = await persistDesignContract(pool, {
     orgId: input.orgId,
     projectId,
-    capture: capture.designContract,
-    personaIdByName,
-    behaviorIdByKey: ifaceResult.behaviorIdByKey,
-    ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent, actor }),
+    design,
   });
 
   return {
@@ -134,7 +169,7 @@ export async function buildEntityGraph(
     personaIds: [...personaIdByName.values()],
     behaviorIds,
     milestoneIds,
-    designContractId,
+    designContract,
     templateSeed: seed,
   };
 }

@@ -16,12 +16,21 @@
  */
 
 import { OrchestratorHttpClient } from "./httpClient.js";
-import type { DiscoverOutcome, LinkOutcome, OrgIntegrationsList, ProvisionOutcome } from "./integrations.js";
+import type {
+  DiscoverOutcome,
+  LinkOperationRead,
+  LinkOutcome,
+  OrgIntegrationsList,
+  ProvisionOutcome,
+  SelectGrantOutcome,
+  SelectPrincipalOutcome,
+} from "./integrations.js";
 
 export class IntegrationsClient extends OrchestratorHttpClient {
   /** Org grants (Plane A). Undefined on network/HTTP failure — empty list is a real empty. */
-  async list(orgId: string): Promise<OrgIntegrationsList | undefined> {
-    return this.getJson<OrgIntegrationsList>(`/orgs/${encodeURIComponent(orgId)}/integrations`);
+  async list(orgId: string, projectId?: string): Promise<OrgIntegrationsList | undefined> {
+    const query = projectId === undefined || projectId === "" ? "" : `?projectId=${encodeURIComponent(projectId)}`;
+    return this.getJson<OrgIntegrationsList>(`/orgs/${encodeURIComponent(orgId)}/integrations${query}`);
   }
 
   /**
@@ -31,7 +40,10 @@ export class IntegrationsClient extends OrchestratorHttpClient {
   async link(
     orgId: string,
     providerKind: string,
-    input: { token: string; metadata?: Record<string, unknown> },
+    input: {
+      token: string;
+      idempotencyKey: string;
+    },
   ): Promise<{ ok: boolean; status: number; body: LinkOutcome | undefined }> {
     const r = await this.sendJson<LinkOutcome>(
       "POST",
@@ -39,6 +51,30 @@ export class IntegrationsClient extends OrchestratorHttpClient {
       input,
     );
     return { ok: r.ok, status: r.status, body: r.body };
+  }
+
+  /** Complete multi-principal selection for an awaiting link/rotate operation. */
+  async selectPrincipal(
+    orgId: string,
+    operationId: string,
+    input: { providerPrincipalId: string },
+  ): Promise<{ ok: boolean; status: number; body: SelectPrincipalOutcome | undefined }> {
+    const r = await this.sendJson<SelectPrincipalOutcome>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/integrations/operations/${encodeURIComponent(operationId)}/principal`,
+      input,
+    );
+    return { ok: r.ok, status: r.status, body: r.body };
+  }
+
+  /**
+   * Durable operation reload — candidates + status only (never secret refs).
+   * Used so multi-principal UI does not trust query-string candidate payloads.
+   */
+  async getOperation(orgId: string, operationId: string): Promise<LinkOperationRead | undefined> {
+    return this.getJson(
+      `/orgs/${encodeURIComponent(orgId)}/integrations/operations/${encodeURIComponent(operationId)}`,
+    );
   }
 
   /**
@@ -61,6 +97,21 @@ export class IntegrationsClient extends OrchestratorHttpClient {
     const r = await this.sendJson<ProvisionOutcome>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/integrations/provision`,
+      input,
+    );
+    return { ok: r.ok, status: r.status, body: r.body };
+  }
+
+  /** Persist the exact account/grant this project will use for one provider. */
+  async selectGrant(
+    orgId: string,
+    projectId: string,
+    providerKind: string,
+    input: { connectionId: string; grantId: string; authGeneration: number; grantGeneration: number },
+  ): Promise<{ ok: boolean; status: number; body: SelectGrantOutcome | undefined }> {
+    const r = await this.sendJson<SelectGrantOutcome>(
+      "PUT",
+      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/integrations/${encodeURIComponent(providerKind)}/selection`,
       input,
     );
     return { ok: r.ok, status: r.status, body: r.body };

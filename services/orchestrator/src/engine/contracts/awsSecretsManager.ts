@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import type { SecretStore, SecretValue } from "./secretStore.js";
+import type { PutCreateOnlyResult, SecretStore, SecretValue } from "./secretStore.js";
 
 /**
  * Backend-agnostic credential refs (`credential/<kind>/<scope>/<owner>/<name>`,
@@ -55,6 +55,7 @@ interface ListSecretsResponse {
  * backend with no live credentials.
  */
 export class AwsSecretsManagerStore implements SecretStore {
+  readonly createOnlyAtomicity = "atomic" as const;
   private readonly fetchImpl: typeof fetch;
   private readonly host: string;
   private readonly endpoint: string;
@@ -78,6 +79,28 @@ export class AwsSecretsManagerStore implements SecretStore {
       return;
     }
     throw new Error(`AWS Secrets Manager put secret ${secret.ref} failed: ${put.status} ${body}`);
+  }
+
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    const existing = await this.get(secret.ref);
+    if (existing !== undefined) {
+      return existing.value === secret.value
+        ? { status: "already_exists_identical" }
+        : { status: "conflict_different_value" };
+    }
+    const created = await this.call("CreateSecret", { Name: this.name(secret.ref), SecretString: secret.value });
+    if (created.ok) return { status: "created" };
+    const body = await created.text();
+    // Race: another writer created first — classify via readback.
+    if (!isNotFound(created.status, body)) {
+      const again = await this.get(secret.ref);
+      if (again !== undefined) {
+        return again.value === secret.value
+          ? { status: "already_exists_identical" }
+          : { status: "conflict_different_value" };
+      }
+    }
+    throw new Error(`AWS Secrets Manager create-only secret ${secret.ref} failed: ${created.status} ${body}`);
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {

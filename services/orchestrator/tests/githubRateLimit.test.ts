@@ -68,6 +68,26 @@ describe("github rate-limit backoff (P3-0028)", () => {
     expect(response).toMatchObject({ status: 200, body: { ok: true } });
   });
 
+  it("surfaces the exact provider delay without sleeping when durable intake owns retry", async () => {
+    const slept: number[] = [];
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls += 1;
+      return new Response("", { status: 429, headers: headers({ "retry-after": "73" }) });
+    }) as unknown as typeof fetch;
+    const client = new FetchGitHubHttpClient({ fetchImpl, sleep: async (ms) => void slept.push(ms) });
+
+    const response = await client.request({
+      method: "GET",
+      path: "/intake",
+      token: "t",
+      retryRateLimit: false,
+    });
+
+    expect(response).toMatchObject({ status: 429, retryAfterMs: 73_000 });
+    expect({ calls, slept }).toEqual({ calls: 1, slept: [] });
+  });
+
   it("§4: honors a 429 Retry-After even AFTER a transient-503 burst", async () => {
     // The rate-limit path keeps its OWN signature stream, independent of the transient-503
     // stream, so a prior 503 burst never consumes the 429's honored Retry-After. The sequence

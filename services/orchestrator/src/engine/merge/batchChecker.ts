@@ -24,8 +24,12 @@ import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db
 import type pg from "pg";
 import { type BatchCheckVerdict, type BatchChecker } from "../contracts/batchMergeCoordinator.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
-import { installationFromOrgConfig, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
-import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
+import { bindOrgGithubCredentialRefs, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import {
+  bindProjectGithubCredentialRefs,
+  isAbsentProjectConfig,
+  migrateProjectConfig,
+} from "../config/projectConfig.js";
 import { CANONICAL_RUNNER_IMAGE, type GovernancePosture } from "../config/shared.js";
 import type { Allocator } from "../contracts/allocator.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -127,10 +131,15 @@ export class PgBatchChecker implements BatchChecker {
       return { specId: entry.specId, branch };
     });
 
-    const installation = installationFromOrgConfig(project.org_config);
-    const staticRef = resolveGithubStaticRef(project.project_config, project.org_config);
+    const orgConfig =
+      project.org_config === null || project.org_config === undefined
+        ? undefined
+        : bindOrgGithubCredentialRefs(migrateOrgConfig(project.org_config), orgId);
+    const installation = orgConfig?.github_app;
+    const staticRef = resolveGithubStaticRef(project.project_config, project.org_config, orgId);
     const token = await resolveVcsToken(this.deps.githubHttp, {
       secrets: this.deps.secrets,
+      orgId,
       ...(installation !== undefined && { installation }),
       ...(staticRef !== undefined && { staticRef }),
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),
@@ -352,11 +361,12 @@ function resolvePolicyVersion(projectConfig: unknown): string | undefined {
  * default a fresh project carries; `isAbsentProjectConfig`) legitimately falls
  * through to the org default — there genuinely is no project-level ref to use.
  */
-export function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown): string | undefined {
+export function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknown, orgId: string): string | undefined {
   if (!isAbsentProjectConfig(projectConfig)) {
     // Present config: a throw here is genuine corruption — let it propagate (loud,
     // fail-closed). NEVER fall through to a different identity.
-    const projectRef = migrateProjectConfig(projectConfig).credentials?.githubCredentialRef;
+    const projectRef = bindProjectGithubCredentialRefs(migrateProjectConfig(projectConfig), orgId).credentials
+      ?.githubCredentialRef;
     if (projectRef !== undefined) return projectRef;
     // Parsed clean but no project-level githubCredentialRef bound → org default.
   }
@@ -366,5 +376,5 @@ export function resolveGithubStaticRef(projectConfig: unknown, orgConfig: unknow
   // `migrateOrgConfig` throws and that throw PROPAGATES (loud, fail-closed),
   // never swallowed to a silent undefined that quietly disables GitHub creds.
   if (orgConfig === null || orgConfig === undefined) return undefined;
-  return migrateOrgConfig(orgConfig).defaultCredentials?.github_token;
+  return bindOrgGithubCredentialRefs(migrateOrgConfig(orgConfig), orgId).defaultCredentials?.github_token;
 }

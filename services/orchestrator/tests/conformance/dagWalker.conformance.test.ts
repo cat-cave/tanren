@@ -75,7 +75,7 @@ class MemoryDag {
   }
 
   snapshot(projectId: string): DagSnapshot {
-    return { projectId, nodes: [...this.nodes.values()].map((n) => ({ ...n })), archived: false };
+    return { projectId, nodes: [...this.nodes.values()].map((node) => ({ ...node })), projectLifecycle: "active" };
   }
 
   /**

@@ -7,8 +7,9 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { mutateOrgConfig, OrgConfigMissingError } from "../config/orgConfigMutate.js";
-import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { bindOrgGithubCredentialRefs, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
 import { systemActor } from "../state/actor.js";
+import { canonicalOrgGithubCredentialRef } from "./refNamespace.js";
 
 // RLS R3b: the org GitHub-App block lives in `organizations.config`, an
 // RLS-enabled table keyed on `id`. These helpers are called from contexts that
@@ -28,7 +29,8 @@ export async function loadOrgGithubAppInstallation(
     // Read-only path keeps the historical SELECT shape (no revision token needed).
     const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
-    return row === undefined ? undefined : migrateOrgConfig(row.config).github_app;
+    if (row === undefined) return row;
+    return bindOrgGithubCredentialRefs(migrateOrgConfig(row.config), orgId).github_app;
   });
 }
 
@@ -46,7 +48,11 @@ export async function loadOrgDefaultGithubCredentialRef(pool: pg.Pool, orgId: st
   return runWithOrgScope(pool, orgId, async (client) => {
     const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
-    return row === undefined ? undefined : migrateOrgConfig(row.config).defaultCredentials?.github_token;
+    if (row === undefined) return row;
+    const ref = migrateOrgConfig(row.config).defaultCredentials?.github_token;
+    return ref === undefined
+      ? undefined
+      : canonicalOrgGithubCredentialRef({ orgId, supplied: ref, kind: "github_token" });
   });
 }
 
@@ -63,10 +69,13 @@ export async function persistOrgDefaultGithubCredentialRef(
     try {
       await mutateOrgConfig(client, orgId, systemActor, (raw) => {
         const current = migrateOrgConfig(raw);
-        return migrateOrgConfig({
-          ...current,
-          defaultCredentials: { ...current.defaultCredentials, github_token: credentialRef },
-        });
+        return bindOrgGithubCredentialRefs(
+          migrateOrgConfig({
+            ...current,
+            defaultCredentials: { ...current.defaultCredentials, github_token: credentialRef },
+          }),
+          orgId,
+        );
       });
       return true;
     } catch (error) {
@@ -86,7 +95,7 @@ export async function persistOrgGithubAppInstallation(
   return runWithOrgScope(pool, orgId, async (client) => {
     try {
       await mutateOrgConfig(client, orgId, systemActor, (raw) => {
-        return { ...migrateOrgConfig(raw), github_app: installation };
+        return bindOrgGithubCredentialRefs({ ...migrateOrgConfig(raw), github_app: installation }, orgId);
       });
       return true;
     } catch (error) {
