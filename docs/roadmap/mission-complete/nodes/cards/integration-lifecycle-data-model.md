@@ -29,10 +29,11 @@ workers remain schema-only for later slices.
 
 ### Publication P1 child redrive (bounded, zero credit)
 
-Exact parent: `01ec423621d5e45b7e2f67052d37621851746df5`. This child is
-limited to the native convergence audit's two publication blockers and truthful
-evidence cleanup. It does not widen Slice 1, register events, add a migration or
-authority, or claim a completed consumer node.
+Pre-redrive executable head before the path-lease children was
+`01ec423621d5e45b7e2f67052d37621851746df5`. This bounded redrive is limited to
+the native convergence audit's two publication blockers and truthful evidence
+cleanup. It does not widen Slice 1, register events, add a migration or authority,
+or claim a completed consumer node.
 
 Leased redrive paths (all already present in the exhaustive final-fold manifest):
 
@@ -61,23 +62,17 @@ and render coverage proving that secret values and hostile coordinates cannot en
 payloads, redirects, or visible chrome. Protected `0041`/`0042` bytes remain frozen.
 
 The final fold is one cumulative clean-replacement candidate, originally built
-from the authorized base `67d9363fe220e1f280ed706a0b80af2b16724362` and now
-replayed as a 19-commit sequence onto the exact publication base
-`8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897` (post-GV-1). The exact replayed
-19-commit head is `7ec09766ef16a5c267a32e8532e8e065a3cbb942`. After the first
-card metadata child, exact test-only union convergence head
-`7bf2ad5875a92cd160667537d3adb4bb27e2c9a6` replaces one legacy ownerless
-credential fixture with supported shorthand and asserts its canonical org-owned
-persisted ref. Exact executable code/test head
-`a4457a54f79c90eb1a79ac0e021fe88b3e8e9feb` then removes two redundant test
-comments to restore the 500-line architecture cap; neither test-only child changes
-production behavior. This final card-only child records that lineage. GV-1
-intersected exactly five paths, which were deliberately combined to preserve its
-`auditPosture` reservation/CAS-event authority and IN-1's lifecycle and org-owned
-credential semantics. The other 18 replay commit payloads remain patch-equivalent
-(two require zero-context patch IDs because the inherited GV-1 event-helper import
-changed patch context). This is not a repair delta layered on an undeclared branch;
-publish only the lineage rooted at the exact base above.
+from authorized base `67d9363fe220e1f280ed706a0b80af2b16724362`. Its 30
+candidate commits now sit on exact publication base
+`d39369ec2788a7094c9a714dd7935e7fcbea5b0e` after PR #965. The rebase was
+conflict-free. Exact rebased product candidate
+`274b4395192364fb9023ad4e8193e704faa510a2` has tree
+`50598c7c63eda1ac7d56d1559b9b1abb0ffc726f`; its full candidate delta is
+byte-identical to the pre-rebase smoke-green delta at
+`c0bf23f038ac7bdda8940e7b86bdb83fdfff8692`. This card-only evidence child does
+not self-reference its own commit. The final publication head is reserved for the
+PR evidence after independent audit. Publish only the lineage rooted at the exact
+base above.
 
 The manifest below is exhaustive relative to the exact publication target through
 the converged candidate: **373 paths = 99 added + 263 modified + 11 deleted**. Each
@@ -382,22 +377,34 @@ completion until Slice 2/3 land binding activation and remaining cutover.
 
 ### Candidate validation (2026-07-16)
 
-- Post-GV focused union proof passed 41/41: governance CAS/event behavior 14/14
-  and project create/PATCH guards 27/27, including canonical owner binding,
-  foreign-owner rejection, `auditPosture` reservation, and structural no-op. The
-  intersected guard test remains exactly 500 lines and architecture checks pass.
-- Affected typecheck passed; affected tests passed 491 files / 4,786 tests, with
-  56 files / 304 live-gated tests skipped.
-- Schema drift reported no changes. Protected `0041`/`0042` migration and snapshot
-  bytes match the authorized base; journal order is exactly `0040→0041→0042→0043`.
-- Live PostgreSQL: lifecycle/RLS/lineage/saga/operation recipe 27/27; config CAS
-  11/11; derivation lifecycle/activation 7/7; exact-operation authority 1/1.
-- `just fast-check` and build-inclusive `just ci` passed: 706 files / 6,818 tests,
-  with 57 files / 318 live-gated tests skipped; all five package builds passed.
-- Fresh-stack serialized `__ETC_BASHRC_SOURCED=1 just smoke` passed. The export
-  works around this Nix host's `/etc/bashrc` dereferencing its own unset guard
-  under the justfile's `bash -u`; no recipe behavior was bypassed. The lifecycle
-  RLS proof passed 2/2: the canonical org-owned ref completed, while a
-  mismatched-owner ref failed hydration with zero derived tasks, runners, events,
-  or costs. The worktree's Compose project/volumes were removed and its ports
-  released after the gate.
+- Focused publication-redrive tests passed 56/56. After the full lint gate found
+  test-only style findings, focused lint and the corrected HTTP/render proofs
+  passed 23/23 before all canonical gates were rerun.
+- `just affected-typecheck` passed all four affected workspace packages. `just affected-test`
+  passed 499 files / 4,871 tests, with 58 files / 316 declared live-gated tests
+  skipped.
+- `just fast-check` and build-inclusive `just ci` passed 718 files / 6,963 tests,
+  with 59 files / 330 declared live-gated tests skipped; all five package builds
+  passed. Formatting, lint, type-aware lint, architecture, schema/contract/event/
+  state drift, spelling, coverage, and Compose configuration were green.
+- Fresh-stack serialized `export __ETC_BASHRC_SOURCED=1; just smoke` exited zero
+  at pre-rebase candidate `c0bf23f038ac7bdda8940e7b86bdb83fdfff8692`
+  (tree `0a99675cdf0e8df8a62868f077be29f43b3b4d0e`). It proved service health,
+  CLI doctor, runner SSH, mTLS plane split and deprivilege, the full RLS cohort,
+  lifecycle migration/RLS/lineage/saga/operation tests 27/27, Vault CAS, and the
+  writer-backed merge authority 28/28. Scoped cleanup left zero candidate
+  containers, volumes, networks, image tags, secret symlinks, port listeners, or
+  gate processes.
+- Rebase onto exact publication base
+  `d39369ec2788a7094c9a714dd7935e7fcbea5b0e` applied all 30 commits without a
+  conflict. At the exact rebased product candidate above, before this evidence-only
+  card edit, the 373-path delta remained 99 added / 263 modified / 11 deleted.
+  Name/status SHA-256 was
+  `b6947646c02503e1ee37761487006c277376d5bc8cd27547b33d6304f1b8e26b`, full
+  binary/full-index diff SHA-256 is
+  `af0ba60966353b8451c119fab16ff5f7e93c26ea5bc21b74fd4dc1363805cab9`, and
+  stable patch ID is `3d73f6ec80047372d5cfb1cfc5a394634a276771`; all three
+  exactly match the smoke-green pre-rebase candidate.
+- Protected `0041`/`0042` migration and snapshot bytes match the publication base.
+  Migration `0043` contains no line-leading `UPDATE` or `DELETE FROM`; the
+  mutation-sensitive model test guards that clean zero-user replacement rule.
