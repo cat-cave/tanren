@@ -1,4 +1,5 @@
 import type { ActorContext } from "../../auth/schemas.js";
+import { projectIntegrationOperationTarget } from "../contracts/integrationAuthority.js";
 import {
   canonicalDesignContractJson,
   designContractDigest,
@@ -98,17 +99,19 @@ async function assertBootstrap(client: IntegrationQueryClient, derivation: Compl
 async function assertDeployAuthority(
   client: IntegrationQueryClient,
   derivation: CompleteProjectDerivation,
+  project: DerivationActivationProject,
 ): Promise<void> {
   const outcome = derivation.results.deploy.outcome;
   const locked = await client.query(
     `SELECT s.connection_id, s.grant_id, s.auth_generation, s.grant_generation,
-            c.provider_principal_id
+            c.provider_principal_id, o.login AS org_slug
        FROM project_integration_grant_selections s
        JOIN org_integration_connections c
          ON c.org_id = s.org_id AND c.provider_kind = s.provider_kind AND c.id = s.connection_id
        JOIN org_integration_grants g
          ON g.org_id = s.org_id AND g.provider_kind = s.provider_kind
         AND g.connection_id = s.connection_id AND g.id = s.grant_id
+       JOIN organizations o ON o.id = s.org_id
       WHERE s.org_id = $1 AND s.project_id = $2 AND s.provider_kind = $3
       FOR UPDATE OF s, c, g`,
     [derivation.ownership.orgId, derivation.ownership.projectId, outcome.providerKind],
@@ -120,6 +123,7 @@ async function assertDeployAuthority(
         auth_generation: number;
         grant_generation: number;
         provider_principal_id: string;
+        org_slug: string;
       }
     | undefined;
   const evidence = outcome.authority;
@@ -134,12 +138,27 @@ async function assertDeployAuthority(
     mismatch("deploy receipt does not match the locked project authority selection");
   }
 
+  const deployRef = outcome.surfaces.deployRef;
+  const separator = deployRef?.indexOf(":") ?? -1;
+  const boundResourceId = outcome.action === "bind" && separator >= 0 ? deployRef!.slice(separator + 1) : undefined;
+  if (outcome.action === "bind" && (boundResourceId === undefined || boundResourceId === "")) {
+    mismatch("bound deploy receipt has no exact resource identity");
+  }
+
   const resolution = await new PgIntegrationAuthority().authorizeOperation(client, {
     orgId: derivation.ownership.orgId,
     projectId: derivation.ownership.projectId,
     providerKind: outcome.providerKind,
     capability: outcome.capability,
     operation: outcome.action,
+    target: projectIntegrationOperationTarget(
+      {
+        projectId: derivation.ownership.projectId,
+        orgSlug: selection.org_slug,
+        name: project.name,
+      },
+      boundResourceId,
+    ),
     actor: systemActor,
   });
   if (
@@ -247,7 +266,7 @@ export async function assertProjectDerivationActivationEvidence(
     mismatch("repository receipt does not match the project's requested and actual default branch");
   }
   await assertBootstrap(client, derivation);
-  await assertDeployAuthority(client, derivation);
+  await assertDeployAuthority(client, derivation, project);
   if (derivation.kind === "interview") await assertInterviewGraph(client, derivation, project);
 }
 
