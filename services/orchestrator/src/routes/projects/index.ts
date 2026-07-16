@@ -207,7 +207,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_governance", issues: parsed.error.issues }, 400);
     }
-    return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data);
+    return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data, actor.userId);
   });
 
   // The project LIFECYCLE surface: archive PAUSES the project (cancels its in-flight

@@ -1,4 +1,5 @@
 import { registerSensitivities, type SensitivityRule } from "./sensitivity.js";
+import { governanceSensitivityRules } from "./sensitivityRules.governance.js";
 import { infraSensitivityRules } from "./sensitivityRules.infra.js";
 import { usageAccountingFailedSensitivityRules } from "./sensitivityRules.usage.js";
 import { appEnvSensitivityRules } from "./sensitivityRules.appEnv.js";
@@ -13,9 +14,8 @@ import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
 
-// Sensitivity rule table. Every payload field reachable from an event must have a registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints / credential refs / SSH host:port are redacted; secrets / raw tokens / command stdout/stderr are secret. A "[]" path suffix applies to every array element.
-
 export const sensitivityRules: SensitivityRule[] = [
+  ...governanceSensitivityRules,
   // run.queued
   ...rulesFor("run.queued", [
     ["trigger", "public"],

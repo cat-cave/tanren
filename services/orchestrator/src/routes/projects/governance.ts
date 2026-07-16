@@ -24,6 +24,7 @@
 // the project's org first. The MUTATION is org-admin authorized (it changes the
 // autonomy posture), stronger than the read — mirroring the org-config gate.
 
+import { runWithOrgScope } from "@tanren/db";
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
@@ -35,6 +36,7 @@ import {
   ReviewPolicy,
 } from "../../engine/config/index.js";
 import { InsightThresholdsConfig } from "../../engine/insights/thresholds.js";
+import { PgEventStore } from "../../engine/eventStore.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 
@@ -69,6 +71,17 @@ function toView(config: ReturnType<typeof migrateProjectConfig>): GovernanceView
   };
 }
 
+function auditPostureChanged(
+  previous: GovernanceView["auditPosture"],
+  current: GovernanceView["auditPosture"],
+): boolean {
+  return (
+    previous.blockReviewAt !== current.blockReviewAt ||
+    previous.p2p3Handling !== current.p2p3Handling ||
+    previous.autonomousRemediation !== current.autonomousRemediation
+  );
+}
+
 /** GET handler: resolve the project's config + render the governance settings. */
 export async function handleGovernanceGet(
   c: Context,
@@ -96,29 +109,46 @@ export async function handleGovernancePut(
   orgId: string,
   projectId: string,
   body: z.infer<typeof GovernancePutSchema>,
+  actorUserId: string,
 ): Promise<Response> {
-  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
-  if (snapshot === undefined || (snapshot.orgId !== null && snapshot.orgId !== orgId)) {
-    return c.json({ error: "project_not_found" }, 404);
-  }
+  return runWithOrgScope(pool, orgId, async (client) => {
+    const snapshot = await ProjectStore.getConfigSnapshot(client, projectId, systemActor);
+    if (snapshot === undefined || (snapshot.orgId !== null && snapshot.orgId !== orgId)) {
+      return c.json({ error: "project_not_found" }, 404);
+    }
 
-  const current = migrateProjectConfig(snapshot.config);
-  const validated = migrateProjectConfig({
-    ...current,
-    ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
-    ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
-    ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
-    ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
-    ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
+    const current = migrateProjectConfig(snapshot.config);
+    const validated = migrateProjectConfig({
+      ...current,
+      ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
+      ...(body.mergeIntegration === undefined ? {} : { mergeIntegration: body.mergeIntegration }),
+      ...(body.governancePosture === undefined ? {} : { governancePosture: body.governancePosture }),
+      ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
+      ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
+    });
+    const updated = await ProjectStore.updateConfigIfCurrent(
+      client,
+      projectId,
+      orgId,
+      snapshot.config,
+      validated,
+      systemActor,
+    );
+    if (!updated) {
+      return c.json(
+        { error: "project_config_conflict", message: "project config changed; reload before retrying" },
+        409,
+      );
+    }
+
+    if (auditPostureChanged(current.auditPosture, validated.auditPosture)) {
+      await new PgEventStore(client).append({
+        orgId,
+        projectId,
+        eventType: "governance.audit_posture.updated",
+        payload: { actorUserId, previous: current.auditPosture, current: validated.auditPosture },
+      });
+    }
+    return c.json(toView(validated));
   });
-  const updated = await ProjectStore.updateConfigIfCurrent(
-    pool,
-    projectId,
-    orgId,
-    snapshot.config,
-    validated,
-    systemActor,
-  );
-  if (updated) return c.json(toView(validated));
-  return c.json({ error: "project_config_conflict", message: "project config changed; reload before retrying" }, 409);
 }

@@ -65,6 +65,9 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   // dispatcher promotes to warn when passed=false
   "auditor.verdict": "info",
 
+  // A successful admin posture transition is ordinary governance audit history.
+  "governance.audit_posture.updated": "info",
+
   // Native gate (in-loop, per-tier, exit-code driven). These fire on EVERY tier
   // evaluation of EVERY writer iteration — routine trajectory noise, NOT per-event
   // operator signals — so they stay at `info` (the matrix row defaults off; an

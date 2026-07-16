@@ -372,14 +372,7 @@ async function persistPosture(
   if (snapshot === undefined) return { ok: false, kind: "conflict" };
   const current = migrateProjectConfig(snapshot.config);
   const next = migrateProjectConfig({ ...current, governancePosture: posture });
-  const updated = await ProjectStore.updateConfigIfCurrent(
-    pool,
-    projectId,
-    orgId,
-    snapshot.config,
-    next,
-    systemActor,
-  );
+  const updated = await ProjectStore.updateConfigIfCurrent(pool, projectId, orgId, snapshot.config, next, systemActor);
   return updated ? { ok: true, config: next } : { ok: false, kind: "conflict" };
 }
 

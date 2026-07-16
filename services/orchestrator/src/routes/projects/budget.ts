@@ -166,10 +166,7 @@ export async function handleBudgetPut(
     systemActor,
   );
   if (!updated) {
-    return c.json(
-      { error: "project_config_conflict", message: "project config changed; reload before retrying" },
-      409,
-    );
+    return c.json({ error: "project_config_conflict", message: "project config changed; reload before retrying" }, 409);
   }
 
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);

@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "actorUserId": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "current": {
+      "additionalProperties": false,
+      "properties": {
+        "autonomousRemediation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "blockReviewAt": {
+          "default": "P1",
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3"
+          ],
+          "type": "string"
+        },
+        "p2p3Handling": {
+          "default": "fix-if-idle",
+          "enum": [
+            "fix-if-idle",
+            "route-to-dag"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "blockReviewAt",
+        "p2p3Handling",
+        "autonomousRemediation"
+      ],
+      "type": "object"
+    },
+    "previous": {
+      "additionalProperties": false,
+      "properties": {
+        "autonomousRemediation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "blockReviewAt": {
+          "default": "P1",
+          "enum": [
+            "P0",
+            "P1",
+            "P2",
+            "P3"
+          ],
+          "type": "string"
+        },
+        "p2p3Handling": {
+          "default": "fix-if-idle",
+          "enum": [
+            "fix-if-idle",
+            "route-to-dag"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "blockReviewAt",
+        "p2p3Handling",
+        "autonomousRemediation"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "actorUserId",
+    "previous",
+    "current"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.governance.audit_posture.updated"
+}

@@ -26,7 +26,8 @@ import {
   WriterSubtaskFailedPayload,
   WriterSubtaskProgressPayload,
   WriterSubtaskStartedPayload,
-} from "./schemas/answerer.js";
+  governanceEventRegistry,
+} from "./schemas/registryFragments.js";
 import {
   AllocatorAllocatedPayload,
   AllocatorFailedPayload,
@@ -182,9 +183,7 @@ import {
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
-// Single source of truth mapping event names → typed Zod payload schemas. To add: (1)
-// Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
-// sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
+// Event name → payload schema truth; additions also need sensitivity + event codegen.
 export const EventRegistry = {
   // Run lifecycle
   "run.queued": RunQueuedPayload,
@@ -236,6 +235,7 @@ export const EventRegistry = {
   // S3: posture-gate residual disposition; Loop 3: autonomous-run strand-findings preflight.
   "auditor.findings_routed": AuditorFindingsRoutedPayload,
   "audit.posture_strands_findings": AuditPostureStrandsFindingsPayload,
+  ...governanceEventRegistry,
   // Sub-registries split into their schema modules for the 500-line cap.
   ...loopEventRegistry,
   ...templateEventRegistry,

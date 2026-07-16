@@ -96,6 +96,7 @@ export const eventTypesSeed = [
   { name: "github.pr.merged", defaultSeverity: "ok" },
   { name: "github.pr.no_commits", defaultSeverity: "info" },
   { name: "github.pr.ready", defaultSeverity: "ok" },
+  { name: "governance.audit_posture.updated", defaultSeverity: "info" },
   { name: "hello.completed", defaultSeverity: "ok" },
   { name: "hello.ssh_completed", defaultSeverity: "info" },
   { name: "hello.ssh_started", defaultSeverity: "info" },

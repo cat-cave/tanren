@@ -13,6 +13,7 @@ import type { ActorContext } from "../src/auth/schemas.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
 import { RoutesPool } from "./helpers/routesPool.js";
+import { isEventStoreAppend } from "./helpers/routesPoolEvents.js";
 
 const admin: ActorContext = {
   userId: "user_alice",
@@ -105,6 +106,26 @@ class InterleavingRoutesPool extends RoutesPool {
   }
 }
 
+class EventFailingRoutesPool extends RoutesPool {
+  private configSnapshot: unknown;
+
+  override async query(sql: string, params: unknown[] = []) {
+    const trimmed = sql.trim();
+    if (trimmed === "BEGIN") {
+      this.configSnapshot = structuredClone(this.projects.get("proj_1")?.config);
+    }
+    if (isEventStoreAppend(trimmed)) {
+      throw new Error("simulated event append failure");
+    }
+    const result = await super.query(sql, params);
+    if (trimmed === "ROLLBACK") {
+      const project = this.projects.get("proj_1");
+      if (project !== undefined) project.config = structuredClone(this.configSnapshot);
+    }
+    return result;
+  }
+}
+
 async function getJson(app: Hono<ActorContextEnv>, path: string): Promise<{ status: number; body: any }> {
   const res = await app.request(path);
   return { status: res.status, body: await res.json().catch(() => null) };
@@ -153,9 +174,9 @@ describe("project governance routes", () => {
 
   // gv-1: the org-admin governance PUT is the SOLE supported path to mutate the
   // governance-owned `auditPosture` DORA knob (the member PATCH is now reserved
-  // out). Prove an admin PUT changes it and the read-back reflects the new value.
-  it("an admin PUT changes auditPosture and the read-back reflects it (sole governance path)", async () => {
-    const { app } = buildHarness();
+  // out). The config CAS + typed event append share one transaction.
+  it("an admin PUT changes auditPosture and appends its one typed mutation fact", async () => {
+    const { app, pool } = buildHarness();
     const before = await getJson(app, "/orgs/org_acme/projects/proj_1/governance");
     expect(before.body.auditPosture).toEqual({
       blockReviewAt: "P1",
@@ -179,6 +200,52 @@ describe("project governance routes", () => {
       p2p3Handling: "route-to-dag",
       autonomousRemediation: true,
     });
+    expect(auditPostureEvents(pool)).toEqual([
+      expect.objectContaining({
+        project_id: "proj_1",
+        org_id: "org_acme",
+        payload: {
+          actorUserId: "user_alice",
+          previous: {
+            blockReviewAt: "P1",
+            p2p3Handling: "fix-if-idle",
+            autonomousRemediation: false,
+          },
+          current: {
+            blockReviewAt: "P3",
+            p2p3Handling: "route-to-dag",
+            autonomousRemediation: true,
+          },
+        },
+      }),
+    ]);
+  });
+
+  it("does not fabricate a mutation fact for an auditPosture no-op", async () => {
+    const { app, pool } = buildHarness();
+    const posture = { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true } as const;
+    expect((await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { auditPosture: posture })).status).toBe(
+      200,
+    );
+    expect((await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { auditPosture: posture })).status).toBe(
+      200,
+    );
+    expect(auditPostureEvents(pool)).toHaveLength(1);
+  });
+
+  it("rolls the config CAS back when its EventStore append fails", async () => {
+    const pool = new EventFailingRoutesPool();
+    pool.seedOrg({ id: "org_acme" });
+    pool.seedProject({ project_id: "proj_1", org_id: "org_acme", config: { version: 1 } });
+    const app = buildApp(pool, admin);
+    const before = structuredClone(pool.projects.get("proj_1")?.config);
+
+    const response = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", {
+      auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+    });
+    expect(response.status).toBe(500);
+    expect(pool.projects.get("proj_1")?.config).toEqual(before);
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 
   it("does not let a stale member PATCH clobber an interleaved admin audit-posture PUT", async () => {
@@ -223,6 +290,7 @@ describe("project governance routes", () => {
     expect(pool.projects.get("proj_1")?.config).not.toMatchObject({
       credentials: { githubCredentialRef: "credential/member-stale" },
     });
+    expect(auditPostureEvents(pool)).toHaveLength(1);
   });
 
   // Reverse interleaving: admin reads first, member credential PATCH wins, admin
@@ -277,6 +345,7 @@ describe("project governance routes", () => {
     expect(pool.projects.get("proj_1")?.config).not.toMatchObject({
       auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
     });
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 
   it("updates only the named field, leaving the others untouched", async () => {
@@ -293,9 +362,10 @@ describe("project governance routes", () => {
   });
 
   it("rejects an unknown reviewPolicy value with 400", async () => {
-    const { app } = buildHarness();
+    const { app, pool } = buildHarness();
     const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { reviewPolicy: "nope" });
     expect(put.status).toBe(400);
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 
   it("404s an unknown project", async () => {
@@ -305,10 +375,11 @@ describe("project governance routes", () => {
   });
 
   it("rejects a governance mutation from a non-admin actor with 403", async () => {
-    const { app } = buildHarness(memberOnly);
+    const { app, pool } = buildHarness(memberOnly);
     const put = await putJson(app, "/orgs/org_acme/projects/proj_1/governance", { reviewPolicy: "auto" });
     expect(put.status).toBe(403);
     expect(put.body.error).toBe("org_admin_required");
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 
   it("does not let an admin of another org mutate this project's governance", async () => {
@@ -320,6 +391,33 @@ describe("project governance routes", () => {
     expect(put.status).toBe(404);
     expect(put.body.error).toBe("project_not_found");
     expect(pool.projects.get("proj_1")?.config).toEqual(before);
+    expect(auditPostureEvents(pool)).toEqual([]);
+  });
+
+  it("a reserved member PATCH cannot mutate posture or fabricate its success event", async () => {
+    const { app, pool } = buildHarness(memberOnly);
+    const before = pool.projects.get("proj_1")?.config;
+    const response = await app.request("/orgs/org_acme/projects/proj_1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditPosture: {
+            blockReviewAt: "P3",
+            p2p3Handling: "route-to-dag",
+            autonomousRemediation: true,
+          },
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "reserved_project_config_patch",
+      fields: ["auditPosture"],
+    });
+    expect(pool.projects.get("proj_1")?.config).toEqual(before);
+    expect(auditPostureEvents(pool)).toEqual([]);
   });
 
   it("allows a non-admin member to READ governance", async () => {
@@ -328,3 +426,7 @@ describe("project governance routes", () => {
     expect(status).toBe(200);
   });
 });
+
+function auditPostureEvents(pool: RoutesPool): Array<Record<string, unknown>> {
+  return pool.events.filter((event) => event["event_type"] === "governance.audit_posture.updated");
+}

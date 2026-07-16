@@ -1,7 +1,9 @@
 # gv-1 — auditPosture write-guard safety repair
 
 **Phase**: governance Phase 0 (safety repairs) · `sm` (small mechanical)
-**Base**: `origin/main` `458f38f8edde19fe38a48ad2ae5d2c4d27814ce9` (merged current main at restack; prior base was `e6a6ded0`)
+**Base**: `origin/main` `9f20c3ea9a4d972a2564374abd16c63ed5f6fe87`
+(`#943`; exact-main restack). The pre-restack head is preserved locally as
+`archive/gv-1-pre-9f20-eef14077`.
 **Branch**: `node/gv-1-audit-posture-write-guard`
 **Worktree**: `.codex/worktrees/gv-1-audit-posture-guard`
 
@@ -10,7 +12,7 @@
 setting because it is omitted from the canonical reserved-field guard. Add
 `auditPosture` to the reserved-field list with structural/deep equality (it is a
 nested object), so a genuine change is rejected while an unchanged value
-round-trips untouched. The sole supported *authorization* path for mutating
+round-trips untouched. The sole supported _authorization_ path for mutating
 `auditPosture` remains the org-admin
 `PUT /:orgId/projects/:projectId/governance` surface.
 
@@ -54,7 +56,7 @@ integration caller is cut over.
   1. In `persistArtifact` (`provisioningEngine.ts` ~323–327): replace
      `getConfig` + unconditional `updateConfig` with
      `getConfigSnapshot` + `updateConfigIfCurrent(client, projectId, orgId,
-     snapshot.config, next, actor)`.
+snapshot.config, next, actor)`.
   2. Source `orgId` from the provision request / project ownership (same org
      predicate the CAS SQL already uses: `org_id = $3 OR org_id IS NULL`).
   3. On CAS miss: fail loud or retry once from a fresh snapshot according to
@@ -65,26 +67,59 @@ integration caller is cut over.
   5. Re-run focused provisioning + `projectConfigCas.integration.test.ts` +
      affected checks; then claim GV-1 complete.
 
+**Serialized event/migration dependency — reserved, NOT yet materialized**
+
+- Root released RV-4's event/nav lease and assigned GV-1 the event registry,
+  severity, sensitivity, generated-seed, and dashboard mount slice.
+- The new typed `governance.audit_posture.updated` fact requires a catalog row
+  because `events.event_type` has a foreign key to the global `event_types`
+  table. `db/src/eventTypesSeed.ts` is a generated mirror, not a runtime seed.
+- Migration ordering is fixed as `0041` IN-1 → `0042` RV-4 → `0043` GV-1.
+  GV-1 owns the future `0043` catalog insert but must not create its SQL,
+  snapshot, or journal entry until both predecessors land.
+
 ## Exclusive ownership
 
 - `services/orchestrator/src/engine/workflow/projectConfigWriteGuards.ts`
 - `services/orchestrator/src/engine/repositories/projects.ts` (CAS authority +
   residual LWW doc until post-IN-1 delete)
+- `services/orchestrator/src/engine/events/schemas/governance.ts`
+- `services/orchestrator/src/engine/events/schemas/registryFragments.ts`
+  (dependency-cap aggregation for the event registry)
+- `services/orchestrator/src/engine/events/registry.ts` (serialized event lease)
+- `services/orchestrator/src/engine/events/sensitivityRules.governance.ts`
+- `services/orchestrator/src/engine/events/sensitivityRules.ts` (serialized
+  event lease)
+- `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`
+- `db/src/eventTypesSeed.ts` (generated; serialized event lease)
+- `contracts/json/events/governance_audit_posture_updated.json` (generated
+  neutral contract mirror)
+- `db/migrations/0043_*` + matching Drizzle journal/snapshot metadata (future
+  serialized migration lease; do not create before `0041`/`0042` land)
+- `services/orchestrator/src/mountRootApiRoutes.ts`
 - `services/orchestrator/src/routes/projects/fullConfigPatch.ts`
+- `services/orchestrator/src/routes/projects/createConfigGuard.ts`
+- `services/orchestrator/src/routes/projects/index.ts`
 - `services/orchestrator/src/routes/projects/governance.ts`
 - `services/orchestrator/src/routes/projects/budget.ts` (CAS convergence)
 - `services/orchestrator/src/routes/brownfield/fullTrack.ts` (CAS convergence;
-  unleased shared-config writer)
+  shared-config writer without a separate lease)
 - `services/orchestrator/tests/projectCreateDeployGuard.test.ts`
 - `services/orchestrator/tests/governanceRoutes.test.ts` (admin PUT auditPosture
-  + bidirectional member/admin interleaving + wrong-org negative)
+  - bidirectional member/admin interleaving + wrong-org negative)
+- `services/orchestrator/tests/governanceAuditPostureEvent.test.ts`
 - `services/orchestrator/tests/budgetRoutes.test.ts` (budget ↔ sibling CAS
   conflict)
 - `services/orchestrator/tests/projectConfigCas.integration.test.ts` (real-PG
   JSONB CAS proof; gated `TANREN_RLS_DB_TEST=1`)
+- `services/orchestrator/tests/governanceAuditPosture.rls.integration.test.ts`
+  (future `0043` real-PG route/state/event atomicity + tenant proof)
 - `services/orchestrator/tests/projectAuditPostureCreateAuthority.test.ts`
 - `services/orchestrator/tests/helpers/routesPool.ts` (CAS SQL surface; documents
   that stringify equality ≠ JSONB)
+- `services/orchestrator/tests/helpers/routesPoolEvents.ts` (typed EventStore
+  envelope capture for route proofs)
+- `services/dashboard/src/api/httpClient.ts`
 - `services/dashboard/src/api/governance.ts`
 - `services/dashboard/src/api/governanceClient.ts`
 - `services/dashboard/src/routes/governance/index.tsx`
@@ -95,24 +130,26 @@ integration caller is cut over.
 
 ## Shared-resource leases, not owned paths
 
-- `services/dashboard/src/app/routes.ts` (serialized lease: append the one real
-  `/settings/governance` nav row)
-- `services/dashboard/src/app/screens.ts` (serialized lease: append the one
-  governance screen mount)
+- `services/dashboard/src/app/routes.ts` and
+  `services/dashboard/src/app/screens.ts` are now GV-1's serialized lease; their
+  existing governance nav/mount must preserve RV-4's eventual convergence.
 - `services/orchestrator/src/engine/integrations/provisioningEngine.ts` —
   **IN-1 exclusive**; inventory only (see Dependencies).
 
-No migration, no event registry, and no `main.ts`. No new orchestrator route:
-the dashboard is a strict BFF/UI consumer of the canonical governance GET/PUT.
-Does not invent a mutation event for gate proof — the durable `projects.config`
-row plus real-DB CAS proof is the node gate. Does not touch mq-1, rv-4, or #856.
+No `main.ts` and no new orchestrator route: the dashboard is a strict BFF/UI
+consumer of the canonical governance GET/PUT. The route's successful
+audit-posture CAS and the named EventStore fact will share one org-scoped
+transaction; rejected, unauthorized, foreign-org, invalid, and stale writes
+must append no success fact. The `0043` catalog insert is deferred behind IN-1
+and RV-4 rather than competing for their migration slots. Does not touch MQ-1,
+RV-4's exclusive behavior-coverage repair, or #856.
 
 ## Consumes
 
 - `checkFullProjectConfigPatch(rawConfig, currentConfig)` — the canonical guard
   the member PATCH route already calls.
 - `ProjectStore.updateConfigIfCurrent` — sole expected-snapshot CAS for
-  unleased whole-config writers.
+  whole-config writers without a separate lease.
 
 ## Produces
 
@@ -124,6 +161,10 @@ row plus real-DB CAS proof is the node gate. Does not touch mq-1, rv-4, or #856.
   produces HTTP 409 `project_config_conflict`.
 - Governance / budget / brownfield posture writers on CAS → HTTP 409
   `project_config_conflict` on stale snapshot (fail loud; client reloads).
+- A successful, actual `auditPosture` transition appends exactly one typed
+  `governance.audit_posture.updated` fact through `PgEventStore`, in the same
+  transaction as the CAS. The non-secret payload records the initiating user
+  id plus the previous and current postures. A no-op posture PUT emits nothing.
 - `/settings/governance` reads the current project posture from the canonical
   GET and an org-admin save proxies only `auditPosture` to the canonical PUT.
 - Save success and validation/authorization/server failures remain visibly
@@ -138,10 +179,14 @@ row plus real-DB CAS proof is the node gate. Does not touch mq-1, rv-4, or #856.
 - A `PATCH` body that includes the unchanged default `auditPosture` plus a
   benign field (e.g. `credentials`) → accepted; the guard does not false-flag
   the structurally-equal nested object.
-- Member-first then admin, and admin-first then member interleavings both leave
+- Member-first then admin, and admin-first then member execution orders both leave
   the winner's fields intact and return 409 to the stale writer.
 - Budget PUT holding a stale snapshot while governance lands → 409; posture
   survives; budget not applied.
+- Reserved member PATCH, invalid governance payload, non-admin/foreign-org PUT,
+  and stale governance CAS append no `governance.audit_posture.updated` event.
+- If the EventStore append fails, the preceding config CAS rolls back; a state
+  transition without its durable fact is impossible.
 
 ## Validation
 
@@ -153,18 +198,27 @@ row plus real-DB CAS proof is the node gate. Does not touch mq-1, rv-4, or #856.
 - Real-PG (when `TANREN_RLS_DB_TEST=1`): `projectConfigCas.integration.test.ts`.
 - Dashboard proof: `governance.render.test.ts` (current read, scoped admin save,
   invalid form, non-admin/server failure visibility, malformed-response failure).
-- `just affected-typecheck` / `affected-test` for this pass. Full
-  `fast-check`/CI deferred until branch is coherent after IN-1 cutover.
+- Typed event/route proof: event registry + field-sensitivity coverage and
+  `governanceRoutes.test.ts` positive/no-op/negative event assertions.
+- Real-PG after `0043`: production HTTP route under `tanren_app` proves one
+  transaction commits state + event, an injected event failure rolls both back,
+  and foreign-tenant rows remain inaccessible.
+- Pre-migration preparation on the exact base: focused event/route tests,
+  `just affected-typecheck`, `just affected-test`, `just fast-check`, and
+  `just ci` are green (2026-07-15). Re-run the full gates after the IN-1 cutover
+  and `0043`; the gated real-Postgres proof and `just smoke` remain deferred.
 
 ## Serialization
 
-The orchestrator granted GV-1 the serialized dashboard `routes.ts` / `screens.ts`
-lease for this repair. Integration provisioning remains IN-1-leased. No other
-shared file is touched beyond the unleased config writers listed under exclusive
-ownership.
+The orchestrator granted GV-1 the serialized dashboard mount and event
+registry/seed/severity/sensitivity leases. The migration train is
+`0041` IN-1 → `0042` RV-4 → `0043` GV-1; no GV-1 migration artifact exists
+until the first two land. Integration provisioning remains IN-1-leased.
 
 ## Completeness
 
-**Not complete** until post-IN-1 removes the residual unconditional
+**Not complete** until (1) post-IN-1 removes the residual unconditional
 `ProjectStore.updateConfig` call site in `provisioningEngine.ts` and deletes the
-LWW method so `updateConfigIfCurrent` is the single authority.
+LWW method so `updateConfigIfCurrent` is the single authority, and (2) serialized
+`0043` installs the event catalog row and the real-Postgres atomic route proof is
+green. The pre-migration branch is repair-in-progress and is not countable.

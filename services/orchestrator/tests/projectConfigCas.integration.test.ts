@@ -94,14 +94,7 @@ describeDb("ProjectStore.updateConfigIfCurrent against real Postgres JSONB", () 
         autonomousRemediation: true,
       },
     };
-    const ok = await ProjectStore.updateConfigIfCurrent(
-      ownerPool,
-      PROJECT,
-      ORG,
-      snapshot!.config,
-      next,
-      systemActor,
-    );
+    const ok = await ProjectStore.updateConfigIfCurrent(ownerPool, PROJECT, ORG, snapshot!.config, next, systemActor);
     expect(ok).toBe(true);
 
     const after = await ProjectStore.getConfig(ownerPool, PROJECT, systemActor);
@@ -183,23 +176,13 @@ describeDb("ProjectStore.updateConfigIfCurrent against real Postgres JSONB", () 
         autonomousRemediation: false,
       },
     };
-    const ok = await ProjectStore.updateConfigIfCurrent(
-      ownerPool,
-      PROJECT,
-      ORG,
-      expectedReordered,
-      next,
-      systemActor,
-    );
+    const ok = await ProjectStore.updateConfigIfCurrent(ownerPool, PROJECT, ORG, expectedReordered, next, systemActor);
     expect(ok).toBe(true);
 
     // Direct SQL proof of the JSONB model the CAS predicate uses.
     const jsonbEq = await ownerPool.query<{ match: boolean }>(
       `SELECT ($1::jsonb IS NOT DISTINCT FROM $2::jsonb) AS match`,
-      [
-        `{"b":1,"a":2}`,
-        `{"a":2,"b":1}`,
-      ],
+      [`{"b":1,"a":2}`, `{"a":2,"b":1}`],
     );
     expect(jsonbEq.rows[0]?.match).toBe(true);
   });
@@ -250,8 +233,5 @@ describeDb("ProjectStore.updateConfigIfCurrent against real Postgres JSONB", () 
 });
 
 async function resetConfig(pool: Pool, config: unknown): Promise<void> {
-  await pool.query(`UPDATE projects SET config = $1::jsonb WHERE project_id = $2`, [
-    JSON.stringify(config),
-    PROJECT,
-  ]);
+  await pool.query(`UPDATE projects SET config = $1::jsonb WHERE project_id = $2`, [JSON.stringify(config), PROJECT]);
 }
