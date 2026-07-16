@@ -6,38 +6,11 @@ import {
   apexCapture,
   appWithGreenfieldRoutes as appWithRoutes,
   captureWithLifecycle,
+  LinkedDeployRoutesPool,
   preparedDeploy,
   seedGithubAppOrg,
   seedStaticTokenOrg,
 } from "./helpers/greenfieldRoutes.js";
-
-class LinkedDeployRoutesPool extends RoutesPool {
-  override async query(sql: string, params: unknown[] = []) {
-    const text = sql.replaceAll(/\s+/gu, " ").trim();
-    if (
-      text.startsWith(
-        "SELECT id, org_id, provider_kind, credential_ref, metadata, capabilities, status FROM org_integrations",
-      )
-    ) {
-      const [orgId, providerKind] = params as string[];
-      return {
-        rows: [
-          {
-            id: "integration_1",
-            org_id: orgId,
-            provider_kind: providerKind,
-            credential_ref: "secret://missing/deploy-token",
-            metadata: {},
-            capabilities: ["deploy"],
-            status: "linked",
-          },
-        ],
-        rowCount: 1,
-      };
-    }
-    return super.query(sql, params);
-  }
-}
 
 describe("greenfield/apex deploy dependency routes", () => {
   it("rejects autonomous onboarding derive without a deploy provider before creating a project", async () => {
@@ -127,11 +100,9 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(pool.projects.size).toBe(0);
   });
 
-  it("rejects onboarding derive when deploy preparation fails after repo-create (no project/graph)", async () => {
-    // IDEMPOTENT + ATOMIC ORDER (audit §3.10): the order is REPO-FIRST then deploy, so
-    // a deploy-provision failure leaves a re-attachable repo but NO project/graph. The
-    // response is still 502 (deploy_provision_failed); a retry re-attaches to the repo
-    // (no 409) and re-runs deploy — never double-provisioning a deploy app.
+  it("rejects onboarding derive when deploy preparation fails after project shell (no entity graph)", async () => {
+    // Project shell is required before authorizeOperation; deploy provision failure
+    // still returns 502 and must not leave a completed entity graph/specs.
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
@@ -149,7 +120,7 @@ describe("greenfield/apex deploy dependency routes", () => {
       body: JSON.stringify({
         capture: captureWithLifecycle(),
         owner: "cat-cave",
-        deploy: { providerKind: "deploy.vercel" },
+        deploy: { providerKind: "deploy.vercel", connectionId: "connection_1", grantId: "grant_1" },
       }),
     });
 
@@ -157,8 +128,7 @@ describe("greenfield/apex deploy dependency routes", () => {
     const body = (await res.json()) as { error: string; message: string };
     expect(body.error).toBe("deploy_provision_failed");
     expect(body.message).toContain("provider token expired");
-    // No project/graph was committed (deploy failed before the project row).
-    expect(pool.projects.size).toBe(0);
+    // Project shell may exist (required for authorizeOperation); entity graph must not.
     expect(pool.specs.size).toBe(0);
     expect(pool.inboxSources).toEqual([]);
     // The repo WAS created (repo-first) — a retry re-attaches to it instead of 409-ing.
@@ -435,10 +405,9 @@ describe("greenfield/apex deploy dependency routes", () => {
     expect(githubHttp.createdRepositories).toEqual([]);
   });
 
-  it("rejects direct greenfield project creation when linked deploy provider fails after repo-create", async () => {
-    // IDEMPOTENT + ATOMIC ORDER (audit §3.10): repo-first then deploy. A deploy failure
-    // leaves a re-attachable repo but NO project; the response is still 502. A retry
-    // re-attaches to the repo (no 409) and re-runs deploy (no second deploy app).
+  it("rejects direct greenfield project creation without exact deploy account selection", async () => {
+    // Sole-candidate guessing is deleted: even a linked sole account requires
+    // connectionId+grantId before any provider I/O.
     const pool = new LinkedDeployRoutesPool();
     seedGithubAppOrg(pool);
     pool.seedMembership("org_acme", "user_alice", "admin");
@@ -455,12 +424,41 @@ describe("greenfield/apex deploy dependency routes", () => {
       }),
     });
 
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: string; status: string };
+    expect(body.error).toBe("deploy_selection_required");
+    expect(body.status).toBe("selection_required");
+    expect(pool.projects.size).toBe(0);
+    expect(githubHttp.createdRepositories.length).toBe(0);
+  });
+
+  it("rejects direct greenfield project creation when linked deploy provider fails after selection", async () => {
+    // Project shell lands first; authorizeOperation + provision fails with 502.
+    // Exact connectionId+grantId required (no sole-candidate guess).
+    const pool = new LinkedDeployRoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const { app, githubHttp } = appWithRoutes(pool);
+
+    const res = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "apex-url-shortener",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: {
+          providerKind: "deploy.vercel",
+          connectionId: "connection_1",
+          grantId: "grant_1",
+        },
+      }),
+    });
+
     expect(res.status).toBe(502);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("deploy_provision_failed");
-    // No project committed (deploy failed before the project row)…
-    expect(pool.projects.size).toBe(0);
-    // …but the repo WAS created (repo-first) — a retry re-attaches to it, no 409.
+    // Repo + project shell may exist; deploy target is not attached.
     expect(githubHttp.createdRepositories.length).toBe(1);
   });
 });

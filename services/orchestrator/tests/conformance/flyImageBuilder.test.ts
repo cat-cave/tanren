@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // FlyImageBuilder seam — the merge-reflecting build path for a Fly release (PR2).
 // Split out of `deployProvisioner.test.ts` (which is at the 500-line architecture cap)
 // and `flyDeployReleaseConfig.test.ts` (which pins the static-image + IPv4 paths): this
@@ -9,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { FlyDeployProvisioner, flyMachineConfig } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { FlyImageBuildFailedError } from "../../src/engine/provisioners/flyImageBuilder.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
@@ -21,14 +22,17 @@ const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const flyGrant: OrgGrant = {
+const flyGrant = testOrgGrant({
   providerKind: "deploy.flyio",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { orgSlug: "acme" },
-};
+  capability: "deploy",
+});
 
 // `orgSlug: "tanren"` → the deploy-app namespacing rule prefixes the created app, so a
 // projectName "acme-web" becomes the real app name "tanren-acme-web".

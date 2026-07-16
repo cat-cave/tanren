@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // MobileReleaseDeployAdapter conformance: provisionOrBind binds the distribution
 // identity; deploy submits the build; verify POLLS until the build is AVAILABLE on the
 // track (failing LOUD on a REJECTED terminal / a never-available budget); demoSurface
@@ -6,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
 import {
   MobileReleaseDeployAdapter,
@@ -21,14 +22,17 @@ const TOKEN_VALUE = "asc_super_secret_api_key";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const grant: OrgGrant = {
+const grant = testOrgGrant({
   providerKind: MOBILE_RELEASE_PROVIDER_KIND,
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { mobilePlatform: "ios", mobileTrack: "testflight", mobileBundleId: "com.acme.web" },
-};
+  capability: "deploy",
+});
 
 const ctx = (name: string): ProjectContext => ({
   projectId: `proj_${name}`,
@@ -127,10 +131,12 @@ describe("MobileReleaseDeployAdapter — loud fail on missing config", () => {
 
   it("throws when the platform is absent", async () => {
     const { instance } = adapter();
-    const grantNoPlatform: OrgGrant = {
-      ...grant,
+    const grantNoPlatform = testOrgGrant({
+      providerKind: grant.providerKind,
+      credentialRef: grant.eligibleOperation.credentialRef,
       metadata: { mobileTrack: "testflight", mobileBundleId: "com.acme.web" },
-    };
+      capability: "deploy",
+    });
     await expect(instance.deploy(grantNoPlatform, ref, source)).rejects.toThrow(
       /required config 'mobilePlatform' is not set/u,
     );
@@ -138,7 +144,12 @@ describe("MobileReleaseDeployAdapter — loud fail on missing config", () => {
 
   it("throws when the track is absent", async () => {
     const { instance } = adapter();
-    const grantNoTrack: OrgGrant = { ...grant, metadata: { mobilePlatform: "ios", mobileBundleId: "com.acme.web" } };
+    const grantNoTrack = testOrgGrant({
+      providerKind: grant.providerKind,
+      credentialRef: grant.eligibleOperation.credentialRef,
+      metadata: { mobilePlatform: "ios", mobileBundleId: "com.acme.web" },
+      capability: "deploy",
+    });
     await expect(instance.deploy(grantNoTrack, ref, source)).rejects.toThrow(
       /required config 'mobileTrack' is not set/u,
     );
@@ -146,7 +157,12 @@ describe("MobileReleaseDeployAdapter — loud fail on missing config", () => {
 
   it("throws when the bundle id is absent (on provision)", async () => {
     const { instance } = adapter();
-    const grantNoBundle: OrgGrant = { ...grant, metadata: { mobilePlatform: "ios", mobileTrack: "testflight" } };
+    const grantNoBundle = testOrgGrant({
+      providerKind: grant.providerKind,
+      credentialRef: grant.eligibleOperation.credentialRef,
+      metadata: { mobilePlatform: "ios", mobileTrack: "testflight" },
+      capability: "deploy",
+    });
     await expect(instance.provisionOrBind(grantNoBundle, ctx("x"), { mode: "provision" })).rejects.toThrow(
       /required config 'mobileBundleId' is not set/u,
     );
@@ -158,6 +174,6 @@ describe("MobileReleaseDeployAdapter — loud fail on missing config", () => {
       secrets: new InMemorySecretStore(),
       poll: instantVerifyPollPolicy(),
     });
-    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/required config 'credentialRef' is not set/u);
+    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // Slack-specific unit coverage for the Plane-A SlackProvisioner: the
 // notificationTarget shape (bot channel-id model, NOT a webhook), idempotent
 // find-or-create, the org bot token surfaced only as a REF (never a value), the
@@ -10,15 +11,16 @@ import {
   secretStoreSlackTransportFactory,
   tanrenNotifyChannelName,
 } from "../../src/engine/integrations/slack/slackProvisioner.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { FetchSlackApiTransport } from "../../src/engine/integrations/slack/slackApiTransport.js";
 import { ScriptedSlackTransport } from "../conformance/fakes/scriptedSlackTransport.js";
 
-const grant: OrgGrant = {
+const grant = testOrgGrant({
   providerKind: "slack",
-  credentialRef: "secret://org/slack-bot-token",
+  credentialRef: "secret://org/slack-bot-token/g/1",
   metadata: { workspaceId: "T123" },
-};
+  capability: "notify",
+});
 
 const ctx = (projectId: string): ProjectContext => ({ projectId, orgId: "org_1", orgSlug: "tanren", name: projectId });
 
@@ -57,9 +59,9 @@ describe("SlackProvisioner.provision", () => {
     const transport = new ScriptedSlackTransport();
     const artifact = await provisionerOver(transport).provision(grant, ctx("beta"));
 
-    expect(artifact.secretRefs?.["botToken"]).toBe(grant.credentialRef);
+    expect(artifact.secretRefs?.["botToken"]).toBe(grant.eligibleOperation.credentialRef);
     // The credential ref is a pointer; the target carries the ref, not a value.
-    expect(artifact.notificationTarget?.config["botTokenRef"]).toBe(grant.credentialRef);
+    expect(artifact.notificationTarget?.config["botTokenRef"]).toBe(grant.eligibleOperation.credentialRef);
     expect(JSON.stringify(artifact)).not.toContain("xoxb-");
   });
 
@@ -102,7 +104,7 @@ describe("SlackProvisioner.bind", () => {
     });
     const artifact = await provisionerOver(transport).bind(grant, "C_team", ctx("zeta"));
     expect(artifact.notificationTarget?.config["channelId"]).toBe("C_team");
-    expect(artifact.secretRefs?.["botToken"]).toBe(grant.credentialRef);
+    expect(artifact.secretRefs?.["botToken"]).toBe(grant.eligibleOperation.credentialRef);
   });
 
   it("rejects binding an unknown channel id (no silent success)", async () => {
@@ -132,7 +134,7 @@ describe("SlackProvisioner.discover", () => {
 describe("secretStoreSlackTransportFactory", () => {
   it("resolves the grant credential ref into a live token only inside the transport", async () => {
     const secrets = new InMemorySecretStore();
-    await secrets.put({ ref: grant.credentialRef, value: "xoxb-real-token" });
+    await secrets.put({ ref: grant.eligibleOperation.credentialRef, value: "xoxb-real-token" });
     let handed: string | undefined;
     const factory = secretStoreSlackTransportFactory(secrets, (token) => {
       handed = token;
@@ -148,6 +150,6 @@ describe("secretStoreSlackTransportFactory", () => {
   it("throws loudly when the bot-token credential ref is missing (no silent fallback)", async () => {
     const secrets = new InMemorySecretStore();
     const factory = secretStoreSlackTransportFactory(secrets, (token) => new FetchSlackApiTransport(token));
-    await expect(factory(grant)).rejects.toThrow(/missing Slack bot-token credential ref/u);
+    await expect(factory(grant)).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

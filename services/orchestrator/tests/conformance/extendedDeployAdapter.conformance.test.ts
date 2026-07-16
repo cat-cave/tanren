@@ -1,8 +1,9 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 import { describe, expect, it } from "vitest";
 import { parseDigest } from "../../src/engine/contracts/cas.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
-import type { OrgGrant } from "../../src/engine/contracts/integrationProvisioner.js";
+
 import { DirectApiDeployAdapter } from "../../src/engine/deploy/directApiDeployAdapter.js";
 import {
   InMemoryManualAttestationStore,
@@ -36,6 +37,8 @@ const SOURCE = { repo: "acme/web", ref: "deadbeef" };
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
@@ -54,11 +57,12 @@ describe("Extended DeployAdapter lifecycle", () => {
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
     });
-    const grant: OrgGrant = {
+    const grant = testOrgGrant({
       providerKind: "deploy.vercel",
-      credentialRef: TOKEN_REF,
+      credentialRef: `${TOKEN_REF}/g/1`,
       metadata: { teamId: "team_1" },
-    };
+      capability: "deploy",
+    });
     const ref: DeployRef = { provider: "deploy.vercel", appId: "vercel_app_1" };
 
     const built = await adapter.buildArtifact(grant, ref, SOURCE);
@@ -90,11 +94,12 @@ describe("Extended DeployAdapter lifecycle", () => {
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
     });
-    const grant: OrgGrant = {
+    const grant = testOrgGrant({
       providerKind: "deploy.flyio",
-      credentialRef: TOKEN_REF,
+      credentialRef: `${TOKEN_REF}/g/1`,
       metadata: { orgSlug: "acme", image: "registry.fly.io/acme-fly:latest" },
-    };
+      capability: "deploy",
+    });
     const ref: DeployRef = { provider: "deploy.flyio", appId: "fly_app_1" };
 
     const built = await adapter.buildArtifact(grant, ref, SOURCE);
@@ -123,11 +128,12 @@ describe("Extended DeployAdapter lifecycle", () => {
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
     });
-    const grant: OrgGrant = {
+    const grant = testOrgGrant({
       providerKind: PULUMI_PROVIDER_KIND,
-      credentialRef: TOKEN_REF,
+      credentialRef: `${TOKEN_REF}/g/1`,
       metadata: { pulumiBackend: "https://api.pulumi.com", pulumiProject: "acme" },
-    };
+      capability: "deploy",
+    });
     const ref: DeployRef = { provider: PULUMI_PROVIDER_KIND, appId: "web" };
 
     const built = await adapter.buildArtifact(grant, ref, SOURCE);
@@ -155,11 +161,12 @@ describe("Extended DeployAdapter lifecycle", () => {
       secrets: secrets(),
       poll: instantVerifyPollPolicy(),
     });
-    const packageGrant: OrgGrant = {
+    const packageGrant = testOrgGrant({
       providerKind: PACKAGE_RELEASE_PROVIDER_KIND,
-      credentialRef: TOKEN_REF,
+      credentialRef: `${TOKEN_REF}/g/1`,
       metadata: { packageRegistry: "npm", packageName: "@acme/web" },
-    };
+      capability: "deploy",
+    });
     const packageRef: DeployRef = { provider: PACKAGE_RELEASE_PROVIDER_KIND, appId: "@acme/web" };
     const packageBuild = await packageAdapter.buildArtifact(packageGrant, packageRef, SOURCE);
     expect(packageBuild.providerChecksum).toMatch(/^sha512:/u);
@@ -173,11 +180,12 @@ describe("Extended DeployAdapter lifecycle", () => {
       secrets: secrets(),
       poll: instantVerifyPollPolicy(),
     });
-    const mobileGrant: OrgGrant = {
+    const mobileGrant = testOrgGrant({
       providerKind: MOBILE_RELEASE_PROVIDER_KIND,
-      credentialRef: TOKEN_REF,
+      credentialRef: `${TOKEN_REF}/g/1`,
       metadata: { mobilePlatform: "ios", mobileTrack: "testflight", mobileBundleId: "com.acme.web" },
-    };
+      capability: "deploy",
+    });
     const mobileRef: DeployRef = { provider: MOBILE_RELEASE_PROVIDER_KIND, appId: "com.acme.web" };
     const mobileBuild = await mobileAdapter.buildArtifact(mobileGrant, mobileRef, SOURCE);
     expect(mobileBuild.artifactDigest).toMatch(/^sha256:/u);
@@ -196,15 +204,16 @@ describe("Extended DeployAdapter lifecycle", () => {
       ownerScope: { orgId: "org_1", projectId: "project_1" },
     });
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "manual-app" };
-    const grant: OrgGrant = {
+    const grant = testOrgGrant({
       providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
-      credentialRef: TOKEN_REF,
+      credentialRef: `${TOKEN_REF}/g/1`,
       metadata: {
         manualExternalUrl: "https://example.com/download",
         manualExternalArtifactDigest: RAW_DIGEST,
         manualExternalProviderChecksum: RAW_CHECKSUM,
       },
-    };
+      capability: "deploy",
+    });
 
     const built = await adapter.buildArtifact(grant, ref, SOURCE);
     expect(await adapter.resolveArtifactDigest(grant, ref, built.deploymentId)).toEqual({
@@ -215,10 +224,12 @@ describe("Extended DeployAdapter lifecycle", () => {
     // the attestation row) — the durable manual_deploy_attestations table (migration 0031)
     // is unchanged, keeping SP-6's sole schema owner as migration 0036.
 
-    const missing: OrgGrant = {
-      ...grant,
+    const missing = testOrgGrant({
+      providerKind: grant.providerKind,
+      credentialRef: grant.eligibleOperation.credentialRef,
       metadata: { manualExternalUrl: "https://example.com/download" },
-    };
+      capability: "deploy",
+    });
     await expect(adapter.buildArtifact(missing, ref, { ...SOURCE, ref: "missing" })).rejects.toMatchObject({
       name: "DeployAdapterOperationError",
       kind: "manual_external",

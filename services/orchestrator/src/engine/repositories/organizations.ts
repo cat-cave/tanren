@@ -1,14 +1,15 @@
-// The `organizations` repository — org-row reads plus the sole org-config CAS
-// surface. getLogin remains non-secret identity only; config snapshot/CAS are
-// explicit config-write methods (not secret export APIs).
+// The `organizations` repository — non-secret identity reads plus the sole
+// org-config snapshot/CAS authority.
 
 import type pg from "pg";
+import { z } from "zod";
 import {
   type ConfigCasOutcome,
   type ConfigSnapshot,
   configCasImpossibleMiss,
   revisionText,
 } from "../config/configRevision.js";
+import type { IntegrationQueryClient } from "./integrationQuery.js";
 import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -33,13 +34,13 @@ export const OrganizationsStore = {
    * Resolve the org's HOSTNAME-SAFE slug (the `login` column). Deploy provisioners
    * use this as the mandatory prefix on every created Fly/Vercel app.
    */
-  async getLogin(client: QueryClient, orgId: string, _actor: ActorRef): Promise<string> {
-    const result = await client.query<{ login: string }>("SELECT login FROM organizations WHERE id = $1", [orgId]);
+  async getLogin(client: IntegrationQueryClient, orgId: string, _actor: ActorRef): Promise<string> {
+    const result = await client.query("SELECT login FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
     if (row === undefined) {
       throw new OrganizationNotFoundError(orgId);
     }
-    return row.login;
+    return z.object({ login: z.string() }).parse(row).login;
   },
 
   /**

@@ -152,12 +152,18 @@ export class PackageReleaseDeployAdapter implements DeployAdapter {
   }
 
   private async token(grant: OrgGrant): Promise<string> {
-    const secret = await this.deps.secrets.get(grant.credentialRef);
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
+    const { secretValueForLease } = await import("../repositories/integrationConnectionResolve.js");
+    const token = await secretValueForLease(
+      new GenerationAddressedIntegrationSecretStore(this.deps.secrets),
+      grant.eligibleOperation,
+    );
+    const secret = { value: token };
     if (secret === undefined) {
       throw new DeployAdapterConfigError(
         PACKAGE_RELEASE_ADAPTER_KIND,
         "credentialRef",
-        `the org grant credentialRef '${grant.credentialRef}' is not present in the secret store (the registry publish token)`,
+        `the org grant credentialRef '${grant.eligibleOperation.credentialRef}' is not present in the secret store (the registry publish token)`,
       );
     }
     return secret.value;

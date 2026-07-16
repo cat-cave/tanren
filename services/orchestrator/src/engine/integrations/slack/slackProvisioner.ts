@@ -188,15 +188,14 @@ export class SlackProvisioner implements IntegrationProvisioner {
         slackChannelId: channel.id,
         slackChannelName: channel.name,
       },
-      secretRefs: { botToken: grant.credentialRef },
+      secretRefs: { botToken: grant.eligibleOperation.credentialRef },
       notificationTarget: {
         kind: "slack",
         config: {
           channelId: channel.id,
           channelName: channel.name,
-          // The send adapter resolves the bot token from this ref to post via
-          // `chat.postMessage`. A ref, never the value.
-          botTokenRef: grant.credentialRef,
+          // Generation-addressed ref only — never a secret value.
+          botTokenRef: grant.eligibleOperation.credentialRef,
         },
       },
     };
@@ -219,10 +218,13 @@ export function secretStoreSlackTransportFactory(
   makeTransport: (botToken: string) => SlackApiTransport,
 ): SlackTransportFactory {
   return async (grant: OrgGrant): Promise<SlackApiTransport> => {
-    const secret = await secrets.get(grant.credentialRef);
-    if (secret === undefined) {
-      throw new Error(`missing Slack bot-token credential ref: ${grant.credentialRef}`);
-    }
-    return makeTransport(secret.value);
+    // Exact generation secret read only — lease-gated IntegrationSecretStore.getExact.
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrationSecretStoreImpl.js");
+    const { secretValueForLease } = await import("../../repositories/integrationConnectionResolve.js");
+    const token = await secretValueForLease(
+      new GenerationAddressedIntegrationSecretStore(secrets),
+      grant.eligibleOperation,
+    );
+    return makeTransport(token);
   };
 }

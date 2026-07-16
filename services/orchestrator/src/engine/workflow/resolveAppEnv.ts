@@ -10,17 +10,17 @@
 // org-scoped (the caller hands an org-scope-carrying `QueryClient`), so RLS gates
 // which project's entries are even visible.
 
-import type pg from "pg";
 import type { ActorRef } from "../state/actor.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import { AppEnvironmentStore, type AppEnvScope } from "../repositories/appEnvironment.js";
-
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+import { AppEnvironmentStore, type AppEnvironment, type AppEnvScope } from "../repositories/appEnvironment.js";
+import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 
 export interface ResolveAppEnvInput {
-  client: QueryClient;
+  client: IntegrationQueryClient;
   secrets: SecretStore;
+  orgId: string;
   projectId: string;
+  environment: AppEnvironment;
   scope: AppEnvScope;
   actor: ActorRef;
 }
@@ -36,7 +36,13 @@ export interface ResolveAppEnvInput {
  * The returned map holds SECRET values — never log/emit it.
  */
 export async function resolveAppEnvForScope(input: ResolveAppEnvInput): Promise<Record<string, string>> {
-  const entries = await AppEnvironmentStore.list(input.client, input.projectId, input.actor);
+  const entries = await AppEnvironmentStore.list(
+    input.client,
+    input.orgId,
+    input.projectId,
+    input.environment,
+    input.actor,
+  );
   const inScope = entries.filter((entry) => entry.scopes.includes(input.scope));
 
   const env: Record<string, string> = {};

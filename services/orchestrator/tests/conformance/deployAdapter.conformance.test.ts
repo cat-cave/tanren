@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // DeployAdapter conformance (the deployment seam above IntegrationProvisioner): the
 // `direct_api` adapter must DELEGATE provisionOrBind/deploy/status to the wrapped
 // Vercel/Fly provisioners, and `verify` must POLL the provider to a READY terminal +
@@ -38,20 +39,24 @@ const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
 function secrets(): InMemorySecretStore {
   const store = new InMemorySecretStore();
   void store.put({ ref: TOKEN_REF, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
+  void store.put({ ref: `${TOKEN_REF}/g/1`, value: TOKEN_VALUE });
   return store;
 }
 
-const vercelGrant: OrgGrant = {
+const vercelGrant = testOrgGrant({
   providerKind: "deploy.vercel",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { teamId: "team_abc", slug: "acme" },
-};
+  capability: "deploy",
+});
 
-const flyGrant: OrgGrant = {
+const flyGrant = testOrgGrant({
   providerKind: "deploy.flyio",
-  credentialRef: TOKEN_REF,
+  credentialRef: `${TOKEN_REF}/g/1`,
   metadata: { orgSlug: "acme", image: "registry.fly.io/acme-web:deployment-1" },
-};
+  capability: "deploy",
+});
 
 // task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`.
 // These adapter tests are about the verify/deploy LIFECYCLE (not the naming), but

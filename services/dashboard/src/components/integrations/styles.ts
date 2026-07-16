@@ -134,7 +134,7 @@ export const INTEGRATIONS_SCREEN_CSS = `
 
 .integrations-screen .link-form {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
   align-items: end;
 }

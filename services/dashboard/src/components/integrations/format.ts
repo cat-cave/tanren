@@ -34,7 +34,9 @@ export function isProviderLinked(
   providerKind: string,
 ): boolean {
   if (integrations === undefined) return false;
-  return integrations.some((row) => row.providerKind === providerKind && row.status === "linked");
+  return integrations.some(
+    (row) => row.providerKind === providerKind && row.connectionStatus === "active" && row.grantStatus === "active",
+  );
 }
 
 /** Capability list joined for a grant card, or "—" when empty. */

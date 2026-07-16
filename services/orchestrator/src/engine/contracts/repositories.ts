@@ -41,7 +41,7 @@ import {
   InboxStore,
   AuditsStore,
   WebhookEventStore,
-  OrgIntegrationsStore,
+  IntegrationConnectionsStore,
   AppEnvironmentStore,
   FragmentsStore,
   EntityClaimStore,
@@ -95,8 +95,8 @@ export interface Repositories {
   readonly recovery: typeof RecoveryStore;
   /** Forge-tools tenant reads (access gates + the `tanren.read_*` projections). */
   readonly forgeTools: typeof ForgeToolsStore;
-  /** Plane A: the `org_integrations` registry (CRUD + `getGrant`). */
-  readonly orgIntegrations: typeof OrgIntegrationsStore;
+  /** Control-plane integration connections and their explicit grants. */
+  readonly integrationConnections: typeof IntegrationConnectionsStore;
   /** Plane B: the built product's `project_app_env` store (upsert/list/get/delete). */
   readonly appEnvironment: typeof AppEnvironmentStore;
   /** Tanren-native templating (docs/roadmap/templating-system.md): the org-scoped
@@ -136,7 +136,7 @@ export const pgRepositories: Repositories = {
   discovery: DiscoveryStore,
   recovery: RecoveryStore,
   forgeTools: ForgeToolsStore,
-  orgIntegrations: OrgIntegrationsStore,
+  integrationConnections: IntegrationConnectionsStore,
   appEnvironment: AppEnvironmentStore,
   fragments: FragmentsStore,
   entityClaims: EntityClaimStore,

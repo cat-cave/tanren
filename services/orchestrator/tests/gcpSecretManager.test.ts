@@ -56,6 +56,24 @@ describe("gcpSecretIdFromRef", () => {
 });
 
 describe("GcpSecretManagerStore wire contract", () => {
+  it("fails create-only closed without provider I/O, including concurrent attempts", async () => {
+    const { fetchImpl, calls } = recordingGcpFetch("p");
+    const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });
+    const attempts = await Promise.allSettled([
+      store.putCreateOnly({ ref: "immutable/g/1", value: "left" }),
+      store.putCreateOnly({ ref: "immutable/g/1", value: "right" }),
+    ]);
+    expect(attempts).toEqual([
+      expect.objectContaining({ status: "rejected" }),
+      expect.objectContaining({ status: "rejected" }),
+    ]);
+    for (const attempt of attempts) {
+      expect((attempt as PromiseRejectedResult).reason).toMatchObject({ writeState: "definitely_unwritten" });
+    }
+    expect(store.createOnlyAtomicity).toBe("unsupported");
+    expect(calls).toEqual([]);
+  });
+
   it("creates the container then adds a base64-encoded version on put", async () => {
     const { fetchImpl, calls } = recordingGcpFetch("p");
     const store = new GcpSecretManagerStore({ project: "p", accessToken: "tok", fetchImpl });

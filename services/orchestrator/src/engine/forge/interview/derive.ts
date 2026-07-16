@@ -1,49 +1,12 @@
-// greenfield onboarding: derive the product graph from a completed
-// vision-interview capture.
-//
-// This is the heart of "interview → DAG". On completion the accumulated
-// capture is turned into a live project's product graph, created through the
-// SAME foundations rather than a forked write path:
-//
-//   project    → createProject              (workflow)
-//   personas   → PersonaStore.create
-//   behaviors  → BehaviorStore.create + linkToSpec
-//   milestones → MilestoneStore.create + setSpecMilestone
-//   specs      → createSpec                 (incl. dependency wiring)
-//
-// The derived DAG is exactly what `getProjectDag` then reads back:
-//   - A foundation milestone (M1 · scaffold) of scaffold specs every later
-//     spec depends on (the critical path root).
-//   - One milestone per inferred INTERFACE (the hi-fi "handheld" / "ops
-//     dashboard" columns), each carrying a spec per BEHAVIOR tied to a persona
-//     whose surface matches that interface, plus a per-interface schema spec.
-//   - Each behavior spec `dependsOn` the scaffold + its interface's schema spec,
-//     so the dependency math the DAG renders is real, not cosmetic.
-//
-// THE ONE-PATH TEMPLATING DOCTRINE (docs/roadmap/templating-system.md). Every
-// project DAG seeds from a FRAGMENT-COMPOSED template. The flow:
-//
-//   1. `selectFragmentConfig(lifecycle, library)` resolves a `TemplateConfig` +
-//      reports which fragment ids are missing from the library (unified bundled +
-//      org-scoped per F2).
-//   2. If missing-fragments: spawn per-fragment authoring runs (F2 — one run per
-//      missing fragment, each producing a validated `Fragment` persisted into the
-//      org's `fragments` table). Wait, retry step 1. If authoring fails, halt loud
-//      with `FragmentAuthoringFailedError` (no silent skip).
-//   3. CREATE the project repo (`createRepository` — `CodeHost.createRepo`).
-//   4. `composeTemplate(config, library)` assembles the VFS, then `materializeTemplate`
-//      PUSHES every composed file directly to the just-created project repo's
-//      default branch — the project repo IS the artifact (PR-G — task #77).
-//      An opaque `templateRef` (`tanren://composed/<slug>@<contentHash>`) rides on
-//      `projects.config` for observability; there is NO `tanren-tmpl-<slug>` seed
-//      repo to clone at run time.
-//
-// There is NO dual scaffoldOrigin, NO `template_build` mode, NO agent template-build
-// DAG, NO template registry to query, NO intermediate per-stack template seed repo.
-// Every project derive is the same path.
+/* eslint-disable import/max-dependencies -- derive wires deploy/authority/graph seams */
+// Completed vision capture → fragment-composed project repo → durable project and
+// product graph. All entities use the canonical creation paths. Missing fragments
+// are authored and composition is pushed directly to the project repo; there is no
+// alternate scaffold/template-build path or intermediate template repository.
 
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { mutateProjectConfig } from "../../config/projectConfig.js";
 import type { DesignAgent } from "../../design/designAgent.js";
 import {
   RepositoryAlreadyExistsError,
@@ -65,13 +28,16 @@ import {
 import { buildEntityGraph } from "./deriveEntityGraph.js";
 import {
   DeployNotLinkedError,
-  isDeployNotLinked,
+  DeploySelectionRequiredError,
+  isDeployUnavailable,
   missingDeployProvisionerError,
   resolveGreenfieldDeployDependency,
   type DeployPreflightCallback,
   type GreenfieldDeployDependency,
   type PrepareDeployCallback,
+  type PersistDeploySelectionCallback,
 } from "./deployDependency.js";
+import { DeployIneligibleError } from "./deployIneligibleError.js";
 import {
   DeriveRollbackError,
   newDeriveCompensation,
@@ -126,6 +92,8 @@ export interface DeriveInput {
   deploy?: GreenfieldDeployDependency;
   preflightDeploy?: DeployPreflightCallback;
   prepareDeploy?: PrepareDeployCallback;
+  /** Production persists the exact pre-project account choice once the project exists. */
+  persistDeploySelection?: PersistDeploySelectionCallback;
   /**
    * THE COMPOSE+MATERIALIZE SEAM (docs/roadmap/templating-system.md). The derive
    * composes a fragment-based template from the captured lifecycle and pushes the
@@ -368,8 +336,15 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
   // cannot deploy anyway.
   const deploy = resolveGreenfieldDeployDependency(input.deploy, { required: true });
   if (deploy !== undefined && input.preflightDeploy !== undefined) {
-    const notLinked = await input.preflightDeploy({ orgId: input.orgId, providerKind: deploy.providerKind });
-    if (notLinked !== undefined) throw new DeployNotLinkedError(notLinked);
+    const unavailable = await input.preflightDeploy({
+      orgId: input.orgId,
+      providerKind: deploy.providerKind,
+      ...(deploy.connectionId === undefined ? {} : { connectionId: deploy.connectionId }),
+      ...(deploy.grantId === undefined ? {} : { grantId: deploy.grantId }),
+    });
+    if (unavailable?.status === "not_linked") throw new DeployNotLinkedError(unavailable);
+    if (unavailable?.status === "selection_required") throw new DeploySelectionRequiredError(unavailable);
+    if (unavailable?.status === "ineligible") throw new DeployIneligibleError(unavailable);
   }
 
   // TASK #78 — TRANSACTIONAL ROLLBACK. Build a compensation stack covering every
@@ -419,35 +394,48 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
     const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
 
+    // Project shell first — authorizeOperation requires a real project selection.
+    // Deploy config is merged after provision; selection must land before provider I/O.
+    const project = await createProject(
+      pool,
+      {
+        name: slug,
+        repoUrl,
+        config: {
+          ...baseConfig,
+          ...productVisionConfig(capture),
+          lifecycle: capture.lifecycle,
+          ...templateRefConfig(seed),
+        },
+        ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
+      },
+      { ...input.actor, orgId: input.orgId },
+      { configWriteProof: provisionedGreenfieldProjectConfigProof },
+    );
+    const projectId = project.projectId;
+
+    // prepareDeploy persists exact selection then authorizeOperation + provision.
     const preparedDeploy = await input.prepareDeploy({
       orgId: input.orgId,
+      projectId,
       capability: "deploy",
       providerKind: deploy.providerKind,
       mode: deploy.mode,
       projectKey: slug,
       projectName: slug,
+      ...(deploy.connectionId === undefined ? {} : { connectionId: deploy.connectionId }),
+      ...(deploy.grantId === undefined ? {} : { grantId: deploy.grantId }),
       ...(deploy.chosenResourceId === undefined ? {} : { chosenResourceId: deploy.chosenResourceId }),
       ...(deploy.stack === undefined ? {} : { stack: deploy.stack }),
       name: deploy.name ?? slug,
     });
-    if (isDeployNotLinked(preparedDeploy)) {
-      throw new DeployNotLinkedError(preparedDeploy);
+    if (isDeployUnavailable(preparedDeploy)) {
+      if (preparedDeploy.status === "not_linked") throw new DeployNotLinkedError(preparedDeploy);
+      if (preparedDeploy.status === "selection_required") throw new DeploySelectionRequiredError(preparedDeploy);
+      throw new DeployIneligibleError(preparedDeploy);
     }
     // TRANSACTIONAL ROLLBACK (task #78): register the deploy app compensation
-    // IMMEDIATELY after a successful provision. The `deployAppId` + `deployAppName`
-    // BOTH live on the project-config keyset the prepareDeploy callback populated
-    // (see `DeployProvisioner.artifactFor`); the provider kind is the same `deploy`
-    // resolved above. Absent `destroyDeployApp` ⇒ skip registration (test-only path;
-    // production wires it via the route).
-    //
-    // AUDIT FINDING D4: BOTH `appId` AND `appName` are required by the compensation
-    // — Fly's destroy keys on `app.name`, Vercel's on `app.appId`. Fly's `listApps`
-    // returns `appId: app.id ?? app.name` which is typically the distinct internal
-    // id (e.g. `fly_app_1`), so a synthesis that filled `name` from `appId` would
-    // route the DELETE at the wrong path and Fly would 404 — the per-provider arm
-    // would swallow that as "already-gone success" (the silent-compensation pattern
-    // audit #8 was meant to kill, reintroduced by PR #711). Threading the real
-    // `deployAppName` closes the regression.
+    // IMMEDIATELY after a successful provision.
     const appId = preparedDeploy.projectConfig["deployAppId"];
     const appName = preparedDeploy.projectConfig["deployAppName"];
     if (
@@ -462,28 +450,31 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       compensation.register({
         kind: "deploy.app",
         label: `${providerKind}:${appName}`,
-        rollback: () => destroyDeployApp({ providerKind, appId, appName }),
+        rollback: () =>
+          destroyDeployApp({
+            providerKind,
+            appId,
+            appName,
+            connectionId: preparedDeploy.outcome.authority.connectionId,
+            grantId: preparedDeploy.outcome.authority.grantId,
+            projectId,
+          }),
       });
     }
-    const persistedConfig = {
-      ...baseConfig,
-      ...productVisionConfig(capture),
-      lifecycle: capture.lifecycle,
-      ...templateRefConfig(seed),
-      ...preparedDeploy.projectConfig,
-    };
-    const project = await createProject(
-      pool,
-      {
-        name: slug,
-        repoUrl,
-        config: persistedConfig,
-        ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
-      },
-      { ...input.actor, orgId: input.orgId },
-      { configWriteProof: provisionedGreenfieldProjectConfigProof },
+    // Merge deploy target into project config after authorized provision.
+    // Run through migrateProjectConfig so zod defaults (reviewPolicy, mergeIntegration,
+    // …) remain on the stored blob — same as createProject's assert path.
+    const { migrateProjectConfig } = await import("../../config/index.js");
+    await mutateProjectConfig(pool, projectId, { kind: "operator", id: input.actor.userId }, (raw) =>
+      migrateProjectConfig({
+        ...migrateProjectConfig(raw),
+        ...baseConfig,
+        ...productVisionConfig(capture),
+        lifecycle: capture.lifecycle,
+        ...templateRefConfig(seed),
+        ...preparedDeploy.projectConfig,
+      }),
     );
-    const projectId = project.projectId;
     const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
     return await buildEntityGraph(pool, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs);
   } catch (error) {

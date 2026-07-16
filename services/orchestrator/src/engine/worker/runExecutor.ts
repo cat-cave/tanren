@@ -415,7 +415,9 @@ async function resolveRunAppEnv(
       const env = await resolveAppEnvForScope({
         client,
         secrets: deps.secrets,
+        orgId,
         projectId,
+        environment: "test",
         scope,
         actor: systemActor,
       });

@@ -11,7 +11,7 @@
 //     (fail-closed), never a silent skip of a required deploy.
 //
 // Pure (no DB): the resolver takes the already-read project config + a
-// `deployIntent` boolean the caller probes from `org_integrations`, so the
+// `deployIntent` boolean the caller probes from active control grants, so the
 // distinction is unit-testable without a pool. The deploy-intent predicate over a
 // grant list lives here too (the caller supplies the grants).
 
@@ -50,7 +50,7 @@ export function grantsSignalDeployIntent(grants: readonly DeployIntentGrant[]): 
 
 /**
  * Resolve a project's deploy intent from its (already-read) config + whether a
- * deploy is expected (the caller's `org_integrations` probe). `orgId` is the
+ * deploy is expected (the caller's control-grant probe). `orgId` is the
  * project's resolved org (null ⇒ no tenant grant can exist ⇒ a legitimate no-op).
  */
 export function resolveDeployTarget(input: {

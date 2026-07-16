@@ -11,8 +11,8 @@ import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-/** A project's operator lifecycle: the autonomous-walker-driven default, or paused. */
-const ProjectLifecycleEnum = z.enum(["active", "archived"]);
+/** A project's lifecycle: deriving, autonomous-walker-driven, or operator-paused. */
+const ProjectLifecycleEnum = z.enum(["deriving", "active", "archived"]);
 export type ProjectLifecycle = z.infer<typeof ProjectLifecycleEnum>;
 
 // The project row as the HTTP project/brownfield routes read it. `config` is an
@@ -28,8 +28,8 @@ export const ProjectRow = z.object({
   config: z.unknown(),
   /** Decimal string of config_revision — present when the SELECT includes it. */
   configRevision: z.string().optional(),
-  // Operator lifecycle: `active` (default) or `archived` (paused). Defaults to
-  // `active` when the column is absent on a row (e.g. a test fake that predates it).
+  // Lifecycle: `deriving`, `active` (default), or `archived` (paused). Defaults
+  // to `active` when the column is absent on a row (e.g. a test fake that predates it).
   lifecycle: ProjectLifecycleEnum.default("active"),
   // Present only on the single-project read (which selects it for the tenant
   // check); null when the column is absent/unset.

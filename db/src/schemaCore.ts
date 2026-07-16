@@ -38,7 +38,9 @@ export const projects = pgTable(
       .default(sql`'{"version":1}'::jsonb`),
     // App CAS gen (never xmin). mode number + CHECK ≤ MAX_SAFE_INTEGER; HTTP uses ::text.
     configRevision: bigint("config_revision", { mode: "number" }).notNull().default(1),
-    // Operator lifecycle: active (walker drives) or archived (paused). Archive surface only.
+    // Operator lifecycle: 'deriving' (greenfield graph incomplete), 'active'
+    // (the autonomous walker drives it), or 'archived' (walker + strand
+    // reconciler skip it; in-flight runs/specs are cancelled on archive).
     lifecycle: text("lifecycle").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     orgId: text("org_id")
@@ -50,7 +52,9 @@ export const projects = pgTable(
       "projects_config_revision_range_check",
       sql`${table.configRevision} >= 1 AND ${table.configRevision} <= 9007199254740991`,
     ),
+    uniqueIndex("projects_org_project_unique").on(table.orgId, table.projectId),
     index("projects_org_id").on(table.orgId),
+    check("projects_lifecycle_check", sql`${table.lifecycle} IN ('deriving','active','archived')`),
   ],
 );
 
@@ -91,6 +95,7 @@ export const specs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    uniqueIndex("specs_org_spec_unique").on(table.orgId, table.specId),
     enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
     enumCheck("specs_priority_check", table.priority, ["P0", "P1", "P2", "tbd"]),
     enumCheck("specs_mode_check", table.mode, ["specialize_seed", "from_scratch"]),
@@ -444,7 +449,6 @@ export const integrationNodes = pgTable(
     uniqueIndex("integration_nodes_org_member_key_unique").on(table.orgId, table.memberKey),
   ],
 );
-
 // tanren-owns-the-engine.md §3 proof reuse: a gate/CI verdict on a node is reused
 // ONLY when EVERY component of the `proofReuseKey` matches (member_key +
 // gate_config_hash + policy_version + runner image + app-env + quarantine). This
