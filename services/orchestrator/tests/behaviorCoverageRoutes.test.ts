@@ -20,6 +20,7 @@ import type {
 import type { BehaviorCoverageEdgesRepository } from "../src/engine/repositories/behaviorCoverageEdges.js";
 import { CoverageIntegrationNodeUnavailableError } from "../src/engine/repositories/behaviorCoverageEdges.js";
 import type { BoundBehaviorCoverageSnapshot } from "../src/engine/runtimeVerification/affectedSelection.js";
+import { buildCoverageAuthorityFingerprint } from "../src/engine/runtimeVerification/affectedSelection.js";
 import {
   AFFECTED_SELECTION_FACT_MEDIA_TYPE,
   decodeAffectedSelectionFact,
@@ -42,13 +43,20 @@ const MEMBER: ActorContext = {
   scopes: ["org:member"],
   source: "session",
 };
+const BASE = "0".repeat(40);
 const HEAD = "a".repeat(40);
 const MEMBER_KEY = "b".repeat(64);
 const REVISION_DIGEST = parseDigest(`sha256:${"c".repeat(64)}`);
 
 function bound(): BoundBehaviorCoverageSnapshot {
-  return {
-    binding: { integrationNodeId: "node-a", preparedHeadSha: HEAD, treeHash: "tree-a", memberKey: MEMBER_KEY },
+  const input = {
+    binding: {
+      integrationNodeId: "node-a",
+      baseSha: BASE,
+      preparedHeadSha: HEAD,
+      treeHash: "tree-a",
+      memberKey: MEMBER_KEY,
+    },
     snapshot: {
       orgId: "org-a",
       projectId: "project-a",
@@ -67,6 +75,46 @@ function bound(): BoundBehaviorCoverageSnapshot {
         },
       ],
     },
+  };
+  return {
+    ...input,
+    authorityFingerprint: buildCoverageAuthorityFingerprint({
+      ...input,
+      changedTargets: [{ kind: "source", targetRef: "src/a.ts" }],
+    }),
+  };
+}
+
+function completeBound(
+  authoritativeTargets: readonly { readonly kind: "source"; readonly targetRef: string }[],
+): BoundBehaviorCoverageSnapshot {
+  const input = {
+    binding: bound().binding,
+    snapshot: {
+      orgId: "org-a",
+      projectId: "project-a",
+      behaviors: [
+        {
+          behaviorRevisionId: "br-a" as BehaviorRevisionId,
+          contentDigest: REVISION_DIGEST,
+          title: "behavior a",
+          edges: [
+            { id: "edge-ui" as BehaviorCoverageEdgeId, kind: "component" as const, targetRef: "ui" },
+            { id: "edge-a" as BehaviorCoverageEdgeId, kind: "source" as const, targetRef: "src/a.ts" },
+          ],
+        },
+        {
+          behaviorRevisionId: "br-c" as BehaviorRevisionId,
+          contentDigest: parseDigest(`sha256:${"e".repeat(64)}`),
+          title: "behavior c",
+          edges: [{ id: "edge-c" as BehaviorCoverageEdgeId, kind: "source" as const, targetRef: "src/c.ts" }],
+        },
+      ],
+    },
+  };
+  return {
+    ...input,
+    authorityFingerprint: buildCoverageAuthorityFingerprint({ ...input, changedTargets: authoritativeTargets }),
   };
 }
 
@@ -114,9 +162,13 @@ function persistedFromCas(cas: MemoryCas, analysisId: Digest): PersistedAffected
   return { fact, selection: selectionFromFact(fact, analysisId) };
 }
 
-function buildHarness(options?: { actor?: ActorContext; projectOrgId?: string | null }) {
+function buildHarness(options?: {
+  actor?: ActorContext;
+  projectOrgId?: string | null;
+  bound?: BoundBehaviorCoverageSnapshot;
+}) {
   const actor = options?.actor ?? ADMIN;
-  const current = bound();
+  const current = options?.bound ?? bound();
   let locked = current;
   let latest: PersistedAffectedSelection | undefined;
   let graphFailure = false;
@@ -187,11 +239,16 @@ function buildHarness(options?: { actor?: ActorContext; projectOrgId?: string | 
   };
 }
 
-async function analyze(harness: ReturnType<typeof buildHarness>) {
+async function analyze(
+  harness: ReturnType<typeof buildHarness>,
+  targets: readonly { readonly kind: "source"; readonly targetRef: string }[] = [
+    { kind: "source", targetRef: "src/a.ts" },
+  ],
+) {
   return harness.app.request("/orgs/org-a/projects/project-a/behavior-coverage/affected-selection", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ integrationNodeId: "node-a", targets: [{ kind: "source", targetRef: "src/a.ts" }] }),
+    body: JSON.stringify({ integrationNodeId: "node-a", targets }),
   });
 }
 
@@ -256,6 +313,45 @@ describe("behavior coverage HTTP surface", () => {
         payload: expect.objectContaining({ analysisId: body.selection.analysisId }),
       }),
     );
+  });
+
+  it("cannot turn omitted targets or a partial graph into authoritative exclusions", async () => {
+    const authoritativeTargets = [
+      { kind: "source" as const, targetRef: "src/a.ts" },
+      { kind: "source" as const, targetRef: "src/c.ts" },
+    ];
+    const omitted = buildHarness({ bound: completeBound(authoritativeTargets) });
+    const omittedResponse = await analyze(omitted, authoritativeTargets.slice(0, 1));
+    expect(omittedResponse.status).toBe(201);
+    await expect(omittedResponse.json()).resolves.toMatchObject({
+      selection: {
+        mode: "expanded_unknown",
+        selected: [{ behaviorRevisionId: "br-a" }, { behaviorRevisionId: "br-c" }],
+        excluded: [],
+      },
+    });
+
+    const sealed = completeBound([{ kind: "source", targetRef: "src/a.ts" }]);
+    const partial = {
+      ...sealed,
+      snapshot: {
+        ...sealed.snapshot,
+        behaviors: [
+          { ...sealed.snapshot.behaviors[0]!, edges: [sealed.snapshot.behaviors[0]!.edges[1]!] },
+          sealed.snapshot.behaviors[1]!,
+        ],
+      },
+    };
+    const partialHarness = buildHarness({ bound: partial });
+    const partialResponse = await analyze(partialHarness);
+    expect(partialResponse.status).toBe(201);
+    await expect(partialResponse.json()).resolves.toMatchObject({
+      selection: {
+        mode: "expanded_unknown",
+        selected: [{ behaviorRevisionId: "br-a" }, { behaviorRevisionId: "br-c" }],
+        excluded: [],
+      },
+    });
   });
 
   it("withholds 2xx when event append fails and when graph changes during publication", async () => {

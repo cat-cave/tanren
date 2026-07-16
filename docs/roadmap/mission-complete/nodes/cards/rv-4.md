@@ -2,7 +2,7 @@
 
 **Bucket**: runtime verification
 **Phase**: MVP / Wave 2 consumer
-**State**: retained-core P1 correction active; serialized tail blocked by IN-1;
+**State**: retained-core P1s corrected locally; serialized tail blocked by IN-1;
 no node credit until merged
 **Base**: `origin/main` / `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
 **Exclusive core**: `63000a1a70ce2e276af51f0143b0d82a7f1ec1f1`
@@ -227,6 +227,12 @@ During exclusive authoring:
 2. mutation-sensitive former-bug negatives;
 3. `just affected-typecheck` and `just affected-test`;
 4. format, architecture/line cap, event drift, and `git diff --check`.
+
+Current retained-core correction proof: 45 focused tests pass across six active
+suites; the five real-Postgres cases remain intentionally gated for the
+serialized tail. `just affected-typecheck`, `just affected-test`, format,
+architecture/line-cap, and event-drift checks pass. The Unicode CAS golden fact
+is fixed at `sha256:d138439ef071f4c934a9a603c5ab6bd4bbd48bee470353a7dc1d6587a4b175ae`.
 
 After IN-1 and the serialized tail land:
 

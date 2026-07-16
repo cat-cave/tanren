@@ -116,10 +116,12 @@ describeDb("RV4-BEHAVIOR-COVERAGE-RLS — org and project isolation", () => {
     );
     expect(bound.binding).toEqual({
       integrationNodeId: NODE_A,
+      baseSha: "a".repeat(40),
       preparedHeadSha: "a".repeat(40),
       treeHash: "tree_rv4_a",
       memberKey: "b".repeat(64),
     });
+    expect(bound.authorityFingerprint).toBe("");
     expect(bound.snapshot.orgId).toBe(ORG_A);
     expect(bound.snapshot.projectId).toBe(PROJECT_A);
   });

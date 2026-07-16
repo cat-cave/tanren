@@ -19,6 +19,7 @@ import {
 } from "../src/engine/repositories/affectedSelectionFacts.js";
 import {
   boundCoverageSnapshotsEqual,
+  buildCoverageAuthorityFingerprint,
   selectAffectedBehaviorRevisions,
   type BoundBehaviorCoverageSnapshot,
 } from "../src/engine/runtimeVerification/affectedSelection.js";
@@ -32,13 +33,21 @@ import {
   persistAffectedSelectionFact,
 } from "../src/engine/runtimeVerification/affectedSelectionFacts.js";
 
+const BASE = "0".repeat(40);
 const HEAD = "a".repeat(40);
 const MEMBER = "b".repeat(64);
 const REVISION_DIGEST = parseDigest(`sha256:${"c".repeat(64)}`);
+const TARGETS = [{ kind: "source" as const, targetRef: "src/a.ts" }];
 
 function bound(): BoundBehaviorCoverageSnapshot {
-  return {
-    binding: { integrationNodeId: "node-a", preparedHeadSha: HEAD, treeHash: "tree-a", memberKey: MEMBER },
+  const input = {
+    binding: {
+      integrationNodeId: "node-a",
+      baseSha: BASE,
+      preparedHeadSha: HEAD,
+      treeHash: "tree-a",
+      memberKey: MEMBER,
+    },
     snapshot: {
       orgId: "org-a",
       projectId: "project-a",
@@ -57,6 +66,10 @@ function bound(): BoundBehaviorCoverageSnapshot {
         },
       ],
     },
+  };
+  return {
+    ...input,
+    authorityFingerprint: buildCoverageAuthorityFingerprint({ ...input, changedTargets: TARGETS }),
   };
 }
 
@@ -85,8 +98,8 @@ function fact() {
   return buildAffectedSelectionFact({
     bound: input,
     selection: selectAffectedBehaviorRevisions({
-      snapshot: input.snapshot,
-      changedTargets: [{ kind: "source", targetRef: "src/a.ts" }],
+      bound: input,
+      changedTargets: TARGETS,
     }),
   });
 }
@@ -123,9 +136,55 @@ describe("immutable affected-selection CAS/event fact", () => {
     expect(() => decodeAffectedSelectionFact(new TextEncoder().encode(JSON.stringify(raw)))).toThrow("does not derive");
   });
 
-  it("makes head, tree, member, edge, and revision-digest mutations stale", () => {
+  it("locks Unicode ordering to one locale-independent golden byte digest and decodes it", () => {
+    const binding = {
+      integrationNodeId: "node-unicode",
+      baseSha: BASE,
+      preparedHeadSha: "1".repeat(40),
+      treeHash: "tree-unicode",
+      memberKey: "2".repeat(64),
+    };
+    const snapshot = {
+      orgId: "org-a",
+      projectId: "project-a",
+      behaviors: [
+        {
+          behaviorRevisionId: "z" as BehaviorRevisionId,
+          contentDigest: parseDigest(`sha256:${"a".repeat(64)}`),
+          title: "Z",
+          edges: [{ id: "edge-z" as BehaviorCoverageEdgeId, kind: "source" as const, targetRef: "src/z.ts" }],
+        },
+        {
+          behaviorRevisionId: "ä" as BehaviorRevisionId,
+          contentDigest: parseDigest(`sha256:${"b".repeat(64)}`),
+          title: "Ä",
+          edges: [{ id: "edge-ä" as BehaviorCoverageEdgeId, kind: "source" as const, targetRef: "src/ä.ts" }],
+        },
+      ],
+    };
+    const changedTargets = [
+      { kind: "source" as const, targetRef: "src/ä.ts" },
+      { kind: "source" as const, targetRef: "src/z.ts" },
+    ];
+    const unicodeBound = {
+      binding,
+      snapshot,
+      authorityFingerprint: buildCoverageAuthorityFingerprint({ binding, snapshot, changedTargets }),
+    };
+    const unicodeFact = buildAffectedSelectionFact({
+      bound: unicodeBound,
+      selection: selectAffectedBehaviorRevisions({ bound: unicodeBound, changedTargets }),
+    });
+    const bytes = encodeAffectedSelectionFact(unicodeFact);
+    expect(bytes).toHaveLength(1_544);
+    expect(contentDigestOf(bytes)).toBe("sha256:d138439ef071f4c934a9a603c5ab6bd4bbd48bee470353a7dc1d6587a4b175ae");
+    expect(decodeAffectedSelectionFact(bytes)).toEqual(unicodeFact);
+  });
+
+  it("makes base, head, tree, member, authority, edge, and revision mutations stale", () => {
     const original = bound();
     const mutations: BoundBehaviorCoverageSnapshot[] = [
+      { ...original, binding: { ...original.binding, baseSha: "9".repeat(40) } },
       { ...original, binding: { ...original.binding, preparedHeadSha: "d".repeat(40) } },
       { ...original, binding: { ...original.binding, treeHash: "tree-mutated" } },
       { ...original, binding: { ...original.binding, memberKey: "e".repeat(64) } },
@@ -144,6 +203,7 @@ describe("immutable affected-selection CAS/event fact", () => {
         },
       },
       { ...original, snapshot: { ...original.snapshot, behaviors: [] } },
+      { ...original, authorityFingerprint: "" },
     ];
     for (const mutation of mutations) expect(boundCoverageSnapshotsEqual(original, mutation)).toBe(false);
   });

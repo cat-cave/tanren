@@ -10,6 +10,7 @@ import {
 type QueryResult = { rows: unknown[]; rowCount: number };
 type MockQuery = (sql: string, params?: unknown[]) => Promise<QueryResult>;
 const DIGEST_A = `sha256:${"a".repeat(64)}`;
+const BASE = "0".repeat(40);
 const HEAD = "a".repeat(40);
 const MEMBER = "b".repeat(64);
 
@@ -107,7 +108,17 @@ describe("BehaviorCoverageEdgesStore", () => {
     const query = vi.fn<MockQuery>(async (sql) => {
       if (sql.includes("FROM integration_nodes")) {
         return {
-          rows: [{ node_id: "node-a", head_sha: HEAD, tree_hash: "tree-a", member_key: MEMBER, status: "ready" }],
+          rows: [
+            {
+              node_id: "node-a",
+              base_sha: BASE,
+              head_sha: HEAD,
+              tree_hash: "tree-a",
+              member_key: MEMBER,
+              affected_fingerprint: "",
+              status: "ready",
+            },
+          ],
           rowCount: 1,
         };
       }
@@ -120,10 +131,12 @@ describe("BehaviorCoverageEdgesStore", () => {
     );
     expect(bound.binding).toEqual({
       integrationNodeId: "node-a",
+      baseSha: BASE,
       preparedHeadSha: HEAD,
       treeHash: "tree-a",
       memberKey: MEMBER,
     });
+    expect(bound.authorityFingerprint).toBe("");
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("org_id = $1");
     expect(sql).toContain("project_id = $2");
@@ -136,7 +149,17 @@ describe("BehaviorCoverageEdgesStore", () => {
       if (sql.startsWith("LOCK TABLE")) return { rows: [], rowCount: 0 };
       if (sql.includes("FROM integration_nodes")) {
         return {
-          rows: [{ node_id: "node-a", head_sha: HEAD, tree_hash: "tree-a", member_key: MEMBER, status: "landed" }],
+          rows: [
+            {
+              node_id: "node-a",
+              base_sha: BASE,
+              head_sha: HEAD,
+              tree_hash: "tree-a",
+              member_key: MEMBER,
+              affected_fingerprint: "",
+              status: "landed",
+            },
+          ],
           rowCount: 1,
         };
       }

@@ -60,6 +60,7 @@ const CoverageSnapshotSchema = z
 const IntegrationBindingSchema = z
   .object({
     integrationNodeId: z.string().min(1),
+    baseSha: z.string().regex(/^[0-9a-f]{40}$/u),
     preparedHeadSha: z.string().regex(/^[0-9a-f]{40}$/u),
     treeHash: z.string().min(1),
     memberKey: z.string().regex(/^[0-9a-f]{64}$/u),
@@ -118,6 +119,7 @@ export const AffectedSelectionFactSchema = z
     orgId: z.string().min(1),
     projectId: z.string().min(1),
     binding: IntegrationBindingSchema,
+    authorityFingerprint: z.string().max(1_000),
     snapshot: CoverageSnapshotSchema,
     selection: SelectionResultSchema,
   })
@@ -149,12 +151,16 @@ function assertFactConsistent(fact: AffectedSelectionFactV1): AffectedSelectionF
     throw new AffectedSelectionFactCorruptError("fact scope does not match graph scope");
   }
   const canonicalSnapshot = canonicalCoverageSnapshot(fact.snapshot);
-  const bound = { binding: fact.binding, snapshot: fact.snapshot };
-  if (!boundCoverageSnapshotsEqual(bound, { binding: fact.binding, snapshot: canonicalSnapshot })) {
+  const bound = {
+    binding: fact.binding,
+    snapshot: fact.snapshot,
+    authorityFingerprint: fact.authorityFingerprint,
+  };
+  if (!boundCoverageSnapshotsEqual(bound, { ...bound, snapshot: canonicalSnapshot })) {
     throw new AffectedSelectionFactCorruptError("fact graph is not canonical");
   }
   const expected = selectAffectedBehaviorRevisions({
-    snapshot: canonicalSnapshot,
+    bound: { ...bound, snapshot: canonicalSnapshot },
     changedTargets: fact.selection.changedTargets,
   });
   if (canonicalJson(canonicalBody(expected)) !== canonicalJson(canonicalBody(fact.selection))) {
@@ -172,6 +178,7 @@ export function buildAffectedSelectionFact(input: {
     orgId: input.bound.snapshot.orgId,
     projectId: input.bound.snapshot.projectId,
     binding: input.bound.binding,
+    authorityFingerprint: input.bound.authorityFingerprint,
     snapshot: input.bound.snapshot,
     selection: input.selection,
   });

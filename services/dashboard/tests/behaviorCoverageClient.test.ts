@@ -13,6 +13,7 @@ const SELECTION = {
   projectId: "project_a",
   binding: {
     integrationNodeId: "integration_node_a",
+    baseSha: "0".repeat(40),
     preparedHeadSha: HEAD_SHA,
     treeHash: "tree_a",
     memberKey: MEMBER_KEY,
@@ -95,6 +96,64 @@ describe("BehaviorCoverageClient strict boundary", () => {
       },
     });
     await expect(wrongSelectionScope.client.getOverview("org_a", "project_a")).resolves.toBeUndefined();
+  });
+
+  it("rejects contradictory modes, widening reasons, and edge identities", async () => {
+    const contradictions = [
+      {
+        ...SELECTION,
+        mode: "targeted",
+        selected: [{ behaviorRevisionId: "behavior_revision_a", reasons: [{ kind: "uncovered_behavior" }] }],
+      },
+      {
+        ...SELECTION,
+        mode: "expanded_unknown",
+        excluded: [
+          { behaviorRevisionId: "other", reason: "no_reachable_changed_target", inspectedEdgeIds: ["edge-other"] },
+        ],
+      },
+      { ...SELECTION, mode: "expanded_unknown" },
+      {
+        ...SELECTION,
+        selected: [
+          {
+            behaviorRevisionId: "behavior_revision_a",
+            reasons: [
+              {
+                kind: "direct_edge",
+                edgeId: "coverage_edge_a",
+                target: { kind: "source", targetRef: "src/other.ts" },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        ...SELECTION,
+        changedTargets: [
+          { kind: "source", targetRef: "src/login.ts" },
+          { kind: "source", targetRef: "src/other.ts" },
+        ],
+        selected: [
+          {
+            behaviorRevisionId: "behavior_revision_a",
+            reasons: [
+              ...SELECTION.selected[0].reasons,
+              {
+                kind: "direct_edge",
+                edgeId: "coverage_edge_a",
+                target: { kind: "source", targetRef: "src/other.ts" },
+              },
+            ],
+          },
+        ],
+      },
+      { ...SELECTION, mode: "no_active_behaviors", selected: [], excluded: [], unknownTargets: [] },
+    ];
+    for (const selection of contradictions) {
+      const client = clientWith({ ...OVERVIEW, latestSelection: { status: "available", selection } });
+      await expect(client.client.getOverview("org_a", "project_a")).resolves.toBeUndefined();
+    }
   });
 
   it("posts the exact integration-node binding and target with CSRF", async () => {
