@@ -1,9 +1,5 @@
-// Tiny in-memory pg substitute that covers the SQL shapes used by the
-// route layer (orgs, projects, specs, doctor, brownfield link) plus the
-// per-project budget surface (ownership + config read-modify-write + cost sum).
-// Deliberately scoped: only the SQL fragments the routes emit are handled.
-
 import type pg from "pg";
+import { handleProjectDerivationQuery, type ProjectDerivationFakeRow } from "./routesPoolProjectDerivations.js";
 
 interface QueryResult {
   rows: unknown[];
@@ -54,17 +50,12 @@ export class RoutesPool {
   readonly projects = new Map<string, ProjectRow>();
   readonly projectMembers = new Map<string, { project_id: string; user_id: string; role: string }>();
   readonly specs = new Map<string, SpecRow>();
+  readonly projectDerivations = new Map<string, ProjectDerivationFakeRow>();
   readonly events: Array<Record<string, unknown>> = [];
   readonly tasks: Array<Record<string, unknown>> = [];
   readonly jobs: Array<Record<string, unknown>> = [];
   readonly runs: Array<Record<string, unknown>> = [];
-  /** Inbox sources (the repo-link auto-provisioned `issues` source lands here). */
   readonly inboxSources: Array<Record<string, unknown>> = [];
-  /**
-   * Per-project cost-record rows the budget-sum query reads. `cost_usd` is REAL
-   * spend; `notional_cost_usd` is the API-equivalent value (defaults to the real
-   * figure for a per-token row, where real == notional).
-   */
   readonly costRecords: Array<{ project_id: string; cost_usd: number; notional_cost_usd: number }> = [];
   /** Captured NOTIFY statements (channel + payload) so a test can assert a re-walk wake. */
   readonly notifies: Array<{ channel: string; payload: string }> = [];
@@ -171,6 +162,7 @@ export class RoutesPool {
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
       return { rows: [], rowCount: 0 };
     }
+    if (trimmed.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
     // NOTIFY <channel>[, '<payload>'] — capture the re-walk wake (audit §3.7e) so a test
     // can assert raising a paused project's ceiling fires a `tanren_dag` notification.
     const notify = /^NOTIFY\s+(\w+)(?:\s*,\s*'([^']*)')?/u.exec(trimmed);
@@ -227,7 +219,9 @@ export class RoutesPool {
       // the canonical repo URL ignoring a trailing `.git` on either side.
       if (sql.includes("regexp_replace(repo_url")) {
         const canonical = String(params[0]).replace(/\.git$/u, "");
-        const row = [...this.projects.values()].find((p) => p.repo_url.replace(/\.git$/u, "") === canonical);
+        const row = [...this.projects.values()].find(
+          (p) => p.repo_url.replace(/\.git$/u, "") === canonical && p.org_id === String(params[1]),
+        );
         return single(row);
       }
     }
@@ -291,7 +285,8 @@ export class RoutesPool {
         runner_image: String(params[4]),
         allocator: String(params[5]),
         config: JSON.parse(String(params[6])) as unknown,
-        org_id: params[7] === null ? null : String(params[7]),
+        lifecycle: String(params[7]),
+        org_id: params[8] === null ? null : String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -304,6 +299,20 @@ export class RoutesPool {
       project.config = JSON.parse(String(params[0])) as unknown;
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
     }
+    if (trimmed.startsWith("UPDATE projects") && trimmed.includes("lifecycle = 'active'")) {
+      const project = this.projects.get(String(params[1]));
+      if (project === undefined || project.org_id !== String(params[0]) || project.lifecycle !== "deriving") {
+        return { rows: [], rowCount: 0 };
+      }
+      project.lifecycle = "active";
+      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    if (trimmed.startsWith("SELECT lifecycle FROM projects WHERE org_id = $1")) {
+      const project = this.projects.get(String(params[1]));
+      return single(
+        project === undefined || project.org_id !== String(params[0]) ? undefined : { lifecycle: project.lifecycle },
+      );
+    }
     if (trimmed.startsWith("UPDATE projects SET repo_url")) {
       const project = this.projects.get(String(params[1]));
       if (project === undefined) return { rows: [], rowCount: 0 };
@@ -314,8 +323,13 @@ export class RoutesPool {
     if (trimmed.startsWith("UPDATE projects SET lifecycle")) {
       const project = this.projects.get(String(params[1]));
       if (project === undefined) return { rows: [], rowCount: 0 };
+      if (params[2] !== undefined && project.lifecycle !== String(params[2])) return { rows: [], rowCount: 0 };
       project.lifecycle = String(params[0]);
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    if (trimmed.startsWith("SELECT lifecycle FROM projects WHERE project_id = $1")) {
+      const project = this.projects.get(String(params[0]));
+      return single(project === undefined ? undefined : { lifecycle: project.lifecycle });
     }
     // The archive cascade: cancel a project's in-flight (queued|running) runs
     // ($1 = project id). Flips matching rows to `cancelled` and returns their ids.
@@ -353,6 +367,9 @@ export class RoutesPool {
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { project_id: project.project_id });
     }
+
+    const derivation = handleProjectDerivationQuery(this.projectDerivations, trimmed, params);
+    if (derivation !== undefined) return derivation;
 
     // specs
     if (trimmed.startsWith("SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status")) {

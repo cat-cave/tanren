@@ -27,6 +27,8 @@ export async function prepareGreenfieldDeploy(input: {
   /** Real project id — required so authorizeOperation can use project selection. */
   projectId: string;
   actorId: string;
+  /** Durable intent identity; provider reconciliation remains keyed by the stable app name. */
+  idempotencyKey?: string;
   projectKey: string;
   projectName: string;
   deploy: {

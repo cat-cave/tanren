@@ -22,7 +22,7 @@ import {
 } from "../src/engine/forge/interview/index.js";
 import { GreenfieldRepoNotEmptyError, RepositoryAlreadyExistsError } from "../src/engine/contracts/codeHostTypes.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
-import { stubPool } from "./fixtures/forge/interviewDeriveStub.js";
+import { stubPool, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -120,9 +120,9 @@ describe("derive — GREENFIELD RE-ATTACH GUARD (apex v84)", () => {
         owner: "cat-cave",
         deploy: { providerKind: "deploy.flyio" },
         materializeTemplate: materialize,
+        bootstrapProject: successfulBootstrapProject,
         createRepository: createRepositoryAlreadyExists,
         deleteRepository: async () => {},
-        destroyDeployApp: async () => {},
         // BARE: the repo is the stranded, empty auto_init seed → re-attach is safe.
         probeRepoBareAutoInit: async () => true,
       },
@@ -151,9 +151,9 @@ describe("derive — GREENFIELD RE-ATTACH GUARD (apex v84)", () => {
           owner: "cat-cave",
           deploy: { providerKind: "deploy.flyio" },
           materializeTemplate: materialize,
+          bootstrapProject: successfulBootstrapProject,
           createRepository: createRepositoryAlreadyExists,
           deleteRepository: async () => {},
-          destroyDeployApp: async () => {},
           // CONTAMINATED: the repo already carries a prior run's compose history → reject.
           probeRepoBareAutoInit: async () => false,
         },
@@ -182,9 +182,9 @@ describe("derive — GREENFIELD RE-ATTACH GUARD (apex v84)", () => {
           owner: "cat-cave",
           deploy: { providerKind: "deploy.flyio" },
           materializeTemplate: materialize,
+          bootstrapProject: successfulBootstrapProject,
           createRepository: createRepositoryAlreadyExists,
           deleteRepository: async () => {},
-          destroyDeployApp: async () => {},
           // No probeRepoBareAutoInit wired.
         },
       ),

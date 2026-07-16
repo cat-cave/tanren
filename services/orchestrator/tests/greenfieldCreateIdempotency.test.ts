@@ -14,6 +14,172 @@ import { apexCapture, appWithGreenfieldRoutes, preparedDeploy, seedGithubAppOrg 
 const JSON_HEADERS = { "content-type": "application/json" };
 
 describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
+  it("retries a failed direct-greenfield deploy from the deriving receipt without duplicate repo effects", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    const githubHttp = new FakeRepoCreateHttp();
+    let deployAttempts = 0;
+    const { app } = appWithGreenfieldRoutes(pool, githubHttp, {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployAttempts += 1;
+        if (deployAttempts === 1) throw new Error("provider temporarily unavailable");
+        return preparedDeploy();
+      },
+    });
+    const body = JSON.stringify({
+      name: "receipt-retry",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel", connectionId: "connection_1", grantId: "grant_1" },
+    });
+
+    const failed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(failed.status).toBe(502);
+    const shell = [...pool.projects.values()][0];
+    expect(shell?.lifecycle).toBe("deriving");
+
+    const resumed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(resumed.status).toBe(200);
+    expect((await resumed.json()) as unknown).toMatchObject({ lifecycle: "active", idempotentReplay: true });
+    expect(githubHttp.createdRepositories).toHaveLength(1);
+    expect(deployAttempts).toBe(2);
+    expect(shell?.lifecycle).toBe("active");
+    const operation = [...pool.projectDerivations.values()][0];
+    expect(operation).toMatchObject({ status: "succeeded", phase: "activate" });
+  });
+
+  it("does not activate until bootstrap is complete and reuses the deploy receipt on retry", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let deployAttempts = 0;
+    let bootstrapAttempts = 0;
+    const { app, githubHttp } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployAttempts += 1;
+        return preparedDeploy();
+      },
+      async bootstrapProject(input) {
+        bootstrapAttempts += 1;
+        if (bootstrapAttempts === 1) {
+          return { errors: [{ seed: "auditCatalog", message: "postgres unavailable" }] };
+        }
+        return {
+          inboxSource: { id: `src_${input.projectId}`, created: true },
+          notificationRoute: { targetId: `notif_${input.orgId}`, created: true, events: 8 },
+          auditCatalog: { jobs: 4, created: ["security", "deps", "mutation", "stale_specs"] },
+          errors: [],
+        };
+      },
+    });
+    const body = JSON.stringify({
+      name: "bootstrap-retry",
+      owner: "cat-cave",
+      greenfield: true,
+      deploy: { providerKind: "deploy.vercel", connectionId: "connection_1", grantId: "grant_1" },
+    });
+
+    const failed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(failed.status).toBe(503);
+    const shell = [...pool.projects.values()][0];
+    expect(shell?.lifecycle).toBe("deriving");
+
+    const resumed = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(resumed.status).toBe(200);
+    expect(shell?.lifecycle).toBe("active");
+    expect(deployAttempts).toBe(1);
+    expect(bootstrapAttempts).toBe(2);
+    expect(githubHttp.createdRepositories).toHaveLength(1);
+  });
+
+  it("rejects a no-shell reattach when the same-name repository contains real history", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let deployEffects = 0;
+    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp("exists", false), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployEffects += 1;
+        return preparedDeploy();
+      },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: "occupied",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "greenfield_repo_not_empty" });
+    expect(pool.projects.size).toBe(0);
+    expect(deployEffects).toBe(0);
+  });
+
+  it("rejects a same-org deriving project that is not this exact greenfield shell", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    pool.seedProject({
+      project_id: "project_wrong_shell",
+      org_id: "org_acme",
+      name: "another-project",
+      repo_url: "https://github.com/cat-cave/claimed",
+      config: { version: 1, greenfield: true },
+      lifecycle: "deriving",
+    });
+    const { app, githubHttp } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        throw new Error("wrong shell must not reach deploy");
+      },
+    });
+
+    const response = await app.request("/orgs/org_acme/projects/greenfield", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        name: "claimed",
+        owner: "cat-cave",
+        greenfield: true,
+        deploy: { providerKind: "deploy.vercel" },
+      }),
+    });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "greenfield_derivation_conflict",
+      reason: "repo_bound_without_derivation",
+    });
+    expect(githubHttp.createdRepositories).toHaveLength(0);
+    expect(pool.projectDerivations.size).toBe(0);
+  });
+
   it("a retried onboarding derive is IDEMPOTENT — re-attaches to the project, no second repo or deploy app", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);

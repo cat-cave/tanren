@@ -295,6 +295,7 @@ class SpecRunPool {
       runner_image: "ghcr.io/cat-cave/tanren-runner:v0",
       allocator: "local-docker",
       config: { version: 1 },
+      lifecycle: "active",
       spec_id: spec.specId,
       title: spec.title,
       description: spec.description,

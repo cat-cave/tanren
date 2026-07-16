@@ -25,7 +25,12 @@ import {
 } from "../src/engine/forge/interview/index.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
 import { createDeterministicInterviewAnswerer } from "./fixtures/forge/deterministicInterviewAnswerer.js";
-import { preparedDeploy, stubPool, type StubState } from "./fixtures/forge/interviewDeriveStub.js";
+import {
+  preparedDeploy,
+  stubPool,
+  successfulBootstrapProject,
+  type StubState,
+} from "./fixtures/forge/interviewDeriveStub.js";
 
 // A TS/pnpm lifecycle capture (apex v27 default) — NOT a Tanren hardcode: the
 // project DECLARES it; the scaffold authors the justfile from it.
@@ -113,6 +118,7 @@ async function runInterviewAndDerive(overrides: Partial<Parameters<typeof derive
   }
   const defaults: Partial<Parameters<typeof deriveFromCapture>[1]> = {
     materializeTemplate: stubMaterialize(),
+    bootstrapProject: successfulBootstrapProject,
   };
   const derived = await deriveFromCapture(
     {
@@ -318,6 +324,7 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
         autonomy: "auto",
         deploy: { providerKind: "deploy.vercel" },
         materializeTemplate: stubMaterialize(),
+        bootstrapProject: successfulBootstrapProject,
       },
     );
 

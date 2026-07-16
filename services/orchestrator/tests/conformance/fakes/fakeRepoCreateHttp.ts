@@ -26,6 +26,7 @@ export interface RecordedRepoDelete {
 
 const REPO_CREATE_PATH = /^\/orgs\/([^/]+)\/repos$/u;
 const REPO_DELETE_PATH = /^\/repos\/([^/]+)\/([^/]+)$/u;
+const REPO_COMMITS_PATH = /^\/repos\/([^/]+)\/([^/]+)\/commits\?per_page=2$/u;
 
 /**
  * The repo-create transport fake. Defaults to a clean `created` outcome; set
@@ -42,9 +43,23 @@ export class FakeRepoCreateHttp implements GitHubHttpClient {
   /** Every recorded repo DELETE (the derive transactional rollback compensations). */
   readonly deletedRepositories: RecordedRepoDelete[] = [];
 
-  constructor(private readonly outcome: RepoCreateOutcome = "created") {}
+  constructor(
+    private readonly outcome: RepoCreateOutcome = "created",
+    private readonly existingRepoIsBare = true,
+  ) {}
 
   async request(input: GitHubHttpRequest): Promise<GitHubHttpResponse> {
+    if (input.method === "GET" && REPO_COMMITS_PATH.test(input.path)) {
+      return this.existingRepoIsBare
+        ? { status: 409, body: { message: "Git Repository is empty" } }
+        : {
+            status: 200,
+            body: [
+              { sha: "compose", commit: { message: "tanren compose: package.json" } },
+              { sha: "initial", commit: { message: "Initial commit" } },
+            ],
+          };
+    }
     if (input.method === "DELETE") {
       const match = REPO_DELETE_PATH.exec(input.path);
       if (match === null) {

@@ -26,6 +26,7 @@ export interface ProjectRecord {
   runner_image: string;
   allocator: string;
   config: unknown;
+  lifecycle: string;
   org_id: string | null;
 }
 
@@ -180,6 +181,7 @@ export class MemoryDb {
       runner_image: p.runnerImage,
       allocator: p.allocator,
       config: p.config,
+      lifecycle: "active",
       org_id: p.orgId,
     });
   }

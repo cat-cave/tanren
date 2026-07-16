@@ -2,18 +2,16 @@
 // the transactional-rollback wrapper (task #78, which spans through `createProject`)
 // stays under the 500-line file cap.
 //
-// SCOPE: this runs ONLY after `createProject` has landed the durable project
-// row. The compensation stack from task #78 covers the EXTERNAL-RESOURCE window
-// up through `createProject`; failures in THIS module leave the project row +
-// external resources intact and the existing `resumeDerivedProject` returns the
-// project idempotently on retry. A partial entity graph here is a known
-// pre-existing limitation (the resume returns the project without re-running
-// these creates) and is out of scope for the transactional-rollback patch.
+// SCOPE: this runs only after the durable deriving project shell exists. Every
+// graph row is written through one org-scoped transaction. A failure rolls the
+// whole graph attempt back while retaining the shell and earlier external-effect
+// receipts, so retry can rebuild the graph without duplicating partial entities.
 
+import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { MilestoneCreateInput, MilestoneStore, PersonaCreateInput, PersonaStore } from "../../entities/index.js";
-import { createSpec } from "../../workflow/projectSpec.js";
+import { createSpecOnClient, type ProjectSpecQueryClient } from "../../workflow/projectSpec.js";
 import { deriveInterfaceMilestones, persistDesignContract } from "./deriveBehaviorSpec.js";
 import type { DeriveInput, DeriveResult } from "./derive.js";
 import type { ScaffoldSpecDef } from "./deriveScaffoldSpecs.js";
@@ -25,11 +23,27 @@ import type { InterviewCapture } from "./types.js";
  * Build out the entity graph (personas + milestones + scaffold specs + interface
  * milestones + design contract) for the just-created project row, and assemble
  * the `DeriveResult`. The caller (`deriveProductGraph`) is responsible for the
- * external-resource creates + the transactional rollback that wraps them; this
- * function is the durable, idempotency-resume-handled tail.
+ * durable shell and phase receipts. This function provides the atomic graph
+ * boundary that makes an interrupted graph phase safe to retry.
  */
 export async function buildEntityGraph(
   pool: pg.Pool,
+  input: DeriveInput,
+  capture: InterviewCapture,
+  slug: string,
+  seed: SeededTemplate,
+  repository: CreatedRepository | undefined,
+  projectId: string,
+  actor: ActorContext,
+  scaffoldSpecs: ScaffoldSpecDef[],
+): Promise<DeriveResult> {
+  return runWithOrgScope(pool, input.orgId, (client) =>
+    buildEntityGraphOnClient(client, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs),
+  );
+}
+
+async function buildEntityGraphOnClient(
+  pool: ProjectSpecQueryClient,
   input: DeriveInput,
   capture: InterviewCapture,
   slug: string,
@@ -78,7 +92,7 @@ export async function buildEntityGraph(
   for (const def of scaffoldSpecs) {
     const dependsOn =
       def.dependsOnPrev === true && previousScaffoldSpecId !== undefined ? [previousScaffoldSpecId] : [];
-    const spec = await createSpec(
+    const spec = await createSpecOnClient(
       pool,
       {
         projectId,
