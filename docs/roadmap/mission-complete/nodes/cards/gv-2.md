@@ -88,6 +88,70 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   `reviewMergeState.test.ts` (review/merge reducer + forge publication view,
   moved out of `runDetail.model.test.ts` to respect the 500-line cap)
 
+## Whole-diff manifest (`main...HEAD`, exact 57 paths)
+
+Base `9f20c3ea9a4d972a2564374abd16c63ed5f6fe87` (`main`/merge-base) → head
+`0f826fde1f374a7963359ba4a8b05fe2b116acab`, nine linear commits, **no migration
+on this head** (implementation diff `main...0f826fde` = 56 files, 18 `A`, 38
+`M`). This docs-only correction adds `governance-http-surface.md`, so the
+complete `main...HEAD` diff is 57 files changed, 5523 insertions(+), 715
+deletions(-) (19 added `A`, 38 modified `M`). The exclusive-production (23) and
+focused-test (12) paths in **Exclusive ownership** above plus the shared-lane
+paths below (22) are the complete exact diff — no path omitted, none claimed as
+foreign-lane ownership, none restated as exclusive. `review.simulated_intent`
+owns serialized **0044 only after GV-1/0043** (catalog row absent from this
+head; app-side seed/registry carry it as catalog data, not an upgrade).
+
+### Shared registry / contract / config / index / doc / test / fixture paths
+
+JSON event contracts (extended review receipt + new intent payload):
+
+- `A contracts/json/events/review_simulated_intent.json`
+- `M contracts/json/events/review_approved.json`
+- `M contracts/json/events/review_changes_requested.json`
+
+Event registry / catalog seed / severity (shared engine lanes; the
+`sensitivityRules.*` files stay under Exclusive ownership above):
+
+- `M services/orchestrator/src/engine/events/registry.ts`
+- `M db/src/eventTypesSeed.ts`
+- `M services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`
+
+Review-merge barrel / index (re-export of the new modules):
+
+- `M services/orchestrator/src/engine/workflow/reviewMerge/index.ts`
+
+cspell config (review-simulated vocabulary):
+
+- `M cspell.json`
+
+Operator / governance docs:
+
+- `M docs/operator-guide/live-validation-findings.md`
+- `M docs/roadmap/mission-complete/nodes/governance.md` (one F1 cell — see that
+  card; preparation implemented, node completion dependency-gated and zero)
+- `A docs/roadmap/mission-complete/nodes/governance-http-surface.md` (HTTP
+  endpoint surface split out of governance.md to respect the 500-line cap; full
+  content and heading meaning preserved)
+
+Shared tests touched in foreign lanes (convergence / render / integration /
+gate; the focused gv-2 tests stay under Exclusive ownership above):
+
+- `A services/orchestrator/tests/simulatedReviewForgeConverge.test.ts`
+- `M services/dashboard/tests/runDetail.render.test.ts`
+- `M services/orchestrator/tests/auditFindingsMergeGate.test.ts`
+- `M services/orchestrator/tests/mergeAuthority.writerBacked.integration.test.ts`
+
+Shared fixtures / helpers (extended to carry reviewed-head + receipt seams):
+
+- `M services/orchestrator/tests/acceptanceHardTier.fixtures.ts`
+- `M services/orchestrator/tests/fixtures/mergeDispatcherConflictFixtures.ts`
+- `M services/orchestrator/tests/helpers/fakeEventStore.ts`
+- `M services/orchestrator/tests/helpers/workerExec.ts`
+- `M services/orchestrator/tests/plannerRunAuthority.fixtures.ts`
+- `M services/orchestrator/tests/reviewMerge.fixtures.ts`
+- `M services/orchestrator/tests/rlsRunLifecycleAuthority.fixtures.ts`
+
 ## Shared-resource leases (not taken)
 
 - Project config / credentials schema (`reviewerGithubCredentialRef` field) —
