@@ -2,14 +2,17 @@
 
 <!-- cspell:ignore mqeval mqgrp mqwake -->
 
-**Status**: W0 frozen (SPEC-FREEZE-W0)
-**Base**: `origin/main` / `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee`
-**Latest landed migration on main**: `0040_event_vocabulary.sql`
-**Card**: [`nodes/cards/ev-sub-w0.md`](./nodes/cards/ev-sub-w0.md)
+**Status**: W0 frozen (SPEC-FREEZE-W0) · W1-A frozen (SPEC-FREEZE-W1-A)
+**Bases**: W0 `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee` · W1-A
+`4e02f707096b26d8390cbc7fbb5248b495b7c397`
+**Latest landed migration on main**: `0042_event_vocabulary_w0.sql`
+**Cards**: [`nodes/cards/ev-sub-w0.md`](./nodes/cards/ev-sub-w0.md) ·
+[`nodes/cards/spec-freeze-w1-a.md`](./nodes/cards/spec-freeze-w1-a.md)
 **Node credit**: freeze = 0 · EV-SUB = 0 · consumer emit+apex = node credit
 
-**Mission entrypoint:** this authority and its linked ownership card are the
-complete W0 named-event handoff; source refs below are provenance only.
+**Mission entrypoint:** this authority, its linked W1-A detail, and the linked
+ownership cards are the complete W0 and W1-A named-event handoff; source refs
+below are provenance only.
 
 This file is the durable single roadmap authority for **named-event freeze
 waves**. Bucket specs and prep cards are inputs; once a row is `frozen` here,
@@ -74,14 +77,15 @@ second catalog; generic substitute events for apex proof.
 
 ## 2. Migration / substrate boundary (post-freeze map)
 
-| Slot         | Owner                  | Purpose                                                                                                              |
-| ------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **0041**     | **CAS-SUB**            | `config_revision` + sole `ProjectStore` CAS (not event catalog)                                                      |
-| **0042**     | **EV-SUB-W0**          | Additive `event_types` INSERTs for **frozen W0 names only** + registry/severity/sensitivity/codegen mirror           |
-| **0043**     | **IN-1**               | `integration_lifecycle` clean-replacement (no vocabulary ownership)                                                  |
-| **0044**     | **RV-4**               | Coverage composite-FK / non-event schema only; **strip** catalog ownership of `behavior.coverage.selection_analyzed` |
-| **(no mig)** | **GV-1 / GV-2 / MQ-1** | Product + emit restacks; catalog pre-seeded by EV-SUB-W0                                                             |
-| **0045**     | **GV-3**               | Policy/gate land-identity CHECKs / purge (not event catalog)                                                         |
+| Slot            | Owner                  | Purpose                                                                                                              |
+| --------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| **0041**        | **CAS-SUB**            | `config_revision` + sole `ProjectStore` CAS (not event catalog)                                                      |
+| **0042**        | **EV-SUB-W0**          | Additive `event_types` INSERTs for **frozen W0 names only** + registry/severity/sensitivity/codegen mirror           |
+| **0043**        | **IN-1**               | `integration_lifecycle` clean-replacement (no vocabulary ownership)                                                  |
+| **0044**        | **RV-4**               | Coverage composite-FK / non-event schema only; **strip** catalog ownership of `behavior.coverage.selection_analyzed` |
+| **(no mig)**    | **GV-1 / GV-2 / MQ-1** | Product + emit restacks; catalog pre-seeded by EV-SUB-W0                                                             |
+| **0045**        | **GV-3**               | Policy/gate land-identity CHECKs / purge (not event catalog)                                                         |
+| **≥0046-class** | **EV-SUB-W1-A**        | Install only the four W1-A rows after mapped 0043–0045 land; choose the actual then-free slot at authoring           |
 
 **Product order note:** GV-1 → GV-2 → MQ-1 may still serialize where they share
 MergeAuthority / governance writers; that is **not** a 1:1 catalog-migration
@@ -92,13 +96,13 @@ earn **zero** node credit.
 
 ## 3. Deferred / non-synonymous alternatives (not W0 collisions)
 
-| Name / family                                                                                                                                  | Relation                                                                                                                                       | Status                               |
-| ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `integration.requirement.derived`                                                                                                              | Future **compiler** fact (requirement derived from behaviors/specs). **Not** a synonym of `validated` (HTTP validate-success proof).           | `deferred` (later integrations wave) |
-| `integration.requirement.superseded`                                                                                                           | Lifecycle successor of a derived requirement.                                                                                                  | `deferred`                           |
-| `review.simulated.started`                                                                                                                     | Later **execution** fact when simulated publication I/O begins. Distinct from durable intent `review.simulated_intent`.                        | `deferred`                           |
-| `review.simulated.verdict`                                                                                                                     | Later **execution** terminal simulated verdict fact. Distinct from intent and from forge-bound `review.approved` / `review.changes_requested`. | `deferred`                           |
-| Full bucket apex chains (runtime behavior.\*, integrations lifecycle, mq group/subset, back-half, governance F1–F5 remainder, designSystem.\*) | Incomplete / under-specified for one dump                                                                                                      | `deferred` (W1+)                     |
+| Name / family                                                                                                                                                   | Relation                                                                                                                                       | Status                               |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `integration.requirement.derived`                                                                                                                               | Future **compiler** fact (requirement derived from behaviors/specs). **Not** a synonym of `validated` (HTTP validate-success proof).           | `deferred` (later integrations wave) |
+| `integration.requirement.superseded`                                                                                                                            | Lifecycle successor of a derived requirement.                                                                                                  | `deferred`                           |
+| `review.simulated.started`                                                                                                                                      | Later **execution** fact when simulated publication I/O begins. Distinct from durable intent `review.simulated_intent`.                        | `deferred`                           |
+| `review.simulated.verdict`                                                                                                                                      | Later **execution** terminal simulated verdict fact. Distinct from intent and from forge-bound `review.approved` / `review.changes_requested`. | `deferred`                           |
+| Remaining bucket apex chains (runtime behavior.\*, integrations lifecycle beyond W1-A, mq group/subset, back-half, governance F1–F5 remainder, designSystem.\*) | Incomplete / under-specified for one dump                                                                                                      | `deferred` (W1+)                     |
 
 These are **explicitly not** `blocked_collision` against W0 winners.
 
@@ -358,7 +362,29 @@ Those thirteen rows are the complete sensitivity path set for this event.
 
 ---
 
-## 6. EV-SUB-W0 implementer checklist (not this PR)
+## 6. W1-A frozen index — IN-7 author lifecycle
+
+The exact durable obligations for these four rows live in
+[`event-vocabulary-w1a-integration-author.md`](./event-vocabulary-w1a-integration-author.md).
+That linked document extends this single freeze authority; it does not create a
+second protocol or production registry.
+
+| name                           | severity | nodes | status   |
+| ------------------------------ | -------- | ----- | -------- |
+| `integration.author.started`   | `ok`     | in-7  | `frozen` |
+| `integration.author.attempt`   | `info`   | in-7  | `frozen` |
+| `integration.author.succeeded` | `ok`     | in-7  | `frozen` |
+| `integration.author.failed`    | `fail`   | in-7  | `frozen` |
+
+**W1-A count: 4 frozen · 0 blocked_collision.** Source: merged PREP
+`a4ea6eb040359d78dabc1b81e22e89978cb012fe`, audited five-path digest
+`567e34152d34b54df59f38e37001d7b7f872522102ca56d808a3d527f3010ecf`.
+The names are final obligations but are not registered, cataloged, emitted, or
+eligible for consumer credit until their later units land.
+
+---
+
+## 7. EV-SUB-W0 implementer checklist (not this PR)
 
 1. Schemas under `events/schemas/*` (`.strict()`), thin `registry.ts` import
    (file ≤500).
@@ -371,14 +397,14 @@ Those thirteen rows are the complete sensitivity path set for this event.
 
 ---
 
-## 7. Later waves (sketch only — not frozen)
+## 8. Later waves (sketch only — not frozen)
 
-| Wave | Illustrative content                                                              |
-| ---- | --------------------------------------------------------------------------------- |
-| W1   | Integrations lifecycle exact expansions (incl. `integration.requirement.derived`) |
-| W2   | Runtime behavior.\* observation chain                                             |
-| W3   | Merge-queue group/subset/land_group chain                                         |
-| W4   | Back-half issue_loop / symptom / resolution family                                |
-| W5   | Governance F1–F5 remainder + designSystem family                                  |
+| Wave | Illustrative content                                                                              |
+| ---- | ------------------------------------------------------------------------------------------------- |
+| W1+  | Remaining integrations lifecycle expansions, including deferred `integration.requirement.derived` |
+| W2   | Runtime behavior.\* observation chain                                                             |
+| W3   | Merge-queue group/subset/land_group chain                                                         |
+| W4   | Back-half issue_loop / symptom / resolution family                                                |
+| W5   | Governance F1–F5 remainder + designSystem family                                                  |
 
 Each: SPEC-FREEZE → EV-SUB → consumer fanout. No global incomplete dump.
