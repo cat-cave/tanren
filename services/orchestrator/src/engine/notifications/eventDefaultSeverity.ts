@@ -249,6 +249,14 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "merge.signal.classified": "info",
   "merge.member.policy_blocked": "warn",
 
+  // Mission-complete W1-A integration.author.* (IN-7 lifecycle facts). Same
+  // ok/info/ok/fail pattern as fragment.authoring.* but a different namespace
+  // and payload — never an alias. Explicit overrides: default fallback is info.
+  "integration.author.started": "ok",
+  "integration.author.attempt": "info",
+  "integration.author.succeeded": "ok",
+  "integration.author.failed": "fail",
+
   // Notification meta — opted off by default; severity floor will mask them
   // even on routes that accidentally enable them, since the dispatcher does
   // not re-emit notification.* into its own pipeline.

@@ -102,6 +102,7 @@ import {
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
   w0EventRegistry,
+  w1aEventRegistry,
 } from "./schemas/integrations.js";
 import {
   MergeBatchBisectingPayload,
@@ -185,6 +186,7 @@ import {
 // sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
   ...w0EventRegistry,
+  ...w1aEventRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,

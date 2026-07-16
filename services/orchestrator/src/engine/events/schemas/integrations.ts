@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AuditEnvelope } from "./audit.js";
 
 export { w0EventRegistry } from "./eventVocabularyW0.js";
+export { w1aEventRegistry } from "./eventVocabularyW1aIntegrationAuthor.js";
 
 // External integration events: GitHub (branch/PR), the review lifecycle, and the
 // merge stage. (The native gate is the merge authority — there are no forge-CI
