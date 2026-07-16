@@ -35,13 +35,16 @@ replayed as a 19-commit sequence onto the exact publication base
 card metadata child, exact test-only union convergence head
 `7bf2ad5875a92cd160667537d3adb4bb27e2c9a6` replaces one legacy ownerless
 credential fixture with supported shorthand and asserts its canonical org-owned
-persisted ref; it changes no production behavior. This final card-only child
-records that lineage. GV-1 intersected exactly five paths, which were deliberately
-unioned to preserve its `auditPosture` reservation/CAS-event authority and IN-1's
-lifecycle and org-owned credential semantics. The other 18 replay commit payloads
-remain patch-equivalent (two require zero-context patch IDs because the inherited
-GV-1 event-helper import changed patch context). This is not a repair delta layered
-on an undeclared branch; publish only the lineage rooted at the exact base above.
+persisted ref. Exact executable code/test head
+`a4457a54f79c90eb1a79ac0e021fe88b3e8e9feb` then removes two redundant test
+comments to restore the 500-line architecture cap; neither test-only child changes
+production behavior. This final card-only child records that lineage. GV-1
+intersected exactly five paths, which were deliberately combined to preserve its
+`auditPosture` reservation/CAS-event authority and IN-1's lifecycle and org-owned
+credential semantics. The other 18 replay commit payloads remain patch-equivalent
+(two require zero-context patch IDs because the inherited GV-1 event-helper import
+changed patch context). This is not a repair delta layered on an undeclared branch;
+publish only the lineage rooted at the exact base above.
 
 The manifest below is exhaustive relative to the exact publication target through
 the converged candidate: **370 paths = 96 added + 263 modified + 11 deleted**. Each
@@ -345,7 +348,8 @@ completion until Slice 2/3 land binding activation and remaining cutover.
 
 - Post-GV focused union proof passed 41/41: governance CAS/event behavior 14/14
   and project create/PATCH guards 27/27, including canonical owner binding,
-  foreign-owner rejection, `auditPosture` reservation, and structural no-op.
+  foreign-owner rejection, `auditPosture` reservation, and structural no-op. The
+  intersected guard test remains exactly 500 lines and architecture checks pass.
 - Affected typecheck passed; affected tests passed 491 files / 4,786 tests, with
   56 files / 304 live-gated tests skipped.
 - Schema drift reported no changes. Protected `0041`/`0042` migration and snapshot
