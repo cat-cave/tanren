@@ -44,7 +44,7 @@ function operationRow(input: {
   };
 }
 
-function harness(actor: ActorContext, row: OperationRow | undefined) {
+function harness(actor: ActorContext, row?: OperationRow) {
   const client: IntegrationQueryClient = {
     async query(): Promise<IntegrationQueryResult> {
       return { rows: row === undefined ? [] : [row], rowCount: row === undefined ? 0 : 1 };
@@ -66,26 +66,42 @@ function harness(actor: ActorContext, row: OperationRow | undefined) {
 }
 
 const durableCases = [
-  { status: "completed", stage: "completed", expected: "completed" },
-  { status: "failed", stage: "failed", failureClassification: "invalid_auth", expected: "failed" },
-  { status: "compensated", stage: "failed", expected: "failed" },
+  { status: "completed", stage: "completed", expected: "completed", expectedDetails: {} },
+  {
+    status: "failed",
+    stage: "failed",
+    failureClassification: "invalid_auth",
+    expected: "failed",
+    expectedDetails: { failureClassification: "invalid_auth" },
+  },
+  { status: "compensated", stage: "failed", expected: "failed", expectedDetails: {} },
   {
     status: "awaiting_principal_selection",
     stage: "awaiting_principal_selection",
     expected: "awaiting_principal_selection",
+    expectedDetails: {},
   },
-  { status: "pending", stage: "created", expected: "verification_in_progress" },
-  { status: "in_progress", stage: "credential_staged", expected: "verification_in_progress" },
-  { status: "in_progress", stage: "finalizing", expected: "finalize_pending" },
-  { status: "in_progress", stage: "activate_pending", expected: "activate_pending" },
+  { status: "pending", stage: "created", expected: "verification_in_progress", expectedDetails: {} },
+  {
+    status: "in_progress",
+    stage: "credential_staged",
+    expected: "verification_in_progress",
+    expectedDetails: {},
+  },
+  { status: "in_progress", stage: "finalizing", expected: "finalize_pending", expectedDetails: {} },
+  { status: "in_progress", stage: "activate_pending", expected: "activate_pending", expectedDetails: {} },
   {
     status: "in_progress",
     stage: "verifying",
     failureClassification: "sentry_scope_http_503",
     retryAfter: "2030-01-02T03:04:05Z",
     expected: "provider_unavailable",
+    expectedDetails: {
+      failureClassification: "sentry_scope_http_503",
+      retryAfter: "2030-01-02T03:04:05.000Z",
+    },
   },
-  { status: "pending", stage: "completed", expected: "unknown" },
+  { status: "pending", stage: "completed", expected: "unknown", expectedDetails: {} },
 ] as const;
 
 describe("integration operation public-status HTTP contract", () => {
@@ -95,13 +111,11 @@ describe("integration operation public-status HTTP contract", () => {
     );
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(body).toMatchObject({ operationId: "op_public", publicStatus: testCase.expected });
-    if (testCase.expected === "provider_unavailable") {
-      expect(body).toMatchObject({
-        failureClassification: "sentry_scope_http_503",
-        retryAfter: "2030-01-02T03:04:05.000Z",
-      });
-    }
+    expect(body).toMatchObject({
+      operationId: "op_public",
+      publicStatus: testCase.expected,
+      ...testCase.expectedDetails,
+    });
     const encoded = JSON.stringify(body);
     expect(encoded).not.toContain("staged_secret_handle");
     expect(encoded).not.toContain("top-secret");
@@ -122,7 +136,7 @@ describe("integration operation public-status HTTP contract", () => {
   });
 
   it("retains missing and cross-org HTTP negatives", async () => {
-    expect((await harness(admin, undefined).request("/org_acme/integrations/operations/missing")).status).toBe(404);
+    expect((await harness(admin).request("/org_acme/integrations/operations/missing")).status).toBe(404);
     const outsider = { ...admin, orgId: "org_other", scopes: ["org:member"] } satisfies ActorContext;
     expect(
       (

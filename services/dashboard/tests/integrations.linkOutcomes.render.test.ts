@@ -36,16 +36,16 @@ function mockOrchestrator(): void {
       return Response.json({ userId: "user_admin", csrfToken: "csrf", expiresAt: "2030-01-01" });
     }
     if (path.endsWith("/orgs")) return Response.json({ orgs: [ORG] });
-    if (/\/integrations\/operations\/op_public$/u.test(path) && method === "GET") {
+    if (path.endsWith("/integrations/operations/op_public") && method === "GET") {
       return Response.json(operationBody);
     }
-    if (/\/orgs\/org_acme\/integrations\/sentry$/u.test(path) && method === "POST") {
+    if (path.endsWith("/orgs/org_acme/integrations/sentry") && method === "POST") {
       return Response.json(linkBody, { status: 202 });
     }
-    if (/\/orgs\/org_acme\/integrations$/u.test(path) && method === "GET") {
+    if (path.endsWith("/orgs/org_acme/integrations") && method === "GET") {
       return Response.json({ integrations: [] });
     }
-    if (/\/orgs\/org_acme\/projects$/u.test(path) && method === "GET") {
+    if (path.endsWith("/orgs/org_acme/projects") && method === "GET") {
       return Response.json({ projects: [PROJECT] });
     }
     return new Response("not found", { status: 404 });
