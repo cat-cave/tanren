@@ -65,6 +65,11 @@ class ScopedClient {
       if (JSON.stringify(row.config) === JSON.stringify(next)) {
         return { rows: [], rowCount: 0 };
       }
+      if (row.config_revision >= Number.MAX_SAFE_INTEGER) {
+        throw new Error(
+          `config_revision overflow: project=${projectId} current=${row.config_revision} cannot increment past ${Number.MAX_SAFE_INTEGER}`,
+        );
+      }
       row.config = next;
       row.config_revision += 1;
       return {

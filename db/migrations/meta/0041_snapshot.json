@@ -5015,6 +5015,10 @@
         "organizations_kind_check": {
           "name": "organizations_kind_check",
           "value": "\"organizations\".\"kind\" IN ('github_org','github_user','oidc')"
+        },
+        "organizations_config_revision_range_check": {
+          "name": "organizations_config_revision_range_check",
+          "value": "\"organizations\".\"config_revision\" >= 1 AND \"organizations\".\"config_revision\" <= 9007199254740991"
         }
       },
       "isRLSEnabled": false
@@ -5650,7 +5654,12 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "projects_config_revision_range_check": {
+          "name": "projects_config_revision_range_check",
+          "value": "\"projects\".\"config_revision\" >= 1 AND \"projects\".\"config_revision\" <= 9007199254740991"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.quarantined_tests": {

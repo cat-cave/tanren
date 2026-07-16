@@ -15,7 +15,8 @@ is a **substrate** for later #856 dashboard restack and for IN-1/train renumber
 ## Outcome (exact)
 
 1. `projects.config_revision` and `organizations.config_revision` are
-   `BIGINT NOT NULL DEFAULT 1` (application generation — **never** `xmin`).
+   `BIGINT NOT NULL DEFAULT 1` with CHECK `1..Number.MAX_SAFE_INTEGER`
+   (application generation — **never** `xmin`; ORM keeps `mode: "number"`).
 2. Sole project write API: `getConfigSnapshot` + `compareAndSwapConfig` on
    `ProjectStore`; LWW `updateConfig` is **deleted**.
 3. Parallel org write API on the repository layer (same snapshot/CAS vocabulary).
@@ -125,6 +126,9 @@ If another path becomes necessary, **update this card first**.
 | 8   | Architecture grep: no LWW/direct config SQL / production xmin config token        |
 | 9   | Route-level cutover (incl. no-op + response identity) for all writers             |
 | 10  | No-op cannot stale-succeed around a competing writer; key-order JSONB is no-op    |
+| 11  | Shared range validator: min/max/max+1/long-digit reject; unsafe JS numbers reject |
+| 12  | HTTP out-of-range revision → 400 before store (zero effect); store rejects too    |
+| 13  | Real-PG CHECK rejects increment past MAX_SAFE_INTEGER (fail-closed, no wrap)      |
 
 Gates: focused unit/conformance + `TANREN_RLS_DB_TEST=1` real-PG; then
 `just fast-check`, `just ci` from this worktree. Smoke is out of band for this

@@ -1,10 +1,17 @@
 // Focused unit/route proofs for the sole config-revision CAS substrate:
 // snapshot/CAS vocabulary, mutate interleaving, HTTP one-shot 409, no-op,
-// and response identity — driven against RoutesPool (no live Postgres).
+// response identity, and closed-range revision safety — RoutesPool only.
 
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import {
+  CONFIG_REVISION_MAX,
+  CONFIG_REVISION_MAX_TEXT,
+  CONFIG_REVISION_MIN,
+  ConfigRevisionSchema,
+  revisionText,
+} from "../src/engine/config/configRevision.js";
 import { mutateProjectConfig } from "../src/engine/config/projectConfigMutate.js";
 import { ProjectStore } from "../src/engine/repositories/projects.js";
 import { systemActor } from "../src/engine/state/actor.js";
@@ -246,5 +253,113 @@ describe("config revision CAS (unit/route)", () => {
       orgId: "org_acme",
       revision: "2",
     });
+  });
+
+  it("revisionText + ConfigRevisionSchema accept only the closed safe range", () => {
+    expect(revisionText(CONFIG_REVISION_MIN)).toBe("1");
+    expect(revisionText(CONFIG_REVISION_MAX)).toBe(CONFIG_REVISION_MAX_TEXT);
+    expect(revisionText(CONFIG_REVISION_MAX_TEXT)).toBe(CONFIG_REVISION_MAX_TEXT);
+    expect(revisionText(BigInt(CONFIG_REVISION_MAX))).toBe(CONFIG_REVISION_MAX_TEXT);
+
+    const rejects: unknown[] = [
+      0,
+      -1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.MAX_SAFE_INTEGER + 1,
+      "0",
+      "01",
+      "-1",
+      "+1",
+      "1.0",
+      "1e2",
+      " 1",
+      "1 ",
+      "",
+      // max+1 decimal text
+      "9007199254740992",
+      "9".repeat(40),
+      // max+1 as bigint
+      9007199254740992n,
+      0n,
+      null,
+      undefined,
+      {},
+    ];
+    for (const bad of rejects) {
+      expect(() => revisionText(bad)).toThrow(/invalid config_revision/u);
+    }
+    const rejectStrings = ["0", "01", "-1", "+1", "1.0", "1e2", " 1", "1 ", "", "9007199254740992", "9".repeat(40)];
+    for (const bad of rejectStrings) {
+      expect(ConfigRevisionSchema.safeParse(bad).success).toBe(false);
+    }
+    expect(ConfigRevisionSchema.safeParse("1").success).toBe(true);
+    expect(ConfigRevisionSchema.safeParse(CONFIG_REVISION_MAX_TEXT).success).toBe(true);
+    expect(ConfigRevisionSchema.safeParse("9007199254740992").success).toBe(false);
+    expect(ConfigRevisionSchema.safeParse("9".repeat(40)).success).toBe(false);
+  });
+
+  it("store CAS rejects out-of-range expected revision before SQL (zero effect)", async () => {
+    const { pool } = buildHarness();
+    const client = pool.asPgPool();
+    const before = structuredClone(pool.projects.get("proj_1"));
+    await expect(
+      ProjectStore.compareAndSwapConfig(client, "proj_1", "9007199254740992", { version: 1, x: 1 }, systemActor),
+    ).rejects.toThrow(/invalid config_revision/u);
+    await expect(
+      ProjectStore.compareAndSwapConfig(client, "proj_1", "9".repeat(40), { version: 1, x: 1 }, systemActor),
+    ).rejects.toThrow(/invalid config_revision/u);
+    expect(pool.projects.get("proj_1")).toEqual(before);
+  });
+
+  it("memory CAS at max is no-op-ok; real change at max fails closed (no wrap)", async () => {
+    const { pool } = buildHarness();
+    const client = pool.asPgPool();
+    const row = pool.projects.get("proj_1")!;
+    row.config = { version: 1, at: "max" };
+    row.config_revision = CONFIG_REVISION_MAX;
+    const noop = await ProjectStore.compareAndSwapConfig(
+      client,
+      "proj_1",
+      CONFIG_REVISION_MAX_TEXT,
+      { version: 1, at: "max" },
+      systemActor,
+    );
+    expect(noop).toMatchObject({ status: "ok", revision: CONFIG_REVISION_MAX_TEXT });
+    expect(row.config_revision).toBe(CONFIG_REVISION_MAX);
+    await expect(
+      ProjectStore.compareAndSwapConfig(
+        client,
+        "proj_1",
+        CONFIG_REVISION_MAX_TEXT,
+        { version: 1, at: "beyond" },
+        systemActor,
+      ),
+    ).rejects.toThrow(/config_revision overflow/u);
+    expect(row.config_revision).toBe(CONFIG_REVISION_MAX);
+    expect(row.config).toEqual({ version: 1, at: "max" });
+  });
+
+  it("HTTP out-of-range revision is 400 with zero store effect (max+1 + long digits)", async () => {
+    const { app, pool } = buildHarness();
+    const before = structuredClone(pool.projects.get("proj_1"));
+    for (const revision of ["9007199254740992", "9".repeat(40), "0", "01", "-1"]) {
+      const res = await json(app, "/orgs/org_acme/projects/proj_1/budget", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ceilingUsd: 1, period: "total", revision }),
+      });
+      expect(res.status).toBe(400);
+      expect(pool.projects.get("proj_1")).toEqual(before);
+    }
+    const orgBefore = structuredClone(pool.orgs.get("org_acme"));
+    const orgRes = await json(app, "/orgs/org_acme", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ config: { version: 1 }, revision: "9007199254740992" }),
+    });
+    expect(orgRes.status).toBe(400);
+    expect(pool.orgs.get("org_acme")).toEqual(orgBefore);
   });
 });

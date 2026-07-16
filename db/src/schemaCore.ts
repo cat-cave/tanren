@@ -12,31 +12,17 @@ import {
 } from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
-// `runs` lives here (not in schema.ts) so the benchmark sub-schema —
-// `experiment_trials.run_id` FK → runs — can reference it from a core module
-// WITHOUT importing schema.ts (schema.ts re-exports the sub-schemas, so a
-// sub-schema importing schema.ts closes an import cycle the lint `no-cycle`
-// rule rejects). It is part of the core run-execution chain anyway. schema.ts
-// re-exports it so `schema.runs` is unchanged for every consumer.
-
-// Core identity + project/spec tables. These are referenced by the split
-// sub-schema files (schemaForge, schemaInbox, …). Keeping them here — rather
-// than in schema.ts — lets those sub-schemas reference the base tables without
-// importing schema.ts, which re-exports the sub-schemas (that re-export edge
-// would otherwise close an import cycle). schema.ts re-exports everything here
-// so consumers + the migration generator still see one `schema.*` namespace.
+// Core identity + project/spec/run tables live here so sub-schemas can reference
+// them without importing schema.ts (avoids the no-cycle import loop). schema.ts
+// re-exports this module as the single `schema.*` namespace for consumers + kit.
 
 export function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
   const literals = sql.raw(values.map((value) => `'${value.replaceAll("'", "''")}'`).join(","));
   return check(name, sql`${column} IN (${literals})`);
 }
 
-// org_id is the tenant-isolation root of the run-execution chain (P-tenancy:
-// mandatory-org-id). projects.org_id is NOT NULL and FK → organizations.id; the
-// migration backfills legacy rows from a placeholder org before tightening. All
-// downstream core tables (specs/runs/tasks/events/cost_records/runners) carry a
-// derived, mandatory, indexed org_id so isolation no longer relies on a nullable
-// project_id → projects.org_id hop or a route-layer gate alone.
+// org_id is the tenant-isolation root (P-tenancy). projects.org_id NOT NULL FK →
+// organizations; downstream core tables carry derived mandatory indexed org_id.
 export const projects = pgTable(
   "projects",
   {
@@ -50,7 +36,7 @@ export const projects = pgTable(
     config: jsonb("config")
       .notNull()
       .default(sql`'{"version":1}'::jsonb`),
-    // App config generation for sole CAS (never xmin). mode number: kit-safe; HTTP uses ::text.
+    // App CAS gen (never xmin). mode number + CHECK ≤ MAX_SAFE_INTEGER; HTTP uses ::text.
     configRevision: bigint("config_revision", { mode: "number" }).notNull().default(1),
     // Operator lifecycle: active (walker drives) or archived (paused). Archive surface only.
     lifecycle: text("lifecycle").notNull().default("active"),
@@ -59,7 +45,13 @@ export const projects = pgTable(
       .notNull()
       .references(() => organizations.id),
   },
-  (table) => [index("projects_org_id").on(table.orgId)],
+  (table) => [
+    check(
+      "projects_config_revision_range_check",
+      sql`${table.configRevision} >= 1 AND ${table.configRevision} <= 9007199254740991`,
+    ),
+    index("projects_org_id").on(table.orgId),
+  ],
 );
 
 export const specs = pgTable(
@@ -83,21 +75,15 @@ export const specs = pgTable(
       .notNull()
       .default(sql`'{}'::text[]`),
     status: text("status").notNull().default("open"),
-    // Execution priority (autonomy-engine.md §1b): DagWalker orders the ready set (P0
-    // first … `tbd` last) before the deterministic tiebreak. Originates on a
-    // discovery/triage `ProposedSpec`, persisted at create time. Literals mirror
-    // `SpecPriority` in engine/state/spec.ts.
+    // DagWalker ready-set priority (P0…tbd). Literals mirror SpecPriority.
     priority: text("priority").notNull().default("tbd"),
-    // WRITER-PROMPT MODE (task #86 — v64 root cause): selects `writerPromptFor()` standing
-    // instructions. `from_scratch` (default) → brownfield/legacy authoring; the greenfield
-    // SCAFFOLD spec sets `specialize_seed` (writer told the composed seed is in place +
-    // proven green; only product-identity surfaces should change). Literals mirror `SpecMode`.
+    // Writer prompt mode: from_scratch | specialize_seed (greenfield scaffold).
     mode: text("mode").notNull().default("from_scratch"),
-    // P3-0014: discovery provenance under `discovery` key. Open bag, tolerant reader — `{}` honest empty.
+    // P3-0014 discovery provenance bag; `{}` is honest empty.
     metadata: jsonb("metadata")
       .notNull()
       .default(sql`'{}'::jsonb`),
-    // Triage-routing PROVENANCE (Claude RA2 — apex GAP 1): nullable trail; enables re-drive DEDUPE.
+    // Triage provenance trail (nullable); enables re-drive dedupe.
     parentSpecId: text("parent_spec_id"),
     sourceFindingIds: text("source_finding_ids").array(),
     originTriageTaskId: text("origin_triage_task_id"),
@@ -128,13 +114,17 @@ export const organizations = pgTable(
     config: jsonb("config")
       .notNull()
       .default(sql`'{"version":1}'::jsonb`),
-    // App org config generation for sole CAS (never xmin). mode number: kit-safe; HTTP uses ::text.
+    // App CAS gen (never xmin). mode number + CHECK ≤ MAX_SAFE_INTEGER; HTTP uses ::text.
     configRevision: bigint("config_revision", { mode: "number" }).notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check("organizations_kind_check", sql`${table.kind} IN ('github_org','github_user','oidc')`),
+    check(
+      "organizations_config_revision_range_check",
+      sql`${table.configRevision} >= 1 AND ${table.configRevision} <= 9007199254740991`,
+    ),
     uniqueIndex("organizations_provider_unique").on(table.kind, table.externalId),
   ],
 );

@@ -75,6 +75,8 @@ export const OrganizationsStore = {
     nextConfig: unknown,
     _actor: ActorRef,
   ): Promise<ConfigCasOutcome> {
+    // Fail closed before $n::bigint — reject overflow/non-canonical tokens loudly.
+    const expected = revisionText(expectedRevision);
     const nextJson = JSON.stringify(nextConfig);
     const result = await client.query<{ config: unknown; revision: unknown }>(
       `UPDATE organizations
@@ -85,7 +87,7 @@ export const OrganizationsStore = {
           AND config_revision = $3::bigint
           AND config IS DISTINCT FROM $1::jsonb
         RETURNING config, config_revision::text AS revision`,
-      [nextJson, orgId, expectedRevision],
+      [nextJson, orgId, expected],
     );
     const row = result.rows[0];
     if (row !== undefined) {
@@ -102,12 +104,12 @@ export const OrganizationsStore = {
       return { status: "not_found" };
     }
     const rev = revisionText(after.revision);
-    if (rev !== expectedRevision) {
+    if (rev !== expected) {
       return { status: "conflict", current: { config: after.config, revision: rev } };
     }
     if (after.config_equal) {
       return { status: "ok", config: after.config, revision: rev };
     }
-    return configCasImpossibleMiss("organization", orgId, expectedRevision);
+    return configCasImpossibleMiss("organization", orgId, expected);
   },
 } as const;

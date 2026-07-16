@@ -320,6 +320,61 @@ describeIf("config revision CAS (real Postgres + RLS)", () => {
     );
     expect(after?.config).not.toMatchObject({ poisoned: true });
   });
+
+  it("CHECK rejects increment past Number.MAX_SAFE_INTEGER (fail-closed, no wrap)", async () => {
+    const maxText = String(Number.MAX_SAFE_INTEGER);
+    const projectId = `proj_max_${randomUUID().slice(0, 8)}`;
+    await ownerPool.query(
+      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id, config_revision)
+       VALUES ($1, 'max', 'https://github.com/example/max', 'main',
+               'ghcr.io/example/runner:v0', 'local-docker', '{"version":1}'::jsonb, $2, $3)`,
+      [projectId, ORG_A, Number.MAX_SAFE_INTEGER],
+    );
+    const orgId = `org_max_${randomUUID().slice(0, 8)}`;
+    await ownerPool.query(
+      `INSERT INTO organizations (id, kind, external_id, login, display_name, config, config_revision)
+       VALUES ($1, 'github_org', $1, $1, $1, '{"version":1}'::jsonb, $2)`,
+      [orgId, Number.MAX_SAFE_INTEGER],
+    );
+
+    // No-op at max is fine (no increment).
+    const noop = await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      ProjectStore.compareAndSwapConfig(client, projectId, maxText, { version: 1 }, systemActor),
+    );
+    expect(noop).toMatchObject({ status: "ok", revision: maxText });
+
+    // Real change attempts config_revision + 1 → CHECK violation (not silent wrap).
+    await expect(
+      runWithOrgScope(runtimePool, ORG_A, (client) =>
+        ProjectStore.compareAndSwapConfig(client, projectId, maxText, { version: 1, bump: true }, systemActor),
+      ),
+    ).rejects.toThrow(/config_revision_range_check|check constraint/iu);
+    const projAfter = await ownerPool.query<{ config_revision: string; config: unknown }>(
+      `SELECT config_revision::text AS config_revision, config FROM projects WHERE project_id = $1`,
+      [projectId],
+    );
+    expect(projAfter.rows[0]?.config_revision).toBe(maxText);
+    expect(projAfter.rows[0]?.config).toEqual({ version: 1 });
+
+    await expect(
+      runWithOrgScope(runtimePool, orgId, (client) =>
+        OrganizationsStore.compareAndSwapConfig(client, orgId, maxText, { version: 1, bump: true }, systemActor),
+      ),
+    ).rejects.toThrow(/config_revision_range_check|check constraint/iu);
+    const orgAfter = await ownerPool.query<{ config_revision: string }>(
+      `SELECT config_revision::text AS config_revision FROM organizations WHERE id = $1`,
+      [orgId],
+    );
+    expect(orgAfter.rows[0]?.config_revision).toBe(maxText);
+
+    // Direct SQL proof: max+1 is rejected by CHECK.
+    await expect(
+      ownerPool.query(`UPDATE projects SET config_revision = $1 WHERE project_id = $2`, [
+        Number.MAX_SAFE_INTEGER + 1,
+        projectId,
+      ]),
+    ).rejects.toThrow(/config_revision_range_check|check constraint/iu);
+  });
 });
 
 describeIf("config_revision migration 0040→0041 upgrade", () => {

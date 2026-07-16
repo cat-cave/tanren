@@ -2,6 +2,8 @@
 // Mirrors store semantics: revision-predicated UPDATE with JSONB IS DISTINCT FROM;
 // probe SELECT with config_equal for authoritative no-op / conflict resolution.
 
+import { CONFIG_REVISION_MAX } from "../../src/engine/config/configRevision.js";
+
 export interface ConfigRevisionRow {
   config: unknown;
   config_revision: number;
@@ -92,6 +94,11 @@ export function handleConfigCasSql(
     if (org === undefined || org.config_revision !== Number(params[2])) return { rows: [], rowCount: 0 };
     const next = parseNext(params);
     if (jsonbSemanticEqual(org.config, next)) return { rows: [], rowCount: 0 };
+    if (org.config_revision >= CONFIG_REVISION_MAX) {
+      throw new Error(
+        `config_revision overflow: organization=${org.id} current=${org.config_revision} cannot increment past ${CONFIG_REVISION_MAX}`,
+      );
+    }
     org.config = next;
     org.config_revision += 1;
     return { rows: [{ config: org.config, revision: String(org.config_revision) }], rowCount: 1 };
@@ -110,6 +117,11 @@ export function handleConfigCasSql(
     if (project === undefined || project.config_revision !== Number(params[2])) return { rows: [], rowCount: 0 };
     const next = parseNext(params);
     if (jsonbSemanticEqual(project.config, next)) return { rows: [], rowCount: 0 };
+    if (project.config_revision >= CONFIG_REVISION_MAX) {
+      throw new Error(
+        `config_revision overflow: project=${project.project_id} current=${project.config_revision} cannot increment past ${CONFIG_REVISION_MAX}`,
+      );
+    }
     project.config = next;
     project.config_revision += 1;
     return { rows: [{ config: project.config, revision: String(project.config_revision) }], rowCount: 1 };
