@@ -143,3 +143,8 @@ node credit.
   wave produces prompt/report scratch, archive+prune it (see `~/tanren-archive/` for
   the 2026-07-16 graveyard sweep). The durable artifacts are: `LEDGER.md`, the node
   cards, and merged PRs.
+- **`just compose-down` before retiring a merged worktree.** `just smoke` leaves a
+  compose stack running (registry on `:5000`, postgres, etc.); removing the worktree
+  does *not* stop it, so the next worktree's smoke fails to bind `:5000`
+  (`rootlessport ... address already in use`). Tear the stack down first, then
+  `git worktree remove`.
