@@ -26,47 +26,47 @@ apex behavior. It cannot earn consumer-node credit.
 
 ### Immediate non-migration paths
 
-| Path | Action |
-| --- | --- |
-| `docs/roadmap/mission-complete/nodes/cards/ev-sub-w0-implementation.md` | This ownership and validation card |
-| `services/orchestrator/src/engine/events/schemas/eventVocabularyW0.ts` | Six frozen strict payload schemas and `w0EventRegistry` |
-| `services/orchestrator/src/engine/events/schemas/integrations.ts` | Extract existing hello entries into `helloEventRegistry` only |
-| `services/orchestrator/src/engine/events/registry.ts` | Import/spread `helloEventRegistry` and `w0EventRegistry` |
-| `services/orchestrator/src/engine/events/sensitivityRules.benchmark.ts` | Extract existing benchmark sensitivity rules only |
-| `services/orchestrator/src/engine/events/sensitivityRules.eventVocabularyW0.ts` | Complete frozen W0 sensitivity path sets |
-| `services/orchestrator/src/engine/events/sensitivityRules.ts` | Import/spread extracted benchmark and W0 rule sets |
-| `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts` | Six explicit frozen severity entries |
-| `db/src/eventTypesSeed.ts` | Generated mirror from `codegen:events`; never hand-edited |
-| `contracts/json/events/integration_requirement_validated.json` | Generated JSON contract |
-| `contracts/json/events/behavior_coverage_selection_analyzed.json` | Generated JSON contract |
-| `contracts/json/events/governance_audit_posture_updated.json` | Generated JSON contract |
-| `contracts/json/events/review_simulated_intent.json` | Generated JSON contract |
-| `contracts/json/events/merge_signal_classified.json` | Generated JSON contract |
-| `contracts/json/events/merge_member_policy_blocked.json` | Generated JSON contract |
-| `services/orchestrator/tests/eventVocabularyW0.test.ts` | Unit and drift-boundary proof |
-| `services/orchestrator/tests/eventVocabularyW0Catalog.integration.test.ts` | Gated real-Postgres catalog/FK/RLS append proof |
+| Path                                                                            | Action                                                        |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `docs/roadmap/mission-complete/nodes/cards/ev-sub-w0-implementation.md`         | This ownership and validation card                            |
+| `services/orchestrator/src/engine/events/schemas/eventVocabularyW0.ts`          | Six frozen strict payload schemas and `w0EventRegistry`       |
+| `services/orchestrator/src/engine/events/schemas/integrations.ts`               | Extract existing hello entries into `helloEventRegistry` only |
+| `services/orchestrator/src/engine/events/registry.ts`                           | Import/spread `helloEventRegistry` and `w0EventRegistry`      |
+| `services/orchestrator/src/engine/events/sensitivityRules.benchmark.ts`         | Extract existing benchmark sensitivity rules only             |
+| `services/orchestrator/src/engine/events/sensitivityRules.eventVocabularyW0.ts` | Complete frozen W0 sensitivity path sets                      |
+| `services/orchestrator/src/engine/events/sensitivityRules.ts`                   | Import/spread extracted benchmark and W0 rule sets            |
+| `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`        | Six explicit frozen severity entries                          |
+| `db/src/eventTypesSeed.ts`                                                      | Generated mirror from `codegen:events`; never hand-edited     |
+| `contracts/json/events/integration_requirement_validated.json`                  | Generated JSON contract                                       |
+| `contracts/json/events/behavior_coverage_selection_analyzed.json`               | Generated JSON contract                                       |
+| `contracts/json/events/governance_audit_posture_updated.json`                   | Generated JSON contract                                       |
+| `contracts/json/events/review_simulated_intent.json`                            | Generated JSON contract                                       |
+| `contracts/json/events/merge_signal_classified.json`                            | Generated JSON contract                                       |
+| `contracts/json/events/merge_member_policy_blocked.json`                        | Generated JSON contract                                       |
+| `services/orchestrator/tests/eventVocabularyW0.test.ts`                         | Unit and drift-boundary proof                                 |
+| `services/orchestrator/tests/eventVocabularyW0Catalog.integration.test.ts`      | Gated real-Postgres catalog/FK/RLS append proof               |
 
 ### Parked migration paths — forbidden until CAS-SUB lands
 
-| Path | Action after CAS-SUB `0041` is on `origin/main` |
-| --- | --- |
-| `db/migrations/0042_event_vocabulary_w0.sql` | Add only the six frozen catalog rows, idempotently |
-| `db/migrations/meta/0042_snapshot.json` | Byte-copy the landed `0041` snapshot (no DDL in 0042) |
-| `db/migrations/meta/_journal.json` | Append the serialized idx-42 entry |
+| Path                                         | Action after CAS-SUB `0041` is on `origin/main`       |
+| -------------------------------------------- | ----------------------------------------------------- |
+| `db/migrations/0042_event_vocabulary_w0.sql` | Add only the six frozen catalog rows, idempotently    |
+| `db/migrations/meta/0042_snapshot.json`      | Byte-copy the landed `0041` snapshot (no DDL in 0042) |
+| `db/migrations/meta/_journal.json`           | Append the serialized idx-42 entry                    |
 
 No wildcard ownership. Any additional changed path requires this card to be
 amended and committed before that path is edited.
 
 ## Frozen names and severities
 
-| Name | Severity |
-| --- | --- |
-| `integration.requirement.validated` | `info` |
-| `behavior.coverage.selection_analyzed` | `info` |
-| `governance.audit_posture.updated` | `info` |
-| `review.simulated_intent` | `info` |
-| `merge.signal.classified` | `info` |
-| `merge.member.policy_blocked` | `warn` |
+| Name                                   | Severity |
+| -------------------------------------- | -------- |
+| `integration.requirement.validated`    | `info`   |
+| `behavior.coverage.selection_analyzed` | `info`   |
+| `governance.audit_posture.updated`     | `info`   |
+| `review.simulated_intent`              | `info`   |
+| `merge.signal.classified`              | `info`   |
+| `merge.member.policy_blocked`          | `warn`   |
 
 The payload fields, literals, regexes, union arms, cross-field invariants, and
 sensitivity paths are copied exactly from `event-vocabulary-waves.md`. No new

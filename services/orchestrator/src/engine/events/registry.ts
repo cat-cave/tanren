@@ -77,10 +77,7 @@ import {
   GithubPrMergedPayload,
   GithubPrNoCommitsPayload,
   GithubPrReadyPayload,
-  HelloCompletedPayload,
-  HelloSshCompletedPayload,
-  HelloSshStartedPayload,
-  HelloStartedPayload,
+  helloEventRegistry,
   MergeBehindPayload,
   MergeBlockedPayload,
   MergeCompletedPayload,
@@ -104,6 +101,7 @@ import {
   ReviewAutoApprovedPayload,
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
+  w0EventRegistry,
 } from "./schemas/integrations.js";
 import {
   MergeBatchBisectingPayload,
@@ -186,6 +184,7 @@ import {
 // Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
 // sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
+  ...w0EventRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,
@@ -390,10 +389,7 @@ export const EventRegistry = {
   "demo.failed": DemoFailedPayload,
 
   // Hello / smoke run
-  "hello.started": HelloStartedPayload,
-  "hello.ssh_started": HelloSshStartedPayload,
-  "hello.ssh_completed": HelloSshCompletedPayload,
-  "hello.completed": HelloCompletedPayload,
+  ...helloEventRegistry,
 
   // Redaction audit: emitted whenever an elevated-scope actor
   // reads raw payload values via the redaction serializer.

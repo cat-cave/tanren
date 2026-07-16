@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "byteSize": {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "digest": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "mediaType": {
+          "const": "application/vnd.tanren.integration-requirement.v1+json",
+          "type": "string"
+        }
+      },
+      "required": [
+        "digest",
+        "byteSize",
+        "mediaType"
+      ],
+      "type": "object"
+    },
+    "capability": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "criticality": {
+      "enum": [
+        "merge_required",
+        "release_required",
+        "best_effort"
+      ],
+      "type": "string"
+    },
+    "direction": {
+      "enum": [
+        "inbound",
+        "outbound",
+        "bidirectional"
+      ],
+      "type": "string"
+    },
+    "missionNodeId": {
+      "const": "in-2",
+      "type": "string"
+    },
+    "plane": {
+      "enum": [
+        "control",
+        "product"
+      ],
+      "type": "string"
+    },
+    "requirementDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "missionNodeId",
+    "requirementDigest",
+    "artifact",
+    "capability",
+    "plane",
+    "direction",
+    "criticality"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.requirement.validated"
+}

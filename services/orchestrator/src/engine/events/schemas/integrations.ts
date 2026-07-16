@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { AuditEnvelope } from "./audit.js";
 
+export { w0EventRegistry } from "./eventVocabularyW0.js";
+
 // External integration events: GitHub (branch/PR), the review lifecycle, and the
 // merge stage. (The native gate is the merge authority — there are no forge-CI
 // observation events here; the gate's own verdict lives in schemas/gate.ts.)
@@ -457,6 +459,13 @@ export const HelloCompletedPayload = z
     workspacePath: z.string(),
   })
   .strict();
+
+export const helloEventRegistry = {
+  "hello.started": HelloStartedPayload,
+  "hello.ssh_started": HelloSshStartedPayload,
+  "hello.ssh_completed": HelloSshCompletedPayload,
+  "hello.completed": HelloCompletedPayload,
+} as const;
 
 // Plane B app-environment: the project's RUNTIME-scoped app env was
 // attached to the DEPLOYED app (Vercel/Fly) as its environment. The deploy is an
