@@ -1,5 +1,9 @@
 # Templating system — one fragment-only scaffold path, missing fragments AUTHORED
 
+> ⛔ **FROZEN — historical, not live work.** The F2 authoring path this describes is
+> BUILT and hardened. Kept for doctrine/provenance only. The live mission is
+> `docs/roadmap/mission-complete/`. Do not treat items here as to-do.
+
 This is the doctrine-of-record for Tanren's project templating, and it is
 **load-bearing**: the orchestrator code cites this file by section
 (§1 = the one rule, §2 = the per-fragment authoring DAG, §3 = the unified
