@@ -139,7 +139,7 @@ export function mergeQueueEarlyEnqueueSeam(
  */
 export function reGateGateReworkSeam(
   input: RunPlannerLoopInput,
-  deps: { eventStore: EventStore; prNumber: number },
+  deps: { prNumber: number },
 ): { reGateGateRework: GateReworkRouter } {
   if (input.reGateGateRework !== undefined) {
     return { reGateGateRework: input.reGateGateRework };
@@ -148,10 +148,7 @@ export function reGateGateReworkSeam(
   const orgId = context.orgId;
   return {
     reGateGateRework: new SpecStatusGateReworkRouter({
-      pool: input.pool,
-      runStateWriter: input.runStateWriter,
       orgId,
-      eventStore: deps.eventStore,
       runId: context.runId,
       projectId: context.projectId,
       prNumber: deps.prNumber,

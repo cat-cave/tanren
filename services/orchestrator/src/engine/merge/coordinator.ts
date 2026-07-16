@@ -36,19 +36,8 @@ export interface MergeQueueEventEmitter {
 }
 
 /**
- * Both-or-neither settle transaction (audit RC-4 #3). Event append + queue UPDATE
- * run on one org-scoped transaction when wired.
- */
-export interface MergeSettleTransaction {
-  run(
-    projectId: string,
-    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
-  ): Promise<void>;
-}
-
-/**
- * Queue/event split-brain guard + atomicity: terminal dequeue is never durable before
- * its event; with a MergeSettleTransaction both writes commit or roll back together.
+ * Queue/event ordering shared by both writer planes. Recovery-owned and park paths
+ * bypass this helper because their writer authority commits event+queue atomically.
  */
 export async function markDequeuedAfterEvent(input: {
   queue: MergeQueueModel;
@@ -57,20 +46,12 @@ export async function markDequeuedAfterEvent(input: {
   entry: MergeQueueEntry;
   reason: DequeueReason;
   message: string;
-  tx?: MergeSettleTransaction;
 }): Promise<void> {
-  const settle = async (events: MergeQueueEventEmitter, queue: MergeQueueModel): Promise<void> => {
-    await events.emitDequeued({
-      projectId: input.projectId,
-      entry: input.entry,
-      reason: input.reason,
-      message: input.message,
-    });
-    await queue.markDequeued(input.entry.queueId, input.reason);
-  };
-  if (input.tx !== undefined) {
-    await input.tx.run(input.projectId, (ctx) => settle(ctx.events, ctx.queue));
-    return;
-  }
-  await settle(input.events, input.queue);
+  await input.events.emitDequeued({
+    projectId: input.projectId,
+    entry: input.entry,
+    reason: input.reason,
+    message: input.message,
+  });
+  await input.queue.markDequeued(input.entry.queueId, input.reason);
 }

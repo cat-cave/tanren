@@ -1,18 +1,15 @@
 // Durable recovery-ownership proofs for conflict / gate-rework settlement.
 // SpecNotRunnableError is never ownership. already_running requires an actively-driving
 // run (queued/running/paused — NOT halted). Spec re-open is allowlisted only for
-// open/in_flight/review via atomic prepareSpecForRecovery (always target status `open`).
+// open/in_flight/review via atomic recovery preparation (always target status `open`).
 // Settlement requires a typed RecoveryEvidencePort that re-reads under system/BYPASSRLS;
 // absence fails closed.
 //
 // OWNERSHIP IDENTITY: replan/rework receipts name the NEW owner run + spec
 // (+ planner task for enqueued). The stale PR/head being replaced is never evidence.
 
-import { runWithOrgScope } from "@tanren/db";
-import type pg from "pg";
 import type { ConflictRecoveryReceipt } from "../contracts/conflictResolution.js";
 import type { RecoveryOwnedSettlementWriter, RunStateWriter } from "../contracts/runStateWriter.js";
-import { isPool, type QueryClient } from "../data/orgScopedDb.js";
 
 /**
  * Run statuses that prove an active owner is still driving work.
@@ -73,50 +70,6 @@ export function requireRecoveryOwnedSettlementWriter(writer: RunStateWriter): Re
     throw new Error("owned recovery settlement requires RunStateWriter & RecoveryOwnedSettlementWriter");
   }
   return writer as RecoveryOwnedCapableRunStateWriter;
-}
-
-/**
- * Narrow a QueryClient to a real Pool for runWithOrgScope. No `as pg.Pool` cast —
- * `isPool` is the honest discriminator (rejects bare query-only clients).
- */
-function requirePool(client: QueryClient, context: string): pg.Pool {
-  if (!isPool(client)) {
-    throw new Error(`${context} requires a Pool-capable client (connect), not a bare query-only client`);
-  }
-  return client;
-}
-
-/**
- * Active owner run for this exact spec under the tenant org GUC (RLS-visible).
- * Never trusts SpecNotRunnableError alone. Uses a short runWithOrgScope txn.
- * Accepts QueryClient so workflow seams need no cast — narrows via isPool.
- */
-export async function findActiveOwnerRunForSpec(
-  pool: QueryClient,
-  orgId: string,
-  projectId: string,
-  specId: string,
-  priorRunId: string,
-): Promise<{ runId: string; status: string } | undefined> {
-  const realPool = requirePool(pool, "findActiveOwnerRunForSpec");
-  return runWithOrgScope(realPool, orgId, async (client): Promise<{ runId: string; status: string } | undefined> => {
-    const result = await client.query<{ run_id: string; status: string }>(
-      `SELECT run_id, status FROM runs
-         WHERE org_id = $1
-           AND project_id = $2
-           AND spec_id = $3
-           AND run_id <> $4
-           AND status IN ('queued', 'running', 'paused')
-         ORDER BY started_at DESC NULLS LAST, run_id ASC
-         LIMIT 1`,
-      [orgId, projectId, specId, priorRunId],
-    );
-    const row = result.rows[0];
-    if (row === undefined) {
-      return undefined;
-    }
-    return { runId: row.run_id, status: row.status };
-  });
 }
 
 /**

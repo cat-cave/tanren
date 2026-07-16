@@ -4,7 +4,7 @@
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type { CoordinateResult, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.js";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import type { BatchInfraHoldCeiling } from "./batchInfraHoldCeiling.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
@@ -28,7 +28,6 @@ export interface EscalateInfraHoldArgs {
   message: string;
   holds: number;
   queueDepth: number;
-  tx?: MergeSettleTransaction;
 }
 
 export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Promise<CoordinateResult> {
@@ -70,7 +69,6 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
           entry,
           reason: settled.reason,
           message: settled.message,
-          ...(args.tx === undefined ? {} : { tx: args.tx }),
         });
       }
       continue;
@@ -83,7 +81,6 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
         entry,
         reason: "superseded",
         message: recovery.message,
-        ...(args.tx === undefined ? {} : { tx: args.tx }),
       });
       continue;
     }
@@ -107,7 +104,6 @@ export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Pr
         entry,
         reason: settled.reason,
         message: settled.message,
-        ...(args.tx === undefined ? {} : { tx: args.tx }),
       });
     }
   }

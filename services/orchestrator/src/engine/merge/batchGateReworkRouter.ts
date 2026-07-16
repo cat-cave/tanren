@@ -26,25 +26,19 @@
 // `convergenceDetector` detects. There only does it ESCALATE as a LOUD `needs_attention`
 // (the `persistent_failure` path), never a silent strand, never a count.
 
-import { getSystemPool, runWithJobOrgId, runWithOrgScope } from "@tanren/db";
+import { getSystemPool, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { BatchGateReworkRouter } from "../contracts/batchMergeCoordinator.js";
 import type { GateReworkRouteResult } from "../contracts/conflictResolution.js";
 import type { MergeQueueEntry } from "../contracts/mergeCoordinator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { resolveProjectOrg } from "../dag/percolationWrites.js";
-import type { EventStore } from "../eventStore.js";
 import {
   atReplanFixedPoint,
   gateErrorSignature,
   type ReplanEnqueuer,
 } from "../workflow/reviewMerge/conflictResolver/replanRouter.js";
 import { buildReplanEnqueuer } from "../workflow/reviewMerge/conflictResolver/replanEnqueuerPg.js";
-import { SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
-import { createLogger } from "../observability/logger.js";
-import { findActiveOwnerRunForSpec } from "./recoveryOwnership.js";
-
-const log = createLogger("batch-gate-rework");
 
 export interface BatchGateReworkRouterDeps {
   pool: pg.Pool;
@@ -64,12 +58,6 @@ export interface BatchGateReworkRouterDeps {
    * cross-org system pool machinery.
    */
   resolveOrg?: (projectId: string) => Promise<string | null>;
-  /**
-   * TEST SEAM: append a durable event under the resolved org. Production OMITS it → the
-   * plane-split PgEventStore / RunStateWriter under the org scope. A no-DB unit run
-   * injects a recording store so event assertions need no DB or scope globals.
-   */
-  appendEvent?: (orgId: string, event: Parameters<EventStore["append"]>[0]) => Promise<void>;
 }
 
 /**
@@ -128,132 +116,34 @@ export class PgBatchGateReworkRouter implements BatchGateReworkRouter {
       // steering + enqueue a fresh writer-rework run (the same mechanism the conflict-replan
       // route uses). The new run re-authors to fix the integration-only failure, then
       // re-queues for merge normally.
-      const run = await this.enqueuer.enqueue({
+      const prepared = await this.enqueuer.enqueue({
         specId: input.culprit.specId,
         orgId,
         projectId: input.projectId,
         steeringNote,
         reopenStatus: "open",
-      });
-      await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, run.replanRunId, run.plannerTaskId);
-      return {
-        kind: "owned",
-        receipt: {
-          kind: "writer_rework",
-          specId: input.culprit.specId,
-          run: { kind: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId },
-        },
-      };
-    } catch (error) {
-      if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(
-          this.deps.pool,
-          orgId,
-          input.projectId,
-          input.culprit.specId,
-          input.culprit.runId,
-        );
-        if (live === undefined) {
-          log.error(
-            "gate-fail SpecNotRunnableError without active owner — fail closed",
-            { specId: input.culprit.specId, reportedStatus: error.status },
-            error,
-          );
-          return {
-            kind: "parking_required",
-            message:
-              `SpecNotRunnableError without verified active owner for ${input.culprit.specId}; ` +
-              `settlement must park. Gate: ${input.gateError}`,
-          };
-        }
-        log.warn(
-          "gate-fail rework verified active owner run",
-          { specId: input.culprit.specId, runId: live.runId, status: live.status },
-          error,
-        );
-        await this.recordReworked(orgId, input, priorSignatures.length, steeringNote, live.runId);
-        return {
-          kind: "owned",
-          receipt: {
-            kind: "writer_rework",
-            specId: input.culprit.specId,
-            run: { kind: "already_running", runId: live.runId },
-          },
-        };
-      }
-      log.error(
-        "gate-fail rework FAILED to enqueue a run — parking_required (never silent strand)",
-        { specId: input.culprit.specId },
-        error,
-      );
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        kind: "parking_required",
-        message:
-          `batch gate-rework enqueue failed for ${input.culprit.specId} (${detail}); settlement must park. ` +
-          `Gate: ${input.gateError}`,
-      };
-    }
-  }
-
-  /** Record the observable `merge.batch.gate_rework_routed` (disposition `reworked`) + the run-enqueue lineage. */
-  private async recordReworked(
-    orgId: string,
-    input: { projectId: string; culprit: MergeQueueEntry; gateError: string },
-    priorReworks: number,
-    steeringNote: string,
-    replanRunId?: string,
-    plannerTaskId?: string,
-  ): Promise<void> {
-    await this.withScopedStore(orgId, async (store) => {
-      await store.append({
-        runId: input.culprit.runId,
-        specId: input.culprit.specId,
-        projectId: input.projectId,
-        orgId,
-        eventType: "merge.batch.gate_rework_routed",
-        payload: {
-          integration: "native_queue",
-          specId: input.culprit.specId,
-          runId: input.culprit.runId,
+        oldRunId: input.culprit.runId,
+        queueId: input.culprit.queueId,
+        route: {
+          kind: "batch_writer_rework",
           prNumber: input.culprit.prNumber,
-          disposition: "reworked",
           gateError: input.gateError,
-          priorReworks,
+          priorReworks: priorSignatures.length,
         },
       });
-      // The OBSERVABLE run-enqueue lineage (only when a NEW run was created — the benign
-      // already-claimed race did not create one; a concurrent tick emitted its own run.queued).
-      if (replanRunId !== undefined && plannerTaskId !== undefined) {
-        await store.append({
-          runId: input.culprit.runId,
-          specId: input.culprit.specId,
-          projectId: input.projectId,
-          orgId,
-          eventType: "recovery.replan_queued",
-          payload: {
-            runId: input.culprit.runId,
-            specId: input.culprit.specId,
-            action: "replan_with_steering",
-            steeringNote,
-            replanRunId,
-            plannerTaskId,
-          },
-        });
+      if (prepared.kind === "owned") {
+        return prepared.receipt.kind === "writer_rework"
+          ? { kind: "owned", receipt: prepared.receipt }
+          : { kind: "parking_failed", message: "recovery preparation returned the wrong owner kind" };
       }
-    });
-  }
-
-  private async withScopedStore(orgId: string, work: (store: EventStore) => Promise<void>): Promise<void> {
-    // TEST SEAM: an injected recording append needs no scope machinery — wrap it as an
-    // EventStore so the work body is identical to the production path.
-    if (this.deps.appendEvent !== undefined) {
-      const appendEvent = this.deps.appendEvent;
-      await work({ append: (event) => appendEvent(orgId, event) });
-      return;
+      if (prepared.kind === "terminal_noop") return prepared;
+      return { kind: "parking_failed", message: prepared.message };
+    } catch (error) {
+      return {
+        kind: "parking_failed",
+        message: `batch gate-rework preparation failed for ${input.culprit.specId}: ${String(error)}`,
+      };
     }
-    const writer = this.deps.runStateWriter;
-    await runWithJobOrgId(orgId, () => work(writer));
   }
 }
 

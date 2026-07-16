@@ -23,13 +23,6 @@
 import { priorityRank, type SpecPriority } from "../state/spec.js";
 import type { ConflictRecoveryReceipt, TerminalParkNoopStatus } from "./conflictResolution.js";
 
-/**
- * The minimal query surface a caller-supplied, already-scoped transaction client must
- * expose for {@link MergeQueueModel.markDequeuedOnClient}. Kept structural so this
- * pure (DB-free) contract module never imports `pg`.
- */
-export type SettleQueryClient = { query(sql: string, params?: ReadonlyArray<unknown>): Promise<unknown> };
-
 // ---- Queue snapshot (the ordering input) ----------------------------------
 
 /** The outcome of driving one entry's merge through the per-run merge path. */
@@ -90,15 +83,6 @@ export interface MergeQueueEntry {
   priority: SpecPriority;
   /** Stable creation-order tiebreak (lower sorts first) AFTER priority. */
   orderKey: number;
-}
-
-/** The spec/PR facts of a SUPERSEDED prior-run entry (returned for the observable event). */
-export interface SupersededEntry {
-  queueId: string;
-  runId: string;
-  specId: string;
-  prUrl: string;
-  prNumber: number;
 }
 
 /**
@@ -259,7 +243,7 @@ export interface MergeQueueModel {
    * GitHub-5xx resilience: RELEASE a claimed entry back to `queued` (merging →
    * queued) WITHOUT settling it — the entry stays IN the queue. Used when a merge
    * drive threw a TRANSIENT/infra error (a 5xx/network blip): the PR is NOT blocked
-   * or dequeued (a `done` run would never re-ready, so a `markDequeued("blocked")`
+   * or dequeued (a terminal run would never re-ready, so retiring the candidate
    * would STRAND a clean PR); instead the claim is released so the subscriber's
    * delayed re-drive re-picks it once the gateway recovers. Distinct from
    * `recoverStaleClaims` (which only fires after the 15-min lease) — this releases
@@ -279,28 +263,6 @@ export interface MergeQueueModel {
    * it usually hands off to autonomous re-plan/re-execution.
    */
   markDequeued(queueId: string, reason: DequeueReason): Promise<void>;
-
-  /**
-   * ATOMICITY (audit RC-4 #3): the same dequeue UPDATE as {@link markDequeued} but run
-   * on a CALLER-SUPPLIED client (an already-open org-scoped transaction) instead of
-   * opening its own. The dequeue/infra-blocked settle threads ONE transaction through
-   * the event append AND this update so they both-commit-or-both-roll-back. The client
-   * must already be scoped to the entry's org (the settle transaction opens it).
-   */
-  markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void>;
-
-  /**
-   * SUPERSEDE the active (queued/merging) merge-queue entry of a PRIOR run that a
-   * fresh percolation re-execution replaces (autonomy-engine.md §2c). Finds the
-   * prior run's active entry, dequeues it `superseded`, and returns the entry's
-   * spec/PR facts so the caller can emit the observable `merge.dequeued` — or
-   * `undefined` when the prior run had no active entry (idempotent: a second call
-   * matches no row and returns undefined). Org-scoped under RLS like every other
-   * queue write. The fix for the percolation self-conflict: without this the prior
-   * run's entry stays `queued`, so the spec has TWO live entries and the batch
-   * check integrates the spec against ITSELF.
-   */
-  supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined>;
 
   /**
    * Crash recovery: return any entries left `merging` (a coordinator died

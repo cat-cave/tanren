@@ -19,7 +19,7 @@ import type {
 } from "../contracts/conflictResolution.js";
 import type { AncestorStack } from "./ancestorStack.js";
 import type { IntegrationNode } from "../contracts/integrationNodes.js";
-import type { RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
+import type { RecoveryOwnedSettlementWriter, RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import type {
   BaseShiftEventEmitter,
   BaseShiftNodeReader,
@@ -47,7 +47,7 @@ export class PgBaseShiftPersistence implements BaseShiftPersistence {
 
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter,
+    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter & RecoveryOwnedSettlementWriter,
     recovery?: RecoveryRouteSettler,
   ) {
     this.recovery = recovery ?? new PgRecoveryRouteSettler(pool, runStateWriter);

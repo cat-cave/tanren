@@ -158,10 +158,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // `in_flight` with no live run. Uniform across BOTH replan routes (this drive/in-loop
     // path + the base-shift coordinator's `recordReplanContext`).
     replan: new SpecStatusReplanRouter({
-      pool: deps.pool,
-      runStateWriter: deps.runStateWriter,
       orgId: deps.orgId,
-      eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,
       // The enqueuer is writer-only (no pool). The prior-replan reader accepts
@@ -178,10 +175,7 @@ export function buildDefaultConflictResolver(deps: DefaultConflictResolverDeps):
     // Uniform across BOTH merge paths (this in-loop `direct_merge` path + the base-shift path,
     // which calls this same factory).
     gateRework: new SpecStatusGateReworkRouter({
-      pool: deps.pool,
-      runStateWriter: deps.runStateWriter,
       orgId: deps.orgId,
-      eventStore: deps.eventStore,
       runId: deps.runId,
       projectId: deps.projectId,
       prNumber: deps.prNumber ?? 0,

@@ -23,7 +23,6 @@ import {
   type RecoveryRouteSettler,
 } from "../src/engine/merge/recoveryRouteSettlement.js";
 import { driveOutcomeFromRecoverySettlement } from "../src/engine/merge/driveConflictVerdict.js";
-import { ScriptedRecoveryEvidencePort } from "./fixtures/scriptedRecoveryEvidence.js";
 
 const ORG = "org_recovery";
 const PROJECT = "project_recovery";
@@ -55,6 +54,8 @@ function poolAsPg(pool: RecoveryPool): pg.Pool {
   return pool as unknown as pg.Pool;
 }
 
+const DEFAULT_OWNED_OUTCOME = { kind: "settled", newlySettled: true } as const;
+
 function writerReturning(
   outcome:
     | { kind: "parked"; newlyParked: boolean }
@@ -66,12 +67,25 @@ function writerReturning(
       },
   calls: Array<Record<string, unknown>>,
   order: string[] = [],
+  ownedOutcome:
+    | { kind: "settled"; newlySettled: boolean }
+    | {
+        kind: "settlement_failed";
+        reason: "evidence_invalid";
+        queueDisposition: "retained";
+        retryAfterMs: number;
+      } = DEFAULT_OWNED_OUTCOME,
 ): RecoveryCapableRunStateWriter {
   return {
     async parkRecoveryAndDequeue(input) {
       order.push("park");
       calls.push(input);
       return outcome;
+    },
+    async settleOwnedRecoveryAndDequeue(input) {
+      order.push("owned-settle");
+      calls.push(input);
+      return ownedOutcome;
     },
   } as unknown as RecoveryCapableRunStateWriter;
 }
@@ -215,25 +229,31 @@ async function kickOff(coord: BaseShiftCoordinator) {
 }
 
 describe("typed recovery settlement — exact atomic authority", () => {
-  it("returns owned only after exact active ownership readback", async () => {
+  it("returns owned only after the atomic owned-dequeue authority succeeds", async () => {
     const recovery = ownedRecovery();
+    const acceptedCalls: Array<Record<string, unknown>> = [];
     const accepted = new PgRecoveryRouteSettler(
       poolAsPg(new RecoveryPool()),
-      writerReturning({ kind: "parked", newlyParked: true }, []),
-      new ScriptedRecoveryEvidencePort("accept-structural"),
+      writerReturning({ kind: "parked", newlyParked: true }, acceptedCalls),
     );
     await expect(accepted.settle({ projectId: PROJECT, runId: RUN, specId: SPEC, recovery })).resolves.toEqual(
       recovery,
     );
 
+    expect(acceptedCalls[0]).toMatchObject({ queueId: QUEUE, reason: "conflict", receipt: recovery.receipt });
+
     const rejected = new PgRecoveryRouteSettler(
       poolAsPg(new RecoveryPool()),
-      writerReturning({ kind: "parked", newlyParked: true }, []),
-      new ScriptedRecoveryEvidencePort("reject-all"),
+      writerReturning({ kind: "parked", newlyParked: true }, [], [], {
+        kind: "settlement_failed",
+        reason: "evidence_invalid",
+        queueDisposition: "retained",
+        retryAfterMs: 3_000,
+      }),
     );
     await expect(rejected.settle({ projectId: PROJECT, runId: RUN, specId: SPEC, recovery })).resolves.toMatchObject({
       kind: "parking_failed",
-      queueDisposition: "unknown",
+      queueDisposition: "retained",
     });
   });
 
@@ -278,12 +298,16 @@ describe("typed recovery settlement — exact atomic authority", () => {
 });
 
 describe("base-shift/percolation consumers preserve settlement truth", () => {
-  it("rejected owned evidence retains the base-shift marker and emits no visible success", async () => {
+  it("failed atomic owned settlement retains the base-shift marker and emits no visible success", async () => {
     const persistence = new RecoveryPersistence(
       new PgRecoveryRouteSettler(
         poolAsPg(new RecoveryPool()),
-        writerReturning({ kind: "parked", newlyParked: true }, []),
-        new ScriptedRecoveryEvidencePort("reject-all"),
+        writerReturning({ kind: "parked", newlyParked: true }, [], [], {
+          kind: "settlement_failed",
+          reason: "evidence_invalid",
+          queueDisposition: "retained",
+          retryAfterMs: 3_000,
+        }),
       ),
     );
     await expect(
@@ -419,6 +443,27 @@ describe("PgPercolationSettler consumes the router disposition before clearing",
     ).resolves.toEqual({ result: "parked" });
     expect(order).toEqual(["parking_required"]);
     expect(clears).toEqual([RUN]);
+  });
+
+  it("production pg composition retires the old queue before clearing the marker", async () => {
+    const order: string[] = [];
+    const writer = {
+      async settleOwnedRecoveryAndDequeue() {
+        order.push("owned-settle");
+        return { kind: "settled" as const, newlySettled: true };
+      },
+      async clearRunPercolationPending() {
+        order.push("clear");
+      },
+    } as unknown as RecoveryCapableRunStateWriter;
+    const settler = new PgPercolationSettler(poolAsPg(new RecoveryPool()), writer, undefined, async () =>
+      ownedRecovery(),
+    );
+
+    await expect(
+      settler.replan({ projectId: PROJECT, dependent: dependent(), pending, reason: "cannot absorb" }),
+    ).resolves.toEqual({ result: "replanned", reexecRunId: "run_new_owner" });
+    expect(order).toEqual(["owned-settle", "clear"]);
   });
 
   it("parking failure retains the marker and cannot masquerade as replanned", async () => {

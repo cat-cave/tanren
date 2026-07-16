@@ -4,6 +4,7 @@
 // wrong-org failure, rollback after a partial attempt, and lost-response retry.
 
 import type { Pool, PoolClient } from "pg";
+import { resetSystemPool, setSystemPool } from "@tanren/db";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   AllowAllPeerVerifier,
@@ -11,11 +12,6 @@ import {
   type RecoveryOwnedSettleInput,
   type RecoveryParkInput,
 } from "../src/engine/contracts/index.js";
-import { driveOutcomeFromRecoverySettlement } from "../src/engine/merge/driveConflictVerdict.js";
-import { settleDriveOutcome } from "../src/engine/merge/batchCoordinatorSettle.js";
-import { PgSpecEscalator } from "../src/engine/merge/coordinatorEscalate.js";
-import { PgMergeQueueEventEmitter } from "../src/engine/merge/coordinatorEvents.js";
-import { PgMergeQueueModel } from "../src/engine/merge/coordinatorPg.js";
 import { readOwnedReceiptEvidence } from "../src/engine/merge/recoveryEvidencePg.js";
 import { DirectRunStateWriter, HttpRunStateWriter } from "../src/engine/worker/index.js";
 import { applyRecoveryParkAtomic } from "../src/engine/worker/recoveryParkAtomic.js";
@@ -99,8 +95,14 @@ describeDb("atomic recovery park — real PG and enforced RLS", () => {
   const owner = () => harness.ownerPool();
   const runtime = () => harness.runtimePool();
 
-  beforeAll(() => harness.setUp(), 60_000);
-  afterAll(() => harness.tearDown(), 30_000);
+  beforeAll(async () => {
+    await harness.setUp();
+    setSystemPool(owner());
+  }, 60_000);
+  afterAll(async () => {
+    resetSystemPool();
+    await harness.tearDown();
+  }, 30_000);
 
   it("Direct and HTTP paths commit the same park, ordered events, and dequeue", async () => {
     const directRun = "run_recovery_park_direct";
@@ -309,9 +311,26 @@ describeDb("atomic recovery park — real PG and enforced RLS", () => {
       "SELECT xmin::text, status, dequeue_reason FROM merge_queue WHERE queue_id = $1",
       [queueId],
     );
+    // Replay is receipt-bound, not successor-liveness-bound: the exact committed
+    // fingerprint remains valid after the successor later terminates.
+    await owner().query("UPDATE runs SET status = 'halted' WHERE run_id = $1", [ownerRunId]);
     await expect(writer.settleOwnedRecoveryAndDequeue(input)).resolves.toEqual({
       kind: "settled",
       newlySettled: false,
+    });
+    await expect(
+      writer.settleOwnedRecoveryAndDequeue({
+        ...input,
+        receipt: {
+          kind: "planner_replan",
+          specId: SPEC,
+          run: { kind: "already_running", runId: "run_wrong_same_reason" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      kind: "settlement_failed",
+      reason: "receipt_mismatch",
+      queueDisposition: "unknown",
     });
     const replayed = await owner().query<{ xmin: string }>("SELECT xmin::text FROM merge_queue WHERE queue_id = $1", [
       queueId,
@@ -444,52 +463,5 @@ describeDb("atomic recovery park — real PG and enforced RLS", () => {
       newlySettled: false,
     });
     expect((await durableState(owner(), runId, queueId)).events).toEqual(["merge.dequeued"]);
-  });
-
-  it("production-composed completed park is a downstream no-op with byte-stable queue row", async () => {
-    const runId = "run_recovery_park_composed";
-    const queueId = "queue_recovery_park_composed";
-    await seedQueue(owner(), runId, queueId);
-    const writer = new DirectRunStateWriter(runtime());
-    const park = await writer.parkRecoveryAndDequeue(inputFor(runId, queueId));
-    if (park.kind !== "parked") throw new Error(`expected parked, got ${park.kind}`);
-    const before = await owner().query<{ xmin: string }>("SELECT xmin::text FROM merge_queue WHERE queue_id = $1", [
-      queueId,
-    ]);
-    const entry = {
-      orgId: ORG,
-      projectId: PROJECT,
-      queueId,
-      runId,
-      specId: SPEC,
-      prUrl: `https://github.example/pulls/${queueId}`,
-      prNumber: 17,
-      dependsOn: [],
-      priority: "normal" as const,
-      orderKey: 1,
-    };
-    const outcome = driveOutcomeFromRecoverySettlement(park, "parked by base-shift recovery");
-    await expect(
-      settleDriveOutcome(
-        {
-          queue: new PgMergeQueueModel(runtime()),
-          events: new PgMergeQueueEventEmitter(runtime(), writer),
-          escalator: new PgSpecEscalator(runtime(), writer),
-          recoverySettlement: writer,
-        },
-        PROJECT,
-        entry,
-        outcome,
-      ),
-    ).resolves.toBe("dequeued");
-    const after = await owner().query<{ xmin: string }>("SELECT xmin::text FROM merge_queue WHERE queue_id = $1", [
-      queueId,
-    ]);
-    expect(after.rows[0]?.xmin).toBe(before.rows[0]?.xmin);
-    expect(await durableState(owner(), runId, queueId)).toEqual({
-      specStatus: "needs_attention",
-      queue: { status: "dequeued", dequeue_reason: "needs_attention" },
-      events: ["dag.spec.needs_attention", "merge.dequeued"],
-    });
   });
 });

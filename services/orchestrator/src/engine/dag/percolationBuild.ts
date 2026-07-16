@@ -34,7 +34,7 @@ import type {
   ConflictRecoverySettlement,
   ReplanRouteResult,
 } from "../contracts/conflictResolution.js";
-import type { RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
+import type { RecoveryOwnedSettlementWriter, RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import type { WorkspaceVcsCore } from "../contracts/workspaceVcsCore.js";
@@ -108,7 +108,7 @@ export class PgPercolationSettler implements PercolationSettler {
 
   constructor(
     private readonly pool: pg.Pool,
-    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter,
+    private readonly runStateWriter: RunStateWriter & RecoveryParkWriter & RecoveryOwnedSettlementWriter,
     recovery?: RecoveryRouteSettler,
     routeReplan: typeof recordReplanContext = recordReplanContext,
   ) {

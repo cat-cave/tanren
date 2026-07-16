@@ -31,20 +31,13 @@
 // FIXED POINT the shared `convergenceDetector` detects. There only does it ESCALATE as a
 // LOUD `needs_attention` human decision (frees the slot, blocks only dependents) instead of
 // enqueuing yet another run -- never a silent stall, never a hot-loop, never a count. It
-// routes the status write through the run-state writer when wired (remote control plane) and
-// otherwise runs the in-process org-scoped UPDATE.
+// delegates every recovery mutation and canonical event to the atomic preparation
+// authority; this decision layer performs no fallback write of its own.
 
 import { createHash } from "node:crypto";
-import type { RunStateWriter } from "../../../contracts/runStateWriter.js";
-import type { QueryClient } from "../../../data/orgScopedDb.js";
-import type { EventStore } from "../../../eventStore.js";
+import type { RecoveryPreparationOutcome, RecoveryPreparationRoute } from "../../../contracts/recoveryPreparation.js";
 import type { ReplanRouter, ReplanRouteResult } from "../../../contracts/conflictResolution.js";
-import { SpecNotRunnableError } from "../../projectSpecErrors.js";
-import { createLogger } from "../../../observability/logger.js";
-import { findActiveOwnerRunForSpec } from "../../../merge/recoveryOwnership.js";
 import { type AttemptSignature, decideConvergence, fixedPointRuleJudgment } from "../../convergenceDetector.js";
-
-const log = createLogger("replan-router");
 
 /**
  * A stable CONFLICT SIGNATURE for a re-plan attempt -- a hash of the conflicting change /
@@ -160,7 +153,10 @@ export interface ReplanEnqueuer {
     steeringNote: string;
     /** The re-drivable status to re-open the spec to before the run-create claims it. */
     reopenStatus: string;
-  }): Promise<{ replanRunId: string; plannerTaskId: string }>;
+    oldRunId: string;
+    queueId?: string;
+    route: RecoveryPreparationRoute;
+  }): Promise<RecoveryPreparationOutcome>;
 }
 
 /**
@@ -175,28 +171,13 @@ export interface PriorReplanReader {
 }
 
 export interface SpecStatusReplanRouterDeps {
-  /**
-   * Tenant pool for RLS-scoped active-owner proof after SpecNotRunnableError.
-   * QueryClient so workflow seams need no `as pg.Pool` cast; findActiveOwnerRunForSpec
-   * narrows via isPool.
-   */
-  pool: QueryClient;
-  /**
-   * REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the
-   * de-privileged data plane. PR #714 made the writer-undefined fallback unreachable
-   * in production.
-   */
-  runStateWriter: RunStateWriter;
-  /** REQUIRED tenant key (v68 fix). Every eventStore.append stamps this directly
-   * rather than re-derive via a SELECT-join -- a null org_id row trips RLS. */
+  /** Required tenant key carried into the atomic recovery preparation request. */
   orgId: string;
-  eventStore: EventStore;
   runId: string;
   projectId: string;
   /**
-   * Enqueues the re-plan run (never-discard re-author on the new base). REQUIRED to
-   * actually re-drive: when absent the router only flips status + records the context
-   * (the legacy no-run-enqueued behavior) -- wiring it is what makes a routed replan RUN.
+   * Owns steering, reopen, successor creation, and canonical routing events atomically.
+   * Absence fails closed to parking_required; this router has no write fallback.
    */
   enqueuer?: ReplanEnqueuer;
   /** Reads the spec's prior re-plan conflict signatures (the convergence-detector input). */
@@ -234,96 +215,31 @@ export class SpecStatusReplanRouter implements ReplanRouter {
     //     enqueues AND the run-create claim can take -- `in_flight` is a DEAD END here),
     //     append the replan context as steering so the next planner pass re-authors the
     //     work ON the new base (intent stays alive), and ENQUEUE the fresh re-plan run.
-    //     The enqueuer owns the re-open + steering + run-create as ONE ordered unit (the
-    //     re-open must COMMIT before the run-create's separate-connection claim reads it --
-    //     the same ordering the recovery `replan_with_steering` action documents). When no
-    //     enqueuer is wired (a degenerate/test path) we fall back to a plain status flip.
+    //     The enqueuer owns the re-open + steering + successor + canonical events as one
+    //     atomic preparation. When no enqueuer is wired, settlement parks instead of
+    //     claiming that a write-free route has an owner.
     const status = this.deps.replanStatus ?? "open";
-    const enqueue = await this.enqueueReplan(input, status);
-    if (enqueue.outcome === "no-enqueuer") {
+    const prepared = await this.enqueueReplan(input, status, signature);
+    if (prepared.kind === "no-enqueuer") {
       return {
         kind: "parking_required",
         message: `replan for ${input.specId} has no enqueuer wired -- settlement must park atomically`,
       };
     }
-    if (enqueue.outcome === "failed") {
-      const detail = enqueue.error instanceof Error ? enqueue.error.message : String(enqueue.error);
+    if (prepared.kind === "failure") {
       return {
-        kind: "parking_required",
-        message:
-          `replan enqueue failed for ${input.specId} (${detail}) -- settlement must park atomically; ` +
-          input.newContext,
+        kind: "parking_failed",
+        message: `recovery preparation failed for ${input.specId}: ${prepared.message}`,
       };
     }
-
-    // (3) Record the new planning context so the next planner pass re-authors the spec ON
-    //     TOP of the other's change -- the durable carrier that keeps intent alive. Emitted
-    //     ONLY now that a re-drive is CONFIRMED (a fresh run was enqueued, or a concurrent
-    //     tick already claimed the re-opened spec → a run IS in flight) -- so a recorded
-    //     `replan_routed` ALWAYS corresponds to a spec that is actually being re-driven,
-    //     never a silent strand. The bounded cap counts these, so it counts only real routings.
-    await this.deps.eventStore.append({
-      runId: this.deps.runId,
-      specId: input.specId,
-      projectId: this.deps.projectId,
-      orgId: this.deps.orgId,
-      eventType: "merge.conflict.replan_routed",
-      payload: {
-        specId: input.specId,
-        ...(input.otherSpecId !== undefined && { otherSpecId: input.otherSpecId }),
-        newContext: input.newContext,
-        replanStatus: status,
-        // The fixed-point axis: which conflict this re-plan was routed against, so the next
-        // routing's detector can tell "the same conflict recurred" (stuck) from "a different
-        // conflict" (progress) -- never a count.
-        conflictSignature: signature,
-      },
-    });
-
-    // (4) Emit the OBSERVABLE `recovery.replan_queued` so the routed replan is never a
-    //     silent stall -- it names the `replanRunId` the walker/worker will drive. Only the
-    //     `enqueued` outcome created a NEW run (the observable id); the benign already-claimed
-    //     race did NOT create a run (a concurrent tick owns the live re-drive), so there is no
-    //     new run id to name -- the `replan_routed` routing above already marks it observable,
-    //     and the concurrent tick emitted its own `run.queued`. No fabricated run id ever.
-    if (enqueue.outcome === "enqueued") {
-      await this.deps.eventStore.append({
-        runId: this.deps.runId,
-        specId: input.specId,
-        projectId: this.deps.projectId,
-        orgId: this.deps.orgId,
-        eventType: "recovery.replan_queued",
-        payload: {
-          runId: this.deps.runId,
-          specId: input.specId,
-          action: "replan_with_steering",
-          steeringNote: input.newContext,
-          replanRunId: enqueue.replanRunId,
-          plannerTaskId: enqueue.plannerTaskId,
-        },
-      });
-      return {
-        kind: "owned",
-        receipt: {
-          kind: "planner_replan",
-          specId: input.specId,
-          run: {
-            kind: "enqueued",
-            replanRunId: enqueue.replanRunId,
-            plannerTaskId: enqueue.plannerTaskId,
-          },
-        },
-      };
+    if (prepared.kind === "conflict") {
+      return { kind: "parking_failed", message: prepared.message };
     }
-    // already-running with verified live run id
-    return {
-      kind: "owned",
-      receipt: {
-        kind: "planner_replan",
-        specId: input.specId,
-        run: { kind: "already_running", runId: enqueue.runId },
-      },
-    };
+    if (prepared.kind === "terminal_noop") return prepared;
+    if (prepared.receipt.kind !== "planner_replan") {
+      return { kind: "parking_failed", message: "recovery preparation returned the wrong owner kind" };
+    }
+    return { kind: "owned", receipt: prepared.receipt };
   }
 
   /**
@@ -335,67 +251,31 @@ export class SpecStatusReplanRouter implements ReplanRouter {
    *                         BENIGN no-op, NOT a strand (the spec re-drives on the live run);
    *   - `failed`         -- a GENUINE enqueue failure with no run in flight (must escalate,
    *                         never silently strand the spec at `replan_routed`);
-   *   - `no-enqueuer`    -- no enqueuer wired (the degenerate/test status-only path).
+   *   - `no-enqueuer`    -- no atomic preparation authority is wired (write-free failure).
    */
   private async enqueueReplan(
-    input: { specId: string; newContext: string },
+    input: { specId: string; newContext: string; otherSpecId?: string },
     status: string,
-  ): Promise<
-    | { outcome: "enqueued"; replanRunId: string; plannerTaskId: string }
-    | { outcome: "already-running"; runId: string }
-    | { outcome: "failed"; error: unknown }
-    | { outcome: "no-enqueuer" }
-  > {
-    if (this.deps.enqueuer === undefined) return { outcome: "no-enqueuer" };
+    conflictSignature: string,
+  ): Promise<RecoveryPreparationOutcome | { kind: "no-enqueuer" }> {
+    if (this.deps.enqueuer === undefined) return { kind: "no-enqueuer" };
     try {
-      const run = await this.deps.enqueuer.enqueue({
+      return await this.deps.enqueuer.enqueue({
         specId: input.specId,
         orgId: this.deps.orgId,
         projectId: this.deps.projectId,
         steeringNote: input.newContext,
         reopenStatus: status,
+        oldRunId: this.deps.runId,
+        route: {
+          kind: "planner_replan",
+          newContext: input.newContext,
+          ...(input.otherSpecId !== undefined && { otherSpecId: input.otherSpecId }),
+          conflictSignature,
+        },
       });
-      return { outcome: "enqueued", replanRunId: run.replanRunId, plannerTaskId: run.plannerTaskId };
     } catch (error) {
-      // BENIGN RACE ONLY: the re-opened spec was already claimed by a concurrent tick (the
-      // run-create's `open`-status claim found it taken). The spec IS being re-driven on
-      // that run, so this is not a strand -- log + treat as a confirmed re-drive.
-      if (error instanceof SpecNotRunnableError) {
-        const live = await findActiveOwnerRunForSpec(
-          this.deps.pool,
-          this.deps.orgId,
-          this.deps.projectId,
-          input.specId,
-          this.deps.runId,
-        );
-        if (live === undefined) {
-          log.error(
-            "re-plan SpecNotRunnableError without an active owner run -- fail closed",
-            { specId: input.specId, reportedStatus: error.status },
-            error,
-          );
-          return {
-            outcome: "failed",
-            error: new Error(
-              "SpecNotRunnableError without an independently verified active owner run (queued/running/paused)",
-            ),
-          };
-        }
-        log.warn(
-          "re-plan enqueue found active owner run; treating as already_running",
-          { specId: input.specId, runId: live.runId, status: live.status },
-          error,
-        );
-        return { outcome: "already-running", runId: live.runId };
-      }
-      // GENUINE FAILURE: the enqueue could not create a run AND no concurrent tick owns it.
-      // Surface it so the caller escalates -- NEVER swallow it into a silent strand.
-      log.error(
-        "re-plan enqueue FAILED to create a run for the routed spec -- escalating (never a silent replan_routed strand)",
-        { specId: input.specId },
-        error,
-      );
-      return { outcome: "failed", error };
+      return { kind: "failure", reason: "write_failed", message: String(error) };
     }
   }
 }

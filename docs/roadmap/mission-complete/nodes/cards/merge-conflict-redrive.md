@@ -4,6 +4,9 @@
 **State at admission**: stale PR #928 (`fix/merge-conflict-dequeue-redrive`, 21
 commits / 112 paths) audited unsuitable wholesale; rebuild from
 `fix/atomic-recovery-park` (`f0f2c4a6`) as a separate stacked unit.
+**State after second convergence redrive (2026-07-15)**: all four exact-head P1
+findings are implemented and the affected, real-Postgres, `just fast-check`, and
+`just ci` gates are green.
 **Purpose**: for a bisected ordered batch where `B` is the isolated culprit,
 land the entire innocent prefix first, then drive `B` through the same
 per-run conflict-recovery path used for base conflicts. Retire `B` only on a
@@ -34,7 +37,9 @@ dequeue or `replanned` ownership.
 - `services/orchestrator/src/engine/contracts/batchMergeCoordinator.ts`
 - `services/orchestrator/src/engine/contracts/changePercolation.ts`
 - `services/orchestrator/src/engine/contracts/conflictResolution.ts`
+- `services/orchestrator/src/engine/contracts/index.ts`
 - `services/orchestrator/src/engine/contracts/mergeCoordinator.ts`
+- `services/orchestrator/src/engine/contracts/recoveryPreparation.ts`
 - `services/orchestrator/src/engine/contracts/runStateAtomicSeam.ts`
 - `services/orchestrator/src/engine/contracts/runStateWriter.ts`
 - `services/orchestrator/src/engine/dag/baseShiftCoordinator.ts`
@@ -53,6 +58,7 @@ dequeue or `replanned` ownership.
 - `services/orchestrator/src/engine/merge/batchCoordinatorSettle.ts`
 - `services/orchestrator/src/engine/merge/batchGateReworkRouter.ts`
 - `services/orchestrator/src/engine/merge/batchInfraEscalate.ts`
+- `services/orchestrator/src/engine/merge/batchInfraHoldCeiling.ts`
 - `services/orchestrator/src/engine/merge/coordinator.ts`
 - `services/orchestrator/src/engine/merge/coordinatorBuild.ts`
 - `services/orchestrator/src/engine/merge/coordinatorEscalate.ts`
@@ -68,10 +74,18 @@ dequeue or `replanned` ownership.
 - `services/orchestrator/src/engine/merge/recoveryEvidencePg.ts`
 - `services/orchestrator/src/engine/merge/recoveryOwnedQueueSettlement.ts`
 - `services/orchestrator/src/engine/merge/recoveryOwnership.ts`
+- `services/orchestrator/src/engine/merge/recoveryReceiptFingerprint.ts`
 - `services/orchestrator/src/engine/merge/recoveryRouteSettlement.ts`
+- `services/orchestrator/src/engine/merge/subscriber.ts`
+- `services/orchestrator/src/engine/merge/subscriberQueueDiscoverySql.ts` (deleted)
 - `services/orchestrator/src/engine/worker/directRunStateWriter.ts`
 - `services/orchestrator/src/engine/worker/httpRunStateWriter.ts`
 - `services/orchestrator/src/engine/worker/recoveryParkAtomic.ts`
+- `services/orchestrator/src/engine/worker/recoveryPreparationAtomic.ts`
+- `services/orchestrator/src/engine/workflow/plannerRun.ts`
+- `services/orchestrator/src/engine/workflow/plannerRunSeams.ts`
+- `services/orchestrator/src/engine/workflow/projectSpec.ts`
+- `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/replanEnqueuerPg.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/replanRouter.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/gateReworkRouter.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/conflictResolver/index.ts`
@@ -91,6 +105,8 @@ dequeue or `replanned` ownership.
   `mergeClaimLease.test.ts`, `mergeCoordinator*.test.ts`,
   `mergeLand*.test.ts`, `mergeQueueDequeuedRecovery*.test.ts` (deleted),
   `mergeSelectNext.test.ts`, `parkSettle.test.ts`, `recovery*.test.ts`,
+  `terminalInfrastructureRecovery.rls.integration.test.ts`,
+  `services/orchestrator/tests/fixtures/terminalInfrastructureRecovery.ts`,
   `reviewMergeP2a.test.ts`, `services/orchestrator/tests/conformance/**`, and
   `services/orchestrator/tests/fixtures/scriptedRecovery*.ts`.
 
@@ -136,6 +152,34 @@ No migration. No new store/authority. No dashboard/UI/event-vocabulary edits.
    PG/facade/fakes, obsolete tests). Delete or reduce
    `EventEmittingMergeCoordinator` to pure settlement helpers.
 
+## Second convergence closure
+
+1. **Atomic successor preparation**: `RecoveryPreparationWriter` is the only
+   replan/rework preparation authority. It locks the exact tenant/project/spec/
+   old-run/queue tuple, admits only `open|in_flight|review`, and commits steering,
+   guarded reopen, one successor run/task/job, and both canonical routing events
+   in one transaction. Stable event idempotency keys provide exact replay and the
+   HTTP path performs durable readback after every ambiguous response.
+2. **Old queue retirement before success**: `PgRecoveryRouteSettler` invokes
+   `settleOwnedRecoveryAndDequeue` for owned receipts. Both base-shift and
+   `PgPercolationSettler` clear their marker only after that atomic settlement;
+   a lost acknowledgement retains the marker until exact replay proves the queue
+   was retired.
+3. **Receipt-bound replay**: fresh owned settlement stores a SHA-256 fingerprint
+   over the exact old tuple, successor run/task/kind, and dequeue reason in the
+   canonical `merge.dequeued` event's existing `idempotency_key`. Already-dequeued
+   replay accepts only that fingerprint, including after the successor terminates;
+   wrong receipts fail `receipt_mismatch`. No migration or parallel registry.
+4. **Infrastructure ownership**: missing GitHub credentials emit a durable alert,
+   release any claim, keep the candidate active, and pace re-drive; credential
+   repair notifications schedule the same active project queue. Ambiguous merge
+   state goes through the atomic needs-attention park and never through a bare
+   `blocked` dequeue. Obsolete dequeued discovery and the unused supersede API are
+   deleted.
+5. **Plane parity**: Direct and HTTP use the same preparation, park, and owned-
+   settlement operations. The former local co-transaction branch and advertised
+   settlement-order divergence are removed.
+
 Suggested receipt:
 
 ```ts
@@ -160,12 +204,21 @@ active run.
 
 ## Validation
 
-- Focused affected typecheck + tests while authoring.
-- Mutation-sensitive ordering / receipt / retained negatives.
-- Real-Postgres/RLS: exact successor owner, wrong-owner rejection, dropped-ack
-  idempotence, loud retained split state (reuse recovery-park integration style).
-- Every source/test/doc ≤ 500 lines (or documented exception).
-- Local commit only after narrow checks green. Root runs full gates before push.
+- Focused recovery endpoint, owned-settlement endpoint, and router/recovery unit
+  cohorts: 47 tests passed.
+- `just affected-typecheck`: passed. `just affected-test`: 237 files passed, 21
+  skipped; 1,904 tests passed, 154 skipped.
+- Real PostgreSQL 18 with RLS enabled: the preparation, recovery-park, and terminal
+  infrastructure cohorts passed 19/19 tests. Coverage includes exact successor
+  ownership, wrong receipt/tuple rejection, commit-response loss, replay after a
+  successor terminates, queue-before-marker settlement, credential repair, and
+  atomic ambiguous-state parking.
+- `just fast-check`: passed, including format, lint, architecture, dependency,
+  spelling, typecheck, full test/coverage, and compose validation.
+- `just ci`: passed, including all `fast-check` stages and the full build.
+- Every changed source/test/doc remains at or below 500 lines; architecture checks
+  passed. Shared compose smoke was intentionally not run for this replacement
+  task.
 
 ## Contributor / branch context
 

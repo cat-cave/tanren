@@ -46,9 +46,8 @@ export async function appendMergeDequeuedEvent(
  * A queue-event emitter bound to a SINGLE already-resolved {@link EventStore} (an
  * org-scoped `PgEventStore`, an in-transaction one, or the plane-split writer). It
  * owns ONLY the event payload shapes — no org resolution, no scope opening — so the
- * SAME payloads are emitted whether the append runs standalone (`PgMergeQueueEventEmitter`)
- * or inside the both-or-neither settle transaction (`PgMergeSettleTransaction`,
- * audit RC-4 #3). Single-sourcing the payloads keeps the two paths from drifting.
+ * SAME payloads are emitted through the writer-backed queue surface. Recovery
+ * settlement itself uses the writer's atomic queue authority.
  */
 export class ClientBoundMergeQueueEventEmitter implements MergeQueueEventEmitter {
   /**

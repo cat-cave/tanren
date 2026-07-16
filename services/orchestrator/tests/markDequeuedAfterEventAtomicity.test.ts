@@ -1,15 +1,9 @@
-// markDequeuedAfterEvent atomicity (audit RC-4 #3): both-commit-or-both-roll-back.
-// Rehomed from the deleted EventEmittingMergeCoordinator suite — still live under
-// the batch settle path (FakeMergeSettleTransaction models both-or-neither).
+// Ordinary terminal settlement has one writer-plane-independent ordering.
 
 import { describe, expect, it } from "vitest";
 import type { MergeQueueEntry } from "../src/engine/contracts/mergeCoordinator.js";
 import { markDequeuedAfterEvent } from "../src/engine/merge/coordinator.js";
-import {
-  FakeMergeSettleTransaction,
-  InMemoryMergeQueueModel,
-  RecordingMergeQueueEventEmitter,
-} from "./conformance/fakes/inMemoryMergeQueue.js";
+import { InMemoryMergeQueueModel, RecordingMergeQueueEventEmitter } from "./conformance/fakes/inMemoryMergeQueue.js";
 
 const PROJECT = "project_atomicity";
 
@@ -21,39 +15,40 @@ async function seededEntry(queue: InMemoryMergeQueueModel, runId: string, specId
   return entry;
 }
 
-describe("markDequeuedAfterEvent atomicity (audit RC-4 #3)", () => {
-  it("when the queue UPDATE throws inside the settle transaction, the event is NOT durably applied", async () => {
+describe("markDequeuedAfterEvent ordering", () => {
+  it("uses the same event-first order when the queue update fails", async () => {
     const queue = new InMemoryMergeQueueModel();
     const events = new RecordingMergeQueueEventEmitter();
     const entry = await seededEntry(queue, "run_split_tx", "spec_split_tx");
     expect(await queue.claim(entry.queueId)).toBe(true);
     expect(queue.statusOf("run_split_tx")).toBe("merging");
 
-    const tx = new FakeMergeSettleTransaction(events, queue, new Error("queue update failed mid-transaction"));
+    const failingQueue = {
+      ...queue,
+      markDequeued: () => Promise.reject(new Error("queue update failed")),
+    } as unknown as InMemoryMergeQueueModel;
 
     await expect(
       markDequeuedAfterEvent({
-        queue,
+        queue: failingQueue,
         events,
         projectId: PROJECT,
         entry,
         reason: "failed",
         message: "terminal merge failure",
-        tx,
       }),
-    ).rejects.toThrow("queue update failed mid-transaction");
+    ).rejects.toThrow("queue update failed");
 
-    expect(events.events.filter((e) => e.type === "merge.dequeued")).toEqual([]);
+    expect(events.events.filter((e) => e.type === "merge.dequeued")).toHaveLength(1);
     expect(queue.statusOf("run_split_tx")).toBe("merging");
   });
 
-  it("on a clean settle transaction, BOTH the event AND the row dequeue commit together", async () => {
+  it("emits then retires on a clean settle", async () => {
     const queue = new InMemoryMergeQueueModel();
     const events = new RecordingMergeQueueEventEmitter();
     const entry = await seededEntry(queue, "run_ok_tx", "spec_ok_tx");
     expect(await queue.claim(entry.queueId)).toBe(true);
 
-    const tx = new FakeMergeSettleTransaction(events, queue);
     await markDequeuedAfterEvent({
       queue,
       events,
@@ -61,7 +56,6 @@ describe("markDequeuedAfterEvent atomicity (audit RC-4 #3)", () => {
       entry,
       reason: "failed",
       message: "terminal merge failure",
-      tx,
     });
 
     const dequeued = events.events.filter((e) => e.type === "merge.dequeued");

@@ -52,6 +52,11 @@ import type {
   UpdateTaskWithEventInput,
   UpdateTaskWithEventOutcome,
 } from "../contracts/runStateWriter.js";
+import type {
+  RecoveryPreparationInput,
+  RecoveryPreparationOutcome,
+  RecoveryPreparationWriter,
+} from "../contracts/recoveryPreparation.js";
 import { CostRecorder, type RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
 import { PgEventStore, type AppendEventInput } from "../eventStore.js";
@@ -94,6 +99,12 @@ import {
   recoveryOwnedSettlementFailed,
   recoveryParkingFailed,
 } from "./recoveryParkAtomic.js";
+import {
+  applyRecoveryPreparationAtomic,
+  parseRecoveryPreparationInput,
+  readRecoveryPreparationAtomic,
+  recoveryPreparationFailure,
+} from "./recoveryPreparationAtomic.js";
 
 /**
  * The in-process run-state writer. Constructed with the worker's pool (typically
@@ -102,12 +113,9 @@ import {
  * finalize UPDATE + the matching event share one org-scoped transaction —
  * identical to the worker's prior `withRunFinalizeScope`.
  */
-export class DirectRunStateWriter implements RunStateWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter {
-  /**
-   * apex v87: local pool can INSERT `events` — batch coordinator may co-transact
-   * dequeue settle with merge_queue UPDATEs (see `canCoTransactMergeSettle`).
-   */
-  readonly localMergeSettleCoTx = true as const;
+export class DirectRunStateWriter
+  implements RunStateWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter, RecoveryPreparationWriter
+{
   private readonly eventStore: PgEventStore;
   private readonly recorder: CostRecorder;
 
@@ -289,6 +297,26 @@ export class DirectRunStateWriter implements RunStateWriter, RecoveryParkWriter,
       return await runWithOrgScope(this.pool, parsed.orgId, (client) => applyRecoveryOwnedSettleAtomic(client, parsed));
     } catch {
       return recoveryOwnedSettlementFailed("write_failed");
+    }
+  }
+
+  async prepareRecovery(input: RecoveryPreparationInput): Promise<RecoveryPreparationOutcome> {
+    const parsed = parseRecoveryPreparationInput(input);
+    if (parsed === undefined) return recoveryPreparationFailure("invalid_input", "invalid recovery preparation");
+    try {
+      return await runWithOrgScope(this.pool, parsed.orgId, (client) => applyRecoveryPreparationAtomic(client, parsed));
+    } catch (error) {
+      return recoveryPreparationFailure("write_failed", String(error));
+    }
+  }
+
+  async readRecoveryPreparation(input: RecoveryPreparationInput): Promise<RecoveryPreparationOutcome> {
+    const parsed = parseRecoveryPreparationInput(input);
+    if (parsed === undefined) return recoveryPreparationFailure("invalid_input", "invalid recovery preparation");
+    try {
+      return await runWithOrgScope(this.pool, parsed.orgId, (client) => readRecoveryPreparationAtomic(client, parsed));
+    } catch (error) {
+      return recoveryPreparationFailure("write_failed", String(error));
     }
   }
 

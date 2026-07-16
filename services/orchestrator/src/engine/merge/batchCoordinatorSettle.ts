@@ -14,7 +14,7 @@ import type { SpecEscalator } from "./coordinatorEscalate.js";
 import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { isAmbiguousMergeError } from "../providers/mergeOutcomeErrors.js";
-import { markDequeuedAfterEvent, type MergeQueueEventEmitter, type MergeSettleTransaction } from "./coordinator.js";
+import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinator.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import {
   holdOrHaltRecoverableDrive,
@@ -39,7 +39,6 @@ export interface BatchSettleDeps {
   events: MergeQueueEventEmitter;
   escalator: SpecEscalator;
   gateRework?: BatchGateReworkRouter;
-  tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /** Atomic active-successor proof + dequeue event + exact queue retirement. */
   recoverySettlement?: RecoveryOwnedSettlementWriter;
@@ -90,7 +89,6 @@ export async function settleBisectCulprit(
       entry: culprit,
       reason: settled.reason,
       message: settled.message,
-      tx: deps.tx,
     });
     return "dequeued";
   }
@@ -109,7 +107,6 @@ export async function settleBisectCulprit(
       entry: culprit,
       reason: settled.reason,
       message: settled.message,
-      tx: deps.tx,
     });
   }
   return "dequeued";
@@ -255,7 +252,6 @@ async function settleNeedsAttention(
       entry,
       reason: "superseded",
       message: outcome.message,
-      tx: deps.tx,
     });
     await deps.recoverableDriveHolds?.reset(entry.queueId);
     return "dequeued";
@@ -290,7 +286,6 @@ async function settleNeedsAttention(
       entry,
       reason: settled.reason,
       message: settled.message,
-      tx: deps.tx,
     });
   }
   await deps.recoverableDriveHolds?.reset(entry.queueId);
@@ -331,7 +326,6 @@ async function settleConflictOwned(
       entry,
       reason: settled.reason,
       message: settled.message,
-      tx: deps.tx,
     });
   }
   await deps.recoverableDriveHolds?.reset(entry.queueId);
@@ -411,7 +405,6 @@ export async function settleFailedDrive(
         entry: culprit,
         reason: settled.reason,
         message: settled.message,
-        tx: deps.tx,
       });
     }
     return "dequeued";
@@ -437,7 +430,6 @@ export async function settleFailedDrive(
       entry: culprit,
       reason: settled.reason,
       message: settled.message,
-      tx: deps.tx,
     });
   }
   await deps.recoverableDriveHolds?.reset(culprit.queueId);

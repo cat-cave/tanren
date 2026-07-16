@@ -22,7 +22,7 @@ import {
 } from "../contracts/mergeCoordinator.js";
 import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
-import type { MergeQueueEventEmitter, MergeSettleTransaction } from "./coordinator.js";
+import type { MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
 import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.js";
 import {
@@ -101,8 +101,6 @@ export interface BatchMergeCoordinatorDeps {
   escalator: SpecEscalator;
   /** Writer-rework router for gate-fail bisect + sustained infra hold. Prod always wires it. */
   gateRework?: BatchGateReworkRouter;
-  /** ATOMICITY (audit RC-4 #3): when wired, the dequeue settle runs its event append + queue UPDATE in ONE transaction (both-or-neither). */
-  tx?: MergeSettleTransaction;
   recoverableDriveHolds?: RecoverableDriveHoldCeiling;
   /** Atomic active-successor proof + canonical event + exact queue retirement. */
   recoverySettlement?: RecoveryOwnedSettlementWriter;
@@ -343,7 +341,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     queueDepth: number,
   ): Promise<CoordinateResult> {
     const ceiling = this.infraHolds;
-    const { queue, events, batchEvents, gateRework, tx } = this.deps;
+    const { queue, events, batchEvents, gateRework } = this.deps;
     const verdict = await holdOnInfra({ ceiling, queue, events: batchEvents, projectId, batch, message, queueDepth });
     if (verdict.kind === "hold") return verdict.result;
     if (gateRework === undefined) return this.terminalInfraBlock(projectId, batch, message, queueDepth);
@@ -360,7 +358,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       message,
       holds: verdict.holds,
       queueDepth,
-      ...(tx === undefined ? {} : { tx }),
     });
   }
 
@@ -484,6 +481,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     const input = {
       queue: this.deps.queue,
       events: this.deps.batchEvents,
+      escalator: this.deps.escalator,
       projectId,
       batch,
       message,

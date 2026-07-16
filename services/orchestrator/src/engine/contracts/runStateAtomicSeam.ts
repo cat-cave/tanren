@@ -88,6 +88,7 @@ export type RecoveryOwnedSettleFailureReason =
   | "ownership_missing"
   | "queue_not_active"
   | "evidence_invalid"
+  | "receipt_mismatch"
   | "write_failed"
   | "transport_failed";
 

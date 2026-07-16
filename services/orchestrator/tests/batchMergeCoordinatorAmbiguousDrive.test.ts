@@ -22,7 +22,7 @@ function makeHarness() {
     checker,
     events,
     batchEvents,
-    escalator: new RecordingSpecEscalator(),
+    escalator: new RecordingSpecEscalator(queue),
     recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     sleep: () => Promise.resolve(),
   });

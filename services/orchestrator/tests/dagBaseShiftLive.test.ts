@@ -233,7 +233,10 @@ const runnerDeps = () => ({
   allocator: { allocate: vi.fn<() => Promise<never>>(), release: vi.fn<() => Promise<void>>() } as never,
   ssh: {} as never,
   identitySecretRef: "secret/runner/identity",
-  runStateWriter: { parkRecoveryAndDequeue: vi.fn<() => Promise<never>>() } as never,
+  runStateWriter: {
+    parkRecoveryAndDequeue: vi.fn<() => Promise<never>>(),
+    settleOwnedRecoveryAndDequeue: vi.fn<() => Promise<never>>(),
+  } as never,
 });
 
 describe("the LIVE base-shift seams — unconditional + loud-throw on absent deps", () => {

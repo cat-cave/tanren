@@ -183,11 +183,19 @@ function scriptedResolver(resolved: boolean): DriveConflictResolveDeps["buildRes
 
 /** Records the re-plan run enqueue (the never-discard re-author) — returns a fixed run id. */
 class RecordingEnqueuer implements ReplanEnqueuer {
-  calls = 0;
+  calls: Parameters<ReplanEnqueuer["enqueue"]>[0][] = [];
   constructor(private readonly replanRunId = "run_replan_drive") {}
-  async enqueue(): Promise<{ replanRunId: string; plannerTaskId: string }> {
-    this.calls += 1;
-    return { replanRunId: this.replanRunId, plannerTaskId: `task_${this.replanRunId}` };
+  async enqueue(input: Parameters<ReplanEnqueuer["enqueue"]>[0]) {
+    this.calls.push(input);
+    return {
+      kind: "owned" as const,
+      newlyPrepared: true,
+      receipt: {
+        kind: "planner_replan" as const,
+        specId: input.specId,
+        run: { kind: "enqueued" as const, replanRunId: this.replanRunId, plannerTaskId: `task_${this.replanRunId}` },
+      },
+    };
   }
 }
 
@@ -195,27 +203,18 @@ class RecordingEnqueuer implements ReplanEnqueuer {
  * A resolver hook that — like the REAL `buildDefaultConflictResolver` the drive wires — routes
  * an irreconcilable conflict through the SHARED `SpecStatusReplanRouter` (so the routed replan
  * ACTUALLY enqueues + emits `recovery.replan_queued`) before returning `{resolved:false}`. The
- * router shares the drive's eventStore, so the disposition mapping + the enqueue are asserted
- * together (the production composition: drive → buildResolverForDrive → router → enqueuer).
+ * disposition mapping + the atomic preparation request are asserted together (the
+ * production composition: drive → buildResolverForDrive → router → enqueuer).
  */
-function replanRoutingResolver(
-  eventStore: FakeEventStore,
-  enqueuer: ReplanEnqueuer,
-): DriveConflictResolveDeps["buildResolver"] {
+function replanRoutingResolver(enqueuer: ReplanEnqueuer): DriveConflictResolveDeps["buildResolver"] {
   return () =>
     (async () => {
       const router = new SpecStatusReplanRouter({
-        pool: { query: async () => ({ rows: [] }) } as never,
         orgId: ORG_ID,
-        eventStore,
         runId: FACTS.runId,
         projectId: FACTS.projectId,
         enqueuer,
         priorReplans: { signatures: async () => [] },
-        runStateWriter: {
-          append: async () => {},
-          setSpecStatus: async () => ({ updated: false }),
-        } as never,
       });
       // Propagate the typed disposition — drive maps owned → replanned, parking_* → escalate.
       const recovery = await router.routeBackToPlanner({
@@ -309,7 +308,7 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     const eventStore = new FakeEventStore();
     const enqueuer = new RecordingEnqueuer("run_replan_drive7");
     const hook = buildDriveConflictResolve(
-      makeDeps(pool, allocator, verdict, replanRoutingResolver(eventStore, enqueuer), undefined, eventStore),
+      makeDeps(pool, allocator, verdict, replanRoutingResolver(enqueuer), undefined, eventStore),
     );
 
     const result = await hook(CONTEXT);
@@ -323,13 +322,8 @@ describe("buildDriveConflictResolve — classify-then-escalate + percolation/cap
     });
     expect(verdict.disposition).toBe("replanned");
     // THE FIX: a fresh re-plan run was ENQUEUED (the never-discard re-author), not relied-upon.
-    expect(enqueuer.calls).toBe(1);
-    // It is OBSERVABLE: `recovery.replan_queued` carries the replanRunId the walker/worker drives.
-    const queued = eventStore.events.find((e) => e.eventType === "recovery.replan_queued");
-    if (queued === undefined) throw new Error("expected recovery.replan_queued");
-    expect((queued.payload as Record<string, unknown>).replanRunId).toBe("run_replan_drive7");
-    // The routing context event is also recorded (the carrier the next planner reads).
-    expect(eventStore.events.some((e) => e.eventType === "merge.conflict.replan_routed")).toBe(true);
+    expect(enqueuer.calls).toHaveLength(1);
+    expect(enqueuer.calls[0]?.route.kind).toBe("planner_replan");
   });
 
   it("ESCALATE (FIXED POINT): re-planning against the SAME conflict again → verdict 'escalate', NO runner provisioned (genuinely incompatible)", async () => {

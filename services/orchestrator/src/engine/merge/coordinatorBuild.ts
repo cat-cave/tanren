@@ -292,7 +292,6 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             pool: deps.pool,
             runStateWriter: deps.runStateWriter,
             orgId: facts.orgId,
-            eventStore,
             runId,
             projectId: facts.projectId,
             prNumber: facts.prNumber,

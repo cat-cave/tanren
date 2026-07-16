@@ -13,16 +13,8 @@ import {
   type MergeQueueModel,
   type MergeQueueSnapshot,
   type MergeRunner,
-  type SettleQueryClient,
-  type SupersededEntry,
 } from "../contracts/mergeCoordinator.js";
-import { PgEventStore } from "../eventStore.js";
-import { ClientBoundMergeQueueEventEmitter } from "./coordinatorEvents.js";
-import {
-  type DriveMergeForQueuedRun,
-  type MergeQueueEventEmitter,
-  type MergeSettleTransaction,
-} from "./coordinator.js";
+import { type DriveMergeForQueuedRun } from "./coordinator.js";
 import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
 import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
@@ -234,60 +226,6 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
   }
 
-  // ATOMICITY (audit RC-4 #3): the same dequeue UPDATE as markDequeued but on a
-  // CALLER-SUPPLIED already-scoped client, so it joins the settle transaction that
-  // also appended the durable event — both commit or both roll back. The client must
-  // already carry the entry's org scope (PgMergeSettleTransaction opens it).
-  async markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void> {
-    await client.query(
-      "UPDATE merge_queue SET status = 'dequeued', dequeue_reason = $2, settled_at = now() WHERE queue_id = $1",
-      [queueId, reason],
-    );
-  }
-
-  async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
-    const orgId = await this.resolveRunOrg(runId);
-    if (orgId === null) return undefined;
-    return runWithOrgScope(this.pool, orgId, async (client): Promise<SupersededEntry | undefined> => {
-      // Atomically retire the prior run's ACTIVE (queued/merging) entry — the partial
-      // unique index guarantees at most one — so the spec stops having two live
-      // entries (the percolation self-conflict). `RETURNING` carries the spec/PR facts
-      // for the observable `merge.dequeued` event. Idempotent: a run with no active
-      // entry (already superseded / never queued) matches no row ⇒ undefined.
-      const result = await client.query<{
-        queue_id: string;
-        spec_id: string;
-        pr_url: string;
-        pr_number: string;
-      }>(
-        `UPDATE merge_queue
-            SET status = 'dequeued', dequeue_reason = 'superseded', settled_at = now()
-          WHERE run_id = $1 AND status IN ('queued', 'merging')
-        RETURNING queue_id, spec_id, pr_url, pr_number`,
-        [runId],
-      );
-      const row = result.rows[0];
-      if (row === undefined) return undefined;
-      return {
-        queueId: row.queue_id,
-        runId,
-        specId: row.spec_id,
-        prUrl: row.pr_url,
-        prNumber: Number(row.pr_number),
-      };
-    });
-  }
-
-  /** Resolve a run's org (system-scoped) so the superseding write hits its row. */
-  private async resolveRunOrg(runId: string): Promise<string | null> {
-    return runWithSystemScope(this.pool, async (client) => {
-      const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [
-        runId,
-      ]);
-      return result.rows[0]?.org_id ?? null;
-    });
-  }
-
   async recoverStaleClaims(projectId: string): Promise<number> {
     const orgId = await resolveProjectOrg(this.pool, projectId);
     if (orgId === null) return 0;
@@ -344,63 +282,4 @@ export class PgMergeRunner implements MergeRunner {
   async driveMerge(input: { runId: string; projectId: string }): Promise<MergeDriveOutcome> {
     return this.drive(input);
   }
-}
-
-/**
- * ATOMICITY SEAM (audit RC-4 #3): the pg-backed both-or-neither settle transaction.
- * Resolves the project's org, opens ONE `runWithOrgScope` transaction, and threads its
- * single client through BOTH the durable event append (a `ClientBoundMergeQueueEventEmitter`
- * over `PgEventStore(client)`) AND the `merge_queue` dequeue UPDATE
- * (`markDequeuedOnClient` on the SAME client). They therefore COMMIT together or ROLL
- * BACK together — closing the crash-between-writes split brain where the event bus said
- * "dequeued" while the row stayed `merging`. The event-first ordering inside `work` is
- * preserved by the caller (`markDequeuedAfterEvent`).
- *
- * Wire ONLY when the pool can INSERT `events` (Direct / `canCoTransactMergeSettle`).
- * Plane-split dataplane REVOKE INSERT on `events` makes co-tx throw 42501 on every
- * coordinate dequeue (apex v87); omit `tx` for sequential event-first via the writer.
- */
-export class PgMergeSettleTransaction implements MergeSettleTransaction {
-  constructor(
-    private readonly pool: pg.Pool,
-    private readonly model: PgMergeQueueModel,
-  ) {}
-
-  async run(
-    projectId: string,
-    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
-  ): Promise<void> {
-    const orgId = await resolveProjectOrg(this.pool, projectId);
-    if (orgId === null) {
-      throw new Error(`cannot settle merge queue for project ${projectId}: no resolvable org`);
-    }
-    await runWithOrgScope(this.pool, orgId, async (client) => {
-      const events = new ClientBoundMergeQueueEventEmitter(new PgEventStore(client), orgId);
-      // A queue facade that delegates to the model but routes the ONE settle write
-      // (`markDequeued`) onto THIS transaction's client. Every other method delegates
-      // verbatim — none is invoked inside the settle unit, but delegating keeps the
-      // facade a faithful MergeQueueModel.
-      const queue = makeClientScopedSettleQueue(this.model, client);
-      await work({ events, queue });
-    });
-  }
-}
-
-/**
- * Build a {@link MergeQueueModel} facade for the settle transaction: its `markDequeued`
- * writes on the supplied (already-scoped) `client` via `markDequeuedOnClient`, so it
- * shares the settle transaction; every other method delegates to `model` unchanged.
- */
-function makeClientScopedSettleQueue(model: PgMergeQueueModel, client: SettleQueryClient): MergeQueueModel {
-  return {
-    enqueue: (input) => model.enqueue(input),
-    loadSnapshot: (projectId) => model.loadSnapshot(projectId),
-    claim: (queueId) => model.claim(queueId),
-    markMerged: (queueId) => model.markMerged(queueId),
-    releaseClaim: (queueId) => model.releaseClaim(queueId),
-    markDequeued: (queueId, reason) => model.markDequeuedOnClient(client, queueId, reason),
-    markDequeuedOnClient: (c, queueId, reason) => model.markDequeuedOnClient(c, queueId, reason),
-    supersedePriorRunEntry: (runId) => model.supersedePriorRunEntry(runId),
-    recoverStaleClaims: (projectId) => model.recoverStaleClaims(projectId),
-  };
 }

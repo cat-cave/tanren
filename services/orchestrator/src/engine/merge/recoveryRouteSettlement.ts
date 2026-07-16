@@ -7,12 +7,10 @@
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import type { ConflictRecoveryDisposition, ConflictRecoverySettlement } from "../contracts/conflictResolution.js";
-import type { RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
-import { PgRecoveryEvidencePort } from "./recoveryEvidencePg.js";
-import { verifyRecoveryOwnership, type RecoveryEvidencePort } from "./recoveryOwnership.js";
+import type { RecoveryOwnedSettlementWriter, RecoveryParkWriter, RunStateWriter } from "../contracts/runStateWriter.js";
 import { recoverableRetryDelayMs } from "./retrySchedule.js";
 
-export type RecoveryCapableRunStateWriter = RunStateWriter & RecoveryParkWriter;
+export type RecoveryCapableRunStateWriter = RunStateWriter & RecoveryParkWriter & RecoveryOwnedSettlementWriter;
 
 /** Honest runtime guard: production direct/HTTP writers implement both ports. */
 export function isRecoveryParkWriter(writer: RunStateWriter): writer is RecoveryCapableRunStateWriter {
@@ -20,14 +18,16 @@ export function isRecoveryParkWriter(writer: RunStateWriter): writer is Recovery
     writer !== undefined &&
     writer !== null &&
     "parkRecoveryAndDequeue" in writer &&
-    typeof (writer as { parkRecoveryAndDequeue?: unknown }).parkRecoveryAndDequeue === "function"
+    typeof (writer as { parkRecoveryAndDequeue?: unknown }).parkRecoveryAndDequeue === "function" &&
+    "settleOwnedRecoveryAndDequeue" in writer &&
+    typeof (writer as { settleOwnedRecoveryAndDequeue?: unknown }).settleOwnedRecoveryAndDequeue === "function"
   );
 }
 
 /** Fail loud at assembly rather than silently installing a non-parking consumer. */
 export function requireRecoveryParkWriter(writer: RunStateWriter): RecoveryCapableRunStateWriter {
   if (!isRecoveryParkWriter(writer)) {
-    throw new Error("recovery settlement requires RunStateWriter & RecoveryParkWriter");
+    throw new Error("recovery settlement requires atomic park and owned-dequeue authority");
   }
   return writer;
 }
@@ -54,15 +54,10 @@ const RETRY_AFTER_MS = recoverableRetryDelayMs(1);
  * any mutation, so a lookup race fails closed rather than granting a receipt.
  */
 export class PgRecoveryRouteSettler implements RecoveryRouteSettler {
-  private readonly evidence: RecoveryEvidencePort;
-
   constructor(
     private readonly pool: pg.Pool,
     private readonly writer: RecoveryCapableRunStateWriter,
-    evidence?: RecoveryEvidencePort,
-  ) {
-    this.evidence = evidence ?? new PgRecoveryEvidencePort(pool);
-  }
+  ) {}
 
   async settle(input: {
     projectId: string;
@@ -96,21 +91,22 @@ export class PgRecoveryRouteSettler implements RecoveryRouteSettler {
       };
     }
     if (input.recovery.kind === "owned") {
-      const verified = await verifyRecoveryOwnership({
-        evidence: this.evidence,
-        expectedOrgId: target.orgId,
-        expectedProjectId: input.projectId,
-        expectedSpecId: input.specId,
-        priorRunId: input.runId,
+      const outcome = await this.writer.settleOwnedRecoveryAndDequeue({
+        orgId: target.orgId,
+        projectId: input.projectId,
+        queueId: target.queueId,
+        runId: input.runId,
+        specId: input.specId,
         receipt: input.recovery.receipt,
-        contextMessage: `DAG recovery for prior run ${input.runId}`,
+        reason: input.recovery.receipt.kind === "writer_rework" ? "superseded" : "conflict",
+        message: `DAG recovery for prior run ${input.runId}`,
       });
-      if (verified.ok) return input.recovery;
+      if (outcome.kind === "settled") return input.recovery;
       return {
         kind: "parking_failed",
-        message: verified.message,
-        queueDisposition: "unknown",
-        retryAfterMs: RETRY_AFTER_MS,
+        message: `owned DAG recovery could not atomically retire ${target.queueId}: ${outcome.reason}`,
+        queueDisposition: outcome.queueDisposition,
+        retryAfterMs: outcome.retryAfterMs,
       };
     }
     const parked = await this.writer.parkRecoveryAndDequeue({
@@ -144,11 +140,11 @@ export class PgRecoveryRouteSettler implements RecoveryRouteSettler {
           WHERE project_id = $1
             AND run_id = $2
             AND spec_id = $3
-            AND status IN ('queued', 'merging')
-          LIMIT 1`,
+          ORDER BY queue_id
+          LIMIT 2`,
         [input.projectId, input.runId, input.specId],
       );
-      const row = result.rows[0];
+      const row = result.rows.length === 1 ? result.rows[0] : undefined;
       return row === undefined ? undefined : { queueId: row.queue_id, orgId: row.org_id };
     });
   }

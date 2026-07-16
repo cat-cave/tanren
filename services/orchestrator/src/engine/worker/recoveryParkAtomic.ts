@@ -14,9 +14,9 @@ import type {
   RecoveryParkOutcome,
 } from "../contracts/runStateWriter.js";
 import { PgEventStore } from "../eventStore.js";
-import { appendMergeDequeuedEvent } from "../merge/coordinatorEvents.js";
 import { readOwnedReceiptEvidence } from "../merge/recoveryEvidencePg.js";
 import { verifyRecoveryOwnership } from "../merge/recoveryOwnership.js";
+import { recoveryReceiptFingerprint } from "../merge/recoveryReceiptFingerprint.js";
 import { RECOVERABLE_RETRY_DELAYS_MS, recoverableRetryDelayMs } from "../merge/retrySchedule.js";
 
 type RecoveryParkClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -96,7 +96,14 @@ const recoveryOwnedSettleOutcomeSchema = z.union([
   z
     .object({
       kind: z.literal("settlement_failed"),
-      reason: z.enum(["invalid_input", "ownership_missing", "queue_not_active", "write_failed", "transport_failed"]),
+      reason: z.enum([
+        "invalid_input",
+        "ownership_missing",
+        "queue_not_active",
+        "receipt_mismatch",
+        "write_failed",
+        "transport_failed",
+      ]),
       queueDisposition: z.literal("unknown"),
       retryAfterMs: retryAfterMsSchema,
     })
@@ -197,8 +204,28 @@ export async function applyRecoveryOwnedSettleAtomic(
   );
   const queue = queueResult.rows[0];
   if (queue === undefined) return recoveryOwnedSettlementFailed("ownership_missing");
+  const receiptFingerprint = recoveryReceiptFingerprint(input);
   if (queue.queue_status === "dequeued" && queue.dequeue_reason === input.reason) {
-    return { kind: "settled", newlySettled: false };
+    const receipt = await client.query<{ event_type: string; payload: Record<string, unknown> }>(
+      `SELECT event_type, payload
+         FROM events
+        WHERE run_id = $1 AND org_id = $2 AND project_id = $3 AND spec_id = $4
+          AND idempotency_key = $5
+        LIMIT 1`,
+      [input.runId, input.orgId, input.projectId, input.specId, receiptFingerprint],
+    );
+    const event = receipt.rows[0];
+    if (
+      event?.event_type === "merge.dequeued" &&
+      event.payload["integration"] === "native_queue" &&
+      event.payload["specId"] === input.specId &&
+      event.payload["reason"] === input.reason &&
+      event.payload["prUrl"] === queue.pr_url &&
+      Number(event.payload["prNumber"]) === Number(queue.pr_number)
+    ) {
+      return { kind: "settled", newlySettled: false };
+    }
+    return recoveryOwnedSettlementFailed("receipt_mismatch");
   }
   if (!ACTIVE_QUEUE_STATUSES.has(queue.queue_status)) {
     return recoveryOwnedSettlementFailed("queue_not_active");
@@ -217,17 +244,23 @@ export async function applyRecoveryOwnedSettleAtomic(
   });
   if (!verified.ok) return recoveryOwnedSettlementFailed("evidence_invalid");
 
-  await appendMergeDequeuedEvent(new PgEventStore(client), input.orgId, {
+  const eventInserted = await new PgEventStore(client).appendPriorIfAbsent({
+    runId: input.runId,
+    specId: input.specId,
     projectId: input.projectId,
-    entry: {
-      runId: input.runId,
-      specId: input.specId,
+    orgId: input.orgId,
+    eventType: "merge.dequeued",
+    idempotencyKey: receiptFingerprint,
+    payload: {
       prUrl: queue.pr_url,
       prNumber: Number(queue.pr_number),
+      integration: "native_queue",
+      specId: input.specId,
+      reason: input.reason,
+      message: input.message,
     },
-    reason: input.reason,
-    message: input.message,
   });
+  if (!eventInserted) throw new Error(`owned recovery receipt already exists while queue ${input.queueId} is active`);
   const dequeued = await client.query(
     `UPDATE merge_queue
         SET status = 'dequeued', dequeue_reason = $6, settled_at = now()

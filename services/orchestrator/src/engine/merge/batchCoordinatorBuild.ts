@@ -23,27 +23,9 @@ import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
 import { PgSpecEscalator, requireRecoveryParkWriter } from "./coordinatorEscalate.js";
 import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBuild.js";
-import {
-  PgMergeQueueEventEmitter,
-  PgMergeQueueModel,
-  PgMergeRunner,
-  PgMergeSettleTransaction,
-} from "./coordinatorPg.js";
+import { PgMergeQueueEventEmitter, PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 import { requireRecoveryOwnedSettlementWriter } from "./recoveryOwnership.js";
-
-/**
- * apex v87: local both-or-neither settle (`PgMergeSettleTransaction`) opens
- * `PgEventStore` on the worker pool — only legal when the writer declares
- * `localMergeSettleCoTx` (Direct; pool can INSERT `events`). HttpRunStateWriter
- * omits the flag; wiring the local settle would throw
- * `permission denied for table events` on every dequeue (bisect / gate rework /
- * needs_attention / infra escalate) and fail the coordinate pass every ~15s.
- * Remote writers use sequential event-first through the writer-backed emitters.
- */
-export function canCoTransactMergeSettle(writer: BuildMergeCoordinatorDeps["runStateWriter"]): boolean {
-  return writer.localMergeSettleCoTx === true;
-}
 
 /**
  * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
@@ -78,16 +60,8 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
   const runStateWriter = requireRecoveryParkWriter(deps.runStateWriter);
   const recoverySettlement = requireRecoveryOwnedSettlementWriter(runStateWriter);
   const queueModel = new PgMergeQueueModel(deps.pool);
-  // ATOMICITY (audit RC-4 #3) + plane-split (apex v87): co-transact event+queue UPDATE
-  // ONLY when the writer is Direct (local pool can INSERT events). HttpRunStateWriter
-  // omits `tx` → markDequeuedAfterEvent uses sequential
-  // event-first through the writer-backed emitters (control plane owns the INSERT).
-  const settleTx = canCoTransactMergeSettle(runStateWriter)
-    ? new PgMergeSettleTransaction(deps.pool, queueModel)
-    : undefined;
   return new BatchMergeCoordinator({
     queue: queueModel,
-    ...(settleTx !== undefined && { tx: settleTx }),
     // `buildDriveMerge(deps)` already threads `deps.runStateWriter` into the merge
     // stage + the spec-status finalize + the conflict re-execution.
     runner: new PgMergeRunner(buildDriveMerge({ ...deps, runStateWriter })),

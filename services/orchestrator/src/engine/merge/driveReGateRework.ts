@@ -10,7 +10,6 @@
 
 import type pg from "pg";
 import type { GateReworkRouter } from "../contracts/conflictResolution.js";
-import type { EventStore } from "../eventStore.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import { SpecStatusGateReworkRouter } from "../workflow/reviewMerge/conflictResolver/gateReworkRouter.js";
 import {
@@ -23,7 +22,6 @@ export interface BuildDriveReGateGateReworkDeps {
   pool: pg.Pool;
   /** REQUIRED (audit D-R3.2 sweep): the writer is the single way to write under the de-privileged data plane. */
   runStateWriter: RunStateWriter;
-  eventStore: EventStore;
   orgId: string;
   runId: string;
   projectId: string;
@@ -39,10 +37,7 @@ export interface BuildDriveReGateGateReworkDeps {
 /** Build the drive-pass re-gate gate-fail rework router (mirrors `conflictResolver/index.ts`). */
 export function buildDriveReGateGateRework(deps: BuildDriveReGateGateReworkDeps): GateReworkRouter {
   const inner = new SpecStatusGateReworkRouter({
-    pool: deps.pool,
-    runStateWriter: deps.runStateWriter,
     orgId: deps.orgId,
-    eventStore: deps.eventStore,
     runId: deps.runId,
     projectId: deps.projectId,
     prNumber: deps.prNumber,

@@ -342,10 +342,7 @@ export class LiveBaseShiftGateReworkRouter implements BaseShiftGateReworkRouter 
   }): Promise<GateReworkRouteResult> {
     const ctx = await loadBaseShiftRunContext(this.deps.pool, input.runId);
     const router = new SpecStatusGateReworkRouter({
-      pool: this.deps.scopedPool,
-      runStateWriter: this.deps.runStateWriter,
       orgId: ctx.orgId,
-      eventStore: this.deps.eventStore,
       runId: input.runId,
       projectId: input.projectId,
       // The base-shift dependent has no real PR handle (the rebase is over a runner-local

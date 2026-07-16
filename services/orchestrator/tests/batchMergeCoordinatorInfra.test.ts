@@ -155,7 +155,7 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.batchEvents.events.some((e) => e.type === "infra_blocked" && e.terminal === true)).toBe(false);
   });
 
-  it("a missing configured GitHub credential terminally blocks and dequeues in one pass", async () => {
+  it("a missing configured GitHub credential stays durably queued for the repair wake", async () => {
     const h = makeHarness();
     seed(h, "spec_a");
     seed(h, "spec_b");
@@ -166,14 +166,12 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
 
     const result = await h.coordinator.coordinate(PROJECT);
 
-    expect(result.holdReason).toBe("infra_blocked");
-    expect(result.retryAfterMs).toBeUndefined();
+    expect(result.holdReason).toBe("infra_error");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
     expect(h.checker.checked).toHaveLength(1);
-    expect(dequeueSpy).toHaveBeenCalledTimes(2);
-    expect(h.queue.statusOf("run_spec_a")).toBe("dequeued");
-    expect(h.queue.statusOf("run_spec_b")).toBe("dequeued");
-    expect(h.queue.dequeueReasonOf("run_spec_a")).toBe("blocked");
-    expect(h.queue.dequeueReasonOf("run_spec_b")).toBe("blocked");
+    expect(dequeueSpy).not.toHaveBeenCalled();
+    expect(h.queue.statusOf("run_spec_a")).toBe("queued");
+    expect(h.queue.statusOf("run_spec_b")).toBe("queued");
     const terminal = h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true);
     expect(terminal).toHaveLength(1);
     expect(terminal[0]?.attempts).toBe(1);
@@ -182,8 +180,8 @@ describe("BatchMergeCoordinator — infra-error robustness (a thrown check NEVER
     expect(h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal !== true)).toHaveLength(0);
 
     const afterTerminal = await h.coordinator.coordinate(PROJECT);
-    expect(afterTerminal.holdReason).toBe("empty");
-    expect(h.batchEvents.events.filter((e) => e.type === "infra_blocked" && e.terminal === true)).toHaveLength(1);
+    expect(afterTerminal.holdReason).toBe("infra_error");
+    expect(h.checker.checked).toHaveLength(2);
   });
 
   it("a TRANSIENT infra error self-heals: throw once, then the retry passes and the batch merges", async () => {
