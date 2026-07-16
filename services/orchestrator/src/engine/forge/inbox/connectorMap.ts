@@ -16,6 +16,7 @@ import {
   type SentryIntakeAuthority,
 } from "./sentryConnector.js";
 import type { SourceConnector } from "./types.js";
+import { IntakeSourceAuthorityError } from "./connectorErrors.js";
 
 export interface BuildConnectorMapDeps {
   secrets: SecretStore;
@@ -27,19 +28,19 @@ export interface BuildConnectorMapDeps {
   // the connector mints an INSTALLATION token. The intake poller builds this map
   // PER-ORG with EXPLICIT resolution — App installation when installed, ELSE the
   // org's default static token (`defaultGithubStaticRef`) — exactly how the rest of
-  // the engine resolves a GitHub credential. A source pinning its OWN
-  // `config.staticRef` overrides this default.
+  // the engine resolves a GitHub credential. Source JSON never selects a ref.
   installation?: OrgGithubAppInstallation;
   minter?: GithubAppTokenMinter;
   // The org-default static GitHub credential ref, used by the GitHub issues
-  // connector when no App is installed and the source pins no own `staticRef`.
+  // connector when no App is installed.
   defaultGithubStaticRef?: string;
 }
 
 /** Build the default `{ issues, errors }` connector map from the shared transports. */
 export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string, SourceConnector> {
   const sentryAuthority: SentryIntakeAuthority =
-    deps.sentryAuthority ?? (() => Promise.reject(new Error("sentry intake authority is not configured")));
+    deps.sentryAuthority ??
+    (() => Promise.reject(new IntakeSourceAuthorityError("sentry", "authority is not configured")));
   return new Map<string, SourceConnector>([
     [
       "issues",

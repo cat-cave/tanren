@@ -24,8 +24,6 @@ import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import { ProposedSpec, PlacementKind } from "../../engine/forge/discovery/index.js";
 import {
   acceptCandidate,
-  buildPgSentryIntakeAuthority,
-  buildInboxConnectorMap,
   CandidateNotFoundError,
   CandidateNotPlaceableError,
   closeDuplicateCandidate,
@@ -34,13 +32,20 @@ import {
   ingestSource,
   SourceKind,
   UnsupportedInboxProviderError,
+  assertNoSourceCredentialOverride,
   assertSupportedIssuesProvider,
+  parseInboxSourceCreateConfig,
   type InboxEngineDeps,
   type SentryHttpClient,
   type SourceConnector,
   type TriageAnswerer,
 } from "../../engine/forge/inbox/index.js";
-import { intakeAutoRouteDeps, intakeItem } from "../../engine/forge/intake/index.js";
+import {
+  buildIntakeConnectorMapForOrg,
+  classifyPermanentInboxSourceError,
+  intakeAutoRouteDeps,
+  intakeItem,
+} from "../../engine/forge/intake/index.js";
 import { pgRepositories } from "../../engine/contracts/repositories.js";
 import type { GithubAppTokenMinter } from "../../engine/providers/githubAppTokenMinter.js";
 import type { ForgeAnswererTarget } from "../../engine/forge/providerFactory.js";
@@ -123,14 +128,7 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   // `issues` is GitHub and `errors` is Sentry — the same authority-aware map
   // the intake poller builds. Unsupported provider configs fail strict parsing;
   // there is no bare-secret-ref provider fallback.
-  const connectors =
-    options.connectors ??
-    buildInboxConnectorMap({
-      secrets: options.secrets,
-      githubHttp: options.githubHttp,
-      sentryAuthority: buildPgSentryIntakeAuthority(options.pool),
-      ...(options.sentryHttp === undefined ? {} : { sentryHttp: options.sentryHttp }),
-    });
+  const connectors = options.connectors ?? new Map<string, SourceConnector>();
   // The shared deps for the accept + resolution transitions — none of which
   // consult a triage answerer (they commit / move an already-triaged candidate).
   // Ingestion builds its own deps per-request with the source-scoped answerer.
@@ -152,19 +150,35 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
   app.post("/:orgId/inbox/sources", async (c) => {
     const orgId = c.req.param("orgId");
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
+    const actor = requireActor(c);
     const parsed = CreateSourceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_source", issues: parsed.error.issues }, 400);
-    if (parsed.data.kind === "issues") {
-      try {
-        assertSupportedIssuesProvider(parsed.data.config);
-      } catch (error) {
-        if (error instanceof UnsupportedInboxProviderError) {
-          return c.json({ error: "unsupported_inbox_provider", message: error.message }, 400);
-        }
-        throw error;
-      }
+    if (parsed.data.projectId !== null) {
+      const projectOrgId = await pgRepositories.projects.getOrgId(options.pool, parsed.data.projectId, {
+        kind: "operator",
+        id: actor.userId,
+      });
+      if (projectOrgId !== orgId) return c.json({ error: "project_not_found" }, 404);
     }
-    const source = await pgRepositories.inbox.createSource(options.pool, { orgId, ...parsed.data });
+    let config = parsed.data.config;
+    try {
+      if (parsed.data.kind === "issues" || parsed.data.kind === "errors") {
+        assertNoSourceCredentialOverride(config);
+      }
+      if (parsed.data.kind === "issues") {
+        assertSupportedIssuesProvider(parsed.data.config);
+      }
+      config = parseInboxSourceCreateConfig(parsed.data.kind, config);
+    } catch (error) {
+      if (error instanceof UnsupportedInboxProviderError) {
+        return c.json({ error: "unsupported_inbox_provider", message: error.message }, 400);
+      }
+      if (error instanceof z.ZodError) {
+        return c.json({ error: "invalid_inbox_source_config", issues: error.issues }, 400);
+      }
+      throw error;
+    }
+    const source = await pgRepositories.inbox.createSource(options.pool, { orgId, ...parsed.data, config });
     return c.json({ source }, 201);
   });
 
@@ -175,16 +189,30 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     if (source === undefined || source.orgId !== orgId) {
       return c.json({ error: "source_not_found" }, 404);
     }
-    // Resolve the triage answerer against the source's org/project so the model
-    // grounds on the right project's specs/routing.
-    const ingestDeps: InboxEngineDeps = {
-      ...deps,
-      answerer: options.answererFactory({
-        orgId,
-        ...(source.projectId === null ? {} : { projectId: source.projectId }),
-      }),
-    };
     try {
+      // Build the production connector from THIS source's org authority. A
+      // request-scoped source config can never select a credential ref.
+      const sourceConnectors =
+        options.connectors ??
+        (await buildIntakeConnectorMapForOrg(
+          {
+            pool: options.pool,
+            secrets: options.secrets,
+            githubHttp: options.githubHttp,
+            ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
+            ...(options.sentryHttp === undefined ? {} : { sentryHttp: options.sentryHttp }),
+          },
+          orgId,
+          [source],
+        ));
+      const ingestDeps: InboxEngineDeps = {
+        ...deps,
+        connectors: sourceConnectors,
+        answerer: options.answererFactory({
+          orgId,
+          ...(source.projectId === null ? {} : { projectId: source.projectId }),
+        }),
+      };
       // B3 (autonomous-by-default): pass the auto-route deps so an `auto_routable`
       // candidate is COMMITTED into the DAG immediately (exactly like the webhook +
       // poller paths) instead of dead-ending in the inbox awaiting a click. The API
@@ -198,6 +226,10 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
       }
       if (error instanceof z.ZodError) {
         return c.json({ error: "invalid_inbox_source_config", issues: error.issues }, 400);
+      }
+      const permanent = classifyPermanentInboxSourceError(error);
+      if (permanent !== undefined) {
+        return c.json({ error: "inbox_source_needs_attention", ...permanent }, 409);
       }
       return c.json({ error: "inbox_ingest_failed", message: messageOf(error) }, 500);
     }

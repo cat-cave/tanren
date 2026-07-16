@@ -45,7 +45,7 @@ const ISSUES_SOURCE: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "",
-  config: { provider: "github", owner: "cat-cave", repo: "app" },
+  config: { owner: "cat-cave", repo: "app" },
   enabled: true,
   autoRoute: false,
 };
@@ -320,7 +320,6 @@ describe("B3 — manual /ingest now auto-routes", () => {
       status: 200,
       body: [{ number: 11, title: "polled bug", body: "x", labels: [] }],
     }));
-    const { pool, specInserts } = stubPool({ sources: [ISSUES_SOURCE] });
     const routableSpec: TriageRoutableSpec = {
       title: "ingested feature",
       description: "from /ingest",
@@ -330,8 +329,10 @@ describe("B3 — manual /ingest now auto-routes", () => {
     };
     const secrets = new FakeSecretStore();
     await secrets.put({ ref: "gh-pat", value: "pat-token" });
-    const sourceWithPat: InboxSource = { ...ISSUES_SOURCE, config: { ...ISSUES_SOURCE.config, staticRef: "gh-pat" } };
-    const local = stubPool({ sources: [sourceWithPat] });
+    const local = stubPool({
+      sources: [ISSUES_SOURCE],
+      orgConfig: { version: 1, defaultCredentials: { github_token: "gh-pat" } },
+    });
     const app = withActor(
       buildInboxApp({
         pool: local.pool,
@@ -344,8 +345,6 @@ describe("B3 — manual /ingest now auto-routes", () => {
     expect(res.status).toBe(200);
     expect(local.specInserts).toHaveLength(1);
     expect(local.specInserts[0]!.title).toBe("ingested feature");
-    void pool;
-    void specInserts;
   });
 });
 

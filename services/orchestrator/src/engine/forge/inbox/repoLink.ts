@@ -11,7 +11,7 @@
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
 import { parseGitHubRepository } from "../../providers/github.js";
-import { GitHubIssuesConfig } from "./githubConnector.js";
+import { ActiveGitHubIssuesConfig } from "./types.js";
 import { InboxStore } from "../../repositories/inbox.js";
 import type { InboxSource } from "./types.js";
 
@@ -45,10 +45,10 @@ export async function ensureIssuesInboxSource(input: EnsureIssuesSourceInput): P
       kind: "issues",
       name: `github · ${repo.owner}/${repo.name}`,
       detail: "auto-created on repo link",
-      // The GitHub issues connector config (provider defaults to github). The
+      // The one GitHub issues connector config (kind is the discriminator). The
       // webhook-provision endpoint later adds a `webhookSecretRef` here; until then
       // the poller pulls issues on its interval.
-      config: { provider: "github", owner: repo.owner, repo: repo.name },
+      config: { owner: repo.owner, repo: repo.name },
       enabled: true,
       autoRoute: false,
     });
@@ -59,7 +59,7 @@ export async function ensureIssuesInboxSource(input: EnsureIssuesSourceInput): P
 /** Whether an existing source is the GitHub `issues` source for this project + repo. */
 function matchesRepo(source: InboxSource, projectId: string, owner: string, repo: string): boolean {
   if (source.kind !== "issues" || source.projectId !== projectId) return false;
-  const parsed = GitHubIssuesConfig.safeParse(source.config);
+  const parsed = ActiveGitHubIssuesConfig.safeParse(source.config);
   if (!parsed.success) return false;
   return parsed.data.owner === owner && parsed.data.repo === repo;
 }

@@ -52,8 +52,6 @@ export const ProvisionWebhookBody = z
   .object({
     projectId: z.string().min(1),
     repoUrl: z.string().min(1),
-    // Optional explicit GitHub credential ref (else the org default / App).
-    githubCredentialRef: z.string().min(1).optional(),
     // Optional callback base URL override (else `deps.publicBaseUrl`).
     callbackBaseUrl: z.string().url().optional(),
   })
@@ -71,7 +69,11 @@ export async function handleProvisionWebhook(
 ): Promise<Response> {
   const parsed = ProvisionWebhookBody.safeParse(await c.req.json().catch(() => {}));
   if (!parsed.success) return c.json({ error: "invalid_provision", issues: parsed.error.issues }, 400);
-  void actor;
+  const projectOrgId = await pgRepositories.projects.getOrgId(deps.pool, parsed.data.projectId, {
+    kind: "operator",
+    id: actor.userId,
+  });
+  if (projectOrgId !== orgId) return c.json({ error: "project_not_found" }, 404);
 
   const repo = parseGitHubRepository(parsed.data.repoUrl);
 
@@ -87,7 +89,7 @@ export async function handleProvisionWebhook(
   let token;
   try {
     const installation = await loadOrgGithubAppInstallation(deps.pool, orgId);
-    const staticRef = parsed.data.githubCredentialRef ?? (await loadOrgDefaultGithubCredentialRef(deps.pool, orgId));
+    const staticRef = await loadOrgDefaultGithubCredentialRef(deps.pool, orgId);
     token = await resolveGithubToken({
       secrets: deps.secrets,
       ...(installation === undefined ? {} : { installation }),
@@ -163,7 +165,10 @@ async function persistWebhookSecretRef(
   await runWithOrgScope(pool, orgId, async (client) => {
     const source = await pgRepositories.inbox.getSource(client, sourceId);
     if (source === undefined) return;
-    await pgRepositories.inbox.updateSourceConfig(client, sourceId, { ...source.config, webhookSecretRef });
+    await pgRepositories.inbox.updateSourceConfig(client, sourceId, source.kind, {
+      ...source.config,
+      webhookSecretRef,
+    });
   });
 }
 

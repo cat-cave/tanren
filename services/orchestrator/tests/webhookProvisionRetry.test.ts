@@ -37,6 +37,7 @@ function stubPool(orgConfig: unknown): {
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.startsWith("SET LOCAL")) {
       return { rows: [], rowCount: 0 };
     }
+    if (sql.startsWith("SELECT org_id FROM projects")) return { rows: [{ org_id: "org_a" }], rowCount: 1 };
     if (sql.startsWith("SELECT config FROM organizations")) return { rows: [{ config: orgConfig }], rowCount: 1 };
     if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
       return { rows: [...sources.values()].filter((s) => s["org_id"] === params[0]), rowCount: sources.size };

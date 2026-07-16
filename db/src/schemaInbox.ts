@@ -4,11 +4,11 @@
 // architecture rule (re-exported into the single `schema.*` namespace at the
 // bottom of schema.ts so the migration generator + consumers see one space):
 //
-//   inbox_sources  — CONFIGURABLE source connectors (GitHub Issues now;
-//                    Linear/Sentry/manual/scheduled-audits as the matrix). A
-//                    source carries a connector `kind`, a free-form `config`
-//                    JSONB (repo/labels/query/etc), an `on` toggle, and an
-//                    `auto` flag. System sources (auto=true, e.g. scheduled
+//   inbox_sources  — CONFIGURABLE source connectors (GitHub Issues, Sentry,
+//                    manual, and scheduled audits). External `config` JSONB is
+//                    decoded by one strict per-kind persisted schema; it never
+//                    carries a reusable credential selector. A source also has
+//                    an `on` toggle and an `auto` flag. System sources (auto=true,
 //                    audits) auto-route their candidates to accepted with no
 //                    manual triage; external issues get the full Forge triage.
 //
@@ -41,7 +41,8 @@ export const inboxSources = pgTable(
     kind: text("kind").notNull(),
     name: text("name").notNull(),
     detail: text("detail").notNull().default(""),
-    // Connector-specific config (repo, labels, linear team, sentry query, …).
+    // Strict per-kind persisted config (GitHub repo/labels or Sentry query) or
+    // sanitized needs-attention state. Credential authority never lives here.
     config: jsonb("config")
       .notNull()
       .default(sql`'{}'::jsonb`),

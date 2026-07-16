@@ -227,6 +227,10 @@ describe("greenfield · arrival (step 3)", () => {
     expect(html).toContain("data-arrival-card");
     expect(html).toContain("your smithy is ready");
     expect(html).toContain("/projects/project_derived?mode=dag");
+    expect(html).toContain("sentry errors");
+    expect(html).not.toContain("oauth + workspace pick");
+    expect(html).not.toContain("api token + project key");
+    expect(html).not.toContain("any json · tanren classifies");
   });
 
   it("GET /onboarding/new?step=2&projectId=… re-renders the derived dag (resume)", async () => {

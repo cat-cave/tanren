@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
+import { InboxStore } from "../repositories/inbox.js";
+import { SourceKind } from "../forge/inbox/types.js";
 import { mutateProjectConfig } from "../repositories/projects.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { ActorRef } from "../state/actor.js";
@@ -57,24 +59,17 @@ async function upsertInboxSource(
   inboxSource: { kind: string; config: Record<string, unknown> },
 ): Promise<string> {
   const name = `${inboxSource.kind} (${request.name ?? request.projectId})`;
-  const id = `src_${randomUUID()}`;
   const config = { ...inboxSource.config, managedBy: MANAGED_BY };
-  const result = await client.query(
-    `INSERT INTO inbox_sources (id, org_id, project_id, kind, name, detail, config, enabled, auto_route)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
-     ON CONFLICT (org_id, project_id, kind) WHERE (config->>'managedBy') = '${MANAGED_BY}' DO UPDATE SET
-       name = EXCLUDED.name,
-       config = EXCLUDED.config
-     RETURNING id`,
-    [id, request.orgId, request.projectId, inboxSource.kind, name, "", JSON.stringify(config), "true", "false"],
-  );
-  const row = result.rows[0];
-  if (row === undefined) {
-    throw new Error(
-      `inbox_sources upsert returned no row for (${request.orgId}, ${request.projectId}, ${inboxSource.kind})`,
-    );
-  }
-  return z.object({ id: z.string() }).parse(row).id;
+  const source = await InboxStore.upsertManagedSource(client, {
+    orgId: request.orgId,
+    projectId: request.projectId,
+    kind: SourceKind.parse(inboxSource.kind),
+    name,
+    config,
+    enabled: true,
+    autoRoute: false,
+  });
+  return source.id;
 }
 
 async function upsertNotificationTarget(

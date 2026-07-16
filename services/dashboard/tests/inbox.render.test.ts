@@ -49,6 +49,25 @@ const SNAPSHOT = {
       enabled: true,
       autoRoute: true,
     },
+    {
+      id: "src_bad",
+      orgId: "org_acme",
+      projectId: "project_easy",
+      kind: "issues",
+      name: "stale issues source",
+      detail: "disabled by intake authority",
+      config: {
+        state: "needs_attention",
+        attention: {
+          state: "needs_attention",
+          code: "invalid_config",
+          message: "This source configuration is invalid. Recreate it with required fields.",
+          observedAt: "2026-07-16T12:00:00.000Z",
+        },
+      },
+      enabled: false,
+      autoRoute: false,
+    },
   ],
   candidates: [
     {
@@ -167,6 +186,8 @@ describe("candidate inbox surface", () => {
     expect(html).toContain("scheduled audits");
     expect(html).toContain("auto");
     expect(html).toContain("no hardcoded sources");
+    expect(html).toContain('data-source-attention="invalid_config"');
+    expect(html).toContain("needs attention · This source configuration is invalid");
   });
 
   it("renders each candidate's triage read-out (dedupe / match / placement)", async () => {

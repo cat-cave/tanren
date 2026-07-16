@@ -80,7 +80,6 @@ describe("createSource — insert wire shape + mapping", () => {
     const source = await createSource(client, input);
     const call = calls[0]!;
     expect(call.sql).toContain("INSERT INTO inbox_sources");
-    // id is generated with a src_ prefix; org/project/kind/name flow through in order.
     expect(String(call.params[0])).toMatch(/^src_/u);
     expect(call.params.slice(1, 6)).toEqual([
       "org_a",
@@ -89,8 +88,12 @@ describe("createSource — insert wire shape + mapping", () => {
       "github · cat-cave",
       "labelled spec-candidate",
     ]);
-    expect(JSON.parse(call.params[6] as string)).toEqual({ owner: "cat-cave", repo: "app" });
-    // enabled/autoRoute are persisted as the string booleans the row mapper reads.
+    expect(JSON.parse(call.params[6] as string)).toEqual({
+      state: "active",
+      owner: "cat-cave",
+      repo: "app",
+      labels: [],
+    });
     expect(call.params[7]).toBe("true");
     expect(call.params[8]).toBe("false");
     expect(source.id).toMatch(/^src_/u);

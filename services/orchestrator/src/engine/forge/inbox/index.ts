@@ -4,6 +4,14 @@
 export {
   SourceKind,
   InboxSource,
+  InboxSourceAttention,
+  ActiveGitHubIssuesConfig,
+  GitHubIssuesConfig,
+  ActiveSentryConfig,
+  SentryConfig,
+  parseInboxSourceCreateConfig,
+  parsePersistedInboxSourceConfig,
+  terminalInboxSourceConfig,
   TriageVerdict,
   TriageRoutableSpec,
   TriageEntityAnchor,
@@ -21,17 +29,18 @@ export { buildTriagePrompt } from "./prompt.js";
 
 export {
   IntakeSourceAuthError,
+  IntakeSourceAuthorityError,
   IntakeSourceFetchError,
   UnsupportedInboxProviderError,
   assertIntakeResponseOk,
+  assertNoSourceCredentialOverride,
   assertSupportedIssuesProvider,
   type IntakeSourceProvider,
 } from "./connectorErrors.js";
 
-export { GitHubIssuesConfig, createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
+export { createGitHubIssuesConnector, type GitHubConnectorDeps } from "./githubConnector.js";
 
 export {
-  SentryConfig,
   createSentryConnector,
   buildPgSentryIntakeAuthority,
   FetchSentryHttpClient,
