@@ -68,6 +68,14 @@ const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
   unattributed: "unattributed",
 };
 
+/**
+ * Run statuses that mark a run finished. Drives both the "● final" paint and
+ * the stream's terminal-seen flag (the latter gates EOF close — see
+ * `RunStreamReducer`). Centralized so the SSE client and its reducer cannot
+ * drift on what "terminal" means.
+ */
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "halted", "cancelled", "done"]);
+
 function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`;
@@ -188,7 +196,7 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
     chip.append(`run · ${status}${outcome === null ? "" : ` · ${outcome}`}`);
   }
   setText(root, "header-status", status);
-  if (["completed", "failed", "halted", "cancelled", "done"].includes(status)) {
+  if (TERMINAL_RUN_STATUSES.has(status)) {
     const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
     if (flag !== null) flag.textContent = "● final";
   }
@@ -222,6 +230,49 @@ function applyTask(root: HTMLElement, task: TaskFrame): void {
   row.classList.toggle("queued", state === "queued");
 }
 
+/**
+ * Pure frame-sequence state for the run-detail SSE island. Owns the
+ * exact-identity cost upsert map + the terminal-seen flag so the SSE frame
+ * contract — terminal status does NOT abort delivery; the server stream close
+ * (EOF) is authoritative — is unit-testable without a DOM/EventSource. A final
+ * same-id cost reconciliation (null→known) arriving AFTER a terminal status
+ * frame still applies, because nothing here (or in `initRunStream`) drops
+ * frames once terminal is seen; only an EOF closes the stream.
+ */
+export class RunStreamReducer {
+  private readonly costsById = new Map<string, CostRecordFrame>();
+  private anonSeq = 0;
+  private terminalSeen = false;
+
+  get totals(): CostTotalsState {
+    return recomputeTotals(this.costsById);
+  }
+
+  get isTerminal(): boolean {
+    return this.terminalSeen;
+  }
+
+  /** Reset + upsert a full snapshot's cost rows by exact identity. */
+  ingestSnapshotCosts(costs: CostRecordFrame[] | undefined): void {
+    this.costsById.clear();
+    this.anonSeq = 0;
+    this.ingestCosts(costs);
+  }
+
+  /** Upsert cost deltas/reconciliations by exact identity (never append-sum). */
+  ingestCosts(costs: CostRecordFrame[] | undefined): void {
+    for (const cost of costs ?? []) {
+      this.costsById.set(costIdentity(cost, this.anonSeq++), cost);
+    }
+  }
+
+  /** Record a status frame. Returns true once a terminal status has been seen. */
+  ingestStatus(status: string): boolean {
+    if (TERMINAL_RUN_STATUSES.has(status)) this.terminalSeen = true;
+    return this.terminalSeen;
+  }
+}
+
 export function initRunStream(): void {
   const root = document.querySelector<HTMLElement>('[data-island="run-stream"]');
   if (root === null) return;
@@ -230,16 +281,14 @@ export function initRunStream(): void {
   if (typeof EventSource === "undefined") return;
 
   /** Exact bigint-decimal cost identity → latest record (upsert, never append-sum). */
-  const costsById = new Map<string, CostRecordFrame>();
-  let anonSeq = 0;
+  const reducer = new RunStreamReducer();
   // Server stream closure is authoritative. We only close after terminal status
   // once the EventSource reports a close/error, so final cost frames delivered
   // before or with the terminal status still apply.
-  let terminalSeen = false;
   const source = new EventSource(url, { withCredentials: true });
 
   const paint = (): void => {
-    renderCostBar(root, recomputeTotals(costsById));
+    renderCostBar(root, reducer.totals);
   };
 
   source.addEventListener("snapshot", (event) => {
@@ -248,11 +297,7 @@ export function initRunStream(): void {
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
       } = JSON.parse(event.data);
-      costsById.clear();
-      anonSeq = 0;
-      for (const cost of data.costs ?? []) {
-        costsById.set(costIdentity(cost, anonSeq++), cost);
-      }
+      reducer.ingestSnapshotCosts(data.costs);
       paint();
       if (data.run !== undefined) applyStatus(root, data.run.status, data.run.outcome);
     } catch {
@@ -263,9 +308,7 @@ export function initRunStream(): void {
   source.addEventListener("costs", (event) => {
     try {
       const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
-      for (const cost of data.costs ?? []) {
-        costsById.set(costIdentity(cost, anonSeq++), cost);
-      }
+      reducer.ingestCosts(data.costs);
       paint();
     } catch {
       /* ignore */
@@ -279,11 +322,9 @@ export function initRunStream(): void {
         outcome: string | null;
       } = JSON.parse(event.data);
       applyStatus(root, data.status, data.outcome);
-      if (["completed", "failed", "halted", "cancelled", "done"].includes(data.status)) {
-        // Mark terminal but do not close yet — final tasks/events/costs may still
-        // arrive if the server reorders poorly; server EOF is authoritative.
-        terminalSeen = true;
-      }
+      // Mark terminal but do not close yet — final tasks/events/costs may still
+      // arrive if the server reorders poorly; server EOF is authoritative.
+      reducer.ingestStatus(data.status);
     } catch {
       /* ignore */
     }
@@ -300,8 +341,9 @@ export function initRunStream(): void {
 
   source.addEventListener("error", () => {
     // After a terminal status, treat stream error/EOF as authoritative close
-    // (prevents infinite reconnect on a finished run without aborting mid-delivery).
-    if (terminalSeen) {
+    // (prevents infinite reconnect on a finished run without aborting
+    // mid-delivery of final cost reconciliations).
+    if (reducer.isTerminal) {
       source.close();
     }
   });

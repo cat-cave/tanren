@@ -31,7 +31,10 @@ export interface HistoryBodyProps {
 const STATUS_FILTERS: { id: string; label: string }[] = [
   { id: "", label: "all" },
   { id: "running", label: "running" },
-  { id: "succeeded", label: "succeeded" },
+  // The id is the REAL API run status (`completed`), never a synonym like
+  // "succeeded" — a value absent from RunStatus matches zero rows and would
+  // manufacture an empty filter result. The label stays user-facing.
+  { id: "completed", label: "succeeded" },
   { id: "failed", label: "failed" },
 ];
 
