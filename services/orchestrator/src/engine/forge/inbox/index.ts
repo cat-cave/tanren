@@ -40,28 +40,6 @@ export {
   type SentryHttpResponse,
 } from "./sentryConnector.js";
 
-export {
-  LinearConfig,
-  createLinearConnector,
-  FetchLinearHttpClient,
-  type LinearConnectorDeps,
-  type LinearHttpClient,
-  type LinearHttpRequest,
-  type LinearHttpResponse,
-} from "./linearConnector.js";
-
-export {
-  JiraConfig,
-  createJiraConnector,
-  FetchJiraHttpClient,
-  type JiraConnectorDeps,
-  type JiraHttpClient,
-  type JiraHttpRequest,
-  type JiraHttpResponse,
-} from "./jiraConnector.js";
-
-export { createIssuesConnector, type IssuesConnectorDeps } from "./issuesConnector.js";
-
 export { buildInboxConnectorMap, type BuildConnectorMapDeps } from "./connectorMap.js";
 
 // The `inbox_sources` + `candidates` store lives on the `Repositories` seam

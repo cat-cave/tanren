@@ -14,9 +14,8 @@
 //     cannot be resolved (App not installed AND no org-default static token) → a
 //     LOUD fail-closed error naming the missing credential, never a silent skip.
 //
-// Non-GitHub issue sources (linear/jira) and error sources (sentry) carry their
-// OWN per-source token ref in their config, so they do not depend on the org's
-// GitHub credential; only a GitHub-provider `issues` source needs this resolution.
+// Sentry error sources resolve an exact integration grant, so they do not depend
+// on the org's GitHub credential; only a GitHub `issues` source needs this path.
 
 import type pg from "pg";
 import type { SecretStore } from "../../contracts/secretStore.js";
@@ -104,9 +103,8 @@ export interface BuildIntakeConnectorMapDeps {
 /**
  * Whether a source is a GitHub-provider `issues` source — the only source whose
  * polling depends on the org's GitHub credential. A GitHub source carries kind
- * `issues` with either no `provider` (github is the default) or `provider:
- * "github"`; linear/jira issues sources and sentry error sources carry their own
- * per-source token ref. A source that already pins its OWN `config.staticRef`
+ * `issues` with either no `provider` or `provider: "github"`; Sentry error
+ * sources use integration authority. A GitHub source that pins its OWN `config.staticRef`
  * supplies its credential directly and so does not require the org-default.
  */
 function isGithubIssuesSourceNeedingOrgCredential(source: InboxSource): boolean {
@@ -128,8 +126,8 @@ function isGithubIssuesSourceNeedingOrgCredential(source: InboxSource): boolean 
  *   • `githubSource` names the org's configured GitHub `issues` source (when one
  *     exists) so a missing credential raises {@link IntakeGithubCredentialMissingError}
  *     against that source — a LOUD failure, never a silent no-connector.
- *   • when NO GitHub source needs the org credential (only linear/jira/sentry, or
- *     a source pinning its own ref, or no intake configured at all), the map is
+ *   • when NO GitHub source needs the org credential (only Sentry, a source
+ *     pinning its own ref, or no intake configured at all), the map is
  *     built without an org-default github ref — the legitimate "no GitHub intake"
  *     case, no error.
  */

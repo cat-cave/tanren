@@ -1,9 +1,8 @@
 // Inbox source-connector wire-shape + normalization tests (mutation ratchet).
 //
-// These tests pin the OBSERVABLE behavior of the four inbox source connectors
-// (GitHub Issues / Sentry / Linear / Jira) and the `issues` provider-dispatcher
-// that the sibling candidateInbox*.test.ts files leave un-asserted — the exact
-// request shape each connector sends through its injected transport (method /
+// These tests pin the observable behavior of the authority-backed inbox source
+// connectors (GitHub Issues and Sentry) that sibling tests leave un-asserted:
+// the exact request shape each connector sends through its injected transport (method /
 // path / auth / query / pagination) and the issue->IngestedItem normalization
 // (id/title/body/severity, slice caps, dedupe-via-skip, error/not-found paths).
 //
@@ -16,7 +15,6 @@ import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
 import {
   createGitHubIssuesConnector,
-  createIssuesConnector,
   createSentryConnector,
   IntakeSourceAuthError,
   IntakeSourceFetchError,
@@ -24,15 +22,12 @@ import {
   type SentryHttpClient,
   type SentryHttpRequest,
   type SentryIntakeAuthority,
-  type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
 import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/x", value: "ghs_static_token" });
 await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
-await secrets.put({ ref: "credential/linear/x", value: "lin_api_token" });
-await secrets.put({ ref: "credential/jira/x", value: "jira_api_token" });
 
 const githubSource: InboxSource = {
   id: "src_gh",
@@ -54,36 +49,6 @@ const sentrySource: InboxSource = {
   name: "sentry · cat-cave/app",
   detail: "unresolved",
   config: { org: "cat-cave", project: "app" },
-  enabled: true,
-  autoRoute: false,
-};
-
-const linearSource: InboxSource = {
-  id: "src_linear",
-  orgId: "org_a",
-  projectId: "project_a",
-  kind: "issues",
-  name: "linear · cat-cave",
-  detail: "open",
-  config: { provider: "linear", tokenRef: "credential/linear/x", teamId: "team_1" },
-  enabled: true,
-  autoRoute: false,
-};
-
-const jiraSource: InboxSource = {
-  id: "src_jira",
-  orgId: "org_a",
-  projectId: "project_a",
-  kind: "issues",
-  name: "jira · cat-cave",
-  detail: "open",
-  config: {
-    provider: "jira",
-    baseUrl: "https://cat-cave.atlassian.net",
-    email: "bot@cat-cave.dev",
-    tokenRef: "credential/jira/x",
-    project: "CAT",
-  },
   enabled: true,
   autoRoute: false,
 };
@@ -121,6 +86,22 @@ const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAu
   createSentryConnector({ secrets, sentryHttp, authority });
 
 describe("github issues connector — request wire shape", () => {
+  it("rejects removed bare-secret-ref providers before provider I/O", async () => {
+    const { client, calls } = recordGitHub([]);
+    await expect(
+      createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch({
+        ...githubSource,
+        config: {
+          provider: "linear",
+          owner: "cat-cave",
+          repo: "app",
+          tokenRef: "credential/linear/x",
+        },
+      }),
+    ).rejects.toThrow(/github/u);
+    expect(calls).toHaveLength(0);
+  });
+
   it("issues a GET to the repo issues endpoint carrying state=open, per_page=50, the resolved token and a refresh supplier", async () => {
     const { client, calls } = recordGitHub([]);
     await createGitHubIssuesConnector({ secrets, githubHttp: client }).fetch(githubSource);
@@ -395,40 +376,5 @@ describe("sentry connector — normalization", () => {
   it("returns a genuine empty list on a 200-with-an-empty-array (no unresolved issues)", async () => {
     const empty = recordSentry([], 200);
     expect(await sentryConnector(empty.client).fetch(sentrySource)).toHaveLength(0);
-  });
-});
-
-// A connector that tags its single ingested item with the given provider name —
-// lets the dispatcher test assert which provider connector was selected.
-const tagConnector = (tag: string): SourceConnector => ({
-  kind: "issues",
-  fetch: async (source) => [
-    { externalId: `${tag}-1`, title: source.name, body: "", severity: "info", projectId: source.projectId },
-  ],
-});
-
-describe("issues provider dispatcher — source selection", () => {
-  const dispatcher = () =>
-    createIssuesConnector({
-      github: tagConnector("github"),
-      linear: tagConnector("linear"),
-      jira: tagConnector("jira"),
-    });
-
-  it("routes provider=linear to linear, provider=jira to jira, and absent/github provider to github", async () => {
-    expect((await dispatcher().fetch(linearSource))[0]!.externalId).toBe("linear-1");
-    expect((await dispatcher().fetch(jiraSource))[0]!.externalId).toBe("jira-1");
-    // no provider field → github default.
-    expect((await dispatcher().fetch(githubSource))[0]!.externalId).toBe("github-1");
-    // explicit provider=github → github.
-    const explicitGh = await dispatcher().fetch({
-      ...githubSource,
-      config: { ...githubSource.config, provider: "github" },
-    });
-    expect(explicitGh[0]!.externalId).toBe("github-1");
-  });
-
-  it("exposes the issues kind", () => {
-    expect(dispatcher().kind).toBe("issues");
   });
 });

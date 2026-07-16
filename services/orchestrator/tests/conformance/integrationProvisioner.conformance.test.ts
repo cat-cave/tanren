@@ -336,22 +336,22 @@ describe("buildIntegrationProvisioner registry (Codex H3 #25 unified registry)",
   });
 
   it("returns the hard-throw UnconfiguredIntegrationProvisioner for an unregistered kind", () => {
-    const provisioner = buildIntegrationProvisioner("linear");
+    const provisioner = buildIntegrationProvisioner("unknown.provider");
     expect(provisioner).toBeInstanceOf(UnconfiguredIntegrationProvisioner);
   });
 
   it("the unconfigured throw NAMES the unregistered kind + the registered set (a diagnostic, not a generic 'not implemented')", () => {
-    const provisioner = buildIntegrationProvisioner("linear");
+    const provisioner = buildIntegrationProvisioner("unknown.provider");
     // The pre-fix message was a generic "No provider is registered yet". The
     // diagnostic now identifies the missing kind + the registered ones, so an
     // operator sees which kind was requested and which are available.
-    expect(() => provisioner.capability()).toThrow(/'linear' is not registered/u);
+    expect(() => provisioner.capability()).toThrow(/'unknown\.provider' is not registered/u);
     expect(() => provisioner.capability()).toThrow(/'sentry'/u);
     expect(() => provisioner.capability()).toThrow(/'deploy\.vercel'/u);
   });
 
   it("every operation on the unconfigured provisioner throws loudly (never a silent no-op)", async () => {
-    const provisioner = buildIntegrationProvisioner("jira");
+    const provisioner = buildIntegrationProvisioner("unknown.provider");
     expect(() => provisioner.capability()).toThrow(/not registered/u);
     const ctx = projectCtx("p");
     await expect(provisioner.discover(await grant("discover", ctx, {}), ctx)).rejects.toThrow(/not registered/u);

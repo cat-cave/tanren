@@ -6,8 +6,8 @@
 // later provider waves.
 //
 // SCOPE — what this port IS and IS NOT:
-//   - IS: project-INTEGRATION providers (sentry | slack | linear | jira |
-//     deploy.vercel | deploy.flyio | pagerduty | …) that yield a
+//   - IS: catalogued project-integration providers (Sentry, Slack, and deploy
+//     providers) that yield a
 //     `ProvisionedArtifact` over the EXISTING project surfaces — `projectConfig`
 //     (→ projects.config), `secretRefs` (→ secret manager), `inboxSource`
 //     (→ inbox_sources), `notificationTarget` (→ notification targets),
@@ -148,7 +148,7 @@ export interface ProvisionedArtifact {
   projectConfig?: Record<string, unknown>;
   /** Secret-manager refs the provisioner stored (DSN, webhook secret, …). Never values. */
   secretRefs?: Record<string, string>;
-  /** The inbox source to create for this project (Sentry/Linear intake). */
+  /** The inbox source to create for this project (currently Sentry intake). */
   inboxSource?: { kind: string; config: Record<string, unknown> };
   /** The notification target to create (Slack channel/webhook, PagerDuty service). */
   notificationTarget?: { kind: string; config: Record<string, unknown> };
@@ -250,12 +250,9 @@ export class UnconfiguredIntegrationProvisioner implements IntegrationProvisione
 }
 
 /**
- * Selectable project-INTEGRATION provisioner backends (sentry | slack | linear |
- * jira | deploy.vercel | deploy.flyio | pagerduty | …). EMPTY in this wave — no
- * provider is registered yet — so every kind resolves to
- * {@link UnconfiguredIntegrationProvisioner}. A provider lands as a NEW case here
- * (+ its impl + a conformance entry), not a refactor, exactly like
- * `buildAllocator` / `buildVcsProvider`. Cloud-ALLOCATOR kinds (`allocator.*`,
+ * Selectable catalogued integration provisioner backends. Unknown kinds resolve
+ * to {@link UnconfiguredIntegrationProvisioner}; there is no permissive fallback
+ * or secret-ref adapter. Cloud-allocator kinds (`allocator.*`,
  *) do NOT belong here — see the SCOPE note in the module header: their
  * SSH/host-key automation extends the `Allocator` seam, not this port.
  */
@@ -265,7 +262,6 @@ export type IntegrationProviderKind = string;
  * Per-call wiring a real provisioner needs (the injected transports/stores its
  * impl composes). Optional + additive — each provider draws ONLY the deps it
  * uses, so a new provider extends this interface without disturbing the others.
- * Foundation (unconfigured) kinds ignore it.
  */
 export interface IntegrationProvisionerDeps {
   /** Sentry's injected `{ http: SentryProvisionHttpClient; secrets: SecretStore }`. */
