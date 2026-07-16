@@ -18,6 +18,7 @@ import {
   integrationRequirementDigest,
   parseIntegrationRequirement,
 } from "../../engine/contracts/integrationRequirement.js";
+import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 
@@ -39,6 +40,8 @@ export interface IntegrationContractRouteOptions {
   pool: pg.Pool;
   /** Injected for tests; production uses PgCasByteStore(pool). */
   casByteStore?: CasByteStore;
+  /** Injected for tests; production uses the sole PgEventStore(pool). */
+  eventStore?: EventStore;
 }
 
 export function registerIntegrationContractRoutes(
@@ -46,6 +49,7 @@ export function registerIntegrationContractRoutes(
   options: IntegrationContractRouteOptions,
 ): void {
   const cas = options.casByteStore ?? new PgCasByteStore(options.pool);
+  const eventStore = options.eventStore ?? new PgEventStore(options.pool);
 
   app.get("/:orgId/integration-contracts/catalog", async (c) => {
     const actor = requireActor(c);
@@ -113,6 +117,26 @@ export function registerIntegrationContractRoutes(
         orgId,
         bytes,
         mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+      });
+      if (artifact.mediaType !== INTEGRATION_REQUIREMENT_MEDIA_TYPE) {
+        throw new Error(`persisted integration requirement has unexpected media type: ${artifact.mediaType}`);
+      }
+      await eventStore.append({
+        orgId,
+        eventType: "integration.requirement.validated",
+        payload: {
+          missionNodeId: "in-2",
+          requirementDigest,
+          artifact: {
+            digest: artifact.digest,
+            byteSize: artifact.byteSize,
+            mediaType: artifact.mediaType,
+          },
+          capability: validated.requirement.capability,
+          plane: validated.requirement.plane,
+          direction: validated.requirement.direction,
+          criticality: validated.requirement.criticality,
+        },
       });
     } else {
       artifact = {

@@ -1,12 +1,12 @@
 # in-2 — typed integration lifecycle contracts
 
-**Phase**: MVP consumer (integrations)  
-**Node ID**: `in-2` (in `CONSUMER`)  
-**Base**: `origin/main` @ `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee`  
-**Predecessor**: SP-1 only (`behaviorRevision` substrate on main; no IN-1 / 0041)  
-**State**: **NOT COMPLETE** — exclusive contract/HTTP/UI/CAS slice can land, but
-the named-event / catalog lease is unavailable. Do **not** PR/merge/count until
-the serialized event lease adds the exact IN-2 proof event + final apex assertion.
+**Phase**: MVP consumer (integrations)
+**Node ID**: `in-2` (in `CONSUMER`)
+**Base**: `origin/main` @ `67d9363fe220e1f280ed706a0b80af2b16724362`
+**Predecessors**: SP-1, SP-3, and EV-SUB-W0 / migration `0042`
+**State**: **COMPLETE CANDIDATE** — the contracts, durable CAS path, callable
+HTTP surface, visible overview panel, governed producer, and non-mocked apex
+proof are implemented. Node credit starts only after gates, audit, and merge.
 
 ## Purpose
 
@@ -45,6 +45,7 @@ shape **must never** validate as a product messaging binding.
 - `services/dashboard/src/components/integrations/IntegrationContractPanel.tsx`
 - `services/orchestrator/tests/integrationRequirement.golden.test.ts`
 - `services/orchestrator/tests/integrationContracts.route.test.ts`
+- `services/orchestrator/tests/integrationContracts.apex.integration.test.ts`
 - `services/orchestrator/tests/pgCasByteStore.rls.integration.test.ts`
 - `services/dashboard/tests/integrationContracts.render.test.ts`
 
@@ -118,22 +119,31 @@ Mounted under free parent `/orgs` (via behaviors thin wire):
 - Live validate outcomes for product / control / cross-plane-negative samples
 - Loud unavailable / auth / malformed states — no decorative success cosplay
 
-### Named event proof (BLOCKED)
+### Named event proof (COMPLETE)
 
-**Unavailable under current event-registry lease.** Final completion requires a
-later serialized event-lease PR to add exactly:
+EV-SUB-W0 landed migration `0042` and the strict governed schema for:
 
-- proof event (proposed name, not seeded here): `integration.requirement.validated`
-- apex assertion hook that the digest + CAS artifact identity fired live
+- proof event: `integration.requirement.validated`
+- payload identity: requirement digest + verified CAS artifact identity
 
-Until then: node is **NOT COMPLETE**, not PR/merge/count eligible.
+The persisting validate route appends it through the sole `PgEventStore` only
+after `PgCasByteStore.put` returns its integrity-verified stored winner. The
+real-Postgres apex test proves HTTP → event → retrievable/rehashed bytes, stable
+CAS identity across revalidation, and cross-org denial. Preview, invalid,
+malformed, and denied requests emit nothing and produce no CAS write.
 
-### Bounded audit-fixes (R2–R4; R1 still serialized/blocked)
+### Convergence fixes (R1–R4 closed)
 
 Independent convergence audit `in2-b5edc573-grok-convergence-report.md` ranked
-the named-event/apex gap (R1) as the P0 that still blocks completeness. The
-bounded, in-slice remediation applied here touches only already-owned/shared
-paths above (no new manifest paths):
+the named-event/apex gap (R1) as the original P0. The bounded remediation
+touches only owned/shared paths above:
+
+- **R1 — governed event + apex correlation**
+  (`routes/integrationContracts`, route unit proof, real-PG apex proof): exactly
+  one append follows each successful persisting CAS put; event and response
+  reference the same stored artifact. Non-persisting and failure paths append
+  zero events. EV-SUB-W0 owns the catalog/schema/migration; IN-2 owns only the
+  consumer emit.
 
 - **R2 — CAS adapter truth/integrity** (`pgCasByteStore.ts`, `cas.ts`):
   `put` returns the STORED winner's media type/byte size (re-read after
@@ -156,13 +166,12 @@ paths above (no new manifest paths):
   `canonicalJson`; pinned full-hex golden digests + byte lengths plus
   permutation/duplicate/version/extra-field coverage.
 
-**R1 remains a P0 and is not addressable in this slice. The node is still NOT
-COMPLETE / not merge / not count eligible.**
-
 ## Validation
 
 - Golden contract vectors (always-on)
 - Route unit tests (authz, 422 plane separation, CAS put path mocked/in-memory ok)
+- Real-PG apex: HTTP validate → governed event → matching retrievable CAS bytes;
+  cross-org and no-effect negative controls
 - Real-PG RLS: same-org put/get; cross-org denied (`TANREN_RLS_DB_TEST=1`)
 - Dashboard render test: panel shows live result markers + unavailable branch
 - `just affected-typecheck` + `just affected-test`

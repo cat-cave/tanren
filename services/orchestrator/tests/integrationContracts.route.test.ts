@@ -13,6 +13,8 @@ import {
   goldenCrossPlaneForbiddenRequirement,
   goldenProductMessagingRequirement,
 } from "../src/engine/contracts/integrationRequirement.js";
+import type { AppendEventInput, EventStore } from "../src/engine/eventStore.js";
+import type { EventName } from "../src/engine/events/index.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createBehaviorRoutes } from "../src/routes/behaviors/index.js";
 import { registerIntegrationContractRoutes } from "../src/routes/integrationContracts/index.js";
@@ -52,6 +54,14 @@ class MemoryCas implements CasByteStore {
   }
 }
 
+class RecordingEventStore implements EventStore {
+  readonly appends: unknown[] = [];
+
+  async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    this.appends.push(input);
+  }
+}
+
 /** Pool unused by integration-contract routes when casByteStore is injected. */
 class EmptyPool {
   async query(): Promise<{ rows: unknown[]; rowCount: number }> {
@@ -71,7 +81,11 @@ class EmptyPool {
   }
 }
 
-function buildHarness(cas: CasByteStore, actor: ActorContext = alice) {
+function buildHarness(
+  cas: CasByteStore,
+  actor: ActorContext = alice,
+  eventStore: EventStore = new RecordingEventStore(),
+) {
   const app = new Hono<ActorContextEnv>();
   app.use(
     "*",
@@ -90,9 +104,14 @@ function buildHarness(cas: CasByteStore, actor: ActorContext = alice) {
   registerIntegrationContractRoutes(contracts, {
     pool: new EmptyPool().asPgPool(),
     casByteStore: cas,
+    eventStore,
   });
   app.route("/orgs", contracts);
   return app;
+}
+
+function validatedAppendAt(events: RecordingEventStore, index: number) {
+  return events.appends[index] as AppendEventInput<"integration.requirement.validated">;
 }
 
 /** Proves the production thin wire on createBehaviorRoutes exposes catalog. */
@@ -143,7 +162,8 @@ describe("integration-contracts HTTP (in-2)", () => {
 
   it("POST validate product messaging persists CAS artifact + digests", async () => {
     const cas = new MemoryCas();
-    const app = buildHarness(cas);
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
@@ -162,13 +182,29 @@ describe("integration-contracts HTTP (in-2)", () => {
     expect(artifact["mediaType"]).toBe("application/vnd.tanren.integration-requirement.v1+json");
     expect(cas.puts).toBe(1);
     expect(cas.store.size).toBe(1);
+    expect(events.appends).toHaveLength(1);
+    const appended = validatedAppendAt(events, 0);
+    expect(appended.orgId).toBe("org_acme");
+    expect(appended.eventType).toBe("integration.requirement.validated");
+    expect(appended.projectId).toBeUndefined();
+    expect(appended.runId).toBeUndefined();
+    expect(appended.payload.requirementDigest).toBe(body["requirementDigest"]);
+    expect(appended.payload.artifact).toEqual(artifact);
+    expect(appended.payload).toMatchObject({
+      missionNodeId: "in-2",
+      capability: "messaging.send",
+      plane: "product",
+      direction: "outbound",
+      criticality: "release_required",
+    });
     const text = JSON.stringify(body);
     expect(text).not.toMatch(/xoxb-/u);
   });
 
   it("POST validate default persists exactly once and is idempotent at the identity level", async () => {
     const cas = new MemoryCas();
-    const app = buildHarness(cas);
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const body = JSON.stringify({ requirement: goldenProductMessagingRequirement() });
     const first = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
@@ -192,11 +228,15 @@ describe("integration-contracts HTTP (in-2)", () => {
     // canonical key collapses to a single stored entry).
     expect(cas.puts).toBe(2);
     expect(cas.store.size).toBe(1);
+    expect(events.appends).toHaveLength(2);
+    expect(validatedAppendAt(events, 0).payload.artifact.digest).toBe(firstBody.artifact.digest);
+    expect(validatedAppendAt(events, 1).payload.artifact.digest).toBe(firstBody.artifact.digest);
   });
 
   it("POST validate with persist:false performs zero CAS puts and reports persisted:false", async () => {
     const cas = new MemoryCas();
-    const app = buildHarness(cas);
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const requirement = goldenProductMessagingRequirement();
     const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
@@ -218,11 +258,13 @@ describe("integration-contracts HTTP (in-2)", () => {
     // Zero CAS puts: the read-only sample path never mutates cas_artifacts.
     expect(cas.puts).toBe(0);
     expect(cas.store.size).toBe(0);
+    expect(events.appends).toHaveLength(0);
   });
 
   it("POST validate with persist:false still rejects invalid input with 422 and never persists", async () => {
     const cas = new MemoryCas();
-    const app = buildHarness(cas);
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
@@ -230,11 +272,13 @@ describe("integration-contracts HTTP (in-2)", () => {
     });
     expect(res.status).toBe(422);
     expect(cas.puts).toBe(0);
+    expect(events.appends).toHaveLength(0);
   });
 
   it("POST validate rejects persist:false with malformed envelope (400, no put)", async () => {
     const cas = new MemoryCas();
-    const app = buildHarness(cas);
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
@@ -243,6 +287,7 @@ describe("integration-contracts HTTP (in-2)", () => {
     // strict() rejects the non-boolean persist at the envelope schema layer.
     expect(res.status).toBe(400);
     expect(cas.puts).toBe(0);
+    expect(events.appends).toHaveLength(0);
   });
 
   it("POST validate control notify succeeds on control plane", async () => {
@@ -260,7 +305,8 @@ describe("integration-contracts HTTP (in-2)", () => {
 
   it("POST validate rejects cross-plane control-as-product with 422", async () => {
     const cas = new MemoryCas();
-    const app = buildHarness(cas);
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
@@ -271,25 +317,36 @@ describe("integration-contracts HTTP (in-2)", () => {
     expect(body.ok).toBe(false);
     expect(body.errors.some((e) => e.code === "binding_plane_mismatch")).toBe(true);
     expect(cas.puts).toBe(0);
+    expect(events.appends).toHaveLength(0);
   });
 
   it("denies other-org access with 403", async () => {
-    const app = buildHarness(new MemoryCas());
-    const res = await app.request("/orgs/org_other/integration-contracts/catalog", {
-      headers: { cookie: "tanren_session=dev" },
+    const cas = new MemoryCas();
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
+    const res = await app.request("/orgs/org_other/integration-contracts:validate", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      body: JSON.stringify({ requirement: goldenProductMessagingRequirement() }),
     });
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };
     expect(body.error).toBe("org_access_denied");
+    expect(cas.puts).toBe(0);
+    expect(events.appends).toHaveLength(0);
   });
 
   it("rejects malformed envelope with 400", async () => {
-    const app = buildHarness(new MemoryCas());
+    const cas = new MemoryCas();
+    const events = new RecordingEventStore();
+    const app = buildHarness(cas, alice, events);
     const res = await app.request("/orgs/org_acme/integration-contracts:validate", {
       method: "POST",
       headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
       body: JSON.stringify({ notRequirement: true }),
     });
     expect(res.status).toBe(400);
+    expect(cas.puts).toBe(0);
+    expect(events.appends).toHaveLength(0);
   });
 });
