@@ -24,16 +24,15 @@ authority, and the complete future binding/delivery/greenfield relational shape
 folded into the still-unmerged migration `0041` (no `0042`). Link/rotate/eligibility
 activate completely; binding workers remain schema-only for later slices.
 
-## Final cumulative PR scope
+## Final cumulative fold scope
 
-This Slice 1 ships as one cumulative clean-replacement PR from exact
-`origin/main` (`9f20c3ea9a4d972a2564374abd16c63ed5f6fe87`). It is not a final-repair
-delta layered on an undeclared branch. The complete comparison contains exactly
-207 paths: 72 additions, 131 modifications, and 4 deletions. The deleted paths are
-`db/src/schemaIntegrations.ts`,
-`services/orchestrator/src/engine/repositories/orgIntegrations.ts`, and
-`services/orchestrator/tests/conformance/integrationRepositories.conformance.test.ts`,
-plus `services/orchestrator/src/routes/projects/greenfieldDeployDestroy.ts`.
+The final fold is one cumulative clean-replacement candidate from exact
+`origin/main` (`9f20c3ea9a4d972a2564374abd16c63ed5f6fe87`). It is not a repair delta
+layered on an undeclared branch. The manifest below is the machine-readable
+ownership boundary for the lifecycle input, the intake/security input, and the
+tenant/recovery convergence repair. Its path/status counts are frozen against the
+final candidate only after the semantic fold is complete; no production or test
+path may be edited before it appears here.
 
 The manifest below is exhaustive for `origin/main...candidate`, including the
 four deletions. No changed path may sit outside it. This remains a bounded P1
@@ -44,7 +43,7 @@ That count cannot advance before exact-candidate independent audit, live proof,
 CI, shared smoke, and hosted merge; even then, IN-1 remains incomplete until the
 downstream binding activation and remaining cutover slices land.
 
-### Exhaustive 207-path manifest
+### Exhaustive final-fold path manifest
 
 <!-- final-freeze-manifest:start -->
 
@@ -255,6 +254,86 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/tests/visionInterview.test.ts`
 - `services/orchestrator/tests/visionInterviewDesignContract.test.ts`
 - `services/orchestrator/tests/visionInterviewLifecycleDrift.test.ts`
+- `db/src/schemaInbox.ts`
+- `docs/architecture/autonomy-engine.md`
+- `services/dashboard/src/api/inboxClient.ts`
+- `services/dashboard/src/api/inboxTypes.ts`
+- `services/dashboard/src/components/inbox/InboxBody.tsx`
+- `services/dashboard/src/components/onboarding/new/ArrivalStep.tsx`
+- `services/dashboard/tests/greenfieldOnboarding.render.test.ts`
+- `services/dashboard/tests/inbox.render.test.ts`
+- `services/orchestrator/src/engine/config/orgConfig.ts`
+- `services/orchestrator/src/engine/contracts/deployAdapter.ts`
+- `services/orchestrator/src/engine/credentials/githubTokenResolver.ts`
+- `services/orchestrator/src/engine/credentials/orgGithubApp.ts`
+- `services/orchestrator/src/engine/credentials/refNamespace.ts`
+- `services/orchestrator/src/engine/deploy/directApiDeployAdapter.ts`
+- `services/orchestrator/src/engine/deploy/manualExternalDeployAdapter.ts`
+- `services/orchestrator/src/engine/forge/inbox/connectorErrors.ts`
+- `services/orchestrator/src/engine/forge/inbox/connectorMap.ts`
+- `services/orchestrator/src/engine/forge/inbox/githubConnector.ts`
+- `services/orchestrator/src/engine/forge/inbox/index.ts`
+- `services/orchestrator/src/engine/forge/inbox/issuesConnector.ts`
+- `services/orchestrator/src/engine/forge/inbox/jiraConnector.ts`
+- `services/orchestrator/src/engine/forge/inbox/linearConnector.ts`
+- `services/orchestrator/src/engine/forge/inbox/repoLink.ts`
+- `services/orchestrator/src/engine/forge/inbox/sentryConnector.ts`
+- `services/orchestrator/src/engine/forge/inbox/types.ts`
+- `services/orchestrator/src/engine/forge/intake/index.ts`
+- `services/orchestrator/src/engine/forge/intake/issueSourceSeam.ts`
+- `services/orchestrator/src/engine/forge/intake/pipeline.ts`
+- `services/orchestrator/src/engine/forge/intake/poller.ts`
+- `services/orchestrator/src/engine/forge/intake/sourceTerminalization.ts`
+- `services/orchestrator/src/engine/forge/intake/sourceValidation.ts`
+- `services/orchestrator/src/engine/forge/intake/webhookMapping.ts`
+- `services/orchestrator/src/engine/forge/intake/webhookProcessor.ts`
+- `services/orchestrator/src/engine/integrations/integrationAuthorityEligibility.ts`
+- `services/orchestrator/src/engine/integrations/integrationAuthorityValidation.ts`
+- `services/orchestrator/src/engine/integrations/provisioningPersistence.ts`
+- `services/orchestrator/src/engine/integrations/slack/slackApiTransport.ts`
+- `services/orchestrator/src/engine/postMerge/deployOnMergeAuthority.ts`
+- `services/orchestrator/src/engine/postMerge/deployOnMergeReads.ts`
+- `services/orchestrator/src/engine/provisioners/deployOperationAuthority.ts`
+- `services/orchestrator/src/engine/provisioners/deployProvisionerTypes.ts`
+- `services/orchestrator/src/engine/provisioners/flyDeployProvisioner.ts`
+- `services/orchestrator/src/engine/provisioners/vercelDeployProvisioner.ts`
+- `services/orchestrator/src/engine/repositories/inbox.ts`
+- `services/orchestrator/src/engine/repositories/inboxSourceLifecycle.ts`
+- `services/orchestrator/src/engine/repositories/integrationConnectionFinalizeResult.ts`
+- `services/orchestrator/src/engine/repositories/webhookEvents.ts`
+- `services/orchestrator/src/routes/githubWebhooks/issues.ts`
+- `services/orchestrator/src/routes/inbox/index.ts`
+- `services/orchestrator/src/routes/inbox/sourceRecovery.ts`
+- `services/orchestrator/src/routes/inbox/webhookProvision.ts`
+- `services/orchestrator/src/routes/orgs/index.ts`
+- `services/orchestrator/tests/candidateInbox.test.ts`
+- `services/orchestrator/tests/candidateInboxJira.test.ts`
+- `services/orchestrator/tests/candidateInboxLinear.test.ts`
+- `services/orchestrator/tests/conformance/buildDeployAdapter.conformance.test.ts`
+- `services/orchestrator/tests/conformance/deployProvisionerNamespacing.test.ts`
+- `services/orchestrator/tests/conformance/fakes/scriptedSentryTransport.ts`
+- `services/orchestrator/tests/conformance/integrationProvisionerConformance.ts`
+- `services/orchestrator/tests/fakes/fakeSentryProvisioner.ts`
+- `services/orchestrator/tests/githubTokenResolver.test.ts`
+- `services/orchestrator/tests/helpers/sentryIntakeAuthority.ts`
+- `services/orchestrator/tests/inboxConnectorWire.test.ts`
+- `services/orchestrator/tests/inboxConnectorWireMore.test.ts`
+- `services/orchestrator/tests/inboxSourceConfigVertical.test.ts`
+- `services/orchestrator/tests/inboxSourceCreation.test.ts`
+- `services/orchestrator/tests/inboxSourceRecovery.test.ts`
+- `services/orchestrator/tests/inboxStore.test.ts`
+- `services/orchestrator/tests/inboxTenantLineageRls.integration.test.ts`
+- `services/orchestrator/tests/ingestionAutonomous.test.ts`
+- `services/orchestrator/tests/intakeCredentialResolution.test.ts`
+- `services/orchestrator/tests/intakeTerminalization.test.ts`
+- `services/orchestrator/tests/integrationAuthority.exactOperation.integration.test.ts`
+- `services/orchestrator/tests/integrationAuthority.exactOperation.test.ts`
+- `services/orchestrator/tests/integrationFinalizationAuthority.test.ts`
+- `services/orchestrator/tests/integrations/slackApiTransport.test.ts`
+- `services/orchestrator/tests/orgConfig.test.ts`
+- `services/orchestrator/tests/orgConfigGateRoutes.test.ts`
+- `services/orchestrator/tests/orgGithubApp.test.ts`
+- `services/orchestrator/tests/webhookProvisionRetry.test.ts`
 <!-- final-freeze-manifest:end -->
 
 Clean replacement also removes the old stable-path helper, incomplete
