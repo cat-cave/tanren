@@ -1,4 +1,4 @@
-<!-- cspell:ignore evsub -->
+<!-- cspell:ignore evsub descoped -->
 
 # Mission-complete node ledger — the single source of truth
 
