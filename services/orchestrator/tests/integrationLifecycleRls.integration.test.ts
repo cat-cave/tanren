@@ -22,21 +22,30 @@ const ORG_B = "org_in_lifecycle_b";
 const PROJECT_A = "project_in_lifecycle_a";
 const PROJECT_B = "project_in_lifecycle_b";
 const DIGEST = `sha256:${"a".repeat(64)}`;
+// All 22 tenant tables created with RLS by migration 0043. The catalog assertion
+// below live-proves every one has ENABLE + FORCE row security and exactly one
+// org-isolation policy — the full foundation, not a subset.
 const LIFECYCLE_TABLES = [
   "behavior_integration_requirements",
   "capability_node_dependencies",
   "capability_nodes",
+  "delivery_run_bindings",
   "delivery_runs",
   "delivery_stage_attempts",
   "integration_binding_env",
+  "integration_binding_generations",
   "integration_bindings",
   "integration_reconciliations",
   "integration_requirements",
   "integration_resource_snapshots",
   "integration_validation_proofs",
+  "org_integration_connection_auth_generations",
+  "org_integration_connection_operations",
   "org_integration_connections",
+  "org_integration_grant_generations",
   "org_integration_grants",
   "project_app_env",
+  "project_derivations",
   "project_integration_grant_selections",
   "spec_capability_dependencies",
 ] as const;
