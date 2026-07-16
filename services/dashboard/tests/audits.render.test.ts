@@ -104,8 +104,10 @@ function mockOrchestrator(snapshot: unknown = SNAPSHOT): void {
       return new Response(JSON.stringify({ job: {} }), { status: 201 });
     if (/\/audits\/[^/]+\/(enable|disable|run)$/u.test(url) && method === "POST")
       return new Response(JSON.stringify({ job: {} }), { status: 200 });
-    // Costs gather → no runs, so the heatmap (window-fill) is empty.
-    if (/\/runs(\?|$)/u.test(url)) return new Response(JSON.stringify({ runs: [] }), { status: 200 });
+    // Window-fill heatmap reads the canonical org-costs model (no run fan-out).
+    if (/\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url)) {
+      return new Response(JSON.stringify({ orgId: ORG.id, costs: [], runs: [], nextCursor: null }), { status: 200 });
+    }
     if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
     return new Response("not found", { status: 404 });
   });
@@ -162,6 +164,40 @@ describe("scheduled audits surface", () => {
     expect(html).toContain("new scheduled audit");
     expect(html).toContain("data-composer");
     expect(html).toContain('data-action="create"');
+  });
+
+  it("uses the org-costs read model for the heatmap and surfaces unavailable on failure", async () => {
+    const calls: string[] = [];
+    const original = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push(url);
+      return original(input, init);
+    });
+    await (await build()).request("/audits");
+    expect(calls.some((url) => /\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url))).toBe(true);
+    expect(calls.some((url) => /\/projects\/[^/]+\/runs/u.test(url))).toBe(false);
+    expect(calls.some((url) => /\/runs\/[^/]+\/costs/u.test(url))).toBe(false);
+
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url))
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/audits$/u.test(url) && method === "GET")
+        return new Response(JSON.stringify(SNAPSHOT), { status: 200 });
+      if (/\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url)) return new Response("down", { status: 503 });
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const html = await (await (await build()).request("/audits")).text();
+    expect(html).toContain("data-heatmap-unavailable");
+    expect(html).toContain("org cost read failed");
   });
 
   it("composer POST creates a job and redirects back", async () => {

@@ -192,9 +192,11 @@ export const RunStore = {
               (SELECT ${COMPLETE_REAL_COST_TOTAL}
                  FROM cost_records cr
                 WHERE cr.run_id = r.run_id AND cr.org_id = $2) AS cost_total_usd,
-              (SELECT MAX(ts) FROM events WHERE events.run_id = r.run_id) AS last_event_at
+              (SELECT MAX(e.ts)
+                 FROM events e
+                WHERE e.run_id = r.run_id AND e.org_id = $2) AS last_event_at
          FROM runs r
-         LEFT JOIN specs s ON s.spec_id = r.spec_id
+         LEFT JOIN specs s ON s.spec_id = r.spec_id AND s.project_id = r.project_id AND s.org_id = $2
         WHERE ${where}
         ORDER BY r.started_at DESC, r.run_id ASC`,
       params,

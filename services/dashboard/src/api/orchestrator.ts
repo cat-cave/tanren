@@ -18,10 +18,8 @@ import { findRunLocation as resolveRunLocation, type FindRunLocationResult } fro
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
-  CostRecord,
   CreatedProject,
   CredentialRecord,
-  CursorPage,
   DoctorReport,
   ForgeAnswer,
   InsightSummary,
@@ -96,43 +94,6 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return json.projects ?? [];
   }
 
-  /**
-   * All cost records for a run (`GET .../runs/:runId/costs`), walking the cursor pages
-   * until the cursor is exhausted so the costs dashboard sees the FULL set. Progress-
-   * based: each page MUST yield a NEW cursor — a repeated cursor means the API stopped
-   * advancing, so the walk STOPS on that (returning what it has) rather than looping
-   * forever. Empty on failure.
-   */
-  async listRunCosts(orgId: string, projectId: string, runId: string): Promise<CostRecord[]> {
-    const base = `${this.orchestratorUrl}/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(
-      projectId,
-    )}/runs/${encodeURIComponent(runId)}/costs`;
-    const all: CostRecord[] = [];
-    const seenCursors = new Set<string>();
-    let cursor: string | null = null;
-    for (;;) {
-      const url = cursor === null ? base : `${base}?cursor=${encodeURIComponent(cursor)}`;
-      const response = await this.fetchImpl(url, { headers: this.headers() }).catch(() => {});
-      if (response === undefined || !response.ok) {
-        break;
-      }
-      const json = (await response.json()) as Partial<CursorPage<CostRecord>>;
-      for (const item of json.items ?? []) {
-        all.push(item);
-      }
-      const nextCursor = json.nextCursor ?? null;
-      // Stop on an exhausted OR non-advancing cursor (a repeated cursor would loop
-      // forever). The dashboard read is best-effort, so a non-advancing API stops the
-      // walk with what it has rather than throwing.
-      if (nextCursor === null || seenCursors.has(nextCursor)) {
-        break;
-      }
-      seenCursors.add(nextCursor);
-      cursor = nextCursor;
-    }
-    return all;
-  }
-
   /** Bounded, strictly decoded org cost read; partial/faulted walks fail closed. */
   async getOrgCosts(orgId: string): Promise<GetOrgCostsResult> {
     return readOrgCosts(
@@ -153,18 +114,16 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
     return result.body;
   }
 
-  // Product reads/writes below use shared getJson/sendJson; degrade empty on failure.
+  // Product reads/writes below use shared getJson/sendJson. List reads that
+  // feed spend/history return `undefined` on transport/HTTP/decode failure so
+  // callers render an explicit unavailable state rather than laundering
+  // failure into empty / $0.
 
-  /** Runs for attention queue + KPIs; empty array on failure. */
-  async listRuns(
-    orgId: string,
-    projectId: string,
-    query: { status?: string; specId?: string } = {},
-  ): Promise<RunListItem[]> {
-    return (await this.listRunsMaybe(orgId, projectId, query)) ?? [];
-  }
-
-  /** listRuns, but undefined on failure (unavailable, not fake empty/zeros). */
+  /**
+   * Runs for attention queue + KPIs. `undefined` on failure (unavailable,
+   * not fake empty/zeros) — callers MUST distinguish that from a legitimate
+   * empty 200 response.
+   */
   async listRunsMaybe(
     orgId: string,
     projectId: string,

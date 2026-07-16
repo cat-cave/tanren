@@ -45,7 +45,8 @@ export function mountHaltedRunScreens(app: Hono, deps: ShellDeps): void {
     for (const org of orgs) {
       const projects = await client.listProjects(org.id);
       for (const project of projects) {
-        const runs = await client.listRuns(org.id, project.projectId);
+        const runs = await client.listRunsMaybe(org.id, project.projectId);
+        if (runs === undefined) continue;
         for (const run of runs) {
           if (isRecoverableRun(run)) {
             halted.push({

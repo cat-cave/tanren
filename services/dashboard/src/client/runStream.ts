@@ -21,11 +21,6 @@
  * contract-typed).
  */
 
-interface BillingAgg {
-  tokens: number;
-  usd: number;
-}
-
 interface CostRecordFrame {
   billingMode: "per_token" | "subscription" | "self_hosted" | "unattributed";
   model: string;
@@ -44,8 +39,16 @@ interface TaskFrame {
   endedAt: string | null;
 }
 
+interface BillingAgg {
+  tokens: number;
+  knownUsd: number;
+  unknownRecords: number;
+}
+
 interface CostTotalsState {
-  perTokenUsd: number;
+  perTokenKnownUsd: number;
+  perTokenUnknown: number;
+  perTokenPriced: number;
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
@@ -76,9 +79,17 @@ function formatUsd(amount: number): string {
   return `$${amount.toFixed(4)}`;
 }
 
+function formatCostLabel(totals: CostTotalsState): string {
+  if (totals.perTokenPriced === 0 && totals.perTokenUnknown > 0) return "unknown";
+  if (totals.perTokenUnknown > 0) return `${formatUsd(totals.perTokenKnownUsd)} known`;
+  return formatUsd(totals.perTokenKnownUsd);
+}
+
 function emptyTotals(): CostTotalsState {
   return {
-    perTokenUsd: 0,
+    perTokenKnownUsd: 0,
+    perTokenUnknown: 0,
+    perTokenPriced: 0,
     inputTokens: 0,
     outputTokens: 0,
     cachedInputTokens: 0,
@@ -88,16 +99,23 @@ function emptyTotals(): CostTotalsState {
 }
 
 function applyCost(totals: CostTotalsState, cost: CostRecordFrame): void {
-  const usd = cost.costUsd === null ? 0 : Number.parseFloat(cost.costUsd);
-  const usdSafe = Number.isFinite(usd) ? usd : 0;
+  const parsed = cost.costUsd === null ? null : Number.parseFloat(cost.costUsd);
+  const knownUsd = parsed !== null && Number.isFinite(parsed) ? parsed : null;
   totals.inputTokens += cost.inputTokens;
   totals.outputTokens += cost.outputTokens;
   totals.cachedInputTokens += cost.cachedInputTokens;
   totals.totalTokens += cost.totalTokens;
-  if (cost.billingMode === "per_token") totals.perTokenUsd += usdSafe;
-  const src = totals.bySource.get(cost.billingMode) ?? { tokens: 0, usd: 0 };
+  if (cost.billingMode === "per_token") {
+    if (knownUsd === null) totals.perTokenUnknown += 1;
+    else {
+      totals.perTokenKnownUsd += knownUsd;
+      totals.perTokenPriced += 1;
+    }
+  }
+  const src = totals.bySource.get(cost.billingMode) ?? { tokens: 0, knownUsd: 0, unknownRecords: 0 };
   src.tokens += cost.totalTokens;
-  src.usd += usdSafe;
+  if (knownUsd === null) src.unknownRecords += 1;
+  else src.knownUsd += knownUsd;
   totals.bySource.set(cost.billingMode, src);
 }
 
@@ -107,7 +125,7 @@ function setText(root: HTMLElement, key: string, text: string): void {
 }
 
 function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
-  setText(root, "cost-per-token", formatUsd(totals.perTokenUsd));
+  setText(root, "cost-per-token", formatCostLabel(totals));
   setText(root, "cost-tokens", `${formatTokens(totals.inputTokens)} / ${formatTokens(totals.outputTokens)}`);
   const sources = root.querySelector<HTMLElement>('[data-rd="cost-sources"]');
   if (sources !== null) {
@@ -122,7 +140,10 @@ function renderCostBar(root: HTMLElement, totals: CostTotalsState): void {
       label.textContent = COST_SOURCE_LABEL[mode];
       const amt = document.createElement("span");
       amt.className = "amt";
-      amt.textContent = `${formatTokens(agg.tokens)} tok${agg.usd > 0 ? ` · ${formatUsd(agg.usd)}` : ""}`;
+      let usdPart = "";
+      if (agg.knownUsd > 0) usdPart = ` · ${formatUsd(agg.knownUsd)}${agg.unknownRecords > 0 ? " known" : ""}`;
+      else if (agg.unknownRecords > 0) usdPart = " · unknown";
+      amt.textContent = `${formatTokens(agg.tokens)} tok${usdPart}`;
       row.append(sw, label, amt);
       sources.append(row);
     }
@@ -192,7 +213,9 @@ export function initRunStream(): void {
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
       } = JSON.parse(event.data);
-      totals.perTokenUsd = 0;
+      totals.perTokenKnownUsd = 0;
+      totals.perTokenUnknown = 0;
+      totals.perTokenPriced = 0;
       totals.inputTokens = 0;
       totals.outputTokens = 0;
       totals.cachedInputTokens = 0;

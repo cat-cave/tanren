@@ -223,6 +223,11 @@ export interface AuditsBodyProps {
   windowColumns: WindowFillColumn[];
   lowNames: string[];
   error?: string;
+  /**
+   * True when the org-costs heatmap gather failed. Distinct from a legitimate
+   * empty heatmap (no subscription records in window).
+   */
+  heatmapUnavailable?: boolean;
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
 }
@@ -262,6 +267,17 @@ export function AuditsBody(props: AuditsBodyProps) {
         {props.error !== undefined && (
           <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">
             {props.error}
+          </div>
+        )}
+        {props.heatmapUnavailable === true && (
+          <div
+            class="placeholder-card"
+            style="border-left:2px solid var(--ember-08)"
+            role="alert"
+            data-heatmap-unavailable
+          >
+            Subscription-window heatmap is incomplete — the org cost read failed, so the idle-window fill below may
+            under-represent availability. This is not an empty heatmap.
           </div>
         )}
         <WhyAudits columns={props.windowColumns} lowNames={props.lowNames} />

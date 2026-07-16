@@ -116,6 +116,65 @@ describe("P2A-0014 SSE driver", () => {
     expect(frames).toBeDefined();
   });
 
+  it("resumes cost deltas past Number.MAX_SAFE_INTEGER without skip or replay", async () => {
+    const pool = new RunRoutesPool();
+    pool.seedProject({ project_id: "project_big", org_id: "org_acme" });
+    pool.seedSpec({ spec_id: "spec_big", project_id: "project_big" });
+    pool.seedRun({ run_id: "run_big", spec_id: "spec_big", project_id: "project_big", status: "running" });
+    // Number.MAX_SAFE_INTEGER + 2 — must stay exact decimal text end-to-end.
+    const huge = "9007199254740993";
+    const next = "9007199254740994";
+    pool.seedCost({
+      id: huge,
+      run_id: "run_big",
+      task_id: "task_1",
+      project_id: "project_big",
+      input_tokens: 1,
+      total_tokens: 1,
+      cost_usd: "0.01",
+    });
+    const captured: Array<{ event: string; data: unknown }> = [];
+    const driver = new SseDriver(
+      {
+        pool: pool.asPgPool(),
+        runId: "run_big",
+        projectId: "project_big",
+        orgId: "org_acme",
+        actor,
+        rawView: false,
+        intervalMs: 0,
+        now: () => new Date("2026-05-01T00:00:00.000Z"),
+      },
+      (frame) => {
+        const parsed = parseFrame(frame);
+        if (parsed !== undefined) captured.push(parsed);
+      },
+    );
+    // Snapshot would set lastCostId from the huge id as exact decimal text.
+    (driver as unknown as { lastCostId: string }).lastCostId = huge;
+    (driver as unknown as { lastStatusFingerprint: string }).lastStatusFingerprint = "running:";
+    pool.seedCost({
+      id: next,
+      run_id: "run_big",
+      task_id: "task_2",
+      project_id: "project_big",
+      input_tokens: 2,
+      total_tokens: 2,
+      cost_usd: "0.02",
+    });
+    await driver.tick();
+    const costsFrame = captured.find((f) => f.event === "costs");
+    expect(costsFrame).toBeDefined();
+    const costs = (costsFrame!.data as { costs: Array<{ id: string | number }> }).costs;
+    expect(costs.map((c) => String(c.id))).toEqual([next]);
+    // A second tick must not re-emit the same cost (no double count / replay).
+    const before = captured.filter((f) => f.event === "costs").length;
+    await driver.tick();
+    expect(captured.filter((f) => f.event === "costs").length).toBe(before);
+    // Cursor state stayed exact decimal text (no Number() precision loss).
+    expect((driver as unknown as { lastCostId: string }).lastCostId).toBe(next);
+  });
+
   it("emits a status frame when the run's status changes between ticks", async () => {
     const pool = new RunRoutesPool();
     pool.seedRun({

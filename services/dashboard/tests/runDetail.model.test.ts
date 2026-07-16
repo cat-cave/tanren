@@ -151,16 +151,36 @@ describe("summarizeCosts — cost bar across all sources", () => {
     expect(totals.totalTokens).toBe(530);
     expect(totals.bySource.get("per_token")?.tokens).toBe(150);
     expect(totals.bySource.get("subscription")?.tokens).toBe(300);
+    expect(totals.bySource.get("subscription")?.unknownRecords).toBe(1);
     expect(totals.bySource.get("self_hosted")?.tokens).toBe(80);
     expect(totals.byModel.get("claude-y")?.provider).toBe("anthropic");
     // never invents an unknown source: only the three real billing modes appear
     expect([...totals.bySource.keys()].sort()).toEqual(["per_token", "self_hosted", "subscription"]);
   });
 
-  it("treats a null/non-numeric costUsd as zero dollars without dropping tokens", () => {
+  it("never launders null costUsd into $0 — tokens still aggregate", () => {
     const totals = summarizeCosts([cost({ costUsd: null, totalTokens: 42 })]);
-    expect(totals.perTokenUsd).toBe(0);
+    expect(totals.perTokenUsd).toBeNull();
+    expect(totals.perTokenHasUnknown).toBe(true);
+    expect(totals.perTokenKnownUsd).toBe(0);
     expect(totals.totalTokens).toBe(42);
+  });
+
+  it("keeps a known subtotal when some USD is unknown (partial coverage)", () => {
+    const totals = summarizeCosts([
+      cost({ id: 1, costUsd: "0.05", totalTokens: 10 }),
+      cost({ id: 2, costUsd: null, totalTokens: 20 }),
+    ]);
+    expect(totals.perTokenUsd).toBeCloseTo(0.05, 5);
+    expect(totals.perTokenHasUnknown).toBe(true);
+    expect(totals.perTokenKnownUsd).toBeCloseTo(0.05, 5);
+    expect(totals.totalTokens).toBe(30);
+  });
+
+  it("preserves a genuine known zero", () => {
+    const totals = summarizeCosts([cost({ costUsd: "0", totalTokens: 5 })]);
+    expect(totals.perTokenUsd).toBe(0);
+    expect(totals.perTokenHasUnknown).toBe(false);
   });
 });
 

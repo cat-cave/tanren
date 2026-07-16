@@ -24,7 +24,7 @@
 import type { Context, Hono } from "hono";
 import { formField } from "../formField.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
-import { getProjectDag } from "../../api/projectDag.js";
+import { getProjectDag, ProjectDagUnavailableError } from "../../api/projectDag.js";
 import { ROLE_IDS, type ProjectConfig, type RoleId, type RoutingChainEntry } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { ProjectDagBody } from "../../components/project/ProjectDagBody.js";
@@ -93,35 +93,25 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
     // clientDepsFor). Pulse falls back to data-derived copy when undefined.
     const client = clientFor(c, deps);
     const mode = resolveProjectMode(c);
-    const [runs, insights, milestones, feed] = await Promise.all([
-      client.listRuns(orgId, projectId),
+    const [runsMaybe, insights, milestones, feed] = await Promise.all([
+      client.listRunsMaybe(orgId, projectId),
       client.listInsights(orgId, projectId),
       client.listMilestones(orgId, projectId),
       client.listFeed(orgId, projectId),
     ]);
+    const runs = runsMaybe ?? [];
     const model = buildProjectViewModel({
       projectId,
       projectName: ctx.project.name,
       runs,
+      runsAvailable: runsMaybe !== undefined,
       insights,
       milestones,
       feed,
       narration: undefined,
       weekSpend: summarizeRunCosts(runs),
     });
-    if (mode === "dag") {
-      const dag = await getProjectDag(client, orgId, projectId);
-      return renderShell(
-        c,
-        ctx,
-        { title: `tanren · ${ctx.project.name} · dag` },
-        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />,
-      );
-    }
-    return renderShell(
-      c,
-      ctx,
-      { title: `tanren · ${ctx.project.name}` },
+    const view = (
       <ProjectViewBody
         projectId={projectId}
         projectName={ctx.project.name}
@@ -129,8 +119,21 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
         model={model}
         insights={insights}
         csrfToken={ctx.csrfToken}
-      />,
+      />
     );
+    if (mode !== "dag") return renderShell(c, ctx, { title: `tanren · ${ctx.project.name}` }, view);
+    try {
+      const dag = await getProjectDag(client, orgId, projectId);
+      return renderShell(
+        c,
+        ctx,
+        { title: `tanren · ${ctx.project.name} · dag` },
+        <ProjectDagBody projectId={projectId} projectName={ctx.project.name} dag={dag} model={model} />,
+      );
+    } catch (error) {
+      if (!(error instanceof ProjectDagUnavailableError)) throw error;
+      return renderShell(c, ctx, { title: `tanren · ${ctx.project.name} · dag` }, view);
+    }
   });
 
   // -------------------------------------------------------------------------
@@ -143,12 +146,12 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       return renderShell(c, ctx, { title: "tanren · specs" }, notFoundBody(projectId));
     }
     const client = clientFor(c, deps);
-    const [specs, runs] = await Promise.all([
+    const [specs, runsMaybe] = await Promise.all([
       client.listSpecs(ctx.org.id, projectId),
-      client.listRuns(ctx.org.id, projectId),
+      client.listRunsMaybe(ctx.org.id, projectId),
     ]);
     const runBySpec: Record<string, string | undefined> = {};
-    for (const run of runs) {
+    for (const run of runsMaybe ?? []) {
       if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
     }
     return renderShell(

@@ -42,12 +42,12 @@ export function queryOrgCostsReadModel(
     return { rows, rowCount: rows.length };
   }
   if (!ORG_RUN_PAGE_SHAPE.test(sql)) return undefined;
-  // selectListForProject also has `FROM runs r LEFT JOIN specs s` but joins
-  // only on spec_id and scopes by `r.project_id = $1 AND r.org_id = $2`, so
-  // neither org-costs marker is present and it must fall through to the
-  // list loader unchanged. Anything that carries one marker is declaring
-  // itself an org-costs run page — then both markers must be present and
-  // canonical, or we refuse to fake (the regression this pin catches).
+  // Project list (selectListForProject) also has `FROM runs r LEFT JOIN specs s`
+  // but scopes by `r.project_id = $1 AND r.org_id = $2` (and joins with $2 for
+  // org). Neither org-costs marker (`WHERE r.org_id = $1` alone, or the $1
+  // constrained join) is present, so it falls through to the list loader.
+  // Anything that carries one org-costs marker is declaring itself an
+  // org-costs run page — then both markers must be present and canonical.
   const looksLikeOrgCostsRunPage = ORG_RUN_PAGE_CONSTRAINED_JOIN.test(sql) || ORG_RUN_PAGE_WHERE.test(sql);
   if (!looksLikeOrgCostsRunPage) return undefined;
   if (!ORG_RUN_PAGE_WHERE.test(sql)) {

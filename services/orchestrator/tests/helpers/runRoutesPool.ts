@@ -10,6 +10,7 @@
 
 import type pg from "pg";
 import { queryOrgCostsReadModel } from "./runRoutesPoolOrgCosts.js";
+import { queryProjectListReadModel } from "./runRoutesPoolProjectList.js";
 
 function taskKindOrder(kind: string): number {
   return ({ plan: 1, write: 2, check: 3, audit: 4, ci: 5 } as Record<string, number>)[kind] ?? 99;
@@ -270,25 +271,8 @@ export class RunRoutesPool {
       const run = this.runs.find((r) => r.run_id === String(params[0]) && r.org_id === String(params[1]));
       return run === undefined ? { rows: [], rowCount: 0 } : { rows: [run], rowCount: 1 };
     }
-    if (trimmed.startsWith("SELECT") && /FROM runs/u.test(trimmed) && /WHERE/u.test(trimmed)) {
-      // list loader: params are [projectId, orgId, ...status/spec filters].
-      const projectId = String(params[0]);
-      const orgId = String(params[1]);
-      const filtered = this.runs
-        .filter((r) => r.project_id === projectId && r.org_id === orgId)
-        .filter((r) => params[2] === undefined || r.status === params[2] || r.spec_id === params[2])
-        .map((r) => ({
-          ...r,
-          spec_title: this.specs.find((s) => s.spec_id === r.spec_id)?.title ?? null,
-          cost_total_usd: completeRealCostTotal(this.costs.filter((c) => c.run_id === r.run_id && c.org_id === orgId)),
-          last_event_at:
-            this.events
-              .filter((e) => e.run_id === r.run_id)
-              .map((e) => e.ts)
-              .sort((a, b) => b.getTime() - a.getTime())[0] ?? null,
-        }));
-      return { rows: filtered, rowCount: filtered.length };
-    }
+    const projectList = queryProjectListReadModel(trimmed, params, this, completeRealCostTotal);
+    if (projectList !== undefined) return projectList;
     // Tasks list (run_id = $1 AND org_id = $2)
     if (/FROM tasks\s+WHERE run_id = \$1 AND org_id = \$2/u.test(trimmed)) {
       const rows = this.tasks
@@ -359,13 +343,13 @@ export class RunRoutesPool {
         .slice(0, limit);
       return { rows, rowCount: rows.length };
     }
-    // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
+    // Events: SSE polling (run_id = $1 AND org_id = $3 AND id > $2[::bigint])
     if (/FROM events\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
-      const lastId = Number(params[1]);
+      const lastId = BigInt(String(params[1]));
       const orgId = String(params[2]);
       const rows = this.events
-        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId && e.id > lastId)
-        .sort((a, b) => a.ts.getTime() - b.ts.getTime() || a.id - b.id)
+        .filter((e) => e.run_id === String(params[0]) && e.org_id === orgId && BigInt(e.id) > lastId)
+        .sort((a, b) => compareBigintText(a.id, b.id))
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
@@ -426,13 +410,13 @@ export class RunRoutesPool {
       return { rows, rowCount: rows.length };
     }
 
-    // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2)
+    // Costs: SSE polling (run_id = $1 AND org_id = $3 AND id > $2[::bigint])
     if (/FROM cost_records\s+WHERE run_id = \$1 AND org_id = \$3 AND id > \$2/u.test(trimmed)) {
       const lastId = BigInt(String(params[1]));
       const orgId = String(params[2]);
       const rows = this.costs
         .filter((c) => c.run_id === String(params[0]) && c.org_id === orgId && BigInt(c.id) > lastId)
-        .sort((a, b) => a.recorded_at.getTime() - b.recorded_at.getTime() || compareBigintText(a.id, b.id))
+        .sort((a, b) => compareBigintText(a.id, b.id))
         .slice(0, 200);
       return { rows, rowCount: rows.length };
     }

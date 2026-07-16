@@ -195,13 +195,27 @@ function attentionSub(kind: DagStatus, node: DagNode): string {
  * a source is unreachable — the view renders a "fresh DAG" empty state rather
  * than 500-ing.
  */
+export class ProjectDagUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectDagUnavailableError";
+  }
+}
+
+/**
+ * Fetch + assemble the project DAG. A failed run-list is loud (not an empty
+ * graph that looks like a greenfield project with no runs).
+ */
 export async function getProjectDag(client: OrchestratorClient, orgId: string, projectId: string): Promise<ProjectDag> {
   const [specs, milestones, runs, behaviors] = await Promise.all([
     client.listSpecs(orgId, projectId),
     client.listMilestones(orgId, projectId),
-    client.listRuns(orgId, projectId),
+    client.listRunsMaybe(orgId, projectId),
     client.listAllBehaviors(orgId, projectId),
   ]);
+  if (runs === undefined) {
+    throw new ProjectDagUnavailableError("Project DAG unavailable: the run-list read failed.");
+  }
 
   // Behaviour linkage is not yet exposed per-spec by the read API, so we leave
   // `behaviorsBySpec` empty for now and surface the project behaviour count via

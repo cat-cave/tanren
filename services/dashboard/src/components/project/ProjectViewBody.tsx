@@ -57,6 +57,12 @@ export function ProjectViewBody(props: ProjectViewBodyProps) {
       />
       <KpiStrip items={model.kpis} />
       <div class="page-body">
+        {!model.runsAvailable && (
+          <div class="placeholder-card" role="alert" data-runs-unavailable style="margin-bottom:12px">
+            Run history and run-derived KPIs (including week spend) are unavailable — the orchestrator read failed. This
+            is not a $0 empty project.
+          </div>
+        )}
         <div class="split-chat">
           <ForgeNarrationCard {...props} />
           <div class="col">

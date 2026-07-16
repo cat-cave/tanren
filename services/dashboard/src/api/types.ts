@@ -405,12 +405,6 @@ export interface NotificationDeliveriesResponse {
   deliveries: NotificationDelivery[];
 }
 
-/** A cursor-paginated page wrapper, matching the orchestrator `CursorPage<T>`. */
-export interface CursorPage<T> {
-  items: T[];
-  nextCursor: string | null;
-}
-
 // RunSpecSummary and RunDetail are generated from contracts/json/http/** and
 // re-exported at the top of this file. The forge-thread bundle embedded in
 // RunDetail (`{ threadId, recentTurns }`) is inlined by the generated type, so

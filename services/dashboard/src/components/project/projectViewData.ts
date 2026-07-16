@@ -57,6 +57,8 @@ export interface ProjectViewModel {
   pulseHeadline: string;
   pulseSub: string;
   liveLabel: string;
+  /** False when the run-list read failed (not a legitimate empty project). */
+  runsAvailable: boolean;
   kpis: KpiItem[];
   attention: AttentionEntry[];
   dagNodes: DagNode[];
@@ -69,6 +71,8 @@ export interface BuildProjectViewInput {
   projectId: string;
   projectName: string;
   runs: RunListItem[];
+  /** False when listRunsMaybe failed; KPIs/spend must not look like genuine zeros. */
+  runsAvailable?: boolean;
   insights: InsightSummary[];
   milestones: MilestoneSummary[];
   feed: ProjectFeedItem[];
@@ -250,26 +254,45 @@ function humanizeEvent(eventType: string): string {
 }
 
 export function buildProjectViewModel(input: BuildProjectViewInput): ProjectViewModel {
+  const runsAvailable = input.runsAvailable !== false;
+  const unavailable = "unavailable";
   const inFlight = input.runs.filter((run) => OPEN_RUN_STATUSES.has(run.status)).length;
   const needsYou = input.runs.filter((run) => run.needsReview).length + input.insights.length;
   const blocked = input.runs.filter((run) => dagStatusForRun(run) === "blocked").length;
-  const velocity = buildVelocity(input);
+  const velocity = runsAvailable ? buildVelocity(input) : null;
 
   const kpis: KpiItem[] = [
-    { k: "in-flight runs", v: String(inFlight), tone: inFlight > 0 ? "hot" : undefined },
-    { k: "needs you", v: String(needsYou), tone: needsYou > 0 ? "warn" : undefined },
+    {
+      k: "in-flight runs",
+      v: runsAvailable ? String(inFlight) : unavailable,
+      tone: runsAvailable && inFlight > 0 ? "hot" : undefined,
+    },
+    {
+      k: "needs you",
+      v: runsAvailable ? String(needsYou) : unavailable,
+      tone: runsAvailable && needsYou > 0 ? "warn" : undefined,
+    },
     {
       k: "week spend",
-      v:
-        input.weekCapUsd === undefined
+      v: runsAvailable
+        ? input.weekCapUsd === undefined
           ? formatRunCosts(input.weekSpend)
-          : `${formatRunCosts(input.weekSpend)} / ${formatUsd(input.weekCapUsd)}`,
+          : `${formatRunCosts(input.weekSpend)} / ${formatUsd(input.weekCapUsd)}`
+        : unavailable,
     },
     { k: "velocity", v: velocity?.trendLabel ?? "—" },
-    { k: "blocked", v: String(blocked), tone: blocked > 0 ? "warn" : undefined },
+    {
+      k: "blocked",
+      v: runsAvailable ? String(blocked) : unavailable,
+      tone: runsAvailable && blocked > 0 ? "warn" : undefined,
+    },
   ];
 
-  const pulseHeadline = input.narration?.body ?? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpend);
+  const pulseHeadline =
+    input.narration?.body ??
+    (runsAvailable
+      ? defaultPulse(input.projectName, inFlight, needsYou, input.weekSpend)
+      : `${input.projectName}: run state unavailable (orchestrator read failed).`);
   const recentEvent = input.feed[0];
   const pulseSub =
     recentEvent === undefined ? "no recent activity" : `most recent · ${humanizeEvent(recentEvent.eventType)}`;
@@ -277,10 +300,11 @@ export function buildProjectViewModel(input: BuildProjectViewInput): ProjectView
   return {
     pulseHeadline,
     pulseSub,
-    liveLabel: `forge live · ${input.feed.length} events`,
+    liveLabel: runsAvailable ? `forge live · ${input.feed.length} events` : "run state unavailable",
+    runsAvailable,
     kpis,
-    attention: buildAttention(input),
-    dagNodes: buildDagNodes(input),
+    attention: runsAvailable ? buildAttention(input) : [],
+    dagNodes: runsAvailable ? buildDagNodes(input) : [],
     velocity,
     activity: buildActivity(input),
     prompts: input.narration?.prompts ?? [

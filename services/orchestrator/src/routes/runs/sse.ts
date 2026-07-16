@@ -97,8 +97,10 @@ export async function handleSseStream(c: Context, args: SseStreamArgs): Promise<
 // real HTTP response. The driver collects frames via a writer callback; the
 // route handler hands it a streaming writer, tests hand it an array push.
 export class SseDriver {
-  private lastEventId = 0;
-  private lastCostId = 0;
+  // bigserial cursor keys — keep exact decimal text end-to-end. Number(...)
+  // would lose precision above Number.MAX_SAFE_INTEGER and skip/replay deltas.
+  private lastEventId = "0";
+  private lastCostId = "0";
   private lastTaskFingerprint = new Map<string, string>();
   private lastStatusFingerprint = "";
   private lastEmitAt: number;
@@ -157,10 +159,14 @@ export class SseDriver {
     for (const task of tasks) {
       this.lastTaskFingerprint.set(task.taskId, fingerprintTask(task));
     }
-    const lastEvent = recentEvents.at(-1);
-    this.lastEventId = lastEvent === undefined ? 0 : Number(lastEvent.id);
-    const lastCost = costs.at(-1);
-    this.lastCostId = lastCost === undefined ? 0 : Number(lastCost.id);
+    this.lastEventId = maxCursor(
+      "0",
+      recentEvents.map((event) => event.id),
+    );
+    this.lastCostId = maxCursor(
+      "0",
+      costs.map((cost) => cost.id),
+    );
 
     if (TERMINAL_STATUSES.has(run.status)) {
       this.terminalPollsRemaining = TERMINAL_GRACE_POLLS;
@@ -265,15 +271,19 @@ export class SseDriver {
     for (const task of changed) {
       await this.emit("task", task);
     }
-    const lastNewEvent = newEvents.at(-1);
-    if (lastNewEvent !== undefined) {
+    if (newEvents.length > 0) {
+      this.lastEventId = maxCursor(
+        this.lastEventId,
+        newEvents.map((event) => event.id),
+      );
       await this.emit("events", { events: newEvents });
-      this.lastEventId = Number(lastNewEvent.id);
     }
-    const lastNewCost = newCosts.at(-1);
-    if (lastNewCost !== undefined) {
+    if (newCosts.length > 0) {
+      this.lastCostId = maxCursor(
+        this.lastCostId,
+        newCosts.map((cost) => cost.id),
+      );
       await this.emit("costs", { costs: newCosts });
-      this.lastCostId = Number(lastNewCost.id);
     }
     if (this.nowMs() - this.lastEmitAt >= HEARTBEAT_INTERVAL_MS) {
       await this.emit("heartbeat", { ts: this.args.now?.() ?? new Date() });
@@ -372,6 +382,26 @@ function fingerprintTask(task: TaskTimelineEntry): string {
     task.startedAt?.toISOString() ?? "",
     task.endedAt?.toISOString() ?? "",
   ].join("|");
+}
+
+/** Canonical decimal text for a bigserial cursor id (safe int or digit string). */
+function canonicalCursor(value: number | string): string {
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error("unsafe SSE cursor id");
+    return String(value);
+  }
+  if (!/^(0|[1-9][0-9]*)$/u.test(value)) throw new Error("invalid SSE cursor id");
+  return BigInt(value).toString();
+}
+
+/** Monotonic max of bigserial cursors as exact decimal text. */
+function maxCursor(current: string, ids: ReadonlyArray<number | string>): string {
+  let max = BigInt(current);
+  for (const id of ids) {
+    const candidate = BigInt(canonicalCursor(id));
+    if (candidate > max) max = candidate;
+  }
+  return max.toString();
 }
 
 // JSON.stringify drops the Date wrapper; we keep ISO strings so the

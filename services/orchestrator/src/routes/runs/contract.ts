@@ -93,6 +93,9 @@ export type RunEventRow = z.infer<typeof RunEventRow>;
 
 export const RunCostRecord = z
   .object({
+    // bigserial may exceed Number.MAX_SAFE_INTEGER — keep exact decimal text
+    // when the driver hands back a string, and only accept safe integers as
+    // numbers (large ids must wire as digit strings).
     id: z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.string().regex(/^\d+$/u)]),
     runId: z.string().min(1),
     taskId: z.string().min(1),
@@ -122,6 +125,22 @@ export const RunCostRecord = z
   })
   .strict()
   .superRefine((record, context) => {
+    // Five mandatory disjoint typed buckets must sum exactly to totalTokens.
+    // Enforce on the server contract (every HTTP decode path) so the dashboard
+    // is not the only place that rejects a corrupted row.
+    const bucketTotal =
+      record.inputTokens +
+      record.cachedInputTokens +
+      record.cacheCreationTokens +
+      record.outputTokens +
+      record.reasoningOutputTokens;
+    if (record.totalTokens !== bucketTotal) {
+      context.addIssue({
+        code: "custom",
+        path: ["totalTokens"],
+        message: "token buckets do not sum to totalTokens",
+      });
+    }
     if ((record.costBasis === "unknown" || record.costBasis === "unattributed") && record.costUsd !== null) {
       context.addIssue({
         code: "custom",

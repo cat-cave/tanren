@@ -345,12 +345,41 @@ describe("history list (/history)", () => {
     expect(html).toContain("halted");
     // Row links to the run detail.
     expect(html).toContain("/projects/project_easy/runs/run_a1");
+    expect(html).not.toContain("data-runs-unavailable");
   });
 
   it("applies the status filter through the run-list API", async () => {
     const app = await build();
     const html = await (await app.request("/history?status=failed")).text();
     expect(html).toContain("refactor auth");
+    expect(html).not.toContain("add health endpoint");
+  });
+
+  it("renders loud unavailable when the run-list read fails (not empty history)", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/auth/me")) {
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith("/orgs")) {
+        return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      }
+      if (url.includes("/projects") && !url.includes("/runs")) {
+        return new Response(JSON.stringify({ projects: PROJECTS }), { status: 200 });
+      }
+      if (/\/runs(\?|$)/u.test(url)) {
+        return new Response("upstream down", { status: 503 });
+      }
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const html = await (await app.request("/history")).text();
+    expect(html).toContain("data-runs-unavailable");
+    expect(html).toContain("Run history unavailable");
+    expect(html).not.toContain("No runs match this filter yet");
     expect(html).not.toContain("add health endpoint");
   });
 });

@@ -166,12 +166,15 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
     const project = ctx.projects.find((p) => p.projectId === requestedProject) ?? ctx.projects[0];
 
     let runs: RunListItem[] = [];
+    let runsAvailable = true;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new OrchestratorClient({
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      runs = await client.listRuns(ctx.org.id, project.projectId, { status });
+      const runsMaybe = await client.listRunsMaybe(ctx.org.id, project.projectId, { status });
+      runs = runsMaybe ?? [];
+      runsAvailable = runsMaybe !== undefined;
     }
 
     return renderShell(
@@ -180,6 +183,7 @@ export function mountCostsScreen(app: Hono, deps: ShellDeps): void {
       { title: "tanren · run history" },
       <HistoryBody
         runs={runs}
+        runsAvailable={runsAvailable}
         status={status}
         orgId={ctx.org?.id ?? ""}
         orgLogin={ctx.org?.login ?? ""}
