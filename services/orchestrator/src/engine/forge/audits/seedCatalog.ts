@@ -23,15 +23,28 @@ interface CatalogEntry {
   targetWindow: string;
 }
 
-// The standard scheduled-audit catalog every autonomous project bootstraps with.
-// Kinds + cadences mirror `recommended.ts` (the forge-recommends panel), so the
-// seed and the recommendation surface stay consistent.
-export const AUDIT_BOOTSTRAP_CATALOG: ReadonlyArray<CatalogEntry> = [
-  { kind: "security", name: "security scan", cadence: "nightly", targetWindow: "night (00–05) · low fill" },
-  { kind: "deps", name: "dependency freshness", cadence: "nightly", targetWindow: "night (00–05) · low fill" },
-  { kind: "mutation", name: "mutation tests", cadence: "weekly", targetWindow: "self-host gpu (idle)" },
-  { kind: "stale_specs", name: "stale-spec sweep", cadence: "monthly", targetWindow: "night (00–05) · low fill" },
-];
+// The one typed category authority shared by seeding and lifecycle activation.
+// Adding a required autonomous loop happens here once; neither side infers
+// completeness from a count.
+export const AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES = [
+  "security",
+  "deps",
+  "mutation",
+  "stale_specs",
+] as const satisfies readonly AuditKind[];
+export type AuditBootstrapCategory = (typeof AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES)[number];
+
+const AUDIT_BOOTSTRAP_CONFIG: Readonly<Record<AuditBootstrapCategory, Omit<CatalogEntry, "kind">>> = {
+  security: { name: "security scan", cadence: "nightly", targetWindow: "night (00–05) · low fill" },
+  deps: { name: "dependency freshness", cadence: "nightly", targetWindow: "night (00–05) · low fill" },
+  mutation: { name: "mutation tests", cadence: "weekly", targetWindow: "self-host gpu (idle)" },
+  stale_specs: { name: "stale-spec sweep", cadence: "monthly", targetWindow: "night (00–05) · low fill" },
+};
+
+export const AUDIT_BOOTSTRAP_CATALOG: ReadonlyArray<CatalogEntry> = AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES.map((kind) => ({
+  kind,
+  ...AUDIT_BOOTSTRAP_CONFIG[kind],
+}));
 
 export interface SeedAuditCatalogInput {
   client: QueryClient;

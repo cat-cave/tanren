@@ -1,3 +1,6 @@
+import { AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES } from "../../src/engine/forge/audits/seedCatalog.js";
+import { DEFAULT_ROUTE_EVENTS, DEFAULT_ROUTE_MIN_SEVERITY } from "../../src/engine/notifications/seedDefaultRoute.js";
+
 interface QueryResult {
   rows: unknown[];
   rowCount: number;
@@ -20,12 +23,18 @@ interface DerivationEvidenceTables {
 }
 
 export class RoutesPoolDerivationEvidence {
-  readonly notificationEventCounts = new Map<string, number>();
-  readonly auditJobCounts = new Map<string, number>();
+  readonly notificationRoutes = new Map<
+    string,
+    Array<{ event_name: string; route_enabled: number; min_severity: string }>
+  >();
+  readonly auditJobs = new Map<string, Array<{ kind: string; enabled: string }>>();
   readonly personas = new Map<string, { id: string; orgId: string; projectId: string }>();
   readonly behaviors = new Map<string, { id: string; personaId: string }>();
   readonly milestones = new Map<string, { id: string; projectId: string }>();
-  readonly designContracts = new Map<string, { id: string; orgId: string; projectId: string }>();
+  readonly designContracts = new Map<
+    string,
+    { id: string; orgId: string; projectId: string; version: number; domain: string; contract: unknown }
+  >();
 
   seedBootstrap(orgId: string, projectId: string, inboxSources: Array<Record<string, unknown>>) {
     const existing = inboxSources.find((source) => source["org_id"] === orgId && source["project_id"] === projectId);
@@ -39,35 +48,54 @@ export class RoutesPoolDerivationEvidence {
       } satisfies Record<string, unknown>);
     if (existing === undefined) inboxSources.push(source);
     const targetId = `notif_${orgId}`;
-    this.notificationEventCounts.set(targetId, 8);
-    this.auditJobCounts.set(`${orgId}:${projectId}`, 4);
+    this.notificationRoutes.set(
+      targetId,
+      DEFAULT_ROUTE_EVENTS.map((event_name) => ({
+        event_name,
+        route_enabled: 1,
+        min_severity: DEFAULT_ROUTE_MIN_SEVERITY,
+      })),
+    );
+    this.auditJobs.set(
+      `${orgId}:${projectId}`,
+      AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES.map((kind) => ({ kind, enabled: "true" })),
+    );
     return {
       inboxSource: { id: String(source["id"]), created: existing === undefined },
-      notificationRoute: { targetId, created: existing === undefined, events: 8 },
+      notificationRoute: {
+        targetId,
+        created: existing === undefined,
+        requiredEvents: DEFAULT_ROUTE_EVENTS.map((eventName) => ({
+          eventName,
+          minSeverity: DEFAULT_ROUTE_MIN_SEVERITY,
+        })),
+      },
       auditCatalog: {
-        jobs: 4,
-        created: ["security", "deps", "mutation", "stale_specs"] as const,
+        requiredCategories: [...AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES],
+        created: [...AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES],
       },
       errors: [],
     };
   }
 
   handle(sql: string, params: unknown[], tables: DerivationEvidenceTables): QueryResult | undefined {
-    if (sql.includes("AS inbox_exists") && sql.includes("FROM notification_routes")) {
-      const [orgId, projectId, sourceId, targetId] = params.map(String);
+    if (sql.startsWith("SELECT id FROM inbox_sources")) {
+      const [orgId, projectId, sourceId] = params.map(String);
       const inboxExists = tables.inboxSources.some(
         (source) => source["org_id"] === orgId && source["project_id"] === projectId && source["id"] === sourceId,
       );
-      return {
-        rows: [
-          {
-            inbox_exists: inboxExists,
-            notification_events: this.notificationEventCounts.get(targetId) ?? 0,
-            audit_jobs: this.auditJobCounts.get(`${orgId}:${projectId}`) ?? 0,
-          },
-        ],
-        rowCount: 1,
-      };
+      return { rows: inboxExists ? [{ id: sourceId }] : [], rowCount: inboxExists ? 1 : 0 };
+    }
+    if (sql.startsWith("SELECT kind, enabled FROM audit_jobs")) {
+      const rows = this.auditJobs.get(`${String(params[0])}:${String(params[1])}`) ?? [];
+      return { rows, rowCount: rows.length };
+    }
+    if (sql.includes("SELECT t.enabled AS target_enabled")) {
+      const rows = (this.notificationRoutes.get(String(params[1])) ?? []).map((row) => ({
+        target_enabled: 1,
+        ...row,
+      }));
+      return { rows, rowCount: rows.length };
     }
     if (sql.startsWith("SELECT s.connection_id") && sql.includes("FOR UPDATE OF s, c, g")) {
       return {
@@ -113,6 +141,33 @@ export class RoutesPoolDerivationEvidence {
         rowCount: 1,
       };
     }
+    if (
+      sql.startsWith("SELECT id, org_id, project_id, version, domain, contract") &&
+      sql.includes("FROM design_contracts")
+    ) {
+      const row = this.designContracts.get(String(params[2]));
+      if (
+        row === undefined ||
+        row.orgId !== String(params[0]) ||
+        row.projectId !== String(params[1]) ||
+        row.version !== Number(params[3])
+      ) {
+        return { rows: [], rowCount: 0 };
+      }
+      return {
+        rows: [
+          {
+            id: row.id,
+            org_id: row.orgId,
+            project_id: row.projectId,
+            version: row.version,
+            domain: row.domain,
+            contract: row.contract,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
     if (sql.startsWith("INSERT INTO design_contracts")) {
       const row = {
         id: String(params[0]),
@@ -122,7 +177,14 @@ export class RoutesPoolDerivationEvidence {
         domain: String(params[3]),
         contract: JSON.parse(String(params[4])) as unknown,
       };
-      this.designContracts.set(row.id, { id: row.id, orgId: row.org_id, projectId: row.project_id });
+      this.designContracts.set(row.id, {
+        id: row.id,
+        orgId: row.org_id,
+        projectId: row.project_id,
+        version: row.version,
+        domain: row.domain,
+        contract: row.contract,
+      });
       return { rows: [row], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO personas")) {

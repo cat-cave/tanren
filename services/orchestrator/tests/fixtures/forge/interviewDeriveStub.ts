@@ -360,6 +360,9 @@ export function stubPool(): {
         id: String(params[0]),
         orgId: String(params[1]),
         projectId: String(params[2]),
+        version: 1,
+        domain: String(params[3]),
+        contract,
       });
       return {
         rows: [
