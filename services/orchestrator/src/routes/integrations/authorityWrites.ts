@@ -73,6 +73,47 @@ export function mountIntegrationAuthorityWrites(
     if (!parsed.success) return c.json({ error: "invalid_link", issues: parsed.error.issues }, 400);
 
     try {
+      // Completed idempotent replay — return terminal result without restage/reverify.
+      const existingOp = await database.withOrgScope(orgId, async (client) => {
+        const found = await client.query(
+          `SELECT id, stage, status, connection_id, target_auth_generation
+           FROM org_integration_connection_operations
+           WHERE org_id = $1 AND idempotency_key = $2`,
+          [orgId, parsed.data.idempotencyKey],
+        );
+        return found.rows[0] as
+          | {
+              id: string;
+              stage: string;
+              status: string;
+              connection_id: string | null;
+              target_auth_generation: number | null;
+            }
+          | undefined;
+      });
+      if (existingOp?.status === "completed" && existingOp.connection_id !== null) {
+        const inventory = await database.withOrgScope(orgId, (client) =>
+          IntegrationConnectionsStore.listInventory(client, orgId),
+        );
+        const row = inventory.find((item) => item.connectionId === existingOp.connection_id);
+        return c.json(
+          {
+            status: "completed",
+            operationId: existingOp.id,
+            operationUrl: `/orgs/${orgId}/integrations/operations/${existingOp.id}`,
+            providerKind,
+            connectionId: existingOp.connection_id,
+            grantId: row?.grantId,
+            providerPrincipalId: row?.providerPrincipalId,
+            displayName: row?.displayName,
+            authGeneration: row?.currentAuthGeneration ?? existingOp.target_auth_generation,
+            grantGeneration: row?.grantGeneration,
+            capabilities: catalogCapabilitiesForProvider(providerKind),
+            idempotentReplay: true,
+          },
+          202,
+        );
+      }
       const permit = await database.withOrgScope(orgId, (client) =>
         authority.authorizePrincipalVerification(client, {
           orgId,
@@ -114,6 +155,7 @@ export function mountIntegrationAuthorityWrites(
             orgId,
             permit.operationId,
             verified.candidates,
+            { authKind: verified.authKind, scopes: verified.scopes },
           ),
         );
         return c.json(
@@ -284,15 +326,6 @@ export function mountIntegrationAuthorityWrites(
     if (op.stagedSecretHandle === undefined) return c.json({ error: "staged_secret_missing" }, 409);
 
     const staged = { handle: op.stagedSecretHandle, operationId: op.id };
-    const permit = {
-      orgId,
-      providerKind: op.providerKind,
-      operationId: op.id,
-      actorId: actor.userId,
-      stagedSecretHandle: op.stagedSecretHandle,
-      [Symbol.for("PrincipalVerificationPermit")]: true as const,
-    };
-    // Re-issue proper permit brand
     const branded = issuePrincipalVerificationPermit({
       orgId,
       providerKind: op.providerKind,
@@ -300,7 +333,6 @@ export function mountIntegrationAuthorityWrites(
       actorId: actor.userId,
       stagedSecretHandle: op.stagedSecretHandle,
     });
-    void permit;
     try {
       const linked = await database.withOrgScope(orgId, (client) =>
         IntegrationConnectionsStore.finalizeVerifiedLink(
@@ -309,8 +341,8 @@ export function mountIntegrationAuthorityWrites(
             permit: branded,
             staged,
             principal,
-            authKind: "api_key",
-            scopes: [],
+            authKind: op.verifiedAuthKind ?? "api_key",
+            scopes: op.verifiedScopes ?? [],
             selectedPrincipalId: principal.providerPrincipalId,
           },
           integrationSecrets,

@@ -393,8 +393,30 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
 
     const scaffoldSpecs = scaffoldSpecsFor(capture.lifecycle, seed);
 
+    // Project shell first — authorizeOperation requires a real project selection.
+    // Deploy config is merged after provision; selection must land before provider I/O.
+    const project = await createProject(
+      pool,
+      {
+        name: slug,
+        repoUrl,
+        config: {
+          ...baseConfig,
+          ...productVisionConfig(capture),
+          lifecycle: capture.lifecycle,
+          ...templateRefConfig(seed),
+        },
+        ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
+      },
+      { ...input.actor, orgId: input.orgId },
+      { configWriteProof: provisionedGreenfieldProjectConfigProof },
+    );
+    const projectId = project.projectId;
+
+    // prepareDeploy persists exact selection then authorizeOperation + provision.
     const preparedDeploy = await input.prepareDeploy({
       orgId: input.orgId,
+      projectId,
       capability: "deploy",
       providerKind: deploy.providerKind,
       mode: deploy.mode,
@@ -412,20 +434,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       throw new DeployIneligibleError(preparedDeploy);
     }
     // TRANSACTIONAL ROLLBACK (task #78): register the deploy app compensation
-    // IMMEDIATELY after a successful provision. The `deployAppId` + `deployAppName`
-    // BOTH live on the project-config keyset the prepareDeploy callback populated
-    // (see `DeployProvisioner.artifactFor`); the provider kind is the same `deploy`
-    // resolved above. Absent `destroyDeployApp` ⇒ skip registration (test-only path;
-    // production wires it via the route).
-    //
-    // AUDIT FINDING D4: BOTH `appId` AND `appName` are required by the compensation
-    // — Fly's destroy keys on `app.name`, Vercel's on `app.appId`. Fly's `listApps`
-    // returns `appId: app.id ?? app.name` which is typically the distinct internal
-    // id (e.g. `fly_app_1`), so a synthesis that filled `name` from `appId` would
-    // route the DELETE at the wrong path and Fly would 404 — the per-provider arm
-    // would swallow that as "already-gone success" (the silent-compensation pattern
-    // audit #8 was meant to kill, reintroduced by PR #711). Threading the real
-    // `deployAppName` closes the regression.
+    // IMMEDIATELY after a successful provision.
     const appId = preparedDeploy.projectConfig["deployAppId"];
     const appName = preparedDeploy.projectConfig["deployAppName"];
     if (
@@ -447,37 +456,26 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
             appName,
             connectionId: preparedDeploy.outcome.authority.connectionId,
             grantId: preparedDeploy.outcome.authority.grantId,
+            projectId,
           }),
       });
     }
-    const persistedConfig = {
-      ...baseConfig,
-      ...productVisionConfig(capture),
-      lifecycle: capture.lifecycle,
-      ...templateRefConfig(seed),
-      ...preparedDeploy.projectConfig,
-    };
-    const project = await createProject(
+    // Merge deploy target into project config after authorized provision.
+    // Run through migrateProjectConfig so zod defaults (reviewPolicy, mergeIntegration,
+    // …) remain on the stored blob — same as createProject's assert path.
+    const { migrateProjectConfig } = await import("../../config/index.js");
+    await ProjectStore.updateConfig(
       pool,
-      {
-        name: slug,
-        repoUrl,
-        config: persistedConfig,
-        ...(repository === undefined ? {} : { defaultBranch: repository.defaultBranch }),
-      },
-      { ...input.actor, orgId: input.orgId },
-      { configWriteProof: provisionedGreenfieldProjectConfigProof },
-    );
-    const projectId = project.projectId;
-    await input.persistDeploySelection?.({
-      orgId: input.orgId,
       projectId,
-      providerKind: deploy.providerKind,
-      connectionId: preparedDeploy.outcome.authority.connectionId,
-      grantId: preparedDeploy.outcome.authority.grantId,
-      authGeneration: preparedDeploy.outcome.authority.authGeneration,
-      grantGeneration: preparedDeploy.outcome.authority.grantGeneration,
-    });
+      migrateProjectConfig({
+        ...baseConfig,
+        ...productVisionConfig(capture),
+        lifecycle: capture.lifecycle,
+        ...templateRefConfig(seed),
+        ...preparedDeploy.projectConfig,
+      }),
+      { kind: "operator", id: input.actor.userId },
+    );
     const actor: ActorContext = { ...input.actor, orgId: input.orgId, projectId };
     return await buildEntityGraph(pool, input, capture, slug, seed, repository, projectId, actor, scaffoldSpecs);
   } catch (error) {

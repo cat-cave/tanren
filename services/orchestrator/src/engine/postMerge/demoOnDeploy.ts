@@ -30,6 +30,7 @@ import type { SecretStore } from "../contracts/secretStore.js";
 import type { DemoSurface, DeployRef } from "../contracts/deployAdapter.js";
 import { type DeployHttpTransport, fetchDeployTransport } from "../provisioners/deployTransport.js";
 import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
+import { systemActor } from "../state/actor.js";
 import { adapterKindForProviderKind, buildDeployAdapter } from "../deploy/buildDeployAdapter.js";
 import type { ManualAttestationStore } from "../deploy/manualExternalDeployAdapter.js";
 import { DemoEngine, type DemoBehavior } from "../demo/demoEngine.js";
@@ -241,50 +242,32 @@ export class DemoOnDeployWatcher {
    */
   private async resolveSurface(verified: VerifiedDeploy): Promise<DemoSurface> {
     const grant = await runWithSystemScope(this.deps.pool, async (client) => {
-      const candidates = await IntegrationConnectionsStore.listExactControlGrants(
-        client,
-        verified.orgId,
-        verified.provider,
-      );
-      if (candidates.length === 0) {
+      const authority = new (await import("../integrations/integrationAuthorityImpl.js")).PgIntegrationAuthority();
+      const resolution = await authority.authorizeOperation(client, {
+        orgId: verified.orgId,
+        projectId: verified.projectId,
+        providerKind: verified.provider,
+        capability: "deploy",
+        operation: "provision",
+        actor: systemActor,
+      });
+      if (resolution.status === "not_linked") {
         throw new Error(
           `demoOnDeploy: run '${verified.runId}' has a verified deploy on '${verified.provider}' but org ` +
             `'${verified.orgId}' has no matching grant — cannot resolve the demo surface`,
         );
       }
-      const chosen = candidates[0]!;
-      const resolved = await IntegrationConnectionsStore.resolveExactControlGrant(client, {
-        orgId: verified.orgId,
-        projectId: verified.projectId,
-        providerKind: verified.provider,
-        connectionId: chosen.connectionId,
-        grantId: chosen.grantId,
-        capability: "deploy",
-        operation: "provision",
-      });
-      if (resolved === undefined) {
-        // Fixture-only / non-catalog provider kinds still need a lease for adapter
-        // construction; fall back to the exact grant without catalog operation match.
-        return IntegrationConnectionsStore.orgGrantFromLease(
-          (await import("../contracts/integrationAuthority.js")).issueEligibleOperationLease({
-            orgId: verified.orgId,
-            projectId: verified.projectId,
-            providerKind: verified.provider,
-            connectionId: chosen.connectionId,
-            grantId: chosen.grantId,
-            authGeneration: chosen.authGeneration,
-            grantGeneration: chosen.grantGeneration,
-            credentialRef: `secret://org/${verified.orgId}/integration/${verified.provider}/connection/${chosen.connectionId}/token/g/${chosen.authGeneration}`,
-            capability: "deploy",
-            operation: "provision",
-            providerPrincipalId: chosen.providerPrincipalId,
-            principalMetadata: {},
-            policyRevision: "integration-catalog.v1",
-            consentRevision: "consent.demo",
-          }),
+      if (resolution.status === "selection_required") {
+        throw new Error(
+          `demoOnDeploy: project '${verified.projectId}' requires an explicit active '${verified.provider}' account selection (${resolution.reason})`,
         );
       }
-      return resolved;
+      if (resolution.status === "ineligible") {
+        throw new Error(
+          `demoOnDeploy: project '${verified.projectId}' deploy grant ineligible (${resolution.reasons.join(",")})`,
+        );
+      }
+      return IntegrationConnectionsStore.orgGrantFromLease(resolution.lease);
     });
     const adapterKind = adapterKindForProviderKind(verified.provider);
     const adapter = buildDeployAdapter(adapterKind, {

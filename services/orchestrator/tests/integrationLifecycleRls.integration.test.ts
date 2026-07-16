@@ -1,4 +1,9 @@
 // cspell:ignore relforcerowsecurity relnamespace schemaname nspname tablename
+/**
+ * Real-Postgres RLS + tenant FK proof against migration 0041.
+ * Opt-in: TANREN_RLS_DB_TEST=1 with a reachable DATABASE_URL.
+ * Seeds use the real 0041 schema (no deleted linkControlGrant / upstream_account_id).
+ */
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -54,6 +59,61 @@ function runtimeUrl(adminUrl: string, database: string): string {
   return parsed.toString();
 }
 
+/** Seed a verified connection+grant generation against the real 0041 shape. */
+async function seedLinkedConnection(
+  client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
+  input: {
+    orgId: string;
+    connectionId: string;
+    grantId: string;
+    providerKind: string;
+    principalId: string;
+    actorId: string;
+    credentialRef: string;
+    scopes: string[];
+    capabilities: string[];
+    operations: string[];
+  },
+): Promise<void> {
+  await client.query(
+    `INSERT INTO org_integration_connections
+       (org_id, id, provider_kind, provider_principal_id, principal_kind, display_name,
+        principal_metadata, health, status, current_auth_generation, owner_id)
+     VALUES ($1, $2, $3, $4, 'organization', $4, '{}'::jsonb, 'healthy', 'active', 1, $5)`,
+    [input.orgId, input.connectionId, input.providerKind, input.principalId, input.actorId],
+  );
+  await client.query(
+    `INSERT INTO org_integration_connection_auth_generations
+       (org_id, provider_kind, connection_id, generation, credential_ref, auth_kind, status)
+     VALUES ($1, $2, $3, 1, $4, 'api_key', 'active')`,
+    [input.orgId, input.providerKind, input.connectionId, input.credentialRef],
+  );
+  await client.query(
+    `INSERT INTO org_integration_grants
+       (org_id, id, provider_kind, connection_id, plane, environment, current_generation, status)
+     VALUES ($1, $2, $3, $4, 'control', 'control', 1, 'active')`,
+    [input.orgId, input.grantId, input.providerKind, input.connectionId],
+  );
+  await client.query(
+    `INSERT INTO org_integration_grant_generations
+       (org_id, provider_kind, connection_id, grant_id, generation, capabilities, operations,
+        provider_scopes, resource_constraints, policy_revision, consent_revision,
+        consent_actor_id, consented_at, status)
+     VALUES ($1, $2, $3, $4, 1, $5::text[], $6::text[], $7::text[], '{}'::jsonb,
+             'integration-catalog.v1', 'consent.test', $8, now(), 'active')`,
+    [
+      input.orgId,
+      input.providerKind,
+      input.connectionId,
+      input.grantId,
+      input.capabilities,
+      input.operations,
+      input.scopes,
+      input.actorId,
+    ],
+  );
+}
+
 describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -75,39 +135,39 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
     await seedTenant(ownerPool, ORG_A, PROJECT_A);
     await seedTenant(ownerPool, ORG_B, PROJECT_B);
 
-    const linkedA = await runWithOrgScope(runtimePool, ORG_A, (client) =>
-      IntegrationConnectionsStore.linkControlGrant(
-        client,
-        {
-          orgId: ORG_A,
-          providerKind: "sentry",
-          upstreamAccountId: "account-a",
-          authKind: "api_key",
-          credentialRef: "secret://org-a/sentry",
-          capabilities: ["errors"],
-        },
-        systemActor,
-      ),
-    );
-    connectionA = linkedA.connectionId;
-    grantA = linkedA.grantId;
+    connectionA = "conn-a";
+    grantA = "grant-a";
+    connectionB = "conn-b";
+    grantB = "grant-b";
 
-    const linkedB = await runWithOrgScope(runtimePool, ORG_B, (client) =>
-      IntegrationConnectionsStore.linkControlGrant(
-        client,
-        {
-          orgId: ORG_B,
-          providerKind: "sentry",
-          upstreamAccountId: "account-b",
-          authKind: "api_key",
-          credentialRef: "secret://org-b/sentry",
-          capabilities: ["errors"],
-        },
-        systemActor,
-      ),
+    await runWithOrgScope(runtimePool, ORG_A, (client) =>
+      seedLinkedConnection(client, {
+        orgId: ORG_A,
+        connectionId: connectionA,
+        grantId: grantA,
+        providerKind: "sentry",
+        principalId: "account-a",
+        actorId: "admin-a",
+        credentialRef: "secret://org-a/sentry/connection/conn-a/token/g/1",
+        scopes: ["project:read", "project:write"],
+        capabilities: ["errors"],
+        operations: ["discover", "provision", "bind"],
+      }),
     );
-    connectionB = linkedB.connectionId;
-    grantB = linkedB.grantId;
+    await runWithOrgScope(runtimePool, ORG_B, (client) =>
+      seedLinkedConnection(client, {
+        orgId: ORG_B,
+        connectionId: connectionB,
+        grantId: grantB,
+        providerKind: "sentry",
+        principalId: "account-b",
+        actorId: "admin-b",
+        credentialRef: "secret://org-b/sentry/connection/conn-b/token/g/1",
+        scopes: ["project:read", "project:write"],
+        capabilities: ["errors"],
+        operations: ["discover", "provision", "bind"],
+      }),
+    );
 
     await runWithOrgScope(runtimePool, ORG_A, (client) =>
       IntegrationConnectionsStore.selectControlGrant(
@@ -118,6 +178,8 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
           providerKind: "sentry",
           connectionId: connectionA,
           grantId: grantA,
+          authGeneration: 1,
+          grantGeneration: 1,
         },
         systemActor,
       ),
@@ -131,6 +193,8 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
           providerKind: "sentry",
           connectionId: connectionB,
           grantId: grantB,
+          authGeneration: 1,
+          grantGeneration: 1,
         },
         systemActor,
       ),
@@ -147,12 +211,11 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
       );
       await client.query(
         `INSERT INTO integration_bindings
-           (org_id, id, project_id, requirement_id, grant_id, environment,
-            provider_kind, adapter_version, external_resource_id, external_resource_name,
-            ownership, teardown_policy, desired_state_hash)
-         VALUES ($1, 'binding-a', $2, 'requirement-a', $3, 'production',
-                 'sentry', 'v1', 'external-a', 'errors-a', 'created', 'delete', $4)`,
-        [ORG_A, PROJECT_A, grantA, DIGEST],
+           (org_id, id, project_id, requirement_id, environment,
+            provider_kind, connection_id, current_generation, status, drift_state)
+         VALUES ($1, 'binding-a', $2, 'requirement-a', 'production',
+                 'sentry', $3, 1, 'ready', 'in_sync')`,
+        [ORG_A, PROJECT_A, connectionA],
       );
       await AppEnvironmentStore.upsert(
         client,
@@ -230,17 +293,12 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
   it("rejects an org-spoofed connection write through the real policy", async () => {
     await expect(
       runWithOrgScope(runtimePool, ORG_A, (client) =>
-        IntegrationConnectionsStore.linkControlGrant(
-          client,
-          {
-            orgId: ORG_B,
-            providerKind: "slack",
-            upstreamAccountId: "spoofed",
-            authKind: "bot_token",
-            credentialRef: "secret://spoofed",
-            capabilities: ["notify"],
-          },
-          systemActor,
+        client.query(
+          `INSERT INTO org_integration_connections
+             (org_id, id, provider_kind, provider_principal_id, principal_kind, display_name,
+              health, status, owner_id)
+           VALUES ($1, 'spoofed', 'slack', 'Tspoof', 'team', 'spoof', 'healthy', 'active', 'x')`,
+          [ORG_B],
         ),
       ),
     ).rejects.toThrow(/row-level security/u);
@@ -251,8 +309,8 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
       runWithOrgScope(runtimePool, ORG_A, (client) =>
         client.query(
           `INSERT INTO org_integration_grants
-             (org_id, id, connection_id, plane, environment, policy_revision, consent_revision)
-           VALUES ($1, 'grant-cross-org', $2, 'control', 'control', 'p1', 'c1')`,
+             (org_id, id, provider_kind, connection_id, plane, environment, status)
+           VALUES ($1, 'grant-cross-org', 'sentry', $2, 'control', 'control', 'active')`,
           [ORG_A, connectionB],
         ),
       ),
@@ -267,6 +325,8 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
           providerKind: "sentry",
           connectionId: connectionB,
           grantId: grantB,
+          authGeneration: 1,
+          grantGeneration: 1,
         },
         systemActor,
       ),
@@ -294,12 +354,11 @@ describeDb("IN-1 lifecycle authority — real Postgres RLS and tenant FKs", () =
       runWithOrgScope(runtimePool, ORG_A, (client) =>
         client.query(
           `INSERT INTO integration_bindings
-             (org_id, id, project_id, requirement_id, grant_id, environment,
-              provider_kind, adapter_version, external_resource_id, external_resource_name,
-              ownership, teardown_policy, desired_state_hash, generation)
-           VALUES ($1, 'binding-cross-org', $2, 'requirement-a', $3, 'production',
-                   'sentry', 'v1', 'external-b', 'errors-b', 'created', 'delete', $4, 2)`,
-          [ORG_A, PROJECT_A, grantB, DIGEST],
+             (org_id, id, project_id, requirement_id, environment,
+              provider_kind, connection_id, current_generation, status)
+           VALUES ($1, 'binding-cross-org', $2, 'requirement-a', 'production',
+                   'sentry', $3, 1, 'ready')`,
+          [ORG_A, PROJECT_A, connectionB],
         ),
       ),
     ).rejects.toThrow(/foreign key/u);

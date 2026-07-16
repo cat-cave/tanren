@@ -218,14 +218,13 @@ export function secretStoreSlackTransportFactory(
   makeTransport: (botToken: string) => SlackApiTransport,
 ): SlackTransportFactory {
   return async (grant: OrgGrant): Promise<SlackApiTransport> => {
-    // Providers must not receive the general SecretStore in new call paths; this
-    // factory still exists for production wiring and reads only the exact
-    // generation path carried by the eligible operation lease.
-    const ref = grant.eligibleOperation.credentialRef;
-    const secret = await secrets.get(ref);
-    if (secret === undefined) {
-      throw new Error(`missing Slack bot-token at exact generation ref`);
-    }
-    return makeTransport(secret.value);
+    // Exact generation secret read only — lease-gated IntegrationSecretStore.getExact.
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrationSecretStoreImpl.js");
+    const { secretValueForLease } = await import("../../repositories/integrationConnectionResolve.js");
+    const token = await secretValueForLease(
+      new GenerationAddressedIntegrationSecretStore(secrets),
+      grant.eligibleOperation,
+    );
+    return makeTransport(token);
   };
 }

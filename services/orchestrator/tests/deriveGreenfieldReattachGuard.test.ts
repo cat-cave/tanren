@@ -77,7 +77,7 @@ function preparedFlyDeploy(): PreparedGreenfieldDeploy {
       authority: {
         connectionId: "connection_1",
         grantId: "grant_1",
-        upstreamAccountId: "account_1",
+        providerPrincipalId: "account_1",
         authGeneration: 1,
         grantGeneration: 1,
       },

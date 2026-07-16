@@ -224,7 +224,9 @@ describe("integrations two-plane panel (/integrations)", () => {
     expect(html).toContain('data-provider="deploy.vercel"');
     expect(html).not.toContain("secret://org/");
     expect(html).toContain("verified principal · Acme Sentry");
-    expect(html).toContain("auth generation 2 · grant generation 3");
+    // Generation numbers are internal eligibility coordinates — never operator UI.
+    expect(html).not.toContain("auth generation");
+    expect(html).not.toContain("grant generation");
     expect(html).toContain("scopes · chat:write");
     expect(html).toContain("selected for project");
     expect(html).toContain("use this principal");

@@ -60,6 +60,7 @@ export interface MemoryOperation {
   selected_principal_id: string | null;
   target_auth_generation: number | null;
   failure_classification: string | null;
+  compensation_state: Record<string, unknown>;
 }
 export interface MemorySelection {
   org_id: string;

@@ -72,6 +72,7 @@ export type DestroyDeployAppCallback = (target: {
   appName: string;
   connectionId: string;
   grantId: string;
+  projectId: string;
 }) => Promise<void>;
 
 /**

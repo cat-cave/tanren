@@ -150,6 +150,6 @@ describe("secretStoreSlackTransportFactory", () => {
   it("throws loudly when the bot-token credential ref is missing (no silent fallback)", async () => {
     const secrets = new InMemorySecretStore();
     const factory = secretStoreSlackTransportFactory(secrets, (token) => new FetchSlackApiTransport(token));
-    await expect(factory(grant)).rejects.toThrow(/missing Slack bot-token/u);
+    await expect(factory(grant)).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

@@ -1,84 +1,14 @@
-import {
-  assertEligibleOperationLease,
-  issueEligibleOperationLease,
-  type EligibleOperationLease,
-} from "../contracts/integrationAuthority.js";
+import { assertEligibleOperationLease, type EligibleOperationLease } from "../contracts/integrationAuthority.js";
 import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import { generationSecretRef, type IntegrationSecretStore } from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
 
 export type IntegrationConnectionHealth = "unknown" | "healthy" | "degraded" | "invalid";
 
-export async function resolveExactControlGrant(
-  client: IntegrationQueryClient,
-  input: {
-    orgId: string;
-    providerKind: string;
-    connectionId: string;
-    grantId: string;
-    capability: string;
-    operation: string;
-    projectId?: string;
-  },
-): Promise<OrgGrant | undefined> {
-  const result = await client.query(
-    `SELECT c.id AS connection_id, c.provider_kind, c.provider_principal_id, c.principal_metadata,
-            c.current_auth_generation, g.id AS grant_id, g.current_generation AS grant_generation,
-            ag.credential_ref, gg.policy_revision, gg.consent_revision, gg.capabilities, gg.operations
-     FROM org_integration_connections c
-     JOIN org_integration_grants g
-       ON g.org_id = c.org_id AND g.connection_id = c.id AND g.id = $4
-      AND g.plane = 'control' AND g.environment = 'control' AND g.status = 'active'
-     JOIN org_integration_connection_auth_generations ag
-       ON ag.org_id = c.org_id AND ag.provider_kind = c.provider_kind
-      AND ag.connection_id = c.id AND ag.generation = c.current_auth_generation AND ag.status = 'active'
-     JOIN org_integration_grant_generations gg
-       ON gg.org_id = g.org_id AND gg.provider_kind = g.provider_kind
-      AND gg.connection_id = g.connection_id AND gg.grant_id = g.id
-      AND gg.generation = g.current_generation AND gg.status = 'active'
-     WHERE c.org_id = $1 AND c.provider_kind = $2 AND c.id = $3 AND c.status = 'active'
-       AND c.health IN ('healthy','unknown')`,
-    [input.orgId, input.providerKind, input.connectionId, input.grantId],
-  );
-  const row = result.rows[0] as
-    | {
-        connection_id: string;
-        provider_kind: string;
-        provider_principal_id: string;
-        principal_metadata: Record<string, unknown>;
-        current_auth_generation: number;
-        grant_id: string;
-        grant_generation: number;
-        credential_ref: string;
-        policy_revision: string;
-        consent_revision: string;
-        capabilities: string[] | null;
-        operations: string[] | null;
-      }
-    | undefined;
-  if (row === undefined) return undefined;
-  if (!(row.capabilities ?? []).includes(input.capability)) return undefined;
-  if (!(row.operations ?? []).includes(input.operation)) return undefined;
-  return orgGrantFromLease(
-    issueEligibleOperationLease({
-      orgId: input.orgId,
-      projectId: input.projectId ?? "",
-      providerKind: row.provider_kind,
-      connectionId: row.connection_id,
-      grantId: row.grant_id,
-      authGeneration: row.current_auth_generation,
-      grantGeneration: row.grant_generation,
-      credentialRef: row.credential_ref,
-      capability: input.capability,
-      operation: input.operation,
-      providerPrincipalId: row.provider_principal_id,
-      principalMetadata: row.principal_metadata ?? {},
-      policyRevision: row.policy_revision,
-      consentRevision: row.consent_revision,
-    }),
-  );
-}
-
+/**
+ * Inventory listing only — never issues an EligibleOperationLease.
+ * Provider I/O must go through IntegrationAuthority.authorizeOperation.
+ */
 export async function listExactControlGrants(
   client: IntegrationQueryClient,
   orgId: string,

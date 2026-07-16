@@ -12,7 +12,11 @@
 import type { Context, Hono } from "hono";
 import { clientDepsFor } from "../../api/clientDeps.js";
 import { IntegrationsClient } from "../../api/integrationsClient.js";
-import type { IntegrationLifecycleInventory, OrgIntegrationSummary } from "../../api/integrations.js";
+import type {
+  IntegrationLifecycleInventory,
+  OrgIntegrationSummary,
+  PrincipalSelectionCandidate,
+} from "../../api/integrations.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
 import { IntegrationsBody } from "../../components/integrations/IntegrationsBody.js";
 import { formField } from "../formField.js";
@@ -38,6 +42,7 @@ function isOrgAdminRole(role: string | undefined): boolean {
   return role === "org:admin" || role === "platform:admin";
 }
 
+// eslint-disable-next-line max-lines-per-function -- convergent multi-phase saga must stay ordered
 export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
   app.get("/integrations", async (c: Context) => {
     const ctx = await loadShellContext(c, deps, { activeNavId: "integrations" });
@@ -48,6 +53,10 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     const notLinkedMessage = c.req.query("notLinkedMsg");
     const selectionProvider = c.req.query("selectionRequired");
     const selectionMessage = c.req.query("selectionMsg");
+    const principalOp = c.req.query("principalOp");
+    const principalProvider = c.req.query("principalProvider");
+    const principalStatus = c.req.query("principalStatus");
+    const principalCandidatesRaw = c.req.query("principalCandidates");
 
     let integrations: OrgIntegrationSummary[] | undefined;
     let lifecycle: IntegrationLifecycleInventory | undefined;
@@ -58,6 +67,52 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
       // when the orchestrator explicitly returned { integrations: [] }.
       integrations = list?.integrations;
       lifecycle = list?.lifecycle;
+    }
+
+    let principalSelection:
+      | {
+          providerKind: string;
+          operationId: string;
+          candidates: PrincipalSelectionCandidate[];
+          status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed";
+        }
+      | undefined;
+    if (
+      principalOp !== undefined &&
+      principalOp !== "" &&
+      principalProvider !== undefined &&
+      principalProvider !== ""
+    ) {
+      let candidates: PrincipalSelectionCandidate[] = [];
+      if (principalCandidatesRaw !== undefined && principalCandidatesRaw !== "") {
+        try {
+          const parsed: unknown = JSON.parse(principalCandidatesRaw);
+          if (Array.isArray(parsed)) {
+            candidates = parsed.filter(
+              (item): item is PrincipalSelectionCandidate =>
+                typeof item === "object" &&
+                item !== null &&
+                typeof (item as { providerPrincipalId?: unknown }).providerPrincipalId === "string" &&
+                typeof (item as { displayName?: unknown }).displayName === "string",
+            );
+          }
+        } catch {
+          candidates = [];
+        }
+      }
+      principalSelection = {
+        providerKind: principalProvider,
+        operationId: principalOp,
+        candidates,
+        status:
+          principalStatus === "failed" ||
+          principalStatus === "invalidated" ||
+          principalStatus === "pending" ||
+          principalStatus === "completed" ||
+          principalStatus === "awaiting"
+            ? principalStatus
+            : "awaiting",
+      };
     }
 
     return renderShell(
@@ -88,6 +143,7 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
                 ...(selectionMessage === undefined || selectionMessage === "" ? {} : { message: selectionMessage }),
               }
         }
+        principalSelection={principalSelection}
         csrfToken={ctx.csrfToken}
       />,
     );
@@ -156,12 +212,59 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
         ? String((result.body as { status?: unknown }).status)
         : "completed";
     if (bodyStatus === "awaiting_principal_selection") {
-      return redirectTo(c, "/integrations", `${providerKind} requires principal selection`);
+      const body = result.body;
+      const operationId = body !== undefined && typeof body.operationId === "string" ? body.operationId : "";
+      const candidates = body !== undefined && Array.isArray(body.candidates) ? body.candidates : [];
+      const qs = new URLSearchParams({
+        principalOp: operationId,
+        principalProvider: providerKind,
+        principalStatus: "awaiting",
+        principalCandidates: JSON.stringify(
+          candidates.map((candidate) => ({
+            providerPrincipalId: candidate.providerPrincipalId,
+            principalKind: candidate.principalKind,
+            displayName: candidate.displayName,
+          })),
+        ),
+      });
+      return c.redirect(`/integrations?${qs.toString()}`, 303);
     }
     if (bodyStatus === "failed") {
       return redirectTo(c, "/integrations", `${providerKind} verification failed`);
     }
     return redirectTo(c, "/integrations", `linked ${providerKind}`);
+  });
+
+  // ── multi-principal selection (Plane A resume) ──────────────────────────
+  app.post("/integrations/select-principal", async (c: Context) => {
+    const ctx = await loadShellContext(c, deps, { activeNavId: "integrations" });
+    const orgId = ctx.org?.id;
+    if (orgId === undefined) return redirectTo(c, "/integrations", "no org in session");
+    const form = await c.req.parseBody();
+    const operationId = formField(form, "operationId").trim();
+    const providerPrincipalId = formField(form, "providerPrincipalId").trim();
+    if (operationId === "" || providerPrincipalId === "") {
+      return redirectTo(c, "/integrations", "missing principal selection fields");
+    }
+    const client = await writeClient(c, deps);
+    const result = await client.selectPrincipal(orgId, operationId, { providerPrincipalId });
+    if (result.status === 409) {
+      const qs = new URLSearchParams({
+        principalOp: operationId,
+        principalProvider: "unknown",
+        principalStatus: "invalidated",
+      });
+      return c.redirect(`/integrations?${qs.toString()}`, 303);
+    }
+    if (!result.ok) {
+      const qs = new URLSearchParams({
+        principalOp: operationId,
+        principalProvider: "unknown",
+        principalStatus: "failed",
+      });
+      return c.redirect(`/integrations?${qs.toString()}`, 303);
+    }
+    return redirectTo(c, "/integrations", `principal selected for ${providerPrincipalId}`);
   });
 
   // ── enable capability (Plane B write) ───────────────────────────────────

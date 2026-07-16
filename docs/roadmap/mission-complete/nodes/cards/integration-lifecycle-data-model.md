@@ -197,8 +197,31 @@ never echoes submitted tokens. Events append only through the canonical EventSto
 - HTTP auth/sanitization/candidate-selection/idempotency; UI pending/failure/verified
   principal rendering.
 
+## P0/P1 convergence redrive (post-audit)
+
+Independent audit returned hard NO-GO on dual/broken authority. Slice 1 now
+closes the following with production cutover (still not full IN-1 completion):
+
+| P0                       | Closure                                                                                                                                                                                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Eligibility bypasses     | Production provider I/O uses only `authorizeOperation` after exact project selection. Deleted `resolveExactControlGrant` + sole-candidate `candidates[0]` + fabricated leases. Greenfield/demo/destroy reordered behind project+selection. |
+| Verified scopes          | Slack scopes from `x-oauth-scopes`; Sentry from capability probes; principal-select persists verified scopes (never `[]` hardcode). Unproven scopes fail before finalize.                                                                  |
+| Exact generation secrets | Sentry/Slack/deploy provisioners + deploy adapters read via `secretValueForLease` / `getExact` only.                                                                                                                                       |
+| Secret finalization saga | Reserve connection+generation in DB → create-only secret write → pointer flip only if op owns reservation. Completed idempotent link replay returns terminal result.                                                                       |
+| Multi-principal UI       | Dashboard CSRF form over durable candidates + operation id (`/integrations/select-principal`). No generation display.                                                                                                                      |
+| PG/RLS proof             | Live-gated tests seed real 0041 rows (no deleted APIs). Memory fake is unit-contract only, not SQL/RLS proof. Opt-in: `TANREN_RLS_DB_TEST=1`.                                                                                              |
+
+**Not claimed:** full IN-1 node completion, binding workers, 0042, shared smoke.
+
+### Live obligations (skipped when credentials/DB absent)
+
+- Real PG: `TANREN_RLS_DB_TEST=1` + `DATABASE_URL` → RLS + migration-order tests.
+- Live Vault CAS create-only + live Slack/Sentry/Vercel/Fly principal verification when provider credentials present.
+- Architecture former-bug greps in `integrationAuthority.p0.convergence.test.ts`.
+
 ## Gate
 
-`just affected-typecheck`, `just affected-test`, `just fast-check`, `just ci`.
-Shared `just smoke` is serialized by root after independent audit. Do not claim
-IN-1 node completion until Slice 2/3 land binding activation and remaining cutover.
+`just affected-typecheck`, `just affected-test`, architecture/contract/schema drift,
+`just fast-check`, `just ci`. Shared `just smoke` is serialized by root after
+independent audit. Do not claim IN-1 node completion until Slice 2/3 land binding
+activation and remaining cutover.

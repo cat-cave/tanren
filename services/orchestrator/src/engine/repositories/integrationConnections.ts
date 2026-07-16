@@ -5,15 +5,10 @@ import type { IntegrationSecretStore } from "../contracts/integrationSecretStore
 import type { FinalizeVerifiedLinkInput, FinalizeVerifiedLinkResult } from "./integrationConnectionFinalize.js";
 export type { FinalizeVerifiedLinkInput, FinalizeVerifiedLinkResult };
 import type { ActorRef } from "../state/actor.js";
-import {
-  listExactControlGrants,
-  orgGrantFromLease,
-  resolveExactControlGrant,
-  secretValueForLease,
-} from "./integrationConnectionResolve.js";
+import { listExactControlGrants, orgGrantFromLease, secretValueForLease } from "./integrationConnectionResolve.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
 
-export { listExactControlGrants, orgGrantFromLease, resolveExactControlGrant, secretValueForLease };
+export { listExactControlGrants, orgGrantFromLease, secretValueForLease };
 
 export const INTEGRATION_CONNECTION_HEALTH = ["unknown", "healthy", "degraded", "invalid"] as const;
 export type IntegrationConnectionHealth = (typeof INTEGRATION_CONNECTION_HEALTH)[number];
@@ -117,13 +112,24 @@ export const IntegrationConnectionsStore = {
     orgId: string,
     operationId: string,
     candidates: PrincipalCandidate[],
+    verified?: { authKind: string; scopes: string[] },
   ): Promise<void> {
     await client.query(
       `UPDATE org_integration_connection_operations
        SET stage = 'awaiting_principal_selection', status = 'awaiting_principal_selection',
-           candidate_principals = $3::jsonb, updated_at = now()
+           candidate_principals = $3::jsonb,
+           compensation_state = COALESCE(compensation_state, '{}'::jsonb) || $4::jsonb,
+           updated_at = now()
        WHERE org_id = $1 AND id = $2`,
-      [orgId, operationId, JSON.stringify(candidates)],
+      [
+        orgId,
+        operationId,
+        JSON.stringify(candidates),
+        JSON.stringify({
+          verifiedAuthKind: verified?.authKind ?? "api_key",
+          verifiedScopes: verified?.scopes ?? [],
+        }),
+      ],
     );
   },
 
@@ -156,12 +162,14 @@ export const IntegrationConnectionsStore = {
         stagedSecretHandle: string | undefined;
         candidatePrincipals: PrincipalCandidate[];
         actorId: string;
+        verifiedAuthKind: string | undefined;
+        verifiedScopes: string[];
       }
     | undefined
   > {
     const result = await client.query(
       `SELECT id, provider_kind, connection_id, operation_kind, stage, status,
-              staged_secret_handle, candidate_principals, actor_id
+              staged_secret_handle, candidate_principals, actor_id, compensation_state
        FROM org_integration_connection_operations
        WHERE org_id = $1 AND id = $2`,
       [orgId, operationId],
@@ -177,9 +185,12 @@ export const IntegrationConnectionsStore = {
           staged_secret_handle: string | null;
           candidate_principals: PrincipalCandidate[];
           actor_id: string;
+          compensation_state: Record<string, unknown> | null;
         }
       | undefined;
     if (row === undefined) return undefined;
+    const compensation = row.compensation_state ?? {};
+    const scopes = compensation["verifiedScopes"];
     return {
       id: row.id,
       providerKind: row.provider_kind,
@@ -190,6 +201,9 @@ export const IntegrationConnectionsStore = {
       stagedSecretHandle: row.staged_secret_handle ?? undefined,
       candidatePrincipals: Array.isArray(row.candidate_principals) ? row.candidate_principals : [],
       actorId: row.actor_id,
+      verifiedAuthKind:
+        typeof compensation["verifiedAuthKind"] === "string" ? compensation["verifiedAuthKind"] : undefined,
+      verifiedScopes: Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === "string") : [],
     };
   },
 
@@ -337,7 +351,7 @@ export const IntegrationConnectionsStore = {
     return orgGrantFromLease(lease);
   },
 
-  resolveExactControlGrant,
+  /** Inventory only — never a lease authority. */
   listExactControlGrants,
 
   async revoke(

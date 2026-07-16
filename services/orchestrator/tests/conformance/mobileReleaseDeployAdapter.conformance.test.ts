@@ -174,6 +174,6 @@ describe("MobileReleaseDeployAdapter — loud fail on missing config", () => {
       secrets: new InMemorySecretStore(),
       poll: instantVerifyPollPolicy(),
     });
-    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/required config 'credentialRef' is not set/u);
+    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

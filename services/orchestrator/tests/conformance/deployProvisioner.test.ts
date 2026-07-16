@@ -104,7 +104,9 @@ describe("VercelDeployProvisioner", () => {
       transport: scriptedDeployTransport("vercel"),
       secrets: new InMemorySecretStore(),
     });
-    await expect(prov.provision(vercelGrant, ctx("acme-web"))).rejects.toThrow(/credentialRef/u);
+    await expect(prov.provision(vercelGrant, ctx("acme-web"))).rejects.toThrow(
+      /missing integration secret for generation/u,
+    );
   });
   it("attachRuntimeEnv sends each var to the Vercel env endpoint; the value reaches the transport", async () => {
     const transport = scriptedDeployTransport("vercel");
@@ -247,7 +249,7 @@ describe("FlyDeployProvisioner", () => {
       secrets: new InMemorySecretStore(),
     });
     await expect(prov.attachRuntimeEnv(flyGrant, "acme-web", [{ key: "K", value: "v" }])).rejects.toThrow(
-      /credentialRef/u,
+      /missing integration secret for generation/u,
     );
   });
   it("deploy is NOT merge-reflecting: fails loud without the explicit static-deploy opt-in", async () => {

@@ -22,6 +22,7 @@ import type {
   OrgIntegrationsList,
   ProvisionOutcome,
   SelectGrantOutcome,
+  SelectPrincipalOutcome,
 } from "./integrations.js";
 
 export class IntegrationsClient extends OrchestratorHttpClient {
@@ -46,6 +47,20 @@ export class IntegrationsClient extends OrchestratorHttpClient {
     const r = await this.sendJson<LinkOutcome>(
       "POST",
       `/orgs/${encodeURIComponent(orgId)}/integrations/${encodeURIComponent(providerKind)}`,
+      input,
+    );
+    return { ok: r.ok, status: r.status, body: r.body };
+  }
+
+  /** Complete multi-principal selection for an awaiting link/rotate operation. */
+  async selectPrincipal(
+    orgId: string,
+    operationId: string,
+    input: { providerPrincipalId: string },
+  ): Promise<{ ok: boolean; status: number; body: SelectPrincipalOutcome | undefined }> {
+    const r = await this.sendJson<SelectPrincipalOutcome>(
+      "POST",
+      `/orgs/${encodeURIComponent(orgId)}/integrations/operations/${encodeURIComponent(operationId)}/principal`,
       input,
     );
     return { ok: r.ok, status: r.status, body: r.body };

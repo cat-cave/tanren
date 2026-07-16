@@ -91,6 +91,7 @@ interface RecordedCreates {
     appName: string;
     connectionId: string;
     grantId: string;
+    projectId?: string;
   }>;
 }
 
@@ -120,7 +121,7 @@ function preparedFlyDeploy(): PreparedGreenfieldDeploy {
       authority: {
         connectionId: "connection_1",
         grantId: "grant_1",
-        upstreamAccountId: "account_1",
+        providerPrincipalId: "account_1",
         authGeneration: 1,
         grantGeneration: 1,
       },
@@ -201,19 +202,16 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     expect(state.projects.size).toBe(1);
   });
 
-  it("ROLLBACK ON DEPLOY FAILURE: project repo created → DELETED on rollback (only resource to undo)", async () => {
-    // SCENARIO: project repo created (registered) + compose pushed VFS into it
-    // + prepareDeploy THROWS. The compensation stack walks LIFO: only the
-    // project repo needs deletion (no separate seed repo to roll back per PR-G).
-    const { pool, state } = stubPool();
+  it("ROLLBACK ON DEPLOY FAILURE: project repo created → DELETED on rollback (project shell may remain)", async () => {
+    // SCENARIO: project repo created + project shell (selection anchor) + prepareDeploy
+    // THROWS. Compensation deletes the project repo; deploy never provisioned.
+    const { pool } = stubPool();
     const rec = newRecorder();
     await expect(
       deriveFromCapture(
         {
           pool,
           async prepareDeploy() {
-            // The deploy provision fails — simulates a Fly quota exceeded or a
-            // transient provisioner error after the project repo was created.
             throw new Error("simulated: deploy provision quota exceeded");
           },
         },
@@ -222,7 +220,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           capture: captureWithLifecycle(),
           actor,
           owner: "cat-cave",
-          deploy: { providerKind: "deploy.flyio" },
+          deploy: { providerKind: "deploy.flyio", connectionId: "connection_1", grantId: "grant_1" },
           materializeTemplate: recordingMaterialize(rec),
           createRepository: async (input) => {
             rec.reposCreated.push({ owner: input.owner, name: input.name });
@@ -242,39 +240,32 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
       ),
     ).rejects.toThrow(/deploy provision quota exceeded/iu);
 
-    // ONE project repo created, ONE deleted. No `tanren-tmpl-*` was ever created.
     expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(rec.pushedRepos).toEqual(["cat-cave/linkly"]);
-    // The deploy provision threw — no deploy app was ever created.
     expect(rec.deploysProvisioned).toEqual([]);
     expect(rec.deploysDestroyed).toEqual([]);
-    expect(state.projects.size).toBe(0);
   });
 
-  it("ROLLBACK ON CREATE-PROJECT FAILURE: both external resources walked back (project repo + deploy)", async () => {
-    // SCENARIO: every external resource provisions successfully, then the
-    // `createProject` DB INSERT throws (e.g. a uniqueness violation). The
-    // compensation stack walks LIFO: deploy app destroyed, then project repo
-    // deleted. Per PR-G there are exactly TWO external resources, not three.
-    const { pool, state } = stubPool();
-    // Inject a stub that throws on the project INSERT (the durable-row anchor).
-    type SqlQuery = (text: string, params?: unknown[]) => Promise<{ rows: unknown[]; rowCount: number }>;
-    const originalConnect = pool.connect.bind(pool);
-    (pool as unknown as { connect: () => Promise<{ query: SqlQuery; release: () => void }> }).connect = async () => {
-      const client = await originalConnect();
-      const originalClientQuery = client.query.bind(client) as SqlQuery;
-      return {
-        query: async (text: string, params: unknown[] = []) => {
-          const sql = text.replaceAll(/\s+/gu, " ").trim();
-          if (sql.startsWith("INSERT INTO projects")) {
-            throw new Error("simulated: duplicate key value violates projects_pkey");
-          }
-          return originalClientQuery(text, params);
-        },
-        release: client.release,
-      };
+  it("ROLLBACK ON POST-DEPLOY FAILURE: both external resources walked back (project repo + deploy)", async () => {
+    // SCENARIO: project shell + deploy provision succeed, then entity-graph INSERT
+    // throws. Compensation destroys deploy app then project repo.
+    const { pool } = stubPool();
+    const originalQuery = pool.query.bind(pool) as (
+      text: string,
+      params?: unknown[],
+    ) => Promise<{ rows: unknown[]; rowCount: number }>;
+    let deployDone = false;
+    const wrappedQuery = async (text: string, params: unknown[] = []) => {
+      const sql = text.replaceAll(/\s+/gu, " ").trim();
+      if (deployDone && sql.startsWith("INSERT INTO specs")) {
+        throw new Error("simulated: entity graph materialization failed");
+      }
+      return originalQuery(text, params);
     };
+    (pool as unknown as { query: typeof wrappedQuery }).query = wrappedQuery;
+    (pool as unknown as { connect: () => Promise<{ query: typeof wrappedQuery; release: () => void }> }).connect =
+      async () => ({ query: wrappedQuery, release() {} });
 
     const rec = newRecorder();
     await expect(
@@ -287,6 +278,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
               appId: "fly_app_42",
               appName: "org_a-linkly",
             });
+            deployDone = true;
             return preparedFlyDeploy();
           },
         },
@@ -295,7 +287,7 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           capture: captureWithLifecycle(),
           actor,
           owner: "cat-cave",
-          deploy: { providerKind: "deploy.flyio" },
+          deploy: { providerKind: "deploy.flyio", connectionId: "connection_1", grantId: "grant_1" },
           materializeTemplate: recordingMaterialize(rec),
           createRepository: async (input) => {
             rec.reposCreated.push({ owner: input.owner, name: input.name });
@@ -313,12 +305,8 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           },
         },
       ),
-    ).rejects.toThrow(/duplicate key value violates projects_pkey/iu);
+    ).rejects.toThrow(/entity graph materialization failed/iu);
 
-    // ONE project repo + ONE deploy app rolled back (LIFO: deploy first, then repo).
-    // Audit finding D4: the rollback carries BOTH `appId` (the internal Fly id) and
-    // `appName` (the globally-unique destroy-path key) — Fly's DELETE routes by name,
-    // and a missing/wrong name would 404 silently.
     expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(rec.deploysProvisioned).toEqual([
       { providerKind: "deploy.flyio", appId: "fly_app_42", appName: "org_a-linkly" },
@@ -330,10 +318,10 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         appName: "org_a-linkly",
         connectionId: "connection_1",
         grantId: "grant_1",
+        projectId: expect.any(String),
       },
     ]);
     expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
-    expect(state.projects.size).toBe(0);
   });
 
   it("DeriveRollbackError SURFACES rollback gaps: failed compensation rides on the error", async () => {

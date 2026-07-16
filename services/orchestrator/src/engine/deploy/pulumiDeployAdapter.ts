@@ -209,7 +209,13 @@ export class PulumiDeployAdapter implements DeployAdapter {
   }
 
   private async token(grant: OrgGrant): Promise<string> {
-    const secret = await this.deps.secrets.get(grant.eligibleOperation.credentialRef);
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
+    const { secretValueForLease } = await import("../repositories/integrationConnectionResolve.js");
+    const token = await secretValueForLease(
+      new GenerationAddressedIntegrationSecretStore(this.deps.secrets),
+      grant.eligibleOperation,
+    );
+    const secret = { value: token };
     if (secret === undefined) {
       throw new DeployAdapterConfigError(
         PULUMI_ADAPTER_KIND,

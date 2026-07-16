@@ -7,11 +7,8 @@ import type {
   MemorySelection,
 } from "./integrationMemoryTables.js";
 import { finalizeLinkInMemory } from "./integrationMemoryFinalize.js";
-/**
- * Structured in-memory integration tables for unit/contract tests.
- * Not a SQL-string matcher — operations are dispatched by explicit method names
- * used through IntegrationQueryClient wrappers in tests.
- */
+import { eligibilityQuery, insertSelection, listInventory, rowsOf } from "./integrationMemoryQueries.js";
+/** Unit-fake integration tables — not a SQL/transaction/RLS proof. */
 import type { IntegrationQueryClient, IntegrationQueryResult } from "../../src/engine/repositories/integrationQuery.js";
 
 export class IntegrationMemoryDb {
@@ -38,6 +35,11 @@ export class IntegrationMemoryDb {
   private dispatch(rawSql: string, params: unknown[], scopedOrgId: string): IntegrationQueryResult {
     const sql = rawSql.replaceAll(/\s+/gu, " ").trim();
 
+    // Unit fake: structured table ops only. Not a SQL/transaction/RLS proof.
+    if (sql.includes("pg_advisory_xact_lock")) {
+      return rowsOf([{ pg_advisory_xact_lock: 1 }]);
+    }
+
     if (
       sql.includes("FROM project_app_env") ||
       sql.includes("INTO project_app_env") ||
@@ -52,34 +54,100 @@ export class IntegrationMemoryDb {
     if (sql.startsWith("UPDATE org_integration_connection_operations")) {
       return this.updateOperation(sql, params);
     }
+    if (sql.includes("FROM org_integration_connection_operations") && sql.includes("idempotency_key")) {
+      const [orgId, idempotencyKey] = params as [string, string];
+      const op = this.operations.find((row) => row.org_id === orgId && row.idempotency_key === idempotencyKey);
+      return rowsOf(
+        op
+          ? [
+              {
+                id: op.id,
+                stage: op.stage,
+                status: op.status,
+                connection_id: op.connection_id,
+                target_auth_generation: op.target_auth_generation,
+              },
+            ]
+          : [],
+      );
+    }
     if (sql.startsWith("SELECT id, provider_kind, connection_id, operation_kind, stage, status,")) {
       const [orgId, operationId] = params as [string, string];
       const op = this.operations.find((row) => row.org_id === orgId && row.id === operationId);
-      return rowsOf(op ? [op] : []);
+      return rowsOf(op ? [{ ...op, compensation_state: op.compensation_state }] : []);
     }
-    if (sql.startsWith("SELECT id, current_auth_generation FROM org_integration_connections")) {
+    if (sql.startsWith("SELECT id FROM org_integration_connection_operations")) {
+      const [orgId, operationId, generation] = params as [string, string, number];
+      const op = this.operations.find(
+        (row) =>
+          row.org_id === orgId &&
+          row.id === operationId &&
+          row.target_auth_generation === generation &&
+          row.status === "in_progress" &&
+          row.stage === "finalizing",
+      );
+      return rowsOf(op ? [{ id: op.id }] : []);
+    }
+    if (
+      sql.startsWith("SELECT id, current_auth_generation") ||
+      sql.startsWith("SELECT id, current_auth_generation, status")
+    ) {
       const [orgId, providerKind, principalId] = params as [string, string, string];
       const conn = this.connections.find(
         (row) =>
           row.org_id === orgId && row.provider_kind === providerKind && row.provider_principal_id === principalId,
       );
-      return rowsOf(conn ? [{ id: conn.id, current_auth_generation: conn.current_auth_generation }] : []);
+      return rowsOf(
+        conn ? [{ id: conn.id, current_auth_generation: conn.current_auth_generation, status: conn.status }] : [],
+      );
+    }
+    if (sql.startsWith("INSERT INTO org_integration_connections")) {
+      const [orgId, id, providerKind, principalId, principalKind, displayName, metadataJson, ownerId] = params as [
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+      ];
+      if (
+        !this.connections.some(
+          (c) => c.org_id === orgId && c.provider_kind === providerKind && c.provider_principal_id === principalId,
+        )
+      ) {
+        this.connections.push({
+          id,
+          org_id: orgId,
+          provider_kind: providerKind,
+          provider_principal_id: principalId,
+          principal_kind: principalKind,
+          display_name: displayName,
+          principal_metadata: JSON.parse(metadataJson) as Record<string, unknown>,
+          health: "healthy",
+          status: "active",
+          current_auth_generation: null,
+          owner_id: ownerId,
+        });
+      }
+      return rowsOf([]);
     }
     if (sql.includes("FROM org_integration_connections c") && sql.includes("LEFT JOIN org_integration_grants g")) {
-      return this.listInventory(params);
+      return listInventory(this, params);
     }
     if (sql.includes("INSERT INTO project_integration_grant_selections")) {
-      return this.insertSelection(params);
+      return insertSelection(this, params);
     }
     if (sql.includes("FROM org_integration_connections c") && sql.includes("JOIN org_integration_grants g")) {
-      return this.eligibilityOrExact(sql, params);
+      return eligibilityQuery(this, params);
     }
     if (sql.startsWith("SELECT provider_principal_id FROM org_integration_connections")) {
       const [orgId, connectionId] = params as [string, string];
       const conn = this.connections.find((row) => row.org_id === orgId && row.id === connectionId);
       return rowsOf(conn ? [{ provider_principal_id: conn.provider_principal_id }] : []);
     }
-    if (sql.includes("WITH connection AS") && sql.includes("auth_gen AS")) {
+    if (sql.includes("WITH supersede_auth AS") || (sql.includes("auth_gen AS") && sql.includes("grant_gen AS"))) {
       return this.finalizeLink(params);
     }
     if (sql.includes("UPDATE org_integration_connections SET status = 'revoked'")) {
@@ -226,6 +294,7 @@ export class IntegrationMemoryDb {
       selected_principal_id: null,
       target_auth_generation: null,
       failure_classification: null,
+      compensation_state: {},
     };
     this.operations.push(op);
     return rowsOf([
@@ -251,13 +320,60 @@ export class IntegrationMemoryDb {
       }
       return rowsOf([]);
     }
-    if (sql.includes("awaiting_principal_selection")) {
-      const [orgId, operationId, candidatesJson] = params as [string, string, string];
+    // Match SET targets, not WHERE status IN (... awaiting_principal_selection ...).
+    if (sql.includes("stage = 'awaiting_principal_selection'")) {
+      const [orgId, operationId, candidatesJson, compensationJson] = params as [
+        string,
+        string,
+        string,
+        string | undefined,
+      ];
       const op = this.operations.find((row) => row.org_id === orgId && row.id === operationId);
       if (op !== undefined) {
         op.stage = "awaiting_principal_selection";
         op.status = "awaiting_principal_selection";
         op.candidate_principals = JSON.parse(candidatesJson) as unknown[];
+        if (compensationJson !== undefined) {
+          op.compensation_state = {
+            ...op.compensation_state,
+            ...(JSON.parse(compensationJson) as Record<string, unknown>),
+          };
+        }
+      }
+      return rowsOf([]);
+    }
+    if (sql.includes("stage = 'finalizing'")) {
+      const [orgId, operationId, connectionId, generation, principalId, compensationJson] = params as [
+        string,
+        string,
+        string,
+        number,
+        string,
+        string,
+      ];
+      const op = this.operations.find((row) => row.org_id === orgId && row.id === operationId);
+      if (op !== undefined) {
+        op.stage = "finalizing";
+        op.status = "in_progress";
+        op.connection_id = connectionId;
+        op.target_auth_generation = generation;
+        op.selected_principal_id = principalId;
+        op.compensation_state = {
+          ...op.compensation_state,
+          ...(JSON.parse(compensationJson) as Record<string, unknown>),
+        };
+      }
+      return rowsOf([]);
+    }
+    if (sql.includes("secret_finalize_failed") || sql.includes("failure_classification = 'secret_finalize_failed'")) {
+      const [orgId, operationId, compensationJson] = params as [string, string, string];
+      const op = this.operations.find((row) => row.org_id === orgId && row.id === operationId);
+      if (op !== undefined) {
+        op.failure_classification = "secret_finalize_failed";
+        op.compensation_state = {
+          ...op.compensation_state,
+          ...(JSON.parse(compensationJson) as Record<string, unknown>),
+        };
       }
       return rowsOf([]);
     }
@@ -274,194 +390,7 @@ export class IntegrationMemoryDb {
     return rowsOf([]);
   }
 
-  private listInventory(params: unknown[]): IntegrationQueryResult {
-    const [orgId] = params as [string, string | null];
-    const rows = this.connections
-      .filter((c) => c.org_id === orgId && c.status === "active")
-      .map((c) => {
-        const grant = this.grants.find(
-          (g) => g.org_id === c.org_id && g.connection_id === c.id && g.plane === "control" && g.status === "active",
-        );
-        const ag = this.authGenerations.find(
-          (row) =>
-            row.org_id === c.org_id && row.connection_id === c.id && row.generation === c.current_auth_generation,
-        );
-        const gg =
-          grant === undefined
-            ? undefined
-            : this.grantGenerations.find(
-                (row) =>
-                  row.org_id === grant.org_id &&
-                  row.grant_id === grant.id &&
-                  row.generation === grant.current_generation,
-              );
-        const selection = this.selections.find(
-          (s) => s.org_id === c.org_id && s.provider_kind === c.provider_kind && s.connection_id === c.id,
-        );
-        const op = this.operations.filter(
-          (row) =>
-            row.org_id === c.org_id &&
-            row.provider_kind === c.provider_kind &&
-            (row.connection_id === c.id || row.connection_id === null) &&
-            ["pending", "in_progress", "awaiting_principal_selection"].includes(row.status),
-        );
-        /* already at */
-        return {
-          connection_id: c.id,
-          grant_id: grant?.id ?? null,
-          org_id: c.org_id,
-          provider_kind: c.provider_kind,
-          provider_principal_id: c.provider_principal_id,
-          principal_kind: c.principal_kind,
-          display_name: c.display_name,
-          health: c.health,
-          connection_status: c.status,
-          current_auth_generation: c.current_auth_generation,
-          grant_generation: grant?.current_generation ?? null,
-          grant_status: grant?.status ?? null,
-          auth_expires_at: ag?.expires_at ?? null,
-          provider_scopes: gg?.provider_scopes ?? [],
-          operation_id: op?.id ?? null,
-          operation_stage: op?.stage ?? null,
-          operation_status: op?.status ?? null,
-          selected_for_project: selection !== undefined,
-        };
-      });
-    return rowsOf(rows);
-  }
-
-  private insertSelection(params: unknown[]): IntegrationQueryResult {
-    const [orgId, projectId, providerKind, connectionId, grantId, authGeneration, grantGeneration, selectedBy] =
-      params as [string, string, string, string, string, number, number, string];
-    const conn = this.connections.find(
-      (c) =>
-        c.org_id === orgId &&
-        c.provider_kind === providerKind &&
-        c.id === connectionId &&
-        c.current_auth_generation === authGeneration,
-    );
-    const grant = this.grants.find(
-      (g) =>
-        g.org_id === orgId &&
-        g.connection_id === connectionId &&
-        g.id === grantId &&
-        g.current_generation === grantGeneration,
-    );
-    if (conn === undefined || grant === undefined) return rowsOf([]);
-    this.selections = this.selections.filter(
-      (s) => !(s.org_id === orgId && s.project_id === projectId && s.provider_kind === providerKind),
-    );
-    this.selections.push({
-      org_id: orgId,
-      project_id: projectId,
-      provider_kind: providerKind,
-      connection_id: connectionId,
-      auth_generation: authGeneration,
-      grant_id: grantId,
-      grant_generation: grantGeneration,
-      selected_by: selectedBy,
-    });
-    return rowsOf([
-      {
-        connection_id: connectionId,
-        grant_id: grantId,
-        auth_generation: authGeneration,
-        grant_generation: grantGeneration,
-      },
-    ]);
-  }
-
-  private eligibilityOrExact(sql: string, params: unknown[]): IntegrationQueryResult {
-    if (sql.includes("c.current_auth_generation") && params.length >= 4 && typeof params[2] === "string") {
-      // resolveExactControlGrant style
-      const [orgId, providerKind, connectionId, grantId] = params as [string, string, string, string];
-      const c = this.connections.find(
-        (row) => row.org_id === orgId && row.provider_kind === providerKind && row.id === connectionId,
-      );
-      const g = this.grants.find(
-        (row) => row.org_id === orgId && row.connection_id === connectionId && row.id === grantId,
-      );
-      if (c === undefined || g === undefined) return rowsOf([]);
-      const ag = this.authGenerations.find(
-        (row) => row.connection_id === c.id && row.generation === c.current_auth_generation && row.status === "active",
-      );
-      const gg = this.grantGenerations.find(
-        (row) => row.grant_id === g.id && row.generation === g.current_generation && row.status === "active",
-      );
-      if (ag === undefined || gg === undefined) return rowsOf([]);
-      return rowsOf([
-        {
-          connection_id: c.id,
-          provider_kind: c.provider_kind,
-          provider_principal_id: c.provider_principal_id,
-          principal_metadata: c.principal_metadata,
-          current_auth_generation: c.current_auth_generation,
-          grant_id: g.id,
-          grant_generation: g.current_generation,
-          credential_ref: ag.credential_ref,
-          policy_revision: gg.policy_revision,
-          consent_revision: gg.consent_revision,
-          capabilities: gg.capabilities,
-          operations: gg.operations,
-        },
-      ]);
-    }
-    // ELIGIBILITY_SQL
-    const [orgId, projectId, providerKind] = params as [string, string, string];
-    const rows = [];
-    for (const c of this.connections.filter((row) => row.org_id === orgId && row.provider_kind === providerKind)) {
-      for (const g of this.grants.filter(
-        (row) => row.org_id === orgId && row.connection_id === c.id && row.plane === "control",
-      )) {
-        const ag = this.authGenerations.find(
-          (row) => row.connection_id === c.id && row.generation === c.current_auth_generation,
-        );
-        const gg = this.grantGenerations.find(
-          (row) => row.grant_id === g.id && row.generation === g.current_generation,
-        );
-        const s = this.selections.find(
-          (row) => row.org_id === orgId && row.project_id === projectId && row.provider_kind === providerKind,
-        );
-        rows.push({
-          connection_id: c.id,
-          provider_kind: c.provider_kind,
-          provider_principal_id: c.provider_principal_id,
-          display_name: c.display_name,
-          principal_metadata: c.principal_metadata,
-          connection_health: c.health,
-          connection_status: c.status,
-          current_auth_generation: c.current_auth_generation,
-          grant_id: g.id,
-          grant_current_generation: g.current_generation,
-          grant_status: g.status,
-          plane: g.plane,
-          environment: g.environment,
-          credential_ref: ag?.credential_ref ?? null,
-          auth_expires_at: ag?.expires_at ?? null,
-          auth_status: ag?.status ?? null,
-          capabilities: gg?.capabilities ?? null,
-          operations: gg?.operations ?? null,
-          provider_scopes: gg?.provider_scopes ?? null,
-          resource_constraints: {},
-          policy_revision: gg?.policy_revision ?? null,
-          consent_revision: gg?.consent_revision ?? null,
-          grant_expires_at: gg?.expires_at ?? null,
-          grant_generation_status: gg?.status ?? null,
-          selected_auth_generation: s?.auth_generation ?? null,
-          selected_grant_generation: s?.grant_generation ?? null,
-          selected_connection_id: s?.connection_id ?? null,
-          selected_grant_id: s?.grant_id ?? null,
-        });
-      }
-    }
-    return rowsOf(rows);
-  }
-
   private finalizeLink(params: unknown[]): IntegrationQueryResult {
     return finalizeLinkInMemory(this, params);
   }
-}
-
-function rowsOf(rows: unknown[]): IntegrationQueryResult {
-  return { rows, rowCount: rows.length };
 }

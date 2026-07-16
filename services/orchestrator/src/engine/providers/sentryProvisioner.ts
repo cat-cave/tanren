@@ -258,11 +258,10 @@ export class SentryProvisioner implements IntegrationProvisioner {
    * in the artifact, logged, or persisted to DB config.
    */
   private async resolveToken(grant: OrgGrant): Promise<string> {
-    const secret = await this.secrets.get(grant.eligibleOperation.credentialRef);
-    if (secret === undefined) {
-      throw new Error(`sentry provisioner: no org token at credential ref ${grant.eligibleOperation.credentialRef}`);
-    }
-    return secret.value;
+    // Exact generation only — never naked SecretStore.get of a non-generation ref.
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
+    const { secretValueForLease } = await import("../repositories/integrationConnectionResolve.js");
+    return secretValueForLease(new GenerationAddressedIntegrationSecretStore(this.secrets), grant.eligibleOperation);
   }
 
   private async listOrgProjects(meta: SentryGrantMetadata, token: string): Promise<RawSentryProject[]> {

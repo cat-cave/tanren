@@ -1,8 +1,7 @@
 // DERIVE TRANSACTIONAL ROLLBACK — the greenfield deploy-DESTROY companion to
 // `prepareGreenfieldDeploy` (task #78). The derive registers a compensation for
 // each deploy app it provisions; this is the route-layer wiring that resolves
-// the org grant and delegates to `DeployProvisioner.destroyApp` (which itself
-// resolves the org token + delegates to Vercel/Fly delete primitives).
+// the org grant via authorizeOperation and delegates to `DeployProvisioner.destroyApp`.
 // IDEMPOTENT: an app that no longer exists is a successful no-op.
 //
 // NEVER call this from a regular run path — deploy-app destruction is
@@ -14,14 +13,15 @@ import {
   buildIntegrationProvisioner,
   type IntegrationProvisioner,
 } from "../../engine/contracts/integrationProvisioner.js";
-import { IntegrationConnectionsStore } from "../../engine/repositories/integrationConnections.js";
 import { productionProvisionerDeps } from "../../engine/integrations/provisioningEngine.js";
 import { DeployProvisioner } from "../../engine/provisioners/deployProvisioner.js";
+import { authorizeGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
 
 export interface GreenfieldDeployDestroyDeps {
   pool: pg.Pool;
   secrets: SecretStore;
   orgId: string;
+  projectId: string;
   actorId: string;
   /**
    * Carries BOTH `appId` and `appName` (audit finding D4): Vercel keys destroy by
@@ -40,27 +40,28 @@ export interface GreenfieldDeployDestroyDeps {
 
 /**
  * Destroy a greenfield-provisioned deploy app via `DeployProvisioner.destroyApp`.
- * IDEMPOTENT — an app that no longer exists is a successful no-op (the contract).
- * A missing grant (the org's deploy integration was unlinked between provision +
- * rollback) is a LOUD throw — the rollback gap surfaces on the derive error so
- * the operator sees exactly which resource may be orphaned. Production-only
- * (the in-memory test fakes inject their own destroy closures).
+ * Uses authorizeOperation after project selection — never naked grant resolve.
  */
 export async function destroyGreenfieldDeployApp(deps: GreenfieldDeployDestroyDeps): Promise<void> {
-  const { pool, secrets, orgId, actorId, target } = deps;
-  const grant = await IntegrationConnectionsStore.resolveExactControlGrant(pool, {
+  const { pool, secrets, orgId, projectId, actorId, target } = deps;
+  const resolved = await authorizeGreenfieldDeploy({
+    client: pool,
     orgId,
+    projectId,
     providerKind: target.providerKind,
-    connectionId: target.connectionId,
-    grantId: target.grantId,
-    capability: "deploy",
+    actorId,
     operation: "teardown",
   });
-  void actorId;
-  if (grant === undefined) {
+  if ("status" in resolved) {
     throw new Error(
-      `${target.providerKind}: cannot destroy deploy app '${target.appName}' (id '${target.appId}') — the org grant ` +
-        `is gone (unlinked between provision + rollback). The deploy app may be orphaned and need manual cleanup.`,
+      `${target.providerKind}: cannot destroy deploy app '${target.appName}' (id '${target.appId}') — ` +
+        `authorizeOperation returned ${resolved.status}. The deploy app may be orphaned and need manual cleanup.`,
+    );
+  }
+  const grant = resolved;
+  if (grant.connectionId !== target.connectionId || grant.grantId !== target.grantId) {
+    throw new Error(
+      `${target.providerKind}: selected grant does not match destroy target connection/grant — refusing teardown`,
     );
   }
   const provisioner: IntegrationProvisioner = buildIntegrationProvisioner(

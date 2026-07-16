@@ -4,11 +4,6 @@ import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import {
-  buildIntegrationProvisioner,
-  resolveSmartDefault,
-  type ProvisionedArtifact,
-} from "../../engine/contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
   GreenfieldRepoNotEmptyError,
@@ -21,13 +16,6 @@ import {
   type GreenfieldRepositoryCreateDeps,
 } from "./greenfieldRepoCreate.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
-import {
-  productionProvisionerDeps,
-  type IneligibleResult,
-  type NotLinkedResult,
-  type ProvisionedResult,
-  type SelectionRequiredResult,
-} from "../../engine/integrations/provisioningEngine.js";
 import {
   DeployProviderInvalidError,
   DeployProviderMissingError,
@@ -43,14 +31,11 @@ import { provisionAutonomousProject } from "../../engine/workflow/provisionAuton
 import { provisionedGreenfieldProjectConfigProof } from "../../engine/workflow/projectConfigWriteGuards.js";
 import { createProject } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
-import {
-  greenfieldOrgLogin,
-  persistGreenfieldDeploySelection,
-  preflightGreenfieldDeploy,
-  resolveGreenfieldDeployGrant,
-} from "./greenfieldDeployAuthority.js";
+import { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
+import { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
 
 export { preflightGreenfieldDeploy } from "./greenfieldDeployAuthority.js";
+export { prepareGreenfieldDeploy } from "./greenfieldDeployPrepare.js";
 
 export const SUPPORTED_DEPLOY_PROVIDER_KINDS = ["deploy.vercel", "deploy.flyio"] as const;
 
@@ -257,16 +242,29 @@ export async function handleGreenfieldCreate(
     }
   }
 
-  // Provision deploy ONLY now (after the repo exists) so the deploy app is the LAST
-  // external resource before the durable project row — minimizing the window where a
-  // crash could strand a deploy app without an anchor. (A resume past this point is
-  // handled by the project-replay branch above.)
+  // Project shell first — provider I/O requires a real project selection anchor.
+  // Deploy config is merged after authorizeOperation + provision (never before).
+  const project = await createProject(
+    pool,
+    {
+      name: input.name,
+      repoUrl: created.repoUrl,
+      defaultBranch: input.defaultBranch ?? created.defaultBranch,
+      config: { version: 1, greenfield: true },
+      ...(input.runnerImage === undefined ? {} : { runnerImage: input.runnerImage }),
+      ...(input.allocator === undefined ? {} : { allocator: input.allocator }),
+    },
+    scopedActor,
+    { configWriteProof: provisionedGreenfieldProjectConfigProof },
+  );
+
   let preparedDeploy: PreparedGreenfieldDeploy;
   try {
     const prepared = await prepareGreenfieldDeploy({
       pool,
       secrets,
       orgId,
+      projectId: project.projectId,
       actorId: actor.userId,
       projectKey: `${input.owner}/${input.name}`,
       projectName: input.name,
@@ -280,43 +278,17 @@ export async function handleGreenfieldCreate(
     }
     preparedDeploy = prepared;
   } catch (error) {
-    return c.json({ error: "deploy_provision_failed", message: messageOf(error) }, 502);
+    return c.json(
+      { error: "deploy_provision_failed", message: error instanceof Error ? error.message : String(error) },
+      502,
+    );
   }
 
-  // Bind a new project to the REAL new repoUrl. createProject persists under the
-  // org actor's RLS scope (it self-scopes on the actor's orgId).
-  const project = await createProject(
+  await ProjectStore.updateConfig(
     pool,
-    {
-      name: input.name,
-      repoUrl: created.repoUrl,
-      defaultBranch: input.defaultBranch ?? created.defaultBranch,
-      // GREENFIELD MARKER: this project has NO pre-existing repo/lockfile — Tanren
-      // authors the toolchain live. Persisted so the run's in-loop deps-ensure uses
-      // a NON-FROZEN install (a writer-added devDep without a regenerated lockfile
-      // still installs), while brownfield keeps the frozen, lockfile-safe default.
-      config: { version: 1, greenfield: true, ...preparedDeploy.projectConfig },
-      ...(input.runnerImage === undefined ? {} : { runnerImage: input.runnerImage }),
-      ...(input.allocator === undefined ? {} : { allocator: input.allocator }),
-    },
-    scopedActor,
-    { configWriteProof: provisionedGreenfieldProjectConfigProof },
-  );
-
-  // The project now exists: persist the exact account used to provision its
-  // deploy app before any later deploy/demo consumer can run.
-  await persistGreenfieldDeploySelection(
-    pool,
-    {
-      orgId,
-      projectId: project.projectId,
-      providerKind: preparedDeploy.outcome.providerKind,
-      connectionId: preparedDeploy.outcome.authority.connectionId,
-      grantId: preparedDeploy.outcome.authority.grantId,
-      authGeneration: preparedDeploy.outcome.authority.authGeneration,
-      grantGeneration: preparedDeploy.outcome.authority.grantGeneration,
-    },
-    actor.userId,
+    project.projectId,
+    { version: 1, greenfield: true, ...preparedDeploy.projectConfig },
+    { kind: "operator", id: actor.userId },
   );
 
   // SHARED bootstrap (Codex round-4): seed the COMPLETE autonomous-project set —
@@ -404,97 +376,4 @@ function greenfieldDeployErrorResponse(c: Context<ActorContextEnv>, error: unkno
     );
   }
   throw error;
-}
-export async function prepareGreenfieldDeploy(input: {
-  pool: pg.Pool;
-  secrets: SecretStore;
-  orgId: string;
-  actorId: string;
-  projectKey: string;
-  projectName: string;
-  deploy: {
-    providerKind: "deploy.vercel" | "deploy.flyio";
-    mode: "greenfield" | "brownfield";
-    connectionId?: string;
-    grantId?: string;
-    chosenResourceId?: string;
-    stack?: string;
-    name?: string;
-  };
-}): Promise<NotLinkedResult | SelectionRequiredResult | IneligibleResult | PreparedGreenfieldDeploy> {
-  const providerKind = input.deploy.providerKind;
-  const resolved = await resolveGreenfieldDeployGrant({
-    client: input.pool,
-    orgId: input.orgId,
-    providerKind,
-    actorId: input.actorId,
-    ...(input.deploy.connectionId === undefined ? {} : { connectionId: input.deploy.connectionId }),
-    ...(input.deploy.grantId === undefined ? {} : { grantId: input.deploy.grantId }),
-  });
-  if ("status" in resolved) return resolved;
-  const grant = resolved;
-  const provisioner = buildIntegrationProvisioner(providerKind, productionProvisionerDeps(input.secrets));
-  // task #27: every Tanren-created deploy app is namespaced `<orgSlug>-<projectName>`
-  // so a bare `linkly` cannot collide on Fly's GLOBAL app-name namespace. Resolve
-  // the Tanren org slug (`organizations.login`) up front and thread it through the
-  // project context — the provisioner's `deployAppName` reads it.
-  const orgSlug = await greenfieldOrgLogin(input.pool, input.orgId, input.actorId);
-  const projectCtx = {
-    projectId: `pending:${input.projectKey}`,
-    orgId: input.orgId,
-    orgSlug,
-    ...(input.deploy.stack === undefined ? {} : { stack: input.deploy.stack }),
-    name: input.deploy.name ?? input.projectName,
-  };
-  let action: "provision" | "bind";
-  let artifact: ProvisionedArtifact;
-  try {
-    if (input.deploy.chosenResourceId !== undefined && input.deploy.chosenResourceId !== "") {
-      action = "bind";
-      artifact = await provisioner.bind(grant, input.deploy.chosenResourceId, projectCtx);
-    } else {
-      const discovered = await provisioner.discover(grant);
-      const smart = resolveSmartDefault(discovered, input.deploy.mode, { name: projectCtx.name });
-      if (smart.action === "bind") {
-        action = "bind";
-        artifact = await provisioner.bind(grant, smart.resourceId, projectCtx);
-      } else {
-        action = "provision";
-        artifact = await provisioner.provision(grant, projectCtx);
-      }
-    }
-  } catch (error) {
-    throw new Error(`deploy provision failed: ${messageOf(error)}`, { cause: error });
-  }
-  const projectConfig = artifact.projectConfig ?? {};
-  if (
-    artifact.deployRef === undefined ||
-    projectConfig["deployProvider"] === undefined ||
-    projectConfig["deployAppId"] === undefined
-  ) {
-    throw new Error(`deploy provision failed: ${providerKind} returned no deploy target config`);
-  }
-  const outcome: ProvisionedResult = {
-    status: "provisioned",
-    capability: "deploy",
-    providerKind,
-    action,
-    mode: input.deploy.mode,
-    authority: {
-      connectionId: grant.connectionId,
-      grantId: grant.grantId,
-      providerPrincipalId: grant.providerPrincipalId,
-      authGeneration: grant.authGeneration,
-      grantGeneration: grant.grantGeneration,
-    },
-    secretRefNames: Object.values(artifact.secretRefs ?? {}),
-    surfaces: {
-      projectConfigKeys: Object.keys(projectConfig),
-      deployRef: `${artifact.deployRef.provider}:${artifact.deployRef.appId}`,
-    },
-  };
-  return { outcome, projectConfig };
-}
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

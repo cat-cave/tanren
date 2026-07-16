@@ -390,13 +390,10 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
    * never placed in an artifact, logged, or returned.
    */
   private async resolveToken(grant: OrgGrant): Promise<string> {
-    const secret = await this.secrets.get(grant.eligibleOperation.credentialRef);
-    if (secret === undefined) {
-      throw new Error(
-        `${this.api.providerKind}: org grant credentialRef '${grant.eligibleOperation.credentialRef}' is not present in the secret store`,
-      );
-    }
-    return secret.value;
+    // Exact generation only via IntegrationSecretStore.getExact + lease.
+    const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
+    const { secretValueForLease } = await import("../repositories/integrationConnectionResolve.js");
+    return secretValueForLease(new GenerationAddressedIntegrationSecretStore(this.secrets), grant.eligibleOperation);
   }
 
   /** Resolve the token and stable app exactly as the deploy path does. */

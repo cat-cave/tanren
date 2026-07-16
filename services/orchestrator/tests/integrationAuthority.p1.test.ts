@@ -19,8 +19,15 @@ describe("IN-1 P1 authority former-bug proofs", () => {
       actorId: "admin",
       stagedSecretHandle: staged.handle,
     });
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      Response.json({ ok: true, team_id: "T_PROVIDER", team: "Provider Team", user_id: "U1" }),
+    const fetchImpl = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify({ ok: true, team_id: "T_PROVIDER", team: "Provider Team", user_id: "U1" }), {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "x-oauth-scopes": "channels:read,channels:manage",
+          },
+        }),
     );
     const result = await new SlackPrincipalVerifier(fetchImpl as unknown as typeof fetch).verify(
       permit,

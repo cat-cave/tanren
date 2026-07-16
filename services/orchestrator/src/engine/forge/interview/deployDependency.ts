@@ -49,6 +49,8 @@ export function isDeployUnavailable(
 
 export type PrepareDeployCallback = (input: {
   orgId: string;
+  /** Real project id — required for authorizeOperation after selection. */
+  projectId: string;
   capability: "deploy";
   providerKind: "deploy.vercel" | "deploy.flyio";
   mode: ProvisionMode;

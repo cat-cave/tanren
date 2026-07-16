@@ -41,7 +41,7 @@ export function preparedDeploy(providerKind: "deploy.vercel" | "deploy.flyio" = 
       authority: {
         connectionId: "connection_1",
         grantId: "grant_1",
-        upstreamAccountId: "account_1",
+        providerPrincipalId: "account_1",
         authGeneration: 1,
         grantGeneration: 1,
       },
@@ -84,6 +84,17 @@ export function stubPool(): {
       const rawConfig = params[6];
       if (typeof rawConfig === "string") {
         configs.set(String(params[0]), JSON.parse(rawConfig) as Record<string, unknown>);
+      }
+      return { rows: [], rowCount: 1 };
+    }
+    // Post-deploy config merge (project shell created first, deploy fields applied after).
+    if (sql.startsWith("UPDATE projects SET config")) {
+      const rawConfig = params[0];
+      const projectId = String(params[1]);
+      if (typeof rawConfig === "string") {
+        // Production updateConfig overwrites the config blob entirely with the
+        // caller's merged object (base + vision + lifecycle + deploy).
+        configs.set(projectId, JSON.parse(rawConfig) as Record<string, unknown>);
       }
       return { rows: [], rowCount: 1 };
     }

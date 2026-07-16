@@ -108,16 +108,40 @@ export interface DiscoverOutcome {
   };
 }
 
-/** Result of POST link — refs only. */
+/** Sanitized multi-principal candidate — never secret refs or generations. */
+export interface PrincipalSelectionCandidate {
+  providerPrincipalId: string;
+  principalKind: string;
+  displayName: string;
+  metadata?: Record<string, string>;
+}
+
+/** Result of POST link — refs only; never tokens/generation display authority. */
 export interface LinkOutcome {
   status: string;
-  providerKind: string;
-  connectionId: string;
-  grantId: string;
-  authGeneration: number;
-  grantGeneration: number;
-  capabilities: string[];
-  metadataKeys: string[];
+  providerKind?: string;
+  operationId?: string;
+  operationUrl?: string;
+  connectionId?: string;
+  grantId?: string;
+  authGeneration?: number;
+  grantGeneration?: number;
+  capabilities?: string[];
+  metadataKeys?: string[];
+  candidates?: PrincipalSelectionCandidate[];
+  reason?: string;
+  displayName?: string;
+  providerPrincipalId?: string;
+  idempotentReplay?: boolean;
+}
+
+export interface SelectPrincipalOutcome {
+  status: string;
+  operationId?: string;
+  connectionId?: string;
+  providerPrincipalId?: string;
+  reason?: string;
+  error?: string;
 }
 
 export interface SelectGrantOutcome {

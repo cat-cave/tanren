@@ -5,7 +5,15 @@
 
 export const INTEGRATION_POLICY_CATALOG_REVISION = "integration-catalog.v1" as const;
 
-export type IntegrationProviderKind = "slack" | "sentry" | "deploy.vercel" | "deploy.flyio";
+export type IntegrationProviderKind =
+  | "slack"
+  | "sentry"
+  | "deploy.vercel"
+  | "deploy.flyio"
+  | "deploy.manual_external"
+  | "deploy.pulumi"
+  | "deploy.package_release"
+  | "deploy.mobile_release";
 
 export interface CatalogOperation {
   id: string;
@@ -74,6 +82,71 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
   },
   {
     providerKind: "deploy.flyio",
+    principalKinds: ["organization"],
+    authKinds: ["api_key"],
+    capabilities: [
+      {
+        id: "deploy",
+        operations: [
+          { id: "discover", requiredScopes: [], plane: "control" },
+          { id: "provision", requiredScopes: [], plane: "control" },
+          { id: "bind", requiredScopes: [], plane: "control" },
+          { id: "teardown", requiredScopes: [], plane: "control" },
+        ],
+      },
+    ],
+  },
+  // Fixture / extended deploy adapters — empty scopes; still require project selection.
+  {
+    providerKind: "deploy.manual_external",
+    principalKinds: ["organization"],
+    authKinds: ["api_key"],
+    capabilities: [
+      {
+        id: "deploy",
+        operations: [
+          { id: "discover", requiredScopes: [], plane: "control" },
+          { id: "provision", requiredScopes: [], plane: "control" },
+          { id: "bind", requiredScopes: [], plane: "control" },
+          { id: "teardown", requiredScopes: [], plane: "control" },
+        ],
+      },
+    ],
+  },
+  {
+    providerKind: "deploy.pulumi",
+    principalKinds: ["organization"],
+    authKinds: ["api_key"],
+    capabilities: [
+      {
+        id: "deploy",
+        operations: [
+          { id: "discover", requiredScopes: [], plane: "control" },
+          { id: "provision", requiredScopes: [], plane: "control" },
+          { id: "bind", requiredScopes: [], plane: "control" },
+          { id: "teardown", requiredScopes: [], plane: "control" },
+        ],
+      },
+    ],
+  },
+  {
+    providerKind: "deploy.package_release",
+    principalKinds: ["organization"],
+    authKinds: ["api_key"],
+    capabilities: [
+      {
+        id: "deploy",
+        operations: [
+          { id: "discover", requiredScopes: [], plane: "control" },
+          { id: "provision", requiredScopes: [], plane: "control" },
+          { id: "bind", requiredScopes: [], plane: "control" },
+          { id: "teardown", requiredScopes: [], plane: "control" },
+        ],
+      },
+    ],
+  },
+  {
+    providerKind: "deploy.mobile_release",
     principalKinds: ["organization"],
     authKinds: ["api_key"],
     capabilities: [

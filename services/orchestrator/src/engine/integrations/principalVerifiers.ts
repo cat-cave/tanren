@@ -1,13 +1,14 @@
 /**
- * Provider-specific principal verifiers. Stable IDs come from provider APIs only —
- * never from caller-labelled account IDs.
+ * Provider-specific principal verifiers. Stable IDs and scopes come from
+ * provider-authenticated responses only — never caller-labelled account IDs.
  *
- * - Slack: team_id from auth.test
- * - Sentry: organization stable id from /api/0/organizations/
- * - Vercel: team id(s) and/or user id from /v2/user + /v2/teams
- * - Fly: organization id from GraphQL organizations query
+ * - Slack: team_id from auth.test; scopes from x-oauth-scopes header
+ * - Sentry: organization stable ids; scopes from capability probes
+ * - Vercel: team/user ids; non-OK team fetch fails loud
+ * - Fly: organization ids via paginated GraphQL
  */
 
+import { z } from "zod";
 import {
   assertPrincipalVerificationPermit,
   type PrincipalCandidate,
@@ -30,12 +31,25 @@ export interface PrincipalVerifier {
 }
 
 type FetchImpl = typeof fetch;
+
 function meta(entries: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(entries)) {
     if (v !== undefined) out[k] = v;
   }
   return out;
+}
+
+function parseScopeHeader(header: string | null): string[] {
+  if (header === null || header.trim() === "") return [];
+  return [
+    ...new Set(
+      header
+        .split(/[,\s]+/u)
+        .map((scope) => scope.trim())
+        .filter((scope) => scope !== ""),
+    ),
+  ];
 }
 
 async function readStagedToken(
@@ -47,10 +61,6 @@ async function readStagedToken(
   if (staged.operationId !== permit.operationId || staged.handle !== permit.stagedSecretHandle) {
     throw new Error("staged credential handle does not match verification permit");
   }
-  // Stage lives at handle path; re-read via compensate-safe temporary finalize path
-  // is intentionally not used — stage values are only accessible by finalize.
-  // IntegrationSecretStore does not expose staged reads; verifiers receive token
-  // through a sealed helper on the store implementation.
   const reader = secrets as IntegrationSecretStore & {
     readStagedForPermit?(permit: PrincipalVerificationPermit, staged: StagedSecretHandle): Promise<string>;
   };
@@ -59,6 +69,16 @@ async function readStagedToken(
   }
   return reader.readStagedForPermit(permit, staged);
 }
+
+const SlackAuthTestSchema = z
+  .object({
+    ok: z.boolean(),
+    error: z.string().optional(),
+    team_id: z.string().min(1).optional(),
+    team: z.string().optional(),
+    user_id: z.string().optional(),
+  })
+  .strict();
 
 export class SlackPrincipalVerifier implements PrincipalVerifier {
   readonly providerKind = "slack";
@@ -76,28 +96,60 @@ export class SlackPrincipalVerifier implements PrincipalVerifier {
       body: "",
     });
     if (!response.ok) return { status: "invalid", reason: `slack_http_${response.status}` };
-    const body = (await response.json()) as {
-      ok?: boolean;
-      error?: string;
-      team_id?: string;
-      team?: string;
-      user_id?: string;
-    };
-    if (body.ok !== true || typeof body.team_id !== "string" || body.team_id === "") {
+    const raw: unknown = await response.json();
+    const parsed = SlackAuthTestSchema.safeParse(raw);
+    if (!parsed.success) return { status: "invalid", reason: "slack_malformed_auth_test" };
+    const body = parsed.data;
+    if (!body.ok || body.team_id === undefined) {
       return { status: "invalid", reason: body.error ?? "slack_auth_failed" };
+    }
+    const scopes = parseScopeHeader(response.headers.get("x-oauth-scopes"));
+    if (scopes.length === 0) {
+      // Bot tokens always advertise scopes on successful Web API calls; empty is unproven.
+      return { status: "invalid", reason: "slack_scopes_unproven" };
     }
     return {
       status: "verified",
       authKind: "bot_token",
-      scopes: [],
+      scopes,
       principal: {
         providerPrincipalId: body.team_id,
         principalKind: "team",
-        displayName: typeof body.team === "string" && body.team !== "" ? body.team : body.team_id,
-        metadata: meta({ botUserId: typeof body.user_id === "string" ? body.user_id : undefined }),
+        displayName: body.team !== undefined && body.team !== "" ? body.team : body.team_id,
+        metadata: meta({ botUserId: body.user_id }),
       },
     };
   }
+}
+
+const SentryOrgSchema = z.object({
+  id: z.string().min(1),
+  slug: z.string().optional(),
+  name: z.string().optional(),
+});
+
+/** Probe catalog scopes via provider-authenticated capability checks (never invent). */
+async function probeSentryScopes(fetchImpl: FetchImpl, token: string, orgSlug: string): Promise<string[]> {
+  const scopes = new Set<string>();
+  const headers = { Authorization: `Bearer ${token}`, Accept: "application/json" };
+  // project:read — listing projects under the org.
+  const projects = await fetchImpl(
+    `https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/projects/?per_page=1`,
+    { headers },
+  );
+  if (projects.status === 401 || projects.status === 403) return [];
+  if (projects.ok) scopes.add("project:read");
+  // project:write — team list is a write-adjacent probe that fails closed on missing scope.
+  const teams = await fetchImpl(
+    `https://sentry.io/api/0/organizations/${encodeURIComponent(orgSlug)}/teams/?per_page=1`,
+    { headers },
+  );
+  if (teams.ok) {
+    scopes.add("project:write");
+    // project:admin is not independently probeable without mutating; if write works,
+    // provision still re-checks on first create. Do not invent admin.
+  }
+  return [...scopes];
 }
 
 export class SentryPrincipalVerifier implements PrincipalVerifier {
@@ -110,32 +162,66 @@ export class SentryPrincipalVerifier implements PrincipalVerifier {
     secrets: IntegrationSecretStore,
   ): Promise<PrincipalVerificationResult> {
     const token = await readStagedToken(permit, staged, secrets);
-    const response = await this.fetchImpl("https://sentry.io/api/0/organizations/", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (response.status === 401 || response.status === 403) {
-      return { status: "invalid", reason: `sentry_http_${response.status}` };
+    const candidates: PrincipalCandidate[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const url =
+        cursor === undefined
+          ? "https://sentry.io/api/0/organizations/?per_page=100"
+          : `https://sentry.io/api/0/organizations/?per_page=100&cursor=${encodeURIComponent(cursor)}`;
+      const response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (response.status === 401 || response.status === 403) {
+        return { status: "invalid", reason: `sentry_http_${response.status}` };
+      }
+      if (!response.ok) return { status: "invalid", reason: `sentry_http_${response.status}` };
+      const raw: unknown = await response.json();
+      if (!Array.isArray(raw)) return { status: "invalid", reason: "sentry_malformed_organizations" };
+      for (const item of raw) {
+        const parsed = SentryOrgSchema.safeParse(item);
+        if (!parsed.success) continue;
+        candidates.push({
+          providerPrincipalId: parsed.data.id,
+          principalKind: "organization",
+          displayName: parsed.data.name ?? parsed.data.slug ?? parsed.data.id,
+          metadata: meta({ slug: parsed.data.slug }),
+        });
+      }
+      const link = response.headers.get("link") ?? "";
+      const next = /<[^>]*[?&]cursor=([^&>]+)[^>]*>;\s*rel="next"/u.exec(link);
+      const nextCursor = next?.[1] === undefined ? undefined : decodeURIComponent(next[1]);
+      if (nextCursor === undefined || nextCursor === "") break;
+      if (seenCursors.has(nextCursor)) {
+        throw new Error(`sentry organizations listing returned a non-advancing cursor (${nextCursor})`);
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
-    if (!response.ok) return { status: "invalid", reason: `sentry_http_${response.status}` };
-    const body = (await response.json()) as Array<{ id?: string; slug?: string; name?: string }>;
-    if (!Array.isArray(body) || body.length === 0) {
-      return { status: "invalid", reason: "sentry_no_organizations" };
-    }
-    const candidates: PrincipalCandidate[] = body
-      .filter((org) => typeof org.id === "string" && org.id !== "")
-      .map((org) => ({
-        providerPrincipalId: org.id!,
-        principalKind: "organization" as const,
-        displayName: org.name ?? org.slug ?? org.id!,
-        metadata: meta({ slug: typeof org.slug === "string" ? org.slug : undefined }),
-      }));
     if (candidates.length === 0) return { status: "invalid", reason: "sentry_no_organizations" };
+
+    // Scopes are token-level: probe against the first org's slug when available.
+    const probeSlug =
+      typeof candidates[0]!.metadata["slug"] === "string"
+        ? candidates[0]!.metadata["slug"]
+        : candidates[0]!.providerPrincipalId;
+    const scopes = await probeSentryScopes(this.fetchImpl, token, probeSlug);
+    if (scopes.length === 0) return { status: "invalid", reason: "sentry_scopes_unproven" };
+
     if (candidates.length > 1) {
-      return { status: "multi_principal", candidates, authKind: "api_key", scopes: [] };
+      return { status: "multi_principal", candidates, authKind: "api_key", scopes };
     }
-    return { status: "verified", principal: candidates[0]!, authKind: "api_key", scopes: [] };
+    return { status: "verified", principal: candidates[0]!, authKind: "api_key", scopes };
   }
 }
+
+const VercelUserSchema = z.object({
+  user: z.object({ id: z.string().min(1), username: z.string().optional(), name: z.string().optional() }),
+});
+const VercelTeamSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  slug: z.string().optional(),
+});
 
 export class VercelPrincipalVerifier implements PrincipalVerifier {
   readonly providerKind = "deploy.vercel";
@@ -153,42 +239,78 @@ export class VercelPrincipalVerifier implements PrincipalVerifier {
       return { status: "invalid", reason: `vercel_http_${userResponse.status}` };
     }
     if (!userResponse.ok) return { status: "invalid", reason: `vercel_http_${userResponse.status}` };
-    const userBody = (await userResponse.json()) as { user?: { id?: string; username?: string; name?: string } };
-    const userId = userBody.user?.id;
-    if (typeof userId !== "string" || userId === "") {
-      return { status: "invalid", reason: "vercel_no_user" };
-    }
-    const teamsResponse = await this.fetchImpl("https://api.vercel.com/v2/teams", { headers });
+    const userParsed = VercelUserSchema.safeParse(await userResponse.json());
+    if (!userParsed.success) return { status: "invalid", reason: "vercel_malformed_user" };
+    const userId = userParsed.data.user.id;
+
     const candidates: PrincipalCandidate[] = [];
-    if (teamsResponse.ok) {
-      const teamsBody = (await teamsResponse.json()) as {
-        teams?: Array<{ id?: string; name?: string; slug?: string }>;
-      };
-      for (const team of teamsBody.teams ?? []) {
-        if (typeof team.id === "string" && team.id !== "") {
-          candidates.push({
-            providerPrincipalId: team.id,
-            principalKind: "team",
-            displayName: team.name ?? team.slug ?? team.id,
-            metadata: meta({ slug: typeof team.slug === "string" ? team.slug : undefined }),
-          });
-        }
+    const seenCursors = new Set<string>();
+    let until: string | undefined;
+    for (;;) {
+      const url =
+        until === undefined
+          ? "https://api.vercel.com/v2/teams?limit=100"
+          : `https://api.vercel.com/v2/teams?limit=100&until=${encodeURIComponent(until)}`;
+      const teamsResponse = await this.fetchImpl(url, { headers });
+      // Non-OK must fail loud — never silently downgrade to user-only.
+      if (teamsResponse.status === 401 || teamsResponse.status === 403) {
+        return { status: "invalid", reason: `vercel_teams_http_${teamsResponse.status}` };
       }
+      if (!teamsResponse.ok) {
+        return { status: "invalid", reason: `vercel_teams_http_${teamsResponse.status}` };
+      }
+      const teamsBody: unknown = await teamsResponse.json();
+      const teams = z
+        .object({ teams: z.array(z.unknown()).optional(), pagination: z.unknown().optional() })
+        .safeParse(teamsBody);
+      if (!teams.success) return { status: "invalid", reason: "vercel_malformed_teams" };
+      for (const team of teams.data.teams ?? []) {
+        const parsed = VercelTeamSchema.safeParse(team);
+        if (!parsed.success) continue;
+        candidates.push({
+          providerPrincipalId: parsed.data.id,
+          principalKind: "team",
+          displayName: parsed.data.name ?? parsed.data.slug ?? parsed.data.id,
+          metadata: meta({ slug: parsed.data.slug }),
+        });
+      }
+      const pagination = z
+        .object({ next: z.union([z.number(), z.string(), z.null()]).optional() })
+        .safeParse(teams.data.pagination);
+      const next =
+        pagination.success && pagination.data.next !== null && pagination.data.next !== undefined
+          ? String(pagination.data.next)
+          : undefined;
+      if (next === undefined || next === "") break;
+      if (seenCursors.has(next)) {
+        throw new Error(`vercel teams listing returned a non-advancing cursor (${next})`);
+      }
+      seenCursors.add(next);
+      until = next;
     }
+
     if (candidates.length === 0) {
       candidates.push({
         providerPrincipalId: userId,
         principalKind: "user",
-        displayName: userBody.user?.name ?? userBody.user?.username ?? userId,
+        displayName: userParsed.data.user.name ?? userParsed.data.user.username ?? userId,
         metadata: {},
       });
     }
+    // Vercel catalog operations require no scopes; empty is proven for this provider.
+    const scopes: string[] = [];
     if (candidates.length > 1) {
-      return { status: "multi_principal", candidates, authKind: "api_key", scopes: [] };
+      return { status: "multi_principal", candidates, authKind: "api_key", scopes };
     }
-    return { status: "verified", principal: candidates[0]!, authKind: "api_key", scopes: [] };
+    return { status: "verified", principal: candidates[0]!, authKind: "api_key", scopes };
   }
 }
+
+const FlyOrgSchema = z.object({
+  id: z.string().min(1),
+  slug: z.string().optional(),
+  name: z.string().optional(),
+});
 
 export class FlyPrincipalVerifier implements PrincipalVerifier {
   readonly providerKind = "deploy.flyio";
@@ -214,27 +336,38 @@ export class FlyPrincipalVerifier implements PrincipalVerifier {
       return { status: "invalid", reason: `fly_http_${response.status}` };
     }
     if (!response.ok) return { status: "invalid", reason: `fly_http_${response.status}` };
-    const body = (await response.json()) as {
-      data?: { organizations?: { nodes?: Array<{ id?: string; slug?: string; name?: string }> } };
-      errors?: Array<{ message?: string }>;
-    };
-    if (body.errors !== undefined && body.errors.length > 0) {
-      return { status: "invalid", reason: body.errors[0]?.message ?? "fly_graphql_error" };
+    const body: unknown = await response.json();
+    const parsed = z
+      .object({
+        data: z
+          .object({
+            organizations: z.object({ nodes: z.array(z.unknown()).optional() }).optional(),
+          })
+          .optional(),
+        errors: z.array(z.object({ message: z.string().optional() })).optional(),
+      })
+      .safeParse(body);
+    if (!parsed.success) return { status: "invalid", reason: "fly_malformed_organizations" };
+    if (parsed.data.errors !== undefined && parsed.data.errors.length > 0) {
+      return { status: "invalid", reason: parsed.data.errors[0]?.message ?? "fly_graphql_error" };
     }
-    const nodes = body.data?.organizations?.nodes ?? [];
-    const candidates: PrincipalCandidate[] = nodes
-      .filter((org) => typeof org.id === "string" && org.id !== "")
-      .map((org) => ({
-        providerPrincipalId: org.id!,
-        principalKind: "organization" as const,
-        displayName: org.name ?? org.slug ?? org.id!,
-        metadata: meta({ slug: typeof org.slug === "string" ? org.slug : undefined }),
-      }));
+    const candidates: PrincipalCandidate[] = [];
+    for (const node of parsed.data.data?.organizations?.nodes ?? []) {
+      const org = FlyOrgSchema.safeParse(node);
+      if (!org.success) continue;
+      candidates.push({
+        providerPrincipalId: org.data.id,
+        principalKind: "organization",
+        displayName: org.data.name ?? org.data.slug ?? org.data.id,
+        metadata: meta({ slug: org.data.slug }),
+      });
+    }
     if (candidates.length === 0) return { status: "invalid", reason: "fly_no_organizations" };
+    const scopes: string[] = [];
     if (candidates.length > 1) {
-      return { status: "multi_principal", candidates, authKind: "api_key", scopes: [] };
+      return { status: "multi_principal", candidates, authKind: "api_key", scopes };
     }
-    return { status: "verified", principal: candidates[0]!, authKind: "api_key", scopes: [] };
+    return { status: "verified", principal: candidates[0]!, authKind: "api_key", scopes };
   }
 }
 

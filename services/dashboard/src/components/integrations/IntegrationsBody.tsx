@@ -15,6 +15,7 @@ import {
   PROJECT_CAPABILITIES,
   type IntegrationLifecycleInventory,
   type OrgIntegrationSummary,
+  type PrincipalSelectionCandidate,
 } from "../../api/integrations.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { capabilitiesLabel, isProviderLinked, providerLabel, statusLabel } from "./format.js";
@@ -42,6 +43,16 @@ export interface IntegrationsBodyProps {
   notLinked?: { providerKind: string; message?: string };
   /** A provider is linked, but this project must choose one exact account. */
   selectionRequired?: { providerKind: string; message?: string };
+  /**
+   * Multi-principal link awaiting explicit principal selection — CSRF form
+   * over sanitized durable candidates + operation id.
+   */
+  principalSelection?: {
+    providerKind: string;
+    operationId: string;
+    candidates: PrincipalSelectionCandidate[];
+    status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed";
+  };
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
 }
@@ -57,6 +68,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
     notice,
     notLinked,
     selectionRequired,
+    principalSelection,
     csrfToken,
   } = props;
   const unavailable = integrations === undefined;
@@ -89,6 +101,9 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                 ? ". choose an account below before enabling this capability."
                 : `: ${selectionRequired.message}`}
             </div>
+          )}
+          {principalSelection === undefined ? null : (
+            <PrincipalSelectionPanel panel={principalSelection} csrfToken={csrfToken} />
           )}
 
           {/* ── Plane A: org grants ─────────────────────────────────────── */}
@@ -288,9 +303,6 @@ function GrantCard(props: { row: OrgIntegrationSummary; projectId: string; csrfT
       <span class="ref">
         verified principal · {row.displayName} ({row.principalKind} · {row.providerPrincipalId})
       </span>
-      <span class="sub">
-        auth generation {row.currentAuthGeneration ?? "—"} · grant generation {row.grantGeneration ?? "—"}
-      </span>
       <span class="sub">health · {statusLabel(row.health)}</span>
       {row.authExpiresAt === undefined ? null : <span class="sub">expires · {row.authExpiresAt}</span>}
       {row.providerScopes.length === 0 ? null : (
@@ -332,5 +344,58 @@ function LifecycleCard(props: { label: string; value: number; detail: string }) 
       <span class="value">{props.value}</span>
       <span class="sub">{props.detail}</span>
     </div>
+  );
+}
+
+function PrincipalSelectionPanel(props: {
+  panel: NonNullable<IntegrationsBodyProps["principalSelection"]>;
+  csrfToken?: string;
+}) {
+  const { panel, csrfToken } = props;
+  const status = panel.status ?? "awaiting";
+  return (
+    <section class="panel" data-principal-selection={panel.operationId} data-principal-status={status}>
+      <div class="panel-pad">
+        <div class="mini-eyebrow">
+          principal selection · {providerLabel(panel.providerKind)}{" "}
+          <span class="window-tag">({status} · never guesses)</span>
+        </div>
+        {status === "failed" ? (
+          <div class="notice warn">principal selection failed — re-link the provider with a valid token.</div>
+        ) : null}
+        {status === "invalidated" ? (
+          <div class="notice warn">candidates were invalidated — re-link to refresh verified principals.</div>
+        ) : null}
+        {status === "completed" ? (
+          <div class="notice">principal selection completed for {providerLabel(panel.providerKind)}.</div>
+        ) : null}
+        {status === "awaiting" || status === "pending" ? (
+          <div class="int-grid">
+            {panel.candidates.map((candidate) => (
+              <form
+                class="int-card linked"
+                method="post"
+                action="/integrations/select-principal"
+                data-principal-candidate={candidate.providerPrincipalId}
+              >
+                <CsrfField token={csrfToken} />
+                <input type="hidden" name="operationId" value={panel.operationId} />
+                <input type="hidden" name="providerPrincipalId" value={candidate.providerPrincipalId} />
+                <span class="label">{candidate.displayName}</span>
+                <span class="sub">
+                  {candidate.principalKind} · {candidate.providerPrincipalId}
+                </span>
+                <button class="btn primary" type="submit">
+                  use this principal
+                </button>
+              </form>
+            ))}
+          </div>
+        ) : null}
+        <div class="note">
+          <b>↑ multi-principal.</b> Sanitized durable candidates only — no secret refs or generation numbers.
+        </div>
+      </div>
+    </section>
   );
 }

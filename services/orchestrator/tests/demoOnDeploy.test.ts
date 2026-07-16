@@ -85,24 +85,42 @@ function fakePool(state: PoolState): pg.Pool {
     }
     if (/FROM org_integration_connections c/u.test(sql)) {
       if (state.grant === undefined) return { rows: [], rowCount: 0 };
-      if (/credential_ref/u.test(sql) && /capabilities/u.test(sql)) {
+      // authorizeOperation eligibility row (selected generations match).
+      if (/project_integration_grant_selections/u.test(sql) || /selected_auth_generation/u.test(sql)) {
+        const credentialRef = (state.grant.credential_ref ?? "secret://org/deploy-token/g/1").includes("/g/")
+          ? (state.grant.credential_ref ?? "secret://org/deploy-token/g/1")
+          : `${state.grant.credential_ref ?? "secret://org/deploy-token"}/g/1`;
         return {
           rows: [
             {
               connection_id: "connection_demo",
               provider_kind: state.grant.provider_kind,
               provider_principal_id: "account_demo",
+              display_name: "account_demo",
               principal_metadata: state.grant.metadata ?? {},
+              connection_health: "healthy",
+              connection_status: "active",
               current_auth_generation: 1,
               grant_id: "grant_demo",
-              grant_generation: 1,
-              credential_ref: (state.grant.credential_ref ?? "secret://org/deploy-token/g/1").includes("/g/")
-                ? (state.grant.credential_ref ?? "secret://org/deploy-token/g/1")
-                : `${state.grant.credential_ref ?? "secret://org/deploy-token"}/g/1`,
-              policy_revision: "integration-catalog.v1",
-              consent_revision: "consent.test",
+              grant_current_generation: 1,
+              grant_status: "active",
+              plane: "control",
+              environment: "control",
+              credential_ref: credentialRef,
+              auth_expires_at: null,
+              auth_status: "active",
               capabilities: ["deploy"],
               operations: ["discover", "provision", "bind", "teardown"],
+              provider_scopes: [],
+              resource_constraints: {},
+              policy_revision: "integration-catalog.v1",
+              consent_revision: "consent.test",
+              grant_expires_at: null,
+              grant_generation_status: "active",
+              selected_auth_generation: 1,
+              selected_grant_generation: 1,
+              selected_connection_id: "connection_demo",
+              selected_grant_id: "grant_demo",
             },
           ],
           rowCount: 1,
