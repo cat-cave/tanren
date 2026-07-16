@@ -7,7 +7,11 @@ import { describe, expect, it } from "vitest";
 import type { ReviewAnswer } from "../src/engine/answerers/schemas/index.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
-import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
+import {
+  FetchGitHubHttpClient,
+  type GitHubHttpClient,
+  type GitHubHttpRequest,
+} from "../src/engine/providers/github.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import type { ReviewMergeRunContext } from "../src/engine/workflow/reviewMerge/context.js";
 import { buildGitHubReviewProbe } from "../src/engine/workflow/reviewMerge/reviewProbeGithub.js";
@@ -69,6 +73,63 @@ interface HttpCounters {
   posts: number;
   listTokens: string[];
   postTokens: string[];
+}
+
+interface AuthFailureTrace {
+  listTokens: string[];
+  postTokens: string[];
+  successfulPosts: number;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+function retryAwareProductionHttp(
+  failure: { phase: "list" | "post"; status: 401 | 403 },
+  trace: AuthFailureTrace,
+): GitHubHttpClient {
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const requestUrl = new URL(url);
+    const path = `${requestUrl.pathname}${requestUrl.search}`;
+    const authorization = String((init.headers as Record<string, string>).Authorization);
+    const token = authorization.replace(/^Bearer /u, "");
+
+    if (path === "/user") {
+      const login = token === WRITER_TOKEN ? "pr-writer" : token === REVIEWER_A_TOKEN ? REVIEWER_A : REVIEWER_B;
+      return jsonResponse({ login, id: 7 });
+    }
+    if (path.includes(`/compare/${BASE}...${HEAD}`)) {
+      return jsonResponse({ files: [{ filename: "x.ts", patch: "+x" }] });
+    }
+    if (path.includes("/reviews?")) {
+      trace.listTokens.push(token);
+      if (failure.phase === "list" && token === REVIEWER_A_TOKEN) {
+        return jsonResponse({ message: "reviewer credential rejected" }, failure.status);
+      }
+      return jsonResponse([]);
+    }
+    if (init.method === "POST" && path.endsWith("/reviews")) {
+      trace.postTokens.push(token);
+      if (failure.phase === "post" && token === REVIEWER_A_TOKEN) {
+        return jsonResponse({ message: "reviewer credential rejected" }, failure.status);
+      }
+      trace.successfulPosts += 1;
+      return jsonResponse({
+        id: 91,
+        state: "APPROVED",
+        html_url: "https://github.com/o/r/pull/1#pullrequestreview-91",
+        commit_id: HEAD,
+        user: { login: token === REVIEWER_A_TOKEN ? REVIEWER_A : REVIEWER_B },
+      });
+    }
+    if (path.endsWith("/pulls/1")) {
+      return jsonResponse({ base: { sha: BASE }, head: { sha: HEAD }, user: { login: "pr-writer" } });
+    }
+    throw new Error(`unexpected ${init.method ?? "GET"} ${path}`);
+  }) as unknown as typeof fetch;
+
+  return new FetchGitHubHttpClient({ fetchImpl, sleep: async () => {} });
 }
 
 function productionHttp(counters: HttpCounters): GitHubHttpClient {
@@ -268,5 +329,72 @@ describe("gv-2 attempt-scoped simulated-reviewer pin", () => {
     expect(counters.posts).toBe(1);
     expect(counters.listTokens).toEqual([REVIEWER_A_TOKEN]);
     expect(counters.postTokens).toEqual([REVIEWER_A_TOKEN]);
+  });
+
+  it.each([
+    ["list", 401],
+    ["list", 403],
+    ["post", 401],
+    ["post", 403],
+  ] as const)("never refreshes pinned reviewer A to rotated B when %s returns %i", async (phase, status) => {
+    const secrets = await seedSecrets(REVIEWER_A_TOKEN);
+    const trace: AuthFailureTrace = { listTokens: [], postTokens: [], successfulPosts: 0 };
+    const githubHttp = retryAwareProductionHttp({ phase, status }, trace);
+    const productionProbe = await buildGitHubReviewProbe({
+      secrets,
+      githubHttp,
+      reviewerGithubCredentialRef: REVIEWER_REF,
+      context,
+      repo: { owner: "o", name: "r" },
+      pullNumber: 1,
+    });
+    const probe = {
+      ...productionProbe,
+      markReady: async () => {},
+      fetchVerdict: async () => ({ verdict: "pending" as const }),
+    };
+    const intents = new InMemorySimulatedReviewIntentRepository();
+    const answererCalls = { count: 0 };
+    const fence: SimulatedReviewPublishFence = {
+      withExclusivePublish: async (_key, work) => {
+        await storeGithubToken(secrets, { ref: REVIEWER_REF, token: REVIEWER_B_TOKEN });
+        return work();
+      },
+    };
+    const pool = new ReviewMergePool("direct_merge", "open", "simulated");
+    const events = new FakeEventStore();
+
+    await expect(
+      pollReviewForRun({
+        pool: pool.asPgPool(),
+        eventStore: events,
+        runStateWriter: fakeMergeWriter(pool, events),
+        secrets,
+        githubHttp,
+        runId: "run_1",
+        reviewProbe: probe,
+        simulatedReviewer: () => reviewer(answererCalls),
+        simulatedReviewContext: {
+          specTitle: "Review",
+          specDescription: "freeze static reviewer credentials",
+          acceptanceCriteria: ["no credential refresh within one attempt"],
+        },
+        intentRepository: intents,
+        publishFence: fence,
+      }),
+    ).rejects.toBeInstanceOf(SimulatedReviewPublicationError);
+
+    expect(answererCalls.count).toBe(1);
+    expect(secrets.reviewerReads).toBe(1);
+    // A failed POST is followed by the normal response-loss reconcile read;
+    // both reads stay on the immutable A snapshot and no second POST occurs.
+    expect(trace.listTokens).toEqual(phase === "post" ? [REVIEWER_A_TOKEN, REVIEWER_A_TOKEN] : [REVIEWER_A_TOKEN]);
+    expect(trace.postTokens).toEqual(phase === "post" ? [REVIEWER_A_TOKEN] : []);
+    expect(trace.successfulPosts).toBe(0);
+    expect([...trace.listTokens, ...trace.postTokens]).not.toContain(REVIEWER_B_TOKEN);
+    const eventTypes = events.events.map((event) => event.eventType);
+    expect(eventTypes).not.toContain("review.approved");
+    expect(eventTypes).not.toContain("review.changes_requested");
+    expect(eventTypes).not.toContain("task.completed");
   });
 });

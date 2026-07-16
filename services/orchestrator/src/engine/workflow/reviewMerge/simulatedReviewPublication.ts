@@ -196,13 +196,23 @@ export interface ResolveSimulatedReviewerTokenInput {
 }
 
 /**
+ * Immutable static-reviewer credential captured for one publication attempt.
+ * It intentionally has no refresh supplier: identity proof, reconcile, and
+ * strict POST must all use this exact bearer token or fail the attempt.
+ */
+export interface StaticSimulatedReviewerTokenSnapshot {
+  readonly token: string;
+  readonly source: "static";
+}
+
+/**
  * Resolve the STRICT simulated-reviewer VCS token + prove it is a different
  * GitHub login than the writer. Fail closed when a distinct identity cannot be
  * represented through the existing managed secret seam.
  */
 export async function resolveDistinctSimulatedReviewerToken(
   input: ResolveSimulatedReviewerTokenInput,
-): Promise<{ reviewer: ResolvedVcsToken; writerLogin: string; reviewerLogin: string }> {
+): Promise<{ reviewer: StaticSimulatedReviewerTokenSnapshot; writerLogin: string; reviewerLogin: string }> {
   const writer = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
     installation: input.writerInstallation,
@@ -213,10 +223,18 @@ export async function resolveDistinctSimulatedReviewerToken(
   const writerLogin = writerIdentity.login;
 
   const explicitReviewerRef = normalizeStaticGithubRef(input.reviewerGithubCredentialRef);
-  const reviewer = await resolveReviewerToken(input, explicitReviewerRef);
+  const resolvedReviewer = await resolveReviewerToken(input, explicitReviewerRef);
+  if (resolvedReviewer.source !== "static") {
+    throw new SimulatedReviewPublicationError(
+      "strict simulated review requires a static reviewer credential for attempt-scoped pinning",
+    );
+  }
+  const reviewer: StaticSimulatedReviewerTokenSnapshot = {
+    token: resolvedReviewer.token,
+    source: "static",
+  };
 
-  const reviewerIdentity = await resolveVcsActorIdentity(reviewer);
-  const reviewerLogin = reviewerIdentity.login;
+  const reviewerLogin = await resolveStaticReviewerLoginSnapshot(input.githubHttp, reviewer);
   if (reviewerLogin === "" || writerLogin === "") {
     throw new SimulatedReviewPublicationError(
       "strict simulated review could not resolve writer/reviewer GitHub logins",
@@ -228,6 +246,27 @@ export async function resolveDistinctSimulatedReviewerToken(
     );
   }
   return { reviewer, writerLogin, reviewerLogin };
+}
+
+async function resolveStaticReviewerLoginSnapshot(
+  http: GitHubHttpClient,
+  reviewer: StaticSimulatedReviewerTokenSnapshot,
+): Promise<string> {
+  const response = await http.request({ method: "GET", path: "/user", token: reviewer.token });
+  if (response.status !== 200 || typeof response.body !== "object" || response.body === null) {
+    throw new SimulatedReviewPublicationError(
+      `strict simulated reviewer identity read failed: HTTP ${response.status}`,
+    );
+  }
+  const body = response.body as { login?: unknown; id?: unknown };
+  if (
+    typeof body.login !== "string" ||
+    body.login.trim() === "" ||
+    (typeof body.id !== "number" && typeof body.id !== "string")
+  ) {
+    throw new SimulatedReviewPublicationError("strict simulated reviewer identity read returned no provider login/id");
+  }
+  return body.login.trim();
 }
 
 async function resolveReviewerToken(

@@ -27,6 +27,7 @@ import {
   resolveDistinctSimulatedReviewerToken,
   SimulatedReviewHeadStaleError,
   SimulatedReviewPublicationError,
+  type StaticSimulatedReviewerTokenSnapshot,
 } from "./simulatedReviewPublication.js";
 
 /**
@@ -131,7 +132,7 @@ async function publishPinnedSimulatedReview(input: {
   event: SubmitReviewEvent;
   body: string;
   headSha: string;
-  reviewer: ResolvedVcsToken;
+  reviewer: StaticSimulatedReviewerTokenSnapshot;
   reviewerLogin: string;
   githubHttp: GitHubHttpClient;
   reviewMerge: GitHubReviewMergeService;
@@ -162,7 +163,6 @@ async function publishPinnedSimulatedReview(input: {
           repo: input.repo,
           pullNumber: input.pullNumber,
           token: input.reviewer.token,
-          refreshToken: input.reviewer.refresh,
         }),
       postReview: async () => {
         const liveHeadSha = (
@@ -178,7 +178,6 @@ async function publishPinnedSimulatedReview(input: {
           body: input.body,
           commitId: input.headSha,
           token: input.reviewer.token,
-          refreshToken: input.reviewer.refresh,
         });
         if (receipt === undefined) {
           throw new SimulatedReviewPublicationError(
