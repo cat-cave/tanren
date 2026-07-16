@@ -1,7 +1,7 @@
 // Production CodeHost construction for MQ-2. Credential resolution stays on the
 // existing provider path; this module creates no alternate secret or host authority.
 
-import { installationFromOrgConfig } from "../config/orgConfig.js";
+import { bindOrgGithubCredentialRefs, migrateOrgConfig } from "../config/orgConfig.js";
 import type { CodeHost } from "../contracts/codeHost.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
@@ -21,11 +21,19 @@ export interface MultiMemberAuthorityHostDeps {
 export async function buildMultiMemberCodeHost(
   deps: MultiMemberAuthorityHostDeps,
   project: ProjectAuthorityRow,
+  orgId: string,
 ): Promise<{ readonly host: CodeHost; readonly repo: { readonly owner: string; readonly name: string } }> {
-  const installation = installationFromOrgConfig(project.org_config);
-  const staticRef = resolveGithubStaticRef(project.project_config, project.org_config);
+  // IN-1 org-scoped credential resolution: bind the org's github credential refs under the
+  // exact tenant scope (no silent fallback) before minting the read token.
+  const orgConfig =
+    project.org_config === null || project.org_config === undefined
+      ? undefined
+      : bindOrgGithubCredentialRefs(migrateOrgConfig(project.org_config), orgId);
+  const installation = orgConfig?.github_app;
+  const staticRef = resolveGithubStaticRef(project.project_config, project.org_config, orgId);
   const token = await resolveVcsToken(deps.githubHttp, {
     secrets: deps.secrets,
+    orgId,
     ...(installation !== undefined && { installation }),
     ...(staticRef !== undefined && { staticRef }),
     ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),

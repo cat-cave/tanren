@@ -2,10 +2,8 @@
 // integration_proofs.evidence JSONB; the quarantine version is a content hash of
 // the exact active gate exclusions, not an unrelated policy-version alias.
 
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { proofReuseKey, type ProofReuseKeyInput } from "../contracts/integrationNodes.js";
-import type { ActiveQuarantine } from "../workflow/ciQuarantine.js";
 import type { MultiMemberInfrastructureEvidence } from "./multiMemberAuthorityTypes.js";
 
 const ProofKeyInput = z
@@ -109,16 +107,3 @@ export function exactBatchGateProofEvidence(
     : undefined;
 }
 
-/** Behaviorally exact version of the active check/test exclusion set. */
-export function activeQuarantineVersion(active: ActiveQuarantine): string {
-  const checkNames = [...active.checkNames].sort(compareCodeUnits);
-  const testIds = [...new Set(active.testIds)].sort(compareCodeUnits);
-  const digest = createHash("sha256")
-    .update(JSON.stringify({ checkNames, testIds, version: "active_quarantine.v1" }))
-    .digest("hex");
-  return `active_quarantine.v1:${digest}`;
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}

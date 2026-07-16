@@ -29,6 +29,7 @@
 // that is the test's owning suite/job, so a single flaky test's quarantine
 // narrows to that check, not the whole gate.
 
+import { createHash } from "node:crypto";
 import type pg from "pg";
 
 // The env var the gate exports to the project's test command carrying the ACTIVE
@@ -102,6 +103,25 @@ export function quarantineEnv(active: ActiveQuarantine): Record<string, string> 
   const safe = active.testIds.filter((id) => id !== "" && isEnvSafeTestId(id));
   if (safe.length === 0) return {};
   return { [QUARANTINE_ENV_VAR]: safe.join(",") };
+}
+
+/**
+ * Behaviorally exact version of the active check/test exclusion set — the quarantine
+ * EPOCH the MQ-2 flake projection binds a proof to. Order-independent (both lists are
+ * sorted) and deduped so the same active set always hashes identically; any change to
+ * the exclusions yields a fresh epoch that assigns no stale flake state.
+ */
+export function activeQuarantineVersion(active: ActiveQuarantine): string {
+  const checkNames = [...active.checkNames].sort(compareCodeUnits);
+  const testIds = [...new Set(active.testIds)].sort(compareCodeUnits);
+  const digest = createHash("sha256")
+    .update(JSON.stringify({ checkNames, testIds, version: "active_quarantine.v1" }))
+    .digest("hex");
+  return `active_quarantine.v1:${digest}`;
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /**

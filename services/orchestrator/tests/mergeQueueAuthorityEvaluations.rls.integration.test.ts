@@ -9,8 +9,8 @@ import type { CodeHost } from "../src/engine/contracts/codeHost.js";
 import { PgEventStore } from "../src/engine/eventStore.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createMergeQueueAuthorityEvaluationRoutes } from "../src/routes/mergeQueue/authorityEvaluations.js";
+import { activeQuarantineVersion } from "../src/engine/workflow/ciQuarantine.js";
 import {
-  activeQuarantineVersion,
   batchArtifactDigest,
   batchProofRoot,
   buildBatchGateProofEvidence,

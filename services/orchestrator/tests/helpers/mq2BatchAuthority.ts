@@ -7,10 +7,10 @@ import type { MergeQueueEntry } from "../../src/engine/contracts/mergeCoordinato
 import type { MergeSignalClassificationV1 } from "../../src/engine/merge/authoritySignalClassification.js";
 import { authorityDerivedId } from "../../src/engine/merge/authoritySignalIdentity.js";
 import {
-  activeQuarantineVersion,
   buildBatchGateProofEvidence,
   MultiMemberAuthorityInfrastructureFault,
 } from "../../src/engine/merge/multiMemberAuthorityEvidence.js";
+import { activeQuarantineVersion } from "../../src/engine/workflow/ciQuarantine.js";
 import type { BatchAuthorityEvaluator } from "../../src/engine/merge/multiMemberAuthorityTypes.js";
 import {
   batchArtifactDigest,

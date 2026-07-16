@@ -32,7 +32,7 @@ export class PgMultiMemberAuthorityEvaluator implements BatchAuthorityEvaluator 
     binding: BatchAuthorityBinding;
   }): Promise<MultiMemberAuthorityEvaluation> {
     const gathered = await gatherMultiMemberAuthorityState(this.deps.pool, input);
-    const { host, repo } = await buildMultiMemberCodeHost(this.deps, gathered.project);
+    const { host, repo } = await buildMultiMemberCodeHost(this.deps, gathered.project, gathered.orgId);
     const envelope = buildMultiMemberEnvelope(input.binding, repo, gathered.project.default_branch);
     const context = await loadMultiMemberLandContext(this.deps.pool, gathered.orgId, input, gathered.policyVersion);
     const authority = buildPgExactBatchAuthority({

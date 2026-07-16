@@ -323,7 +323,7 @@ function membersForIntegratedNode(
     // content is already represented by the exact cloned baseSha, not a phantom empty SHA.
     return headSha === undefined
       ? []
-      : [{ specId: member.specId, runId: facts.tailSpecId, branch: member.branch, headSha }];
+      : [{ specId: member.specId, runId: member.runId, branch: member.branch, headSha }];
   });
 }
 

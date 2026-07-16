@@ -45,8 +45,7 @@ import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
-import { loadActiveQuarantine, quarantineEnv } from "../workflow/ciQuarantine.js";
-import { activeQuarantineVersion } from "./multiMemberAuthorityEvidence.js";
+import { activeQuarantineVersion, loadActiveQuarantine, quarantineEnv } from "../workflow/ciQuarantine.js";
 
 const log = createLogger("merge");
 

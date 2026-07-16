@@ -6,11 +6,11 @@ import { CiFlakyDetectedPayload } from "../../engine/events/schemas/ciFlaky.js";
 import { MergeSignalClassifiedPayload } from "../../engine/events/schemas/eventVocabularyW0.js";
 import { authorityDerivedId } from "../../engine/merge/authoritySignalIdentity.js";
 import {
-  activeQuarantineVersion,
   BatchGateProofEvidenceV1,
   exactBatchGateProofEvidence,
   type BatchGateEvidenceBinding,
 } from "../../engine/merge/multiMemberAuthorityEvidence.js";
+import { activeQuarantineVersion } from "../../engine/workflow/ciQuarantine.js";
 
 export interface AuthorityEvaluationMemberData {
   readonly ordinal: number;

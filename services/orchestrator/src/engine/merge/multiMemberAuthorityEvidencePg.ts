@@ -9,9 +9,8 @@ import type { BudgetScope, ConflictResolution, GateVerdict, MergeabilityState } 
 import { CiFlakyDetectedPayload } from "../events/schemas/ciFlaky.js";
 import { GitHubOutageError } from "../providers/githubRetry.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
-import { loadActiveQuarantine } from "../workflow/ciQuarantine.js";
+import { activeQuarantineVersion, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
 import {
-  activeQuarantineVersion,
   exactBatchGateProofEvidence,
   MultiMemberAuthorityInfrastructureFault,
 } from "./multiMemberAuthorityEvidence.js";
