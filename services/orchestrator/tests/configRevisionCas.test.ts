@@ -345,21 +345,39 @@ describe("config revision CAS (unit/route)", () => {
     const { app, pool } = buildHarness();
     const before = structuredClone(pool.projects.get("proj_1"));
     for (const revision of ["9007199254740992", "9".repeat(40), "0", "01", "-1"]) {
-      const res = await json(app, "/orgs/org_acme/projects/proj_1/budget", {
+      const budget = await json(app, "/orgs/org_acme/projects/proj_1/budget", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ceilingUsd: 1, period: "total", revision }),
       });
-      expect(res.status).toBe(400);
+      expect(budget.status).toBe(400);
+      expect(pool.projects.get("proj_1")).toEqual(before);
+
+      const gov = await json(app, "/orgs/org_acme/projects/proj_1/governance", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ revision, reviewPolicy: "auto" }),
+      });
+      expect(gov.status).toBe(400);
+      expect(pool.projects.get("proj_1")).toEqual(before);
+
+      const patch = await json(app, "/orgs/org_acme/projects/proj_1", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ config: { version: 1, x: 1 }, revision }),
+      });
+      expect(patch.status).toBe(400);
       expect(pool.projects.get("proj_1")).toEqual(before);
     }
     const orgBefore = structuredClone(pool.orgs.get("org_acme"));
-    const orgRes = await json(app, "/orgs/org_acme", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ config: { version: 1 }, revision: "9007199254740992" }),
-    });
-    expect(orgRes.status).toBe(400);
-    expect(pool.orgs.get("org_acme")).toEqual(orgBefore);
+    for (const revision of ["9007199254740992", "9".repeat(40)]) {
+      const orgRes = await json(app, "/orgs/org_acme", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ config: { version: 1 }, revision }),
+      });
+      expect(orgRes.status).toBe(400);
+      expect(pool.orgs.get("org_acme")).toEqual(orgBefore);
+    }
   });
 });

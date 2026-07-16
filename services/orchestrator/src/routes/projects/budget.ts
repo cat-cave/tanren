@@ -55,6 +55,13 @@ export const BudgetPutSchema = z
   })
   .strict();
 
+/** Full-document project config PATCH — revision uses the shared closed range. */
+export const ProjectPatchSchema = z.object({
+  config: z.record(z.string(), z.unknown()),
+  /** Expected config_revision from the last GET — one-shot CAS token. */
+  revision: ConfigRevisionSchema,
+});
+
 /**
  * The read-shape both GET and PUT return — the apex-proof + operator surface.
  *

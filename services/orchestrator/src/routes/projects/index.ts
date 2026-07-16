@@ -23,7 +23,13 @@ import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
-import { BudgetPutSchema, handleBudgetGet, handleBudgetPut, projectConfigConflict } from "./budget.js";
+import {
+  BudgetPutSchema,
+  handleBudgetGet,
+  handleBudgetPut,
+  ProjectPatchSchema,
+  projectConfigConflict,
+} from "./budget.js";
 import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
@@ -46,12 +52,6 @@ const ProjectCreateSchema = z.object({
   runnerImage: z.string().min(1).optional(),
   allocator: z.string().min(1).optional(),
   config: z.record(z.string(), z.unknown()).optional(),
-});
-
-const ProjectPatchSchema = z.object({
-  config: z.record(z.string(), z.unknown()),
-  /** Expected config_revision from the last GET — one-shot CAS token. */
-  revision: z.string().regex(/^[1-9]\d*$/u),
 });
 
 export function createProjectRoutes(options: ProjectRoutesOptions) {

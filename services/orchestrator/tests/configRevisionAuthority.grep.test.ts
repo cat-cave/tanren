@@ -87,4 +87,19 @@ describe("config revision sole-authority architecture", () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  it("routes accept revision only via shared ConfigRevisionSchema (no local digit regex)", () => {
+    const allowed = new Set(["src/engine/config/configRevision.ts"]);
+    const offenders: string[] = [];
+    for (const file of files) {
+      const rel = relative(ROOT, file);
+      if (allowed.has(rel)) continue;
+      const text = readFileSync(file, "utf8");
+      // Ban wire-local revision digit regexes; must import ConfigRevisionSchema.
+      if (/revision\s*:\s*z\.string\(\)\s*\.regex\(\s*\/\^\[1-9\]\\d\*\$\//u.test(text)) {
+        offenders.push(rel);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
 });
