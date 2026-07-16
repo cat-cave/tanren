@@ -106,4 +106,3 @@ export function exactBatchGateProofEvidence(
     ? evidence
     : undefined;
 }
-
