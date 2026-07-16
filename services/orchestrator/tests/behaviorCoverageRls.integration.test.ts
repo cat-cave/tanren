@@ -6,7 +6,7 @@
 // same-org cross-project (mismatched-lineage) coverage-edge insert is
 // structurally rejected (SQLSTATE 23503, constraint
 // behavior_coverage_edges_project_lineage_fk) even on the owner connection that
-// bypasses RLS, while a correctly-lineaged insert succeeds. This isolates the
+// bypasses RLS, while a correctly lineage-matched insert succeeds. This isolates the
 // FK guarantee from the RLS WITH CHECK guarantee proved separately above.
 
 import { migrate, runWithOrgScope } from "@tanren/db";
@@ -193,7 +193,7 @@ describeDb("RV4-BEHAVIOR-COVERAGE-RLS — org and project isolation", () => {
     expect(absent.rowCount).toBe(0);
 
     // POSITIVE: (ORG_A, PROJECT_A) is a real projects lineage row and BEHAVIOR_A
-    // belongs to it, so the correctly-lineaged insert is accepted by the same FK.
+    // belongs to it, so the correctly lineage-matched insert is accepted by the same FK.
     const ok = await ownerPool.query(
       `INSERT INTO behavior_coverage_edges
          (org_id, id, project_id, behavior_revision_id, edge_kind, target_ref)

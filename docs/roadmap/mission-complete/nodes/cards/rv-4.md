@@ -295,7 +295,7 @@ affected-build`, `check:schema-drift`, architecture/line-cap, format-check, and
 `git diff --check` are green. The `0044` composite `(org_id, project_id)`
 project-lineage FK proof (negative: same-org cross-project insert rejected with
 SQLSTATE `23503` on `behavior_coverage_edges_project_lineage_fk`; positive:
-correctly-lineaged insert succeeds) is WRITTEN in
+correctly lineage-matched insert succeeds) is WRITTEN in
 `behaviorCoverageRls.integration.test.ts`, alongside the RLS isolation and the
 production HTTP → CAS → `PgEventStore` → replay integration suites — all are
 Postgres-gated (`TANREN_RLS_DB_TEST=1` / live PG) and therefore SKIP in this
