@@ -76,6 +76,10 @@ never evidence of member blame.
   binding on integrated pass verdicts; no solver API.
 - `engine/merge/batchIntegrationNodeDrive.ts`: attach the node identity/head and
   proof binding produced by the existing gate path.
+- `engine/merge/batchChecker.ts`: only propagate each queue entry's real `runId`
+  through the ordered-member/build-facts seam. IN-1 owns the adjacent org
+  credential/static-ref resolution lines; its merge/rebase is a serialized
+  convergence point and MQ-2 does not alter those hunks.
 - `engine/merge/batchCoordinator.ts`: mandatory evaluator call before embark;
   no inline evaluator logic (file cap).
 - `engine/merge/batchCoordinatorBuild.ts`: wire the production PG evaluator.
@@ -94,8 +98,9 @@ never evidence of member blame.
 - `mergeAuthorityGate.ts` and its land protocol; serialize with future GV-2 on
   shared MergeAuthority land/review writers.
 - New land/store/byte-store authority, direct host land, or bypass endpoint.
-- `batchChecker.ts` credential hunks and `mergeAuthorityBundleBuild.ts` (IN-1
-  lease); IN-1/RV-4/GV-1/#856 paths generally.
+- `batchChecker.ts` org credential/static-ref hunks and
+  `mergeAuthorityBundleBuild.ts` (IN-1 lease); IN-1/RV-4/GV-1/#856 paths
+  generally.
 - MQ-3 ddmin/QuickXPlain, learned failure constraints, or maximal-safe solver.
 - Shared navigation / `screens.ts` / migrations.
 
