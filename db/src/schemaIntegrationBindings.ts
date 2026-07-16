@@ -130,6 +130,7 @@ export const integrationBindingGenerations = pgTable(
     }),
     uniqueIndex("integration_binding_generations_binding_generation_unique").on(
       table.orgId,
+      table.projectId,
       table.bindingId,
       table.generation,
     ),
@@ -217,6 +218,7 @@ export const integrationBindingEnv = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
+    projectId: text("project_id").notNull(),
     bindingId: text("binding_id").notNull(),
     bindingGeneration: integer("binding_generation").notNull(),
     key: text("key").notNull(),
@@ -229,17 +231,24 @@ export const integrationBindingEnv = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    primaryKey({ columns: [table.orgId, table.bindingId, table.bindingGeneration, table.key] }),
+    primaryKey({ columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration, table.key] }),
     uniqueIndex("integration_binding_env_output_unique").on(
       table.orgId,
+      table.projectId,
       table.bindingId,
       table.bindingGeneration,
       table.key,
     ),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.bindingGeneration],
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "integration_binding_env_project_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration],
       foreignColumns: [
         integrationBindingGenerations.orgId,
+        integrationBindingGenerations.projectId,
         integrationBindingGenerations.bindingId,
         integrationBindingGenerations.generation,
       ],

@@ -46,8 +46,8 @@ export const integrationRequirements = pgTable(
       name: "integration_requirements_project_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.supersededBy],
-      foreignColumns: [table.orgId, table.id],
+      columns: [table.orgId, table.projectId, table.supersededBy],
+      foreignColumns: [table.orgId, table.projectId, table.id],
       name: "integration_requirements_superseded_by_fk",
     }),
     uniqueIndex("integration_requirements_project_id_unique").on(table.orgId, table.projectId, table.id),
@@ -85,21 +85,36 @@ export const behaviorIntegrationRequirements = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
+    // One shared child project_id bound to BOTH endpoints: a Project-A behavior
+    // revision cannot cite a Project-B requirement (same-org referential
+    // integrity is enforced at the FK, not via org RLS).
+    projectId: text("project_id").notNull(),
     behaviorRevisionId: text("behavior_revision_id").notNull(),
     requirementId: text("requirement_id").notNull(),
     relationRole: text("relation_role").notNull().default("requires"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    primaryKey({ columns: [table.orgId, table.behaviorRevisionId, table.requirementId] }),
+    primaryKey({
+      columns: [table.orgId, table.projectId, table.behaviorRevisionId, table.requirementId],
+    }),
     foreignKey({
-      columns: [table.orgId, table.requirementId],
-      foreignColumns: [integrationRequirements.orgId, integrationRequirements.id],
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "behavior_integration_requirements_project_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.requirementId],
+      foreignColumns: [integrationRequirements.orgId, integrationRequirements.projectId, integrationRequirements.id],
       name: "behavior_integration_requirements_requirement_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.behaviorRevisionId],
-      foreignColumns: [behaviorRevisionsReference.orgId, behaviorRevisionsReference.id],
+      columns: [table.orgId, table.projectId, table.behaviorRevisionId],
+      foreignColumns: [
+        behaviorRevisionsReference.orgId,
+        behaviorRevisionsReference.projectId,
+        behaviorRevisionsReference.id,
+      ],
       name: "behavior_integration_requirements_behavior_revision_fk",
     }),
     index("behavior_integration_requirements_org_id").on(table.orgId),
@@ -143,6 +158,7 @@ export const capabilityNodes = pgTable(
       foreignColumns: [integrationRequirements.orgId, integrationRequirements.projectId, integrationRequirements.id],
       name: "capability_nodes_requirement_lineage_fk",
     }),
+    uniqueIndex("capability_nodes_org_project_id_unique").on(table.orgId, table.projectId, table.id),
     uniqueIndex("capability_nodes_requirement_generation_unique").on(
       table.orgId,
       table.requirementId,
@@ -171,20 +187,26 @@ export const capabilityNodeDependencies = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
+    projectId: text("project_id").notNull(),
     capabilityNodeId: text("capability_node_id").notNull(),
     dependsOnCapabilityNodeId: text("depends_on_capability_node_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    primaryKey({ columns: [table.orgId, table.capabilityNodeId, table.dependsOnCapabilityNodeId] }),
+    primaryKey({ columns: [table.orgId, table.projectId, table.capabilityNodeId, table.dependsOnCapabilityNodeId] }),
     foreignKey({
-      columns: [table.orgId, table.capabilityNodeId],
-      foreignColumns: [capabilityNodes.orgId, capabilityNodes.id],
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "capability_node_dependencies_project_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.capabilityNodeId],
+      foreignColumns: [capabilityNodes.orgId, capabilityNodes.projectId, capabilityNodes.id],
       name: "capability_node_dependencies_node_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.dependsOnCapabilityNodeId],
-      foreignColumns: [capabilityNodes.orgId, capabilityNodes.id],
+      columns: [table.orgId, table.projectId, table.dependsOnCapabilityNodeId],
+      foreignColumns: [capabilityNodes.orgId, capabilityNodes.projectId, capabilityNodes.id],
       name: "capability_node_dependencies_parent_fk",
     }),
     index("capability_node_dependencies_org_id").on(table.orgId),
@@ -202,20 +224,21 @@ export const specCapabilityDependencies = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
+    projectId: text("project_id").notNull(),
     specId: text("spec_id").notNull(),
     capabilityNodeId: text("capability_node_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    primaryKey({ columns: [table.orgId, table.specId, table.capabilityNodeId] }),
+    primaryKey({ columns: [table.orgId, table.projectId, table.specId, table.capabilityNodeId] }),
     foreignKey({
-      columns: [table.orgId, table.specId],
-      foreignColumns: [specs.orgId, specs.specId],
+      columns: [table.orgId, table.projectId, table.specId],
+      foreignColumns: [specs.orgId, specs.projectId, specs.specId],
       name: "spec_capability_dependencies_spec_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.capabilityNodeId],
-      foreignColumns: [capabilityNodes.orgId, capabilityNodes.id],
+      columns: [table.orgId, table.projectId, table.capabilityNodeId],
+      foreignColumns: [capabilityNodes.orgId, capabilityNodes.projectId, capabilityNodes.id],
       name: "spec_capability_dependencies_node_fk",
     }),
     index("spec_capability_dependencies_org_id").on(table.orgId),

@@ -30,18 +30,48 @@ const DIGEST = `sha256:${"b".repeat(64)}`;
 const REQUIRED_UNIQUE_INDEXES = [
   "projects_org_project_unique",
   "specs_org_spec_unique",
+  "specs_org_project_spec_unique",
   "org_integration_connections_provider_id_unique",
   "org_integration_grants_connection_id_unique",
+  // project-bearing parent targets (rewritten by the same-org lineage repair)
+  "integration_requirements_project_id_unique",
+  "capability_nodes_org_project_id_unique",
+  "integration_binding_generations_binding_generation_unique",
+  "integration_binding_env_output_unique",
+  "delivery_runs_authority_decision_unique",
+  // frozen-spine (0034/0035/0037/0039) parent targets are not drizzle-managed;
+  // they are added as raw SQL in 0041 before the composite FKs that reference them.
+  "behavior_revisions_org_project_id_unique",
+  "behavior_verdicts_org_project_id_unique",
+  "proof_units_org_project_digest_unique",
+  "authority_decisions_org_project_id_unique",
 ] as const;
 
 /** Representative composite FKs that previously failed on empty apply (42830). */
 const REQUIRED_COMPOSITE_FKS = [
   "capability_nodes_project_fk",
   "spec_capability_dependencies_spec_fk",
+  "spec_capability_dependencies_node_fk",
   "integration_validation_proofs_spec_fk",
+  "integration_validation_proofs_behavior_revision_fk",
+  "integration_validation_proofs_behavior_verdict_fk",
+  "integration_validation_proofs_proof_unit_fk",
+  "integration_validation_proofs_binding_generation_fk",
   "project_integration_grant_selections_connection_fk",
   "project_integration_grant_selections_grant_fk",
   "project_app_env_project_fk",
+  "project_app_env_binding_output_fk",
+  // same-org lineage repair composites (shared child project_id on both endpoints)
+  "behavior_integration_requirements_requirement_fk",
+  "behavior_integration_requirements_behavior_revision_fk",
+  "capability_node_dependencies_node_fk",
+  "capability_node_dependencies_parent_fk",
+  "integration_requirements_superseded_by_fk",
+  "integration_binding_env_binding_generation_fk",
+  "delivery_run_bindings_binding_generation_fk",
+  "delivery_runs_authority_decision_fk",
+  "integration_reconciliations_binding_generation_fk",
+  "integration_resource_snapshots_binding_generation_fk",
 ] as const;
 
 function dbName(): string {

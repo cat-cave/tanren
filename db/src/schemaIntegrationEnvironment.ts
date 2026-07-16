@@ -46,9 +46,10 @@ export const projectAppEnv = pgTable(
       name: "project_app_env_project_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.bindingGeneration, table.key],
+      columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration, table.key],
       foreignColumns: [
         integrationBindingEnv.orgId,
+        integrationBindingEnv.projectId,
         integrationBindingEnv.bindingId,
         integrationBindingEnv.bindingGeneration,
         integrationBindingEnv.key,

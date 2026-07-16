@@ -155,6 +155,10 @@ describe("IN-1 P1 integration lifecycle schema contract", () => {
         firstFk: 'CONSTRAINT "spec_capability_dependencies_spec_fk" FOREIGN KEY',
       },
       {
+        uniqueIndex: 'CREATE UNIQUE INDEX "specs_org_project_spec_unique"',
+        firstFk: 'CONSTRAINT "spec_capability_dependencies_spec_fk" FOREIGN KEY ("org_id","project_id","spec_id")',
+      },
+      {
         uniqueIndex: 'CREATE UNIQUE INDEX "org_integration_connections_provider_id_unique"',
         firstFk: 'CONSTRAINT "project_integration_grant_selections_connection_fk" FOREIGN KEY',
       },
@@ -167,8 +171,41 @@ describe("IN-1 P1 integration lifecycle schema contract", () => {
         firstFk: 'CONSTRAINT "capability_nodes_requirement_lineage_fk" FOREIGN KEY',
       },
       {
+        uniqueIndex: 'CREATE UNIQUE INDEX "capability_nodes_org_project_id_unique"',
+        firstFk:
+          'CONSTRAINT "capability_node_dependencies_node_fk" FOREIGN KEY ("org_id","project_id","capability_node_id")',
+      },
+      {
         uniqueIndex: 'CREATE UNIQUE INDEX "integration_binding_generations_binding_generation_unique"',
         firstFk: 'CONSTRAINT "integration_binding_env_binding_generation_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "integration_binding_env_output_unique"',
+        firstFk:
+          'CONSTRAINT "project_app_env_binding_output_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation","key")',
+      },
+      // Frozen-spine (0034/0035/0037/0039) parent targets are not drizzle-managed,
+      // so they are added as raw SQL here in 0041 before the composite FKs that
+      // reference them. Org RLS is not same-org referential integrity.
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "behavior_revisions_org_project_id_unique"',
+        firstFk:
+          'CONSTRAINT "behavior_integration_requirements_behavior_revision_fk" FOREIGN KEY ("org_id","project_id","behavior_revision_id")',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "behavior_verdicts_org_project_id_unique"',
+        firstFk:
+          'CONSTRAINT "integration_validation_proofs_behavior_verdict_fk" FOREIGN KEY ("org_id","project_id","behavior_verdict_id")',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "proof_units_org_project_digest_unique"',
+        firstFk:
+          'CONSTRAINT "integration_validation_proofs_proof_unit_fk" FOREIGN KEY ("org_id","project_id","proof_unit_digest")',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "authority_decisions_org_project_id_unique"',
+        firstFk:
+          'CONSTRAINT "delivery_runs_authority_decision_fk" FOREIGN KEY ("org_id","project_id","authority_decision_id")',
       },
     ] as const;
     for (const { uniqueIndex, firstFk } of requiredBefore) {
@@ -178,6 +215,47 @@ describe("IN-1 P1 integration lifecycle schema contract", () => {
       expect(fkAt, `${firstFk} missing`).toBeGreaterThanOrEqual(0);
       expect(indexAt).toBeLessThan(fkAt);
     }
+  });
+
+  it("binds every project-bearing endpoint with a shared child project_id (same-org referential integrity)", () => {
+    // Governing rule: for every relationship whose endpoints have project identity,
+    // the child row has one shared project_id and every endpoint FK includes that
+    // same column. Two independent project columns are not sufficient unless
+    // equality is database-enforced; org RLS is not same-org referential integrity.
+    const compositeFkColumns: Record<string, string> = {
+      // requirement supersession
+      integration_requirements_superseded_by_fk: '("org_id","project_id","superseded_by")',
+      // behavior↔requirement (both endpoints bound to shared project_id)
+      behavior_integration_requirements_requirement_fk: '("org_id","project_id","requirement_id")',
+      behavior_integration_requirements_behavior_revision_fk: '("org_id","project_id","behavior_revision_id")',
+      // capability node↔node dependency (both node endpoints composite + project FK)
+      capability_node_dependencies_node_fk: '("org_id","project_id","capability_node_id")',
+      capability_node_dependencies_parent_fk: '("org_id","project_id","depends_on_capability_node_id")',
+      // spec↔capability node (both endpoints composite)
+      spec_capability_dependencies_spec_fk: '("org_id","project_id","spec_id")',
+      spec_capability_dependencies_node_fk: '("org_id","project_id","capability_node_id")',
+      // binding generation lineage (reconciliation / snapshot / proof / run-binding / env)
+      integration_binding_env_binding_generation_fk: '("org_id","project_id","binding_id","binding_generation")',
+      delivery_run_bindings_binding_generation_fk: '("org_id","project_id","binding_id","binding_generation")',
+      integration_reconciliations_binding_generation_fk: '("org_id","project_id","binding_id","binding_generation")',
+      integration_resource_snapshots_binding_generation_fk: '("org_id","project_id","binding_id","binding_generation")',
+      integration_validation_proofs_binding_generation_fk: '("org_id","project_id","binding_id","binding_generation")',
+      // delivery run↔authority decision
+      delivery_runs_authority_decision_fk: '("org_id","project_id","authority_decision_id")',
+      // proof spine (spec / revision / verdict / proof unit)
+      integration_validation_proofs_spec_fk: '("org_id","project_id","spec_id")',
+      integration_validation_proofs_behavior_revision_fk: '("org_id","project_id","behavior_revision_id")',
+      integration_validation_proofs_behavior_verdict_fk: '("org_id","project_id","behavior_verdict_id")',
+      integration_validation_proofs_proof_unit_fk: '("org_id","project_id","proof_unit_digest")',
+      // project app env↔binding output (five-column common-project FK)
+      project_app_env_binding_output_fk: '("org_id","project_id","binding_id","binding_generation","key")',
+    };
+    for (const [fk, columns] of Object.entries(compositeFkColumns)) {
+      const needle = `CONSTRAINT "${fk}" FOREIGN KEY ${columns}`;
+      expect(migration, `${fk} must bind exactly ${columns}`).toContain(needle);
+    }
+    // The parallel weaker org-only delivery_run_bindings_binding_fk must be gone.
+    expect(migration).not.toContain('"delivery_run_bindings_binding_fk"');
   });
 
   it("pins principal/generation authority and no fake dev provisioned bypass", () => {
