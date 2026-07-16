@@ -27,6 +27,32 @@ workers remain schema-only for later slices.
 
 ## Final cumulative fold scope
 
+### Publication P1 child redrive (bounded, zero credit)
+
+Exact parent: `01ec423621d5e45b7e2f67052d37621851746df5`. This child is
+limited to the native convergence audit's two publication blockers and truthful
+evidence cleanup. It does not widen Slice 1, register events, add a migration or
+authority, or claim a completed consumer node.
+
+Leased redrive paths (all already present in the exhaustive final-fold manifest):
+
+- `db/migrations/0043_integration_lifecycle.sql`
+- `db/src/schemaSpineReferences.ts`
+- `services/orchestrator/src/routes/integrations/authorityWrites.ts`
+- `services/orchestrator/tests/integrationLifecycleModel.test.ts`
+- `services/orchestrator/tests/integrationRoutes.contract.test.ts`
+- `services/dashboard/src/routes/integrations/index.tsx`
+- `services/dashboard/tests/integrations.render.test.ts`
+- this card
+
+The correction removes every data-conversion `UPDATE` from `0043` and makes the
+migration-model proof mutation-sensitive to any future backfill. On the visible
+surface, only a durable `completed` operation may render as linked. Every pending,
+provider-unavailable, finalize-pending, activate-pending, and failed outcome keeps
+its operation identity, reloads from sanitized durable state, and has negative HTTP
+and render coverage proving that secret values and hostile coordinates cannot enter
+payloads, redirects, or visible chrome. Protected `0041`/`0042` bytes remain frozen.
+
 The final fold is one cumulative clean-replacement candidate, originally built
 from the authorized base `67d9363fe220e1f280ed706a0b80af2b16724362` and now
 replayed as a 19-commit sequence onto the exact publication base
