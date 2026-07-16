@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { BehaviorStore } from "../../engine/entities/behaviors.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
+import { registerIntegrationContractRoutes } from "../integrationContracts/index.js";
 import { actorCanAccessOrg } from "../orgs/access.js";
 
 interface BehaviorRoutesOptions {
@@ -98,6 +99,10 @@ export function createBehaviorRoutes(options: BehaviorRoutesOptions) {
       return c.json({ error: "behavior_access_denied", message: messageOf(error) }, 403);
     }
   });
+
+  // in-2 thin wire: typed integration-contract validate/catalog under free /orgs parent.
+  // Exclusive body lives in routes/integrationContracts — do not expand here.
+  registerIntegrationContractRoutes(app, { pool: options.pool });
 
   return app;
 }
