@@ -6,7 +6,6 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { BatchAuthorityBinding } from "../contracts/batchMergeCoordinator.js";
 import type { BudgetScope, ConflictResolution, GateVerdict, MergeabilityState } from "../contracts/mergeAuthority.js";
-import { CiFlakyDetectedPayload } from "../events/schemas/ciFlaky.js";
 import { GitHubOutageError } from "../providers/githubRetry.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
 import { activeQuarantineVersion, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
@@ -14,7 +13,6 @@ import {
   exactBatchGateProofEvidence,
   MultiMemberAuthorityInfrastructureFault,
 } from "./multiMemberAuthorityEvidence.js";
-import type { SameTreeFlakeEvidence } from "./multiMemberAuthorityTypes.js";
 import { budgetScopeFrom } from "./mergeAuthorityInputs.js";
 
 interface PersistedBatchRow {
@@ -47,19 +45,17 @@ export async function loadBatchDecisionEvidence(
 ): Promise<{
   readonly persisted: PersistedBatchDecisionSignals;
   readonly budget: BudgetScope;
-  readonly evidence?: SameTreeFlakeEvidence;
 }> {
   const [persisted, rawBudget] = await Promise.all([
     loadPersistedBatchDecisionSignals(pool, orgId, projectId, binding),
     new PgBudgetGate(pool).resolveBudget(projectId),
   ]);
-  const evidence = await loadExactSameTreeFlakeEvidence(pool, orgId, projectId, binding, persisted);
   const budget = budgetScopeFrom({
     ceilingUsd: rawBudget.ceilingUsd,
     spentUsd: rawBudget.spentUsd,
     ...(rawBudget.failClosed === undefined ? {} : { failClosedReason: `budget ${rawBudget.failClosed}` }),
   });
-  return { persisted, budget, ...(evidence === undefined ? {} : { evidence }) };
+  return { persisted, budget };
 }
 
 /** Read the exact node/proof facts that replace hard-coded clean authority inputs. */
@@ -103,45 +99,6 @@ export async function loadCurrentQuarantineVersion(pool: pg.Pool, orgId: string,
   return runWithOrgScope(pool, orgId, async (client) =>
     activeQuarantineVersion(await loadActiveQuarantine(client, projectId)),
   );
-}
-
-/** A quarantine row is flake evidence only when it attests this exact proven head. */
-export async function loadExactSameTreeFlakeEvidence(
-  pool: pg.Pool,
-  orgId: string,
-  projectId: string,
-  binding: BatchAuthorityBinding,
-  signals: PersistedBatchDecisionSignals,
-): Promise<SameTreeFlakeEvidence | undefined> {
-  if (signals.gateVerdict !== "passed") return undefined;
-  return runWithOrgScope(pool, orgId, async (client) => {
-    const active = await loadActiveQuarantine(client, projectId);
-    const version = activeQuarantineVersion(active);
-    let match: SameTreeFlakeEvidence | undefined;
-    if (version !== binding.proof.keyInput.quarantineVersion) return match;
-    const result = await client.query<{ id: string; evidence: unknown }>(
-      `SELECT id, evidence
-         FROM quarantined_tests
-        WHERE project_id = $1 AND cleared_at IS NULL
-        ORDER BY quarantined_at, id`,
-      [projectId],
-    );
-    for (const row of result.rows) {
-      const evidence = CiFlakyDetectedPayload.safeParse(row.evidence);
-      if (!evidence.success || !evidence.data.sampleShas.includes(binding.headSha)) continue;
-      match = {
-        kind: "same_tree_flake",
-        treeHash: binding.treeHash,
-        quarantineVersion: version,
-        observations: [
-          { id: `${row.id}:failed`, verdict: "failed" },
-          { id: `${row.id}:passed`, verdict: "passed" },
-        ],
-      };
-      break;
-    }
-    return match;
-  });
 }
 
 /** Preserve typed provider outages; untyped/config failures remain unknown. */

@@ -20,7 +20,6 @@ import {
   type EvaluateMultiMemberAuthorityInput,
   type MultiMemberAuthorityEvaluation,
   type MultiMemberAuthorityMemberOutcome,
-  type SameTreeFlakeEvidence,
 } from "./multiMemberAuthorityTypes.js";
 
 type W0Unknown = Extract<MergeSignalClassificationV1, { classification: "unknown_fail_closed" }>;
@@ -114,10 +113,6 @@ export async function evaluateMultiMemberAuthority(
     return infrastructureResult(input, input.evidence);
   }
 
-  if (input.evidence?.kind === "same_tree_flake") {
-    return flakeResult(input, input.evidence);
-  }
-
   let authorization: LandAuthorization;
   try {
     authorization = await input.authority.authorizeLand(input.decisionInput, input.envelope);
@@ -136,8 +131,14 @@ export async function evaluateMultiMemberAuthority(
   });
 
   if (authorization.decision === "authorized") {
-    if (classification.classification !== "unknown_fail_closed") {
-      return unknownResult(input, ["authorized_with_blocking_classification"], authorization);
+    // POSITIVE-signal guard: the green path is derived from the real SP-4
+    // `decision === "authorized"` above, NOT from the absence of a fail-closed
+    // classification. Honor it only when the exact decision input is genuinely clean —
+    // no blocking findings and no authorization block reasons. A permissive authority that
+    // authorizes despite blocking evidence fails closed instead of laundering a green
+    // embark.
+    if (blockingFindings(input).length > 0 || authorization.reasons.length > 0) {
+      return unknownResult(input, ["authorized_with_blocking_evidence"], authorization);
     }
     const ids = identities(input, { decision: "authorized", kind: "authority", reasonInputs: [] });
     const members = input.binding.members.map((member) => ({
@@ -185,23 +186,11 @@ export async function evaluateMultiMemberAuthority(
     return unknownResult(input, attribution.reasons, authorization, w0);
   }
 
-  if (isDeterministicInteraction(input, authorization)) {
-    const ids = identities(input, {
-      decision: authorization.decision,
-      kind: "interaction_failure",
-      reasonInputs: reasonInputs(authorization),
-    });
-    return {
-      ...common(input, ids, membersHeld(input, "interaction_failure"), [
-        "integrated_residual_block",
-        ...reasonInputs(authorization),
-      ]),
-      kind: "interaction_failure",
-      eligibleMemberIds: [],
-      authorization,
-    };
-  }
-
+  // A residual authority block at the post-pass site that is neither member-attributable
+  // policy, typed infrastructure, nor a product decision is `unknown_fail_closed` (never
+  // `interaction_failure`). The evaluator runs only AFTER an integrated PASS, so it cannot
+  // witness the durable FAILED batch proof an interaction failure requires — that
+  // disposition is reconstructed solely by the durable HTTP read side.
   const w0 = classification.classification === "unknown_fail_closed" ? classification : undefined;
   return unknownResult(input, ["authority_blocked_fail_closed", ...reasonInputs(authorization)], authorization, w0);
 }
@@ -228,36 +217,6 @@ function infrastructureResult(
     kind: "transient_infrastructure",
     eligibleMemberIds: [],
     w0: classification,
-  };
-}
-
-function flakeResult(
-  input: EvaluateMultiMemberAuthorityInput,
-  evidence: SameTreeFlakeEvidence,
-): MultiMemberAuthorityEvaluation {
-  const [first, second] = evidence.observations;
-  const valid =
-    evidence.treeHash === input.binding.treeHash &&
-    evidence.quarantineVersion === input.binding.proof.keyInput.quarantineVersion &&
-    first.id.trim() !== "" &&
-    second.id.trim() !== "" &&
-    first.id !== second.id &&
-    first.verdict !== second.verdict;
-  if (!valid) return unknownResult(input, ["incomplete_same_tree_flake_evidence"]);
-  const ids = identities(input, {
-    kind: "flake_observation",
-    observationIds: [first.id, second.id],
-    quarantineVersion: evidence.quarantineVersion,
-    treeHash: evidence.treeHash,
-    verdicts: [first.verdict, second.verdict],
-  });
-  return {
-    ...common(input, ids, membersHeld(input, "flake_observation"), ["same_tree_nondeterminism"]),
-    kind: "flake_observation",
-    eligibleMemberIds: [],
-    treeHash: evidence.treeHash,
-    quarantineVersion: evidence.quarantineVersion,
-    observationIds: [first.id, second.id],
   };
 }
 
@@ -373,19 +332,6 @@ function sameFinding(left: Finding, right: Finding): boolean {
     left.body === right.body &&
     left.fixHint === right.fixHint
   );
-}
-
-function isDeterministicInteraction(
-  input: EvaluateMultiMemberAuthorityInput,
-  authorization: LandAuthorization,
-): boolean {
-  const inputs = new Set(reasonInputs(authorization));
-  if (inputs.size === 0) return false;
-  if (inputs.has("binding") || inputs.has("budget") || inputs.has("demo") || inputs.has("findings")) return false;
-  if (inputs.has("reviewVerdict") || inputs.has("hitlSignoff") || inputs.has("mergeability")) return false;
-  if (inputs.has("gateVerdict") && input.decisionInput.gateVerdict !== "failed") return false;
-  if (inputs.has("conflicts") && input.decisionInput.conflicts !== "unresolved") return false;
-  return [...inputs].every((value) => value === "gateVerdict" || value === "conflicts");
 }
 
 function validateExactBinding(input: EvaluateMultiMemberAuthorityInput): string[] {

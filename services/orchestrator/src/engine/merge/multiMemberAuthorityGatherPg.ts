@@ -53,7 +53,6 @@ export class PgMultiMemberAuthorityEvaluator implements BatchAuthorityEvaluator 
       envelope,
       authority,
       memberFindings: gathered.memberFindings,
-      ...(gathered.evidence === undefined ? {} : { evidence: gathered.evidence }),
     });
     const classification = result.w0;
     if (classification !== undefined) {

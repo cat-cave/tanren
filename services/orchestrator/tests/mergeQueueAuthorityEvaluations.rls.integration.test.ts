@@ -276,7 +276,11 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     await expect(validate()).resolves.toEqual({ valid: true });
   });
 
-  it("gathers same-tree flake evidence only from the exact active quarantine and passing proof epoch", async () => {
+  it("projects flake_observation on the read side only from the exact active quarantine and passing proof epoch", async () => {
+    // The engine gather no longer synthesizes flake evidence (descoped): flake_observation
+    // is reconstructed on the durable read side from a real ci-flaky quarantine row whose
+    // proven toggle attests THIS exact head, joined to a passing batch proof. Prove that
+    // read-side projection against real Postgres, and that a head mismatch removes it.
     const quarantineEvidence = {
       checkName: "unit",
       testId: "suite#toggle",
@@ -294,7 +298,6 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     );
     const version = await loadCurrentQuarantineVersion(runtimePool, ORG_A, PROJECT_A);
     const keyInput = { ...fixtureA.binding.proof.keyInput, quarantineVersion: version };
-    const proofKey = proofReuseKey(keyInput);
     const proofEvidence = buildBatchGateProofEvidence({
       nodeId: fixtureA.binding.nodeId,
       headSha: fixtureA.binding.headSha,
@@ -313,19 +316,23 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
     });
     const binding: BatchAuthorityBinding = {
       ...fixtureA.binding,
-      proof: { verdict: "passed", proofReuseKey: proofKey, keyInput },
+      proof: { verdict: "passed", proofReuseKey: proofReuseKey(keyInput), keyInput },
     };
 
+    // The engine gather now returns only the durable persisted signals (no synthesized flake).
     const gathered = await loadBatchDecisionEvidence(runtimePool, ORG_A, PROJECT_A, binding);
     expect(gathered.persisted).toEqual({ gateVerdict: "passed", mergeability: "clean", conflicts: "resolved" });
-    expect(gathered.evidence).toEqual({
-      kind: "same_tree_flake",
-      treeHash: binding.treeHash,
-      quarantineVersion: version,
-      observations: [
-        { id: "quarantine-exact-toggle:failed", verdict: "failed" },
-        { id: "quarantine-exact-toggle:passed", verdict: "passed" },
-      ],
+
+    const listPath = `/orgs/${ORG_A}/projects/${PROJECT_A}/merge-queue/authority-evaluations`;
+    const flakeBody = (await (await app.request(listPath)).json()) as {
+      evaluations: Array<{ kind: string; source: string; sourceId: string; reasonCodes: string[] }>;
+    };
+    const flake = flakeBody.evaluations.find((evaluation) => evaluation.kind === "flake_observation");
+    expect(flake).toMatchObject({
+      kind: "flake_observation",
+      source: "quarantine",
+      sourceId: "quarantine-exact-toggle",
+      reasonCodes: ["same_tree_nondeterminism"],
     });
 
     await scopedUpdate(
@@ -335,8 +342,8 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
         WHERE id = 'quarantine-exact-toggle'`,
       [],
     );
-    const malformed = await loadBatchDecisionEvidence(runtimePool, ORG_A, PROJECT_A, binding);
-    expect(malformed.evidence).toBeUndefined();
+    const mismatched = (await (await app.request(listPath)).json()) as { evaluations: Array<{ kind: string }> };
+    expect(mismatched.evaluations.some((evaluation) => evaluation.kind === "flake_observation")).toBe(false);
   });
 });
 

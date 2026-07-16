@@ -4,7 +4,7 @@
 
 **Phase**: MVP (merge-queue)  
 **Node ID**: `mq-2`  
-**Base**: `origin/main` @ `608c5bbc08728dfa0188a2d1a0408688f0e76876` (#962 MQ-1)  
+**Base**: `origin/main` @ `26aabe6f` (#969 RV-4; re-ported over post-in-1/rv-4/mq-1)  
 **Branch**: `mission/mq-2-final`  
 **Node credit**: **0** until independent audit, full green gates, and merge
 
@@ -12,11 +12,25 @@
 
 MQ-2 evaluates the exact persisted `merge_batch` integration node through the
 merged SP-4 `MergeAuthorityV2` before the production coordinator embarks on
-member lands. It produces the closed seven-way consumer disposition
+member lands. The closed seven-way consumer disposition is
 (`authorized_subset`, `member_failure`, `interaction_failure`,
 `flake_observation`, `transient_infrastructure`, `needs_product_decision`, or
-`unknown_fail_closed`), preserves member attribution, and exposes a durable-state
-HTTP/UI read side.
+`unknown_fail_closed`); it preserves member attribution and exposes a
+durable-state HTTP/UI read side.
+
+**Two of the seven are durable read-side reconstructions, not post-pass engine
+dispositions.** The pre-embark evaluator runs ONLY after an integrated PASS, so it
+genuinely produces five embark/W0 dispositions — `authorized_subset` (derived from
+a real SP-4 `decision === "authorized"` on a genuinely-clean input, never from the
+absence of a fail-closed classification), `member_failure`,
+`needs_product_decision`, `transient_infrastructure`, and `unknown_fail_closed` (a
+residual non-attributable authority block is `unknown_fail_closed`, never
+`interaction_failure`). The remaining two are reconstructed solely by the HTTP read
+side (`readDurableBatchEvidence`) from durable state a passing pre-embark evaluator
+cannot witness: `interaction_failure` from a durable FAILED batch `integration_proof`
+(`batch_gate.v1`), and `flake_observation` from a durable ci-flaky `quarantined_tests`
+row whose proven toggle attests THIS exact head at the matching quarantine epoch.
+There is no synthesized pre-authority flake input and no dead engine branch.
 
 This node does **not** solve subsets. `authorized_subset` is the primary kind
 only when SP-4 authorizes the exact full member set represented by the persisted
@@ -180,13 +194,23 @@ credit; MQ-3 owns subset selection and MQ-5 owns durable group-land liveness.
    eligible only for their own fresh authority lands. Multi-member policy with
    missing/empty attribution or finding IDs is `unknown_fail_closed` with
    `unattributed_policy` and cannot embark.
-5. At the post-pass evaluator call site, `interaction_failure` means member-
-   local preflight is clean but multi-member `authorizeLand` has a residual,
-   non-member-local block. A checker combined-tree `fail` remains on the
-   existing typed bisect path; MQ-2 does not start ddmin or claim a solved
-   culprit. `flake_observation` requires typed same-tree non-determinism
-   evidence. Incomplete JUnit evidence, a missing quarantine epoch, or untyped
-   noise is `unknown_fail_closed`, never member failure or infrastructure.
+5. `interaction_failure` and `flake_observation` are durable READ-SIDE
+   reconstructions, NOT post-pass engine dispositions. The post-pass evaluator
+   runs only after an integrated PASS, so it can neither observe a failed proof
+   nor honestly witness two opposite-verdict same-tree observations; a residual
+   non-member-attributable `authorizeLand` block there is `unknown_fail_closed`,
+   never `interaction_failure`. The HTTP read side
+   (`readDurableBatchEvidence`) is the sole producer of both: it projects
+   `interaction_failure` from a durable FAILED batch `integration_proof` bound by
+   the exact six proof-key components (a checker combined-tree `fail` still lands
+   on the existing typed bisect path; MQ-2 starts no ddmin and claims no solved
+   culprit), and `flake_observation` from a durable ci-flaky `quarantined_tests`
+   row whose `CiFlakyDetectedPayload` proves the toggle
+   (`toggledShaCount ≥ 1` + `sampleShas` containing THIS exact proven head) at the
+   matching quarantine epoch — never from synthesized per-verdict observations.
+   Incomplete gate evidence, a missing/mismatched quarantine epoch, or a head the
+   detector never toggled yields no flake state (`unknown_fail_closed` or empty),
+   never member failure or infrastructure.
 6. Typed infrastructure, product-decision, and untyped/contradictory evidence
    map only to their corresponding closed dispositions.
 7. Evaluation/group IDs are deterministic `mqeval_`/`mqgrp_`; member order,

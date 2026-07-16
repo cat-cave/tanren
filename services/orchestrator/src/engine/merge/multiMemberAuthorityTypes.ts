@@ -58,20 +58,6 @@ export interface MemberFailureEvaluation extends EvaluationBase {
   readonly w0: Extract<MergeSignalClassificationV1, { classification: "deterministic_policy" }>;
 }
 
-export interface InteractionFailureEvaluation extends EvaluationBase {
-  readonly kind: "interaction_failure";
-  readonly eligibleMemberIds: readonly [];
-  readonly authorization: LandAuthorization;
-}
-
-export interface FlakeObservationEvaluation extends EvaluationBase {
-  readonly kind: "flake_observation";
-  readonly eligibleMemberIds: readonly [];
-  readonly treeHash: string;
-  readonly quarantineVersion: string;
-  readonly observationIds: readonly [string, string];
-}
-
 export interface InfrastructureEvaluation extends EvaluationBase {
   readonly kind: "transient_infrastructure";
   readonly eligibleMemberIds: readonly [];
@@ -92,11 +78,17 @@ export interface UnknownEvaluation extends EvaluationBase {
   readonly w0?: Extract<MergeSignalClassificationV1, { classification: "unknown_fail_closed" }>;
 }
 
+// The engine post-pass evaluator produces these FIVE embark/W0 dispositions. The two
+// durable read-side dispositions — `interaction_failure` (a durable FAILED batch proof)
+// and `flake_observation` (a durable ci-flaky quarantine row proving same-tree
+// non-determinism for the exact proven head) — are reconstructed by the HTTP read side
+// (`readDurableBatchEvidence`), never by this post-pass evaluator: the evaluator only runs
+// AFTER an integrated PASS, so it can neither observe a failed proof nor honestly witness
+// two opposite-verdict same-tree observations. A residual, non-member-attributable
+// authority block at the post-pass site is `unknown_fail_closed`, not `interaction_failure`.
 export type MultiMemberAuthorityEvaluation =
   | AuthorizedSubsetEvaluation
   | MemberFailureEvaluation
-  | InteractionFailureEvaluation
-  | FlakeObservationEvaluation
   | InfrastructureEvaluation
   | ProductDecisionEvaluation
   | UnknownEvaluation;
@@ -108,17 +100,6 @@ export interface MemberFindingAttribution {
   readonly findings: ReadonlyArray<Finding>;
 }
 
-/** Typed same-tree non-determinism; both observations name one immutable tree. */
-export interface SameTreeFlakeEvidence {
-  readonly kind: "same_tree_flake";
-  readonly treeHash: string;
-  readonly quarantineVersion: string;
-  readonly observations: readonly [
-    { readonly id: string; readonly verdict: "passed" | "failed" },
-    { readonly id: string; readonly verdict: "passed" | "failed" },
-  ];
-}
-
 /** Typed infrastructure evidence accepted by the frozen W0 classifier. */
 export interface MultiMemberInfrastructureEvidence {
   readonly kind: "infrastructure";
@@ -126,7 +107,12 @@ export interface MultiMemberInfrastructureEvidence {
   readonly sourceKey: string;
 }
 
-export type MultiMemberPreAuthorityEvidence = SameTreeFlakeEvidence | MultiMemberInfrastructureEvidence;
+// Pre-authority evidence the post-pass evaluator may short-circuit on. Only typed
+// infrastructure qualifies: it is the sole pre-authority signal a passing batch can carry
+// without inventing a durable observation the store does not hold. (Same-tree flake is a
+// read-side reconstruction from the durable ci-flaky quarantine surface — never a
+// synthesized pre-authority input; see `MultiMemberAuthorityEvaluation`.)
+export type MultiMemberPreAuthorityEvidence = MultiMemberInfrastructureEvidence;
 
 export interface EvaluateMultiMemberAuthorityInput {
   readonly binding: BatchAuthorityBinding;

@@ -156,6 +156,28 @@ describe("MQ-2 exact multi-member authority evaluation", () => {
     expect(harness.persistAuthorizedDecision).not.toHaveBeenCalled();
   });
 
+  it("fails closed when a permissive authority authorizes despite blocking evidence (positive-signal guard)", async () => {
+    // The green path is derived from a genuinely-clean authorized decision, NOT from the
+    // absence of a fail-closed classification: an authority that returns `authorized` while
+    // the exact decision input carries a blocking finding must NOT reach authorized_subset.
+    const result = await evaluateMultiMemberAuthority(
+      evaluationInput({
+        decision: { findings: [FINDING] },
+        authority: {
+          authorizeLand: vi.fn<MergeAuthorityV2["authorizeLand"]>(async (input, env) => ({
+            decision: "authorized",
+            reasons: [],
+            subject: input.subject,
+            envelope: env,
+          })),
+        },
+      }),
+    );
+    expect(result.kind).toBe("unknown_fail_closed");
+    expect(result.reasonCodes).toContain("authorized_with_blocking_evidence");
+    expect(result.eligibleMemberIds).toEqual([]);
+  });
+
   it("attributes member policy, excludes B, dependency-holds C, and leaves A eligible", async () => {
     const result = await evaluateMultiMemberAuthority(
       evaluationInput({
@@ -204,33 +226,16 @@ describe("MQ-2 exact multi-member authority evaluation", () => {
     });
   });
 
-  it("types an explicit residual integrated conflict without blaming a member or starting search", async () => {
+  it("fails a residual non-attributable authority block closed (never interaction_failure) at the post-pass site", async () => {
+    // A residual block that is not member-attributable policy, typed infra, or a product
+    // decision is unknown_fail_closed. interaction_failure is NOT an engine post-pass
+    // disposition — it is reconstructed by the durable HTTP read side from a FAILED batch
+    // proof (which the post-pass evaluator, running only after a PASS, can never observe).
     const result = await evaluateMultiMemberAuthority(evaluationInput({ decision: { conflicts: "unresolved" } }));
-    expect(result).toMatchObject({ kind: "interaction_failure", eligibleMemberIds: [] });
+    expect(result.kind).toBe("unknown_fail_closed");
+    expect(result.eligibleMemberIds).toEqual([]);
     expect(result.members.every((member) => member.disposition === "hold")).toBe(true);
-    expect(result.reasonCodes).toContain("integrated_residual_block");
-  });
-
-  it("accepts only typed same-tree nondeterminism as a flake observation", async () => {
-    const result = await evaluateMultiMemberAuthority(
-      evaluationInput({
-        evidence: {
-          kind: "same_tree_flake",
-          treeHash: "batch-tree",
-          quarantineVersion: "quarantine-4",
-          observations: [
-            { id: "gate-1", verdict: "failed" },
-            { id: "gate-2", verdict: "passed" },
-          ],
-        },
-      }),
-    );
-    expect(result).toMatchObject({
-      kind: "flake_observation",
-      treeHash: "batch-tree",
-      observationIds: ["gate-1", "gate-2"],
-      eligibleMemberIds: [],
-    });
+    expect(result.reasonCodes).toContain("authority_blocked_fail_closed");
   });
 
   it("maps typed infrastructure without member blame", async () => {

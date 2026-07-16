@@ -344,12 +344,17 @@ function flakeProjection(
 ): AuthorityEvaluationProjectionData {
   return {
     ...commonProofProjection(row, node, "quarantine", quarantine.id, quarantine.quarantined_at),
+    // The id is derived from the REAL durable ci-flaky quarantine row and its proven toggle
+    // facts (id, toggle/observation counts) that `exactQuarantineForHead` validated against
+    // this exact proven head — never from synthesized per-verdict observation ids.
     evaluationId: authorityDerivedId("mqeval", {
       durableSource: "quarantine.v1",
       node: nodeIdentity(row, node.members),
-      observationIds: [`${quarantine.id}:failed`, `${quarantine.id}:passed`],
+      observationCount: quarantine.observation_count,
       proofReuseKey: row.proof_reuse_key,
+      quarantineId: quarantine.id,
       quarantineVersion,
+      toggledShaCount: quarantine.toggled_sha_count,
     }),
     kind: "flake_observation",
     members: heldMembers(node.members, "flake_observation"),

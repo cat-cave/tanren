@@ -11,12 +11,7 @@ import type { AuthorizeLandInput, LandBindingEnvelope } from "../contracts/merge
 import { serviceAuditActor } from "../events/schemas/audit.js";
 import { resolveLandTimeFindings, resolveLandTimeSignals } from "./landSignals.js";
 import { reviewVerdictFrom } from "./mergeAuthorityInputs.js";
-import {
-  batchArtifactDigest,
-  batchProofRoot,
-  type MemberFindingAttribution,
-  type MultiMemberPreAuthorityEvidence,
-} from "./multiMemberAuthorityTypes.js";
+import { batchArtifactDigest, batchProofRoot, type MemberFindingAttribution } from "./multiMemberAuthorityTypes.js";
 import { loadBatchDecisionEvidence, type PersistedBatchDecisionSignals } from "./multiMemberAuthorityEvidencePg.js";
 
 export interface ProjectAuthorityRow {
@@ -38,7 +33,6 @@ export interface GatheredMultiMemberAuthorityState {
   readonly policyVersion: number;
   readonly decisionInput: AuthorizeLandInput;
   readonly memberFindings: ReadonlyArray<MemberFindingAttribution>;
-  readonly evidence?: MultiMemberPreAuthorityEvidence;
 }
 
 export async function gatherMultiMemberAuthorityState(
@@ -77,7 +71,6 @@ export async function gatherMultiMemberAuthorityState(
       decisionEvidence.persisted,
     ),
     memberFindings: memberSignals.map((signals) => signals.attribution),
-    ...(decisionEvidence.evidence === undefined ? {} : { evidence: decisionEvidence.evidence }),
   };
 }
 
