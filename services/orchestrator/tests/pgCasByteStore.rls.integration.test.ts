@@ -7,8 +7,8 @@
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
-import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
-import { parseDigest } from "../src/engine/contracts/cas.js";
+import { PgCasByteStore, verifyStoredCasRow } from "../src/engine/cas/pgCasByteStore.js";
+import { CasArtifactIntegrityError, contentDigestOf, parseDigest } from "../src/engine/contracts/cas.js";
 import {
   canonicalRequirementBytes,
   goldenProductMessagingRequirement,
@@ -199,6 +199,56 @@ describeDb("PgCasByteStore RLS (in-2 durable CAS)", () => {
     ).rejects.toMatchObject({ name: "CasArtifactIntegrityError" });
   });
 
+  // ---- R2 follow-up: byte_size exact-equality corruption (get + put-conflict) ----
+  // These mutate ONLY the stored byte_size (inline bytes + digest stay consistent),
+  // so the byte_size exact-equality check is the sole signal — proving the read
+  // and read-back paths each validate byte_size, not just the content re-hash.
+
+  it("get detects a stored byte_size mismatch as a typed CasArtifactIntegrityError", async () => {
+    const store = new PgCasByteStore(runtimePool);
+    const bytes = uniqueBytes("get-byte-size-mismatch");
+    const ref = await store.put({
+      orgId: ORG_A,
+      bytes,
+      mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+    });
+
+    // Corrupt only byte_size (bytes still hash to the digest). The read path's
+    // byte_size exact-equality check must reject the mismatched metadata.
+    await ownerPool.query(`UPDATE cas_artifacts SET byte_size = $1 WHERE org_id = $2 AND digest = $3`, [
+      bytes.byteLength + 1,
+      ORG_A,
+      ref.digest,
+    ]);
+
+    await expect(store.get(ORG_A, ref.digest)).rejects.toMatchObject({
+      name: "CasArtifactIntegrityError",
+    });
+  });
+
+  it("put detects a stored byte_size mismatch on the read-back as a typed CasArtifactIntegrityError", async () => {
+    const store = new PgCasByteStore(runtimePool);
+    const bytes = uniqueBytes("put-byte-size-mismatch");
+    const ref = await store.put({
+      orgId: ORG_A,
+      bytes,
+      mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE,
+    });
+
+    // Corrupt byte_size, then re-put the original bytes. INSERT hits ON CONFLICT
+    // DO NOTHING (row already present), so the read-back path must catch the
+    // mismatched byte_size rather than echo a false success.
+    await ownerPool.query(`UPDATE cas_artifacts SET byte_size = $1 WHERE org_id = $2 AND digest = $3`, [
+      bytes.byteLength + 1,
+      ORG_A,
+      ref.digest,
+    ]);
+
+    await expect(
+      store.put({ orgId: ORG_A, bytes, mediaType: INTEGRATION_REQUIREMENT_MEDIA_TYPE }),
+    ).rejects.toMatchObject({ name: "CasArtifactIntegrityError" });
+  });
+
   it("same-org positive + cross-org denial keeps zero cross-org effects", async () => {
     const store = new PgCasByteStore(runtimePool);
     const bytes = uniqueBytes("same-org");
@@ -217,5 +267,104 @@ describeDb("PgCasByteStore RLS (in-2 durable CAS)", () => {
     // Unscoped runtime SELECT sees zero rows (deny-by-default).
     const denied = await runtimePool.query("SELECT digest FROM cas_artifacts");
     expect(denied.rowCount).toBe(0);
+  });
+});
+
+// ---- R2 follow-up: verifyStoredCasRow centralized-verifier unit coverage ----
+// Pure-logic coverage for the centralized stored-row verifier shared by PgCas
+// `get` + post-put read-back. This describe is intentionally OUTSIDE `describeDb`
+// (not DB-gated) so the canonical-form / nonnegative / safe-integer / exact-length
+// logic always runs — Postgres normalizes bigint text on storage, so the hostile
+// row shapes below (leading zero, negative, non-integer, unsafe range) cannot be
+// produced by a live UPDATE and are proved here against the verifier directly.
+// The live corruption proofs for the get and put-conflict behavior paths live in
+// the `describeDb` block above (inline_bytes + byte_size mismatch on both paths).
+const VERIFY_ORG = "org_unit";
+const VERIFY_PAYLOAD = new TextEncoder().encode("in2-r2-unit-payload");
+
+function verifyRow(overrides: Partial<{ inline_bytes: Buffer | null; byte_size: string | number }> = {}): {
+  inline_bytes: Buffer | null;
+  byte_size: string | number;
+} {
+  return {
+    inline_bytes: Buffer.from(VERIFY_PAYLOAD),
+    byte_size: String(VERIFY_PAYLOAD.byteLength),
+    ...overrides,
+  };
+}
+
+describe("verifyStoredCasRow (in-2 R2 centralized CAS row verifier, no DB)", () => {
+  it("returns the verified actual bytes + byte length for a consistent row", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    const verified = verifyStoredCasRow(VERIFY_ORG, digest, verifyRow());
+    expect(verified.byteSize).toBe(VERIFY_PAYLOAD.byteLength);
+    expect(Buffer.from(verified.bytes).equals(Buffer.from(VERIFY_PAYLOAD))).toBe(true);
+  });
+
+  it("accepts a numeric byte_size from drivers that return numbers", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    const verified = verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ byte_size: VERIFY_PAYLOAD.byteLength }));
+    expect(verified.byteSize).toBe(VERIFY_PAYLOAD.byteLength);
+  });
+
+  it("throws CasArtifactIntegrityError when inline bytes are missing", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    expect(() => verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ inline_bytes: null }))).toThrow(
+      CasArtifactIntegrityError,
+    );
+  });
+
+  it("throws CasArtifactIntegrityError when stored bytes do not hash to the requested digest", () => {
+    const digest = contentDigestOf(new TextEncoder().encode("different-bytes"));
+    expect(() => verifyStoredCasRow(VERIFY_ORG, digest, verifyRow())).toThrow(CasArtifactIntegrityError);
+  });
+
+  it("throws CasArtifactIntegrityError for a non-canonical byte_size (leading zero)", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    expect(() =>
+      verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ byte_size: `0${VERIFY_PAYLOAD.byteLength}` })),
+    ).toThrow(CasArtifactIntegrityError);
+  });
+
+  it("throws CasArtifactIntegrityError for a negative byte_size", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    expect(() => verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ byte_size: "-1" }))).toThrow(
+      CasArtifactIntegrityError,
+    );
+  });
+
+  it("throws CasArtifactIntegrityError for a non-integer byte_size", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    expect(() => verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ byte_size: "1.5" }))).toThrow(
+      CasArtifactIntegrityError,
+    );
+  });
+
+  it("throws CasArtifactIntegrityError when byte_size exceeds the safe integer range", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    // 2^53 = exactly past Number.MAX_SAFE_INTEGER; canonical form but unsafe.
+    expect(() => verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ byte_size: "9007199254740992" }))).toThrow(
+      CasArtifactIntegrityError,
+    );
+  });
+
+  it("throws CasArtifactIntegrityError when byte_size does not equal actual bytes length", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    expect(() =>
+      verifyStoredCasRow(VERIFY_ORG, digest, verifyRow({ byte_size: VERIFY_PAYLOAD.byteLength + 1 })),
+    ).toThrow(CasArtifactIntegrityError);
+  });
+
+  it("throws CasArtifactIntegrityError (never a generic Error) on every failure shape", () => {
+    const digest = contentDigestOf(VERIFY_PAYLOAD);
+    const cases = [
+      verifyRow({ inline_bytes: null }),
+      verifyRow({ byte_size: "-1" }),
+      verifyRow({ byte_size: "9007199254740992" }),
+      verifyRow({ byte_size: VERIFY_PAYLOAD.byteLength + 1 }),
+    ];
+    for (const bad of cases) {
+      expect(() => verifyStoredCasRow(VERIFY_ORG, digest, bad)).toThrow(CasArtifactIntegrityError);
+    }
   });
 });

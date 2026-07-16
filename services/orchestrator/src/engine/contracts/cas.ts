@@ -134,6 +134,21 @@ export function domainHash(tag: DomainTag, body: CanonicalBody): Digest {
   return `sha256:${hex}` as Digest;
 }
 
+/**
+ * The SOLE SP-3 content-addressing hash: SHA-256 over raw bytes, branded to
+ * `Digest`. This is the canonical bytes→identity helper reused by the CAS byte
+ * store and every content-digest consumer (in-2 validate route, golden vectors).
+ * Domain hashing (`domainHash` above) is a DELIBERATE identity separation — it
+ * hashes `canonicalJson` over a `[tag, body]` tuple, never raw bytes — so the two
+ * framings share one serializer but never collapse into one hash. There must be
+ * exactly ONE implementation of each framing; never re-roll SHA-256 over bytes
+ * outside this function (pinned by the CAS digest-authority architecture test).
+ */
+export function contentDigestOf(bytes: Uint8Array): Digest {
+  const hex = createHash("sha256").update(bytes).digest("hex");
+  return parseDigest(`sha256:${hex}`);
+}
+
 export type ProofUnitKind =
   | "native_ci_tier"
   | "native_ci_step"

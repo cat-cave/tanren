@@ -1,7 +1,9 @@
 // in-2: golden vectors for IntegrationRequirementV1 plane separation + digests.
 
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { contentDigestOf } from "../src/engine/contracts/cas.js";
 import {
   canonicalRequirementBytes,
   goldenControlNotifyRequirement,
@@ -25,10 +27,6 @@ const PRODUCT_BYTE_LENGTH = 1429;
 const CONTROL_REQUIREMENT_DIGEST = "sha256:758498a8ce90c94ee192eaf6f82ab49df194f483d6fb9fe3e48f82ac407d77fa";
 const CONTROL_CONTENT_DIGEST = "sha256:e816a42d3d2b109ffb5d7dc958dc94aa150c0dab476fe9c4e03446da93728af8";
 const CONTROL_BYTE_LENGTH = 1120;
-
-function contentDigestOf(bytes: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
 
 describe("IntegrationRequirementV1 golden vectors (in-2)", () => {
   it("accepts product messaging.send with product binding kinds", () => {
@@ -248,5 +246,44 @@ describe("IntegrationRequirementV1 golden vectors (in-2)", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.issues.some((i) => i.code === "schema")).toBe(true);
+  });
+});
+
+// ---- R2 follow-up: content-digest authority ----
+// There must be exactly ONE bytes→Digest helper — `contentDigestOf` in
+// engine/contracts/cas.ts — reused by the CAS byte store and the validate route.
+// A second copy would let an algorithm drift silently split content identity (the
+// R2 root defect: the route and PgCas each carried their own SHA-256). Pinned by
+// reading the real source files, the same file-inventory style as the runner image
+// guards. Co-located with the golden digest pins because this is the digest-authority
+// contract: one implementation of each framing, reused everywhere.
+const casSource = readFileSync(fileURLToPath(new URL("../src/engine/contracts/cas.ts", import.meta.url)), "utf8");
+const pgCasSource = readFileSync(
+  fileURLToPath(new URL("../src/engine/cas/pgCasByteStore.ts", import.meta.url)),
+  "utf8",
+);
+const routeSource = readFileSync(
+  fileURLToPath(new URL("../src/routes/integrationContracts/index.ts", import.meta.url)),
+  "utf8",
+);
+
+describe("in-2 R2 — content-digest authority (one bytes→Digest helper)", () => {
+  it("engine/contracts/cas.ts exports the canonical contentDigestOf helper", () => {
+    expect(casSource).toContain("export function contentDigestOf");
+  });
+
+  it("PgCasByteStore reuses the canonical helper and owns no SHA-256 implementation", () => {
+    // No local crypto import, no hand-rolled hash function of any name (the /i
+    // flag covers both `digestOf` and `contentDigestOf` style local definitions).
+    expect(pgCasSource).not.toContain("createHash");
+    expect(pgCasSource).not.toMatch(/function\s+\w*digest\w*\s*\(/iu);
+    // The canonical helper is imported and used.
+    expect(pgCasSource).toContain("contentDigestOf");
+  });
+
+  it("validate route reuses the canonical helper and owns no SHA-256 implementation", () => {
+    expect(routeSource).not.toContain("createHash");
+    expect(routeSource).not.toMatch(/function\s+\w*digest\w*\s*\(/iu);
+    expect(routeSource).toContain("contentDigestOf");
   });
 });

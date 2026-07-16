@@ -5,13 +5,12 @@
  */
 
 import type { Hono } from "hono";
-import { createHash } from "node:crypto";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { PgCasByteStore } from "../../engine/cas/pgCasByteStore.js";
 import type { CasByteStore, Digest } from "../../engine/contracts/cas.js";
-import { parseDigest } from "../../engine/contracts/cas.js";
+import { contentDigestOf } from "../../engine/contracts/cas.js";
 import {
   INTEGRATION_REQUIREMENT_MEDIA_TYPE,
   canonicalRequirementBytes,
@@ -35,11 +34,6 @@ const ValidateBodySchema = z
     persist: z.boolean().optional(),
   })
   .strict();
-
-/** Computes the would-be CAS content digest of canonical bytes (no write). */
-function contentDigestOf(bytes: Uint8Array): Digest {
-  return parseDigest(`sha256:${createHash("sha256").update(bytes).digest("hex")}`);
-}
 
 export interface IntegrationContractRouteOptions {
   pool: pg.Pool;
