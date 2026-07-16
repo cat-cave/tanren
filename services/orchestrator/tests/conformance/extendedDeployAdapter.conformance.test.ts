@@ -70,6 +70,26 @@ const stageGrant = (
     target,
   });
 
+async function buildAuthority(
+  providerKind: string,
+  metadata: Record<string, unknown>,
+  ref: DeployRef,
+  source: typeof SOURCE,
+) {
+  return {
+    deploy: await stageGrant(providerKind, metadata, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: source.repo,
+      sourceRef: source.ref,
+    }),
+    resolveArtifactIdentity: (deploymentId: string) =>
+      stageGrant(providerKind, metadata, "resolve_artifact_identity", {
+        resourceId: ref.appId,
+        deploymentId,
+      }),
+  };
+}
+
 describe("Extended DeployAdapter lifecycle", () => {
   it("builds, previews, promotes, rolls back, and idempotently tears down a direct_api release", async () => {
     const transport = scriptedDeployTransport("vercel", ["acme-web"]);
@@ -82,11 +102,7 @@ describe("Extended DeployAdapter lifecycle", () => {
     const ref: DeployRef = { provider: "deploy.vercel", appId: "vercel_app_1" };
 
     const built = await adapter.buildArtifact(
-      await stageGrant("deploy.vercel", metadata, "deploy", {
-        resourceId: ref.appId,
-        sourceRepo: SOURCE.repo,
-        sourceRef: SOURCE.ref,
-      }),
+      await buildAuthority("deploy.vercel", metadata, ref, SOURCE),
       ref,
       SOURCE,
     );
@@ -147,6 +163,26 @@ describe("Extended DeployAdapter lifecycle", () => {
     expect(JSON.stringify({ built, preview, promoted, rolledBack })).not.toContain(TOKEN_VALUE);
   });
 
+  it("requires distinct resolve-artifact authority after deploy and blocks identity provider I/O otherwise", async () => {
+    const transport = scriptedDeployTransport("vercel", ["acme-web"]);
+    const adapter = new DirectApiDeployAdapter({
+      provisioner: { transport, secrets: secrets() },
+      urlProbe: scriptedUrlProbe(),
+      poll: instantVerifyPollPolicy(),
+    });
+    const ref: DeployRef = { provider: "deploy.vercel", appId: "vercel_app_1" };
+    const deploy = await stageGrant("deploy.vercel", { teamId: "team_1" }, "deploy", {
+      resourceId: ref.appId,
+      sourceRepo: SOURCE.repo,
+      sourceRef: SOURCE.ref,
+    });
+
+    await expect(
+      adapter.buildArtifact({ deploy, resolveArtifactIdentity: async () => deploy }, ref, SOURCE),
+    ).rejects.toThrow(/binding mismatch/u);
+    expect(transport.statusPolls("vercel_deploy_1")).toBe(0);
+  });
+
   it("reads Fly's immutable image digest and transitions traffic by releasing that image", async () => {
     const transport = scriptedDeployTransport("fly", ["acme-fly"]);
     const adapter = new DirectApiDeployAdapter({
@@ -157,15 +193,7 @@ describe("Extended DeployAdapter lifecycle", () => {
     const metadata = { orgSlug: "acme", image: "registry.fly.io/acme-fly:latest" };
     const ref: DeployRef = { provider: "deploy.flyio", appId: "fly_app_1" };
 
-    const built = await adapter.buildArtifact(
-      await stageGrant("deploy.flyio", metadata, "deploy", {
-        resourceId: ref.appId,
-        sourceRepo: SOURCE.repo,
-        sourceRef: SOURCE.ref,
-      }),
-      ref,
-      SOURCE,
-    );
+    const built = await adapter.buildArtifact(await buildAuthority("deploy.flyio", metadata, ref, SOURCE), ref, SOURCE);
     expect(built).toMatchObject({ state: "built", providerChecksum: null });
     expect(built.artifactDigest).toMatch(/^sha256:/u);
     const preview = await adapter.applyPreview(
@@ -224,11 +252,7 @@ describe("Extended DeployAdapter lifecycle", () => {
     const ref: DeployRef = { provider: PULUMI_PROVIDER_KIND, appId: "web" };
 
     const built = await adapter.buildArtifact(
-      await stageGrant(PULUMI_PROVIDER_KIND, metadata, "deploy", {
-        resourceId: ref.appId,
-        sourceRepo: SOURCE.repo,
-        sourceRef: SOURCE.ref,
-      }),
+      await buildAuthority(PULUMI_PROVIDER_KIND, metadata, ref, SOURCE),
       ref,
       SOURCE,
     );
@@ -288,11 +312,7 @@ describe("Extended DeployAdapter lifecycle", () => {
     const packageMetadata = { packageRegistry: "npm", packageName: "@acme/web" };
     const packageRef: DeployRef = { provider: PACKAGE_RELEASE_PROVIDER_KIND, appId: "@acme/web" };
     const packageBuild = await packageAdapter.buildArtifact(
-      await stageGrant(PACKAGE_RELEASE_PROVIDER_KIND, packageMetadata, "deploy", {
-        resourceId: packageRef.appId,
-        sourceRepo: SOURCE.repo,
-        sourceRef: SOURCE.ref,
-      }),
+      await buildAuthority(PACKAGE_RELEASE_PROVIDER_KIND, packageMetadata, packageRef, SOURCE),
       packageRef,
       SOURCE,
     );
@@ -321,11 +341,7 @@ describe("Extended DeployAdapter lifecycle", () => {
     };
     const mobileRef: DeployRef = { provider: MOBILE_RELEASE_PROVIDER_KIND, appId: "com.acme.web" };
     const mobileBuild = await mobileAdapter.buildArtifact(
-      await stageGrant(MOBILE_RELEASE_PROVIDER_KIND, mobileMetadata, "deploy", {
-        resourceId: mobileRef.appId,
-        sourceRepo: SOURCE.repo,
-        sourceRef: SOURCE.ref,
-      }),
+      await buildAuthority(MOBILE_RELEASE_PROVIDER_KIND, mobileMetadata, mobileRef, SOURCE),
       mobileRef,
       SOURCE,
     );
@@ -358,11 +374,7 @@ describe("Extended DeployAdapter lifecycle", () => {
     };
 
     const built = await adapter.buildArtifact(
-      await stageGrant(MANUAL_EXTERNAL_PROVIDER_KIND, metadata, "deploy", {
-        resourceId: ref.appId,
-        sourceRepo: SOURCE.repo,
-        sourceRef: SOURCE.ref,
-      }),
+      await buildAuthority(MANUAL_EXTERNAL_PROVIDER_KIND, metadata, ref, SOURCE),
       ref,
       SOURCE,
     );
@@ -381,11 +393,11 @@ describe("Extended DeployAdapter lifecycle", () => {
     // is unchanged, keeping SP-6's sole schema owner as migration 0036.
 
     const missingSource = { ...SOURCE, ref: "missing" };
-    const missing = await stageGrant(
+    const missing = await buildAuthority(
       MANUAL_EXTERNAL_PROVIDER_KIND,
       { manualExternalUrl: "https://example.com/download" },
-      "deploy",
-      { resourceId: ref.appId, sourceRepo: missingSource.repo, sourceRef: missingSource.ref },
+      ref,
+      missingSource,
     );
     await expect(adapter.buildArtifact(missing, ref, missingSource)).rejects.toMatchObject({
       name: "DeployAdapterOperationError",

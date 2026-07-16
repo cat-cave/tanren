@@ -30,6 +30,7 @@ export type IntegrationPrivilegedOperation =
   | "discover"
   | "provision"
   | "bind"
+  | "intake"
   | "attach_runtime_env"
   | "deploy"
   | "verify"

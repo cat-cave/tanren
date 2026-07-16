@@ -34,7 +34,6 @@ import type { DeployHttpTransport } from "./deployTransport.js";
 import { deployAppName } from "./deployAppName.js";
 import { secretValueForDeployOperation } from "./deployOperationAuthority.js";
 import type {
-  DeployArtifactBuild,
   DeployArtifactIdentity,
   DeployEnvVar,
   DeployProvisionerDeps,
@@ -44,7 +43,6 @@ import type {
 
 export { DEPLOY_APP_NAME_MAX_LEN, deployAppName } from "./deployAppName.js";
 export type {
-  DeployArtifactBuild,
   DeployArtifactIdentity,
   DeployEnvVar,
   DeployProvisionerDeps,
@@ -209,22 +207,6 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     return this.api.triggerDeploy(grant, token, app, source);
   }
 
-  /** Trigger and identify one build under the same exact deploy-stage authority. */
-  async buildArtifact(grant: OrgGrant, appId: string, source: DeploySource): Promise<DeployArtifactBuild> {
-    const token = await this.resolveToken(grant, "deploy", {
-      resourceId: appId,
-      sourceRepo: source.repo,
-      sourceRef: source.ref,
-    });
-    const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
-    if (app === undefined) {
-      throw new Error(`${this.api.providerKind}: cannot build unknown app '${appId}' (not found under the org grant)`);
-    }
-    const result = await this.api.triggerDeploy(grant, token, app, source);
-    const identity = await this.api.resolveArtifactIdentity(grant, token, app, result.deploymentId);
-    return { result, identity };
-  }
-
   /**
    * Read the live status of a previously-triggered deployment on `appId` (the verify
    * poll primitive). Resolves the org token, finds the app under the grant, and hands
@@ -237,16 +219,6 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     deploymentId: string,
     operation: "verify" | "resolve_demo_surface" = "verify",
   ): Promise<DeploymentStatus> {
-    return (await this.deploymentStatusReader(grant, appId, deploymentId, operation))();
-  }
-
-  /** Acquire one fresh lease at stage entry, then poll with the locally held token. */
-  async deploymentStatusReader(
-    grant: OrgGrant,
-    appId: string,
-    deploymentId: string,
-    operation: "verify" | "resolve_demo_surface" = "verify",
-  ): Promise<() => Promise<DeploymentStatus>> {
     const token = await this.resolveToken(grant, operation, { resourceId: appId, deploymentId });
     const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
     if (app === undefined) {
@@ -254,7 +226,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
         `${this.api.providerKind}: cannot read deployment status for unknown app '${appId}' (not found under the org grant)`,
       );
     }
-    return () => this.api.getDeployment(grant, token, app, deploymentId);
+    return this.api.getDeployment(grant, token, app, deploymentId);
   }
 
   /** Resolve an existing deployment's provider-reported artifact identity. */

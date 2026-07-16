@@ -29,12 +29,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -272,9 +274,17 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     return { deploymentId, url, state: "pending_manual_confirmation" };
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const deployed = await this.deploy(grant, ref, source);
-    const identity = await this.declaredIdentity(ref, deployed.deploymentId, grant);
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
     return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
@@ -373,8 +383,11 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       : { kind: "web_url", url: record.attestation.url };
   }
 
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
-    this.assertAuthority(grant, "verify", { resourceId: ref.appId, deploymentId });
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     // Phase 1: wait for OPERATOR CONFIRMATION. Poll the persistent store until an
     // operator flips the row to `confirmed` via the confirmation route. NO count,
     // NO deadline (feedback_no_timeouts_progress_based) — a genuine fixed point
@@ -384,6 +397,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     // `verified` for a row still in pending state.
     await pollUntilTerminal({
       readState: async () => {
+        this.assertAuthority(await grantForAttempt(), "verify", { resourceId: ref.appId, deploymentId });
         const rec = await this.loadRecord(ref, deploymentId);
         return { state: rec.state, ready: rec.state === "confirmed", failed: false };
       },
@@ -402,6 +416,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
       intervalMs: this.deps.poll.intervalMs,
     });
     // Re-load the record to get the CURRENT attested URL post-confirmation.
+    this.assertAuthority(await grantForAttempt(), "verify", { resourceId: ref.appId, deploymentId });
     const record = await this.loadRecord(ref, deploymentId);
     if (record.attestation.url === "") {
       throw new DeployAdapterOperationError(
@@ -417,6 +432,7 @@ export class ManualExternalDeployAdapter implements DeployAdapter {
     let lastStatus = 0;
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
+        this.assertAuthority(await grantForAttempt(), "verify", { resourceId: ref.appId, deploymentId });
         const probeStatus = await this.deps.urlProbe.probe(record.attestation.url);
         lastStatus = probeStatus;
         const reachable = (probeStatus >= 200 && probeStatus < 400) || probeStatus === 401 || probeStatus === 403;

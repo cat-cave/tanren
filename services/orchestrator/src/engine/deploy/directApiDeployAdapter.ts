@@ -16,12 +16,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -74,19 +76,18 @@ export class DirectApiDeployAdapter implements DeployAdapter {
     return deployProvisionerFor(ref.provider, this.deps.provisioner).deploy(grant, ref.appId, source);
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const built = await deployProvisionerFor(ref.provider, this.deps.provisioner).buildArtifact(
-      grant,
-      ref.appId,
-      source,
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
     );
-    return {
-      artifactDigest: parseDigest(built.identity.artifactDigest),
-      providerChecksum:
-        built.identity.providerChecksum === null ? null : parseProviderChecksum(built.identity.providerChecksum),
-      deploymentId: built.result.deploymentId,
-      state: "built",
-    };
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
@@ -173,12 +174,15 @@ export class DirectApiDeployAdapter implements DeployAdapter {
    * provider state advances (BUILDING → QUEUED → …) — a slow-but-progressing deploy is
    * never declared failed on a count. The success result is the PROOF the deploy is live.
    */
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     const provisioner = deployProvisionerFor(ref.provider, this.deps.provisioner);
-    const readStatus = await provisioner.deploymentStatusReader(grant, ref.appId, deploymentId);
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await readStatus();
+        const read = await provisioner.deploymentStatus(await grantForAttempt(), ref.appId, deploymentId);
         return { state: read.state, ready: read.terminalReady, failed: read.terminalFailed, url: read.url };
       },
       onFailureTerminal: (state) =>

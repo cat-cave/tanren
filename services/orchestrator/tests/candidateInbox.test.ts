@@ -27,6 +27,7 @@ import {
   type TriageAnswererContext,
 } from "../src/engine/forge/inbox/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
+import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const actor: ActorContext = {
   userId: "user_a",
@@ -70,14 +71,19 @@ const sentrySource: InboxSource = {
   kind: "errors",
   name: "sentry · cat-cave/app",
   detail: "unresolved issues",
-  config: { org: "cat-cave", project: "app", tokenRef: "credential/sentry/x" },
+  config: { org: "cat-cave", project: "app" },
   enabled: true,
   autoRoute: false,
 };
 
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/x", value: "ghs_token" });
-await secrets.put({ ref: "credential/sentry/x", value: "sntrys_token" });
+await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
+
+const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
+
+const sentryConnector = (sentryHttp: SentryHttpClient) =>
+  createSentryConnector({ secrets, sentryHttp, authority: sentryAuthority });
 
 // A GitHubHttpClient returning two issues + one PR (which must be filtered).
 function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHubHttpRequest[] } {
@@ -419,7 +425,7 @@ describe("sentry connector (mocked)", () => {
 
   it("maps unresolved sentry issues to candidates with permalink + metadata body", async () => {
     const { client, calls } = fakeSentry(sentryIssues);
-    const connector = createSentryConnector({ secrets, sentryHttp: client });
+    const connector = sentryConnector(client);
     const items = await connector.fetch(sentrySource);
 
     expect(items).toHaveLength(2);
@@ -438,7 +444,7 @@ describe("sentry connector (mocked)", () => {
 
   it("maps sentry level to severity (error→fail, warning→warn, else→info)", async () => {
     const { client } = fakeSentry(sentryIssues);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     // error
     expect(items[0]?.severity).toBe("fail");
     // warning
@@ -447,7 +453,7 @@ describe("sentry connector (mocked)", () => {
 
   it("forwards an optional level filter into the query", async () => {
     const { client, calls } = fakeSentry([]);
-    await createSentryConnector({ secrets, sentryHttp: client }).fetch({
+    await sentryConnector(client).fetch({
       ...sentrySource,
       config: { ...sentrySource.config, level: "fatal" },
     });
@@ -457,9 +463,7 @@ describe("sentry connector (mocked)", () => {
   it("ingests + triages sentry candidates as triaged (needs_call)", async () => {
     const { client } = fakeSentry(sentryIssues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([
-      ["errors", createSentryConnector({ secrets, sentryHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["errors", sentryConnector(client)]]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), sentrySource);
     expect(out).toHaveLength(2);
     expect(out[0]?.status).toBe("triaged");
@@ -472,9 +476,7 @@ describe("sentry connector (mocked)", () => {
   it("routes a sentry fail touching an in-flight spec to fold into the live run", async () => {
     const { client } = fakeSentry([sentryIssues[0]]);
     const { pool } = stubPool([{ spec_id: "spec_co1", title: "orders checkout submit flow", status: "in_flight" }]);
-    const connectors = new Map<string, SourceConnector>([
-      ["errors", createSentryConnector({ secrets, sentryHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["errors", sentryConnector(client)]]);
     const { candidates: out } = await ingestSource(depsFor(connectors, pool), sentrySource);
     expect(out[0]?.triage?.verdict).toBe("needs_call");
     expect(out[0]?.triage?.match).toContain("in-flight");
@@ -485,9 +487,7 @@ describe("sentry connector (mocked)", () => {
     const issues = [{ id: "4001", title: "TypeError v1", level: "error", permalink: "https://sentry.io/4001/" }];
     const { client } = fakeSentry(issues);
     const { pool, candidates } = stubPool();
-    const connectors = new Map<string, SourceConnector>([
-      ["errors", createSentryConnector({ secrets, sentryHttp: client })],
-    ]);
+    const connectors = new Map<string, SourceConnector>([["errors", sentryConnector(client)]]);
     const deps = depsFor(connectors, pool);
     await ingestSource(deps, sentrySource);
     issues[0]!.title = "TypeError v2";

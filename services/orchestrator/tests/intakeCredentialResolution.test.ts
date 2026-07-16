@@ -129,10 +129,10 @@ describe("intake credential resolution — not configured (legitimate no-poller)
       id: "src_sentry",
       kind: "errors",
       name: "sentry · cat-cave",
-      config: { org: "cat-cave", project: "app", tokenRef: "sentry/tok" },
+      config: { org: "cat-cave", project: "app" },
     };
 
-    // No throw — the map builds (the sentry connector carries its own token ref).
+    // No throw — the map builds; Sentry authority is resolved only when it fetches.
     const connectors = await buildIntakeConnectorMapForOrg({ pool, secrets: fakeSecrets, githubHttp: http }, "org_a", [
       sentrySource,
     ]);

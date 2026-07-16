@@ -24,12 +24,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -274,28 +276,18 @@ export class PulumiDeployAdapter implements DeployAdapter {
     return { deploymentId: result.updateId, url: result.endpointUrl, state: "in-progress" };
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const backend = this.backend(grant);
-    const project = this.project(grant);
-    const token = await this.token(grant, "deploy", {
-      resourceId: ref.appId,
-      sourceRepo: source.repo,
-      sourceRef: source.ref,
-    });
-    const deployed = await this.deps.runner.up({ backend, project, stack: ref.appId, token, source });
-    const raw = await this.deps.runner.resolveArtifactIdentity({
-      backend,
-      project,
-      stack: ref.appId,
-      token,
-      updateId: deployed.updateId,
-    });
-    return {
-      artifactDigest: parseDigest(raw.artifactDigest),
-      providerChecksum: raw.providerChecksum === null ? null : parseProviderChecksum(raw.providerChecksum),
-      deploymentId: deployed.updateId,
-      state: "built",
-    };
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
@@ -412,11 +404,14 @@ export class PulumiDeployAdapter implements DeployAdapter {
     return { kind: "web_url", url: read.endpointUrl };
   }
 
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
-    const readStatus = await this.statusReader(grant, ref, deploymentId, "verify");
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await readStatus();
+        const read = await this.read(await grantForAttempt(), ref, deploymentId, "verify");
         return { state: read.result, ready: read.succeeded, failed: read.failed, endpointUrl: read.endpointUrl };
       },
       onFailureTerminal: (state) =>
@@ -441,19 +436,10 @@ export class PulumiDeployAdapter implements DeployAdapter {
     updateId: string,
     operation: "verify" | "resolve_demo_surface",
   ): Promise<PulumiUpdateStatus> {
-    return (await this.statusReader(grant, ref, updateId, operation))();
-  }
-
-  private async statusReader(
-    grant: OrgGrant,
-    ref: DeployRef,
-    updateId: string,
-    operation: "verify" | "resolve_demo_surface",
-  ): Promise<() => Promise<PulumiUpdateStatus>> {
     const backend = this.backend(grant);
     const project = this.project(grant);
     const token = await this.token(grant, operation, { resourceId: ref.appId, deploymentId: updateId });
-    return () => this.deps.runner.updateStatus({ backend, project, stack: ref.appId, token, updateId });
+    return this.deps.runner.updateStatus({ backend, project, stack: ref.appId, token, updateId });
   }
 
   private async smokeCheck(

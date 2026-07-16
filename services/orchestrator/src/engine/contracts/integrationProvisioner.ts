@@ -418,7 +418,7 @@ function registeredDeployProviderKinds(): readonly string[] {
  * provisioner either).
  *
  * SHARED FACTORY, NARROW SEAM: returns the `DeployProvisioner` base type so callers
- * get `attachRuntimeEnv` / `deploy` / `destroyApp` / `deploymentStatus` without an
+ * get `attachRuntimeEnv` / `deploy` / `deploymentStatus` without an
  * extra cast. The `deployProvisionerFor` selector in `workflow/` now delegates here.
  */
 export function buildDeployProvisioner(kind: string, deps: IntegrationProvisionerDeps): DeployProvisioner {
@@ -455,7 +455,7 @@ function buildSlackProvisioner(): IntegrationProvisioner {
   const secrets = buildSecretStore();
   const transportFactory = secretStoreSlackTransportFactory(
     secrets,
-    (botToken: string): SlackApiTransport => new FetchSlackApiTransport(botToken),
+    (tokenForAttempt): SlackApiTransport => new FetchSlackApiTransport(tokenForAttempt),
   );
   return new SlackProvisioner({ transportFactory });
 }

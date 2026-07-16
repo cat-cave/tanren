@@ -166,7 +166,7 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
     // `pending_manual_confirmation` state repeating (a proven fixed point) →
     // escalates LOUD via pollUntilTerminal's stuck detection.
     await expect(
-      instance.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/is STUCK 'pending_manual_confirmation' — no operator confirmation received/u);
   });
 
@@ -178,7 +178,7 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
     expect(flip?.freshlyConfirmed).toBe(true);
     expect(flip?.record.confirmedBy).toBe("user_ops");
     // verify NOW sees `confirmed` and smoke-probes the URL.
-    const verification = await instance.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
+    const verification = await instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("verified");
     expect(verification.url).toBe("https://acme-web.example.com");
@@ -190,7 +190,7 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
     const { instance, store } = adapter(403);
     const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
-    const verification = await instance.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
+    const verification = await instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.smokeStatus).toBe(403);
   });
@@ -209,7 +209,7 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
     });
     const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
-    const verification = await instance.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
+    const verification = await instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.smokeStatus).toBe(200);
     expect(verification.pollCount).toBe(16);
@@ -220,7 +220,7 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
     const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
     await expect(
-      instance.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/is STUCK unreachable \(HTTP 503\)/u);
   });
 
@@ -228,7 +228,7 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
     const { instance } = adapter();
     const deploymentId = "manual:proj_1@never";
     await expect(
-      instance.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/no recorded attestation/u);
   });
 });
@@ -260,7 +260,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
     expect(status.state).toBe("pending_manual_confirmation");
     // verify still fails LOUD (no operator confirmation across the restart).
     await expect(
-      adapterB.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+      adapterB.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/is STUCK 'pending_manual_confirmation'/u);
   });
 
@@ -286,7 +286,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const verification = await adapterB.verify(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
+    const verification = await adapterB.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("verified");
     expect(verification.smokeStatus).toBe(200);

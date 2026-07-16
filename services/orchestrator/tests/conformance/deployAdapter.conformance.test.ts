@@ -6,7 +6,7 @@ import { testOrgGrant } from "../helpers/orgGrant.js";
 // budget exhaustion, or an unreachable URL. Driven entirely over the scripted in-
 // memory deploy transport + a scripted URL probe — NO live Vercel/Fly/network calls.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
@@ -190,7 +190,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     transport.scriptDeploymentStates(deploymentId, ["QUEUED", "BUILDING", "BUILDING", "READY"]);
 
     const verification = await instance.verify(
-      await deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
       ref,
       deploymentId,
     );
@@ -206,13 +206,66 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     expect(probe.probed[0]).not.toContain("{branch}");
   });
 
+  it("performs no next status read when reauthorization reports revocation between polls", async () => {
+    const transport = scriptedDeployTransport("vercel");
+    const { instance } = adapter(transport);
+    const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
+    transport.scriptDeploymentStates(deploymentId, ["BUILDING", "READY"]);
+    const grant = await deploymentGrant("deploy.vercel", "verify", ref, deploymentId);
+    let authorityAttempts = 0;
+
+    await expect(
+      instance.verify(
+        async () => {
+          authorityAttempts += 1;
+          if (authorityAttempts > 1) throw new Error("selected grant revoked");
+          return grant;
+        },
+        ref,
+        deploymentId,
+      ),
+    ).rejects.toThrow(/revoked/u);
+    expect(authorityAttempts).toBe(2);
+    expect(transport.statusPolls(deploymentId)).toBe(1);
+  });
+
+  it("performs no next status read when a fixed lease expires between polls", async () => {
+    vi.useFakeTimers();
+    try {
+      const issuedAt = new Date("2030-01-01T00:00:00.000Z");
+      vi.setSystemTime(issuedAt);
+      const transport = scriptedDeployTransport("vercel");
+      const { instance } = adapter(transport);
+      const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
+      transport.scriptDeploymentStates(deploymentId, ["BUILDING", "READY"]);
+      const grant = await deploymentGrant("deploy.vercel", "verify", ref, deploymentId);
+      let authorityAttempts = 0;
+
+      await expect(
+        instance.verify(
+          async () => {
+            authorityAttempts += 1;
+            if (authorityAttempts > 1) vi.setSystemTime(new Date(issuedAt.getTime() + 31_000));
+            return grant;
+          },
+          ref,
+          deploymentId,
+        ),
+      ).rejects.toThrow(/expired/u);
+      expect(authorityAttempts).toBe(2);
+      expect(transport.statusPolls(deploymentId)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails LOUD when the deployment reaches a FAILURE terminal", async () => {
     const transport = scriptedDeployTransport("vercel");
     const { instance, probe } = adapter(transport);
     const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["BUILDING", "ERROR"]);
     await expect(
-      instance.verify(await deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/FAILURE state 'ERROR'/u);
     // A failed deploy is never smoke-checked.
     expect(probe.probed).toEqual([]);
@@ -227,7 +280,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const slowButProgressing = Array.from({ length: 20 }, (_v, i) => `BUILDING-${String(i)}`);
     transport.scriptDeploymentStates(deploymentId, [...slowButProgressing, "READY"]);
     const verification = await instance.verify(
-      await deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
       ref,
       deploymentId,
     );
@@ -246,7 +299,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     // advancement), escalated as a stuck-deploy via intelligent non-convergence, NOT a cap.
     transport.scriptDeploymentStates(deploymentId, ["BUILDING"]);
     await expect(
-      instance.verify(await deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/is STUCK in non-terminal state 'BUILDING'/u);
   });
 
@@ -257,7 +310,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
     await expect(
-      instance.verify(await deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/not reachable \(smoke check returned HTTP 503\)/u);
   });
 
@@ -267,7 +320,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.flyio", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["created", "starting", "started"]);
     const verification = await instance.verify(
-      await deploymentGrant("deploy.flyio", "verify", ref, deploymentId),
+      () => deploymentGrant("deploy.flyio", "verify", ref, deploymentId),
       ref,
       deploymentId,
     );
@@ -286,7 +339,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
     const verification = await instance.verify(
-      await deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
       ref,
       deploymentId,
     );
@@ -300,7 +353,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
     await expect(
-      instance.verify(await deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
+      instance.verify(() => deploymentGrant("deploy.vercel", "verify", ref, deploymentId), ref, deploymentId),
     ).rejects.toThrow(/not reachable .*HTTP 500/u);
   });
 
@@ -310,7 +363,7 @@ describe("DirectApiDeployAdapter — verify (proven deploy)", () => {
     const { ref, deploymentId } = await provisionAndDeploy(instance, "deploy.vercel", "acme-web");
     transport.scriptDeploymentStates(deploymentId, ["READY"]);
     const verification = await instance.verify(
-      await deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
+      () => deploymentGrant("deploy.vercel", "verify", ref, deploymentId),
       ref,
       deploymentId,
     );

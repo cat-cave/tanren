@@ -284,7 +284,7 @@ export class LinkedDeployRoutesPool extends RoutesPool {
             operations: ["discover", "provision", "bind"],
             provider_scopes: [],
             resource_constraints: {},
-            policy_revision: "integration-catalog.v1",
+            policy_revision: "integration-catalog.v2",
             consent_revision: "consent.test",
             grant_expires_at: null,
             grant_generation_status: "active",

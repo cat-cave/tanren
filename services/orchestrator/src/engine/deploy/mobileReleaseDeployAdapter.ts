@@ -23,12 +23,14 @@
 import type {
   ApplyPreviewInput,
   ArtifactIdentity,
+  BuildArtifactAuthority,
   BuildArtifactResult,
   DemoSurface,
   DeployAdapter,
   DeployRef,
   DeployStatus,
   DeployVerification,
+  DeployGrantForAttempt,
   PreviewRelease,
   PromoteInput,
   ProvisionOrBindInput,
@@ -219,28 +221,18 @@ export class MobileReleaseDeployAdapter implements DeployAdapter {
     return { deploymentId: result.buildRef, url: result.buildRef, state: "processing" };
   }
 
-  async buildArtifact(grant: OrgGrant, ref: DeployRef, source: DeploySource): Promise<BuildArtifactResult> {
-    const platform = this.platform(grant);
-    const track = this.track(grant);
-    const token = await this.token(grant, "deploy", {
-      resourceId: ref.appId,
-      sourceRepo: source.repo,
-      sourceRef: source.ref,
-    });
-    const deployed = await this.deps.distribution.submit({ platform, track, bundleId: ref.appId, token, source });
-    const identity = await this.deps.distribution.resolveArtifactIdentity({
-      platform,
-      track,
-      bundleId: ref.appId,
-      token,
-      buildRef: deployed.buildRef,
-    });
-    return {
-      artifactDigest: parseDigest(identity.artifactDigest),
-      providerChecksum: identity.providerChecksum === null ? null : parseProviderChecksum(identity.providerChecksum),
-      deploymentId: deployed.buildRef,
-      state: "built",
-    };
+  async buildArtifact(
+    authority: BuildArtifactAuthority,
+    ref: DeployRef,
+    source: DeploySource,
+  ): Promise<BuildArtifactResult> {
+    const deployed = await this.deploy(authority.deploy, ref, source);
+    const identity = await this.resolveArtifactDigest(
+      await authority.resolveArtifactIdentity(deployed.deploymentId),
+      ref,
+      deployed.deploymentId,
+    );
+    return { ...identity, deploymentId: deployed.deploymentId, state: "built" };
   }
 
   async resolveArtifactDigest(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<ArtifactIdentity> {
@@ -330,11 +322,14 @@ export class MobileReleaseDeployAdapter implements DeployAdapter {
     return { kind: "app_channel", platform, track, buildRef: read.buildRef };
   }
 
-  async verify(grant: OrgGrant, ref: DeployRef, deploymentId: string): Promise<DeployVerification> {
-    const readStatus = await this.statusReader(grant, ref, deploymentId, "verify");
+  async verify(
+    grantForAttempt: DeployGrantForAttempt,
+    ref: DeployRef,
+    deploymentId: string,
+  ): Promise<DeployVerification> {
     const { poll, pollCount } = await pollUntilTerminal({
       readState: async () => {
-        const read = await readStatus();
+        const read = await this.read(await grantForAttempt(), ref, deploymentId, "verify");
         return { state: read.state, ready: read.available, failed: read.rejected, buildRef: read.buildRef };
       },
       onFailureTerminal: (state) =>
@@ -362,25 +357,15 @@ export class MobileReleaseDeployAdapter implements DeployAdapter {
     deploymentId: string,
     operation: "verify" | "resolve_demo_surface",
   ): Promise<MobileSubmissionStatus> {
-    return (await this.statusReader(grant, ref, deploymentId, operation))();
-  }
-
-  private async statusReader(
-    grant: OrgGrant,
-    ref: DeployRef,
-    deploymentId: string,
-    operation: "verify" | "resolve_demo_surface",
-  ): Promise<() => Promise<MobileSubmissionStatus>> {
     const platform = this.platform(grant);
     const track = this.track(grant);
     const token = await this.token(grant, operation, { resourceId: ref.appId, deploymentId });
-    return () =>
-      this.deps.distribution.submissionStatus({
-        platform,
-        track,
-        bundleId: ref.appId,
-        token,
-        buildRef: deploymentId,
-      });
+    return this.deps.distribution.submissionStatus({
+      platform,
+      track,
+      bundleId: ref.appId,
+      token,
+      buildRef: deploymentId,
+    });
   }
 }

@@ -1,5 +1,9 @@
 import type { IntegrationQueryClient } from "./integrationQuery.js";
-import type { FinalizeVerifiedLinkResult, LinkReservation } from "./integrationConnectionFinalize.js";
+import {
+  assertLinkReservation,
+  type FinalizeVerifiedLinkResult,
+  type LinkReservation,
+} from "./integrationConnectionFinalize.js";
 import {
   assertIdenticalAuthGeneration,
   assertIdenticalGrantGeneration,
@@ -227,6 +231,7 @@ export async function activateDurableReservationSql(
   reservation: LinkReservation,
   credentialRef: string,
 ): Promise<FinalizeVerifiedLinkResult> {
+  assertLinkReservation(reservation);
   if (credentialRef !== reservation.credentialRef) throw new Error("operation_credential_coordinate_conflict");
   const owner = await client.query(
     `SELECT stage, status FROM org_integration_connection_operations

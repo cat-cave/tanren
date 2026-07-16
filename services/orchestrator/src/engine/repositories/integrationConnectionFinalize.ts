@@ -14,6 +14,7 @@ import {
 } from "../contracts/integrationSecretStore.js";
 import { principalVerificationFingerprint } from "../integrations/integrationOperationFingerprint.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
+import { loadCompletedLinkResult } from "./integrationConnectionFinalizeResult.js";
 
 export interface FinalizeVerifiedLinkInput {
   permit: PrincipalVerificationPermit;
@@ -34,24 +35,61 @@ export interface FinalizeVerifiedLinkResult {
   displayName: string;
 }
 
-export interface LinkReservation {
-  operationKind: "link" | "rotate";
-  connectionId: string;
-  nextGeneration: number;
-  baseRef: string;
-  credentialRef: string;
-  grantId: string;
-  grantGeneration: number;
-  principal: PrincipalCandidate;
-  permit: PrincipalVerificationPermit;
-  authKind: string;
-  scopes: string[];
-  expiresAt?: string;
-  capabilities: string[];
-  operations: string[];
-  policyRevision: string;
-  consentRevision: string;
-  consentedAt: string;
+declare const linkReservationBrand: unique symbol;
+
+interface LinkReservationFields {
+  readonly operationKind: "link" | "rotate";
+  readonly connectionId: string;
+  readonly nextGeneration: number;
+  readonly baseRef: string;
+  readonly credentialRef: string;
+  readonly grantId: string;
+  readonly grantGeneration: number;
+  readonly principal: PrincipalCandidate;
+  readonly permit: PrincipalVerificationPermit;
+  readonly authKind: string;
+  readonly scopes: string[];
+  readonly expiresAt?: string;
+  readonly capabilities: string[];
+  readonly operations: string[];
+  readonly policyRevision: string;
+  readonly consentRevision: string;
+  readonly consentedAt: string;
+}
+
+export interface LinkReservation extends LinkReservationFields {
+  readonly [linkReservationBrand]: true;
+}
+
+const authenticLinkReservations = new WeakSet();
+
+function issueLinkReservation(fields: LinkReservationFields): LinkReservation {
+  const reservation = Object.freeze({
+    ...fields,
+    principal: Object.freeze({
+      ...fields.principal,
+      metadata: Object.freeze({ ...fields.principal.metadata }),
+    }),
+    scopes: Object.freeze([...fields.scopes]),
+    capabilities: Object.freeze([...fields.capabilities]),
+    operations: Object.freeze([...fields.operations]),
+  }) as unknown as LinkReservation;
+  authenticLinkReservations.add(reservation);
+  return reservation;
+}
+
+export function assertLinkReservation(value: LinkReservation): asserts value is LinkReservation {
+  if (typeof value !== "object" || value === null || !authenticLinkReservations.has(value)) {
+    throw new Error("invalid link reservation");
+  }
+  assertPrincipalVerificationPermit(value.permit);
+  const expectedBase = connectionCredentialBaseRef(value.permit.orgId, value.permit.providerKind, value.connectionId);
+  if (
+    value.baseRef !== expectedBase ||
+    value.credentialRef !== generationSecretRef(expectedBase, value.nextGeneration)
+  ) {
+    throw new Error("operation_credential_coordinate_conflict");
+  }
 }
 
 type OperationRow = {
@@ -137,7 +175,7 @@ function reservationFromRow(row: OperationRow, permit: PrincipalVerificationPerm
   if (generationSecretRef(baseRef, row.target_auth_generation) !== row.reserved_credential_ref) {
     throw new Error("operation_credential_coordinate_conflict");
   }
-  return {
+  return issueLinkReservation({
     operationKind: row.operation_kind,
     connectionId: row.reserved_connection_id,
     nextGeneration: row.target_auth_generation,
@@ -155,7 +193,7 @@ function reservationFromRow(row: OperationRow, permit: PrincipalVerificationPerm
     policyRevision: row.reserved_policy_revision,
     consentRevision: row.reserved_consent_revision,
     consentedAt: iso(row.reserved_consented_at),
-  };
+  });
 }
 
 async function operationForUpdate(
@@ -191,7 +229,7 @@ export async function loadDurableLinkStateSql(
   if (!["finalizing", "activate_pending", "completed"].includes(row.stage)) return undefined;
   const reservation = reservationFromRow(row, permit);
   if (row.stage === "completed" && row.status === "completed") {
-    return loadCompletedResult(client, reservation);
+    return loadCompletedLinkResult(client, reservation);
   }
   return reservation;
 }
@@ -209,7 +247,7 @@ export async function reserveVerifiedLinkSql(
     }
     const reservation = reservationFromRow(row, input.permit);
     return row.stage === "completed" && row.status === "completed"
-      ? loadCompletedResult(client, reservation)
+      ? loadCompletedLinkResult(client, reservation)
       : reservation;
   }
   if (row.status === "failed" || row.status === "compensated") {
@@ -279,7 +317,7 @@ export async function reserveVerifiedLinkSql(
     ],
   );
   if ((updated.rowCount ?? 0) !== 1) throw new Error("operation_reservation_conflict");
-  return {
+  return issueLinkReservation({
     operationKind: row.operation_kind,
     connectionId: target.connectionId,
     nextGeneration: target.authGeneration,
@@ -297,7 +335,7 @@ export async function reserveVerifiedLinkSql(
     policyRevision,
     consentRevision,
     consentedAt,
-  };
+  });
 }
 
 async function reserveLinkTarget(client: IntegrationQueryClient, input: FinalizeVerifiedLinkInput) {
@@ -380,6 +418,13 @@ export async function finalizeReservedSecret(
   reservation: LinkReservation,
   staged: StagedSecretHandle,
 ): Promise<string> {
+  assertLinkReservation(reservation);
+  if (
+    staged.operationId !== reservation.permit.operationId ||
+    staged.handle !== reservation.permit.stagedSecretHandle
+  ) {
+    throw new Error("operation_staged_handle_conflict");
+  }
   const finalized = await secrets.finalize(staged, reservation.baseRef, reservation.nextGeneration);
   if (finalized.ref !== reservation.credentialRef || finalized.generation !== reservation.nextGeneration) {
     throw new Error("secret_store_coordinate_conflict");
@@ -393,6 +438,7 @@ export async function markReservationActivatePendingSql(
   reservation: LinkReservation,
   credentialRef: string,
 ): Promise<void> {
+  assertLinkReservation(reservation);
   if (credentialRef !== reservation.credentialRef) throw new Error("operation_credential_coordinate_conflict");
   const updated = await client.query(
     `UPDATE org_integration_connection_operations
@@ -427,6 +473,7 @@ export async function activateReservedLinkSql(
   reservation: LinkReservation,
   credentialRef: string,
 ): Promise<FinalizeVerifiedLinkResult> {
+  assertLinkReservation(reservation);
   const { activateDurableReservationSql } = await import("./integrationConnectionActivate.js");
   return activateDurableReservationSql(client, reservation, credentialRef);
 }
@@ -435,6 +482,7 @@ export async function markStagedCleanupCompleteSql(
   client: IntegrationQueryClient,
   permit: PrincipalVerificationPermit,
 ): Promise<void> {
+  assertPrincipalVerificationPermit(permit);
   await client.query(
     `UPDATE org_integration_connection_operations
      SET staged_secret_handle = NULL,
@@ -444,51 +492,4 @@ export async function markStagedCleanupCompleteSql(
        AND ((stage = 'completed' AND status = 'completed') OR (stage = 'failed' AND status = 'failed'))`,
     [permit.orgId, permit.operationId],
   );
-}
-
-async function loadCompletedResult(
-  client: IntegrationQueryClient,
-  reservation: LinkReservation,
-): Promise<FinalizeVerifiedLinkResult> {
-  const result = await client.query(
-    `SELECT c.id AS connection_id, c.display_name, ag.generation AS auth_generation,
-            g.id AS grant_id, gg.generation AS grant_generation
-     FROM org_integration_connections c
-     JOIN org_integration_grants g
-       ON g.org_id = c.org_id AND g.connection_id = c.id AND g.id = $5
-      AND g.plane = 'control' AND g.environment = 'control'
-     JOIN org_integration_connection_auth_generations ag
-       ON ag.org_id = c.org_id AND ag.provider_kind = c.provider_kind
-      AND ag.connection_id = c.id AND ag.generation = $4
-     JOIN org_integration_grant_generations gg
-       ON gg.org_id = g.org_id AND gg.provider_kind = g.provider_kind
-      AND gg.connection_id = g.connection_id AND gg.grant_id = g.id AND gg.generation = $6
-     WHERE c.org_id = $1 AND c.id = $2 AND c.provider_kind = $3`,
-    [
-      reservation.permit.orgId,
-      reservation.connectionId,
-      reservation.permit.providerKind,
-      reservation.nextGeneration,
-      reservation.grantId,
-      reservation.grantGeneration,
-    ],
-  );
-  const row = result.rows[0] as
-    | {
-        connection_id: string;
-        display_name: string;
-        auth_generation: number;
-        grant_id: string;
-        grant_generation: number;
-      }
-    | undefined;
-  if (row === undefined) throw new Error("completed_operation_missing_rows");
-  return {
-    connectionId: row.connection_id,
-    grantId: row.grant_id,
-    providerPrincipalId: reservation.principal.providerPrincipalId,
-    authGeneration: row.auth_generation,
-    grantGeneration: row.grant_generation,
-    displayName: row.display_name,
-  };
 }

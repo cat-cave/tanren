@@ -32,6 +32,7 @@ import { resolveAppEnvForScope } from "./resolveAppEnv.js";
 import type { DeployEnvVar } from "../provisioners/deployProvisioner.js";
 import { deployProvisionerFor } from "./deployProvisionerFor.js";
 import type { DeployHttpTransport } from "../provisioners/deployTransport.js";
+import { assertDeployOperationAuthority } from "../provisioners/deployOperationAuthority.js";
 
 /**
  * The `deployRef` the deploy provisioner wrote into `projects.config`:
@@ -87,6 +88,16 @@ export interface AttachRuntimeAppEnvResult {
  * app with no runtime secrets needs no attachment.
  */
 export async function attachRuntimeAppEnv(input: AttachRuntimeAppEnvInput): Promise<AttachRuntimeAppEnvResult> {
+  // Authenticate every exact coordinate before the project-env query or secret
+  // resolution. This remains mandatory when the resulting env is empty.
+  if (input.grant.orgId !== input.orgId || input.grant.projectId !== input.projectId) {
+    throw new Error("attachRuntimeAppEnv: grant org/project does not match requested project");
+  }
+  assertDeployOperationAuthority(input.deployRef.provider, input.grant, "attach_runtime_env", {
+    resourceId: input.deployRef.appId,
+    environment: "production",
+  });
+
   // (1) Runtime-scoped app env. A `dev`/`test`-only entry is filtered out here —
   // only entries whose scopes include `runtime` reach the deployed app.
   const env = await resolveAppEnvForScope({

@@ -92,7 +92,7 @@ function fakePool(state: PoolState): pg.Pool {
           operations: ["attach_runtime_env", "deploy", "verify"],
           provider_scopes: [],
           resource_constraints: defaultIntegrationResourceConstraints(),
-          policy_revision: "integration-catalog.v1",
+          policy_revision: "integration-catalog.v2",
           consent_revision: "consent.test",
           grant_expires_at: null,
           grant_generation_status: "active",

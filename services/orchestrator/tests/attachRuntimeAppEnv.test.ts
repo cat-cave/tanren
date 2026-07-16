@@ -4,7 +4,7 @@
 // emitted event / the result, and the flow works over both Vercel + Fly via the
 // scripted transport.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OrgGrant } from "../src/engine/contracts/integrationProvisioner.js";
 import type { IntegrationQueryClient } from "../src/engine/repositories/integrationQuery.js";
 import { systemActor } from "../src/engine/state/actor.js";
@@ -13,6 +13,7 @@ import { AppEnvironmentStore } from "../src/engine/repositories/appEnvironment.j
 import { attachRuntimeAppEnv } from "../src/engine/workflow/attachRuntimeAppEnv.js";
 import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
+import { testOrgGrant } from "./helpers/orgGrant.js";
 
 const RUNTIME_SECRET = "re_live_super_secret";
 
@@ -22,12 +23,14 @@ const RUNTIME_SECRET = "re_live_super_secret";
 class AttachDb implements IntegrationQueryClient {
   readonly appEnvRows: Record<string, unknown>[] = [];
   readonly integrationRows: Record<string, unknown>[] = [];
+  queryCount = 0;
 
   // eslint-disable-next-line @typescript-eslint/require-await
   async query(
     rawSql: string,
     params: readonly unknown[] = [],
   ): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+    this.queryCount += 1;
     const sql = rawSql.replaceAll(/\s+/gu, " ").trim();
     if (/INSERT INTO project_app_env/u.test(sql)) {
       const [
@@ -201,7 +204,6 @@ async function seedAppEnv(db: AttachDb): Promise<void> {
 }
 
 async function seedGrant(providerKind: string, metadata: Record<string, unknown>, appId: string): Promise<OrgGrant> {
-  const { testOrgGrant } = await import("./helpers/orgGrant.js");
   return await testOrgGrant({
     providerKind,
     providerPrincipalId: "account-1",
@@ -212,6 +214,19 @@ async function seedGrant(providerKind: string, metadata: Record<string, unknown>
     target: { resourceId: appId, environment: "production" },
     orgId: "org_1",
     projectId: "proj",
+  });
+}
+
+function attachGrant(overrides: Parameters<typeof testOrgGrant>[0] = {}): Promise<OrgGrant> {
+  return testOrgGrant({
+    providerKind: "deploy.vercel",
+    credentialRef: "secret://org/deploy-token/g/1",
+    capability: "deploy",
+    operation: "attach_runtime_env",
+    target: { resourceId: "prj_live", environment: "production" },
+    orgId: "org_1",
+    projectId: "proj",
+    ...overrides,
   });
 }
 
@@ -343,6 +358,55 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
     expect(events.events).toHaveLength(0);
   });
 
+  it("rejects every inexact or forged grant before DB, secret, provider, or event I/O", async () => {
+    const exact = await seedGrant("deploy.vercel", {}, "prj_live");
+    const cases: Array<{ name: string; grant: OrgGrant }> = [
+      { name: "cloned", grant: { ...exact, metadata: { ...exact.metadata } } as OrgGrant },
+      { name: "wrong org", grant: await attachGrant({ orgId: "org_other" }) },
+      { name: "wrong project", grant: await attachGrant({ projectId: "project_other" }) },
+      { name: "wrong provider", grant: await attachGrant({ providerKind: "deploy.flyio" }) },
+      {
+        name: "wrong resource",
+        grant: await attachGrant({ target: { resourceId: "other-app", environment: "production" } }),
+      },
+      {
+        name: "wrong environment",
+        grant: {
+          ...exact,
+          eligibleOperation: {
+            ...exact.eligibleOperation,
+            target: { resourceId: "prj_live", environment: "preview" },
+          },
+        } as OrgGrant,
+      },
+    ];
+
+    for (const candidate of cases) {
+      const db = new AttachDb();
+      const secretStore = secrets();
+      const secretRead = vi.spyOn(secretStore, "get");
+      const transport = scriptedDeployTransport("vercel");
+      const events = new FakeEventStore();
+      await expect(
+        attachRuntimeAppEnv({
+          client: db,
+          secrets: secretStore,
+          transport,
+          events,
+          projectId: "proj",
+          orgId: "org_1",
+          deployRef: { provider: "deploy.vercel", appId: "prj_live" },
+          grant: candidate.grant,
+          actor: systemActor,
+        }),
+      ).rejects.toThrow(/grant|lease|binding/u);
+      expect(db.queryCount).toBe(0);
+      expect(secretRead).not.toHaveBeenCalled();
+      expect(transport.bearersSeen).toEqual([]);
+      expect(events.events).toEqual([]);
+    }
+  });
+
   it("fails loud when the supplied exact grant does not match the deployRef provider", async () => {
     const db = new AttachDb();
     await seedAppEnv(db);
@@ -359,7 +423,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
         grant,
         actor: systemActor,
       }),
-    ).rejects.toThrow(/does not match deployRef provider/u);
+    ).rejects.toThrow(/binding mismatch/u);
   });
 
   it("fails loud on an unknown deployRef provider before provider I/O (never a silent skip)", async () => {
@@ -379,7 +443,7 @@ describe("attachRuntimeAppEnv (P-APP-ENV-2)", () => {
         grant,
         actor: systemActor,
       }),
-    ).rejects.toThrow(/does not match deployRef provider/u);
+    ).rejects.toThrow(/binding mismatch/u);
     expect(transport.bearersSeen).toEqual([]);
   });
 });

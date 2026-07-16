@@ -127,7 +127,7 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     );
     runner.scriptUpdateResults(deploymentId, ["in-progress", "in-progress", "succeeded"]);
     const verification = await instance.verify(
-      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      () => operationGrant("verify", { resourceId: ref.appId, deploymentId }),
       ref,
       deploymentId,
     );
@@ -148,7 +148,7 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     );
     runner.scriptUpdateResults(deploymentId, ["in-progress", "failed"]);
     await expect(
-      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+      instance.verify(() => operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
     ).rejects.toThrow(/reached a FAILURE result 'failed'/u);
     expect(probe.probed).toEqual([]);
   });
@@ -165,7 +165,7 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     const advancing = Array.from({ length: 20 }, (_v, i) => `in-progress-${String(i)}`);
     runner.scriptUpdateResults(deploymentId, [...advancing, "succeeded"]);
     const verification = await instance.verify(
-      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      () => operationGrant("verify", { resourceId: ref.appId, deploymentId }),
       ref,
       deploymentId,
     );
@@ -183,7 +183,7 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     );
     runner.scriptUpdateResults(deploymentId, ["in-progress"]);
     await expect(
-      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+      instance.verify(() => operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
     ).rejects.toThrow(/is STUCK in non-terminal result 'in-progress'/u);
   });
 
@@ -197,7 +197,7 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     );
     runner.scriptUpdateResults(deploymentId, ["succeeded"]);
     await expect(
-      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+      instance.verify(() => operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
     ).rejects.toThrow(/not reachable .*HTTP 503/u);
   });
 
@@ -228,7 +228,7 @@ describe("PulumiDeployAdapter — verify (proven deploy)", () => {
     );
     runner.scriptUpdateResults(deploymentId, ["succeeded"]);
     const verification = await instance.verify(
-      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      () => operationGrant("verify", { resourceId: ref.appId, deploymentId }),
       ref,
       deploymentId,
     );

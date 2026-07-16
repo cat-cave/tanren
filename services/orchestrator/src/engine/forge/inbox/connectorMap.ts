@@ -10,7 +10,12 @@ import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.
 import { createCiInsightsConnector } from "./ciInsightsConnector.js";
 import { createGitHubIssuesConnector } from "./githubConnector.js";
 import { createIssuesConnector } from "./issuesConnector.js";
-import { createSentryConnector, FetchSentryHttpClient, type SentryHttpClient } from "./sentryConnector.js";
+import {
+  createSentryConnector,
+  FetchSentryHttpClient,
+  type SentryHttpClient,
+  type SentryIntakeAuthority,
+} from "./sentryConnector.js";
 import { createLinearConnector, FetchLinearHttpClient, type LinearHttpClient } from "./linearConnector.js";
 import { createJiraConnector, FetchJiraHttpClient, type JiraHttpClient } from "./jiraConnector.js";
 import type { SourceConnector } from "./types.js";
@@ -19,6 +24,7 @@ export interface BuildConnectorMapDeps {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   sentryHttp?: SentryHttpClient;
+  sentryAuthority?: SentryIntakeAuthority;
   linearHttp?: LinearHttpClient;
   jiraHttp?: JiraHttpClient;
   // Intake credential resolution (no-silent-fallbacks fix): the org's GitHub App
@@ -37,6 +43,8 @@ export interface BuildConnectorMapDeps {
 
 /** Build the default `{ issues, errors }` connector map from the shared transports. */
 export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string, SourceConnector> {
+  const sentryAuthority: SentryIntakeAuthority =
+    deps.sentryAuthority ?? (() => Promise.reject(new Error("sentry intake authority is not configured")));
   return new Map<string, SourceConnector>([
     [
       "issues",
@@ -57,7 +65,11 @@ export function buildInboxConnectorMap(deps: BuildConnectorMapDeps): Map<string,
     ],
     [
       "errors",
-      createSentryConnector({ secrets: deps.secrets, sentryHttp: deps.sentryHttp ?? new FetchSentryHttpClient() }),
+      createSentryConnector({
+        secrets: deps.secrets,
+        sentryHttp: deps.sentryHttp ?? new FetchSentryHttpClient(),
+        authority: sentryAuthority,
+      }),
     ],
     // CI-intelligence PR3: the CI-insights source (a `system` source). It pulls
     // nothing — the worker's CiInsightsLoop emits its candidates — so the connector

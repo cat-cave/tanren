@@ -170,11 +170,14 @@ describe("secretStoreSlackTransportFactory", () => {
     const projectCtx = ctx("transport");
     const grant = await discoverGrant(projectCtx);
     await secrets.put({ ref: grant.eligibleOperation.credentialRef, value: "xoxb-real-token" });
-    let handed: string | undefined;
-    const factory = secretStoreSlackTransportFactory(secrets, (token) => {
-      handed = token;
-      return new FetchSlackApiTransport(token, () => {
-        throw new Error("no network in this test");
+    let authorization: string | null = null;
+    const factory = secretStoreSlackTransportFactory(secrets, (tokenForAttempt) => {
+      return new FetchSlackApiTransport(tokenForAttempt, async (_url, init) => {
+        authorization = new Headers(init?.headers).get("Authorization");
+        return new Response(JSON.stringify({ ok: true, user_id: "U_BOT" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       });
     });
     const transport = await factory(grant, {
@@ -186,23 +189,26 @@ describe("secretStoreSlackTransportFactory", () => {
       target: {},
     });
     expect(transport).toBeInstanceOf(FetchSlackApiTransport);
-    expect(handed).toBe("xoxb-real-token");
+    await transport.authTest();
+    expect(authorization).toBe("Bearer xoxb-real-token");
   });
 
   it("throws loudly when the bot-token credential ref is missing (no silent fallback)", async () => {
     const secrets = new InMemorySecretStore();
-    const factory = secretStoreSlackTransportFactory(secrets, (token) => new FetchSlackApiTransport(token));
+    const factory = secretStoreSlackTransportFactory(
+      secrets,
+      (tokenForAttempt) => new FetchSlackApiTransport(tokenForAttempt),
+    );
     const projectCtx = ctx("missing");
     const grant = await discoverGrant(projectCtx);
-    await expect(
-      factory(grant, {
-        orgId: projectCtx.orgId,
-        projectId: projectCtx.projectId,
-        providerKind: "slack",
-        capability: "notify",
-        operation: "discover",
-        target: {},
-      }),
-    ).rejects.toThrow(/missing integration secret for generation/u);
+    const transport = await factory(grant, {
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+      providerKind: "slack",
+      capability: "notify",
+      operation: "discover",
+      target: {},
+    });
+    await expect(transport.authTest()).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

@@ -11,7 +11,7 @@
 // asserts the request it built + the normalized output it returned — no spies,
 // no mock-only assertions.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
 import type { GitHubHttpClient, GitHubHttpRequest } from "../src/engine/providers/github.js";
 import {
@@ -23,12 +23,14 @@ import {
   type InboxSource,
   type SentryHttpClient,
   type SentryHttpRequest,
+  type SentryIntakeAuthority,
   type SourceConnector,
 } from "../src/engine/forge/inbox/index.js";
+import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const secrets = new InMemorySecretStore();
 await secrets.put({ ref: "credential/github/x", value: "ghs_static_token" });
-await secrets.put({ ref: "credential/sentry/x", value: "sntrys_token" });
+await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
 await secrets.put({ ref: "credential/linear/x", value: "lin_api_token" });
 await secrets.put({ ref: "credential/jira/x", value: "jira_api_token" });
 
@@ -51,7 +53,7 @@ const sentrySource: InboxSource = {
   kind: "errors",
   name: "sentry · cat-cave/app",
   detail: "unresolved",
-  config: { org: "cat-cave", project: "app", tokenRef: "credential/sentry/x" },
+  config: { org: "cat-cave", project: "app" },
   enabled: true,
   autoRoute: false,
 };
@@ -111,6 +113,12 @@ function recordSentry(body: unknown, status = 200): { client: SentryHttpClient; 
     },
   };
 }
+
+const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
+const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/missing/g/1");
+
+const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAuthority = sentryAuthority) =>
+  createSentryConnector({ secrets, sentryHttp, authority });
 
 describe("github issues connector — request wire shape", () => {
   it("issues a GET to the repo issues endpoint carrying state=open, per_page=50, the resolved token and a refresh supplier", async () => {
@@ -240,7 +248,7 @@ describe("github issues connector — normalization", () => {
 describe("sentry connector — request wire shape", () => {
   it("GETs the org/project issues endpoint with the unresolved query + 14d statsPeriod, the base url and the secret token", async () => {
     const { client, calls } = recordSentry([]);
-    await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    await sentryConnector(client).fetch(sentrySource);
     const req = calls[0]!;
     expect(req.method).toBe("GET");
     expect(req.baseUrl).toBe("https://sentry.io");
@@ -250,7 +258,7 @@ describe("sentry connector — request wire shape", () => {
 
   it("honours a custom query and appends the optional level clause", async () => {
     const { client, calls } = recordSentry([]);
-    await createSentryConnector({ secrets, sentryHttp: client }).fetch({
+    await sentryConnector(client).fetch({
       ...sentrySource,
       config: { ...sentrySource.config, query: "is:unresolved is:assigned", level: "fatal" },
     });
@@ -261,14 +269,27 @@ describe("sentry connector — request wire shape", () => {
     );
   });
 
-  it("throws when the configured tokenRef is absent from the secret store", async () => {
+  it("throws when the authorized generation secret is absent from the secret store", async () => {
     const { client } = recordSentry([]);
-    await expect(
-      createSentryConnector({ secrets, sentryHttp: client }).fetch({
-        ...sentrySource,
-        config: { ...sentrySource.config, tokenRef: "credential/sentry/missing" },
-      }),
-    ).rejects.toThrow(/no secret at ref credential\/sentry\/missing/u);
+    await expect(sentryConnector(client, missingSentryAuthority).fetch(sentrySource)).rejects.toThrow(
+      /missing integration secret for generation/u,
+    );
+  });
+
+  it("rejects cloned authority before secret or Sentry HTTP I/O", async () => {
+    const { client, calls } = recordSentry([]);
+    const authentic = await sentryAuthority({ orgId: "org_a", projectId: "project_a", resourceId: "app" });
+    const cloned = { ...authentic, metadata: { ...authentic.metadata } } as typeof authentic;
+    const secretRead = vi.spyOn(secrets, "get");
+    try {
+      await expect(sentryConnector(client, async () => cloned).fetch(sentrySource)).rejects.toThrow(
+        /org grant does not match/u,
+      );
+      expect(secretRead).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
+    } finally {
+      secretRead.mockRestore();
+    }
   });
 });
 
@@ -286,7 +307,7 @@ describe("sentry connector — normalization", () => {
         metadata: { type: "TypeError", value: "cannot read id" },
       },
     ]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     expect(items[0]!.externalId).toBe("sentry-9");
     expect(items[0]!.body).toBe(
       [
@@ -302,37 +323,35 @@ describe("sentry connector — normalization", () => {
 
   it("omits each body line when its source field is absent (a title-only issue yields an empty body)", async () => {
     const { client } = recordSentry([{ id: "9", title: "only a title" }]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     // none of permalink/culprit/type-value/level/events/users lines fire.
     expect(items[0]!.body).toBe("");
   });
 
   it("includes only the present body lines for a partial issue (permalink + events, no culprit/level/users)", async () => {
     const { client } = recordSentry([{ id: "9", title: "partial", permalink: "https://sentry.io/9/", count: 5 }]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     expect(items[0]!.body).toBe("https://sentry.io/9/\nevents: 5");
   });
 
   it("emits a type:value line when only the metadata type is present (value defaults to empty, trailing space trimmed)", async () => {
     const { client } = recordSentry([{ id: "9", title: "t", metadata: { type: "ValueError" } }]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     // value absent → `ValueError: ` then .trim() → "ValueError:".
     expect(items[0]!.body).toBe("ValueError:");
   });
 
   it("emits a type:value line when only the metadata value is present (type defaults to 'error')", async () => {
     const { client } = recordSentry([{ id: "9", title: "t", metadata: { value: "boom" } }]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     expect(items[0]!.body).toBe("error: boom");
   });
 
   it("emits the users-affected line for a string userCount but not when it is absent", async () => {
     const present = recordSentry([{ id: "9", title: "t", userCount: "12" }]);
-    expect((await createSentryConnector({ secrets, sentryHttp: present.client }).fetch(sentrySource))[0]!.body).toBe(
-      "users affected: 12",
-    );
+    expect((await sentryConnector(present.client).fetch(sentrySource))[0]!.body).toBe("users affected: 12");
     const absent = recordSentry([{ id: "9", title: "t" }]);
-    expect((await createSentryConnector({ secrets, sentryHttp: absent.client }).fetch(sentrySource))[0]!.body).toBe("");
+    expect((await sentryConnector(absent.client).fetch(sentrySource))[0]!.body).toBe("");
   });
 
   it("falls back title to culprit then metadata value then shortId and maps fatal/warning levels", async () => {
@@ -341,7 +360,7 @@ describe("sentry connector — normalization", () => {
       { id: "2", metadata: { value: "from metadata" }, level: "warning" },
       { id: "3", shortId: "APP-3", level: "debug" },
     ]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     expect(items[0]!.title).toBe("from culprit");
     // fatal
     expect(items[0]!.severity).toBe("fail");
@@ -360,26 +379,22 @@ describe("sentry connector — normalization", () => {
       { id: "5" },
       { id: "6", title: "kept" },
     ]);
-    const items = await createSentryConnector({ secrets, sentryHttp: client }).fetch(sentrySource);
+    const items = await sentryConnector(client).fetch(sentrySource);
     expect(items.map((i) => i.externalId)).toEqual(["sentry-6"]);
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): a 401 is an auth error, a non-array 200 is a failed read", async () => {
     // A 401 is a LOUD auth error (the token was rejected), never silently "no issues".
     const denied = recordSentry([{ id: "1", title: "x" }], 401);
-    await expect(createSentryConnector({ secrets, sentryHttp: denied.client }).fetch(sentrySource)).rejects.toThrow(
-      IntakeSourceAuthError,
-    );
+    await expect(sentryConnector(denied.client).fetch(sentrySource)).rejects.toThrow(IntakeSourceAuthError);
     // A 200 whose body is not an issues array is a failed read — LOUD.
     const notArray = recordSentry({ detail: "nope" });
-    await expect(createSentryConnector({ secrets, sentryHttp: notArray.client }).fetch(sentrySource)).rejects.toThrow(
-      IntakeSourceFetchError,
-    );
+    await expect(sentryConnector(notArray.client).fetch(sentrySource)).rejects.toThrow(IntakeSourceFetchError);
   });
 
   it("returns a genuine empty list on a 200-with-an-empty-array (no unresolved issues)", async () => {
     const empty = recordSentry([], 200);
-    expect(await createSentryConnector({ secrets, sentryHttp: empty.client }).fetch(sentrySource)).toHaveLength(0);
+    expect(await sentryConnector(empty.client).fetch(sentrySource)).toHaveLength(0);
   });
 });
 
