@@ -382,7 +382,7 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
         });
       },
     });
-    // Seed only intent — do not publish/terminalize.
+    // Seed only intent — do not publish or mark terminal.
     await intentRepository.adoptOrRecord({
       runId: "run_1",
       orgId: "org_1",

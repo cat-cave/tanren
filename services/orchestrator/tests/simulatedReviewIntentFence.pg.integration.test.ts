@@ -1,3 +1,4 @@
+// cspell:ignore hashtext
 // gv-2 real PostgreSQL proof (opt-in): production-composed intent first-wins +
 // try-advisory publish fence across two actual pool clients.
 //

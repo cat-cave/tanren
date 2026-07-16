@@ -70,7 +70,7 @@ export interface SimulatedReviewStageResult {
  *   3. Resolve the head-keyed durable intent; a hit skips the Answerer.
  *   4. Compare pinned login to intent before any publish-fence/forge work.
  *   5. Under cross-process publish fence: list→reconcile→optional POST.
- *   6. Bind forge receipt; never terminalize without it.
+ *   6. Bind forge receipt; never emit a terminal event without it.
  */
 export async function runSimulatedReviewStage(
   input: RunSimulatedReviewStageInput,

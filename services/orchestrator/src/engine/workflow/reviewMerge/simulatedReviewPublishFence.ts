@@ -1,3 +1,4 @@
+// cspell:ignore hashtext
 // gv-2 cross-process list→POST single-flight for strict simulated review.
 //
 // PostgreSQL session advisory lock serializes publication for the exact

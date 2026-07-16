@@ -15,7 +15,7 @@ terminal `review.*` event, sequential land TOCTOU on `reviewedHeadSha`.
 
 ## Dependencies
 
-**Hard product prereq**
+**Hard product prerequisite**
 
 - **GV-1** landed (#963) — auditPosture CAS guard; not re-opened here.
 
@@ -30,7 +30,7 @@ terminal `review.*` event, sequential land TOCTOU on `reviewedHeadSha`.
 - Atomic review terminal (`markReviewTaskDoneWithEvent` / `priorEvents`).
 - Existing run-detail HTTP event GET (org/project auth + redaction).
 
-**Not a hard prereq**
+**Not a hard prerequisite**
 
 - **MQ-2** multi-member evaluate — soft file lease only on `landSignals` /
   sequential land writers. No DAG edge `mq-2 → gv-2`.

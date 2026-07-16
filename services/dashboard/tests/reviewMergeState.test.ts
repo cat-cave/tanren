@@ -1,3 +1,4 @@
+// cspell:ignore pullrequestreview
 // Review/merge reducer + gv-2 forge-publication tri-state tests. Moved out of
 // `runDetail.model.test.ts` so each file stays under the 500-line cap and the
 // reducer tests import the reducer module directly. No DOM, no rendering.
