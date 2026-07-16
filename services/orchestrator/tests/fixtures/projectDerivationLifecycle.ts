@@ -1,12 +1,28 @@
 import { runWithOrgScope } from "@tanren/db";
 import type { Pool } from "pg";
+import type { ActorContext } from "../../src/auth/schemas.js";
 import { InterviewCapture } from "../../src/engine/forge/interview/types.js";
+import { buildDerivationDesignPlan } from "../../src/engine/forge/interview/deriveDesignContract.js";
+import { IntegrationConnectionsStore } from "../../src/engine/repositories/integrationConnections.js";
 import { buildDerivationOwnership, repositoryOwnershipMarker } from "../../src/engine/repositories/projects.js";
+import { systemActor } from "../../src/engine/state/actor.js";
 import type { SeededTemplate } from "../../src/engine/templates/index.js";
+import {
+  provisionAutonomousProject,
+  type ProvisionAutonomousProjectResult,
+} from "../../src/engine/workflow/provisionAutonomousProject.js";
 
 export const SEED: SeededTemplate = {
   templateRef: "tanren://composed/proof@1234567890ab",
   validatedAt: "2026-07-16T00:00:00.000Z",
+};
+
+export const DERIVATION_ACTOR: ActorContext = {
+  userId: "derivation-test",
+  orgId: "org_derivation_a",
+  projectId: null,
+  scopes: ["platform:admin"],
+  source: "local_dev",
 };
 
 /* eslint-disable unicorn/no-thenable -- Given/When/Then is the persisted behavior vocabulary. */
@@ -49,6 +65,8 @@ export const GRAPH_CAPTURE = InterviewCapture.parse({
 });
 /* eslint-enable unicorn/no-thenable */
 
+export const graphDesignPlan = (fingerprint: string) => buildDerivationDesignPlan(GRAPH_CAPTURE, fingerprint);
+
 export function directSanitizedInput(): Record<string, unknown> {
   return { kind: "direct_greenfield", input: { deploy: { providerKind: "deploy.vercel" } } };
 }
@@ -78,6 +96,13 @@ export async function corruptReceipt(pool: Pool, projectId: string, path: string
   await pool.query(
     "UPDATE project_derivations SET result_receipt = jsonb_set(result_receipt, $2::text[], to_jsonb($3::text)) WHERE project_id = $1",
     [projectId, path.slice(1, -1).split(","), value],
+  );
+}
+
+export async function setReceiptValue(pool: Pool, projectId: string, path: string, value: unknown): Promise<void> {
+  await pool.query(
+    "UPDATE project_derivations SET result_receipt = jsonb_set(result_receipt, $2::text[], $3::jsonb) WHERE project_id = $1",
+    [projectId, path.slice(1, -1).split(","), JSON.stringify(value)],
   );
 }
 
@@ -126,4 +151,82 @@ export async function graphCounts(pool: Pool, projectId: string): Promise<Record
     behaviors: row.behaviors,
     designContracts: row.design_contracts,
   };
+}
+
+export async function seedActivationPrerequisites(
+  pool: Pool,
+  orgId: string,
+  projects: Array<{ projectId: string; repoUrl: string }>,
+): Promise<Map<string, ProvisionAutonomousProjectResult>> {
+  await runWithOrgScope(pool, orgId, async (client) => {
+    await client.query(
+      `INSERT INTO org_integration_connections
+         (org_id, id, provider_kind, provider_principal_id, principal_kind, display_name,
+          principal_metadata, health, status, current_auth_generation, owner_id)
+       VALUES ($1, 'connection_1', 'deploy.vercel', 'account_1', 'organization', 'account_1',
+               '{}'::jsonb, 'healthy', 'active', 1, 'derivation-test')`,
+      [orgId],
+    );
+    await client.query(
+      `INSERT INTO org_integration_connection_auth_generations
+         (org_id, provider_kind, connection_id, generation, credential_ref, auth_kind, status)
+       VALUES ($1, 'deploy.vercel', 'connection_1', 1,
+               'secret://fixture/deploy.vercel/connection_1/token/g/1', 'api_key', 'active')`,
+      [orgId],
+    );
+    await client.query(
+      `INSERT INTO org_integration_grants
+         (org_id, id, provider_kind, connection_id, plane, environment, current_generation, status)
+       VALUES ($1, 'grant_1', 'deploy.vercel', 'connection_1', 'control', 'control', 1, 'active')`,
+      [orgId],
+    );
+    await client.query(
+      `INSERT INTO org_integration_grant_generations
+         (org_id, provider_kind, connection_id, grant_id, generation, capabilities, operations,
+          provider_scopes, resource_constraints, policy_revision, consent_revision,
+          consent_actor_id, consented_at, status)
+       VALUES ($1, 'deploy.vercel', 'connection_1', 'grant_1', 1, ARRAY['deploy'],
+               ARRAY['discover','provision','bind','teardown'], ARRAY[]::text[], '{}'::jsonb,
+               'integration-catalog.v1', 'consent.test', 'derivation-test', now(), 'active')`,
+      [orgId],
+    );
+  });
+
+  for (const project of projects) {
+    await runWithOrgScope(pool, orgId, (client) =>
+      IntegrationConnectionsStore.selectControlGrant(
+        client,
+        {
+          orgId,
+          projectId: project.projectId,
+          providerKind: "deploy.vercel",
+          connectionId: "connection_1",
+          grantId: "grant_1",
+          authGeneration: 1,
+          grantGeneration: 1,
+        },
+        systemActor,
+      ),
+    );
+  }
+
+  const bootstraps = new Map<string, ProvisionAutonomousProjectResult>();
+  for (const project of projects) {
+    const result = await provisionAutonomousProject({
+      pool,
+      orgId,
+      projectId: project.projectId,
+      repoUrl: project.repoUrl,
+    });
+    if (
+      result.errors.length > 0 ||
+      result.inboxSource === undefined ||
+      result.notificationRoute === undefined ||
+      result.auditCatalog === undefined
+    ) {
+      throw new Error(`activation prerequisite failed for ${project.projectId}`);
+    }
+    bootstraps.set(project.projectId, result);
+  }
+  return bootstraps;
 }

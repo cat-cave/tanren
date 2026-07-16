@@ -13,7 +13,6 @@ import {
   type ProjectDerivationConflictError,
   withProjectDerivationLock,
 } from "../src/engine/repositories/projects.js";
-import type { ActorContext } from "../src/auth/schemas.js";
 import type { DeriveInput } from "../src/engine/forge/interview/derive.js";
 import { runDirectGreenfieldDerivation } from "../src/routes/projects/greenfieldCreateStateMachine.js";
 import { FakeRepoCreateHttp } from "./conformance/fakes/fakeRepoCreateHttp.js";
@@ -21,12 +20,15 @@ import { preparedDeploy } from "./fixtures/forge/interviewDeriveStub.js";
 import {
   activationTuple,
   corruptReceipt,
+  DERIVATION_ACTOR as ACTOR,
   directSanitizedInput,
   GRAPH_CAPTURE,
   graphCounts,
+  graphDesignPlan,
   ownership as buildOwnership,
   repository,
   SEED,
+  seedActivationPrerequisites,
 } from "./fixtures/projectDerivationLifecycle.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -40,13 +42,6 @@ const PROJECT_FAILED = "project_derivation_failed";
 const PROJECT_CONCURRENT = "project_derivation_concurrent";
 const PROJECT_GRAPH = "project_derivation_graph";
 const PROJECT_ACTIVATION = "project_derivation_activation";
-const ACTOR: ActorContext = {
-  userId: "derivation-test",
-  orgId: ORG_A,
-  projectId: null,
-  scopes: ["platform:admin"],
-  source: "local_dev",
-};
 const ownership = (projectId: string, repoUrl: string, fingerprint: string) =>
   buildOwnership(ORG_A, projectId, repoUrl, fingerprint);
 
@@ -67,6 +62,7 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
   const database = `tanren_project_derivation_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let owner: Pool | undefined;
   let runtime: Pool | undefined;
+  let bootstraps: Awaited<ReturnType<typeof seedActivationPrerequisites>> = new Map();
 
   function ownerPool(): Pool {
     if (owner === undefined) throw new Error("owner pool is not initialized");
@@ -77,6 +73,8 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
     if (runtime === undefined) throw new Error("runtime pool is not initialized");
     return runtime;
   }
+
+  const bootstrap = (projectId: string) => bootstraps.get(projectId)!;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -107,6 +105,12 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
        VALUES ('spec_derivation_ready', $1, $2, 'ready root', 'must wait for activation')`,
       [PROJECT_CONCURRENT, ORG_A],
     );
+    bootstraps = await seedActivationPrerequisites(runtime, ORG_A, [
+      { projectId: PROJECT_FAILED, repoUrl: "https://github.com/cat-cave/derivation-failed" },
+      { projectId: PROJECT_CONCURRENT, repoUrl: "https://github.com/cat-cave/derivation-concurrent" },
+      { projectId: PROJECT_GRAPH, repoUrl: "https://github.com/cat-cave/derivation-graph" },
+      { projectId: PROJECT_ACTIVATION, repoUrl: "https://github.com/cat-cave/derivation-activation" },
+    ]);
   }, 120_000);
 
   afterAll(async () => {
@@ -154,7 +158,13 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       "graph",
     );
     operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", preparedDeploy(), "graph");
-    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "bootstrap", { errors: [] }, "activate");
+    operation = await ProjectDerivationStore.recordReceipt(
+      pool,
+      operation,
+      "bootstrap",
+      bootstrap(PROJECT_FAILED),
+      "activate",
+    );
 
     await corruptReceipt(ownerPool(), PROJECT_FAILED, "{repository,binding,projectId}", "project_foreign");
     await expect(ProjectDerivationStore.activate(pool, operation)).rejects.toMatchObject({
@@ -305,7 +315,13 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
         }
         if (current.resultReceipt["bootstrap"] === undefined) {
           bootstrapEffects += 1;
-          current = await ProjectDerivationStore.recordReceipt(pool, current, "bootstrap", { errors: [] }, "activate");
+          current = await ProjectDerivationStore.recordReceipt(
+            pool,
+            current,
+            "bootstrap",
+            bootstrap(PROJECT_CONCURRENT),
+            "activate",
+          );
         }
         return ProjectDerivationStore.activate(pool, current);
       });
@@ -356,7 +372,13 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       "graph",
     );
     operation = await ProjectDerivationStore.recordReceipt(pool, operation, "deploy", preparedDeploy(), "graph");
-    operation = await ProjectDerivationStore.recordReceipt(pool, operation, "bootstrap", { errors: [] }, "activate");
+    operation = await ProjectDerivationStore.recordReceipt(
+      pool,
+      operation,
+      "bootstrap",
+      bootstrap(PROJECT_ACTIVATION),
+      "activate",
+    );
 
     await ownerPool().query(`
       CREATE FUNCTION fail_derivation_activation_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -400,11 +422,17 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       repoUrl,
       request: { capture: "graph-receipt-proof" },
     });
+    const designPlan = graphDesignPlan(fingerprint);
     const operation = await ProjectDerivationStore.begin(pool, {
       orgId: ORG_A,
       projectId: PROJECT_GRAPH,
       idempotencyFingerprint: fingerprint,
-      sanitizedInput: { kind: "interview", deploy: { providerKind: "deploy.vercel" } },
+      sanitizedInput: {
+        kind: "interview",
+        deploy: { providerKind: "deploy.vercel" },
+        designMode: "captured",
+        designInputDigest: designPlan.inputDigest,
+      },
       ownershipReceipt: ownership(PROJECT_GRAPH, repoUrl, fingerprint),
     });
     await ownerPool().query(`

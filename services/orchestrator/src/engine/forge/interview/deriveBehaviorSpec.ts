@@ -7,7 +7,7 @@ import { AUTONOMOUS_AUDIT_POSTURE } from "../../config/index.js";
 import { BehaviorCreateInput, BehaviorStore } from "../../entities/behaviors.js";
 import { MilestoneCreateInput, MilestoneStore } from "../../entities/milestones.js";
 import { createSpecOnClient, type ProjectSpecQueryClient, type SpecContract } from "../../workflow/projectSpec.js";
-import { behaviorKey } from "./deriveDesignContract.js";
+import { behaviorKey, DanglingDesignRefError } from "./deriveDesignContract.js";
 import type { CaptureBehavior, CaptureInterface, InterviewCapture } from "./types.js";
 
 // Re-export the design-contract derive helpers (native design subsystem, WS-D1)
@@ -77,6 +77,7 @@ export interface DeriveBehaviorSpecInput {
   milestoneId: string;
   dependsOn: string[];
   personaIdByName: Map<string, string>;
+  behaviorId: string;
   actor: ActorContext;
 }
 
@@ -108,6 +109,7 @@ export async function deriveBehaviorSpec(
   const behaviorRow = await BehaviorStore.create(
     pool,
     BehaviorCreateInput.parse({
+      id: input.behaviorId,
       personaId,
       title: input.behavior.title,
       given: input.behavior.given,
@@ -146,6 +148,7 @@ export interface InterfaceMilestonesInput {
   capture: InterviewCapture;
   scaffoldSpecIds: string[];
   personaIdByName: Map<string, string>;
+  plannedBehaviorIdByKey: Map<string, string>;
   actor: ActorContext;
 }
 
@@ -206,6 +209,9 @@ export async function deriveInterfaceMilestones(
       (b) => interfaceForBehavior(b, capture, interfaces)?.name === iface.name,
     );
     for (const behavior of ifaceBehaviors) {
+      const key = behaviorKey(behavior.persona, behavior.title);
+      const plannedBehaviorId = input.plannedBehaviorIdByKey.get(key);
+      if (plannedBehaviorId === undefined) throw new DanglingDesignRefError("behavior", key);
       const behaviorSpec = await deriveBehaviorSpec(pool, {
         projectId,
         orgId: input.orgId,
@@ -213,13 +219,14 @@ export async function deriveInterfaceMilestones(
         milestoneId: milestone.id,
         dependsOn: [...scaffoldSpecIds, schemaSpec.specId],
         personaIdByName,
+        behaviorId: plannedBehaviorId,
         actor,
       });
       specIds.push(behaviorSpec.specId);
       const bId = behaviorSpec.behaviorId;
       if (bId === undefined) continue;
       behaviorIds.push(bId);
-      behaviorIdByKey.set(behaviorKey(behavior.persona, behavior.title), bId);
+      behaviorIdByKey.set(key, bId);
     }
   }
   return { specIds, milestoneIds, behaviorIds, behaviorIdByKey };

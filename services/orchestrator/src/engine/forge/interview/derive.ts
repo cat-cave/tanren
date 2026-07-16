@@ -24,7 +24,11 @@ import type { DeleteRepositoryCallback } from "./deriveCompensation.js";
 import type { InterviewCapture } from "./types.js";
 
 export { FragmentAuthoringFailedError, UnresolvableLifecycleError } from "../../templates/index.js";
-export { ProjectBootstrapIncompleteError, deriveProductGraph } from "./deriveProductGraph.js";
+export {
+  ProjectBootstrapIncompleteError,
+  ProjectDesignElaborationStateUnknownError,
+  deriveProductGraph,
+} from "./deriveProductGraph.js";
 export { ProjectDerivationConflictError } from "../../repositories/projects.js";
 
 export interface DeriveInput {

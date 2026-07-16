@@ -35,7 +35,11 @@ export {
   type PreparedGreenfieldDeploy,
 } from "./deployDependency.js";
 export { DeployIneligibleError } from "./deployIneligibleError.js";
-export { ProjectBootstrapIncompleteError, ProjectDerivationConflictError } from "./derive.js";
+export {
+  ProjectBootstrapIncompleteError,
+  ProjectDerivationConflictError,
+  ProjectDesignElaborationStateUnknownError,
+} from "./derive.js";
 
 // Before the durable shell exists, repository creation is the only compensated
 // effect. After the shell, derivation is replay-owned and never rolls effects back.

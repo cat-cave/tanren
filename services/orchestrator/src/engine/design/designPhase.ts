@@ -40,6 +40,7 @@ import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } f
 import type {
   CapturedDesignSeed,
   DesignAgent,
+  DesignAgentAnswer,
   DesignAgentBehavior,
   DesignAgentInput,
   DesignAgentPersona,
@@ -74,6 +75,79 @@ export interface RunDesignPhaseResult {
   domain: string;
 }
 
+export function designContractFromAnswer(input: {
+  answer: DesignAgentAnswer;
+  personas: ReadonlyArray<DesignAgentPersona>;
+  behaviors: ReadonlyArray<DesignAgentBehavior>;
+}): DesignContractV1 {
+  const { answer, personas, behaviors } = input;
+  const personaIds = new Set(personas.map((persona) => persona.id));
+  const behaviorIds = new Set(behaviors.map((behavior) => behavior.id));
+
+  const coveredBehaviorIds = new Set(answer.coverage.map((surface) => surface.behaviorId));
+  const uncovered = [...behaviorIds].filter((id) => !coveredBehaviorIds.has(id));
+  if (uncovered.length > 0) {
+    throw new Error(
+      `design phase: the elaborated contract does not cover ${uncovered.length} behavior(s) [${uncovered.join(", ")}] — ` +
+        "every behavior the design is responsible for must map to a designed surface (exhaustive checklist)",
+    );
+  }
+
+  for (const surface of answer.coverage) {
+    if (!behaviorIds.has(surface.behaviorId)) {
+      throw new Error(
+        `design phase: coverage references unknown behavior id '${surface.behaviorId}' (not a project behavior)`,
+      );
+    }
+    if (!personaIds.has(surface.personaId)) {
+      throw new Error(
+        `design phase: coverage references unknown persona id '${surface.personaId}' (not a project persona)`,
+      );
+    }
+  }
+  const dimensionKeys = new Set(answer.dimensions.map((dimension) => dimension.key));
+  for (const surface of answer.coverage) {
+    if (!dimensionKeys.has(surface.dimensionKey)) {
+      throw new Error(
+        `design phase: coverage references unknown dimension key '${surface.dimensionKey}' (not a declared dimension)`,
+      );
+    }
+  }
+  for (const dimension of answer.dimensions) {
+    for (const id of dimension.personaIds) {
+      if (!personaIds.has(id)) {
+        throw new Error(
+          `design phase: dimension '${dimension.key}' references unknown persona id '${id}' (not a project persona)`,
+        );
+      }
+    }
+  }
+
+  const contractPersonaRefs = new Set<string>();
+  for (const surface of answer.coverage) contractPersonaRefs.add(surface.personaId);
+  for (const dimension of answer.dimensions) {
+    for (const id of dimension.personaIds) contractPersonaRefs.add(id);
+  }
+
+  return parseDesignContract({
+    version: DESIGN_CONTRACT_VERSION,
+    domain: answer.domain,
+    identity: answer.identity,
+    intent: answer.intent,
+    principles: answer.principles,
+    constraints: answer.constraints,
+    personaRefs: [...contractPersonaRefs],
+    behaviorRefs: [...coveredBehaviorIds],
+    dimensions: answer.dimensions.map((dimension) => ({
+      key: dimension.key,
+      label: dimension.label,
+      intent: dimension.intent,
+      guidance: dimension.guidance,
+      personaRefs: dimension.personaIds,
+    })),
+  });
+}
+
 /**
  * Run the design phase: resolve the project's personas + behaviors, run the design
  * agent to elaborate the thin seed into a full contract, assert exhaustive behavior
@@ -96,8 +170,6 @@ export async function runDesignPhase(input: RunDesignPhaseInput): Promise<RunDes
     name: p.name,
     description: p.description,
   }));
-  const personaIds = new Set(personas.map((p) => p.id));
-
   const behaviors: DesignAgentBehavior[] = [];
   for (const persona of personaRows) {
     const rows = await BehaviorStore.listForPersona(input.client, persona.id, input.actor);
@@ -116,83 +188,9 @@ export async function runDesignPhase(input: RunDesignPhaseInput): Promise<RunDes
       /* eslint-enable unicorn/no-thenable */
     }
   }
-  const behaviorIds = new Set(behaviors.map((b) => b.id));
-
   const agentInput: DesignAgentInput = { seed: input.seed, personas, behaviors };
   const answer = await input.agent.elaborate(agentInput);
-
-  // EXHAUSTIVE COVERAGE — every behavior the design is responsible for MUST appear in
-  // the agent's coverage. A dropped behavior is a silently-incomplete contract → loud.
-  const coveredBehaviorIds = new Set(answer.coverage.map((c) => c.behaviorId));
-  const uncovered = [...behaviorIds].filter((id) => !coveredBehaviorIds.has(id));
-  if (uncovered.length > 0) {
-    throw new Error(
-      `design phase: the elaborated contract does not cover ${uncovered.length} behavior(s) [${uncovered.join(", ")}] — ` +
-        "every behavior the design is responsible for must map to a designed surface (exhaustive checklist)",
-    );
-  }
-
-  // STRICT RESOLUTION — every behavior/persona id the agent referenced MUST be one of
-  // the real ids it was handed (no hallucinated/dangling refs leak into the contract).
-  for (const surface of answer.coverage) {
-    if (!behaviorIds.has(surface.behaviorId)) {
-      throw new Error(
-        `design phase: coverage references unknown behavior id '${surface.behaviorId}' (not a project behavior)`,
-      );
-    }
-    if (!personaIds.has(surface.personaId)) {
-      throw new Error(
-        `design phase: coverage references unknown persona id '${surface.personaId}' (not a project persona)`,
-      );
-    }
-  }
-  const dimensionKeys = new Set(answer.dimensions.map((d) => d.key));
-  for (const surface of answer.coverage) {
-    if (!dimensionKeys.has(surface.dimensionKey)) {
-      throw new Error(
-        `design phase: coverage references unknown dimension key '${surface.dimensionKey}' (not a declared dimension)`,
-      );
-    }
-  }
-  for (const dimension of answer.dimensions) {
-    for (const id of dimension.personaIds) {
-      if (!personaIds.has(id)) {
-        throw new Error(
-          `design phase: dimension '${dimension.key}' references unknown persona id '${id}' (not a project persona)`,
-        );
-      }
-    }
-  }
-
-  // The behaviors covered are the contract's behavior obligation; the personas the
-  // coverage touches (plus any persona-scoped dimension) are its persona binding.
-  const contractPersonaRefs = new Set<string>();
-  for (const surface of answer.coverage) contractPersonaRefs.add(surface.personaId);
-  for (const dimension of answer.dimensions) {
-    for (const id of dimension.personaIds) contractPersonaRefs.add(id);
-  }
-
-  // Build the elaborated contract + re-parse through the schema (loud on malformed —
-  // the same posture as the store's mapRow). The agent's domain-derived dimensions +
-  // exhaustive coverage become the persisted contract's dimensions + behaviorRefs.
-  const contract: DesignContractV1 = parseDesignContract({
-    version: DESIGN_CONTRACT_VERSION,
-    domain: answer.domain,
-    identity: answer.identity,
-    intent: answer.intent,
-    principles: answer.principles,
-    constraints: answer.constraints,
-    // THE MOAT — bind to the project's real persona + behavior entities.
-    personaRefs: [...contractPersonaRefs],
-    behaviorRefs: [...coveredBehaviorIds],
-    dimensions: answer.dimensions.map((d) => ({
-      key: d.key,
-      label: d.label,
-      intent: d.intent,
-      guidance: d.guidance,
-      personaRefs: d.personaIds,
-    })),
-  });
+  const contract = designContractFromAnswer({ answer, personas, behaviors });
 
   const record = await DesignContractStore.create(
     input.client,
@@ -204,5 +202,9 @@ export async function runDesignPhase(input: RunDesignPhaseInput): Promise<RunDes
     input.actorRef,
   );
 
-  return { record, behaviorsCovered: coveredBehaviorIds.size, domain: contract.domain };
+  return {
+    record,
+    behaviorsCovered: new Set(answer.coverage.map((surface) => surface.behaviorId)).size,
+    domain: contract.domain,
+  };
 }

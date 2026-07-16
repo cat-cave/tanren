@@ -10,13 +10,19 @@
 
 import type pg from "pg";
 import type { DeriveInput } from "../../../src/engine/forge/interview/derive.js";
+import { RoutesPoolDerivationEvidence } from "../../helpers/routesPoolDerivationEvidence.js";
 
-export const successfulBootstrapProject: NonNullable<DeriveInput["bootstrapProject"]> = async (input) => ({
-  inboxSource: { id: `src_${input.projectId}`, created: true },
-  notificationRoute: { targetId: `notif_${input.orgId}`, created: true, events: 8 },
-  auditCatalog: { jobs: 4, created: ["security", "deps", "mutation", "stale_specs"] },
-  errors: [],
-});
+export const successfulBootstrapProject: NonNullable<DeriveInput["bootstrapProject"]> = async (input) => {
+  const fixture = input.pool as pg.Pool & {
+    seedDerivationBootstrap?: (orgId: string, projectId: string) => Promise<unknown> | unknown;
+  };
+  if (fixture.seedDerivationBootstrap === undefined) {
+    throw new Error("successfulBootstrapProject requires a derivation-evidence test pool");
+  }
+  return (await fixture.seedDerivationBootstrap(input.orgId, input.projectId)) as Awaited<
+    ReturnType<NonNullable<DeriveInput["bootstrapProject"]>>
+  >;
+};
 
 // What the stub observed across the derive's create calls.
 export interface StubState {
@@ -34,6 +40,11 @@ export interface StubState {
   // design subsystem, WS-D1) so a test can assert the captured contract is
   // persisted as a first-class versioned entity.
   designContracts: Array<Record<string, unknown>>;
+}
+
+function restoreMap<K, V>(target: Map<K, V>, source: Map<K, V>): void {
+  target.clear();
+  for (const [key, value] of source) target.set(key, value);
 }
 
 // A `prepareDeploy` outcome fixture (a provisioned deploy + the project config it
@@ -84,6 +95,9 @@ export function stubPool(): {
     designContracts: [],
   };
   const configs = new Map<string, Record<string, unknown>>();
+  const evidence = new RoutesPoolDerivationEvidence();
+  const inboxSources: Array<Record<string, unknown>> = [];
+  const specRows = new Map<string, { spec_id: string; project_id: string }>();
   const projects = new Map<
     string,
     {
@@ -100,9 +114,75 @@ export function stubPool(): {
   >();
   const derivations = new Map<string, Record<string, unknown>>();
   const personaIds = new Set<string>();
+  let graphSnapshot:
+    | {
+        specs: typeof state.specs;
+        specRows: typeof specRows;
+        personaIds: Set<string>;
+        personas: typeof evidence.personas;
+        behaviors: typeof evidence.behaviors;
+        milestones: typeof evidence.milestones;
+        designContracts: typeof evidence.designContracts;
+        personaCount: number;
+        personaMetadata: typeof state.personaMetadata;
+        behaviorCount: number;
+        milestoneCount: number;
+        designContractValues: typeof state.designContracts;
+        specMilestones: number;
+        specBehaviors: number;
+      }
+    | undefined;
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
+    if (sql === "BEGIN") {
+      graphSnapshot = {
+        specs: new Map(state.specs),
+        specRows: new Map(specRows),
+        personaIds: new Set(personaIds),
+        personas: new Map(evidence.personas),
+        behaviors: new Map(evidence.behaviors),
+        milestones: new Map(evidence.milestones),
+        designContracts: new Map(evidence.designContracts),
+        personaCount: state.personas,
+        personaMetadata: [...state.personaMetadata],
+        behaviorCount: state.behaviors,
+        milestoneCount: state.milestones,
+        designContractValues: [...state.designContracts],
+        specMilestones: state.specMilestones,
+        specBehaviors: state.specBehaviors,
+      };
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql === "COMMIT") {
+      graphSnapshot = undefined;
+      return { rows: [], rowCount: 0 };
+    }
+    if (sql === "ROLLBACK") {
+      if (graphSnapshot !== undefined) {
+        restoreMap(state.specs, graphSnapshot.specs);
+        restoreMap(specRows, graphSnapshot.specRows);
+        personaIds.clear();
+        for (const id of graphSnapshot.personaIds) personaIds.add(id);
+        restoreMap(evidence.personas, graphSnapshot.personas);
+        restoreMap(evidence.behaviors, graphSnapshot.behaviors);
+        restoreMap(evidence.milestones, graphSnapshot.milestones);
+        restoreMap(evidence.designContracts, graphSnapshot.designContracts);
+        state.personas = graphSnapshot.personaCount;
+        state.personaMetadata = graphSnapshot.personaMetadata;
+        state.behaviors = graphSnapshot.behaviorCount;
+        state.milestones = graphSnapshot.milestoneCount;
+        state.designContracts = graphSnapshot.designContractValues;
+        state.specMilestones = graphSnapshot.specMilestones;
+        state.specBehaviors = graphSnapshot.specBehaviors;
+      }
+      graphSnapshot = undefined;
+      return { rows: [], rowCount: 0 };
+    }
     if (sql.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
+    if (!sql.startsWith("INSERT INTO")) {
+      const evidenceResult = evidence.handle(sql, params, { projects, specs: specRows, inboxSources });
+      if (evidenceResult !== undefined) return evidenceResult;
+    }
     if (sql.includes("FROM project_derivations")) {
       const row = sql.includes("AND id = $2")
         ? derivations.get(String(params[1]))
@@ -225,7 +305,17 @@ export function stubPool(): {
       const project = projects.get(String(params[1]));
       return project === undefined
         ? { rows: [], rowCount: 0 }
-        : { rows: [{ lifecycle: project.lifecycle, repo_url: project.repo_url }], rowCount: 1 };
+        : {
+            rows: [
+              {
+                lifecycle: project.lifecycle,
+                name: project.name,
+                repo_url: project.repo_url,
+                default_branch: project.default_branch,
+              },
+            ],
+            rowCount: 1,
+          };
     }
     if (sql.startsWith("INSERT INTO project_members")) return { rows: [], rowCount: 1 };
     if (sql.startsWith("SELECT project_id FROM projects")) {
@@ -256,6 +346,7 @@ export function stubPool(): {
       const acceptanceCriteria = typeof params[5] === "string" ? (JSON.parse(params[5]) as string[]) : [];
       const dependsOn = (params[6] as string[]) ?? [];
       state.specs.set(specId, { dependsOn, title, description, acceptanceCriteria });
+      specRows.set(specId, { spec_id: specId, project_id: String(params[1]) });
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO design_contracts")) {
@@ -265,6 +356,11 @@ export function stubPool(): {
       const rawContract = params[4];
       const contract = typeof rawContract === "string" ? (JSON.parse(rawContract) as Record<string, unknown>) : {};
       state.designContracts.push(contract);
+      evidence.designContracts.set(String(params[0]), {
+        id: String(params[0]),
+        orgId: String(params[1]),
+        projectId: String(params[2]),
+      });
       return {
         rows: [
           {
@@ -282,6 +378,11 @@ export function stubPool(): {
     if (sql.startsWith("INSERT INTO personas")) {
       state.personas += 1;
       personaIds.add(String(params[0]));
+      evidence.personas.set(String(params[0]), {
+        id: String(params[0]),
+        orgId: String(params[2]),
+        projectId: String(params[3]),
+      });
       // The metadata jsonb is the 7th column (params[6], JSON text) — capture it so
       // a test can assert the persona `surface` is persisted there (no `surface` column).
       const rawMeta = params[6];
@@ -325,6 +426,7 @@ export function stubPool(): {
     }
     if (sql.startsWith("INSERT INTO behaviors")) {
       state.behaviors += 1;
+      evidence.behaviors.set(String(params[0]), { id: String(params[0]), personaId: String(params[1]) });
       return {
         rows: [
           {
@@ -345,6 +447,7 @@ export function stubPool(): {
     }
     if (sql.startsWith("INSERT INTO milestones")) {
       state.milestones += 1;
+      evidence.milestones.set(String(params[0]), { id: String(params[0]), projectId: String(params[1]) });
       return {
         rows: [
           {
@@ -374,8 +477,15 @@ export function stubPool(): {
     }
     return { rows: [], rowCount: 0 };
   };
+  const pool = {
+    query,
+    connect: async () => ({ query, release() {} }),
+    seedDerivationBootstrap(orgId: string, projectId: string) {
+      return evidence.seedBootstrap(orgId, projectId, inboxSources);
+    },
+  } as unknown as pg.Pool;
   return {
-    pool: { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool,
+    pool,
     state,
     configs,
   };

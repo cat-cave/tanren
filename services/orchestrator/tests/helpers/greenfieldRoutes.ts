@@ -99,31 +99,7 @@ export function appWithGreenfieldRoutes(
   const prepareDeploy = onboardingOverrides.prepareDeploy;
   const bootstrapProject =
     onboardingOverrides.bootstrapProject ??
-    (async (input) => {
-      const existing = pool.inboxSources.find(
-        (source) => source["org_id"] === input.orgId && source["project_id"] === input.projectId,
-      );
-      const source =
-        existing ??
-        ({
-          id: `src_${input.projectId}`,
-          org_id: input.orgId,
-          project_id: input.projectId,
-          kind: "issues",
-          name: "github issues",
-          detail: "test bootstrap",
-          config: {},
-          enabled: "true",
-          auto_route: "false",
-        } satisfies Record<string, unknown>);
-      if (existing === undefined) pool.inboxSources.push(source);
-      return {
-        inboxSource: { id: String(source["id"]), created: existing === undefined },
-        notificationRoute: { targetId: `notif_${input.orgId}`, created: existing === undefined, events: 8 },
-        auditCatalog: { jobs: 4, created: ["security", "deps", "mutation", "stale_specs"] as const },
-        errors: [],
-      };
-    });
+    (async (input) => pool.seedDerivationBootstrap(input.orgId, input.projectId));
   app.use(
     "*",
     createAuthMiddleware({

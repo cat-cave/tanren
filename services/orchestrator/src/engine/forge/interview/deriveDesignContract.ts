@@ -15,11 +15,17 @@
 // versioned entity is the durable artifact later workstreams inject into the
 // writer (WS-D2) + verify with a design oracle (WS-D4) — the clean seam left here.
 
+import { createHash } from "node:crypto";
 import type { ProjectSpecQueryClient } from "../../workflow/projectSpec.js";
-import type { ActorContext } from "../../../auth/schemas.js";
 import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } from "../../design/designContract.js";
-import type { CapturedDesignSeed, DesignAgent } from "../../design/designAgent.js";
-import { runDesignPhase } from "../../design/designPhase.js";
+import type {
+  CapturedDesignSeed,
+  DesignAgentAnswer,
+  DesignAgentBehavior,
+  DesignAgentInput,
+  DesignAgentPersona,
+} from "../../design/designAgent.js";
+import { designContractFromAnswer } from "../../design/designPhase.js";
 import { DesignContractStore } from "../../repositories/designContracts.js";
 import type { CaptureDesignContract, InterviewCapture } from "./types.js";
 
@@ -141,6 +147,62 @@ function toDesignSeed(capture: CaptureDesignContract): CapturedDesignSeed {
   };
 }
 
+export interface DerivationDesignPlan {
+  inputDigest: string;
+  agentInput: DesignAgentInput;
+  personaIdByName: Map<string, string>;
+  behaviorIdByKey: Map<string, string>;
+}
+
+function plannedId(kind: "persona" | "behavior", fingerprint: string, key: string): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(["tanren.derivation-graph-identity.v1", fingerprint, kind, key]), "utf8")
+    .digest("hex");
+  return `${kind}_${digest.slice(0, 32)}`;
+}
+
+/** Preassign the identities a provider-authored design may reference before graph I/O. */
+export function buildDerivationDesignPlan(capture: InterviewCapture, fingerprint: string): DerivationDesignPlan {
+  if (capture.designContract === null) throw new MissingDesignContractError();
+  const personaIdByName = new Map<string, string>();
+  const personas: DesignAgentPersona[] = capture.personas.map((persona) => {
+    const key = persona.name.trim().toLowerCase();
+    if (personaIdByName.has(key)) throw new Error(`duplicate captured persona '${persona.name}'`);
+    const id = plannedId("persona", fingerprint, key);
+    personaIdByName.set(key, id);
+    return { id, name: persona.name, description: persona.description };
+  });
+
+  const behaviorIdByKey = new Map<string, string>();
+  const behaviors: DesignAgentBehavior[] = capture.behaviors.map((behavior) => {
+    const key = behaviorKey(behavior.persona, behavior.title);
+    if (behaviorIdByKey.has(key)) throw new Error(`duplicate captured behavior '${key}'`);
+    const personaId = personaIdByName.get(behavior.persona.trim().toLowerCase());
+    if (personaId === undefined) {
+      throw new DanglingDesignRefError("persona", behavior.persona);
+    }
+    const id = plannedId("behavior", fingerprint, key);
+    behaviorIdByKey.set(key, id);
+    return {
+      id,
+      personaId,
+      title: behavior.title,
+      given: behavior.given,
+      when: behavior.when,
+      thenOutcome: behavior.then,
+    };
+  });
+  const agentInput: DesignAgentInput = {
+    seed: toDesignSeed(capture.designContract),
+    personas,
+    behaviors,
+  };
+  const inputDigest = `sha256:${createHash("sha256")
+    .update(JSON.stringify(["tanren.derivation-design-input.v1", agentInput]), "utf8")
+    .digest("hex")}`;
+  return { inputDigest, agentInput, personaIdByName, behaviorIdByKey };
+}
+
 // Persist the project's first-class `DesignContract` entity (WS-D1/WS-D3), returning
 // the HEAD record's id. The captured contract is REQUIRED (the derive guards it with
 // `MissingDesignContractError` before reaching here) — a null capture is a LOUD failure,
@@ -160,14 +222,8 @@ export async function persistDesignContract(
     orgId: string;
     projectId: string;
     capture: CaptureDesignContract | null;
-    personaIdByName: Map<string, string>;
-    behaviorIdByKey: Map<string, string>;
-    // WS-D3: the design agent that elaborates the captured intent into the designed
-    // contract. Production wires a real provider answerer; absent on engine-graph
-    // test paths (the thin-capture-only seam).
-    designAgent?: DesignAgent;
-    // The org-scope carrier for the design phase's persona/behavior entity reads.
-    actor?: ActorContext;
+    designPlan: DerivationDesignPlan;
+    designAnswer?: DesignAgentAnswer;
   },
 ): Promise<string> {
   // The contract is REQUIRED — the derive guards null upstream
@@ -175,24 +231,17 @@ export async function persistDesignContract(
   // null capture is a LOUD failure here too, never a silently-skipped design row.
   if (input.capture === null) throw new MissingDesignContractError();
 
-  // WS-D3 DESIGN PHASE — elaborate the thin capture into the designed HEAD contract.
-  if (input.designAgent !== undefined) {
-    if (input.actor === undefined) {
-      throw new Error("design phase: an actor is required to resolve the project's persona/behavior graph");
-    }
-    const result = await runDesignPhase({
-      client: pool,
-      orgId: input.orgId,
-      projectId: input.projectId,
-      agent: input.designAgent,
-      actor: input.actor,
-      actorRef: { kind: "operator" },
-      seed: toDesignSeed(input.capture),
-    });
-    return result.record.id;
-  }
+  const contract =
+    input.designAnswer === undefined
+      ? toDesignContract(input.capture, input.designPlan.personaIdByName, input.designPlan.behaviorIdByKey)
+      : designContractFromAnswer({
+          answer: input.designAnswer,
+          personas: input.designPlan.agentInput.personas,
+          behaviors: input.designPlan.agentInput.behaviors,
+        });
 
-  // No agent wired (engine-graph test seam) — persist the thin captured contract.
+  // The provider call (when present) already completed behind the derivation's
+  // durable result boundary. This transaction only persists the validated answer.
   // The design contract is PROJECT-scoped (H2 BLOCKING unify): the whole-product
   // contract lives at a single per-project head (migration 0028 collapsed the
   // broken mode-keying), shared across every spec type in the project.
@@ -201,7 +250,7 @@ export async function persistDesignContract(
     {
       orgId: input.orgId,
       projectId: input.projectId,
-      contract: toDesignContract(input.capture, input.personaIdByName, input.behaviorIdByKey),
+      contract,
     },
     { kind: "operator" },
   );

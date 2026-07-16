@@ -2,6 +2,7 @@ import type pg from "pg";
 import { handleConfigCasSql } from "./routesPoolConfigCas.js";
 import { isEventStoreAppend, recordRouteEvent } from "./routesPoolEvents.js";
 import { handleProjectDerivationQuery, type ProjectDerivationFakeRow } from "./routesPoolProjectDerivations.js";
+import { RoutesPoolDerivationEvidence } from "./routesPoolDerivationEvidence.js";
 
 interface QueryResult {
   rows: unknown[];
@@ -60,12 +61,17 @@ export class RoutesPool {
   readonly jobs: Array<Record<string, unknown>> = [];
   readonly runs: Array<Record<string, unknown>> = [];
   readonly inboxSources: Array<Record<string, unknown>> = [];
+  readonly derivationEvidence = new RoutesPoolDerivationEvidence();
   readonly costRecords: Array<{ project_id: string; cost_usd: number; notional_cost_usd: number }> = [];
   /** Captured NOTIFY statements (channel + payload) so a test can assert a re-walk wake. */
   readonly notifies: Array<{ channel: string; payload: string }> = [];
 
   seedCostRecord(projectId: string, costUsd: number, notionalCostUsd: number = costUsd): void {
     this.costRecords.push({ project_id: projectId, cost_usd: costUsd, notional_cost_usd: notionalCostUsd });
+  }
+
+  seedDerivationBootstrap(orgId: string, projectId: string) {
+    return this.derivationEvidence.seedBootstrap(orgId, projectId, this.inboxSources);
   }
 
   seedBudgetPause(input: {
@@ -169,6 +175,8 @@ export class RoutesPool {
       return { rows: [], rowCount: 0 };
     }
     if (trimmed.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
+    const derivationEvidence = this.derivationEvidence.handle(trimmed, params, this);
+    if (derivationEvidence !== undefined) return derivationEvidence;
     // NOTIFY <channel>[, '<payload>'] — capture the re-walk wake (audit §3.7e) so a test
     // can assert raising a paused project's ceiling fires a `tanren_dag` notification.
     const notify = /^NOTIFY\s+(\w+)(?:\s*,\s*'([^']*)')?/u.exec(trimmed);
@@ -315,7 +323,12 @@ export class RoutesPool {
       return single(
         project === undefined || project.org_id !== String(params[0])
           ? undefined
-          : { lifecycle: project.lifecycle, repo_url: project.repo_url },
+          : {
+              lifecycle: project.lifecycle,
+              name: project.name,
+              repo_url: project.repo_url,
+              default_branch: project.default_branch,
+            },
       );
     }
     if (trimmed.startsWith("UPDATE projects SET repo_url")) {
@@ -419,48 +432,8 @@ export class RoutesPool {
       return { rows: [{ spec_id: spec.spec_id }], rowCount: 1 };
     }
 
-    if (trimmed.startsWith("INSERT INTO milestones")) {
-      return {
-        rows: [
-          {
-            id: params[0],
-            project_id: params[1],
-            label: params[2],
-            name: params[3],
-            description: params[4],
-            order_index: params[5],
-            eta: params[6],
-            status: params[7],
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ],
-        rowCount: 1,
-      };
-    }
     if (trimmed.startsWith("DELETE FROM spec_milestones")) return { rows: [], rowCount: 0 };
     if (trimmed.startsWith("INSERT INTO spec_milestones")) return { rows: [], rowCount: 1 };
-
-    // design_contracts (native design subsystem, WS-D1) — the derive persists the
-    // captured design contract as a first-class version-1 row. Post-H2-unify
-    // (migration 0028) params: [id, org_id, project_id, domain, contract_json].
-    // The version is COALESCE'd in the real SQL; the stub returns version 1
-    // (the first per-project contract).
-    if (trimmed.startsWith("INSERT INTO design_contracts")) {
-      return {
-        rows: [
-          {
-            id: String(params[0]),
-            org_id: String(params[1]),
-            project_id: String(params[2]),
-            version: 1,
-            domain: String(params[3]),
-            contract: JSON.parse(String(params[4])) as unknown,
-          },
-        ],
-        rowCount: 1,
-      };
-    }
 
     // inbox_sources (the repo-link auto-provisioned `issues` source).
     if (trimmed.includes("FROM inbox_sources WHERE org_id = $1")) {

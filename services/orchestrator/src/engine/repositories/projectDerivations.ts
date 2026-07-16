@@ -3,9 +3,13 @@ import { getOrgScope, notifyDagChanged, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { z } from "zod";
 import type { ProjectLifecycle } from "./projects.js";
+import { assertProjectDerivationActivationEvidence } from "./integrationProjectAccess.js";
 import {
   completeDerivationReceipts,
+  canonicalDerivationJson,
+  canonicalizeDerivation,
   decodeDerivationReceipts,
+  derivationJson as json,
   DerivationKindSchema,
   DerivationReceiptValidationError,
   DerivationOwnershipReceiptSchema,
@@ -83,29 +87,6 @@ function decode(row: RawDerivationRow): ProjectDerivationRow {
   });
 }
 
-function json(value: unknown): string {
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) throw new TypeError("project derivation receipt must be JSON-serializable");
-  return encoded;
-}
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalize(item));
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, canonicalize(item)]),
-    );
-  }
-  return value;
-}
-
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalize(value));
-}
-
 function conflictFromReceipt(
   error: DerivationReceiptValidationError,
   projectId: string,
@@ -152,8 +133,8 @@ function assertBeginIdentity(
   if (
     operation.projectId !== input.projectId ||
     operation.idempotencyFingerprint !== input.idempotencyFingerprint ||
-    canonicalJson(operation.sanitizedInput) !== canonicalJson(input.sanitizedInput) ||
-    canonicalJson(operation.ownershipReceipt) !== canonicalJson(input.ownershipReceipt)
+    canonicalDerivationJson(operation.sanitizedInput) !== canonicalDerivationJson(input.sanitizedInput) ||
+    canonicalDerivationJson(operation.ownershipReceipt) !== canonicalDerivationJson(input.ownershipReceipt)
   ) {
     throw new ProjectDerivationConflictError(input.projectId, "binding_mismatch");
   }
@@ -185,7 +166,7 @@ export function projectDerivationFingerprint(input: {
     input.kind,
     input.orgId,
     input.repoUrl,
-    canonicalize(input.request),
+    canonicalizeDerivation(input.request),
   ]);
   return `sha256:${createHash("sha256").update(body, "utf8").digest("hex")}`;
 }
@@ -276,6 +257,8 @@ async function recordReceiptOnClientQuery<K extends DerivationReceiptKey>(
             status = 'in_progress',
             updated_at = now()
       WHERE org_id = $1 AND id = $2 AND status = 'in_progress'
+        AND ($3::text NOT IN ('design_intent', 'design')
+             OR NOT (COALESCE(result_receipt, '{}'::jsonb) ? $3::text))
       RETURNING ${SELECT_DERIVATION_COLUMNS}`,
     [operation.orgId, operation.id, key, json(encoded), phase],
   );
@@ -404,8 +387,13 @@ export const ProjectDerivationStore = {
         throw new ProjectDerivationConflictError(operation.projectId, "binding_mismatch");
       }
       const complete = requireComplete(current);
-      const project = await client.query<{ lifecycle: ProjectLifecycle; repo_url: string }>(
-        `SELECT lifecycle, repo_url FROM projects
+      const project = await client.query<{
+        lifecycle: ProjectLifecycle;
+        repo_url: string;
+        name: string;
+        default_branch: string;
+      }>(
+        `SELECT lifecycle, repo_url, name, default_branch FROM projects
           WHERE org_id = $1 AND project_id = $2
           FOR UPDATE`,
         [current.orgId, current.projectId],
@@ -422,6 +410,16 @@ export const ProjectDerivationStore = {
           throw new ProjectDerivationConflictError(current.projectId, "invalid_lifecycle");
         }
         return current;
+      }
+      try {
+        await assertProjectDerivationActivationEvidence(client, complete, {
+          name: projectRow.name,
+          repoUrl: projectRow.repo_url,
+          defaultBranch: projectRow.default_branch,
+        });
+      } catch (error) {
+        if (error instanceof DerivationReceiptValidationError) throw conflictFromReceipt(error, current.projectId);
+        throw error;
       }
 
       const activated = await client.query<{ project_id: string }>(
