@@ -23,14 +23,14 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | --- | --- | --- | --- | --- | --- |
 | merge-queue | 16 | 6 | 1 (mq-1) | 1 (mq-2) | 0 |
 | runtime-verification | 26 | 15¹ | 0² | 1 (rv-4) | 0 |
-| integrations | 22 | 22 | 1 (in-2) | 1 (in-1) | 0 |
+| integrations | 22 | 22 | 2 (in-1,in-2) | 0 | 0 |
 | back-half | 35 | 14 | 0 | 0 | 21 (bh-15..35) |
 | design-system | 9 | 6 | 0 | 0 | 0 |
 | governance | 34 | 15 | 3 (gv-1,4,5) | 1 (gv-2) | 19 (gv-16..34) |
-| **Total** | **142** | **~78** | **5** | **4** | **40** |
+| **Total** | **142** | **~78** | **6** | **3** | **40** |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
-² Strict completion **5/142 = 3.5%**. The 4 in-flight worktrees (in-1, rv-4, gv-2, mq-2) + the in-7 event substrate are the immediate frontier.
+² Strict completion **6/142 = 4.2%**. The 3 in-flight worktrees (rv-4, gv-2, mq-2) + the in-7 event substrate are the immediate frontier. in-1 (the integrations foundation) merged via #966 on 2026-07-16.
 
 > **Honesty flag — the 142 is partly aspirational.** The **MVP tier (~78 nodes, the
 > v97 acceptance target) is fully specced.** The **full tier has 40 nodes of spec
@@ -43,7 +43,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Worktree | Node | State |
 | --- | --- | --- |
-| `in-1-final-fold` | in-1 | Draft PR #966, 44 ahead, clean; ci passed, smoke interrupted. **Next to land.** |
+| ~~`in-1-final-fold`~~ | in-1 | ✅ **MERGED #966** (2026-07-16) — org-costs FK reconciled, 22-table RLS proof, grok GO. Worktree retired. |
 | `rv-4-final` | rv-4 | Clean, audit GO; needs post-in-1 rebase + migration/HTTP/UI tail. |
 | `gv-2-final` | gv-2 | Audit GO; 6 spelling-only dirty paths; needs rebase + commit + gates. |
 | `mq-2-final` | mq-2 | Real multi-member authority; collides with in-1/rv-4 → re-port clean over them. |
@@ -107,7 +107,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Node | Status | Purpose | Deps |
 | --- | --- | --- | --- |
-| in-1 | 🟡 in-flight | Integration lifecycle data model + RLS migration | SP·1 |
+| in-1 | ✅ done | Integration lifecycle data model + RLS migration (#966) | SP·1 |
 | in-2 | ✅ done | Typed lifecycle contracts (IntegrationRequirementV1 …) | SP·1 |
 | in-3 | ⬜ todo | Typed integration event vocabulary | in-1 · SP·8 |
 | in-4 | ⬜ todo | IntegrationStateWriter (control-plane) + data-plane de-priv | in-1/3 |
