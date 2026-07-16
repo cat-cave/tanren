@@ -29,7 +29,7 @@ activate completely; binding workers remain schema-only for later slices.
 This Slice 1 ships as one cumulative clean-replacement PR from exact
 `origin/main` (`9f20c3ea9a4d972a2564374abd16c63ed5f6fe87`). It is not a final-repair
 delta layered on an undeclared branch. The complete comparison contains exactly
-151 paths: 59 additions, 89 modifications, and 3 deletions. The deleted paths are
+152 paths: 60 additions, 89 modifications, and 3 deletions. The deleted paths are
 `db/src/schemaIntegrations.ts`,
 `services/orchestrator/src/engine/repositories/orgIntegrations.ts`, and
 `services/orchestrator/tests/conformance/integrationRepositories.conformance.test.ts`.
@@ -43,7 +43,7 @@ That count cannot advance before exact-candidate independent audit, live proof,
 CI, shared smoke, and hosted merge; even then, IN-1 remains incomplete until the
 downstream binding activation and remaining cutover slices land.
 
-### Exhaustive 151-path manifest
+### Exhaustive 152-path manifest
 
 <!-- final-freeze-manifest:start -->
 
@@ -186,6 +186,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/tests/integrationAuthorityRaces.test.ts`
 - `services/orchestrator/tests/integrationConnectionSaga.integration.test.ts`
 - `services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts`
+- `services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts`
 - `services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts`
 - `services/orchestrator/tests/integrationLifecycleModel.test.ts`
 - `services/orchestrator/tests/integrationLifecycleRls.integration.test.ts`

@@ -333,6 +333,20 @@ describeDb("IN-1 same-org lineage repair — rejects cross-project endpoints", (
 
   // ---- Edge 8/9/10: binding generation (reconciliation / snapshot / proof) ----
   it("rejects a binding-generation reference (reconciliation/snapshot/proof) to another project", async () => {
+    // Same-project positive controls: the cross-project rejects below are only
+    // meaningful if the identical insert shape succeeds against the seeded
+    // Project-A binding generation.
+    await owner.query(
+      `INSERT INTO integration_reconciliations (org_id, id, project_id, requirement_id, binding_id, binding_generation, phase, idempotency_key, request_fingerprint)
+       VALUES ($1, 'rec-ctrl', $2, $3, $4, 1, 'discover', 'idem-ctrl', $5)`,
+      [ORG, PROJECT_A, A.requirement, A.binding, D],
+    );
+    await owner.query(
+      `INSERT INTO integration_resource_snapshots (org_id, id, project_id, requirement_id, binding_id, binding_generation, provider_kind, external_resource_id, observed_state_hash, sanitized_snapshot, health, last_seen_at)
+       VALUES ($1, 'snap-ctrl', $2, $3, $4, 1, 'sentry', 'ext', $5, '{}'::jsonb, 'healthy', now())`,
+      [ORG, PROJECT_A, A.requirement, A.binding, D],
+    );
+    // Cross-project rejects: swap only the binding endpoint to Project B.
     await expect(
       owner.query(
         `INSERT INTO integration_reconciliations (org_id, id, project_id, requirement_id, binding_id, binding_generation, phase, idempotency_key, request_fingerprint)
@@ -443,6 +457,17 @@ describeDb("IN-1 same-org lineage repair — rejects cross-project endpoints", (
           CAS_A,
         ],
       );
+    // Seed this proof's OWN delivery-run binding membership so the control below
+    // does not rely on the delivery-run-binding test having run first. The
+    // delivery_binding_set_fk needs a (org, project, run, binding, gen) row; this
+    // is idempotent (ON CONFLICT DO NOTHING) whether or not that test or the seed
+    // already created the Project-A membership.
+    await owner.query(
+      `INSERT INTO delivery_run_bindings (org_id, project_id, delivery_run_id, binding_id, binding_generation)
+       VALUES ($1, $2, $3, $4, 1)
+       ON CONFLICT (org_id, delivery_run_id, binding_id, binding_generation) DO NOTHING`,
+      [ORG, PROJECT_A, A.deliveryRun, A.binding],
+    );
     // control (all Project A) succeeds.
     await insertProof(baseProof({}));
     await expect(insertProof(baseProof({ spec: B.spec }))).rejects.toThrow(fkError);

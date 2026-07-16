@@ -2,14 +2,11 @@ import { sql } from "drizzle-orm";
 import { type AnyPgColumn, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
-// `runs` lives here so benchmark sub-schemas can reference it without importing
-// schema.ts and closing an import cycle. schema.ts re-exports it for consumers.
-// Core identity + project/spec tables. These are referenced by the split
-// sub-schema files (schemaForge, schemaInbox, …). Keeping them here — rather
-// than in schema.ts — lets those sub-schemas reference the base tables without
-// importing schema.ts, which re-exports the sub-schemas (that re-export edge
-// would otherwise close an import cycle). schema.ts re-exports everything here
-// so consumers + the migration generator still see one `schema.*` namespace.
+// Core identity + project/spec/run tables. The split sub-schemas (schemaForge,
+// schemaInbox, …) reference these base tables directly here — rather than via
+// schema.ts — because schema.ts re-exports the sub-schemas (that re-export edge
+// would otherwise close an import cycle). schema.ts re-exports everything here so
+// consumers + the migration generator still see one `schema.*` namespace.
 
 export function enumCheck(name: string, column: AnyPgColumn, values: ReadonlyArray<string>) {
   const literals = sql.raw(values.map((value) => `'${value.replaceAll("'", "''")}'`).join(","));
@@ -456,15 +453,13 @@ export const integrationNodes = pgTable(
     uniqueIndex("integration_nodes_org_member_key_unique").on(table.orgId, table.memberKey),
   ],
 );
-// tanren-owns-the-engine.md §3 proof reuse: a gate/CI verdict on a node is reused
-// ONLY when EVERY component of the `proofReuseKey` matches (member_key +
-// gate_config_hash + policy_version + runner image + app-env + quarantine). This
-// table records the proof keyed by that full key — so a batch proof carries into
-// the real merge, a bisection reads a prefix node's proof, and a no-op rebase skips
-// unaffected gate tiers (all Wave-3 leverage; OBSERVE-ONLY now). `proof_reuse_key`
-// is the natural identity (the same six inputs → one proof per org).
-//
-// org_id is the tenant root (RLS deny-by-default, 3a-style direct org match).
+// tanren-owns-the-engine.md §3 proof reuse: a gate/CI verdict on a node is reused ONLY when
+// EVERY component of the `proofReuseKey` matches (member_key + gate_config_hash + policy_version
+// + runner image + app-env + quarantine). This table records the proof keyed by that full key —
+// so a batch proof carries into the real merge, a bisection reads a prefix node's proof, and a
+// no-op rebase skips unaffected gate tiers (all Wave-3 leverage; OBSERVE-ONLY now).
+// `proof_reuse_key` is the natural identity (the same six inputs → one proof per org); org_id is
+// the tenant root (RLS deny-by-default, 3a-style direct org match).
 export const integrationProofs = pgTable(
   "integration_proofs",
   {
