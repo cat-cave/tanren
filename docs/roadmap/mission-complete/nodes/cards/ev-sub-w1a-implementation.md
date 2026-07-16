@@ -31,30 +31,30 @@ apex behavior. It cannot earn consumer-node credit.
 
 ### Phase A — immediate non-migration paths
 
-| Path                                                                                                | Action                                                                  |
-| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `docs/roadmap/mission-complete/nodes/cards/ev-sub-w1a-implementation.md`                            | This ownership and validation card                                      |
-| `services/orchestrator/src/engine/events/schemas/eventVocabularyW1aIntegrationAuthor.ts`            | Four frozen strict payloads + `w1aEventRegistry` (canonical re-author)  |
-| `services/orchestrator/src/engine/events/schemas/integrations.ts`                                   | Re-export `w1aEventRegistry` only (one line)                            |
-| `services/orchestrator/src/engine/events/registry.ts`                                               | Import/spread `w1aEventRegistry` only (≤498 lines)                      |
-| `services/orchestrator/src/engine/events/sensitivityRules.eventVocabularyW1aIntegrationAuthor.ts`   | Complete frozen W1-A sensitivity path sets (16 public leaves)           |
-| `services/orchestrator/src/engine/events/sensitivityRules.ts`                                       | Import/spread W1-A rule set                                             |
-| `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`                            | Four explicit frozen severity entries                                   |
-| `db/src/eventTypesSeed.ts`                                                                          | Generated mirror from `codegen:events`; never hand-edited               |
-| `contracts/json/events/integration_author_started.json`                                             | Generated JSON contract                                                 |
-| `contracts/json/events/integration_author_attempt.json`                                             | Generated JSON contract                                                 |
-| `contracts/json/events/integration_author_succeeded.json`                                           | Generated JSON contract                                                 |
-| `contracts/json/events/integration_author_failed.json`                                              | Generated JSON contract                                                 |
-| `services/orchestrator/tests/eventVocabularyW1aIntegrationAuthor.test.ts`                           | Unit and drift-boundary proof                                           |
-| `services/orchestrator/tests/prep/integrationAuthorEventPrep.test.ts`                               | Flip obsolete “no production registration” assertion; retain no-authority-import proof |
+| Path                                                                                              | Action                                                                                 |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `docs/roadmap/mission-complete/nodes/cards/ev-sub-w1a-implementation.md`                          | This ownership and validation card                                                     |
+| `services/orchestrator/src/engine/events/schemas/eventVocabularyW1aIntegrationAuthor.ts`          | Four frozen strict payloads + `w1aEventRegistry` (canonical re-author)                 |
+| `services/orchestrator/src/engine/events/schemas/integrations.ts`                                 | Re-export `w1aEventRegistry` only (one line)                                           |
+| `services/orchestrator/src/engine/events/registry.ts`                                             | Import/spread `w1aEventRegistry` only (≤498 lines)                                     |
+| `services/orchestrator/src/engine/events/sensitivityRules.eventVocabularyW1aIntegrationAuthor.ts` | Complete frozen W1-A sensitivity path sets (16 public leaves)                          |
+| `services/orchestrator/src/engine/events/sensitivityRules.ts`                                     | Import/spread W1-A rule set                                                            |
+| `services/orchestrator/src/engine/notifications/eventDefaultSeverity.ts`                          | Four explicit frozen severity entries                                                  |
+| `db/src/eventTypesSeed.ts`                                                                        | Generated mirror from `codegen:events`; never hand-edited                              |
+| `contracts/json/events/integration_author_started.json`                                           | Generated JSON contract                                                                |
+| `contracts/json/events/integration_author_attempt.json`                                           | Generated JSON contract                                                                |
+| `contracts/json/events/integration_author_succeeded.json`                                         | Generated JSON contract                                                                |
+| `contracts/json/events/integration_author_failed.json`                                            | Generated JSON contract                                                                |
+| `services/orchestrator/tests/eventVocabularyW1aIntegrationAuthor.test.ts`                         | Unit and drift-boundary proof                                                          |
+| `services/orchestrator/tests/prep/integrationAuthorEventPrep.test.ts`                             | Flip obsolete “no production registration” assertion; retain no-authority-import proof |
 
 ### Phase B — serialized migration paths (BLOCKED; do not author yet)
 
-| Path                                                                                         | Action after 0043/0044/0045 on `origin/main`                                                                                          |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `db/migrations/004N_event_vocabulary_w1a.sql`                                                | Add only the four frozen catalog rows, idempotently (`004N` = free)                                                                   |
-| `db/migrations/meta/004N_snapshot.json`                                                      | Schema-copy predecessor; fresh ID chained (no DDL)                                                                                    |
-| `db/migrations/meta/_journal.json`                                                           | Append the serialized idx-N entry                                                                                                     |
+| Path                                                                                         | Action after 0043/0044/0045 on `origin/main`                                                                                                                                                                                                                                                                                   |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `db/migrations/004N_event_vocabulary_w1a.sql`                                                | Add only the four frozen catalog rows, idempotently (`004N` = free)                                                                                                                                                                                                                                                            |
+| `db/migrations/meta/004N_snapshot.json`                                                      | Schema-copy predecessor; fresh ID chained (no DDL)                                                                                                                                                                                                                                                                             |
+| `db/migrations/meta/_journal.json`                                                           | Append the serialized idx-N entry                                                                                                                                                                                                                                                                                              |
 | `services/orchestrator/tests/eventVocabularyW1aIntegrationAuthorCatalog.integration.test.ts` | **Not authored until the actual free migration slot exists.** When created, complete W0-shaped proof: `migrate()` + `PgEventStore` append + FK/catalog seed + RLS isolation + restart read-back (`eventVocabularyW0Catalog.integration.test.ts`). No guessed 0046–0048 filenames, no skip-stub body, no Phase A partial suite. |
 
 **Never steal slots 0043 / 0044 / 0045.** Choose the then-free ≥0046-class index
@@ -83,12 +83,12 @@ fifth name or silent reshape is permitted. Payloads have no `version` field.
 
 ### Strict payload field sets (envelope owns tenancy)
 
-| Name      | Leaves                                                                                                                                 |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| started   | `missionNodeId: "in-7"`, `unitId` (1..256)                                                                                             |
+| Name      | Leaves                                                                                                                                                           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| started   | `missionNodeId: "in-7"`, `unitId` (1..256)                                                                                                                       |
 | attempt   | started + `attempt` (≥1 int), `bodyPreview` (≤500 via `AUTHORING_ATTEMPT_BODY_PREVIEW_MAX`), `canonicalSignature` (1..256), `rejection` (≤2000), `decision` enum |
-| succeeded | started + `attempts` (≥1 int)                                                                                                          |
-| failed    | started + `reason` (1..2000), `attempts` (≥0 int)                                                                                      |
+| succeeded | started + `attempts` (≥1 int)                                                                                                                                    |
+| failed    | started + `reason` (1..2000), `attempts` (≥0 int)                                                                                                                |
 
 All 16 leaves are `public`. No `orgId` / `projectId` / `runId` / credentials in payload.
 

@@ -121,9 +121,9 @@ describe("mission-complete W1-A integration.author event vocabulary", () => {
     expect(parses("integration.author.attempt", { ...attempt, rejection: "x".repeat(2_001) })).toBe(false);
     expect(parses("integration.author.attempt", { ...attempt, decision: "retry" })).toBe(false);
 
-    expect(parses("integration.author.succeeded", { ...validPayloads["integration.author.succeeded"], attempts: 0 })).toBe(
-      false,
-    );
+    expect(
+      parses("integration.author.succeeded", { ...validPayloads["integration.author.succeeded"], attempts: 0 }),
+    ).toBe(false);
     expect(parses("integration.author.failed", { ...validPayloads["integration.author.failed"], reason: "" })).toBe(
       false,
     );
