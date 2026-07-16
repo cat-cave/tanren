@@ -41,7 +41,7 @@ them. Prefer many small green PRs landing back-to-back over one 400-file slab.
 > **Precedent:** in-1 (the integrations foundation) landed at ~382 files / +45k —
 > the **justified exception**, because it establishes the whole `integration_*`
 > vocabulary + RLS backbone that in-2..22 consume. It also, tellingly, bundled
-> *global spine-lineage FKs* that broke an out-of-card smoke test — exactly the
+> _global spine-lineage FKs_ that broke an out-of-card smoke test — exactly the
 > cross-cutting blast radius a light node avoids. Going forward: a node that needs a
 > cross-cutting spine change (a shared FK, a global invariant) **splits that change
 > into its own serialized migration/prep PR** rather than folding it into a feature
@@ -66,12 +66,12 @@ enter an open-ended audit loop.
 
 ### Rule 3 — Role + model routing as fixed lanes
 
-| Lane | Model | Job |
-| --- | --- | --- |
-| **Root** | Claude (this orchestrator) | Lease cards, run barrier pre-flight, freeze the wave base, gate evidence, merge, update `LEDGER.md`. **Never authors production code.** |
-| **Implementor** ×3–4 | Claude native subagents (worktree-isolated) + **codex/luna** for heavy authoring | One card each, disjoint paths, build to `just affected-typecheck` + the node's tests green. |
-| **Auditor** | **grok** | One adversarial pass per node vs the card's validation column **+ a negative control**. Binary GO / NO-GO. |
-| **Mechanical** | **opencode / glm** | Spelling, line-cap splits, audit-fix nits, card/manifest reconciliation. |
+| Lane                 | Model                                                                            | Job                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **Root**             | Claude (this orchestrator)                                                       | Lease cards, run barrier pre-flight, freeze the wave base, gate evidence, merge, update `LEDGER.md`. **Never authors production code.** |
+| **Implementor** ×3–4 | Claude native subagents (worktree-isolated) + **codex/luna** for heavy authoring | One card each, disjoint paths, build to `just affected-typecheck` + the node's tests green.                                             |
+| **Auditor**          | **grok**                                                                         | One adversarial pass per node vs the card's validation column **+ a negative control**. Binary GO / NO-GO.                              |
+| **Mechanical**       | **opencode / glm**                                                               | Spelling, line-cap splits, audit-fix nits, card/manifest reconciliation.                                                                |
 
 Claude subagents (Agent tool, `isolation: "worktree"`) and codex (its own
 `.codex/worktrees`) run **concurrently** — that is the 6–7 lanes. Reserve any
@@ -145,6 +145,6 @@ node credit.
   cards, and merged PRs.
 - **`just compose-down` before retiring a merged worktree.** `just smoke` leaves a
   compose stack running (registry on `:5000`, postgres, etc.); removing the worktree
-  does *not* stop it, so the next worktree's smoke fails to bind `:5000`
+  does _not_ stop it, so the next worktree's smoke fails to bind `:5000`
   (`rootlessport ... address already in use`). Tear the stack down first, then
   `git worktree remove`.
