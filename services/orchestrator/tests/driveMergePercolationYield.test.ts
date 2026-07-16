@@ -14,6 +14,8 @@ import { FakeAllocator } from "../src/engine/contracts/allocator.js";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { FakeCommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { inertGitHubHttp } from "./helpers/githubHttp.js";
+import type { BaseShiftRebaseHook } from "../src/engine/workflow/reviewMerge/mergeDispatchTypes.js";
+import { InMemoryRunStateWriter } from "./fixtures/inMemoryRunStateWriter.js";
 
 const RUN_ID = "run_yield";
 const SPEC_ID = "spec_yield";
@@ -103,27 +105,31 @@ function fakePool(): pg.Pool {
   } as unknown as pg.Pool;
 }
 
+function driveWithBaseShift(allocator: SpyAllocator, baseShiftRebaseOverride: BaseShiftRebaseHook) {
+  return buildDriveMerge({
+    pool: fakePool(),
+    secrets: new FakeSecretStore(),
+    githubHttp: inertGitHubHttp(),
+    allocator,
+    ssh: new FakeCommandSubstrate(),
+    identitySecretRef: "secret/runner/identity",
+    runStateWriter: new InMemoryRunStateWriter(),
+    mergeProbe: {
+      readFreshness: async () => ({ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }),
+      readBaseBranch: async () => "main",
+      retargetBase: async () => {},
+    },
+    baseShiftRebaseOverride,
+  });
+}
+
 describe("buildDriveMerge — percolation mutual exclusion (the drive YIELDS, never escalates)", () => {
   it("a live percolation_pending marker on a conflicting drive → recoverable `blocked` hold, NOT needs_attention", async () => {
     const allocator = new SpyAllocator();
-    const drive = buildDriveMerge({
-      pool: fakePool(),
-      secrets: new FakeSecretStore(),
-      githubHttp: inertGitHubHttp(),
-      allocator,
-      ssh: new FakeCommandSubstrate(),
-      identitySecretRef: "secret/runner/identity",
-      // §5h: freshness is the `CodeHost`-derived ancestry signal — inject a `behind` probe +
-      // a base-shift hook that surfaces the CONFLICT (jj owns conflict), so the conflict
-      // reaches the drive's resolver hook (where the percolation-yield lives) without a real
-      // GitHub provider / a real jj rebase.
-      mergeProbe: {
-        readFreshness: async () => ({ state: "behind", behind: true, baseBranch: "main", headBranch: "tanren/run_1" }),
-        readBaseBranch: async () => "main",
-        retargetBase: async () => {},
-      },
-      baseShiftRebaseOverride: async () => ({ outcome: "conflict", message: "branch conflicts with base" }),
-    });
+    const drive = driveWithBaseShift(allocator, async () => ({
+      outcome: "conflict",
+      message: "branch conflicts with base",
+    }));
 
     const outcome = await drive({ runId: RUN_ID, projectId: PROJECT_ID });
 
@@ -133,6 +139,39 @@ describe("buildDriveMerge — percolation mutual exclusion (the drive YIELDS, ne
     expect(outcome.kind).not.toBe("needs_attention");
     // The drive yielded BEFORE provisioning a runner — it never raced percolation.
     expect(allocator.allocateCalls).toBe(0);
+  });
+
+  it("a completed base-shift park is not attempted again by outer settlement", async () => {
+    const drive = driveWithBaseShift(new SpyAllocator(), async () => ({
+      outcome: "held",
+      message: "already parked",
+      recovery: { kind: "parked", newlyParked: true },
+    }));
+
+    await expect(drive({ runId: RUN_ID, projectId: PROJECT_ID })).resolves.toEqual({
+      kind: "needs_attention",
+      message: "already parked",
+      parking: "complete",
+    });
+  });
+
+  it("a retained base-shift parking failure remains retained without a second attempt", async () => {
+    const drive = driveWithBaseShift(new SpyAllocator(), async () => ({
+      outcome: "held",
+      message: "park retained",
+      recovery: {
+        kind: "parking_failed",
+        message: "park retained",
+        queueDisposition: "retained",
+        retryAfterMs: 3_000,
+      },
+    }));
+
+    await expect(drive({ runId: RUN_ID, projectId: PROJECT_ID })).resolves.toEqual({
+      kind: "needs_attention",
+      message: "park retained",
+      parking: "parking_failed",
+    });
   });
 });
 

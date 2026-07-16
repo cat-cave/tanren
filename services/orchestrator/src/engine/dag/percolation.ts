@@ -17,11 +17,8 @@
 //   SHA:
 //     - `none`      → unchanged (a no-op / already-absorbed signal never re-fires).
 //     - `lazy`      → emit `percolation_deferred` (batched into the next rebase).
-//     - `immediate` → emit `percolating`, then KICK OFF a real re-execution
-//                     (rebuild → re-base → re-enqueue the dependent so its own
-//                     gate+checker+auditor re-run). Held on an ancestor-vs-ancestor
-//                     conflict. The change is NOT absorbed here — it absorbs on the
-//                     SETTLE of a LATER pass, after the re-execution re-gates clean.
+//     - `immediate` → emit `percolating`, then rebase and re-gate the same run in
+//                     place. The change is absorbed only on a later settle pass.
 //
 // It is a SCHEDULER over the seams (like the DagWalker over the executor). It NEVER
 // merges and NEVER records the absorbed key on a bare re-base — absorption requires
@@ -54,6 +51,8 @@ export interface PercolationPassResult {
   deferred: string[];
   /** Dependents routed BACK TO THE PLANNER (irreconcilable) — work kept ALIVE, not dropped. */
   replanned: string[];
+  /** Dependents durably parked at needs_attention by the atomic recovery authority. */
+  parked: string[];
   /** Dependents whose IMMEDIATE change kicked off a real re-execution this pass. */
   reexecuting: string[];
   /** Dependents whose re-execution is still IN FLIGHT (the loop guard — no re-emit). */
@@ -62,8 +61,7 @@ export interface PercolationPassResult {
    * Dependents HELD this pass — a RECOVERABLE hold (NOT a failure), retried on the next
    * notification: an ancestor-vs-ancestor rebuild conflict, OR a fail-closed
    * `BaseShiftHeldError` (the never-discard base-shift rebase/resolver/gate could not
-   * settle — the work survives untouched; Wave 3 resumes it once the live runner is
-   * plumbed). Distinct from `failed` (a real, non-recoverable error).
+   * settle and the work survives untouched). Distinct from `failed`.
    */
   held: string[];
   /** Dependents with NO actionable change (the termination key — verified SHA matches). */
@@ -129,6 +127,7 @@ function emptyResult(projectId: string): PercolationPassResult {
     absorbed: [],
     deferred: [],
     replanned: [],
+    parked: [],
     reexecuting: [],
     inFlight: [],
     held: [],
@@ -263,7 +262,11 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
     if (verdict === "absorbed") {
       // The dependent's OWN gate+checker+auditor re-ran CLEAN against the change.
       // Advance the verified SHA (the termination key) + clear the marker.
-      await this.deps.settler.absorb({ projectId, dependent, pending });
+      const outcome = await this.deps.settler.absorb({ projectId, dependent, pending });
+      if (outcome.result !== "absorbed") {
+        await this.recordRecoveryOutcome(projectId, dependent, pending, outcome, result);
+        return;
+      }
       await this.deps.events.emitPercolated({
         projectId,
         specId: dependent.specId,
@@ -279,16 +282,41 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
     // the dependent back to the planner WITH the change as context (NEVER dropped,
     // NEVER merged) + clear the marker.
     const reason = `re-execution could not reconcile the upstream change from ${pending.ancestorSpecId}`;
-    await this.deps.settler.replan({ projectId, dependent, pending, reason });
-    await this.deps.events.emitPercolationReplan({
-      projectId,
-      specId: dependent.specId,
-      runId: dependent.runId,
-      ancestorSpecId: pending.ancestorSpecId,
-      ancestorSha: pending.toSha,
-      reason,
-    });
-    result.replanned.push(dependent.specId);
+    const outcome = await this.deps.settler.replan({ projectId, dependent, pending, reason });
+    await this.recordRecoveryOutcome(projectId, dependent, pending, outcome, result, reason);
+  }
+
+  private async recordRecoveryOutcome(
+    projectId: string,
+    dependent: SpeculativeDependent,
+    pending: PercolationPending,
+    outcome: Exclude<Awaited<ReturnType<PercolationSettler["absorb"]>>, { result: "absorbed" }>,
+    result: PercolationPassResult,
+    reason = "percolation recovery refused absorption and routed the dependent",
+  ): Promise<void> {
+    if (outcome.result === "replanned") {
+      await this.deps.events.emitPercolationReplan({
+        projectId,
+        specId: dependent.specId,
+        runId: dependent.runId,
+        ancestorSpecId: pending.ancestorSpecId,
+        ancestorSha: pending.toSha,
+        reason,
+      });
+      result.replanned.push(dependent.specId);
+      return;
+    }
+    if (outcome.result === "parked") {
+      result.parked.push(dependent.specId);
+      return;
+    }
+    if (outcome.result === "terminal_noop") {
+      result.skipped.push(dependent.specId);
+      return;
+    }
+    // parking_failed retains the marker and is a recoverable/paced hold.
+    this.heldBackoff.recordHeld(dependent.specId);
+    result.held.push(dependent.specId);
   }
 
   /** PHASE 2: detect a new actionable change + kick off / defer. */
@@ -364,6 +392,18 @@ export class PercolatingCoordinator implements ChangePercolationCoordinator {
         this.heldBackoff.clear(dependent.specId);
         this.deferredDedup.clear(dependent.specId);
         result.reexecuting.push(dependent.specId);
+      } else if (outcome.result === "replanned") {
+        this.heldBackoff.clear(dependent.specId);
+        this.deferredDedup.clear(dependent.specId);
+        result.replanned.push(dependent.specId);
+      } else if (outcome.result === "parked") {
+        this.heldBackoff.clear(dependent.specId);
+        this.deferredDedup.clear(dependent.specId);
+        result.parked.push(dependent.specId);
+      } else if (outcome.result === "terminal_noop") {
+        this.heldBackoff.clear(dependent.specId);
+        this.deferredDedup.clear(dependent.specId);
+        result.skipped.push(dependent.specId);
       } else {
         // held: a never-discard base-shift hold surfaced as a structured kick-off result
         // (a spec-vs-spec assembly conflict now surfaces as a `BaseShiftHeldError` thrown

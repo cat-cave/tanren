@@ -14,7 +14,6 @@ import type { GithubAppTokenMinter } from "../providers/githubAppTokenMinter.js"
 import { buildBatchMergeCoordinator } from "./batchCoordinatorBuild.js";
 import { boundedRetryDelayMs, serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { discoverOrphanedPrs } from "./orphanedPrSweep.js";
-import { LIST_PROJECTS_WITH_QUEUE_SQL } from "./subscriberQueueDiscoverySql.js";
 import { createLogger } from "../observability/logger.js";
 import { subscribeWithReconnect, type SubscribeWithReconnectHandle } from "../db/notifySubscriber.js";
 
@@ -111,7 +110,7 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
       `SELECT DISTINCT project_id
          FROM merge_queue
         WHERE org_id = $1
-          AND status IN ('queued', 'merging', 'dequeued')
+          AND status IN ('queued', 'merging')
         ORDER BY project_id`,
       [row.org_id],
     );
@@ -122,7 +121,12 @@ async function resolveCredentialRepairProjects(pool: pg.Pool, eventId: string): 
 /** Discover every project that has a native merge queue to coordinate (system-scoped). */
 async function listProjectsWithQueue(pool: pg.Pool): Promise<string[]> {
   return runWithSystemScope(pool, async (client) => {
-    const result = await client.query<{ project_id: string }>(LIST_PROJECTS_WITH_QUEUE_SQL);
+    const result = await client.query<{ project_id: string }>(
+      `SELECT DISTINCT project_id
+         FROM merge_queue
+        WHERE status IN ('queued', 'merging')
+        ORDER BY project_id`,
+    );
     return result.rows.map((row) => row.project_id);
   });
 }

@@ -53,8 +53,12 @@ const noopEmitter: PercolationEventEmitter = {
 };
 
 const noopSettler: PercolationSettler = {
-  async absorb(): Promise<void> {},
-  async replan(): Promise<void> {},
+  async absorb() {
+    return { result: "absorbed" };
+  },
+  async replan() {
+    return { result: "replanned", reexecRunId: "run_replan" };
+  },
 };
 
 describe("percolation pass classifies a fail-closed BaseShiftHeldError as `held`, not `failed`", () => {

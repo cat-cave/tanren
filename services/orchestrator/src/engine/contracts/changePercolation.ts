@@ -42,6 +42,7 @@
 //     unchanged SHA does not re-trigger every walk.
 
 import type { OpenFindingSeverity, ReviewVerdict, SpecLifecycleState } from "./dagLifecycle.js";
+import type { TerminalParkNoopStatus } from "./conflictResolution.js";
 
 // ---- The ancestor-change signal (what the detect step reads) ---------------
 
@@ -346,36 +347,37 @@ export interface PercolationReadModel {
 
 /**
  * The outcome of KICKING OFF a percolation for ONE (dependent, ancestor-change).
- * `reexecuting`: the integration was rebuilt against the ancestor's new state, the
- * dependent re-based onto it, and a real re-execution enqueued — its gate + checker
- * + auditor will run; the change is NOT yet absorbed (it settles when that run
- * terminates clean). `held`: the rebuild surfaced an ancestor-vs-ancestor conflict
- * (routed to the conflict resolver as in the merge-hold) — retried next walk; the work untouched.
+ * `reexecuting`: the existing dependent branch was rebased onto the re-resolved
+ * ancestor stack and re-gated in place; the change is not absorbed until settle.
+ * Recovery outcomes preserve owned/parked/terminal truth; `held` is retried paced.
  */
 export interface PercolationKickOffOutcome {
-  result: "reexecuting" | "held";
+  result: "reexecuting" | "replanned" | "parked" | "terminal_noop" | "held";
   ancestorSpecId: string;
   /** On `reexecuting`: the re-execution run id (recorded in the in-flight marker). */
   reexecRunId?: string;
   /** On `held`: the ancestor-vs-ancestor conflict detail. */
   reason?: string;
+  /** On `terminal_noop`: the concurrent terminal state that ended recovery. */
+  terminalStatus?: TerminalParkNoopStatus;
 }
+
+/** Truthful settlement of a percolation route; parking failure retains its marker. */
+export type PercolationRecoveryOutcome =
+  | { result: "replanned"; reexecRunId: string }
+  | { result: "parked" }
+  | { result: "terminal_noop"; terminalStatus: TerminalParkNoopStatus }
+  | { result: "held"; reason: string };
+
+export type PercolationAbsorbOutcome = { result: "absorbed" } | PercolationRecoveryOutcome;
 
 /**
  * Kicks off the §2c chain re-integration for ONE (dependent, ancestor-change):
- *   1. Rebuild the dependent's speculative integration against the ancestor's NEW
- *      state (reuse the SpeculativeIntegrator). An A-vs-other conflict ⇒
- *      `held` (routed to the conflict resolver, retried next walk).
- *   2. Re-base the dependent onto the rebuilt integration (update `speculative_base`
- *      + `integrated_ancestor_shas`), keeping the dependent's OWN branch/work as the
- *      base — never reset/discarded.
- *   3. Re-execute the dependent through a REAL run (the DagWalker createQueuedRunFromSpec
- *      path) so its gate + checker + auditor genuinely re-run against the percolated
- *      change (the planner re-plans / the upstream-change resolver reconciles a
- *      break). Record the in-flight marker (so the settle phase resolves it and a
- *      sticky signal does not re-trigger). Returns `reexecuting` with the run id.
+ *   1. Re-resolve the ordered unmerged ancestor stack at its current heads.
+ *   2. Rebase the dependent's existing branch/run onto that stack in place.
+ *   3. Re-gate that same run and record the in-flight marker for later settlement.
  * It does NOT record the absorbed SHA — that happens on SETTLE, only after the
- * re-execution re-gated clean (NEVER merge unverified).
+ * re-gate passed (NEVER merge unverified).
  */
 export interface PercolationKickOff {
   kickOff(input: {
@@ -384,12 +386,9 @@ export interface PercolationKickOff {
     decision: PercolationDecision;
     /**
      * The ancestor spec ids that have MERGED to `default_branch` (lifecycle
-     * `merged`). The kick-off DROPS these from the speculative stack: the rebuilt
-     * integration stacks only the UNMERGED ancestors (a merged ancestor's content
-     * arrives via fresh main, since the integrator resets the ephemeral ref to
-     * `default_branch` first). When EVERY ancestor has merged the re-base is onto
-     * plain `default_branch` and the re-execution is genuinely NON-speculative
-     * (`speculative_base` cleared to NULL) — a real run against main.
+     * `merged`). The kick-off drops these from the re-resolved ancestor stack; their
+     * content arrives through fresh `default_branch`. When every ancestor has merged,
+     * the stack is empty and the same run rebases non-speculatively onto main.
      */
     mergedAncestorSpecIds: ReadonlyArray<string>;
   }): Promise<PercolationKickOffOutcome>;
@@ -403,14 +402,18 @@ export interface PercolationKickOff {
  */
 export interface PercolationSettler {
   /** Record the re-gated-clean ancestor SHA + the absorbed verdict; clear the marker. */
-  absorb(input: { projectId: string; dependent: SpeculativeDependent; pending: PercolationPending }): Promise<void>;
+  absorb(input: {
+    projectId: string;
+    dependent: SpeculativeDependent;
+    pending: PercolationPending;
+  }): Promise<PercolationAbsorbOutcome>;
   /** Route the dependent back to the planner WITH the upstream change; clear the marker. */
   replan(input: {
     projectId: string;
     dependent: SpeculativeDependent;
     pending: PercolationPending;
     reason: string;
-  }): Promise<void>;
+  }): Promise<PercolationRecoveryOutcome>;
 }
 
 // ---- The chain event emitter ----------------------------------------------

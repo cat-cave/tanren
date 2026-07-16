@@ -55,18 +55,6 @@ export function isSustainedInfraNonRecovery(signatures: ReadonlyArray<string>): 
 }
 
 /**
- * The stable SIGNATURE of a THROWN transient/infra merge-drive error — the error's identity
- * (its `name:message`, or the stringified value for a non-Error). The SAME upstream failure
- * recurring across re-drives produces the identical signature (a persisting fixed point →
- * alert); a SHIFTING failure (a 504 then a 502 then a reset) keeps changing → progress → keep
- * recovering quietly. Keyed on the typed error's name + message (NOT a per-attempt timestamp),
- * so a genuinely-identical failure is recognized as identical across re-drives.
- */
-export function infraThrowSignature(error: unknown): string {
-  return error instanceof Error ? `${error.name}:${error.message}` : String(error);
-}
-
-/**
  * Append `signature` to a trailing history, clamped to {@link INFRA_SIGNATURE_WINDOW}. The
  * store persists the returned array; passing it back through {@link isSustainedInfraNonRecovery}
  * yields the alert decision. Clamping keeps the persisted JSON bounded WITHOUT being an attempt

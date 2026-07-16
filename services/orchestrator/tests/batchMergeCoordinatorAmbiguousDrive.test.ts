@@ -8,6 +8,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
 
 function makeHarness() {
   const queue = new InMemoryMergeQueueModel();
@@ -21,7 +22,8 @@ function makeHarness() {
     checker,
     events,
     batchEvents,
-    escalator: new RecordingSpecEscalator(),
+    escalator: new RecordingSpecEscalator(queue),
+    recoverySettlement: new InMemoryRecoveryOwnedSettlementWriter(queue, events),
     sleep: () => Promise.resolve(),
   });
   return { coordinator, queue, runner, checker, events, batchEvents };

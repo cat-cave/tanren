@@ -13,16 +13,8 @@ import {
   type MergeQueueModel,
   type MergeQueueSnapshot,
   type MergeRunner,
-  type SettleQueryClient,
-  type SupersededEntry,
 } from "../contracts/mergeCoordinator.js";
-import { PgEventStore } from "../eventStore.js";
-import { ClientBoundMergeQueueEventEmitter } from "./coordinatorEvents.js";
-import {
-  type DriveMergeForQueuedRun,
-  type MergeQueueEventEmitter,
-  type MergeSettleTransaction,
-} from "./coordinator.js";
+import { type DriveMergeForQueuedRun } from "./coordinator.js";
 import { MERGE_CLAIM_LEASE_MS } from "./mergeClaimLease.js";
 import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
 
@@ -37,6 +29,8 @@ async function resolveProjectOrg(pool: pg.Pool, projectId: string): Promise<stri
 }
 
 interface QueueEntryRow {
+  org_id: string;
+  project_id: string;
   queue_id: string;
   run_id: string;
   spec_id: string;
@@ -47,100 +41,13 @@ interface QueueEntryRow {
   rn: string | number;
 }
 
+// Re-export so batchCoordinatorBuild can assemble queue + events from one module
+// (stays under import/max-dependencies).
+export { PgMergeQueueEventEmitter } from "./coordinatorEvents.js";
+
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
-
-const RECOVER_DEQUEUED_CANDIDATES_SQL = `
-WITH candidates AS (
-  SELECT mq.queue_id, mq.run_id, mq.dequeue_reason, mq.pr_url, mq.pr_number, anchor.ts AS anchor_ts, anchor.id AS anchor_id
-  FROM merge_queue mq
-  JOIN LATERAL (
-    SELECT e.ts, e.id FROM events e
-    WHERE e.project_id = mq.project_id AND e.org_id = mq.org_id
-      AND (
-        (e.event_type = 'merge.dequeued' AND e.payload ->> 'integration' = 'native_queue' AND e.payload ->> 'reason' = 'blocked')
-        OR (e.event_type = 'merge.batch.infra_blocked' AND e.payload ->> 'terminal' = 'true'
-          AND COALESCE(e.payload ->> 'kind', '') <> 'ambiguous_merge_state'
-          AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%ambiguous%'
-          AND COALESCE(e.payload ->> 'message', '') NOT LIKE '%double-merge%'
-          AND (NOT COALESCE((e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
-            OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
-            OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
-            OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
-            OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
-            OR e.payload ->> 'message' LIKE '%No GitHub credential configured%'), false)
-            OR EXISTS (
-              SELECT 1 FROM events repair
-              CROSS JOIN LATERAL (SELECT COALESCE(NULLIF(e.payload ->> 'credentialRef', ''), NULLIF(e.payload ->> 'missingRef', ''), NULLIF(e.payload ->> 'requiredCredentialRef', ''), substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')) AS missing_ref) missing
-              WHERE repair.project_id = mq.project_id AND repair.org_id = mq.org_id
-                AND (repair.ts > e.ts OR (repair.ts = e.ts AND repair.id > e.id))
-                AND ((repair.event_type = 'integration.provisioned' AND repair.payload ->> 'providerKind' = 'github')
-                  OR repair.event_type IN ('org.github.connected', 'credential.github.configured')
-                  OR repair.payload ->> 'provider' = 'github'
-                  OR repair.payload ->> 'mode' = 'app'
-                  OR repair.payload ->> 'credentialKind' IN ('github_app', 'github_token')
-                  OR (missing.missing_ref ~ '^credential/(github|github_token|github_app)/' AND (repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
-                    OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref))))
-                AND (missing.missing_ref IS NULL OR repair.payload ->> 'mode' = 'app' OR repair.payload ->> 'credentialKind' = 'github_app'
-                  OR repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
-                  OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref)))))
-      )
-      AND ((e.run_id IS NOT NULL AND e.run_id = mq.run_id)
-        OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
-        OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
-        OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
-        OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array' THEN e.payload -> 'members' ELSE '[]'::jsonb END) AS member WHERE member ->> 'prNumber' = mq.pr_number OR member ->> 'specId' = mq.spec_id))
-    ORDER BY e.ts DESC, e.id DESC LIMIT 1
-  ) anchor ON TRUE
-  WHERE mq.project_id = $1 AND mq.status = 'dequeued' AND mq.dequeue_reason = 'blocked'
-    AND mq.pr_url IS NOT NULL AND mq.pr_url <> '' AND mq.pr_number IS NOT NULL
-    AND NOT EXISTS (SELECT 1 FROM merge_queue active WHERE active.run_id = mq.run_id AND active.status IN ('queued', 'merging'))
-    AND NOT EXISTS (
-      SELECT 1 FROM events e
-      WHERE e.project_id = mq.project_id AND e.org_id = mq.org_id
-        AND (e.ts > anchor.ts OR (e.ts = anchor.ts AND e.id > anchor.id))
-        AND (e.event_type IN ('merge.completed', 'merge.queue.infra_blocked', 'merge.batch.culprit', 'dag.spec.needs_attention', 'dag.spec.percolation_replan', 'merge.conflict.replan_routed', 'recovery.replan_queued')
-          OR (e.event_type = 'merge.batch.infra_blocked' AND e.payload ->> 'terminal' = 'true'
-            AND (e.payload ->> 'kind' = 'ambiguous_merge_state' OR e.payload ->> 'message' LIKE '%ambiguous%' OR e.payload ->> 'message' LIKE '%double-merge%'
-              OR ((e.payload ->> 'kind' IN ('missing_required_credential', 'missing_github_credential')
-                OR e.payload ->> 'cause' IN ('missing_required_credential', 'missing_github_credential')
-                OR e.payload ->> 'reason' IN ('missing_required_credential', 'missing_github_credential')
-                OR e.payload ->> 'message' LIKE '%missing GitHub credential ref:%'
-                OR e.payload ->> 'message' LIKE '%missing % credential ref:%'
-                OR e.payload ->> 'message' LIKE '%No GitHub credential configured%')
-                AND NOT EXISTS (
-                  SELECT 1 FROM events repair
-                  CROSS JOIN LATERAL (SELECT COALESCE(NULLIF(e.payload ->> 'credentialRef', ''), NULLIF(e.payload ->> 'missingRef', ''), NULLIF(e.payload ->> 'requiredCredentialRef', ''), substring(e.payload ->> 'message' from 'missing [^:]* credential ref: ([^[:space:]]+)')) AS missing_ref) missing
-                  WHERE repair.project_id = mq.project_id AND repair.org_id = mq.org_id
-                    AND (repair.ts > e.ts OR (repair.ts = e.ts AND repair.id > e.id))
-                    AND ((repair.event_type = 'integration.provisioned' AND repair.payload ->> 'providerKind' = 'github')
-                      OR repair.event_type IN ('org.github.connected', 'credential.github.configured')
-                      OR repair.payload ->> 'provider' = 'github'
-                      OR repair.payload ->> 'mode' = 'app'
-                      OR repair.payload ->> 'credentialKind' IN ('github_app', 'github_token')
-                      OR (missing.missing_ref ~ '^credential/(github|github_token|github_app)/' AND (repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
-                        OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref))))
-                    AND (missing.missing_ref IS NULL OR repair.payload ->> 'mode' = 'app' OR repair.payload ->> 'credentialKind' = 'github_app'
-                      OR repair.payload ->> 'credentialRef' = missing.missing_ref OR repair.payload ->> 'ref' = missing.missing_ref
-                      OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(repair.payload -> 'secretRefNames') = 'array' THEN repair.payload -> 'secretRefNames' ELSE '[]'::jsonb END) AS secret_ref(ref) WHERE secret_ref.ref = missing.missing_ref)))))))
-        AND ((e.run_id IS NOT NULL AND e.run_id = mq.run_id)
-          OR (NULLIF(e.payload ->> 'runId', '') IS NOT NULL AND e.payload ->> 'runId' = mq.run_id)
-          OR (NULLIF(e.payload ->> 'prUrl', '') IS NOT NULL AND e.payload ->> 'prUrl' = mq.pr_url)
-          OR (NULLIF(e.payload ->> 'prNumber', '') IS NOT NULL AND e.payload ->> 'prNumber' = mq.pr_number)
-          OR EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(e.payload -> 'members') = 'array' THEN e.payload -> 'members' ELSE '[]'::jsonb END) AS member WHERE member ->> 'prNumber' = mq.pr_number OR member ->> 'specId' = mq.spec_id)
-          OR (e.event_type IN ('dag.spec.needs_attention', 'dag.spec.percolation_replan', 'merge.conflict.replan_routed', 'recovery.replan_queued') AND e.spec_id = mq.spec_id))
-    )
-  FOR UPDATE OF mq
-), recoverable AS (
-  SELECT c.queue_id, c.run_id, c.dequeue_reason, c.pr_url, c.pr_number FROM candidates c
-  WHERE NOT EXISTS (SELECT 1 FROM merge_queue active WHERE active.run_id = c.run_id AND active.status IN ('queued', 'merging'))
-)
-UPDATE merge_queue mq SET status = 'queued', dequeue_reason = NULL, claimed_at = NULL, settled_at = NULL
-FROM recoverable
-WHERE mq.queue_id = recoverable.queue_id AND mq.status = 'dequeued'
-  AND mq.dequeue_reason = recoverable.dequeue_reason AND mq.pr_url = recoverable.pr_url AND mq.pr_number = recoverable.pr_number
-  AND NOT EXISTS (SELECT 1 FROM merge_queue active WHERE active.run_id = recoverable.run_id AND active.status IN ('queued', 'merging'))`;
 
 /**
  * The pg-backed native-queue model. Resolves the project's org, then reads/writes
@@ -210,7 +117,7 @@ export class PgMergeQueueModel implements MergeQueueModel {
       // The QUEUED entries joined to each spec's DAG facts (depends_on + priority).
       // Ordered deterministically by enqueue time for a stable orderKey tiebreak.
       const entryRows = await client.query<QueueEntryRow>(
-        `SELECT mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
+        `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
                 s.depends_on, s.priority,
                 row_number() OVER (ORDER BY mq.enqueued_at, mq.queue_id) AS rn
            FROM merge_queue mq
@@ -219,6 +126,8 @@ export class PgMergeQueueModel implements MergeQueueModel {
         [projectId],
       );
       const entries: MergeQueueEntry[] = entryRows.rows.map((row) => ({
+        orgId: row.org_id,
+        projectId: row.project_id,
         queueId: row.queue_id,
         runId: row.run_id,
         specId: row.spec_id,
@@ -309,76 +218,12 @@ export class PgMergeQueueModel implements MergeQueueModel {
     );
   }
 
-  async recoverDequeuedCandidates(projectId: string): Promise<number> {
-    const orgId = await resolveProjectOrg(this.pool, projectId);
-    if (orgId === null) return 0;
-    return runWithOrgScope(this.pool, orgId, async (client) => {
-      await client.query("LOCK TABLE merge_queue IN SHARE ROW EXCLUSIVE MODE");
-      const result = await client.query(RECOVER_DEQUEUED_CANDIDATES_SQL, [projectId]);
-      return result.rowCount ?? 0;
-    });
-  }
-
   async markDequeued(queueId: string, reason: DequeueReason): Promise<void> {
     await this.settle(
       queueId,
       "UPDATE merge_queue SET status = 'dequeued', dequeue_reason = $2, settled_at = now() WHERE queue_id = $1",
       [reason],
     );
-  }
-
-  // ATOMICITY (audit RC-4 #3): the same dequeue UPDATE as markDequeued but on a
-  // CALLER-SUPPLIED already-scoped client, so it joins the settle transaction that
-  // also appended the durable event — both commit or both roll back. The client must
-  // already carry the entry's org scope (PgMergeSettleTransaction opens it).
-  async markDequeuedOnClient(client: SettleQueryClient, queueId: string, reason: DequeueReason): Promise<void> {
-    await client.query(
-      "UPDATE merge_queue SET status = 'dequeued', dequeue_reason = $2, settled_at = now() WHERE queue_id = $1",
-      [queueId, reason],
-    );
-  }
-
-  async supersedePriorRunEntry(runId: string): Promise<SupersededEntry | undefined> {
-    const orgId = await this.resolveRunOrg(runId);
-    if (orgId === null) return undefined;
-    return runWithOrgScope(this.pool, orgId, async (client): Promise<SupersededEntry | undefined> => {
-      // Atomically retire the prior run's ACTIVE (queued/merging) entry — the partial
-      // unique index guarantees at most one — so the spec stops having two live
-      // entries (the percolation self-conflict). `RETURNING` carries the spec/PR facts
-      // for the observable `merge.dequeued` event. Idempotent: a run with no active
-      // entry (already superseded / never queued) matches no row ⇒ undefined.
-      const result = await client.query<{
-        queue_id: string;
-        spec_id: string;
-        pr_url: string;
-        pr_number: string;
-      }>(
-        `UPDATE merge_queue
-            SET status = 'dequeued', dequeue_reason = 'superseded', settled_at = now()
-          WHERE run_id = $1 AND status IN ('queued', 'merging')
-        RETURNING queue_id, spec_id, pr_url, pr_number`,
-        [runId],
-      );
-      const row = result.rows[0];
-      if (row === undefined) return undefined;
-      return {
-        queueId: row.queue_id,
-        runId,
-        specId: row.spec_id,
-        prUrl: row.pr_url,
-        prNumber: Number(row.pr_number),
-      };
-    });
-  }
-
-  /** Resolve a run's org (system-scoped) so the superseding write hits its row. */
-  private async resolveRunOrg(runId: string): Promise<string | null> {
-    return runWithSystemScope(this.pool, async (client) => {
-      const result = await client.query<{ org_id: string | null }>("SELECT org_id FROM runs WHERE run_id = $1", [
-        runId,
-      ]);
-      return result.rows[0]?.org_id ?? null;
-    });
   }
 
   async recoverStaleClaims(projectId: string): Promise<number> {
@@ -437,64 +282,4 @@ export class PgMergeRunner implements MergeRunner {
   async driveMerge(input: { runId: string; projectId: string }): Promise<MergeDriveOutcome> {
     return this.drive(input);
   }
-}
-
-/**
- * ATOMICITY SEAM (audit RC-4 #3): the pg-backed both-or-neither settle transaction.
- * Resolves the project's org, opens ONE `runWithOrgScope` transaction, and threads its
- * single client through BOTH the durable event append (a `ClientBoundMergeQueueEventEmitter`
- * over `PgEventStore(client)`) AND the `merge_queue` dequeue UPDATE
- * (`markDequeuedOnClient` on the SAME client). They therefore COMMIT together or ROLL
- * BACK together — closing the crash-between-writes split brain where the event bus said
- * "dequeued" while the row stayed `merging`. The event-first ordering inside `work` is
- * preserved by the caller (`markDequeuedAfterEvent`).
- *
- * Wire ONLY when the pool can INSERT `events` (Direct / `canCoTransactMergeSettle`).
- * Plane-split dataplane REVOKE INSERT on `events` makes co-tx throw 42501 on every
- * coordinate dequeue (apex v87); omit `tx` for sequential event-first via the writer.
- */
-export class PgMergeSettleTransaction implements MergeSettleTransaction {
-  constructor(
-    private readonly pool: pg.Pool,
-    private readonly model: PgMergeQueueModel,
-  ) {}
-
-  async run(
-    projectId: string,
-    work: (ctx: { events: MergeQueueEventEmitter; queue: MergeQueueModel }) => Promise<void>,
-  ): Promise<void> {
-    const orgId = await resolveProjectOrg(this.pool, projectId);
-    if (orgId === null) {
-      throw new Error(`cannot settle merge queue for project ${projectId}: no resolvable org`);
-    }
-    await runWithOrgScope(this.pool, orgId, async (client) => {
-      const events = new ClientBoundMergeQueueEventEmitter(new PgEventStore(client), orgId);
-      // A queue facade that delegates to the model but routes the ONE settle write
-      // (`markDequeued`) onto THIS transaction's client. Every other method delegates
-      // verbatim — none is invoked inside the settle unit, but delegating keeps the
-      // facade a faithful MergeQueueModel.
-      const queue = makeClientScopedSettleQueue(this.model, client);
-      await work({ events, queue });
-    });
-  }
-}
-
-/**
- * Build a {@link MergeQueueModel} facade for the settle transaction: its `markDequeued`
- * writes on the supplied (already-scoped) `client` via `markDequeuedOnClient`, so it
- * shares the settle transaction; every other method delegates to `model` unchanged.
- */
-function makeClientScopedSettleQueue(model: PgMergeQueueModel, client: SettleQueryClient): MergeQueueModel {
-  return {
-    enqueue: (input) => model.enqueue(input),
-    loadSnapshot: (projectId) => model.loadSnapshot(projectId),
-    claim: (queueId) => model.claim(queueId),
-    markMerged: (queueId) => model.markMerged(queueId),
-    releaseClaim: (queueId) => model.releaseClaim(queueId),
-    markDequeued: (queueId, reason) => model.markDequeuedOnClient(client, queueId, reason),
-    markDequeuedOnClient: (c, queueId, reason) => model.markDequeuedOnClient(c, queueId, reason),
-    recoverDequeuedCandidates: (projectId) => model.recoverDequeuedCandidates(projectId),
-    supersedePriorRunEntry: (runId) => model.supersedePriorRunEntry(runId),
-    recoverStaleClaims: (projectId) => model.recoverStaleClaims(projectId),
-  };
 }

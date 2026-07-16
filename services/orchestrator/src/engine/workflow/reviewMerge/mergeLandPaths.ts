@@ -30,14 +30,7 @@ import type { DispatcherDeps } from "./mergeDispatcher.js";
 export async function rebaseBehindBranch(
   deps: DispatcherDeps,
   mergeability: PullRequestMergeability,
-): Promise<{
-  outcome: "rebased" | "up_to_date" | "conflict" | "held";
-  message?: string;
-  // COMMIT-BINDING (§5): the rebased PR head sha the dispatcher anchors the re-gate
-  // verdict on. Present via the unified `baseShiftRebase` hook; the re-gate fails closed
-  // rather than binding wrong when a hook returns no head sha.
-  rebasedHeadSha?: string;
-}> {
+): Promise<Awaited<ReturnType<NonNullable<DispatcherDeps["input"]["baseShiftRebase"]>>>> {
   const { input, context } = deps;
   if (input.baseShiftRebase === undefined) {
     // FAIL-CLOSED: the unified base-shift hook is REQUIRED on every land-driving caller. Its
@@ -260,9 +253,9 @@ async function landViaAuthorityAttempt(
       // §3.2: a TRANSIENT authority refusal (a not-yet-converged signal: gate pending,
       // budget momentarily unresolved, a mergeability re-read race). RECOVERABLE — emit
       // `merge.blocked` + hold the task running so the recovery surface re-drives. The old
-      // `emitConflict` here finalized a TERMINAL `merge.dequeued(reason:"conflict")` that
-      // `recoverDequeuedCandidates` never recovers — permanently stranding the spec + every
-      // dependent. Recoverable `blocked` is the SAME finalize the needs_attention arm uses,
+      // `emitConflict` here finalized a TERMINAL `merge.dequeued(reason:"conflict")`,
+      // permanently stranding the spec + every dependent. Recoverable `blocked` is the SAME
+      // finalize the needs_attention arm uses,
       // mapped by the coordinator to a bounded recoverable hold (NOT a terminal dequeue).
       await emitAuthorityBlocked(deps, ops, disposition.reasons);
       await ops.finalize("blocked", { taskOutcome: "pending", taskStatus: "running" });

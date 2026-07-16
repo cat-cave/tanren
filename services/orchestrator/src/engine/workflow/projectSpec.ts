@@ -343,7 +343,7 @@ async function ensureSpecDependenciesExist(pool: QueryClient, projectId: string,
   }
 }
 
-async function createQueuedRunFromSpecOnClient(
+export async function createQueuedRunFromSpecOnClient(
   client: pg.PoolClient,
   input: CreateSpecRunInput,
   actor?: ActorContext,
