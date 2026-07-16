@@ -27,15 +27,16 @@ workers remain schema-only for later slices.
 
 ## Final cumulative fold scope
 
-The final fold is one cumulative clean-replacement candidate from the authorized
-base `67d9363fe220e1f280ed706a0b80af2b16724362`. It is not a repair delta layered
-on an undeclared branch. `origin/main` advanced during the fold, most recently to
-`608c5bbc08728dfa0188a2d1a0408688f0e76876` (#962); that commit is the mandatory
-publication target for a dedicated clean rebase/convergence pass, not the base
-validated by this candidate. Never publish the pre-rebase candidate.
+The final fold is one cumulative clean-replacement candidate, originally built
+from the authorized base `67d9363fe220e1f280ed706a0b80af2b16724362` and then
+replayed onto the exact publication target
+`608c5bbc08728dfa0188a2d1a0408688f0e76876` (#962). The 18-commit replay was
+conflict-free and patch-equivalent; the target's dependency-cap gate then required
+one test-only convergence helper. It is not a repair delta layered on an
+undeclared branch. Never publish the pre-rebase candidate.
 
-The manifest below is exhaustive for the authorized base through the working
-candidate: **369 paths = 95 added + 263 modified + 11 deleted**. Each
+The manifest below is exhaustive relative to the exact publication target through
+the converged candidate: **370 paths = 96 added + 263 modified + 11 deleted**. Each
 whitespace-delimited token is `STATUS:path`, where `STATUS` is `A`, `M`, or `D`.
 No changed or untracked path may sit outside it. This remains a bounded P1 Slice 1
 foundation: binding workers, rotation UI, the complete lifecycle event surface,
@@ -79,7 +80,8 @@ A:services/orchestrator/tests/integrationAuthorityRaces.test.ts A:services/orche
 A:services/orchestrator/tests/integrationFinalizationAuthority.test.ts A:services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts A:services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts
 A:services/orchestrator/tests/integrationLifecycleModel.test.ts A:services/orchestrator/tests/integrationLifecycleRls.integration.test.ts A:services/orchestrator/tests/integrationOperationDurability.integration.test.ts
 A:services/orchestrator/tests/integrationVaultCas.integration.test.ts A:services/orchestrator/tests/materializeTemplateReconcile.test.ts A:services/orchestrator/tests/projectDerivationActivationEvidence.rls.integration.test.ts
-A:services/orchestrator/tests/projectDerivationLifecycle.rls.integration.test.ts A:services/orchestrator/tests/projectDerivationResponseLoss.test.ts D:db/src/schemaIntegrations.ts
+A:services/orchestrator/tests/projectDerivationLifecycle.rls.integration.test.ts A:services/orchestrator/tests/projectDerivationResponseLoss.test.ts A:services/orchestrator/tests/rlsRunLifecycleCredentials.fixtures.ts
+D:db/src/schemaIntegrations.ts
 D:services/orchestrator/src/engine/forge/inbox/issuesConnector.ts D:services/orchestrator/src/engine/forge/inbox/jiraConnector.ts D:services/orchestrator/src/engine/forge/inbox/linearConnector.ts
 D:services/orchestrator/src/engine/repositories/orgIntegrations.ts D:services/orchestrator/src/routes/projects/greenfieldDeployDestroy.ts D:services/orchestrator/tests/candidateInboxJira.test.ts
 D:services/orchestrator/tests/candidateInboxLinear.test.ts D:services/orchestrator/tests/conformance/deployProvisionerDestroyApp.test.ts D:services/orchestrator/tests/conformance/integrationRepositories.conformance.test.ts

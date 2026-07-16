@@ -33,18 +33,14 @@
 
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
-import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
+import { migrate, setSystemPool } from "@tanren/db";
 import { PgJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
-import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
-import { deriveCredentialRef } from "../src/engine/credentials/refNamespace.js";
 import { StaticRunnerAllocator } from "../src/engine/allocators/staticRunnerAllocator.js";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
-import { loadRunExecutionContext } from "../src/engine/worker/runExecutionContext.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 import {
   lifecycleAuthorityBundle,
@@ -57,6 +53,11 @@ import {
   passingGitHub,
   twoSubtaskAdapters,
 } from "./plannerRun.fixtures.js";
+import {
+  lifecycleGithubCredentialRef,
+  loadLifecycleRunExecutionContext,
+  seededLifecycleGithubSecrets,
+} from "./rlsRunLifecycleCredentials.fixtures.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -88,7 +89,7 @@ const PROJECT = `proj_${ORG}`;
 const SPEC = `spec_${ORG}`;
 const RUN = "run_lifecycle";
 const PLAN_TASK = `task_plan_${ORG}`;
-const GITHUB_REF = deriveCredentialRef({ kind: "github_token", scope: "org", ownerId: ORG, name: "dev" });
+const GITHUB_REF = lifecycleGithubCredentialRef(ORG);
 const CODEX_REF = "credential/codex/dev";
 const RUNNER_FINGERPRINT = "SHA256:lifecycle-runner-host";
 const FOREIGN_OWNER = "org_lifecycle_foreign";
@@ -96,12 +97,7 @@ const FOREIGN_PROJECT = `proj_${ORG}_foreign_ref`;
 const FOREIGN_SPEC = `spec_${ORG}_foreign_ref`;
 const FOREIGN_RUN = "run_lifecycle_foreign_ref";
 const FOREIGN_PLAN_TASK = `task_plan_${ORG}_foreign_ref`;
-const FOREIGN_GITHUB_REF = deriveCredentialRef({
-  kind: "github_token",
-  scope: "org",
-  ownerId: FOREIGN_OWNER,
-  name: "dev",
-});
+const FOREIGN_GITHUB_REF = lifecycleGithubCredentialRef(FOREIGN_OWNER);
 
 // A no-op SSH substrate: the workflow's git-clone / bootstrap / branch-push AND the
 // NATIVE GATE (deps-ensure + the gate tiers, all over `ssh.run`) run here; success
@@ -190,8 +186,7 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
 
     // The secret store the draft-PR stage resolves the GitHub token from. Fake +
     // pre-stored so no real GitHub auth is materialized.
-    const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: GITHUB_REF, token: "ghp_lifecycleToken" });
+    const secrets = await seededLifecycleGithubSecrets(GITHUB_REF);
 
     // The REAL allocator over a REAL PgRunnerStore on the ENFORCED app pool: this
     // is the seam the live run failed at — the runner INSERT runs under only the
@@ -320,12 +315,11 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     await seedForeignCredentialRun(ownerPool);
 
     await expect(
-      runWithOrgScope(appPool, ORG, (client) =>
-        loadRunExecutionContext(client, {
-          runId: FOREIGN_RUN,
-          identitySecretRef: "runner/test/identity",
-        }),
-      ),
+      loadLifecycleRunExecutionContext(appPool, {
+        orgId: ORG,
+        runId: FOREIGN_RUN,
+        identitySecretRef: "runner/test/identity",
+      }),
     ).rejects.toMatchObject({
       name: "CredentialRefOwnershipError",
       credentialKind: "github_token",
