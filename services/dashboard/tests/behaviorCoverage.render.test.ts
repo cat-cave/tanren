@@ -30,6 +30,7 @@ const SELECTION = {
   projectId: "project_easy",
   binding: {
     integrationNodeId: "integration_node_visible",
+    baseSha: "0".repeat(40),
     preparedHeadSha: HEAD_SHA,
     treeHash: "tree_visible",
     memberKey: MEMBER_KEY,
@@ -42,7 +43,13 @@ const SELECTION = {
       behaviorRevisionId: "behavior_revision_login",
       reasons: [{ kind: "unknown_target", target: { kind: "source", targetRef: "src/unknown.ts" } }],
     },
-    { behaviorRevisionId: "behavior_revision_checkout", reasons: [{ kind: "uncovered_behavior" }] },
+    {
+      behaviorRevisionId: "behavior_revision_checkout",
+      reasons: [
+        { kind: "unknown_target", target: { kind: "source", targetRef: "src/unknown.ts" } },
+        { kind: "uncovered_behavior" },
+      ],
+    },
   ],
   excluded: [],
 } as const;
@@ -72,6 +79,7 @@ let selectionUnavailable = false;
 let verifyState: "current" | "stale" = "current";
 let writeHeaders: Headers | undefined;
 let writeBody: unknown;
+let latestSelection: unknown = SELECTION;
 
 function overview(): unknown {
   return {
@@ -79,7 +87,7 @@ function overview(): unknown {
     orgId: "org_acme",
     projectId: "project_easy",
     graph: graphUnavailable ? { status: "unavailable" } : AVAILABLE_GRAPH,
-    latestSelection: { status: "available", selection: SELECTION },
+    latestSelection: { status: "available", selection: latestSelection },
   };
 }
 
@@ -123,6 +131,7 @@ beforeEach(() => {
   verifyState = "current";
   writeHeaders = undefined;
   writeBody = undefined;
+  latestSelection = SELECTION;
   mockOrchestrator();
 });
 
@@ -168,6 +177,14 @@ describe("rv-4 visible behavior coverage surface", () => {
     const html = await (await build().request("/projects/project_easy/behavior-coverage")).text();
     expect(html).toContain("Coverage service unavailable");
     expect(html).not.toContain("0</b><span>active behaviors");
+  });
+
+  it("fails loudly instead of letting a contradictory targeted mode hide widening", async () => {
+    latestSelection = { ...SELECTION, mode: "targeted" };
+    const html = await (await build().request("/projects/project_easy/behavior-coverage")).text();
+    expect(html).toContain("Coverage service unavailable");
+    expect(html).not.toContain(`data-analysis-id="${ANALYSIS_ID}"`);
+    expect(html).not.toContain("excluded with proof");
   });
 
   it("posts the exact integration node and target, forwards CSRF, and explains widening", async () => {

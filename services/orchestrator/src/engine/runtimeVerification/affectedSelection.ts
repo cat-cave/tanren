@@ -1,5 +1,5 @@
 import type { BehaviorRevisionId } from "../contracts/behaviorRevision.js";
-import type { Digest } from "../contracts/cas.js";
+import { canonicalJson, contentDigestOf, parseDigest, type CanonicalBody, type Digest } from "../contracts/cas.js";
 import type { BehaviorCoverageEdgeId } from "../contracts/runtimeVerification.js";
 
 export const COVERAGE_EDGE_KINDS = ["spec", "source", "component", "integration", "design", "dependency"] as const;
@@ -26,16 +26,15 @@ export interface BehaviorCoverageSubject {
   readonly edges: readonly BehaviorCoverageEdge[];
 }
 
-/** One deterministic, complete read of the active graph in an exact project scope. */
 export interface BehaviorCoverageSnapshot {
   readonly orgId: string;
   readonly projectId: string;
   readonly behaviors: readonly BehaviorCoverageSubject[];
 }
 
-/** Server-resolved content identity; callers never supply these fields. */
 export interface CoverageIntegrationBinding {
   readonly integrationNodeId: string;
+  readonly baseSha: string;
   readonly preparedHeadSha: string;
   readonly treeHash: string;
   readonly memberKey: string;
@@ -44,6 +43,7 @@ export interface CoverageIntegrationBinding {
 export interface BoundBehaviorCoverageSnapshot {
   readonly binding: CoverageIntegrationBinding;
   readonly snapshot: BehaviorCoverageSnapshot;
+  readonly authorityFingerprint: string;
 }
 
 export type AffectedSelectionReason =
@@ -69,7 +69,6 @@ export interface ExcludedBehaviorRevision {
   readonly inspectedEdgeIds: readonly BehaviorCoverageEdgeId[];
 }
 
-/** Pure selector output. The CAS digest becomes analysisId only after persistence. */
 export interface AffectedSelectionResultV1 {
   readonly version: "v1";
   readonly mode: "targeted" | "expanded_unknown" | "no_active_behaviors";
@@ -79,7 +78,6 @@ export interface AffectedSelectionResultV1 {
   readonly excluded: readonly ExcludedBehaviorRevision[];
 }
 
-/** Public durable result: exact scope/binding plus the immutable CAS identity. */
 export interface AffectedSelectionV1 extends AffectedSelectionResultV1 {
   readonly analysisId: Digest;
   readonly orgId: string;
@@ -99,10 +97,14 @@ function targetKey(target: AffectedTarget): string {
   return `${target.kind}\u0000${target.targetRef}`;
 }
 
+export function fixedCodeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function canonicalTargets(targets: readonly AffectedTarget[]): AffectedTarget[] {
   const byKey = new Map<string, AffectedTarget>();
   for (const target of targets) byKey.set(targetKey(target), target);
-  return [...byKey.values()].sort((left, right) => targetKey(left).localeCompare(targetKey(right)));
+  return [...byKey.values()].sort((left, right) => fixedCodeUnitCompare(targetKey(left), targetKey(right)));
 }
 
 function reasonKey(reason: AffectedSelectionReason): string {
@@ -139,7 +141,7 @@ function canonicalBehaviors(snapshot: BehaviorCoverageSnapshot): BehaviorCoverag
   const behaviorIds = new Set<string>();
   const edgeIds = new Set<string>();
   const behaviors = [...snapshot.behaviors]
-    .sort((left, right) => left.behaviorRevisionId.localeCompare(right.behaviorRevisionId))
+    .sort((left, right) => fixedCodeUnitCompare(left.behaviorRevisionId, right.behaviorRevisionId))
     .map((behavior) => {
       if (behaviorIds.has(behavior.behaviorRevisionId)) {
         throw new BehaviorCoverageGraphCorruptError(
@@ -148,7 +150,8 @@ function canonicalBehaviors(snapshot: BehaviorCoverageSnapshot): BehaviorCoverag
       }
       behaviorIds.add(behavior.behaviorRevisionId);
       const edges = [...behavior.edges].sort((left, right) =>
-        `${left.kind}\u0000${left.targetRef}\u0000${left.id}`.localeCompare(
+        fixedCodeUnitCompare(
+          `${left.kind}\u0000${left.targetRef}\u0000${left.id}`,
           `${right.kind}\u0000${right.targetRef}\u0000${right.id}`,
         ),
       );
@@ -163,7 +166,151 @@ function canonicalBehaviors(snapshot: BehaviorCoverageSnapshot): BehaviorCoverag
   return behaviors;
 }
 
-/** Canonicalizes and validates a snapshot before it is selected or persisted. */
+const COVERAGE_AUTHORITY_FINGERPRINT_PREFIX = "rv4.coverage-authority.v1";
+const COVERAGE_AUTHORITY_FINGERPRINT_PATTERN = new RegExp(
+  `^${COVERAGE_AUTHORITY_FINGERPRINT_PREFIX.replaceAll(".", "\\.")}\\|(sha256:[0-9a-f]{64})\\|(sha256:[0-9a-f]{64})\\|(sha256:[0-9a-f]{64})$`,
+  "u",
+);
+
+interface CoverageAuthorityDigests {
+  readonly targetProvenanceDigest: Digest;
+  readonly coverageGenerationDigest: Digest;
+  readonly sealDigest: Digest;
+}
+
+function bindingBody(binding: CoverageIntegrationBinding): CanonicalBody {
+  return {
+    baseSha: binding.baseSha,
+    integrationNodeId: binding.integrationNodeId,
+    memberKey: binding.memberKey,
+    preparedHeadSha: binding.preparedHeadSha,
+    treeHash: binding.treeHash,
+  };
+}
+
+function contentAddress(body: CanonicalBody): Digest {
+  return contentDigestOf(new TextEncoder().encode(canonicalJson(body)));
+}
+
+function targetProvenanceDigest(input: {
+  readonly binding: CoverageIntegrationBinding;
+  readonly snapshot: BehaviorCoverageSnapshot;
+  readonly changedTargets: readonly AffectedTarget[];
+}): Digest {
+  return contentAddress({
+    version: "behavior_coverage_target_provenance.v1",
+    orgId: input.snapshot.orgId,
+    projectId: input.snapshot.projectId,
+    binding: bindingBody(input.binding),
+    changedTargets: canonicalTargets(input.changedTargets).map((target) => ({ ...target })),
+  });
+}
+
+function coverageGenerationDigest(input: {
+  readonly binding: CoverageIntegrationBinding;
+  readonly snapshot: BehaviorCoverageSnapshot;
+}): Digest {
+  const snapshot = canonicalCoverageSnapshot(input.snapshot);
+  return contentAddress({
+    version: "behavior_coverage_generation.v1",
+    orgId: snapshot.orgId,
+    projectId: snapshot.projectId,
+    binding: bindingBody(input.binding),
+    behaviors: snapshot.behaviors.map((behavior) => ({
+      behaviorRevisionId: behavior.behaviorRevisionId,
+      contentDigest: behavior.contentDigest,
+      title: behavior.title,
+      edges: behavior.edges.map((edge) => ({ ...edge })),
+    })),
+  });
+}
+
+function authoritySealDigest(input: {
+  readonly binding: CoverageIntegrationBinding;
+  readonly snapshot: BehaviorCoverageSnapshot;
+  readonly targetProvenanceDigest: Digest;
+  readonly coverageGenerationDigest: Digest;
+}): Digest {
+  return contentAddress({
+    version: "behavior_coverage_authority_seal.v1",
+    orgId: input.snapshot.orgId,
+    projectId: input.snapshot.projectId,
+    binding: bindingBody(input.binding),
+    targetProvenanceDigest: input.targetProvenanceDigest,
+    coverageGenerationDigest: input.coverageGenerationDigest,
+  });
+}
+
+function authorityDigests(input: {
+  readonly binding: CoverageIntegrationBinding;
+  readonly snapshot: BehaviorCoverageSnapshot;
+  readonly changedTargets: readonly AffectedTarget[];
+}): CoverageAuthorityDigests {
+  const targetDigest = targetProvenanceDigest(input);
+  const graphDigest = coverageGenerationDigest(input);
+  return {
+    targetProvenanceDigest: targetDigest,
+    coverageGenerationDigest: graphDigest,
+    sealDigest: authoritySealDigest({
+      binding: input.binding,
+      snapshot: input.snapshot,
+      targetProvenanceDigest: targetDigest,
+      coverageGenerationDigest: graphDigest,
+    }),
+  };
+}
+
+/** Only an integration-node materializer may stamp this affected fingerprint. */
+export function buildCoverageAuthorityFingerprint(input: {
+  readonly binding: CoverageIntegrationBinding;
+  readonly snapshot: BehaviorCoverageSnapshot;
+  readonly changedTargets: readonly AffectedTarget[];
+}): string {
+  const digests = authorityDigests(input);
+  return [
+    COVERAGE_AUTHORITY_FINGERPRINT_PREFIX,
+    digests.targetProvenanceDigest,
+    digests.coverageGenerationDigest,
+    digests.sealDigest,
+  ].join("|");
+}
+
+function parseAuthorityFingerprint(value: string): CoverageAuthorityDigests | undefined {
+  const match = COVERAGE_AUTHORITY_FINGERPRINT_PATTERN.exec(value);
+  if (match === null) return undefined;
+  return {
+    targetProvenanceDigest: parseDigest(match[1]!),
+    coverageGenerationDigest: parseDigest(match[2]!),
+    sealDigest: parseDigest(match[3]!),
+  };
+}
+
+function evaluateCoverageAuthority(input: {
+  readonly bound: BoundBehaviorCoverageSnapshot;
+  readonly changedTargets: readonly AffectedTarget[];
+}): { readonly targetProvenanceSealed: boolean; readonly coverageGenerationSealed: boolean } {
+  const claimed = parseAuthorityFingerprint(input.bound.authorityFingerprint);
+  if (claimed === undefined) return { targetProvenanceSealed: false, coverageGenerationSealed: false };
+  const claimedSeal = authoritySealDigest({
+    binding: input.bound.binding,
+    snapshot: input.bound.snapshot,
+    targetProvenanceDigest: claimed.targetProvenanceDigest,
+    coverageGenerationDigest: claimed.coverageGenerationDigest,
+  });
+  if (claimedSeal !== claimed.sealDigest) {
+    return { targetProvenanceSealed: false, coverageGenerationSealed: false };
+  }
+  const expected = authorityDigests({
+    binding: input.bound.binding,
+    snapshot: input.bound.snapshot,
+    changedTargets: input.changedTargets,
+  });
+  return {
+    targetProvenanceSealed: claimed.targetProvenanceDigest === expected.targetProvenanceDigest,
+    coverageGenerationSealed: claimed.coverageGenerationDigest === expected.coverageGenerationDigest,
+  };
+}
+
 export function canonicalCoverageSnapshot(snapshot: BehaviorCoverageSnapshot): BehaviorCoverageSnapshot {
   if (snapshot.orgId === "" || snapshot.projectId === "") {
     throw new BehaviorCoverageGraphCorruptError("coverage snapshot scope must be non-empty");
@@ -180,9 +327,25 @@ function buildSelected(
     .map((behavior) => ({
       behaviorRevisionId: behavior.behaviorRevisionId,
       reasons: [...(selected.get(behavior.behaviorRevisionId)?.values() ?? [])].sort((left, right) =>
-        reasonKey(left).localeCompare(reasonKey(right)),
+        fixedCodeUnitCompare(reasonKey(left), reasonKey(right)),
       ),
     }));
+}
+
+function expandedSelection(
+  behaviors: readonly BehaviorCoverageSubject[],
+  selected: ReadonlyMap<BehaviorRevisionId, ReadonlyMap<string, AffectedSelectionReason>>,
+  changedTargets: readonly AffectedTarget[],
+  unknownTargets: readonly AffectedTarget[],
+): AffectedSelectionResultV1 {
+  return {
+    version: "v1",
+    mode: "expanded_unknown",
+    changedTargets,
+    unknownTargets,
+    selected: buildSelected(behaviors, selected),
+    excluded: [],
+  };
 }
 
 function buildExcluded(
@@ -192,7 +355,7 @@ function buildExcluded(
   return behaviors
     .filter((behavior) => !selected.has(behavior.behaviorRevisionId))
     .map((behavior) => {
-      const inspectedEdgeIds = [...new Set(behavior.edges.map((edge) => edge.id))].sort();
+      const inspectedEdgeIds = [...new Set(behavior.edges.map((edge) => edge.id))].sort(fixedCodeUnitCompare);
       if (inspectedEdgeIds.length === 0) {
         throw new BehaviorCoverageGraphCorruptError(
           `selector attempted to exclude uncovered behavior ${behavior.behaviorRevisionId}`,
@@ -206,15 +369,12 @@ function buildExcluded(
     });
 }
 
-/**
- * Select the exact active behavior-revision set affected by changed targets.
- * Unknown impact expands; every omission carries edge evidence from this graph.
- */
+/** Unknown impact expands; every omission carries sealed edge evidence. */
 export function selectAffectedBehaviorRevisions(input: {
-  readonly snapshot: BehaviorCoverageSnapshot;
+  readonly bound: BoundBehaviorCoverageSnapshot;
   readonly changedTargets: readonly AffectedTarget[];
 }): AffectedSelectionResultV1 {
-  const snapshot = canonicalCoverageSnapshot(input.snapshot);
+  const snapshot = canonicalCoverageSnapshot(input.bound.snapshot);
   const behaviors = snapshot.behaviors;
   const changedTargets = canonicalTargets(input.changedTargets);
   if (behaviors.length === 0) {
@@ -233,14 +393,49 @@ export function selectAffectedBehaviorRevisions(input: {
     for (const behavior of behaviors) {
       addReason(selected, behavior.behaviorRevisionId, { kind: "no_changed_targets" });
     }
-    return {
-      version: "v1",
-      mode: "expanded_unknown",
-      changedTargets,
-      unknownTargets: [],
-      selected: buildSelected(behaviors, selected),
-      excluded: [],
-    };
+    return expandedSelection(behaviors, selected, changedTargets, []);
+  }
+
+  const authority = evaluateCoverageAuthority({ bound: { ...input.bound, snapshot }, changedTargets });
+  if (!authority.targetProvenanceSealed) {
+    for (const behavior of behaviors) {
+      for (const target of changedTargets) {
+        addReason(selected, behavior.behaviorRevisionId, { kind: "unknown_target", target });
+      }
+    }
+    return expandedSelection(behaviors, selected, changedTargets, changedTargets);
+  }
+  if (!authority.coverageGenerationSealed) {
+    for (const behavior of behaviors) {
+      addReason(selected, behavior.behaviorRevisionId, { kind: "uncovered_behavior" });
+    }
+    return expandedSelection(behaviors, selected, changedTargets, []);
+  }
+
+  const activeIds = new Set(behaviors.map((behavior) => behavior.behaviorRevisionId));
+  let graphIncomplete = false;
+  for (const behavior of behaviors) {
+    if (behavior.edges.length === 0) {
+      graphIncomplete = true;
+      addReason(selected, behavior.behaviorRevisionId, { kind: "uncovered_behavior" });
+    }
+    for (const edge of behavior.edges) {
+      if (edge.kind !== "dependency" || activeIds.has(edge.targetRef as BehaviorRevisionId)) continue;
+      graphIncomplete = true;
+      addReason(selected, behavior.behaviorRevisionId, {
+        kind: "dangling_dependency",
+        edgeId: edge.id,
+        targetRef: edge.targetRef,
+      });
+    }
+  }
+  if (graphIncomplete) {
+    for (const behavior of behaviors) {
+      for (const target of changedTargets) {
+        addReason(selected, behavior.behaviorRevisionId, { kind: "unknown_target", target });
+      }
+    }
+    return expandedSelection(behaviors, selected, changedTargets, changedTargets);
   }
 
   const targetByKey = new Map(changedTargets.map((target) => [targetKey(target), target]));
@@ -265,24 +460,6 @@ export function selectAffectedBehaviorRevisions(input: {
     }
   }
 
-  const activeIds = new Set(behaviors.map((behavior) => behavior.behaviorRevisionId));
-  let expandedForUnknown = unknownTargets.length > 0;
-  for (const behavior of behaviors) {
-    if (behavior.edges.length === 0) {
-      expandedForUnknown = true;
-      addReason(selected, behavior.behaviorRevisionId, { kind: "uncovered_behavior" });
-    }
-    for (const edge of behavior.edges) {
-      if (edge.kind !== "dependency" || activeIds.has(edge.targetRef as BehaviorRevisionId)) continue;
-      expandedForUnknown = true;
-      addReason(selected, behavior.behaviorRevisionId, {
-        kind: "dangling_dependency",
-        edgeId: edge.id,
-        targetRef: edge.targetRef,
-      });
-    }
-  }
-
   let grew = true;
   while (grew) {
     grew = false;
@@ -301,7 +478,7 @@ export function selectAffectedBehaviorRevisions(input: {
 
   return {
     version: "v1",
-    mode: expandedForUnknown ? "expanded_unknown" : "targeted",
+    mode: unknownTargets.length > 0 ? "expanded_unknown" : "targeted",
     changedTargets,
     unknownTargets,
     selected: buildSelected(behaviors, selected),
@@ -309,7 +486,6 @@ export function selectAffectedBehaviorRevisions(input: {
   };
 }
 
-/** Exact comparison used by the post-CAS locked recheck and replay freshness gate. */
 export function boundCoverageSnapshotsEqual(
   left: BoundBehaviorCoverageSnapshot,
   right: BoundBehaviorCoverageSnapshot,

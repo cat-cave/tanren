@@ -49,6 +49,7 @@ function SelectionResult(props: {
         <div class="mini-eyebrow">immutable affected-selection fact · {selection.analysisId}</div>
         <div class="binding" data-integration-node={selection.binding.integrationNodeId}>
           <span>node · {selection.binding.integrationNodeId}</span>
+          <code>base · {selection.binding.baseSha}</code>
           <code>head · {selection.binding.preparedHeadSha}</code>
           <code>tree · {selection.binding.treeHash}</code>
           <code>member · {selection.binding.memberKey}</code>

@@ -171,7 +171,7 @@ export function createBehaviorCoverageRoutes(options: BehaviorCoverageRoutesOpti
         repository.readBoundSnapshot(client, scope, parsed.data.integrationNodeId),
       );
       const result = selectAffectedBehaviorRevisions({
-        snapshot: initial.snapshot,
+        bound: initial,
         changedTargets: parsed.data.targets,
       });
       const fact = buildAffectedSelectionFact({ bound: initial, selection: result });
@@ -235,7 +235,11 @@ export function createBehaviorCoverageRoutes(options: BehaviorCoverageRoutesOpti
       const current = await runWithOrgScope(options.pool, scope.orgId, (client) =>
         repository.lockAndReadBoundSnapshot(client, scope, persisted.fact.binding.integrationNodeId),
       );
-      const original = { binding: persisted.fact.binding, snapshot: persisted.fact.snapshot };
+      const original = {
+        binding: persisted.fact.binding,
+        snapshot: persisted.fact.snapshot,
+        authorityFingerprint: persisted.fact.authorityFingerprint,
+      };
       if (!boundCoverageSnapshotsEqual(original, current)) {
         return c.json({ verification: { status: "stale" as const, analysisId } }, 409);
       }

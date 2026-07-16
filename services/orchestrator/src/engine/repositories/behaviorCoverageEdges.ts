@@ -72,9 +72,11 @@ const CoverageGraphRowSchema = z
 const IntegrationNodeRowSchema = z
   .object({
     node_id: z.string().min(1),
+    base_sha: z.string().regex(/^[0-9a-f]{40}$/u),
     head_sha: z.string().regex(/^[0-9a-f]{40}$/u),
     tree_hash: z.string().min(1),
     member_key: z.string().regex(/^[0-9a-f]{64}$/u),
+    affected_fingerprint: z.string(),
     status: z.enum(["ready", "landed"]),
   })
   .strict();
@@ -154,7 +156,7 @@ async function readSnapshot(client: QueryClient, scope: BehaviorCoverageScope): 
 
 async function readBinding(client: QueryClient, scope: BehaviorCoverageScope, integrationNodeId: string) {
   const result = await client.query(
-    `SELECT node_id, head_sha, tree_hash, member_key, status
+    `SELECT node_id, base_sha, head_sha, tree_hash, member_key, affected_fingerprint, status
        FROM integration_nodes
       WHERE org_id = $1
         AND project_id = $2
@@ -172,10 +174,14 @@ async function readBinding(client: QueryClient, scope: BehaviorCoverageScope, in
   }
   const row = IntegrationNodeRowSchema.parse(raw);
   return {
-    integrationNodeId: row.node_id,
-    preparedHeadSha: row.head_sha,
-    treeHash: row.tree_hash,
-    memberKey: row.member_key,
+    binding: {
+      integrationNodeId: row.node_id,
+      baseSha: row.base_sha,
+      preparedHeadSha: row.head_sha,
+      treeHash: row.tree_hash,
+      memberKey: row.member_key,
+    },
+    authorityFingerprint: row.affected_fingerprint,
   };
 }
 
@@ -184,9 +190,9 @@ async function readBoundSnapshot(
   scope: BehaviorCoverageScope,
   integrationNodeId: string,
 ): Promise<BoundBehaviorCoverageSnapshot> {
-  const binding = await readBinding(client, scope, integrationNodeId);
+  const node = await readBinding(client, scope, integrationNodeId);
   const snapshot = await readSnapshot(client, scope);
-  return { binding, snapshot };
+  return { ...node, snapshot };
 }
 
 export const BehaviorCoverageEdgesStore: BehaviorCoverageEdgesRepository = {

@@ -21,6 +21,7 @@ const CoverageBehaviorSchema = z
 const CoverageBindingSchema = z
   .object({
     integrationNodeId: z.string().min(1),
+    baseSha: z.string().regex(/^[0-9a-f]{40}$/u),
     preparedHeadSha: z.string().regex(/^[0-9a-f]{40}$/u),
     treeHash: z.string().min(1),
     memberKey: z.string().regex(/^[0-9a-f]{64}$/u),
@@ -54,6 +55,14 @@ const ExcludedBehaviorSchema = z
   })
   .strict();
 
+function fixedCodeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function targetKey(target: z.infer<typeof AffectedTargetSchema>): string {
+  return `${target.kind}\u0000${target.targetRef}`;
+}
+
 export const AffectedSelectionSchema = z
   .object({
     version: z.literal("v1"),
@@ -71,17 +80,168 @@ export const AffectedSelectionSchema = z
   .superRefine((selection, context) => {
     const selected = new Set(selection.selected.map((row) => row.behaviorRevisionId));
     const excluded = new Set(selection.excluded.map((row) => row.behaviorRevisionId));
+    const changedTargets = new Set(selection.changedTargets.map(targetKey));
+    const unknownTargets = new Set(selection.unknownTargets.map(targetKey));
     if (selected.size !== selection.selected.length || excluded.size !== selection.excluded.length) {
       context.addIssue({ code: "custom", message: "behavior identities must be unique" });
+    }
+    if (
+      changedTargets.size !== selection.changedTargets.length ||
+      unknownTargets.size !== selection.unknownTargets.length
+    ) {
+      context.addIssue({ code: "custom", message: "target identities must be unique" });
     }
     if ([...selected].some((id) => excluded.has(id))) {
       context.addIssue({ code: "custom", message: "selected and excluded sets must be disjoint" });
     }
-    if (selection.mode === "targeted" && selection.unknownTargets.length > 0) {
-      context.addIssue({ code: "custom", path: ["mode"], message: "targeted mode cannot contain unknown targets" });
+    if ([...unknownTargets].some((target) => !changedTargets.has(target))) {
+      context.addIssue({
+        code: "custom",
+        path: ["unknownTargets"],
+        message: "unknown targets must be changed targets",
+      });
     }
-    if (selection.mode === "no_active_behaviors" && (selection.selected.length > 0 || selection.excluded.length > 0)) {
-      context.addIssue({ code: "custom", path: ["mode"], message: "no-active mode cannot contain behaviors" });
+
+    const edgeOwners = new Map<string, string>();
+    const edgeClaims = new Map<string, string>();
+    const directTargets = new Set<string>();
+    let wideningReasonCount = 0;
+    for (const [rowIndex, row] of selection.selected.entries()) {
+      const reasonKeys = new Set<string>();
+      for (const [reasonIndex, reason] of row.reasons.entries()) {
+        const path: PropertyKey[] = ["selected", rowIndex, "reasons", reasonIndex];
+        const key = JSON.stringify(reason);
+        if (reasonKeys.has(key)) context.addIssue({ code: "custom", path, message: "duplicate selection reason" });
+        reasonKeys.add(key);
+        if (
+          reason.kind === "direct_edge" ||
+          reason.kind === "transitive_dependency" ||
+          reason.kind === "dangling_dependency"
+        ) {
+          const owner = edgeOwners.get(reason.edgeId);
+          const claim = JSON.stringify(reason);
+          if (owner !== undefined && owner !== row.behaviorRevisionId) {
+            context.addIssue({ code: "custom", path, message: "edge identity belongs to another behavior" });
+          }
+          if (edgeClaims.has(reason.edgeId) && edgeClaims.get(reason.edgeId) !== claim) {
+            context.addIssue({ code: "custom", path, message: "edge identity has contradictory reason evidence" });
+          }
+          edgeOwners.set(reason.edgeId, row.behaviorRevisionId);
+          edgeClaims.set(reason.edgeId, claim);
+        }
+        if (reason.kind === "direct_edge") {
+          const target = targetKey(reason.target);
+          directTargets.add(target);
+          if (!changedTargets.has(target) || unknownTargets.has(target)) {
+            context.addIssue({ code: "custom", path, message: "direct edge target contradicts target sets" });
+          }
+        } else if (reason.kind === "transitive_dependency") {
+          if (
+            !selected.has(reason.dependencyBehaviorRevisionId) ||
+            reason.dependencyBehaviorRevisionId === row.behaviorRevisionId
+          ) {
+            context.addIssue({
+              code: "custom",
+              path,
+              message: "transitive dependency must name another selected behavior",
+            });
+          }
+        } else if (reason.kind === "unknown_target") {
+          wideningReasonCount += 1;
+          if (!unknownTargets.has(targetKey(reason.target))) {
+            context.addIssue({ code: "custom", path, message: "unknown reason target is not declared unknown" });
+          }
+        } else if (reason.kind === "no_changed_targets") {
+          wideningReasonCount += 1;
+          if (selection.changedTargets.length > 0) {
+            context.addIssue({ code: "custom", path, message: "no-target reason contradicts changed targets" });
+          }
+        } else {
+          wideningReasonCount += 1;
+        }
+      }
+    }
+    for (const [rowIndex, row] of selection.excluded.entries()) {
+      const uniqueEdges = new Set(row.inspectedEdgeIds);
+      if (uniqueEdges.size !== row.inspectedEdgeIds.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["excluded", rowIndex],
+          message: "inspected edge identities must be unique",
+        });
+      }
+      for (const edgeId of uniqueEdges) {
+        const owner = edgeOwners.get(edgeId);
+        if (owner !== undefined && owner !== row.behaviorRevisionId) {
+          context.addIssue({
+            code: "custom",
+            path: ["excluded", rowIndex],
+            message: "edge identity crosses behavior rows",
+          });
+        }
+        edgeOwners.set(edgeId, row.behaviorRevisionId);
+      }
+    }
+
+    if (selection.mode === "targeted") {
+      if (selection.changedTargets.length === 0 || selection.unknownTargets.length > 0 || wideningReasonCount > 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["mode"],
+          message: "targeted mode requires sealed, non-widened targets",
+        });
+      }
+      if (selection.selected.length === 0 || [...changedTargets].some((target) => !directTargets.has(target))) {
+        context.addIssue({
+          code: "custom",
+          path: ["selected"],
+          message: "every targeted change needs direct-edge evidence",
+        });
+      }
+    } else if (selection.mode === "expanded_unknown") {
+      if (selection.selected.length === 0 || selection.excluded.length > 0 || wideningReasonCount === 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["mode"],
+          message: "expanded mode must widen every active behavior with evidence",
+        });
+      }
+      for (const [rowIndex, row] of selection.selected.entries()) {
+        const rowUnknowns = new Set(
+          row.reasons.filter((reason) => reason.kind === "unknown_target").map((reason) => targetKey(reason.target)),
+        );
+        if ([...unknownTargets].some((target) => !rowUnknowns.has(target))) {
+          context.addIssue({
+            code: "custom",
+            path: ["selected", rowIndex],
+            message: "unknown target did not widen this behavior",
+          });
+        }
+        if (
+          selection.changedTargets.length === 0 &&
+          !row.reasons.some((reason) => reason.kind === "no_changed_targets")
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["selected", rowIndex],
+            message: "empty-target expansion lacks its reason",
+          });
+        }
+      }
+    } else {
+      if (selection.selected.length > 0 || selection.excluded.length > 0) {
+        context.addIssue({ code: "custom", path: ["mode"], message: "no-active mode cannot contain behaviors" });
+      }
+      if (
+        changedTargets.size !== unknownTargets.size ||
+        [...changedTargets].some((target) => !unknownTargets.has(target))
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["unknownTargets"],
+          message: "no-active mode treats every change as unknown",
+        });
+      }
     }
   });
 
@@ -97,8 +257,8 @@ const GraphStateSchema = z.discriminatedUnion("status", [
       const actual = graph.behaviors
         .filter((row) => row.edges.length === 0)
         .map((row) => row.behaviorRevisionId)
-        .sort();
-      const claimed = [...graph.uncoveredBehaviorRevisionIds].sort();
+        .sort(fixedCodeUnitCompare);
+      const claimed = [...graph.uncoveredBehaviorRevisionIds].sort(fixedCodeUnitCompare);
       if (JSON.stringify(actual) !== JSON.stringify(claimed)) {
         context.addIssue({ code: "custom", path: ["uncoveredBehaviorRevisionIds"], message: "uncovered set mismatch" });
       }
