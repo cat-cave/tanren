@@ -21,6 +21,7 @@ import {
   type RecoverableDriveHoldCeiling,
   type RecoverableDriveHoldResult,
 } from "./recoverableDriveHold.js";
+import { isClassifiedMemberPolicyMessage } from "./authoritySignalClassification.js";
 import { settleFromParkOutcome } from "./parkSettle.js";
 import { settleOwnedRecoveryOrPark, type OwnedQueueSettle } from "./recoveryOwnedQueueSettlement.js";
 import { createLogger } from "../observability/logger.js";
@@ -211,6 +212,11 @@ export async function settleDriveOutcome(
   }
 
   if (outcome.kind === "blocked") {
+    // mq-1: classified member policy must route to writer repair, never infra hold.
+    if (isClassifiedMemberPolicyMessage(outcome.message)) {
+      const result = await settleFailedDrive(deps, projectId, entry, outcome.message);
+      return result === "retained" ? { kind: "held", retryAfterMs: BATCH_DRIVE_INFRA_RETRY_AFTER_MS } : "dequeued";
+    }
     const ceiling = deps.recoverableDriveHolds;
     if (ceiling !== undefined) {
       return holdOrHaltRecoverableDrive({ ceiling, queue: deps.queue, events: deps.events, projectId, entry, outcome });

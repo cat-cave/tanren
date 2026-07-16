@@ -449,8 +449,9 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       if (settled !== "dequeued") {
         return { projectId, queueDepth, holdReason: "merge_retry", retryAfterMs: settled.retryAfterMs };
       }
+      // mq-1: member isolation — a dequeued policy culprit must not stop eligible siblings.
       dequeuedSpecId = entry.specId;
-      break;
+      continue;
     }
     return {
       projectId,

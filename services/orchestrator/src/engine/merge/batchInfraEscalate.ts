@@ -8,6 +8,7 @@ import { markDequeuedAfterEvent, type MergeQueueEventEmitter } from "./coordinat
 import type { BatchMergeEventEmitter } from "./batchCoordinator.js";
 import type { BatchInfraHoldCeiling } from "./batchInfraHoldCeiling.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
+import { isClassifiedMemberPolicyMessage } from "./authoritySignalClassification.js";
 import { settleFromParkOutcome } from "./parkSettle.js";
 import { settleOwnedRecoveryOrPark } from "./recoveryOwnedQueueSettlement.js";
 import { createLogger } from "../observability/logger.js";
@@ -31,6 +32,16 @@ export interface EscalateInfraHoldArgs {
 }
 
 export async function escalateInfraHoldToWriter(args: EscalateInfraHoldArgs): Promise<CoordinateResult> {
+  // mq-1: never reclassify a classified member-policy batch as workspace infra escalation.
+  if (isClassifiedMemberPolicyMessage(args.message)) {
+    log.error("refusing batch infra escalation for classified member-policy authority block", {
+      projectId: args.projectId,
+      message: args.message,
+      members: args.batch.length,
+    });
+    await args.ceiling.reset(args.projectId);
+    return { projectId: args.projectId, holdReason: "all_blocked", queueDepth: args.queueDepth };
+  }
   const gateError = synthesizeGateErrorFromInfra(args.message, args.holds);
   await args.batchEvents.emitInfraBlocked({
     projectId: args.projectId,
