@@ -17,6 +17,8 @@
 //       throws LOUD, NOT a silent skip. The org-default path is loud via the eager
 //       seam check; the source-static path is loud via the lazy resolver error
 //       (`MissingGithubCredentialRefError`) re-thrown at the tick boundary.
+//   (e) a persisted removed-provider/raw-token issues source → a LOUD
+//       `UnsupportedInboxProviderError`, never a forever-retried source.
 
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
@@ -27,7 +29,7 @@ import {
   intakeAutoRouteDeps,
 } from "../src/engine/forge/intake/index.js";
 import { MissingGithubCredentialRefError } from "../src/engine/credentials/githubTokenResolver.js";
-import { IntakeSourceAuthError } from "../src/engine/forge/inbox/index.js";
+import { IntakeSourceAuthError, UnsupportedInboxProviderError } from "../src/engine/forge/inbox/index.js";
 import type { InboxSource, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
 
 const githubSource: InboxSource = {
@@ -248,5 +250,42 @@ describe("intake fetch auth — a connector 401/403 surfaces LOUD at the tick bo
     );
 
     await expect(poller.tick()).rejects.toBeInstanceOf(IntakeSourceAuthError);
+  });
+});
+
+describe("intake provider resolution — removed provider config surfaces LOUD", () => {
+  it("tick() re-throws an unsupported provider without secret/provider I/O or perpetual retry", async () => {
+    const removedProviderSource: InboxSource = {
+      ...githubSource,
+      config: { provider: "jira", baseUrl: "https://jira.example", projectKey: "ENG" },
+    };
+    const pool = pollerStubPool(removedProviderSource, { version: 1 });
+    let secretReads = 0;
+    const secrets = {
+      get: async () => {
+        secretReads += 1;
+      },
+    } as never;
+    let providerCalls = 0;
+    const http = {
+      request: async () => {
+        providerCalls += 1;
+        return { status: 200, body: [] };
+      },
+    } as never;
+    const poller = new IntakePoller(
+      {
+        pool,
+        secrets,
+        githubHttp: http,
+        answererFactory: () => fixedTriage,
+        autoRoute: intakeAutoRouteDeps(),
+      },
+      60_000,
+    );
+
+    await expect(poller.tick()).rejects.toBeInstanceOf(UnsupportedInboxProviderError);
+    expect(secretReads).toBe(0);
+    expect(providerCalls).toBe(0);
   });
 });

@@ -15,7 +15,7 @@ import type { GitHubHttpClient } from "../../providers/github.js";
 import { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { z } from "zod";
-import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
+import { assertIntakeResponseOk, assertSupportedIssuesProvider, IntakeSourceFetchError } from "./connectorErrors.js";
 import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
 
 // The `config` shape a GitHub Issues source carries. `owner`/`repo` name the
@@ -79,6 +79,10 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
   return {
     kind: "issues",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
+      // The clean-replaced Linear/Jira connectors must fail as unsupported at
+      // the authority boundary, before config parsing can look like a generic
+      // GitHub failure and before any credential/provider I/O occurs.
+      assertSupportedIssuesProvider(source.config);
       const config = GitHubIssuesConfig.parse(source.config);
       // The source's own `staticRef` takes precedence; else the org-default static
       // ref the poller resolved (App-installation-OR-org-default-static). When

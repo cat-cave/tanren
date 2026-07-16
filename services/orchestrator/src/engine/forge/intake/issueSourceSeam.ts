@@ -26,7 +26,7 @@ import {
   MissingGithubCredentialRefError,
   NoGithubCredentialConfiguredError,
 } from "../../credentials/githubTokenResolver.js";
-import { IntakeSourceAuthError } from "../inbox/connectorErrors.js";
+import { IntakeSourceAuthError, UnsupportedInboxProviderError } from "../inbox/connectorErrors.js";
 import {
   buildInboxConnectorMap,
   buildPgSentryIntakeAuthority,
@@ -71,7 +71,10 @@ export class IntakeGithubCredentialMissingError extends Error {
  *   • the LIVE auth-rejected path — a connector's HTTP fetch comes back 401/403
  *     ({@link IntakeSourceAuthError}): the token resolved but the source denied it
  *     (expired/revoked/insufficient scope). Same class of misconfiguration — a
- *     LOUD fail-closed re-throw, not a swallowed "this source never ingests".
+ *     LOUD fail-closed re-throw, not a swallowed "this source never ingests", AND
+ *   • a deleted provider/raw-token shape ({@link UnsupportedInboxProviderError}):
+ *     the source cannot become valid through retry and must be recreated against
+ *     the supported GitHub provider rather than quietly retried forever.
  *
  * The intake poller's `tick()` uses this single predicate so a configured GitHub
  * source whose credential cannot be resolved — by ANY path — is a LOUD
@@ -86,7 +89,8 @@ export function isCredentialResolutionError(error: unknown): boolean {
     error instanceof IntakeGithubCredentialMissingError ||
     error instanceof NoGithubCredentialConfiguredError ||
     error instanceof MissingGithubCredentialRefError ||
-    error instanceof IntakeSourceAuthError
+    error instanceof IntakeSourceAuthError ||
+    error instanceof UnsupportedInboxProviderError
   );
 }
 

@@ -33,6 +33,8 @@ import {
   foldCandidate,
   ingestSource,
   SourceKind,
+  UnsupportedInboxProviderError,
+  assertSupportedIssuesProvider,
   type InboxEngineDeps,
   type SentryHttpClient,
   type SourceConnector,
@@ -152,6 +154,16 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
     if (!guard(c, orgId)) return c.json({ error: "org_access_denied" }, 403);
     const parsed = CreateSourceBody.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) return c.json({ error: "invalid_source", issues: parsed.error.issues }, 400);
+    if (parsed.data.kind === "issues") {
+      try {
+        assertSupportedIssuesProvider(parsed.data.config);
+      } catch (error) {
+        if (error instanceof UnsupportedInboxProviderError) {
+          return c.json({ error: "unsupported_inbox_provider", message: error.message }, 400);
+        }
+        throw error;
+      }
+    }
     const source = await pgRepositories.inbox.createSource(options.pool, { orgId, ...parsed.data });
     return c.json({ source }, 201);
   });
@@ -181,6 +193,12 @@ export function createInboxRoutes(options: InboxRoutesOptions) {
       const { candidates } = await ingestSource(ingestDeps, source, intakeAutoRouteDeps());
       return c.json({ candidates }, 200);
     } catch (error) {
+      if (error instanceof UnsupportedInboxProviderError) {
+        return c.json({ error: "unsupported_inbox_provider", message: error.message }, 400);
+      }
+      if (error instanceof z.ZodError) {
+        return c.json({ error: "invalid_inbox_source_config", issues: error.issues }, 400);
+      }
       return c.json({ error: "inbox_ingest_failed", message: messageOf(error) }, 500);
     }
   });
