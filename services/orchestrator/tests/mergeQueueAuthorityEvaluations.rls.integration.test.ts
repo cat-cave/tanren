@@ -277,7 +277,7 @@ describeDb("mq-2 durable authority evaluation under enforced RLS", () => {
   });
 
   it("projects flake_observation on the read side only from the exact active quarantine and passing proof epoch", async () => {
-    // The engine gather no longer synthesizes flake evidence (descoped): flake_observation
+    // The engine gather no longer synthesizes flake evidence (removed): flake_observation
     // is reconstructed on the durable read side from a real ci-flaky quarantine row whose
     // proven toggle attests THIS exact head, joined to a passing batch proof. Prove that
     // read-side projection against real Postgres, and that a head mismatch removes it.
