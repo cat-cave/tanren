@@ -59,18 +59,47 @@ export function describeRepositoriesConformance(
       expect(ownership).toEqual({ orgId: ORG_A, defaultBranch: "main" });
     });
 
-    it("reads back the config blob it wrote on the caller's client", async () => {
+    it("reads back the config blob it wrote via revision CAS on the caller's client", async () => {
       const h = await makeHarness();
       await h.seed({ projects: [projectA()] });
       const client = h.clientForOrg(ORG_A);
-      await h.repositories.projects.updateConfig(
+      const snapshot = await h.repositories.projects.getConfigSnapshot(client, "project_a", systemActor);
+      expect(snapshot?.revision).toBe("1");
+      const outcome = await h.repositories.projects.compareAndSwapConfig(
         client,
         "project_a",
+        "1",
         { version: 1, governancePosture: "x" },
         systemActor,
       );
+      expect(outcome).toMatchObject({ status: "ok", revision: "2" });
       const config = await h.repositories.projects.getConfig(client, "project_a", systemActor);
       expect(config).toMatchObject({ governancePosture: "x" });
+    });
+
+    it("returns conflict (not success) when two writers race the same revision", async () => {
+      const h = await makeHarness();
+      await h.seed({ projects: [projectA()] });
+      const client = h.clientForOrg(ORG_A);
+      const first = await h.repositories.projects.compareAndSwapConfig(
+        client,
+        "project_a",
+        "1",
+        { version: 1, governancePosture: "winner" },
+        systemActor,
+      );
+      expect(first).toMatchObject({ status: "ok", revision: "2" });
+      const second = await h.repositories.projects.compareAndSwapConfig(
+        client,
+        "project_a",
+        "1",
+        { version: 1, governancePosture: "loser" },
+        systemActor,
+      );
+      expect(second).toMatchObject({
+        status: "conflict",
+        current: { revision: "2", config: { governancePosture: "winner" } },
+      });
     });
 
     it("updates a project's repo url on the caller's client", async () => {

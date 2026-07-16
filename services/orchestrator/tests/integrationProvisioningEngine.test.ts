@@ -42,6 +42,7 @@ interface StubState {
   inboxSources: Array<{ id: string; org_id: string; project_id: string; kind: string; name: string; config: string }>;
   notificationTargets: Array<{ id: string; org_id: string; channel_kind: string; destination: string; label: string }>;
   projectConfig: Record<string, unknown> | null;
+  projectConfigRevision: number;
 }
 
 function stubPool(state: StubState): pg.Pool {
@@ -73,12 +74,51 @@ function stubPool(state: StubState): pg.Pool {
         rowCount: 1,
       };
     }
+    if (
+      text.includes("SELECT config, config_revision::text AS revision,") &&
+      text.includes("config IS NOT DISTINCT FROM") &&
+      text.includes("FROM projects")
+    ) {
+      const next = JSON.parse(String(params[1])) as unknown;
+      const current = state.projectConfig ?? {};
+      return {
+        rows: [
+          {
+            config: current,
+            revision: String(state.projectConfigRevision),
+            config_equal: JSON.stringify(current) === JSON.stringify(next),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (text.includes("SELECT config, config_revision::text AS revision FROM projects")) {
+      return {
+        rows: [{ config: state.projectConfig ?? {}, revision: String(state.projectConfigRevision) }],
+        rowCount: 1,
+      };
+    }
     if (text.includes("SELECT config FROM projects")) {
       return { rows: [{ config: state.projectConfig }], rowCount: state.projectConfig === null ? 1 : 1 };
     }
+    if (text.includes("config_revision = config_revision + 1") && text.includes("UPDATE projects")) {
+      const expected = Number(params[2]);
+      if (state.projectConfigRevision !== expected) {
+        return { rows: [], rowCount: 0 };
+      }
+      const next = JSON.parse(String(params[0])) as Record<string, unknown>;
+      if (JSON.stringify(state.projectConfig ?? {}) === JSON.stringify(next)) {
+        return { rows: [], rowCount: 0 };
+      }
+      state.projectConfig = next;
+      state.projectConfigRevision += 1;
+      return {
+        rows: [{ config: state.projectConfig, revision: String(state.projectConfigRevision) }],
+        rowCount: 1,
+      };
+    }
     if (text.startsWith("UPDATE projects SET config")) {
-      state.projectConfig = JSON.parse(String(params[0])) as Record<string, unknown>;
-      return { rows: [], rowCount: 1 };
+      throw new Error("LWW UPDATE projects SET config is deleted — use revision CAS");
     }
     // inbox source: INSERT ... ON CONFLICT (org_id, project_id, kind) DO UPDATE.
     // The stub MIRRORS the real DB constraints so a bad kind can't pass silently:
@@ -151,6 +191,7 @@ function freshState(linked: boolean): StubState {
     inboxSources: [],
     notificationTargets: [],
     projectConfig: null,
+    projectConfigRevision: 1,
   };
 }
 

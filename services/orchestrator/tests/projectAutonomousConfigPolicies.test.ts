@@ -227,6 +227,7 @@ describe("project-config is the source of truth (apex-mode eradication)", () => 
   describe("(1) GovernancePutSchema accepts auditPosture + insightThresholds and round-trips", () => {
     it("a PUT body carrying both fields parses + the migrated config persists both", () => {
       const parsed = GovernancePutSchema.parse({
+        revision: "1",
         auditPosture: AUTONOMOUS_AUDIT_POSTURE,
         insightThresholds: { ciInsightFlakyMinShas: 1 },
       });

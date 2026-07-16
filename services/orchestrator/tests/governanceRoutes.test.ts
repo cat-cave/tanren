@@ -66,10 +66,22 @@ async function putJson(
   path: string,
   payload: unknown,
 ): Promise<{ status: number; body: any }> {
+  const body =
+    payload !== null && typeof payload === "object" && !Array.isArray(payload)
+      ? { ...(payload as Record<string, unknown>) }
+      : payload;
+  if (body !== null && typeof body === "object" && !Array.isArray(body) && !("revision" in body)) {
+    const current = await getJson(app, path);
+    if (current.status === 200 && typeof current.body?.revision === "string") {
+      (body as Record<string, unknown>).revision = current.body.revision;
+    } else {
+      (body as Record<string, unknown>).revision = "1";
+    }
+  }
   const res = await app.request(path, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   return { status: res.status, body: await res.json().catch(() => null) };
 }
@@ -138,5 +150,18 @@ describe("project governance routes", () => {
     const { app } = buildHarness(memberOnly);
     const { status } = await getJson(app, "/orgs/org_acme/projects/proj_1/governance");
     expect(status).toBe(200);
+  });
+
+  it("missing revision on governance PUT returns 400 (bypasses helper auto-fill)", async () => {
+    const { app } = buildHarness();
+    // Raw request — do not use putJson, which injects the current revision.
+    const res = await app.request("/orgs/org_acme/projects/proj_1/governance", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reviewPolicy: "auto" }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBeDefined();
   });
 });

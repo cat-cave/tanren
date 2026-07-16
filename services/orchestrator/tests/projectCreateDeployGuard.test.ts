@@ -251,7 +251,7 @@ describe("generic project creation deploy guard", () => {
     const response = await app.request("/orgs/org_acme/projects/project_existing", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config }),
+      body: JSON.stringify({ config, revision: "1" }),
     });
 
     expect(response.status).toBe(400);
@@ -275,6 +275,7 @@ describe("generic project creation deploy guard", () => {
           governancePosture: "strict",
           credentials: { githubCredentialRef: "credential/github/project" },
         },
+        revision: "1",
       }),
     });
 

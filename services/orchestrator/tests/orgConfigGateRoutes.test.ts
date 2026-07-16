@@ -85,7 +85,7 @@ describe("audit-gate org-config PATCH route", () => {
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: gatedBucketBPatch() }),
+      body: JSON.stringify({ config: gatedBucketBPatch(), revision: "1" }),
     });
 
     expect(response.status).toBe(202);
@@ -116,6 +116,7 @@ describe("audit-gate org-config PATCH route", () => {
           auditGateEnabled: true,
           auditGate: { repo: "cat-cave/tanren-config" },
         },
+        revision: "1",
       }),
     });
 
@@ -144,6 +145,7 @@ describe("audit-gate org-config PATCH route", () => {
             audit: { chain: [{ cli: "claude", model: "opus-4.7", authRef: "credential/claude" }] },
           },
         },
+        revision: "1",
       }),
     });
 

@@ -2,11 +2,13 @@
 // `organizations.config.github_app` (JSONB; no dedicated table). Both the
 // install-onboarding callback (write) and the token resolver (read) go through
 // here so the JSONB round-trip stays in one place and always flows through
-// `migrateOrgConfig`.
+// `migrateOrgConfig`. Writes use the sole org-config CAS (progress mutate).
 
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
+import { mutateOrgConfig, OrgConfigMissingError } from "../config/orgConfigMutate.js";
 import { migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { systemActor } from "../state/actor.js";
 
 // RLS R3b: the org GitHub-App block lives in `organizations.config`, an
 // RLS-enabled table keyed on `id`. These helpers are called from contexts that
@@ -23,6 +25,7 @@ export async function loadOrgGithubAppInstallation(
   orgId: string,
 ): Promise<OrgGithubAppInstallation | undefined> {
   return runWithOrgScope(pool, orgId, async (client) => {
+    // Read-only path keeps the historical SELECT shape (no revision token needed).
     const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
     return row === undefined ? undefined : migrateOrgConfig(row.config).github_app;
@@ -48,13 +51,8 @@ export async function loadOrgDefaultGithubCredentialRef(pool: pg.Pool, orgId: st
 }
 
 /**
- * Set the org's default GitHub credential ref
- * (`organizations.config.defaultCredentials.github_token`) — the token-mode
- * counterpart to {@link persistOrgGithubAppInstallation}. Read-modify-writes the
- * `defaultCredentials` block through `migrateOrgConfig` so the persisted blob is
- * always a valid versioned config. Returns false when the org row is absent.
- *
- * RLS: same single-org scoping rationale as {@link loadOrgGithubAppInstallation}.
+ * Set the org's default GitHub credential ref via progress-based org config CAS.
+ * Returns false when the org row is absent.
  */
 export async function persistOrgDefaultGithubCredentialRef(
   pool: pg.Pool,
@@ -62,21 +60,21 @@ export async function persistOrgDefaultGithubCredentialRef(
   credentialRef: string,
 ): Promise<boolean> {
   return runWithOrgScope(pool, orgId, async (client) => {
-    const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
-    const row = result.rows[0];
-    if (row === undefined) {
-      return false;
+    try {
+      await mutateOrgConfig(client, orgId, systemActor, (raw) => {
+        const current = migrateOrgConfig(raw);
+        return migrateOrgConfig({
+          ...current,
+          defaultCredentials: { ...current.defaultCredentials, github_token: credentialRef },
+        });
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof OrgConfigMissingError) {
+        return false;
+      }
+      throw error;
     }
-    const current = migrateOrgConfig(row.config);
-    const next = migrateOrgConfig({
-      ...current,
-      defaultCredentials: { ...current.defaultCredentials, github_token: credentialRef },
-    });
-    const updated = await client.query<{ id: string }>(
-      "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
-      [JSON.stringify(next), orgId],
-    );
-    return updated.rowCount !== null && updated.rowCount > 0;
   });
 }
 
@@ -86,16 +84,16 @@ export async function persistOrgGithubAppInstallation(
   installation: OrgGithubAppInstallation,
 ): Promise<boolean> {
   return runWithOrgScope(pool, orgId, async (client) => {
-    const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
-    const row = result.rows[0];
-    if (row === undefined) {
-      return false;
+    try {
+      await mutateOrgConfig(client, orgId, systemActor, (raw) => {
+        return { ...migrateOrgConfig(raw), github_app: installation };
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof OrgConfigMissingError) {
+        return false;
+      }
+      throw error;
     }
-    const next = { ...migrateOrgConfig(row.config), github_app: installation };
-    const updated = await client.query<{ id: string }>(
-      "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
-      [JSON.stringify(next), orgId],
-    );
-    return updated.rowCount !== null && updated.rowCount > 0;
   });
 }

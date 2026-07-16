@@ -23,7 +23,7 @@ import { systemActor } from "../../engine/state/actor.js";
 import { createProject, ProjectAccessDeniedError, ProjectNotFoundError } from "../../engine/workflow/projectSpec.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
-import { BudgetPutSchema, handleBudgetGet, handleBudgetPut } from "./budget.js";
+import { BudgetPutSchema, handleBudgetGet, handleBudgetPut, projectConfigConflict } from "./budget.js";
 import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
@@ -50,6 +50,8 @@ const ProjectCreateSchema = z.object({
 
 const ProjectPatchSchema = z.object({
   config: z.record(z.string(), z.unknown()),
+  /** Expected config_revision from the last GET — one-shot CAS token. */
+  revision: z.string().regex(/^[1-9]\d*$/u),
 });
 
 export function createProjectRoutes(options: ProjectRoutesOptions) {
@@ -148,13 +150,32 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
       return c.json({ error: "project_not_found" }, 404);
     }
-    const currentConfig = migrateProjectConfig(await ProjectStore.getConfig(options.pool, projectId, systemActor));
+    const snapshot = await ProjectStore.getConfigSnapshot(options.pool, projectId, systemActor);
+    if (snapshot === undefined) {
+      return c.json({ error: "project_not_found" }, 404);
+    }
+    if (snapshot.revision !== parsed.data.revision) {
+      return c.json(projectConfigConflict(orgId, projectId, snapshot.revision), 409);
+    }
+    const currentConfig = migrateProjectConfig(snapshot.config);
     const configCheck = checkFullProjectConfigPatch(parsed.data.config, currentConfig);
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }
-    await ProjectStore.updateConfig(options.pool, projectId, configCheck.config, systemActor);
-    return c.json({ projectId, config: configCheck.config });
+    const outcome = await ProjectStore.compareAndSwapConfig(
+      options.pool,
+      projectId,
+      parsed.data.revision,
+      configCheck.config,
+      systemActor,
+    );
+    if (outcome.status === "not_found") {
+      return c.json({ error: "project_not_found" }, 404);
+    }
+    if (outcome.status === "conflict") {
+      return c.json(projectConfigConflict(orgId, projectId, outcome.current.revision), 409);
+    }
+    return c.json({ projectId, config: configCheck.config, revision: outcome.revision });
   });
 
   // The dedicated dollar-budget surface (autonomy-engine.md §3 proof 6): a
@@ -270,6 +291,8 @@ function toProjectContract(row: RepoProjectRow) {
     runnerImage: row.runnerImage,
     allocator: row.allocator,
     config: migrateProjectConfig(row.config),
+    // Application config generation — the one-shot CAS token for PATCH/budget/governance.
+    revision: row.configRevision ?? "1",
     // Expose the operator lifecycle so list + read consumers see paused projects.
     lifecycle: row.lifecycle,
   };

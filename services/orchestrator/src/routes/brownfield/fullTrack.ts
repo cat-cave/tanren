@@ -33,7 +33,7 @@ import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { GovernancePosture, type GovernancePosture as GovernancePostureType } from "../../engine/config/shared.js";
-import { migrateProjectConfig } from "../../engine/config/projectConfig.js";
+import { migrateProjectConfig, mutateProjectConfig } from "../../engine/config/projectConfig.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import {
   loadOrgDefaultGithubCredentialRef,
@@ -352,11 +352,11 @@ async function fetchIssuesFor(
 }
 
 async function persistPosture(pool: pg.Pool, projectId: string, posture: GovernancePostureType): Promise<unknown> {
-  const config = await ProjectStore.getConfig(pool, projectId, systemActor);
-  const current = migrateProjectConfig(config);
-  const next = { ...current, governancePosture: posture };
-  await ProjectStore.updateConfig(pool, projectId, next, systemActor);
-  return next;
+  const result = await mutateProjectConfig(pool, projectId, systemActor, (config) => {
+    const current = migrateProjectConfig(config);
+    return { ...current, governancePosture: posture };
+  });
+  return result.config;
 }
 
 function externalPushPolicy(posture: GovernancePostureType): string {

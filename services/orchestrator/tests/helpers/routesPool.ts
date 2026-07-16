@@ -4,6 +4,7 @@
 // Deliberately scoped: only the SQL fragments the routes emit are handled.
 
 import type pg from "pg";
+import { handleConfigCasSql } from "./routesPoolConfigCas.js";
 
 interface QueryResult {
   rows: unknown[];
@@ -17,6 +18,7 @@ interface OrgRow {
   login: string;
   display_name: string;
   config: unknown;
+  config_revision: number;
 }
 
 interface OrgMemberRow {
@@ -33,6 +35,7 @@ interface ProjectRow {
   runner_image: string;
   allocator: string;
   config: unknown;
+  config_revision: number;
   lifecycle: string;
   org_id: string | null;
 }
@@ -119,6 +122,7 @@ export class RoutesPool {
       // `defaultOrgConfigV1()`, and the parsers now fail hard on an unversioned
       // row (the migration shim is deleted).
       config: input.config ?? { version: 1 },
+      config_revision: input.config_revision ?? 1,
     };
     this.orgs.set(row.id, row);
     return row;
@@ -139,6 +143,7 @@ export class RoutesPool {
       // Bare versioned config by default (see seedOrg): unversioned rows now
       // fail hard.
       config: input.config ?? { version: 1 },
+      config_revision: input.config_revision ?? 1,
       lifecycle: input.lifecycle ?? "active",
       org_id: input.org_id,
     };
@@ -199,11 +204,9 @@ export class RoutesPool {
       const org = this.orgs.get(String(params[0]));
       return single(org === undefined ? undefined : { config: org.config });
     }
-    if (trimmed.startsWith("UPDATE organizations SET config")) {
-      const org = this.orgs.get(String(params[1]));
-      if (org === undefined) return { rows: [], rowCount: 0 };
-      org.config = JSON.parse(String(params[0])) as unknown;
-      return { rows: [{ id: org.id }], rowCount: 1 };
+    {
+      const cas = handleConfigCasSql(trimmed, params, this.orgs, this.projects);
+      if (cas !== undefined) return cas;
     }
 
     // org_members (the GitHub-App install/callback org-admin authorization read).
@@ -213,7 +216,12 @@ export class RoutesPool {
     }
 
     // projects
-    if (trimmed.startsWith("SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config")) {
+    if (
+      trimmed.startsWith(
+        "SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config, config_revision",
+      ) ||
+      trimmed.startsWith("SELECT project_id, name, repo_url, default_branch, runner_image, allocator, config")
+    ) {
       if (sql.includes("WHERE org_id = $1")) {
         const orgId = String(params[0]);
         const rows = [...this.projects.values()].filter((p) => p.org_id === orgId);
@@ -247,7 +255,7 @@ export class RoutesPool {
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { org_id: project.org_id, config: project.config });
     }
-    // ProjectStore.getConfig (the budget PUT read-modify-write + narration).
+    // ProjectStore.getConfig (read-only consumers).
     if (trimmed.startsWith("SELECT config FROM projects WHERE project_id = $1")) {
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { config: project.config });
@@ -291,15 +299,10 @@ export class RoutesPool {
         runner_image: String(params[4]),
         allocator: String(params[5]),
         config: JSON.parse(String(params[6])) as unknown,
+        config_revision: 1,
         org_id: params[7] === null ? null : String(params[7]),
       });
       return { rows: [], rowCount: 1 };
-    }
-    if (trimmed.startsWith("UPDATE projects SET config")) {
-      const project = this.projects.get(String(params[1]));
-      if (project === undefined) return { rows: [], rowCount: 0 };
-      project.config = JSON.parse(String(params[0])) as unknown;
-      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
     }
     if (trimmed.startsWith("UPDATE projects SET repo_url")) {
       const project = this.projects.get(String(params[1]));

@@ -26,6 +26,7 @@ export interface ProjectRecord {
   runner_image: string;
   allocator: string;
   config: unknown;
+  config_revision: number;
   org_id: string | null;
 }
 
@@ -180,6 +181,7 @@ export class MemoryDb {
       runner_image: p.runnerImage,
       allocator: p.allocator,
       config: p.config,
+      config_revision: 1,
       org_id: p.orgId,
     });
   }

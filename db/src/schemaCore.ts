@@ -1,5 +1,15 @@
 import { sql } from "drizzle-orm";
-import { type AnyPgColumn, check, index, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  type AnyPgColumn,
+  bigint,
+  check,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { stateEnumLists } from "./stateEnums.js";
 
 // `runs` lives here (not in schema.ts) so the benchmark sub-schema —
@@ -36,18 +46,13 @@ export const projects = pgTable(
     defaultBranch: text("default_branch").notNull().default("main"),
     runnerImage: text("runner_image").notNull().default("ghcr.io/cat-cave/tanren-runner:v0"),
     allocator: text("allocator").notNull().default("local-docker"),
-    // Versioned `ProjectConfigV1` blob. Column default is the MINIMAL VALID versioned config
-    // (`{"version":1}`), NOT bare `{}`: reads parse through `migrateProjectConfig` (fail-HARD on
-    // unversioned rows), so `{}` would poison a column-omitting insert into a latent runtime 500.
-    // `{"version":1}` parses to the fully-defaulted V1 (identical to `defaultProjectConfigV1()`).
-    // Application inserts (`createProject`) still supply a full default explicitly; this only
-    // backstops a column-omitting insert with a valid-and-versioned value.
+    // Versioned ProjectConfigV1; default is minimal valid `{"version":1}` (not `{}`).
     config: jsonb("config")
       .notNull()
       .default(sql`'{"version":1}'::jsonb`),
-    // Operator lifecycle: 'active' (the default — the autonomous walker drives it)
-    // or 'archived' (the walker + strand reconciler skip it; in-flight runs/specs
-    // are cancelled on archive). Flipped only through the dedicated archive surface.
+    // App config generation for sole CAS (never xmin). mode number: kit-safe; HTTP uses ::text.
+    configRevision: bigint("config_revision", { mode: "number" }).notNull().default(1),
+    // Operator lifecycle: active (walker drives) or archived (paused). Archive surface only.
     lifecycle: text("lifecycle").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     orgId: text("org_id")
@@ -119,18 +124,12 @@ export const organizations = pgTable(
     externalId: text("external_id").notNull(),
     login: text("login").notNull(),
     displayName: text("display_name").notNull(),
-    // The org's versioned `OrgConfigV1` blob. As with `projects.config`, the column
-    // default is the MINIMAL VALID versioned config (`{"version":1}`), NOT a bare
-    // `{}`: `migrateOrgConfig` fail-HARD rejects an unversioned row, so a bare `{}`
-    // default would poison a column-omitting insert into a latent 500 on the next
-    // org-config read (the App-installation / provider-mode / default-credentials
-    // reads in `resolveCredentials.ts`). `{"version":1}` parses to the fully-defaulted
-    // V1 shape (identical to `defaultOrgConfigV1()`). The bootstrap insert
-    // (`identityStore.upsertOrg`) still supplies a full `defaultOrgConfigV1()`
-    // explicitly; this default only backstops a column-omitting insert.
+    // Versioned OrgConfigV1; default is minimal valid `{"version":1}` (not `{}`).
     config: jsonb("config")
       .notNull()
       .default(sql`'{"version":1}'::jsonb`),
+    // App org config generation for sole CAS (never xmin). mode number: kit-safe; HTTP uses ::text.
+    configRevision: bigint("config_revision", { mode: "number" }).notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

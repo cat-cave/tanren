@@ -6,27 +6,16 @@
 //
 //   GET  /:orgId/projects/:projectId/governance
 //     → { reviewPolicy, mergeIntegration, governancePosture, auditPosture,
-//         insightThresholds }
-//       the governed settings the run loop consults: whether review requires a
-//       human verdict (`reviewPolicy`), which merge engine the PR enters
-//       (`mergeIntegration`), the escape-hatch posture (`governancePosture`), the
-//       audit-posture DORA knob (`auditPosture`), and the CI-intelligence
-//       thresholds (`insightThresholds`).
+//         insightThresholds, revision }
 //   PUT  /:orgId/projects/:projectId/governance
-//        { reviewPolicy?, mergeIntegration?, governancePosture?, auditPosture?,
-//          insightThresholds? }
-//     → the same shape, re-read after the write. Read-modify-writes the keys on
-//       `projects.config` through the SAME versioned project-config path the rest
-//       of the config uses — a dedicated, discoverable endpoint mirroring the budget
-//       surface. Omitted fields are left untouched.
-//
-// Both run org-scoped under RLS: the config read-modify-write resolves + verifies
-// the project's org first. The MUTATION is org-admin authorized (it changes the
-// autonomy posture), stronger than the read — mirroring the org-config gate.
+//        { revision, reviewPolicy?, mergeIntegration?, governancePosture?,
+//          auditPosture?, insightThresholds? }
+//     → the same shape after a one-shot revision CAS. Omitted fields untouched.
 
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
+import { ConfigRevisionSchema } from "../../engine/config/configRevision.js";
 import {
   AuditPostureConfig,
   GovernancePosture,
@@ -37,11 +26,13 @@ import {
 import { InsightThresholdsConfig } from "../../engine/insights/thresholds.js";
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
+import { projectConfigConflict } from "./configConflict.js";
 
-// Every field is optional: a PUT overrides only the settings it names; omitted
-// keys keep their current value (read-modify-write). `.strict()` rejects unknown keys.
+// Every field except revision is optional: a PUT overrides only the settings it
+// names; omitted keys keep their current value (read-modify-write once).
 export const GovernancePutSchema = z
   .object({
+    revision: ConfigRevisionSchema,
     reviewPolicy: ReviewPolicy.optional(),
     mergeIntegration: MergeIntegration.optional(),
     governancePosture: GovernancePosture.optional(),
@@ -57,15 +48,17 @@ export interface GovernanceView {
   governancePosture: z.infer<typeof GovernancePosture>;
   auditPosture: z.infer<typeof AuditPostureConfig>;
   insightThresholds: z.infer<typeof InsightThresholdsConfig>;
+  revision: string;
 }
 
-function toView(config: ReturnType<typeof migrateProjectConfig>): GovernanceView {
+function toView(config: ReturnType<typeof migrateProjectConfig>, revision: string): GovernanceView {
   return {
     reviewPolicy: config.reviewPolicy,
     mergeIntegration: config.mergeIntegration,
     governancePosture: config.governancePosture,
     auditPosture: config.auditPosture,
     insightThresholds: config.insightThresholds,
+    revision,
   };
 }
 
@@ -80,15 +73,17 @@ export async function handleGovernanceGet(
   if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
     return c.json({ error: "project_not_found" }, 404);
   }
-  const config = migrateProjectConfig(await ProjectStore.getConfig(pool, projectId, systemActor));
-  return c.json(toView(config));
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined) {
+    return c.json({ error: "project_not_found" }, 404);
+  }
+  const config = migrateProjectConfig(snapshot.config);
+  return c.json(toView(config, snapshot.revision));
 }
 
 /**
- * PUT handler: set the project's governance settings by read-modify-writing the
- * named keys on `projects.config`, then re-read + return the resolved view. Only
- * the named fields change; the rest of the config round-trips untouched through
- * the versioned parser so the persisted blob is always a valid ProjectConfigV1.
+ * PUT handler: one-shot revision CAS over named governance keys on projects.config.
+ * Field-merge is applied once against the snapshot matching `body.revision`.
  */
 export async function handleGovernancePut(
   c: Context,
@@ -102,7 +97,15 @@ export async function handleGovernancePut(
     return c.json({ error: "project_not_found" }, 404);
   }
 
-  const current = migrateProjectConfig(await ProjectStore.getConfig(pool, projectId, systemActor));
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined) {
+    return c.json({ error: "project_not_found" }, 404);
+  }
+  if (snapshot.revision !== body.revision) {
+    return c.json(projectConfigConflict(orgId, projectId, snapshot.revision), 409);
+  }
+
+  const current = migrateProjectConfig(snapshot.config);
   const nextConfig = {
     ...current,
     ...(body.reviewPolicy === undefined ? {} : { reviewPolicy: body.reviewPolicy }),
@@ -111,10 +114,14 @@ export async function handleGovernancePut(
     ...(body.auditPosture === undefined ? {} : { auditPosture: body.auditPosture }),
     ...(body.insightThresholds === undefined ? {} : { insightThresholds: body.insightThresholds }),
   };
-  // Round-trip through the versioned parser so the persisted blob is always a valid
-  // ProjectConfigV1.
   const validated = migrateProjectConfig(nextConfig);
-  await ProjectStore.updateConfig(pool, projectId, validated, systemActor);
+  const outcome = await ProjectStore.compareAndSwapConfig(pool, projectId, body.revision, validated, systemActor);
+  if (outcome.status === "not_found") {
+    return c.json({ error: "project_not_found" }, 404);
+  }
+  if (outcome.status === "conflict") {
+    return c.json(projectConfigConflict(orgId, projectId, outcome.current.revision), 409);
+  }
 
-  return c.json(toView(validated));
+  return c.json(toView(validated, outcome.revision));
 }
