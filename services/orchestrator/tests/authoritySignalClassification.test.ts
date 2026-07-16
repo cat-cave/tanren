@@ -262,6 +262,44 @@ describe("mq-1 typed authority-signal classification", () => {
     });
   });
 
+  it("accepts only explicit bound multi-member attribution and retains frozen W0 identity", async () => {
+    const envelope = binding(["A", "C"]);
+    const input = decisionInput(envelope);
+    const authorization = await authority().authorizeLand(input, envelope);
+    const classification = classifyMergeSignal({
+      decisionInput: input,
+      envelope,
+      evidence: mergeAuthorityEvidence(authorization),
+      attributedMemberIds: ["C"],
+    });
+
+    expect(classification).toMatchObject({
+      missionNodeId: "mq-1",
+      classification: "deterministic_policy",
+      reasonCode: "audit_policy",
+      memberIds: ["C"],
+      findingIds: ["finding-p1"],
+    });
+  });
+
+  it("rejects attribution to a member outside the exact envelope", async () => {
+    const envelope = binding(["A", "C"]);
+    const input = decisionInput(envelope);
+    const authorization = await authority().authorizeLand(input, envelope);
+    const classification = classifyMergeSignal({
+      decisionInput: input,
+      envelope,
+      evidence: mergeAuthorityEvidence(authorization),
+      attributedMemberIds: ["not-bound"],
+    });
+
+    expect(classification).toMatchObject({
+      classification: "unknown_fail_closed",
+      reasonCode: "unattributed_policy",
+      memberIds: [],
+    });
+  });
+
   it("fails contradictory authority evidence closed", async () => {
     const envelope = binding();
     const input = decisionInput(envelope);

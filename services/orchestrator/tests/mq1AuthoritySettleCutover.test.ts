@@ -17,6 +17,7 @@ import { holdOrHaltRecoverableDrive, RecoverableDriveHoldCeiling } from "../src/
 import { MergeDispatcher, type DispatcherDeps } from "../src/engine/workflow/reviewMerge/mergeDispatcher.js";
 import type { MergeForRunInput, MergeProbe } from "../src/engine/workflow/reviewMerge/index.js";
 import {
+  allowExactBatchAuthority,
   InMemoryBatchChecker,
   RecordingBatchGateReworkRouter,
   RecordingBatchMergeEventEmitter,
@@ -135,6 +136,7 @@ function makeBatchHarness(maxBatchSize = 6) {
   const escalator = new RecordingSpecEscalator();
   const gateRework = new RecordingBatchGateReworkRouter();
   const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,
     checker,

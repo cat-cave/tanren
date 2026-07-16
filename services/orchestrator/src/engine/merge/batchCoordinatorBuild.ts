@@ -15,10 +15,9 @@
 import { runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
 import { isAbsentProjectConfig, migrateProjectConfig } from "../config/projectConfig.js";
-import { DEFAULT_MAX_BATCH_SIZE } from "../config/shared.js";
 import type { MergeCoordinator } from "../contracts/mergeCoordinator.js";
 import { PgBatchChecker } from "./batchChecker.js";
-import { BatchMergeCoordinator } from "./batchCoordinator.js";
+import { BatchMergeCoordinator, DEFAULT_MAX_BATCH_SIZE } from "./batchCoordinator.js";
 import { PgBatchMergeEventEmitter } from "./batchCoordinatorPg.js";
 import { PgBatchGateReworkRouter } from "./batchGateReworkRouter.js";
 import { PgSpecEscalator, requireRecoveryParkWriter } from "./coordinatorEscalate.js";
@@ -26,6 +25,7 @@ import { type BuildMergeCoordinatorDeps, buildDriveMerge } from "./coordinatorBu
 import { PgMergeQueueEventEmitter, PgMergeQueueModel, PgMergeRunner } from "./coordinatorPg.js";
 import { PgHoldCeilingStore } from "./holdCeilingStore.js";
 import { requireRecoveryOwnedSettlementWriter } from "./recoveryOwnership.js";
+import { PgMultiMemberAuthorityEvaluator } from "./multiMemberAuthorityGatherPg.js";
 
 /**
  * Resolve a project's configured `maxBatchSize` (the batch cap) under the system
@@ -75,6 +75,13 @@ export function buildBatchMergeCoordinator(deps: BuildMergeCoordinatorDeps): Mer
       identitySecretRef: deps.identitySecretRef,
       ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
       runStateWriter,
+    }),
+    authorityEvaluator: new PgMultiMemberAuthorityEvaluator({
+      pool: deps.pool,
+      githubHttp: deps.githubHttp,
+      secrets: deps.secrets,
+      runStateWriter,
+      ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
     }),
     // Audit finding D3/H3 sweep: writer ALWAYS wired (Direct or HTTP); the queue
     // event emitters route every event through it.

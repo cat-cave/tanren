@@ -16,6 +16,10 @@ import type { Context, Hono } from "hono";
 import { MergeQueueClient } from "../../api/mergeQueueClient.js";
 import type { IntegrationMetrics, QueueStats } from "../../api/mergeQueue.js";
 import {
+  MergeQueueAuthorityEvaluationsClient,
+  type MergeQueueAuthorityEvaluationsListResponse,
+} from "../../api/mergeQueueAuthorityEvaluations.js";
+import {
   MergeQueueAuthoritySignalsClient,
   type MergeQueueAuthoritySignalsListResponse,
 } from "../../api/mergeQueueAuthoritySignals.js";
@@ -40,6 +44,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
     let metrics: IntegrationMetrics | undefined;
     let stats: QueueStats | undefined;
     let authoritySignals: MergeQueueAuthoritySignalsListResponse | undefined;
+    let authorityEvaluations: MergeQueueAuthorityEvaluationsListResponse | undefined;
     if (ctx.org !== undefined && project !== undefined) {
       const client = new MergeQueueClient({
         orchestratorUrl: deps.orchestratorUrl,
@@ -49,10 +54,15 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         orchestratorUrl: deps.orchestratorUrl,
         cookieHeader: c.req.header("cookie"),
       });
-      [metrics, stats, authoritySignals] = await Promise.all([
+      const evaluationClient = new MergeQueueAuthorityEvaluationsClient({
+        orchestratorUrl: deps.orchestratorUrl,
+        cookieHeader: c.req.header("cookie"),
+      });
+      [metrics, stats, authoritySignals, authorityEvaluations] = await Promise.all([
         client.getIntegrationMetrics(ctx.org.id, project.projectId, windowDays),
         client.getQueueStats(ctx.org.id, project.projectId, windowDays),
         signalClient.listAuthoritySignals(ctx.org.id, project.projectId),
+        evaluationClient.listAuthorityEvaluations(ctx.org.id, project.projectId),
       ]);
     }
 
@@ -64,6 +74,7 @@ export function mountMergeQueueScreen(app: Hono, deps: ShellDeps): void {
         metrics={metrics}
         stats={stats}
         authoritySignals={authoritySignals}
+        authorityEvaluations={authorityEvaluations}
         windowDays={windowDays}
         projectName={project?.name ?? ""}
         noProject={project === undefined}

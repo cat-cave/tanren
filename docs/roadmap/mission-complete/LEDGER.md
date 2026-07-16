@@ -1,4 +1,4 @@
-<!-- cspell:ignore evsub -->
+<!-- cspell:ignore evsub descoped -->
 
 # Mission-complete node ledger — the single source of truth
 
@@ -23,16 +23,16 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Bucket               | Total   | MVP     | ✅ done        | 🟡 in-flight | 🚧 spec-debt   |
 | -------------------- | ------- | ------- | -------------- | ------------ | -------------- |
-| merge-queue          | 16      | 6       | 1 (mq-1)       | 1 (mq-2)     | 0              |
-| runtime-verification | 26      | 15¹     | 0²             | 1 (rv-4)     | 0              |
+| merge-queue          | 16      | 6       | 2 (mq-1,mq-2)  | 0            | 0              |
+| runtime-verification | 26      | 15¹     | 1² (rv-4)      | 0            | 0              |
 | integrations         | 22      | 22      | 2 (in-1,in-2)  | 0            | 0              |
 | back-half            | 35      | 14      | 0              | 0            | 21 (bh-15..35) |
 | design-system        | 9       | 6       | 0              | 0            | 0              |
 | governance           | 34      | 15      | 4 (gv-1,2,4,5) | 0            | 19 (gv-16..34) |
-| **Total**            | **142** | **~78** | **7**          | **2**        | **40**         |
+| **Total**            | **142** | **~78** | **9**          | **0**        | **40**         |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
-² Strict completion **7/142 = 4.9%**. The 2 in-flight worktrees (rv-4, mq-2) + the in-7 event substrate are the immediate frontier. in-1 (#966) + gv-2 (#968) merged 2026-07-16.
+² Strict completion **9/142 = 6.3%**. in-1 (#966), gv-2 (#968), rv-4 (#969), mq-2 (this PR) merged 2026-07-16. The in-7 event substrate is the next frontier item; the first parallel fan-out wave follows.
 
 > **Honesty flag — the 142 is partly aspirational.** The **MVP tier (~78 nodes, the
 > v97 acceptance target) is fully specced.** The **full tier has 40 nodes of spec
@@ -46,33 +46,33 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | Worktree              | Node             | State                                                                                                                                    |
 | --------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | ~~`in-1-final-fold`~~ | in-1             | ✅ **MERGED #966** (2026-07-16) — org-costs FK reconciled, 22-table RLS proof, grok GO. Worktree retired.                                |
-| `rv-4-final`          | rv-4             | Clean, audit GO; needs post-in-1 rebase + migration/HTTP/UI tail.                                                                        |
+| ~~`rv-4-final`~~      | rv-4             | ✅ **MERGED #969** (2026-07-16) — 0044 composite-FK cross-org proof, wired into smoke, grok GO. Worktree retired.                        |
 | ~~`gv-2-final`~~      | gv-2             | ✅ **MERGED #968** (2026-07-16) — rebased onto post-in-1, cred-ref reconcile, intent_pending cosplay removed, grok GO. Worktree retired. |
-| `mq-2-final`          | mq-2             | Real multi-member authority; collides with in-1/rv-4 → re-port clean over them.                                                          |
+| ~~`mq-2-final`~~      | mq-2             | ✅ **MERGED** (this PR) — re-ported clean; 7 dispositions genuine (2 read-side descoped from cosplay), grok GO. Worktree retired.        |
 | `in-7-evsub-w1a`      | (in-7 substrate) | Event substrate, ci passed; 0 node credit until in-7 producer+HTTP+UI+apex lands.                                                        |
 
 ---
 
 ## merge-queue (16)
 
-| Node  | Phase | Status       | Purpose                                                             | Deps             |
-| ----- | ----- | ------------ | ------------------------------------------------------------------- | ---------------- |
-| mq-1  | MVP   | ✅ done      | v96 regression lock + typed authority reasons (policy ≠ infra)      | SP·4             |
-| mq-2  | MVP   | 🟡 in-flight | MergeAuthority-V2 multi-member eval, 7 typed dispositions           | mq-1 · SP·1/3    |
-| mq-3  | MVP   | ⬜ todo      | Generalized safe-subset solver (ddmin / QuickXPlain)                | mq-2 · SP·3      |
-| mq-4  | MVP   | ⬜ todo      | Member isolation + partition-scoped leases (no project-wide lock)   | mq-2 · SP·1      |
-| mq-5  | MVP   | ⬜ todo      | Atomic land-group reconciliation (one CAS, all members)             | mq-2/3 · SP·3/4  |
-| mq-11 | MVP   | ⬜ todo      | IntegrationNodeMaterializer behind jj WorkspaceVcsCore              | mq-5 · SP·3/4    |
-| mq-6  | full  | ⬜ todo      | Granular Merkle proof graph — per-unit reuse                        | mq-2 · SP·3/5    |
-| mq-7  | full  | ⬜ todo      | Flake classification + exact quarantine + epochs                    | mq-3/6 · SP·5    |
-| mq-8  | full  | ⬜ todo      | EAGER speculative beam search (build before ready)                  | mq-4/6 · SP·4    |
-| mq-9  | full  | ⬜ todo      | IntegrationGraphScheduler + semantic partitions + dynamic batches   | mq-3/4/6         |
-| mq-10 | full  | ⬜ todo      | Autonomous repair + re-spec router (RespecPacketV1)                 | mq-2/3 · SP·1/2  |
-| mq-12 | full  | ⬜ todo      | Fragment/F2 evidence-contract extension                             | mq-6/7 · SP·2/5  |
-| mq-13 | full  | ⬜ todo      | Deploy/verify/demo/rollback loop extension                          | mq-5/10 · SP·5/6 |
-| mq-14 | full  | ⬜ todo      | QueuePolicyV1 + full comparator ops (freeze/pause/windows/commands) | mq-2/4/9 · SP·4  |
-| mq-15 | full  | ⬜ todo      | Dashboard merge-train viz + exportable signed artifacts             | mq-2/3/6/7/10/13 |
-| mq-16 | full  | ⬜ todo      | Merge-Queue-V2 backfill / one-way authority cutover                 | mq-2/5 · SP·8    |
+| Node  | Phase | Status  | Purpose                                                             | Deps             |
+| ----- | ----- | ------- | ------------------------------------------------------------------- | ---------------- |
+| mq-1  | MVP   | ✅ done | v96 regression lock + typed authority reasons (policy ≠ infra)      | SP·4             |
+| mq-2  | MVP   | ✅ done | MergeAuthority-V2 multi-member eval, 7 typed dispositions           | mq-1 · SP·1/3    |
+| mq-3  | MVP   | ⬜ todo | Generalized safe-subset solver (ddmin / QuickXPlain)                | mq-2 · SP·3      |
+| mq-4  | MVP   | ⬜ todo | Member isolation + partition-scoped leases (no project-wide lock)   | mq-2 · SP·1      |
+| mq-5  | MVP   | ⬜ todo | Atomic land-group reconciliation (one CAS, all members)             | mq-2/3 · SP·3/4  |
+| mq-11 | MVP   | ⬜ todo | IntegrationNodeMaterializer behind jj WorkspaceVcsCore              | mq-5 · SP·3/4    |
+| mq-6  | full  | ⬜ todo | Granular Merkle proof graph — per-unit reuse                        | mq-2 · SP·3/5    |
+| mq-7  | full  | ⬜ todo | Flake classification + exact quarantine + epochs                    | mq-3/6 · SP·5    |
+| mq-8  | full  | ⬜ todo | EAGER speculative beam search (build before ready)                  | mq-4/6 · SP·4    |
+| mq-9  | full  | ⬜ todo | IntegrationGraphScheduler + semantic partitions + dynamic batches   | mq-3/4/6         |
+| mq-10 | full  | ⬜ todo | Autonomous repair + re-spec router (RespecPacketV1)                 | mq-2/3 · SP·1/2  |
+| mq-12 | full  | ⬜ todo | Fragment/F2 evidence-contract extension                             | mq-6/7 · SP·2/5  |
+| mq-13 | full  | ⬜ todo | Deploy/verify/demo/rollback loop extension                          | mq-5/10 · SP·5/6 |
+| mq-14 | full  | ⬜ todo | QueuePolicyV1 + full comparator ops (freeze/pause/windows/commands) | mq-2/4/9 · SP·4  |
+| mq-15 | full  | ⬜ todo | Dashboard merge-train viz + exportable signed artifacts             | mq-2/3/6/7/10/13 |
+| mq-16 | full  | ⬜ todo | Merge-Queue-V2 backfill / one-way authority cutover                 | mq-2/5 · SP·8    |
 
 ## runtime-verification (26)
 
@@ -81,7 +81,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | rv-1  | MVP   | 🧱 spine-built | Immutable behavior revisions + spec binding (SP·1)                | —                  |
 | rv-2  | MVP   | 🧱 spine-built | Executable-plan compiler + typed assertion DSL                    | rv-1               |
 | rv-3  | MVP   | 🧱 spine-built | Verification-fragment registry + F2 authoring (SP·2)              | rv-2 · SP·2        |
-| rv-4  | MVP   | 🟡 in-flight   | Behavior coverage edges + affected selection                      | rv-1/2             |
+| rv-4  | MVP   | ✅ done        | Behavior coverage edges + affected selection (#969)               | rv-1/2             |
 | rv-5  | MVP   | 🧱 spine-built | Preview deployment adapter (Fly lifecycle) (SP·6)                 | rv-1 · SP·3        |
 | rv-6  | MVP   | 🧱 spine-built | Driver adapters — Playwright + API/CLI/package/mobile             | rv-2/5             |
 | rv-7  | MVP   | ⬜ todo        | Fixture lease adapter (isolated tenant/channel/data)              | rv-5/8             |

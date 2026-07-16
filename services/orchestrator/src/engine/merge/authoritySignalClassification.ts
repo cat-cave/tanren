@@ -2,7 +2,6 @@
 // mq-1: MA-V2-bound authority-signal classification + sole EventStore append.
 // Consumes landed W0 Zod schemas only — never redefines registry/sensitivity/catalog.
 
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import { decideFromFindings } from "../contracts/auditPosture.js";
 import { severityRank, type Finding } from "../contracts/findings.js";
@@ -14,6 +13,11 @@ import type {
 } from "../contracts/mergeAuthority.js";
 import type { EventStore } from "../eventStore.js";
 import { MergeMemberPolicyBlockedPayload, MergeSignalClassifiedPayload } from "../events/schemas/eventVocabularyW0.js";
+import {
+  authorityDerivedId,
+  authoritySignalIdentity,
+  type AuthorityIdentityObject,
+} from "./authoritySignalIdentity.js";
 
 export const MQ1_MISSION_NODE_ID = "mq-1" as const;
 export const MERGE_SIGNAL_VERSION = "merge_signal.v1" as const;
@@ -61,110 +65,30 @@ export interface ClassifyMergeSignalInputV1 {
   readonly decisionInput: AuthorizeLandInput;
   readonly envelope: LandBindingEnvelope;
   readonly evidence: unknown;
-}
-
-type CanonicalValue = null | boolean | number | string | readonly CanonicalValue[] | CanonicalObject;
-interface CanonicalObject {
-  readonly [key: string]: CanonicalValue;
+  /** MQ-2: member ids proven by per-run durable signal reads for this exact node. */
+  readonly attributedMemberIds?: ReadonlyArray<string>;
 }
 
 interface AuthorityInspection {
   readonly kind: "authority";
   readonly authorization: LandAuthorization;
-  readonly fingerprint: CanonicalObject;
+  readonly fingerprint: AuthorityIdentityObject;
 }
 interface InfrastructureInspection {
   readonly kind: "infrastructure";
   readonly reasonCode: MergeInfrastructureReasonCode;
   readonly sourceKey: string;
-  readonly fingerprint: CanonicalObject;
+  readonly fingerprint: AuthorityIdentityObject;
 }
 interface InvalidInspection {
   readonly kind: "invalid";
   readonly reasonCode: Extract<MergeSignalReasonCode, "invalid_binding" | "untyped_evidence">;
-  readonly fingerprint: CanonicalObject;
+  readonly fingerprint: AuthorityIdentityObject;
 }
 type EvidenceInspection = AuthorityInspection | InfrastructureInspection | InvalidInspection;
 
-function canonicalJson(value: CanonicalValue): string {
-  if (value === null || typeof value === "boolean" || typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("merge-signal identity cannot contain a non-finite number");
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  const object = value as CanonicalObject;
-  return `{${Object.keys(object)
-    .sort()
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key]!)}`)
-    .join(",")}}`;
-}
-
-function derivedId(prefix: "mqeval" | "mqgrp" | "mqwake", value: CanonicalValue): string {
-  return `${prefix}_${createHash("sha256").update(canonicalJson(value)).digest("hex")}`;
-}
-
 function stableUnique(values: ReadonlyArray<string>): string[] {
   return [...new Set(values)].sort();
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function bindingFingerprint(envelope: LandBindingEnvelope): CanonicalObject {
-  return {
-    artifactDigest: envelope.artifactDigest,
-    expectedMainSha: envelope.expectedMainSha,
-    headSha: envelope.headSha,
-    memberSetHash: envelope.memberSetHash,
-    members: envelope.members.map((m) => ({
-      branch: m.branch,
-      disposition: m.disposition,
-      headSha: m.headSha,
-      runId: m.runId,
-      specId: m.specId,
-    })),
-    policyVersion: envelope.policyVersion,
-    proofRoot: envelope.proofRoot,
-    subject: { id: envelope.subject.id, kind: envelope.subject.kind },
-    target: {
-      intoMain: envelope.target.intoMain,
-      repo: { name: envelope.target.repo.name, owner: envelope.target.repo.owner },
-    },
-  };
-}
-
-function decisionFingerprint(input: AuthorizeLandInput): CanonicalObject {
-  return {
-    auditPosture: {
-      autonomousRemediation: input.auditPosture.autonomousRemediation ?? false,
-      blockReviewAt: input.auditPosture.blockReviewAt,
-      p2p3Handling: input.auditPosture.p2p3Handling,
-    },
-    budget:
-      input.budget.kind === "resolved"
-        ? { ceilingUsd: input.budget.ceilingUsd, kind: input.budget.kind, spentUsd: input.budget.spentUsd }
-        : input.budget.kind === "unresolvable"
-          ? { kind: input.budget.kind, reason: input.budget.reason }
-          : { kind: input.budget.kind },
-    conflicts: input.conflicts,
-    demo: input.demo,
-    findings: [...input.findings]
-      .sort((a, b) => compareCodeUnits(a.id, b.id))
-      .map((f) => ({
-        body: f.body,
-        fixHint: f.fixHint ?? null,
-        id: f.id,
-        severity: f.severity,
-        title: f.title,
-      })),
-    gateVerdict: input.gateVerdict,
-    hitlSignoff: input.hitlSignoff,
-    mergeability: input.mergeability,
-    reviewVerdict: input.reviewVerdict,
-    subject: { id: input.subject.id, kind: input.subject.kind },
-  };
 }
 
 function isReason(value: unknown): value is LandBlockReason {
@@ -238,25 +162,6 @@ function hasValidBinding(input: AuthorizeLandInput, envelope: LandBindingEnvelop
   );
 }
 
-function identity(
-  input: AuthorizeLandInput,
-  envelope: LandBindingEnvelope,
-  evidence: EvidenceInspection,
-): { evaluationId: string; groupId: string } {
-  const groupId = derivedId("mqgrp", {
-    memberSetHash: envelope.memberSetHash,
-    members: envelope.members.map((member) => ({ runId: member.runId, specId: member.specId })),
-    subject: { id: envelope.subject.id, kind: envelope.subject.kind },
-  });
-  const evaluationId = derivedId("mqeval", {
-    binding: bindingFingerprint(envelope),
-    decision: decisionFingerprint(input),
-    evidence: evidence.fingerprint,
-    signalVersion: MERGE_SIGNAL_VERSION,
-  });
-  return { evaluationId, groupId };
-}
-
 function commonIdentity(evaluationId: string, groupId: string) {
   return {
     missionNodeId: MQ1_MISSION_NODE_ID,
@@ -301,7 +206,15 @@ function blockingFindings(input: AuthorizeLandInput): Finding[] {
 /** Classify one exact authority evaluation from MA-V2 evidence or typed infra. */
 export function classifyMergeSignal(input: ClassifyMergeSignalInputV1): MergeSignalClassificationV1 {
   const evidence = inspectEvidence(input.evidence, input.envelope);
-  const { evaluationId, groupId } = identity(input.decisionInput, input.envelope, evidence);
+  const attribution = input.attributedMemberIds === undefined ? undefined : stableUnique(input.attributedMemberIds);
+  const identityEvidence =
+    attribution === undefined ? evidence.fingerprint : { ...evidence.fingerprint, attributedMemberIds: attribution };
+  const { evaluationId, groupId } = authoritySignalIdentity({
+    decisionInput: input.decisionInput,
+    envelope: input.envelope,
+    evidence: identityEvidence,
+    signalVersion: MERGE_SIGNAL_VERSION,
+  });
   if (!hasValidBinding(input.decisionInput, input.envelope)) {
     return unknownClassification(evaluationId, groupId, "invalid_binding");
   }
@@ -316,7 +229,7 @@ export function classifyMergeSignal(input: ClassifyMergeSignalInputV1): MergeSig
       memberIds: [],
       findingIds: [],
       retryability: "retryable",
-      wakeKey: derivedId("mqwake", { reasonCode: evidence.reasonCode, sourceKey: evidence.sourceKey }),
+      wakeKey: authorityDerivedId("mqwake", { reasonCode: evidence.reasonCode, sourceKey: evidence.sourceKey }),
       disposition: "retry_when_ready",
     });
   }
@@ -336,7 +249,9 @@ export function classifyMergeSignal(input: ClassifyMergeSignalInputV1): MergeSig
         blocking.map((finding) => finding.id),
       );
     }
-    if (input.envelope.members.length !== 1) {
+    const memberIds = attribution ?? (input.envelope.members.length === 1 ? [input.envelope.members[0]!.specId] : []);
+    const boundMemberIds = new Set(input.envelope.members.map((member) => member.specId));
+    if (memberIds.length === 0 || memberIds.some((memberId) => !boundMemberIds.has(memberId))) {
       return unknownClassification(
         evaluationId,
         groupId,
@@ -348,7 +263,7 @@ export function classifyMergeSignal(input: ClassifyMergeSignalInputV1): MergeSig
       ...commonIdentity(evaluationId, groupId),
       classification: "deterministic_policy",
       reasonCode: "audit_policy",
-      memberIds: [input.envelope.members[0]!.specId],
+      memberIds,
       findingIds: stableUnique(blocking.map((finding) => finding.id)),
       retryability: "non_retryable",
       wakeKey: null,
@@ -371,7 +286,7 @@ export function classifyMergeSignal(input: ClassifyMergeSignalInputV1): MergeSig
         memberIds: [],
         findingIds: [],
         retryability: "non_retryable",
-        wakeKey: derivedId("mqwake", { evaluationId, reasonCode }),
+        wakeKey: authorityDerivedId("mqwake", { evaluationId, reasonCode }),
         disposition: "await_product_decision",
       });
     }

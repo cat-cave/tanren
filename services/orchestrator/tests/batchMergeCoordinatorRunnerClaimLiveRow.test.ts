@@ -32,6 +32,7 @@ import {
   RecordingBatchGateReworkRouter,
   RecordingBatchMergeEventEmitter,
 } from "./conformance/fakes/inMemoryBatchChecker.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 import {
   InMemoryMergeQueueModel,
   RecordingMergeQueueEventEmitter,
@@ -62,6 +63,7 @@ function makeHarness(): Harness {
   const escalator = new RecordingSpecEscalator();
   const gateRework = new RecordingBatchGateReworkRouter();
   const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner,
     checker,

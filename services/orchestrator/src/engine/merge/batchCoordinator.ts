@@ -38,15 +38,14 @@ import { escalateInfraHoldToWriter } from "./batchInfraEscalate.js";
 import type { HoldCeilingStore } from "./holdCeilingStore.js";
 import { RecoverableDriveHoldCeiling } from "./recoverableDriveHold.js";
 import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
+import { driveMultiMemberPass } from "./multiMemberAuthorityEmbark.js";
+import type { BatchAuthorityEvaluator } from "./multiMemberAuthorityTypes.js";
 import { createLogger } from "../observability/logger.js";
+export { DEFAULT_MAX_BATCH_SIZE };
 const log = createLogger("batch-coordinator");
-// In-pass re-poll spacing (not a cap): one transient re-poll, then hand off to cross-pass hold.
 const INFRA_RETRY_BACKOFF_MS = 500;
-
 const PENDING_RECHECK_MS = 15_000;
-
 class BatchCheckStillPendingError extends Error {}
-
 /** Bisect sub-check could not RUN (infra) — abort bisect + HOLD; never blame an innocent PR. */
 class BatchCheckInfraError extends Error {
   constructor(
@@ -58,26 +57,20 @@ class BatchCheckInfraError extends Error {
   }
 }
 
-/** The batch-level events the coordinator emits (the batch-layer visibility surface). */
 export interface BatchMergeEventEmitter {
-  /** merge.batch.checking: a batch was formed + is being speculatively integrated + checked. */
   emitChecking(input: {
     projectId: string;
     batch: ReadonlyArray<MergeQueueEntry>;
     formation: BatchFormation;
     maxBatchSize: number;
   }): Promise<void>;
-  /** merge.batch.passed: the batch check is green; the entries will merge in DAG order. */
   emitPassed(input: {
     projectId: string;
     batch: ReadonlyArray<MergeQueueEntry>;
     integrationBranch: string;
   }): Promise<void>;
-  /** merge.batch.bisecting: the batch check failed; the coordinator is isolating the culprit. */
   emitBisecting(input: { projectId: string; batch: ReadonlyArray<MergeQueueEntry>; message: string }): Promise<void>;
-  /** merge.batch.culprit: bisect isolated the single offending PR (dequeued, recoverable). */
   emitCulprit(input: { projectId: string; culprit: MergeQueueEntry; checks: number; message: string }): Promise<void>;
-  /** merge.batch.infra_blocked: recoverable infra hold or terminal loud halt. */
   emitInfraBlocked(input: {
     projectId: string;
     batch: ReadonlyArray<MergeQueueEntry>;
@@ -93,6 +86,7 @@ export interface BatchMergeCoordinatorDeps {
   queue: MergeQueueModel;
   runner: MergeRunner;
   checker: BatchChecker;
+  authorityEvaluator: BatchAuthorityEvaluator;
   /** The base queue-event emitter (merge.queue.advanced / merge.dequeued — reused). */
   events: MergeQueueEventEmitter;
   /** The batch-level event emitter (merge.batch.*). */
@@ -190,9 +184,17 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       const verdict = checked.verdict;
 
       if (verdict.result === "pass") {
-        const { integrationBranch } = verdict;
-        await this.deps.batchEvents.emitPassed({ projectId, batch: current.batch, integrationBranch });
-        const result = await this.mergeBatch(projectId, current.batch, queueDepth);
+        const result = await driveMultiMemberPass({
+          deps: this.deps,
+          projectId,
+          batch: current.batch,
+          binding: verdict.authorityBinding,
+          integrationBranch: verdict.integrationBranch,
+          queueDepth,
+          emitPassed: (batch, integrationBranch) =>
+            this.deps.batchEvents.emitPassed({ projectId, batch, integrationBranch }),
+          drive: (batch) => this.mergeBatch(projectId, batch, queueDepth),
+        });
         if (result.holdReason !== "infra_error" && result.holdReason !== "infra_blocked") {
           await this.infraHolds.reset(projectId);
         }

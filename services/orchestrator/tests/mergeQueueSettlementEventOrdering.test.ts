@@ -7,6 +7,7 @@ import {
   RecordingSpecEscalator,
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 
 const PROJECT = "project_settlement_ordering";
 
@@ -20,6 +21,7 @@ function makeBatchHarness(): {
   const checker = new InMemoryBatchChecker();
   const events = new RecordingMergeQueueEventEmitter();
   const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: allowExactBatchAuthority(),
     queue,
     runner: new ScriptedMergeRunner(),
     checker,

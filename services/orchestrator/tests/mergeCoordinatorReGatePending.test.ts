@@ -27,6 +27,7 @@ import {
   RecordingSpecEscalator,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 
 /** A runner that returns a SCRIPTED outcome per drive, in order (so a hold-then-merge sequences). */
 class ScriptedMergeRunner implements MergeRunner {
@@ -65,6 +66,7 @@ function harness(): {
   const runner = new ScriptedMergeRunner();
   const events = new RecordingMergeQueueEventEmitter();
   const coordinator = new BatchMergeCoordinator({
+    authorityEvaluator: allowExactBatchAuthority(),
     resolveMaxBatchSize: async () => 1,
     queue,
     runner,

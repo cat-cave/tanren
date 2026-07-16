@@ -18,6 +18,7 @@ import {
   ScriptedMergeRunner,
 } from "./conformance/fakes/inMemoryMergeQueue.js";
 import { InMemoryRecoveryOwnedSettlementWriter } from "./conformance/fakes/inMemoryRecoveryOwnedSettlementWriter.js";
+import { allowExactBatchAuthority } from "./helpers/mq2BatchAuthority.js";
 
 const LEASE_MS = MERGE_CLAIM_LEASE_MS;
 
@@ -61,6 +62,7 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
+      authorityEvaluator: allowExactBatchAuthority(),
       resolveMaxBatchSize: async () => 1,
       queue,
       runner,
@@ -96,6 +98,7 @@ describe("recoverStaleClaims lease guard (P2d serialization hardening)", () => {
     const runner = new ScriptedMergeRunner();
     const events = new RecordingMergeQueueEventEmitter();
     const coordinator = new BatchMergeCoordinator({
+      authorityEvaluator: allowExactBatchAuthority(),
       resolveMaxBatchSize: async () => 1,
       queue,
       runner,

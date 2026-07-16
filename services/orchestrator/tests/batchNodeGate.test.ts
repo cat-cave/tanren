@@ -46,6 +46,7 @@ function gateDeps(ssh: CommandSubstrate) {
     eventStore: new FakeEventStore(),
     governancePosture: "open" as const,
     integrationRef: "tanren-batch-local",
+    orgId: "org_b",
     projectId: "project_b",
     tailSpecId: "spec_tail",
     timeoutMs: 100,
@@ -114,5 +115,57 @@ describe("batchNodeGate — invalid .tanren/ci.yml is a fail VERDICT (not a thro
 
     expect(passed).toBe(true);
     expect(verdict.result).toBe("pass");
+  });
+
+  it("actuates the exact quarantine set and records the excluded failure without red-gating", async () => {
+    const commands: string[] = [];
+    const validYaml = [
+      "version: 1",
+      "tiers:",
+      "  fast:",
+      "    - name: lint",
+      "      run: pnpm lint",
+      "      junitReport: reports/lint-junit.xml",
+      "  slow:",
+      "    - name: unit",
+      "      run: pnpm test",
+      "      junitReport: reports/junit.xml",
+      "when:",
+      "  fast:",
+      "    - pre_audit",
+      "  slow:",
+      "    - pre_merge",
+      "",
+    ].join("\n");
+    const ssh: CommandSubstrate = {
+      async run(_target: RunnerHandle, command: RunnerCommand): Promise<CommandResult> {
+        commands.push(command.command);
+        const ok = { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+        if (command.command.includes(".tanren/ci.yml")) return { ...ok, stdout: validYaml };
+        if (command.command.includes("pnpm test")) return { ...ok, exitCode: 1, stderr: "known toggle" };
+        return ok;
+      },
+    };
+    const events = new FakeEventStore();
+    const gate = batchNodeGate({
+      ...gateDeps(ssh),
+      eventStore: events,
+      quarantinedStepNames: new Set(["unit"]),
+      appEnv: { TANREN_QUARANTINE: "suite#toggle" },
+    });
+
+    const { verdict, passed } = await gate(live());
+
+    expect(passed).toBe(true);
+    expect(verdict.result).toBe("pass");
+    expect(events.events).toContainEqual(
+      expect.objectContaining({
+        eventType: "gate.quarantine_excluded",
+        payload: expect.objectContaining({ quarantinedStep: "unit" }),
+      }),
+    );
+    expect(commands.some((command) => command.includes("TANREN_QUARANTINE") && command.includes("suite#toggle"))).toBe(
+      true,
+    );
   });
 });

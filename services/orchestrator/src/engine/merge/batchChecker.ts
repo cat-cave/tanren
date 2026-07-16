@@ -45,6 +45,7 @@ import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
 import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
+import { activeQuarantineVersion, loadActiveQuarantine, quarantineEnv } from "../workflow/ciQuarantine.js";
 
 const log = createLogger("merge");
 
@@ -112,24 +113,25 @@ export class PgBatchChecker implements BatchChecker {
       throw new Error(`cannot batch-check ${input.projectId}: project has no org`);
     }
 
-    const { project, branches } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
+    const { project, branches, quarantine } = await runWithOrgScope(this.deps.pool, orgId, async (client) => {
       const projectRow = await this.loadProject(client, input.projectId);
       const branchRows = await this.loadEntryBranches(
         client,
         input.entries.map((e) => e.runId),
       );
-      return { project: projectRow, branches: branchRows };
+      const activeQuarantine = await loadActiveQuarantine(client, input.projectId);
+      return { project: projectRow, branches: branchRows, quarantine: activeQuarantine };
     });
 
     // Order the entries' branches in the caller's DAG order — a missing branch is a
     // hard error (we never integrate a phantom). This is the prospective merge order.
     const branchByRun = new Map(branches.map((b) => [b.run_id, b.branch] as const));
-    const ordered: IntegrationAncestor[] = input.entries.map((entry) => {
+    const ordered: Array<IntegrationAncestor & { readonly runId: string }> = input.entries.map((entry) => {
       const branch = branchByRun.get(entry.runId);
       if (branch === undefined) {
         throw new Error(`batch entry ${entry.specId} run ${entry.runId} has no run branch to integrate`);
       }
-      return { specId: entry.specId, branch };
+      return { specId: entry.specId, runId: entry.runId, branch };
     });
 
     const orgConfig =
@@ -175,6 +177,7 @@ export class PgBatchChecker implements BatchChecker {
       codeHost,
       tailSpecId,
       integrationRef: integrationBranch,
+      quarantine,
     });
   }
 
@@ -190,7 +193,7 @@ export class PgBatchChecker implements BatchChecker {
     orgId: string;
     projectId: string;
     project: BatchProjectRow;
-    ordered: ReadonlyArray<IntegrationAncestor>;
+    ordered: ReadonlyArray<IntegrationAncestor & { readonly runId: string }>;
     installation: OrgGithubAppInstallation | undefined;
     staticRef: string | undefined;
     repo: RepoRef;
@@ -199,6 +202,7 @@ export class PgBatchChecker implements BatchChecker {
     codeHost: CodeHost;
     tailSpecId: string;
     integrationRef: string;
+    quarantine: Awaited<ReturnType<typeof loadActiveQuarantine>>;
   }): Promise<BatchCheckVerdict> {
     const { orgId, projectId, project, ordered, installation, staticRef, repo, tailSpecId, integrationRef } = args;
     const baseSha = await args.codeHost.fetchRef({
@@ -217,6 +221,7 @@ export class PgBatchChecker implements BatchChecker {
     const runnerImage = project.runner_image ?? DEFAULT_BATCH_RUNNER_IMAGE;
     const governancePosture = resolveGovernancePosture(project.project_config);
     const policyVersion = resolvePolicyVersion(project.project_config);
+    const quarantineAppEnv = quarantineEnv(args.quarantine);
     const eventStore = this.deps.runStateWriter;
     const gateDeps = {
       ssh: this.deps.ssh,
@@ -226,6 +231,8 @@ export class PgBatchChecker implements BatchChecker {
       orgId,
       projectId,
       tailSpecId,
+      appEnv: quarantineAppEnv,
+      quarantinedStepNames: args.quarantine.checkNames,
     } as const;
     return runWithJobOrgId(orgId, () =>
       driveBatchThroughNode(
@@ -237,12 +244,10 @@ export class PgBatchChecker implements BatchChecker {
           repoUrl: project.repo_url,
           runnerImage,
           tailSpecId,
-          members: ordered.map((a) => ({ specId: a.specId, branch: a.branch })),
+          members: ordered.map((a) => ({ specId: a.specId, runId: a.runId, branch: a.branch })),
           policyVersion,
-          // The quarantine (flaky-skip) set version is project-policy-scoped; until a
-          // dedicated quarantine version exists it tracks the policy version (a posture
-          // bump that changes the quarantine set forces a recompute). Honest, not faked.
-          quarantineVersion: policyVersion,
+          appEnv: quarantineAppEnv,
+          quarantineVersion: activeQuarantineVersion(args.quarantine),
         },
         {
           nodes: new PgIntegrationNodeModel(this.deps.pool),
