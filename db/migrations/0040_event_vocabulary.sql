@@ -151,7 +151,6 @@ INSERT INTO "event_types" ("name", "default_severity") VALUES
   ('review.auto_approved', 'ok'),
   ('review.changes_requested', 'warn'),
   ('review.requested', 'info'),
-  ('review.simulated_intent', 'info'),
   ('run.cancelled', 'info'),
   ('run.completed', 'ok'),
   ('run.failed', 'fail'),

@@ -10,6 +10,8 @@ import { answererOutputSchemaFor, ReviewAnswer } from "../src/engine/answerers/s
 import type { SubmitReviewEvent, SubmittedReviewReceipt } from "../src/engine/providers/githubReviewMerge.js";
 import type { AnswererAdapter } from "../src/engine/providers/types.js";
 import { pollReviewForRun, type ReviewProbe } from "../src/engine/workflow/reviewMerge/reviewPolling.js";
+import { InMemorySimulatedReviewIntentRepository } from "../src/engine/workflow/reviewMerge/simulatedReviewIntent.js";
+import { InMemorySimulatedReviewPublishFence } from "../src/engine/workflow/reviewMerge/simulatedReviewPublishFence.js";
 import {
   buildSimulatedReviewerPrompt,
   reviewBodyFor,
@@ -181,6 +183,9 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
         specDescription: "Desc",
         acceptanceCriteria: ["does the thing"],
       },
+      // Explicit test injection — production never falls back to in-memory fence.
+      intentRepository: new InMemorySimulatedReviewIntentRepository(),
+      publishFence: new InMemorySimulatedReviewPublishFence(),
     });
 
     expect(result.verdict).toBe("approved");
@@ -230,6 +235,8 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
         specDescription: "Desc",
         acceptanceCriteria: ["does the thing"],
       },
+      intentRepository: new InMemorySimulatedReviewIntentRepository(),
+      publishFence: new InMemorySimulatedReviewPublishFence(),
     });
 
     expect(result.verdict).toBe("changes_requested");
@@ -275,6 +282,8 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
           specDescription: "Desc",
           acceptanceCriteria: ["c"],
         },
+        intentRepository: new InMemorySimulatedReviewIntentRepository(),
+        publishFence: new InMemorySimulatedReviewPublishFence(),
       }),
     ).rejects.toThrow(/publication failed|forge 422/iu);
 
@@ -305,6 +314,8 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
           specDescription: "Desc",
           acceptanceCriteria: ["c"],
         },
+        intentRepository: new InMemorySimulatedReviewIntentRepository(),
+        publishFence: new InMemorySimulatedReviewPublishFence(),
       }),
     ).rejects.toThrow(/head mismatch/iu);
 
@@ -343,6 +354,8 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
           specDescription: "Desc",
           acceptanceCriteria: ["c"],
         },
+        intentRepository: new InMemorySimulatedReviewIntentRepository(),
+        publishFence: new InMemorySimulatedReviewPublishFence(),
       }),
     ).rejects.toThrow(/state mismatch/iu);
 
@@ -395,6 +408,8 @@ describe("review polling stage — reviewPolicy: simulated (gv-2 strict publicat
           specDescription: "Desc",
           acceptanceCriteria: ["c"],
         },
+        intentRepository: new InMemorySimulatedReviewIntentRepository(),
+        publishFence: new InMemorySimulatedReviewPublishFence(),
       }),
     ).rejects.toThrow(/submit a strict review|fetchHeadSha|publication/iu);
 

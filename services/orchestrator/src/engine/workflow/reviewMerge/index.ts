@@ -59,6 +59,7 @@ export {
   InMemorySimulatedReviewPublishFence,
   PgAdvisorySimulatedReviewPublishFence,
   SIMULATED_REVIEW_PUBLISH_FENCE_NAMESPACE,
+  SimulatedReviewPublishFenceBusyError,
   simulatedReviewPublishFenceMaterial,
   type SimulatedReviewPublishFence,
   type SimulatedReviewPublishFenceKey,

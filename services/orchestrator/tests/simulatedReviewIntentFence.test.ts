@@ -381,6 +381,56 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     ).toBe(false);
   });
 
+  it("cross-field cohere: state/event/marker/body must agree (poison fails loud)", () => {
+    const goodBody = reviewBodyFor({ verdict: "approve", reasoning: "ok" });
+    expect(
+      ReviewSimulatedIntentPayload.safeParse({
+        headSha: HEAD,
+        state: "approved",
+        // event disagrees with state
+        event: "REQUEST_CHANGES",
+        body: goodBody,
+        message: "ok",
+        reviewerLogin: REVIEWER,
+        marker: "tanren-simulated-review:v1:approved",
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewSimulatedIntentPayload.safeParse({
+        headSha: HEAD,
+        state: "approved",
+        event: "APPROVE",
+        body: goodBody,
+        message: "ok",
+        reviewerLogin: REVIEWER,
+        // marker disagrees with state
+        marker: "tanren-simulated-review:v1:changes_requested",
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewSimulatedIntentPayload.safeParse({
+        headSha: HEAD,
+        state: "approved",
+        event: "APPROVE",
+        body: "free text without marker line",
+        message: "ok",
+        reviewerLogin: REVIEWER,
+        marker: "tanren-simulated-review:v1:approved",
+      }).success,
+    ).toBe(false);
+    expect(
+      ReviewSimulatedIntentPayload.safeParse({
+        headSha: HEAD,
+        state: "approved",
+        event: "APPROVE",
+        body: goodBody,
+        message: "ok",
+        reviewerLogin: REVIEWER,
+        marker: "tanren-simulated-review:v1:approved",
+      }).success,
+    ).toBe(true);
+  });
+
   it("crash after list / before POST: second worker re-lists and posts once total", async () => {
     const forge: SharedForge = { posts: [], listed: 0, reviews: [] };
     let failFirstPost = true;

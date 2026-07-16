@@ -40,7 +40,6 @@ import {
   type SimulatedReviewIntentRepository,
 } from "./simulatedReviewIntent.js";
 import {
-  InMemorySimulatedReviewPublishFence,
   PgAdvisorySimulatedReviewPublishFence,
   type SimulatedReviewPublishFence,
 } from "./simulatedReviewPublishFence.js";
@@ -383,13 +382,16 @@ function defaultIntentRepository(pool: RunStateClient, eventStore: EventStore): 
 }
 
 function defaultPublishFence(pool: RunStateClient): SimulatedReviewPublishFence {
+  // Production must pin a real PG pool client for the session advisory lock.
+  // In-memory fence is explicit test injection only — never auto-fallback.
   const connectable = pool as RunStateClient & { connect?: () => Promise<unknown> };
-  if (typeof connectable.connect === "function") {
-    return new PgAdvisorySimulatedReviewPublishFence(pool as unknown as { connect: () => Promise<pg.PoolClient> });
+  if (typeof connectable.connect !== "function") {
+    throw new SimulatedReviewPublicationError(
+      "simulated review publish fence requires a PostgreSQL pool with connect(); " +
+        "production must use PgAdvisorySimulatedReviewPublishFence — inject publishFence only in tests",
+    );
   }
-  // Unit-test pools lack connect(); an injected fence is preferred. Fall back
-  // to in-process serialization so single-worker tests still fence list→POST.
-  return new InMemorySimulatedReviewPublishFence();
+  return new PgAdvisorySimulatedReviewPublishFence(pool as unknown as { connect: () => Promise<pg.PoolClient> });
 }
 
 async function finalizeReviewTask(

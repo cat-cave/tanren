@@ -17,7 +17,21 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   (`resolveVcsToken` / `credential/github/*`).
 - Atomic review terminal (`markReviewTaskDoneWithEvent` / `priorEvents`).
 - Existing events `review.approved` / `review.changes_requested` (extended
-  payload fields — no new event type, no seed/registry event name).
+  payload fields) **plus** a new non-terminal intent event
+  `review.simulated_intent` (first-wins Answerer fence).
+
+**Migration serialization blocker (honest)**
+
+- PR #931 migration `0040_event_vocabulary.sql` is **immutable spine** and stays
+  byte-identical to `origin/main` (no in-place edit). Runtime `eventTypesSeed.ts`
+  - Zod/registry/JSON/severity/sensitivity carry the app catalog row, but are
+    **not** an upgrade mechanism for existing DBs.
+- The DB catalog row for `review.simulated_intent` requires a **new post-0040
+  migration**. **IN-1 currently owns unmerged 0041**, so this branch **cannot
+  become merge-ready** until IN-1 lands and GV-2 restacks to add the next
+  serialized migration (**expected 0042**). Do not invent startup DDL or a
+  second vocabulary seeder. Opt-in real-PG tests may seed the row in isolated
+  setup and must label upgrade proof as blocked until that migration exists.
 
 **Downstream consumers**
 
@@ -36,6 +50,9 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 - `services/orchestrator/src/engine/workflow/reviewMerge/reviewProbeGithub.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/simulatedReviewer.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/simulatedReviewPublication.ts`
+- `services/orchestrator/src/engine/workflow/reviewMerge/simulatedReviewIntent.ts`
+- `services/orchestrator/src/engine/workflow/reviewMerge/simulatedReviewPublishFence.ts`
+- `services/orchestrator/src/engine/workflow/reviewMerge/simulatedReviewStage.ts`
 - `services/orchestrator/src/engine/workflow/reviewMerge/reviewTaskTerminal.ts`
 - `services/orchestrator/src/engine/providers/githubReviewMerge.ts`
 - `services/orchestrator/src/engine/providers/githubReviewMergeParse.ts`
@@ -43,8 +60,11 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   (comment-only doc/mirror note)
 - `services/orchestrator/src/engine/events/schemas/integrations.ts` (review
   payload fields only — all-or-nothing forge receipt union)
+- `services/orchestrator/src/engine/events/schemas/reviewSimulatedIntent.ts`
+  (Zod cross-field cohere for the new intent event)
 - `services/orchestrator/src/engine/events/sensitivityRules.infra.ts` (review
   payload field tags only — mechanical for schema extension)
+- `services/orchestrator/src/engine/events/sensitivityRules.review.ts`
 - `services/orchestrator/src/engine/merge/landSignals.ts` (`reviewedHeadSha`)
 - `services/orchestrator/src/engine/merge/mergeAuthorityGate.ts` (exact-head
   review receipt bind at land)
@@ -53,10 +73,13 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 - `services/dashboard/src/components/runDetail/ReviewBody.tsx`
 - `services/dashboard/src/components/runDetail/model.ts` (forge publication view)
 - Focused tests: `simulatedReviewer.test.ts`,
-  `simulatedReviewPublication.test.ts`, `githubReviewMergeSubmit.test.ts`,
-  `reviewTaskTerminalRouting.test.ts`, `reviewForgePublicationSchema.test.ts`,
-  `mergeAuthorityGate.test.ts` (review TOCTOU), `simulatedReviewHeadRebind.test.ts`
-  (A→B re-review recovery), `runDetail.model.test.ts`
+  `simulatedReviewPublication.test.ts`, `simulatedReviewIntentFence.test.ts`,
+  `simulatedReviewIntentFence.pg.integration.test.ts` (opt-in real PG; pre-
+  migration seed), `simulatedReviewPublishFence.test.ts`,
+  `githubReviewMergeSubmit.test.ts`, `reviewTaskTerminalRouting.test.ts`,
+  `reviewForgePublicationSchema.test.ts`, `mergeAuthorityGate.test.ts` (review
+  TOCTOU), `simulatedReviewHeadRebind.test.ts` (A→B re-review recovery),
+  `runDetail.model.test.ts`
 
 ## Shared-resource leases (not taken)
 
@@ -65,7 +88,10 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
   `githubCredentialRef` + App install seam; explicit
   `reviewerGithubCredentialRef` is an optional poll-stage input for tests /
   future config wiring.
-- `eventTypesSeed` / central registry event **names** — not edited (no new event).
+- Migration serial number **0041** — **owned by IN-1** (unmerged). GV-2 must not
+  create 0041; after IN-1 merges, GV-2 adds the next number for the intent
+  catalog row (expected 0042). App-side `eventTypesSeed` / registry already list
+  `review.simulated_intent` as codegen/catalog data.
 - `mountFeatureRoutes` / nav / `RunDetailBody` / runs index — HTTP uses existing
   run-detail event surface.
 
@@ -79,13 +105,21 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 
 ### Engine
 
+- **New intent event** `review.simulated_intent`: first-wins durable Answerer
+  decision on exact run/head **before** any forge I/O (lookup → Answerer only
+  if absent → `appendPriorIfAbsent` + readback winner). Never land authority.
 - Simulated path posts real `APPROVE` or `REQUEST_CHANGES` with `commit_id` =
-  exact head SHA, using a distinct reviewer identity.
+  exact head SHA, using a distinct reviewer identity, under a **bounded**
+  PostgreSQL `pg_try_advisory_lock` publication fence (busy → retriable
+  fail-loud, zero provider I/O, job redrive re-lists/reclaims). No JS
+  production fallback; unlock failure destroys the pool client.
 - Durable receipt `{ forgeReviewId, forgeReviewState, forgeReviewUrl, headSha }`
   is bound onto the same atomic `review.approved` /
   `review.changes_requested` event as the internal verdict.
 - Event schema treats forge fields as **all-or-nothing** (union of complete
   receipt vs absent base) — partial tuples fail at the schema boundary.
+  Intent payload Zod cross-field refinement requires state/event/marker/body
+  cohere; poison fails loud on lookup.
 - Land-time signals expose `reviewedHeadSha` from the receipt; `authorizeAndLand`
   blocks when a present receipt head ≠ the head being landed.
 - Missing credential, same-identity, failed, malformed, COMMENT, or
@@ -94,11 +128,16 @@ identity, durable forge receipt bound onto the terminal `review.*` event.
 
 ### Named event proof
 
+- **New:** `review.simulated_intent` carries non-secret publication identity
+  (head, state, event, body, message, reviewerLogin, marker). App registry +
+  seed list it; **DB upgrade row blocked on post-IN-1 migration**.
 - `review.approved` / `review.changes_requested` carry complete forge receipt
   fields when simulated review terminalizes (never a partial tuple).
 - Negative: failed/skipped/mismatched publication leaves those events absent.
 - Negative: partial forge fields rejected by schema; head-advanced land blocked
   even when `review.approved` exists.
+- Negative: intent never consumed by landSignals / MergeAuthority / UI as
+  approval.
 
 ### HTTP
 
@@ -144,12 +183,19 @@ Auth / forge:
 ## Validation
 
 - Focused: `simulatedReviewer.test.ts`, `simulatedReviewPublication.test.ts`,
+  `simulatedReviewIntentFence.test.ts`, `simulatedReviewPublishFence.test.ts`,
   `githubReviewMergeSubmit.test.ts`, `reviewTaskTerminalRouting.test.ts`,
   `reviewForgePublicationSchema.test.ts`, `mergeAuthorityGate.test.ts`,
   `simulatedReviewHeadRebind.test.ts`, `runDetail.model.test.ts`.
+- Real-PG (opt-in `TANREN_RLS_DB_TEST=1`):  
+  `simulatedReviewIntentFence.pg.integration.test.ts` — dual-client try-lock +
+  eventStore first-wins; seeds catalog row; **not** upgrade proof.
 - `just affected-typecheck origin/main`, `just affected-test origin/main`,
   `just fast-check`, `just ci`.
-- Line counts under 500; no migration; no new runtime deps.
+- Line counts under 500; **no migration on this branch** (IN-1 serial blocker);
+  no new runtime deps.
+- **Merge-ready only after:** IN-1 lands → restack → add serialized migration
+  for `review.simulated_intent` (expected 0042) → fresh audit.
 
 ## Credential operator note
 

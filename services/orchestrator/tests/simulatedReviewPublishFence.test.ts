@@ -1,4 +1,4 @@
-// gv-2 cross-process publish fence: key isolation + session advisory lock proofs.
+// gv-2 cross-process publish fence: try-lock, destroy-on-unlock-fail, fail-closed.
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 
@@ -6,52 +6,47 @@ import {
   InMemorySimulatedReviewPublishFence,
   PgAdvisorySimulatedReviewPublishFence,
   SIMULATED_REVIEW_PUBLISH_FENCE_NAMESPACE,
+  SimulatedReviewPublishFenceBusyError,
   simulatedReviewPublishFenceMaterial,
 } from "../src/engine/workflow/reviewMerge/simulatedReviewPublishFence.js";
+import { SimulatedReviewPublicationError } from "../src/engine/workflow/reviewMerge/simulatedReviewPublication.js";
 
 const HEAD = "a".repeat(40);
 const OTHER_HEAD = "b".repeat(40);
 const REVIEWER = "tanren-reviewer[bot]";
 
-describe("gv-2 publish fence key isolation + advisory lock SQL", () => {
+const baseKey = {
+  owner: "o",
+  repo: "r",
+  pullNumber: 1,
+  headSha: HEAD,
+  reviewerLogin: REVIEWER,
+  state: "approved" as const,
+};
+
+describe("gv-2 publish fence key isolation + try-advisory lock", () => {
   it("wrong key/head/pr cannot share fence material", () => {
-    const base = {
-      owner: "o",
-      repo: "r",
-      pullNumber: 1,
-      headSha: HEAD,
-      reviewerLogin: REVIEWER,
-      state: "approved" as const,
-    };
-    const a = simulatedReviewPublishFenceMaterial(base);
-    const b = simulatedReviewPublishFenceMaterial({ ...base, headSha: OTHER_HEAD });
-    const c = simulatedReviewPublishFenceMaterial({ ...base, pullNumber: 2 });
-    const d = simulatedReviewPublishFenceMaterial({ ...base, reviewerLogin: "other" });
-    const e = simulatedReviewPublishFenceMaterial({ ...base, state: "changes_requested" });
+    const a = simulatedReviewPublishFenceMaterial(baseKey);
+    const b = simulatedReviewPublishFenceMaterial({ ...baseKey, headSha: OTHER_HEAD });
+    const c = simulatedReviewPublishFenceMaterial({ ...baseKey, pullNumber: 2 });
+    const d = simulatedReviewPublishFenceMaterial({ ...baseKey, reviewerLogin: "other" });
+    const e = simulatedReviewPublishFenceMaterial({ ...baseKey, state: "changes_requested" });
     expect(new Set([a, b, c, d, e]).size).toBe(5);
     expect(a).toContain(SIMULATED_REVIEW_PUBLISH_FENCE_NAMESPACE);
   });
 
-  it("in-memory fence serializes concurrent work on the same key", async () => {
+  it("in-memory fence serializes concurrent work on the same key (test injection only)", async () => {
     const fence = new InMemorySimulatedReviewPublishFence();
-    const key = {
-      owner: "o",
-      repo: "r",
-      pullNumber: 1,
-      headSha: HEAD,
-      reviewerLogin: REVIEWER,
-      state: "approved" as const,
-    };
     const order: number[] = [];
     await Promise.all([
-      fence.withExclusivePublish(key, async () => {
+      fence.withExclusivePublish(baseKey, async () => {
         order.push(1);
         await new Promise<void>((r) => {
           setTimeout(r, 20);
         });
         order.push(2);
       }),
-      fence.withExclusivePublish(key, async () => {
+      fence.withExclusivePublish(baseKey, async () => {
         order.push(3);
         order.push(4);
       }),
@@ -59,13 +54,17 @@ describe("gv-2 publish fence key isolation + advisory lock SQL", () => {
     expect(order).toEqual([1, 2, 3, 4]);
   });
 
-  it("advisory lock SQL uses session lock + unlock and releases after exception", async () => {
+  it("try-lock SQL + unlock after exception; never blocking pg_advisory_lock", async () => {
     const sqlLog: string[] = [];
     let unlocked = false;
     const client = {
       query: async (sql: string) => {
         sqlLog.push(sql);
-        if (sql.includes("pg_advisory_unlock")) unlocked = true;
+        if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+        if (sql.includes("pg_advisory_unlock")) {
+          unlocked = true;
+          return { rows: [{ pg_advisory_unlock: true }], rowCount: 1 };
+        }
         return { rows: [], rowCount: 0 };
       },
       release: () => {},
@@ -73,28 +72,21 @@ describe("gv-2 publish fence key isolation + advisory lock SQL", () => {
     const fence = new PgAdvisorySimulatedReviewPublishFence({
       connect: async () => client as unknown as pg.PoolClient,
     });
-    const key = {
-      owner: "o",
-      repo: "r",
-      pullNumber: 7,
-      headSha: HEAD,
-      reviewerLogin: REVIEWER,
-      state: "approved" as const,
-    };
     await expect(
-      fence.withExclusivePublish(key, async () => {
+      fence.withExclusivePublish(baseKey, async () => {
         throw new Error("boom during publish");
       }),
     ).rejects.toThrow(/boom during publish/u);
-    expect(sqlLog.some((s) => s.includes("pg_advisory_lock"))).toBe(true);
+    expect(sqlLog.some((s) => s.includes("pg_try_advisory_lock"))).toBe(true);
+    expect(sqlLog.some((s) => s.includes("pg_advisory_lock(") && !s.includes("try"))).toBe(false);
     expect(sqlLog.some((s) => s.includes("pg_advisory_unlock"))).toBe(true);
     expect(unlocked).toBe(true);
   });
 
-  it("lock acquisition failure fails loud (never unfenced work)", async () => {
+  it("try-lock false → retriable busy, zero provider work", async () => {
     const client = {
       query: async (sql: string) => {
-        if (sql.includes("pg_advisory_lock")) throw new Error("lock denied");
+        if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: false }], rowCount: 1 };
         return { rows: [], rowCount: 0 };
       },
       release: () => {},
@@ -104,45 +96,127 @@ describe("gv-2 publish fence key isolation + advisory lock SQL", () => {
     });
     let worked = false;
     await expect(
-      fence.withExclusivePublish(
-        {
-          owner: "o",
-          repo: "r",
-          pullNumber: 1,
-          headSha: HEAD,
-          reviewerLogin: REVIEWER,
-          state: "approved",
-        },
-        async () => {
-          worked = true;
-          return 1;
-        },
-      ),
+      fence.withExclusivePublish(baseKey, async () => {
+        worked = true;
+        return 1;
+      }),
+    ).rejects.toBeInstanceOf(SimulatedReviewPublishFenceBusyError);
+    await expect(
+      fence.withExclusivePublish(baseKey, async () => {
+        worked = true;
+        return 1;
+      }),
+    ).rejects.toThrow(/fence busy/iu);
+    expect(worked).toBe(false);
+    const busy = await fence
+      .withExclusivePublish(baseKey, async () => 1)
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+    expect(busy).toBeInstanceOf(SimulatedReviewPublicationError);
+    expect((busy as SimulatedReviewPublicationError).retriable).toBe(true);
+  });
+
+  it("lock query failure fails loud (never unfenced work)", async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) throw new Error("lock denied");
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    };
+    const fence = new PgAdvisorySimulatedReviewPublishFence({
+      connect: async () => client as unknown as pg.PoolClient,
+    });
+    let worked = false;
+    await expect(
+      fence.withExclusivePublish(baseKey, async () => {
+        worked = true;
+        return 1;
+      }),
     ).rejects.toThrow(/lock acquisition failed/iu);
     expect(worked).toBe(false);
   });
 
-  it("two pool clients: second waits until first unlocks (mock serial clients)", async () => {
-    let held = false;
-    let waiters = 0;
-    let releaseWait!: () => void;
-    const waitGate = new Promise<void>((r) => {
-      releaseWait = r;
+  it("connect failure fails loud with zero work", async () => {
+    const fence = new PgAdvisorySimulatedReviewPublishFence({
+      connect: async () => {
+        throw new Error("pool exhausted");
+      },
     });
+    let worked = false;
+    await expect(
+      fence.withExclusivePublish(baseKey, async () => {
+        worked = true;
+        return 1;
+      }),
+    ).rejects.toThrow(/could not pin a pool client/iu);
+    expect(worked).toBe(false);
+  });
+
+  it("unlock failure destroys client and does not return it healthy", async () => {
+    const releases: Array<boolean | Error | undefined> = [];
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+        if (sql.includes("pg_advisory_unlock")) throw new Error("connection lost on unlock");
+        return { rows: [], rowCount: 0 };
+      },
+      release: (destroy?: boolean | Error) => {
+        releases.push(destroy);
+      },
+    };
+    const fence = new PgAdvisorySimulatedReviewPublishFence({
+      connect: async () => client as unknown as pg.PoolClient,
+    });
+    await expect(fence.withExclusivePublish(baseKey, async () => "ok")).rejects.toThrow(
+      /unlock failed after successful work/iu,
+    );
+    expect(releases).toEqual([true]);
+  });
+
+  it("provider error + unlock failure: preserves publication error and destroys client", async () => {
+    const releases: Array<boolean | Error | undefined> = [];
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+        if (sql.includes("pg_advisory_unlock")) throw new Error("unlock boom");
+        return { rows: [], rowCount: 0 };
+      },
+      release: (destroy?: boolean | Error) => {
+        releases.push(destroy);
+      },
+    };
+    const fence = new PgAdvisorySimulatedReviewPublishFence({
+      connect: async () => client as unknown as pg.PoolClient,
+    });
+    await expect(
+      fence.withExclusivePublish(baseKey, async () => {
+        throw new Error("forge 502");
+      }),
+    ).rejects.toThrow(/forge 502/u);
+    await expect(
+      fence.withExclusivePublish(baseKey, async () => {
+        throw new Error("forge 502");
+      }),
+    ).rejects.toThrow(/unlock failed/iu);
+    expect(releases).toEqual([true, true]);
+  });
+
+  it("two clients: holder works; contender gets busy with zero I/O (no blocking wait)", async () => {
+    let held = false;
+    let contenderWorked = false;
     const makeClient = () => ({
       query: async (sql: string) => {
-        if (sql.includes("pg_advisory_lock")) {
-          if (held) {
-            waiters += 1;
-            await waitGate;
-          }
+        if (sql.includes("pg_try_advisory_lock")) {
+          if (held) return { rows: [{ acquired: false }], rowCount: 1 };
           held = true;
-          return { rows: [], rowCount: 0 };
+          return { rows: [{ acquired: true }], rowCount: 1 };
         }
         if (sql.includes("pg_advisory_unlock")) {
           held = false;
-          releaseWait();
-          return { rows: [], rowCount: 0 };
+          return { rows: [{ pg_advisory_unlock: true }], rowCount: 1 };
         }
         return { rows: [], rowCount: 0 };
       },
@@ -151,28 +225,26 @@ describe("gv-2 publish fence key isolation + advisory lock SQL", () => {
     const fence = new PgAdvisorySimulatedReviewPublishFence({
       connect: async () => makeClient() as unknown as pg.PoolClient,
     });
-    const key = {
-      owner: "o",
-      repo: "r",
-      pullNumber: 1,
-      headSha: HEAD,
-      reviewerLogin: REVIEWER,
-      state: "approved" as const,
-    };
-    const order: string[] = [];
-    await Promise.all([
-      fence.withExclusivePublish(key, async () => {
-        order.push("a-start");
-        await new Promise<void>((r) => {
-          setTimeout(r, 15);
-        });
-        order.push("a-end");
+    const holder = fence.withExclusivePublish(baseKey, async () => {
+      await new Promise<void>((r) => {
+        setTimeout(r, 30);
+      });
+      return "held";
+    });
+    // Contender while holder still inside work → try-lock false → busy, zero work.
+    await new Promise<void>((r) => {
+      setTimeout(r, 5);
+    });
+    await expect(
+      fence.withExclusivePublish(baseKey, async () => {
+        contenderWorked = true;
+        return "nope";
       }),
-      fence.withExclusivePublish(key, async () => {
-        order.push("b");
-      }),
-    ]);
-    expect(order).toEqual(["a-start", "a-end", "b"]);
-    expect(waiters).toBeGreaterThanOrEqual(1);
+    ).rejects.toBeInstanceOf(SimulatedReviewPublishFenceBusyError);
+    expect(contenderWorked).toBe(false);
+    expect(await holder).toBe("held");
+    // After release, redrive acquires and runs.
+    const again = await fence.withExclusivePublish(baseKey, async () => "redrive");
+    expect(again).toBe("redrive");
   });
 });

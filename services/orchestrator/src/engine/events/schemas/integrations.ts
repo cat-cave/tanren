@@ -94,18 +94,9 @@ const reviewChangesBase = z
   })
   .strict();
 export const ReviewChangesRequestedPayload = z.union([reviewChangesBase.merge(forgeReceipt), reviewChangesBase]);
-// gv-2 intent fence (not terminal land authority).
-export const ReviewSimulatedIntentPayload = z
-  .object({
-    headSha: forgeHeadSha,
-    state: z.enum(["approved", "changes_requested"]),
-    event: z.enum(["APPROVE", "REQUEST_CHANGES"]),
-    body: z.string().min(1),
-    message: z.string(),
-    reviewerLogin: z.string().min(1),
-    marker: z.string().min(1),
-  })
-  .strict();
+// gv-2 intent fence (not terminal land authority) — refined schema lives in its
+// own module so state/event/marker/body cohere without blowing the 500-line cap.
+export { ReviewSimulatedIntentPayload } from "./reviewSimulatedIntent.js";
 
 // Emitted when a project's reviewPolicy is `auto`: the review stage approved the
 // PR without polling GitHub (the no-review tier). Distinct from `review.approved`
