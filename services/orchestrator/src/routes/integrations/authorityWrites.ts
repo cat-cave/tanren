@@ -20,6 +20,7 @@ import {
 } from "./authorityPayloads.js";
 import { runDurableLinkSaga } from "./linkSaga.js";
 import { mountPrincipalSelectionRoute } from "./principalSelectionRoute.js";
+import { publicLinkOperationProjection } from "./publicLinkOpStatus.js";
 import {
   convergeVerifierTransition,
   recordAwaitingPrincipal,
@@ -347,6 +348,7 @@ export function mountIntegrationAuthorityWrites(
       IntegrationConnectionsStore.getOperation(client, orgId, c.req.param("operationId")),
     );
     if (op === undefined) return c.json({ error: "operation_not_found" }, 404);
+    const publicProjection = publicLinkOperationProjection(op);
     return c.json(
       {
         operationId: op.id,
@@ -355,6 +357,7 @@ export function mountIntegrationAuthorityWrites(
         operationKind: op.operationKind,
         stage: op.stage,
         status: op.status,
+        ...publicProjection,
         candidates: op.candidatePrincipals,
       },
       200,

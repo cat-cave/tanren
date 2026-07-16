@@ -16,7 +16,9 @@ import type {
   IntegrationLifecycleInventory,
   OrgIntegrationSummary,
   PrincipalSelectionCandidate,
+  PublicLinkOpStatus,
 } from "../../api/integrations.js";
+import { PUBLIC_LINK_OP_STATUSES } from "../../api/integrations.js";
 import { OrchestratorClient } from "../../api/orchestrator.js";
 import type { ProjectDetail, ProjectSummary } from "../../api/types.js";
 import { loadShellContext, renderShell, type ShellDeps } from "../../app/mountShell.js";
@@ -130,6 +132,29 @@ function isOrgAdminRole(role: string | undefined): boolean {
   return role === "org:admin" || role === "platform:admin";
 }
 
+function linkPostOutcome(body: unknown): { status: PublicLinkOpStatus; operationId?: string } {
+  if (body === null || typeof body !== "object") return { status: "malformed" };
+  const record = body as Record<string, unknown>;
+  const operationId =
+    typeof record["operationId"] === "string" && record["operationId"] !== "" ? record["operationId"] : undefined;
+  const rawStatus = record["status"];
+  if (typeof rawStatus !== "string")
+    return { status: "malformed", ...(operationId === undefined ? {} : { operationId }) };
+  const status = (PUBLIC_LINK_OP_STATUSES as readonly string[]).includes(rawStatus)
+    ? (rawStatus as PublicLinkOpStatus)
+    : "unknown";
+  return { status, ...(operationId === undefined ? {} : { operationId }) };
+}
+
+function publicFailureClassification(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-z][a-z0-9_]{0,127}$/u.test(value) ? value : undefined;
+}
+
+function publicRetryAfter(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u.test(value)) return undefined;
+  return Number.isNaN(new Date(value).getTime()) ? undefined : value;
+}
+
 // eslint-disable-next-line max-lines-per-function -- convergent multi-phase saga must stay ordered
 export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
   app.get("/integrations", async (c: Context) => {
@@ -161,7 +186,9 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
           providerKind: string;
           operationId: string;
           candidates: PrincipalSelectionCandidate[];
-          status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed" | "unavailable";
+          status?: PublicLinkOpStatus | "invalidated" | "unavailable";
+          failureClassification?: string;
+          retryAfter?: string;
         }
       | undefined;
     // Query carries operation id only — durable candidates reloaded from the
@@ -177,23 +204,21 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
           status: "unavailable",
         };
       } else {
-        const statusMap: Record<string, NonNullable<typeof principalSelection>["status"]> = {
-          awaiting_principal_selection: "awaiting",
-          pending: "pending",
-          in_progress: "pending",
-          completed: "completed",
-          failed: "failed",
-          compensated: "failed",
-        };
-        const mapped =
-          principalStatus === "invalidated"
-            ? "invalidated"
-            : (statusMap[op.status] ?? (op.status === "awaiting_principal_selection" ? "awaiting" : "pending"));
+        const negativeOverride = ["invalidated", "malformed", "unknown", "failed"].includes(principalStatus ?? "")
+          ? (principalStatus as "invalidated" | "malformed" | "unknown" | "failed")
+          : undefined;
+        const mapped = (PUBLIC_LINK_OP_STATUSES as readonly string[]).includes(op.publicStatus)
+          ? op.publicStatus
+          : "unknown";
+        const failureClassification = publicFailureClassification(op.failureClassification);
+        const retryAfter = publicRetryAfter(op.retryAfter);
         principalSelection = {
           providerKind: op.providerKind,
           operationId: op.operationId,
           candidates: op.candidates,
-          status: mapped,
+          status: negativeOverride ?? mapped,
+          ...(failureClassification === undefined ? {} : { failureClassification }),
+          ...(retryAfter === undefined ? {} : { retryAfter }),
         };
       }
     }
@@ -295,24 +320,14 @@ export function mountIntegrationsScreen(app: Hono, deps: ShellDeps): void {
     if (!result.ok) {
       return redirectTo(c, "/integrations", `link failed (${result.status})`);
     }
-    const bodyStatus =
-      result.body !== undefined && typeof result.body === "object" && "status" in result.body
-        ? String((result.body as { status?: unknown }).status)
-        : "completed";
-    if (bodyStatus === "awaiting_principal_selection") {
-      const body = result.body;
-      const operationId = body !== undefined && typeof body.operationId === "string" ? body.operationId : "";
-      const qs = new URLSearchParams({
-        principalOp: operationId,
-        principalProvider: providerKind,
-        principalStatus: "awaiting",
-      });
-      return c.redirect(`/integrations?${qs.toString()}`, 303);
+    const outcome = linkPostOutcome(result.body);
+    if (outcome.status === "completed") return redirectTo(c, "/integrations", `linked ${providerKind}`);
+    if (outcome.operationId === undefined) {
+      return redirectTo(c, "/integrations", `${providerKind} link outcome ${outcome.status}`);
     }
-    if (bodyStatus === "failed") {
-      return redirectTo(c, "/integrations", `${providerKind} verification failed`);
-    }
-    return redirectTo(c, "/integrations", `linked ${providerKind}`);
+    const qs = new URLSearchParams({ principalOp: outcome.operationId, principalProvider: providerKind });
+    if (["malformed", "unknown", "failed"].includes(outcome.status)) qs.set("principalStatus", outcome.status);
+    return c.redirect(`/integrations?${qs.toString()}`, 303);
   });
 
   // ── multi-principal selection (Plane A resume) ──────────────────────────

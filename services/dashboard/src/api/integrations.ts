@@ -116,6 +116,33 @@ export interface PrincipalSelectionCandidate {
   metadata?: Record<string, string>;
 }
 
+export const PUBLIC_LINK_OP_STATUSES = [
+  "awaiting_principal_selection",
+  "provider_unavailable",
+  "verification_in_progress",
+  "finalize_pending",
+  "activate_pending",
+  "completed",
+  "failed",
+  "malformed",
+  "unknown",
+] as const;
+
+export type PublicLinkOpStatus = (typeof PUBLIC_LINK_OP_STATUSES)[number];
+
+export interface LinkOperationRead {
+  operationId: string;
+  providerKind: string;
+  connectionId?: string;
+  operationKind: string;
+  status: string;
+  stage: string;
+  publicStatus: PublicLinkOpStatus;
+  candidates: PrincipalSelectionCandidate[];
+  failureClassification?: string;
+  retryAfter?: string;
+}
+
 /** Result of POST link — refs only; never tokens/generation display authority. */
 export interface LinkOutcome {
   status: string;

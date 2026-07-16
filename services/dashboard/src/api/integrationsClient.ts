@@ -18,9 +18,9 @@
 import { OrchestratorHttpClient } from "./httpClient.js";
 import type {
   DiscoverOutcome,
+  LinkOperationRead,
   LinkOutcome,
   OrgIntegrationsList,
-  PrincipalSelectionCandidate,
   ProvisionOutcome,
   SelectGrantOutcome,
   SelectPrincipalOutcome,
@@ -71,19 +71,7 @@ export class IntegrationsClient extends OrchestratorHttpClient {
    * Durable operation reload — candidates + status only (never secret refs).
    * Used so multi-principal UI does not trust query-string candidate payloads.
    */
-  async getOperation(
-    orgId: string,
-    operationId: string,
-  ): Promise<
-    | {
-        operationId: string;
-        providerKind: string;
-        status: string;
-        stage: string;
-        candidates: PrincipalSelectionCandidate[];
-      }
-    | undefined
-  > {
+  async getOperation(orgId: string, operationId: string): Promise<LinkOperationRead | undefined> {
     return this.getJson(
       `/orgs/${encodeURIComponent(orgId)}/integrations/operations/${encodeURIComponent(operationId)}`,
     );

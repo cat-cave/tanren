@@ -137,6 +137,7 @@ export const IntegrationConnectionsStore = {
         verifiedScopes: string[];
         verifiedExpiresAt: string | undefined;
         failureClassification: string | undefined;
+        retryAfter: string | undefined;
         selectedPrincipalId: string | undefined;
       }
     | undefined
@@ -145,6 +146,7 @@ export const IntegrationConnectionsStore = {
       `SELECT id, provider_kind, connection_id, operation_kind, stage, status,
               staged_secret_handle, candidate_principals, actor_id,
               verified_auth_kind, verified_scopes, verified_expires_at, failure_classification,
+              compensation_state,
               selected_principal_id
        FROM org_integration_connection_operations
        WHERE org_id = $1 AND id = $2`,
@@ -165,6 +167,7 @@ export const IntegrationConnectionsStore = {
           verified_scopes: string[] | null;
           verified_expires_at: Date | string | null;
           failure_classification: string | null;
+          compensation_state: Record<string, unknown> | null;
           selected_principal_id: string | null;
         }
       | undefined;
@@ -188,6 +191,10 @@ export const IntegrationConnectionsStore = {
             ? row.verified_expires_at.toISOString()
             : row.verified_expires_at,
       failureClassification: row.failure_classification ?? undefined,
+      retryAfter:
+        row.compensation_state !== null && typeof row.compensation_state["retryAfter"] === "string"
+          ? row.compensation_state["retryAfter"]
+          : undefined,
       selectedPrincipalId: row.selected_principal_id ?? undefined,
     };
   },

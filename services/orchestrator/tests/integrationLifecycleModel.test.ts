@@ -111,6 +111,16 @@ describe("IN-1 P1 integration lifecycle schema contract", () => {
     expect(tables).not.toHaveProperty("public.org_integrations");
   });
 
+  it("performs no legacy-row transformation DML in the clean 0043 migration", () => {
+    expect(migration).not.toMatch(/^\s*UPDATE\b/imu);
+    expect(migration).not.toMatch(/^\s*DELETE\s+FROM\b/imu);
+    expect(migration).not.toContain('UPDATE "inbox_sources"');
+    expect(migration).not.toMatch(/config"\s*#>>\s*'\{attention/u);
+    expect(migration).not.toContain("webhookSecretRef");
+    expect(migration).toContain('ALTER TABLE "inbox_sources" ADD COLUMN "state"');
+    expect(migration).toContain("inbox_sources_attention_check");
+  });
+
   it("owns the complete P1 table model with direct indexed tenant roots", () => {
     expect(TABLES).toHaveLength(22);
     for (const tableName of TABLES) {

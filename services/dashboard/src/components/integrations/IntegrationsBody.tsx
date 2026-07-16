@@ -16,6 +16,7 @@ import {
   type IntegrationLifecycleInventory,
   type OrgIntegrationSummary,
   type PrincipalSelectionCandidate,
+  type PublicLinkOpStatus,
 } from "../../api/integrations.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { capabilitiesLabel, isProviderLinked, providerLabel, statusLabel } from "./format.js";
@@ -53,7 +54,9 @@ export interface IntegrationsBodyProps {
     providerKind: string;
     operationId: string;
     candidates: PrincipalSelectionCandidate[];
-    status?: "awaiting" | "invalidated" | "pending" | "failed" | "completed" | "unavailable";
+    status?: PublicLinkOpStatus | "invalidated" | "unavailable";
+    failureClassification?: string;
+    retryAfter?: string;
   };
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
@@ -366,27 +369,46 @@ function PrincipalSelectionPanel(props: {
   csrfToken?: string;
 }) {
   const { panel, csrfToken } = props;
-  const status = panel.status ?? "awaiting";
+  const status = panel.status ?? "unknown";
   return (
     <section class="panel" data-principal-selection={panel.operationId} data-principal-status={status}>
       <div class="panel-pad">
         <div class="mini-eyebrow">
-          principal selection · {providerLabel(panel.providerKind)}{" "}
+          integration operation · {providerLabel(panel.providerKind)}{" "}
           <span class="window-tag">({status} · never guesses)</span>
         </div>
         {status === "failed" ? (
-          <div class="notice warn">principal selection failed — re-link the provider with a valid token.</div>
+          <div class="notice warn">link operation failed — re-link the provider with a valid credential.</div>
         ) : null}
         {status === "invalidated" ? (
           <div class="notice warn">candidates were invalidated — re-link to refresh verified principals.</div>
         ) : null}
         {status === "unavailable" ? (
-          <div class="notice warn">operation unavailable — refresh or re-link to continue principal selection.</div>
+          <div class="notice warn">operation unavailable — refresh or re-link to continue.</div>
         ) : null}
         {status === "completed" ? (
-          <div class="notice">principal selection completed for {providerLabel(panel.providerKind)}.</div>
+          <div class="notice">operation completed for {providerLabel(panel.providerKind)}.</div>
         ) : null}
-        {status === "awaiting" || status === "pending" ? (
+        {status === "provider_unavailable" ? (
+          <div class="notice warn">
+            provider verification unavailable
+            {panel.failureClassification === undefined ? null : ` · ${panel.failureClassification}`}
+            {panel.retryAfter === undefined ? " — retry pending." : ` — retry after ${panel.retryAfter}.`}
+          </div>
+        ) : null}
+        {status === "verification_in_progress" ? (
+          <div class="notice warn">provider verification is still in progress.</div>
+        ) : null}
+        {status === "finalize_pending" ? (
+          <div class="notice warn">secret finalization is pending; no connection is active yet.</div>
+        ) : null}
+        {status === "activate_pending" ? (
+          <div class="notice warn">connection activation is pending; no success is reported yet.</div>
+        ) : null}
+        {status === "malformed" || status === "unknown" ? (
+          <div class="notice warn">link response state is unusable; retry or inspect the durable operation.</div>
+        ) : null}
+        {status === "awaiting_principal_selection" ? (
           <div class="int-grid">
             {panel.candidates.map((candidate) => (
               <form
