@@ -2,7 +2,7 @@
 
 **Bucket**: runtime verification
 **Phase**: MVP / Wave 2 consumer
-**State**: production-authority P1 correction redrive active on the retained core;
+**State**: production-authority P1 correction implemented and locally validated;
 serialized tail remains blocked by IN-1; no node credit until merged
 **Base**: `origin/main` / `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
 **Exclusive core**: `63000a1a70ce2e276af51f0143b0d82a7f1ec1f1`
@@ -104,6 +104,29 @@ Only these paths may be edited before the serialized tail is granted:
 - `services/orchestrator/tests/integrationNodes.persistence.test.ts`
 
 No wildcard ownership. Amend this card before any additional exclusive path.
+
+## Production authority correction
+
+The retained core now has one production ready-node materializer shared by the
+batch and eager producers. It captures the exact cloned base bookmark before jj
+creates a local working commit, derives the immutable base-to-head product diff
+inside that same still-open workspace, reads the canonical org/project coverage
+graph, and atomically stamps the existing `integration_nodes.affected_fingerprint`
+column before exposing `ready`. No analyze request or client can supply the stamp.
+
+Batch materialization rejects a pre-clone host-head / cloned-base race as a
+retriable hold. Eager materialization carries the typed 40-hex cloned base rather
+than the branch name. Proven merged-and-dropped ancestors are represented by the
+new base, not a phantom empty member SHA. A blank generic UPSERT preserves a
+stamp only when project, base, member key, prepared head, and tree are unchanged;
+binding drift clears it, and a same-org cross-project member-key collision fails
+closed.
+
+The materializer deliberately performs no table-lock upgrade. Its building,
+graph snapshot, fingerprint, and ready write share one transaction; a graph
+mutation that commits after the snapshot makes the seal stale, so selection
+expands safely. A deterministic real-Postgres race proof forces that ordering,
+then proves materializing the same node again restores targeted selection.
 
 ## Serialized tail — reserved, not currently leased
 
@@ -250,6 +273,15 @@ suites; the five real-Postgres cases remain intentionally gated for the
 serialized tail. `just affected-typecheck`, `just affected-test`, format,
 architecture/line-cap, and event-drift checks pass. The Unicode CAS golden fact
 is fixed at `sha256:d138439ef071f4c934a9a603c5ab6bd4bbd48bee470353a7dc1d6587a4b175ae`.
+
+Production-authority P1 redrive proof: 40 focused always-on/real-jj assertions
+pass; 19/19 live RLS-Postgres assertions pass across the production batch and
+eager producers, exact target derivation, fingerprint preservation/clearing,
+cross-project collision, HTTP → sole Pg CAS → default PgEventStore → replay,
+concurrent graph mutation, and repeat materialization. `just affected-test` passes
+1,336 assertions with 158 environment-gated skips. Affected typecheck, format,
+architecture/line cap, ordinary lint, type-aware lint, and `git diff --check`
+pass. The isolated Postgres service was removed after the proof.
 
 After IN-1 and the serialized tail land:
 

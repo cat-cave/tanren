@@ -23,6 +23,7 @@ import type { LiveJjWorkspace } from "../src/engine/providers/liveJjWorkspace.js
 vi.setConfig({ testTimeout: 30_000, hookTimeout: 30_000 });
 import { JjWorkspaceVcsCore } from "../src/engine/providers/jjWorkspaceVcsCore.js";
 import { AncestorNotReadyError, integrateOverWorkspace } from "../src/engine/dag/jjLocalIntegration.js";
+import { deriveChangedSourceTargets } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 import { LOCAL_HANDLE, LocalCommandSubstrate } from "./conformance/fakes/localCommandSubstrate.js";
 import { assertGitDirUnder, fixtureGitEnv } from "./conformance/fakes/fixtureGitEnv.js";
 
@@ -160,6 +161,7 @@ function liveLocalJj(): LiveJjWorkspace {
 describe("§3.5 jj-local batch integration (real jj)", () => {
   it("stacks two member bookmarks CLEAN — bookmark prep + LOCAL head read-back (no immutable refusal)", async () => {
     const { originPath } = makeBatchFixture();
+    const expectedBaseSha = revParse(originPath, "main");
     const live = liveLocalJj();
     const ssh = new LocalCommandSubstrate();
 
@@ -182,6 +184,7 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
     // remote-tracking ref would have yielded the un-rebased head).
     expect(result.headSha).toMatch(/^[0-9a-f]{40}$/u);
     expect(result.treeHash).not.toBe("");
+    expect(result.baseSha).toBe(expectedBaseSha);
     // The member-head divergence keys are the PRISTINE pre-integration remote heads (read
     // from `<branch>@origin`, which the local rebase never advanced) — two distinct shas.
     expect(result.memberHeadShas["spec-a"]).toMatch(/^[0-9a-f]{40}$/u);
@@ -190,6 +193,15 @@ describe("§3.5 jj-local batch integration (real jj)", () => {
     // The integrated head is NOT either pristine member head (it is the stacked result).
     expect(result.headSha).not.toBe(result.memberHeadShas["spec-a"]);
     expect(result.headSha).not.toBe(result.memberHeadShas["spec-b"]);
+    const targets = await deriveChangedSourceTargets(
+      { ssh, target: live.target, workspacePath: live.workspacePath },
+      result.baseSha,
+      result.headSha,
+    );
+    expect(targets).toEqual([
+      { kind: "source", targetRef: "a.txt" },
+      { kind: "source", targetRef: "b.txt" },
+    ]);
   });
 
   it("MATERIALIZES the integrated tree on disk — the working copy carries member files absent from the base (the no-PR-ever-merged regression)", async () => {

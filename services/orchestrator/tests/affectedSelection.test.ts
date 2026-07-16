@@ -262,8 +262,8 @@ describe("RV4-AFFECTED-SELECTION-FAIL-CLOSED", () => {
     const graph = snapshot(values.map((id, index) => behavior(id, [edge(`edge-${index}`, "source", id)])));
     const forward = selectAffectedBehaviorRevisions({ bound: sealedBound(graph, targets), changedTargets: targets });
     const reverse = selectAffectedBehaviorRevisions({
-      bound: sealedBound({ ...graph, behaviors: [...graph.behaviors].reverse() }, [...targets].reverse()),
-      changedTargets: [...targets].reverse(),
+      bound: sealedBound({ ...graph, behaviors: graph.behaviors.toReversed() }, targets.toReversed()),
+      changedTargets: targets.toReversed(),
     });
     expect(reverse).toEqual(forward);
   });
