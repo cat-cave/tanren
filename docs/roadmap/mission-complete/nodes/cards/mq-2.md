@@ -59,6 +59,7 @@ never evidence of member blame.
 - `docs/roadmap/mission-complete/nodes/cards/mq-2.md`
 - `services/orchestrator/src/engine/merge/multiMemberAuthorityTypes.ts`
 - `services/orchestrator/src/engine/merge/multiMemberAuthorityEvaluator.ts`
+- `services/orchestrator/src/engine/merge/multiMemberAuthorityEmbark.ts`
 - `services/orchestrator/src/engine/merge/multiMemberAuthorityGatherPg.ts`
 - `services/orchestrator/src/engine/merge/authoritySignalIdentity.ts`
 - `services/orchestrator/src/routes/mergeQueue/authorityEvaluations.ts`
