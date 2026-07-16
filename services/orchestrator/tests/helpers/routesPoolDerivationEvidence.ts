@@ -1,3 +1,4 @@
+import { integrationCatalogRevision } from "../../src/engine/contracts/integrationCatalog.js";
 import { AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES } from "../../src/engine/forge/audits/seedCatalog.js";
 import { DEFAULT_ROUTE_EVENTS, DEFAULT_ROUTE_MIN_SEVERITY } from "../../src/engine/notifications/seedDefaultRoute.js";
 
@@ -106,6 +107,7 @@ export class RoutesPoolDerivationEvidence {
             auth_generation: 1,
             grant_generation: 1,
             provider_principal_id: "account_1",
+            org_slug: String(params[0]),
           },
         ],
         rowCount: 1,
@@ -282,8 +284,8 @@ function eligibleAuthority(providerKind: string): Record<string, unknown> {
     capabilities: ["deploy"],
     operations: ["discover", "provision", "bind", "teardown"],
     provider_scopes: [],
-    resource_constraints: {},
-    policy_revision: "integration-catalog.v1",
+    resource_constraints: { version: 1, projectBinding: "selected", resourceIds: "*", environments: "*" },
+    policy_revision: integrationCatalogRevision(),
     consent_revision: "consent.test",
     grant_expires_at: null,
     grant_generation_status: "active",

@@ -61,7 +61,7 @@ function unusedHttp(): GitHubHttpClient {
 const installation: OrgGithubAppInstallation = {
   appId: "12345",
   installationId: "67890",
-  credentialRef: "credential/github_app/test",
+  credentialRef: "credential/github_app/org/org_clone/test",
   installedAt: "2026-01-01T00:00:00Z",
 };
 
@@ -123,7 +123,7 @@ function makeContext(overrides: Partial<PlannerRunContext> = {}): PlannerRunCont
     acceptanceCriteria: [],
     runnerImage: "image",
     identitySecretRef: "runner/test/identity",
-    githubCredentialRef: "credential/github/dev",
+    githubCredentialRef: "credential/github/org/org_clone/dev",
     ...overrides,
   };
 }
@@ -212,7 +212,7 @@ describe("prepareRunWorkspace clone authentication", () => {
   it("resolves the token from secrets + the run's credential ref (production path) and keeps it off the command line", async () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_clone/dev", token: TOKEN });
 
     // No injected token: prepareRunWorkspace must resolve it from the secret
     // store at context.githubCredentialRef — the SAME seam push uses.
@@ -265,7 +265,7 @@ describe("prepareRunWorkspace clone authentication", () => {
   it("MERGE-SAFETY: an authenticated run THROWS (no silent .invalid fallback) when identity resolution fails", async () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_clone/dev", token: TOKEN });
     // A real provider whose token resolves (the secret is present) but whose actor-identity
     // read FAILS — the transport returns 503 on `GET /user`, so the standalone
     // `resolveVcsActorIdentity` (invoking the token's lazy identity supplier) throws. The
@@ -294,7 +294,7 @@ describe("prepareRunWorkspace clone authentication", () => {
   it("sets the bot git identity in a DEDICATED step right after the clone, BEFORE the bootstrap commit", async () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_clone/dev", token: TOKEN });
     // Drive the real commitBootstrap over SSH (not the injected no-op) so the
     // bootstrap commit shows up in the recorded command stream and we can assert
     // the identity step precedes it.
@@ -336,7 +336,7 @@ describe("prepareRunWorkspace clone authentication", () => {
   it("P2a Part 2: clone routes credential resolution (no installation) carrying the static ref only", async () => {
     const ssh = new RecordingSsh();
     const secrets = new FakeSecretStore();
-    await storeGithubToken(secrets, { ref: "credential/github/dev", token: TOKEN });
+    await storeGithubToken(secrets, { ref: "credential/github/org/org_clone/dev", token: TOKEN });
     const { githubHttp, calls, restore } = recordingResolver();
 
     try {
@@ -348,7 +348,7 @@ describe("prepareRunWorkspace clone authentication", () => {
 
       expect(calls).toHaveLength(1);
       expect(calls[0]?.installation).toBeUndefined();
-      expect(calls[0]?.staticRef).toBe("credential/github/dev");
+      expect(calls[0]?.staticRef).toBe("credential/github/org/org_clone/dev");
       expect(ssh.commands[0]?.command.stdin).toBe(TOKEN);
     } finally {
       restore();

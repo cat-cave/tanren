@@ -70,13 +70,13 @@ const sentrySource: InboxSource = {
   kind: "errors",
   name: "sentry · cat-cave/app",
   detail: "unresolved issues",
-  config: { org: "cat-cave", project: "app" },
+  config: { org: "cat-cave", project: "app", baseUrl: "https://sentry.io" },
   enabled: true,
   autoRoute: false,
 };
 
 const secrets = new InMemorySecretStore();
-await secrets.put({ ref: "credential/github/x", value: "ghs_token" });
+await secrets.put({ ref: "credential/github/org/org_a/default", value: "ghs_token" });
 await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
 
 const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
@@ -84,7 +84,11 @@ const sentryAuthority = testSentryIntakeAuthority("credential/sentry/x/g/1");
 const sentryConnector = (sentryHttp: SentryHttpClient) =>
   createSentryConnector({ secrets, sentryHttp, authority: sentryAuthority });
 const githubConnector = (githubHttp: GitHubHttpClient) =>
-  createGitHubIssuesConnector({ secrets, githubHttp, defaultStaticRef: "credential/github/x" });
+  createGitHubIssuesConnector({
+    secrets,
+    githubHttp,
+    defaultStaticRef: "credential/github/org/org_a/default",
+  });
 
 // A GitHubHttpClient returning two issues + one PR (which must be filtered).
 function fakeGitHub(issues: unknown[]): { client: GitHubHttpClient; calls: GitHubHttpRequest[] } {

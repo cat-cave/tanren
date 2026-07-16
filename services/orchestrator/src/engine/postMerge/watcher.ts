@@ -260,6 +260,7 @@ export class PostMergeWatcher {
   private async resolveToken(context: ReviewMergeRunContext) {
     return resolveVcsToken(this.deps.githubHttp, {
       secrets: this.deps.secrets,
+      orgId: context.orgId,
       ...(context.installation !== undefined && { installation: context.installation }),
       ...(context.staticCredentialRef !== undefined && { staticRef: context.staticCredentialRef }),
       ...(this.deps.githubAppMinter !== undefined && { minter: this.deps.githubAppMinter }),

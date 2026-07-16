@@ -4,13 +4,13 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
- * Executable empty-PostgreSQL proof that migration chain 0000→0041 applies
+ * Executable empty-PostgreSQL proof that migration chain 0000→0043 applies
  * cleanly (no DDL ordering / 42830 errors) and that the composite org-qualified
  * FKs + unique keys exist and reject wrong-org / cross-binding rows.
  *
- * Seeds use the current 0041 shape only: connection → auth generation → grant →
+ * Seeds use the current 0043 shape only: connection → auth generation → grant →
  * grant generation → project selection with exact auth/grant generations.
- * No deleted pre-0041 columns (upstream_account_id, auth_kind on connection, etc.).
+ * No deleted pre-lifecycle columns (upstream_account_id, auth_kind on connection, etc.).
  *
  * Gated behind TANREN_RLS_DB_TEST=1 + an owner/superuser DATABASE_URL — same
  * harness as integrationLifecycleRls.integration.test.ts.
@@ -26,7 +26,7 @@ const PROJECT_A = "project_in_mig_order_a";
 const PROJECT_B = "project_in_mig_order_b";
 const DIGEST = `sha256:${"b".repeat(64)}`;
 
-/** Composite unique indexes that must exist before dependent FKs in 0041. */
+/** Composite unique indexes that must exist before dependent FKs in 0043. */
 const REQUIRED_UNIQUE_INDEXES = [
   "projects_org_project_unique",
   "specs_org_spec_unique",
@@ -54,7 +54,7 @@ function withDatabase(url: string, database: string): string {
   return parsed.toString();
 }
 
-/** Seed verified connection+generations against the real 0041 shape (RLS helper parity). */
+/** Seed verified connection+generations against the real 0043 shape (RLS helper parity). */
 async function seedLinkedConnection(
   owner: Pool,
   input: {
@@ -109,7 +109,7 @@ async function seedLinkedConnection(
   );
 }
 
-describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0041", () => {
+describeDb("IN-1 migration order — empty PostgreSQL chain 0000→0043", () => {
   const database = dbName();
   let ownerPool: Pool;
   let migrateError: unknown;

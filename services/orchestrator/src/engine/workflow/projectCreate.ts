@@ -56,7 +56,7 @@ function buildProject(
     config:
       input.config === undefined
         ? defaultProjectConfigV1()
-        : assertProjectCreateConfigAllowed(input.config, options.configWriteProof),
+        : assertProjectCreateConfigAllowed(input.config, options.configWriteProof, actor?.orgId ?? undefined),
   };
 }
 

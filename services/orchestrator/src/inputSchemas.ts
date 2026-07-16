@@ -29,9 +29,10 @@ export const runInputSchema = z.object({
   branch: z.string().min(1).optional(),
 });
 
-export const draftPrInputSchema = z.object({
-  githubCredentialRef: z.string().min(1).optional(),
-  workspacePath: z.string().min(1).optional(),
-  title: z.string().min(1).optional(),
-  body: z.string().optional(),
-});
+export const draftPrInputSchema = z
+  .object({
+    workspacePath: z.string().min(1).optional(),
+    title: z.string().min(1).optional(),
+    body: z.string().optional(),
+  })
+  .strict();

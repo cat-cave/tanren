@@ -191,6 +191,23 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       );
     }
 
+    await setReceiptValue(
+      ownerPool(),
+      DIRECT_PROJECT,
+      "{deploy,value,outcome,surfaces,deployRef}",
+      "deploy.flyio:app_1",
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    operation = await ProjectDerivationStore.recordReceipt(
+      runtimePool(),
+      operation,
+      "deploy",
+      preparedDeploy(),
+      "graph",
+    );
+
     await ownerPool().query(
       "UPDATE org_integration_connections SET health = 'degraded' WHERE org_id = $1 AND id = 'connection_1'",
       [ORG],

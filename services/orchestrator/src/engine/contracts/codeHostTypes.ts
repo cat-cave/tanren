@@ -121,6 +121,8 @@ export interface IntegrationAncestor {
  */
 export interface VcsCredentialContext {
   secrets: SecretStore;
+  /** Authenticated organization that owns every credential coordinate. */
+  orgId: string;
   /** Org App installation block, when the org has installed the App. */
   installation?: OrgGithubAppInstallation;
   /** Static fallback credential ref (a project/org credential). */

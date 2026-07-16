@@ -29,9 +29,15 @@ import {
   resolveHarnessEndpointOverride,
   type HarnessEndpointOverride,
 } from "../config/managedProvider.js";
-import { migrateOrgConfig, type OrgConfigV1, type OrgDefaultCredentials } from "../config/orgConfig.js";
+import {
+  bindOrgGithubCredentialRefs,
+  migrateOrgConfig,
+  type OrgConfigV1,
+  type OrgDefaultCredentials,
+} from "../config/orgConfig.js";
 import type { ProjectConfigV1 } from "../config/projectConfig.js";
 import type { RoutingChainEntry } from "../config/shared.js";
+import { canonicalOrgGithubCredentialRef } from "./refNamespace.js";
 
 type OrgConfigClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -97,6 +103,8 @@ export interface ResolvedRunCredentials {
   providerMode: ProviderMode;
   endpointOverride?: HarnessEndpointOverride;
 }
+
+export type ResolvedLlmCredentials = Pick<ResolvedRunCredentials, "defaultLlm" | "providerMode" | "endpointOverride">;
 
 /** Per-kind explicit overrides (e.g. a re-run with a pinned GitHub ref). */
 export interface RunCredentialOverride {
@@ -241,33 +249,7 @@ export async function resolveCredentialsForRun(
 ): Promise<ResolvedRunCredentials> {
   const orgConfig = await loadOrgProviderModeConfig(pool, input.orgScope);
   const projectCredentials = input.projectConfig.credentials ?? {};
-
-  // Effective provider mode: project override (when set) wins over the org's
-  // default.
-  const providerMode: ProviderMode = input.projectConfig.providerMode ?? orgConfig.providerMode;
-
-  // Default LLM routing entry + endpoint. Resolved BEFORE GitHub so a BYOK run
-  // with no resolvable default LLM throws MissingCredentialError("llm_default")
-  // first (preserving the original error ordering). Managed runs never throw
-  // here — they resolve the platform-owned entry.
-  let defaultLlm: RoutingChainEntry;
-  let endpointOverride: HarnessEndpointOverride | undefined;
-  if (providerMode === "managed") {
-    // Managed: the PLATFORM-owned credential + endpoint, run through the codex
-    // harness pointed at the managed OpenRouter endpoint. These are DEPLOY/hosting
-    // config (defaultManagedProviderConfig — owned by the deploy layer), NOT
-    // userland org/project config: a tenant chooses managed-vs-byok (providerMode),
-    // but does NOT pick the platform credential ref/endpoint. The tenant's own
-    // default LLM is NOT consulted under managed.
-    const managed = defaultManagedProviderConfig();
-    defaultLlm = { cli: "codex", model: "default", authRef: managed.credentialRef };
-    endpointOverride = resolveHarnessEndpointOverride("managed", managed);
-  } else {
-    // BYOK (default): the tenant's own resolved default entry — project over org,
-    // no endpoint override. The (cli, authRef) compatibility + full-role rules
-    // are enforced where the default is SET (the connect route).
-    defaultLlm = pickEntry("llm_default", projectCredentials.defaultLlm, orgConfig.defaults?.defaultLlm);
-  }
+  const llm = resolveLlmCredentials(input.projectConfig, orgConfig);
 
   // GitHub is ALWAYS the tenant's credential — managed mode only swaps the LLM
   // provider source, never the repo identity used to publish PRs / poll CI.
@@ -284,6 +266,7 @@ export async function resolveCredentialsForRun(
   // throws `MissingCredentialError("github_token")` — loud, never a silent default or
   // PAT workaround, and never a representable empty-and-no-App state.
   const github = resolveGithubCredential(
+    input.orgScope,
     input.override?.githubCredentialRef,
     projectCredentials.githubCredentialRef,
     orgConfig.defaults?.github_token,
@@ -291,11 +274,38 @@ export async function resolveCredentialsForRun(
   );
 
   return {
-    defaultLlm,
+    defaultLlm: llm.defaultLlm,
     github,
     githubCredentialRef: githubCredentialRefForWire(github),
+    providerMode: llm.providerMode,
+    ...(llm.endpointOverride && { endpointOverride: llm.endpointOverride }),
+  };
+}
+
+/** Resolve only the model credential layers for a Forge answerer (no fake GitHub ref). */
+export async function resolveLlmCredentialsForForge(
+  pool: OrgConfigClient,
+  input: Pick<ResolveCredentialsInput, "projectConfig" | "orgScope">,
+): Promise<ResolvedLlmCredentials> {
+  return resolveLlmCredentials(input.projectConfig, await loadOrgProviderModeConfig(pool, input.orgScope));
+}
+
+function resolveLlmCredentials(
+  projectConfig: Pick<ProjectConfigV1, "credentials" | "providerMode">,
+  orgConfig: OrgProviderModeConfig,
+): ResolvedLlmCredentials {
+  const providerMode: ProviderMode = projectConfig.providerMode ?? orgConfig.providerMode;
+  if (providerMode === "managed") {
+    const managed = defaultManagedProviderConfig();
+    return {
+      defaultLlm: { cli: "codex", model: "default", authRef: managed.credentialRef },
+      providerMode,
+      endpointOverride: resolveHarnessEndpointOverride("managed", managed),
+    };
+  }
+  return {
+    defaultLlm: pickEntry("llm_default", projectConfig.credentials?.defaultLlm, orgConfig.defaults?.defaultLlm),
     providerMode,
-    ...(endpointOverride && { endpointOverride }),
   };
 }
 
@@ -309,6 +319,7 @@ export async function resolveCredentialsForRun(
  * empty-and-no-App state is NOT representable.
  */
 function resolveGithubCredential(
+  scope: OrgScope,
   override: string | undefined,
   projectRef: string | undefined,
   orgDefaultRef: string | undefined,
@@ -316,7 +327,13 @@ function resolveGithubCredential(
 ): ResolvedGithubCredential {
   for (const layer of [override, projectRef, orgDefaultRef]) {
     if (typeof layer === "string" && layer.trim() !== "") {
-      return { kind: "static", ref: layer };
+      if (scope.kind !== "org") {
+        throw new UnscopedOrgError();
+      }
+      return {
+        kind: "static",
+        ref: canonicalOrgGithubCredentialRef({ orgId: scope.orgId, supplied: layer, kind: "github_token" }),
+      };
     }
   }
   if (hasGithubApp) {
@@ -359,7 +376,7 @@ async function loadOrgProviderModeConfig(pool: OrgConfigClient, scope: OrgScope)
   if (row === undefined) {
     throw new OrgProviderModeUnresolved(scope.orgId);
   }
-  const config: OrgConfigV1 = migrateOrgConfig(row.config);
+  const config: OrgConfigV1 = bindOrgGithubCredentialRefs(migrateOrgConfig(row.config), scope.orgId);
   return {
     defaults: config.defaultCredentials,
     providerMode: config.providerMode,

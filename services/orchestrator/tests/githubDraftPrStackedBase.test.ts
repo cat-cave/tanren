@@ -46,7 +46,7 @@ describe("stacked-PR draft base", () => {
 
   it("end-to-end: the draft PR opens against the immediate-ancestor branch", async () => {
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secretToken" });
     const ssh = new RecordingSsh();
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
@@ -73,6 +73,7 @@ describe("stacked-PR draft base", () => {
       runId: "run_123",
       specId: "spec_123",
       projectId: "project_123",
+      appendEventOrgId: "org_fake",
       workspacePath: "/workspace/runs/run_123/repo",
       repoUrl: "https://github.com/cat-cave/repo.git",
       // `targetBranch` is the default-branch fallback; the stack overrides it to the ancestor.
@@ -80,7 +81,7 @@ describe("stacked-PR draft base", () => {
       ancestorStack: [member("spec_a", "tanren/run_a")],
       runBranch: "tanren/run_123",
       title: "Tanren run run_123",
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_fake/dev",
       timeoutMs: 500,
     });
 

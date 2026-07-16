@@ -19,39 +19,44 @@ const { orgGithubApp, githubStaticRef } = percolationCredentialResolutionInterna
 describe("percolation orgGithubApp — no silent fallback", () => {
   it("returns undefined for a genuinely ABSENT org config (legitimate 'no App')", () => {
     const absent: unknown = undefined;
-    expect(orgGithubApp(null)).toBeUndefined();
-    expect(orgGithubApp(absent)).toBeUndefined();
+    expect(orgGithubApp(null, "org_1")).toBeUndefined();
+    expect(orgGithubApp(absent, "org_1")).toBeUndefined();
   });
 
   it("returns undefined for a parseable App-less org config (legitimate 'no App')", () => {
-    expect(orgGithubApp({ version: 1 })).toBeUndefined();
+    expect(orgGithubApp({ version: 1 }, "org_1")).toBeUndefined();
   });
 
   it("THROWS loudly on a PRESENT-yet-UNPARSEABLE org config — never a silent undefined that disables App auth", () => {
     // A versionless (corrupt) config: the old code swallowed this to `undefined`,
     // silently disabling App auth. It must now throw loudly.
-    expect(() => orgGithubApp({ github_app: { installationId: "123" } })).toThrow(UnknownConfigVersionError);
+    expect(() => orgGithubApp({ github_app: { installationId: "123" } }, "org_1")).toThrow(UnknownConfigVersionError);
   });
 });
 
 describe("percolation githubStaticRef — no silent fallback", () => {
   it("returns the project credential ref when the project config carries one", () => {
     const ref = githubStaticRef(
-      { version: 1, credentials: { githubCredentialRef: "credential/github/project" } },
+      { version: 1, credentials: { githubCredentialRef: "credential/github/org/org_1/project" } },
       { version: 1 },
+      "org_1",
     );
-    expect(ref).toBe("credential/github/project");
+    expect(ref).toBe("credential/github/org/org_1/project");
   });
 
   it("falls through to the org default when the project config is ABSENT", () => {
-    expect(githubStaticRef(null, { version: 1, defaultCredentials: { github_token: "credential/github/org" } })).toBe(
-      "credential/github/org",
-    );
+    expect(
+      githubStaticRef(
+        null,
+        { version: 1, defaultCredentials: { github_token: "credential/github/org/org_1/default" } },
+        "org_1",
+      ),
+    ).toBe("credential/github/org/org_1/default");
   });
 
   it("returns undefined when neither project nor org config configures a ref (legitimate empty)", () => {
-    expect(githubStaticRef({ version: 1 }, { version: 1 })).toBeUndefined();
-    expect(githubStaticRef(null, null)).toBeUndefined();
+    expect(githubStaticRef({ version: 1 }, { version: 1 }, "org_1")).toBeUndefined();
+    expect(githubStaticRef(null, null, "org_1")).toBeUndefined();
   });
 
   it("THROWS loudly on a PRESENT-yet-UNPARSEABLE project config — never swallowed-and-skipped to the org default", () => {
@@ -59,14 +64,15 @@ describe("percolation githubStaticRef — no silent fallback", () => {
     // a corrupt project config. It must now throw loudly.
     expect(() =>
       githubStaticRef(
-        { credentials: { githubCredentialRef: "credential/github/project" } },
-        { version: 1, defaultCredentials: { github_token: "credential/github/org" } },
+        { credentials: { githubCredentialRef: "credential/github/org/org_1/project" } },
+        { version: 1, defaultCredentials: { github_token: "credential/github/org/org_1/default" } },
+        "org_1",
       ),
     ).toThrow(UnknownConfigVersionError);
   });
 
   it("THROWS loudly on a PRESENT-yet-UNPARSEABLE org config — never swallowed to undefined", () => {
-    expect(() => githubStaticRef({ version: 1 }, { defaultCredentials: { github_token: "x" } })).toThrow(
+    expect(() => githubStaticRef({ version: 1 }, { defaultCredentials: { github_token: "x" } }, "org_1")).toThrow(
       UnknownConfigVersionError,
     );
   });

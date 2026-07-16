@@ -164,6 +164,7 @@ export async function buildApp(input: {
       installation === undefined ? await loadOrgDefaultGithubCredentialRef(input.pool, orgId) : undefined;
     const resolved = await resolveGithubToken({
       secrets,
+      orgId,
       installation,
       minter: githubAppMinter,
       ...(staticRef !== undefined && { staticRef }),

@@ -40,7 +40,7 @@ function projectConfig(): unknown {
     governancePosture: "open",
     reviewPolicy: "auto",
     credentials: {
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_yield/dev",
       defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     },
   };

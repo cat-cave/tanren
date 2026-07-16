@@ -862,14 +862,14 @@ smoke-plane-split-worker-remote-writes: runner-key gen-mtls-certs
 
 # IN-1: fresh ephemeral database proof for all lifecycle RLS/FK boundaries and
 # for migration-chain ordering. The RLS file proves tenant isolation under the
-# restricted `tanren_app` role; the migration-order file proves chain 0000->0041
+# restricted `tanren_app` role; the migration-order file proves chain 0000->0043
 # applies cleanly on an empty PostgreSQL database and that the composite
 # org-qualified FKs/unique keys materialize and reject wrong-org/cross-binding
 # rows. Both files share the same owner/superuser DATABASE_URL +
 # TANREN_RLS_DB_TEST=1 harness; the migration-order test manages its own
 # ephemeral database + cleanup (same pattern as the lifecycle RLS proof).
 smoke-rls-integration-lifecycle:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts services/orchestrator/tests/integrationConnectionSaga.integration.test.ts services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts services/orchestrator/tests/integrationOperationDurability.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationLifecycleRls.integration.test.ts services/orchestrator/tests/integrationLifecycleMigrationOrder.integration.test.ts services/orchestrator/tests/integrationLifecycleLineageFk.integration.test.ts services/orchestrator/tests/integrationConnectionSaga.integration.test.ts services/orchestrator/tests/integrationConnectionSagaFailures.integration.test.ts services/orchestrator/tests/integrationOperationDurability.integration.test.ts
 
 # IN-1: real Vault 1.18 KV v2 CAS=0 wire proof. The compose dev Vault exposes
 # its dev listener on TANREN_VAULT_HOST_PORT (default 18200).

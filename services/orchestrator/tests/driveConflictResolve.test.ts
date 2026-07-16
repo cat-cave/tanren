@@ -67,7 +67,7 @@ function fakePool(opts: { percolationPending?: unknown; priorReplanSignatures?: 
   const projectConfig = {
     version: 1,
     credentials: {
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_x/dev",
       defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/dev" },
     },
   };

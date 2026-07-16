@@ -10,6 +10,7 @@
 
 import type pg from "pg";
 import type { DeriveInput } from "../../../src/engine/forge/interview/derive.js";
+import { handleConfigCasSql } from "../../helpers/routesPoolConfigCas.js";
 import { RoutesPoolDerivationEvidence } from "../../helpers/routesPoolDerivationEvidence.js";
 
 export const successfulBootstrapProject: NonNullable<DeriveInput["bootstrapProject"]> = async (input) => {
@@ -109,6 +110,7 @@ export function stubPool(): {
       runner_image: string;
       allocator: string;
       config: Record<string, unknown>;
+      config_revision: number;
       lifecycle: string;
     }
   >();
@@ -179,6 +181,13 @@ export function stubPool(): {
       return { rows: [], rowCount: 0 };
     }
     if (sql.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
+    const cas = handleConfigCasSql(sql, params, new Map(), projects);
+    if (cas !== undefined) {
+      const projectId = String(sql.startsWith("UPDATE projects") ? params[1] : params[0]);
+      const project = projects.get(projectId);
+      if (project !== undefined) configs.set(projectId, project.config);
+      return cas;
+    }
     if (!sql.startsWith("INSERT INTO")) {
       const evidenceResult = evidence.handle(sql, params, { projects, specs: specRows, inboxSources });
       if (evidenceResult !== undefined) return evidenceResult;
@@ -267,31 +276,18 @@ export function stubPool(): {
         runner_image: String(params[4]),
         allocator: String(params[5]),
         config: configs.get(String(params[0])) ?? {},
+        config_revision: 1,
         lifecycle: String(params[7]),
         org_id: String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }
-    // Post-deploy config merge (project shell created first, deploy fields applied after).
+    // Compatibility read for non-CAS project-config consumers.
     if (sql.startsWith("SELECT config FROM projects")) {
       const projectId = String(params[0]);
       return configs.has(projectId)
         ? { rows: [{ config: configs.get(projectId) }], rowCount: 1 }
         : { rows: [], rowCount: 0 };
-    }
-    if (sql.startsWith("UPDATE projects SET config")) {
-      const rawConfig = params[0];
-      const projectId = String(params[1]);
-      const expected = JSON.parse(String(params[2])) as Record<string, unknown>;
-      if (JSON.stringify(configs.get(projectId)) !== JSON.stringify(expected)) return { rows: [], rowCount: 0 };
-      if (typeof rawConfig === "string") {
-        // Production updateConfig overwrites the config blob entirely with the
-        // caller's merged object (base + vision + lifecycle + deploy).
-        configs.set(projectId, JSON.parse(rawConfig) as Record<string, unknown>);
-        const project = projects.get(projectId);
-        if (project !== undefined) project.config = configs.get(projectId)!;
-      }
-      return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith("UPDATE projects") && sql.includes("lifecycle = 'active'")) {
       const project = projects.get(String(params[1]));

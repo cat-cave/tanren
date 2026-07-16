@@ -1,7 +1,7 @@
 import { migrateProjectConfig } from "../../engine/config/index.js";
+import { mutateProjectConfig } from "../../engine/config/projectConfigMutate.js";
 import type { PreparedGreenfieldDeploy } from "../../engine/forge/interview/index.js";
 import {
-  mutateProjectConfig,
   ProjectDerivationConflictError,
   ProjectDerivationStore,
   projectDerivationFingerprint,

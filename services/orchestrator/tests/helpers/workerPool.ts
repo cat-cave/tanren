@@ -2,7 +2,7 @@ import type pg from "pg";
 
 // Shared with runWorker.test.ts: the github credential ref the seeded run's
 // project config carries, echoed back from the CI-poll run⋈project read.
-export const githubCredentialRef = "credential/github/dev";
+export const githubCredentialRef = "credential/github/org/org_worker_seed/dev";
 
 // In-memory pg substitute covering exactly the SQL the seam emits:
 // createProject/createSpec/createQueuedRunFromSpec inserts + reads, the

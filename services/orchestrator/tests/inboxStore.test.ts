@@ -15,12 +15,23 @@ import type { CandidateTriage, IngestedItem, InboxSource } from "../src/engine/f
 
 // The store methods exercised below; the `Repositories` seam owns the SQL, so the
 // tests drive the same `InboxStore.*` surface the routes/engine/poller now use.
-const { createSource, getCandidate, getSource, listCandidates, listSources, resolveCandidate, upsertCandidate } =
-  InboxStore;
+const { createSource, getCandidate, listCandidates, resolveCandidate, upsertCandidate } = InboxStore;
 
 interface Call {
   sql: string;
   params: unknown[];
+}
+
+function activeSourceRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    state: "active",
+    attention_code: null,
+    attention_message: null,
+    attention_observed_at: null,
+    webhook_configured: false,
+    retry_not_before: null,
+    ...row,
+  };
 }
 
 // A recording stub `QueryClient`: each handler is matched by an SQL substring
@@ -55,7 +66,7 @@ describe("createSource — insert wire shape + mapping", () => {
       kind: "issues",
       name: "github · cat-cave",
       detail: "labelled spec-candidate",
-      config: { owner: "cat-cave", repo: "app" },
+      config: { owner: "cat-cave", repo: "app", labels: [] },
       enabled: true,
       autoRoute: false,
     };
@@ -63,7 +74,7 @@ describe("createSource — insert wire shape + mapping", () => {
       {
         match: "INSERT INTO inbox_sources",
         rows: (p) => [
-          {
+          activeSourceRow({
             id: p[0],
             org_id: p[1],
             project_id: p[2],
@@ -73,7 +84,7 @@ describe("createSource — insert wire shape + mapping", () => {
             config: JSON.parse(p[6] as string),
             enabled: p[7],
             auto_route: p[8],
-          },
+          }),
         ],
       },
     ]);
@@ -88,12 +99,7 @@ describe("createSource — insert wire shape + mapping", () => {
       "github · cat-cave",
       "labelled spec-candidate",
     ]);
-    expect(JSON.parse(call.params[6] as string)).toEqual({
-      state: "active",
-      owner: "cat-cave",
-      repo: "app",
-      labels: [],
-    });
+    expect(JSON.parse(call.params[6] as string)).toEqual({ owner: "cat-cave", repo: "app", labels: [] });
     expect(call.params[7]).toBe("true");
     expect(call.params[8]).toBe("false");
     expect(source.id).toMatch(/^src_/u);
@@ -106,7 +112,7 @@ describe("createSource — insert wire shape + mapping", () => {
       {
         match: "INSERT INTO inbox_sources",
         rows: (p) => [
-          {
+          activeSourceRow({
             id: p[0],
             org_id: p[1],
             project_id: p[2],
@@ -116,7 +122,7 @@ describe("createSource — insert wire shape + mapping", () => {
             config: JSON.parse(p[6] as string),
             enabled: p[7],
             auto_route: p[8],
-          },
+          }),
         ],
       },
     ]);
@@ -134,7 +140,7 @@ describe("createSource — insert wire shape + mapping", () => {
       {
         match: "INSERT INTO inbox_sources",
         rows: (p) => [
-          {
+          activeSourceRow({
             id: p[0],
             org_id: p[1],
             project_id: p[2],
@@ -144,14 +150,14 @@ describe("createSource — insert wire shape + mapping", () => {
             config: JSON.parse(p[6] as string),
             enabled: p[7],
             auto_route: p[8],
-          },
+          }),
         ],
       },
     ]);
     const source = await createSource(client, {
       orgId: "o",
       projectId: null,
-      kind: "system",
+      kind: "scheduled_audit",
       name: "n",
       enabled: false,
       autoRoute: true,
@@ -163,100 +169,6 @@ describe("createSource — insert wire shape + mapping", () => {
   });
 });
 
-describe("mapSource — string-boolean + null-config normalization", () => {
-  it("maps enabled/auto_route string booleans (only 'true' is true) and a null config to {}", async () => {
-    const { client } = recorder([
-      {
-        match: "FROM inbox_sources WHERE id = $1",
-        rows: () => [
-          {
-            id: "src_1",
-            org_id: "org_a",
-            project_id: null,
-            kind: "issues",
-            name: "n",
-            detail: "d",
-            config: null,
-            enabled: "false",
-            auto_route: "true",
-          },
-        ],
-      },
-    ]);
-    const source = await getSource(client, "src_1");
-    expect(source).toBeDefined();
-    expect(source!.enabled).toBe(false);
-    expect(source!.autoRoute).toBe(true);
-    expect(source!.config).toEqual({});
-    expect(source!.projectId).toBeNull();
-  });
-
-  it("treats any non-'true' enabled string as false (the === 'true' comparison)", async () => {
-    const { client } = recorder([
-      {
-        match: "FROM inbox_sources WHERE id = $1",
-        rows: () => [
-          {
-            id: "src_2",
-            org_id: "o",
-            project_id: "p",
-            kind: "manual",
-            name: "n",
-            detail: "",
-            config: {},
-            // "t" is not the literal "true", so it must map to false.
-            enabled: "t",
-            auto_route: "false",
-          },
-        ],
-      },
-    ]);
-    const source = await getSource(client, "src_2");
-    expect(source!.enabled).toBe(false);
-  });
-
-  it("returns undefined when no source row matches", async () => {
-    const { client } = recorder([]);
-    expect(await getSource(client, "src_missing")).toBeUndefined();
-  });
-
-  it("lists sources ordered by created_at, scoped to the org param", async () => {
-    const { client, calls } = recorder([
-      {
-        match: "FROM inbox_sources WHERE org_id = $1",
-        rows: () => [
-          {
-            id: "s1",
-            org_id: "org_a",
-            project_id: null,
-            kind: "issues",
-            name: "a",
-            detail: "",
-            config: {},
-            enabled: "true",
-            auto_route: "false",
-          },
-          {
-            id: "s2",
-            org_id: "org_a",
-            project_id: null,
-            kind: "errors",
-            name: "b",
-            detail: "",
-            config: {},
-            enabled: "true",
-            auto_route: "false",
-          },
-        ],
-      },
-    ]);
-    const sources = await listSources(client, "org_a");
-    expect(calls[0]!.sql).toContain("ORDER BY created_at");
-    expect(calls[0]!.params).toEqual(["org_a"]);
-    expect(sources.map((s) => s.id)).toEqual(["s1", "s2"]);
-  });
-});
-
 const source: InboxSource = {
   id: "src_gh",
   orgId: "org_a",
@@ -264,7 +176,7 @@ const source: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "",
-  config: {},
+  config: { owner: "cat-cave", repo: "app", labels: [] },
   enabled: true,
   autoRoute: false,
 };
@@ -312,7 +224,7 @@ describe("upsertCandidate — insert/conflict wire shape + mapping", () => {
     ]);
     const candidate = await upsertCandidate(client, source, item, triage, "triaged");
     const call = calls[0]!;
-    expect(call.sql).toContain("ON CONFLICT (source_id, external_id) DO UPDATE");
+    expect(call.sql).toContain("ON CONFLICT (org_id, source_id, external_id) DO UPDATE");
     expect(String(call.params[0])).toMatch(/^cand_/u);
     expect(call.params[1]).toBe("src_gh");
     expect(call.params[2]).toBe("org_a");

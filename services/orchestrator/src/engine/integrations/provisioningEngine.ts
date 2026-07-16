@@ -9,7 +9,6 @@
 // returned `ProvisionOutcome` and the emitted event carry ref NAMES, never values.
 
 import { z } from "zod";
-import { mutateProjectConfig } from "../config/projectConfigMutate.js";
 import type {
   AuthorizeOperationResult,
   IntegrationAuthority,

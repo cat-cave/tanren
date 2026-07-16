@@ -51,7 +51,10 @@ export class FakeSentryProvisioner implements IntegrationProvisioner {
       secretRefs: { SENTRY_DSN: ref },
       // `errors` mirrors the real SentryProvisioner: the DB-allowed (kind CHECK) +
       // connector-registered kind for Sentry intake (a "sentry" kind violates both).
-      inboxSource: { kind: "errors", config: { org: "acme", project: slug } },
+      inboxSource: {
+        kind: "errors",
+        config: { org: "acme", project: slug, baseUrl: "https://sentry.io" },
+      },
     };
   }
 }

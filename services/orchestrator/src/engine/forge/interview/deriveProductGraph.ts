@@ -1,10 +1,10 @@
 /* eslint-disable import/max-dependencies -- durable derive composes the canonical seams */
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
+import { mutateProjectConfig } from "../../config/projectConfigMutate.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import { githubHttpsRemote } from "../../providers/github.js";
 import {
-  mutateProjectConfig,
   ProjectDerivationConflictError,
   ProjectDerivationStore,
   explicitRepositoryMarker,

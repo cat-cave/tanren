@@ -1,3 +1,4 @@
+/* eslint-disable max-classes-per-file -- one cohesive exported intake error taxonomy */
 // Intake source-connector fetch errors (no-silent-fallbacks doctrine).
 //
 // A source connector (`github`/`sentry`) pulls open issues over

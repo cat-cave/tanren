@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PrincipalCandidate } from "../src/engine/contracts/integrationAuthority.js";
 import type { PutCreateOnlyResult, SecretValue } from "../src/engine/contracts/secretStore.js";
 import { InMemorySecretStore, SecretStoreWriteError } from "../src/engine/contracts/secretStore.js";
+import { mutateProjectConfig } from "../src/engine/config/projectConfigMutate.js";
 import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
 import { integrationRequestFingerprint } from "../src/engine/integrations/integrationOperationFingerprint.js";
 import { IntegrationSecretCleanupReaper } from "../src/engine/integrations/integrationSecretCleanupReaper.js";
@@ -11,7 +12,6 @@ import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integra
 import type { LinkReservation } from "../src/engine/repositories/integrationConnectionFinalize.js";
 import { IntegrationConnectionsStore } from "../src/engine/repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../src/engine/repositories/integrationQuery.js";
-import { mutateProjectConfig } from "../src/engine/repositories/projects.js";
 import type { IntegrationAuthorityRouteDatabase } from "../src/routes/integrations/authorityWrites.js";
 import { runDurableLinkSaga } from "../src/routes/integrations/linkSaga.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
@@ -328,7 +328,7 @@ describeDb("IN-1 operation durability — real PostgreSQL", () => {
     const racingClient: IntegrationQueryClient = {
       async query(sql, params) {
         const result = await owner.query(sql, params);
-        if (sql.startsWith("SELECT config FROM projects") && initialReads < 2) {
+        if (sql.startsWith("SELECT config, config_revision::text AS revision FROM projects") && initialReads < 2) {
           initialReads += 1;
           if (initialReads === 2) releaseInitialReads?.();
           await bothRead;

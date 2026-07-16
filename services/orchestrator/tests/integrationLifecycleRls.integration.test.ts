@@ -1,8 +1,8 @@
 // cspell:ignore relforcerowsecurity relnamespace schemaname nspname tablename
 /**
- * Real-Postgres RLS + tenant FK proof against migration 0041.
+ * Real-Postgres RLS + tenant FK proof against migration 0043.
  * Opt-in: TANREN_RLS_DB_TEST=1 with a reachable DATABASE_URL.
- * Seeds use the real 0041 schema (no deleted linkControlGrant / upstream_account_id).
+ * Seeds use the real 0043 schema (no deleted linkControlGrant / upstream_account_id).
  */
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
@@ -59,7 +59,7 @@ function runtimeUrl(adminUrl: string, database: string): string {
   return parsed.toString();
 }
 
-/** Seed a verified connection+grant generation against the real 0041 shape. */
+/** Seed a verified connection+grant generation against the real 0043 shape. */
 async function seedLinkedConnection(
   client: { query: (sql: string, params?: unknown[]) => Promise<unknown> },
   input: {

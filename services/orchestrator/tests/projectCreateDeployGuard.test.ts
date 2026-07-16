@@ -114,6 +114,29 @@ describe("generic project creation deploy guard", () => {
     expect(pool.projects.size).toBe(1);
   });
 
+  it("rejects a foreign-org GitHub credential on project create", async () => {
+    const { app, pool } = orgProjectHarness();
+    const response = await app.request("/orgs/org_acme/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Foreign credential",
+        repoUrl: "https://github.com/acme/foreign-credential",
+        config: {
+          version: 1,
+          credentials: { githubCredentialRef: "credential/github/org/org_other/default" },
+        },
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_project_config",
+      fields: ["credentials.githubCredentialRef"],
+    });
+    expect(pool.projects.size).toBe(0);
+  });
+
   it("rejects org-scoped caller-supplied autonomous native-queue config before creating a project", async () => {
     const { app, pool } = orgProjectHarness();
     const response = await app.request("/orgs/org_acme/projects", {
@@ -273,7 +296,7 @@ describe("generic project creation deploy guard", () => {
           reviewPolicy: "human",
           mergeIntegration: "not_configured",
           governancePosture: "strict",
-          credentials: { githubCredentialRef: "credential/github/project" },
+          credentials: { githubCredentialRef: "project" },
         },
         revision: "1",
       }),
@@ -281,7 +304,7 @@ describe("generic project creation deploy guard", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      config: { credentials: { githubCredentialRef: "credential/github/project" } },
+      config: { credentials: { githubCredentialRef: "credential/github/org/org_acme/project" } },
     });
   });
 
@@ -356,6 +379,28 @@ describe("generic project creation deploy guard", () => {
       fields: ["auditPosture"],
     });
     expect(pool.projects.size).toBe(0);
+  });
+
+  it("rejects a foreign-org GitHub credential on project PATCH without advancing config", async () => {
+    const { app, pool } = orgProjectHarness();
+    pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          credentials: { githubCredentialRef: "credential/github/org/org_other/default" },
+        },
+        revision: "1",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid_project_config" });
+    expect(pool.projects.get("project_existing")?.config).toEqual({ version: 1 });
+    expect(pool.projects.get("project_existing")?.config_revision).toBe(1);
   });
 
   it.each([

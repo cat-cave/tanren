@@ -40,8 +40,8 @@ const ORG_ID = "org_pm";
 const PR_URL = "https://github.com/acme/widget/pull/12";
 const PR_NUMBER = 12;
 const BASE_BRANCH = "main";
-const CODEX_ORG_REF = "credential/codex/org_pm/default";
-const GITHUB_ORG_REF = "credential/github/org_pm/default";
+const CODEX_ORG_REF = "credential/codex/org/org_pm/default";
+const GITHUB_ORG_REF = "credential/github/org/org_pm/default";
 
 interface FakePoolState {
   /** Whether the run has a merge.completed event (and its merge sha). */

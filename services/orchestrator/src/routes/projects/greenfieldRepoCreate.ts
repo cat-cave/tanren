@@ -65,6 +65,7 @@ export async function createGreenfieldRepository(deps: GreenfieldRepositoryCreat
   // verdict is itself a silent degrade).
   const creds = {
     secrets,
+    orgId: deps.orgId,
     ...(installation !== undefined && { installation }),
     ...(staticRef !== undefined && { staticRef }),
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),

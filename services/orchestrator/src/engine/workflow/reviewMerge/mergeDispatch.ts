@@ -328,6 +328,7 @@ async function resolveTanrenLogins(
   }
   const resolved = await resolveVcsToken(input.githubHttp, {
     secrets: input.secrets,
+    orgId: context.orgId,
     installation: context.installation,
     staticRef: context.staticCredentialRef,
     minter: input.githubAppMinter,
@@ -352,6 +353,7 @@ async function buildHostProbe(
   const resolveToken = (): Promise<ResolvedVcsToken> =>
     resolveVcsToken(input.githubHttp, {
       secrets: input.secrets,
+      orgId: context.orgId,
       installation: context.installation,
       staticRef: context.staticCredentialRef,
       minter: input.githubAppMinter,
@@ -389,6 +391,7 @@ function buildContributorProbe(
       const resolveToken = (): Promise<ResolvedVcsToken> =>
         resolveVcsToken(input.githubHttp, {
           secrets: input.secrets,
+          orgId: context.orgId,
           installation: context.installation,
           staticRef: context.staticCredentialRef,
           minter: input.githubAppMinter,

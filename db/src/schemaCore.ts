@@ -96,6 +96,7 @@ export const specs = pgTable(
   },
   (table) => [
     uniqueIndex("specs_org_spec_unique").on(table.orgId, table.specId),
+    uniqueIndex("specs_org_project_spec_unique").on(table.orgId, table.projectId, table.specId),
     enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
     enumCheck("specs_priority_check", table.priority, ["P0", "P1", "P2", "tbd"]),
     enumCheck("specs_mode_check", table.mode, ["specialize_seed", "from_scratch"]),

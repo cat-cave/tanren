@@ -18,6 +18,8 @@ import {
   createSentryConnector,
   IntakeSourceAuthError,
   IntakeSourceFetchError,
+  IntakeSourceRateLimitError,
+  IntakeSourceResourceError,
   UnsupportedInboxProviderError,
   type InboxSource,
   type SentryHttpClient,
@@ -27,7 +29,7 @@ import {
 import { testSentryIntakeAuthority } from "./helpers/sentryIntakeAuthority.js";
 
 const secrets = new InMemorySecretStore();
-await secrets.put({ ref: "credential/github/x", value: "ghs_static_token" });
+await secrets.put({ ref: "credential/github/org/org_a/default", value: "ghs_static_token" });
 await secrets.put({ ref: "credential/sentry/x/g/1", value: "sntrys_token" });
 
 const githubSource: InboxSource = {
@@ -49,7 +51,7 @@ const sentrySource: InboxSource = {
   kind: "errors",
   name: "sentry · cat-cave/app",
   detail: "unresolved",
-  config: { org: "cat-cave", project: "app" },
+  config: { org: "cat-cave", project: "app", baseUrl: "https://sentry.io" },
   enabled: true,
   autoRoute: false,
 };
@@ -86,7 +88,7 @@ const missingSentryAuthority = testSentryIntakeAuthority("credential/sentry/miss
 const sentryConnector = (sentryHttp: SentryHttpClient, authority: SentryIntakeAuthority = sentryAuthority) =>
   createSentryConnector({ secrets, sentryHttp, authority });
 const githubConnector = (githubHttp: GitHubHttpClient) =>
-  createGitHubIssuesConnector({ secrets, githubHttp, defaultStaticRef: "credential/github/x" });
+  createGitHubIssuesConnector({ secrets, githubHttp, defaultStaticRef: "credential/github/org/org_a/default" });
 
 describe("github issues connector — request wire shape", () => {
   it("rejects removed bare-secret-ref providers before provider I/O", async () => {
@@ -122,13 +124,31 @@ describe("github issues connector — request wire shape", () => {
     expect(req.token).toBe("ghs_static_token");
     // a refresh supplier (the resolver's re-mint hook) is wired for the 401 path.
     expect(typeof req.refreshToken).toBe("function");
+    expect(req.retryRateLimit).toBe(false);
+  });
+
+  it("surfaces GitHub's exact provider-directed delay for durable scheduling", async () => {
+    const calls: GitHubHttpRequest[] = [];
+    const client: GitHubHttpClient = {
+      async request(input) {
+        calls.push(input);
+        return { status: 429, body: {}, retryAfterMs: 73_000 };
+      },
+    };
+
+    const error = await githubConnector(client)
+      .fetch(githubSource)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(IntakeSourceRateLimitError);
+    expect((error as IntakeSourceRateLimitError).retryAfterMs).toBe(73_000);
+    expect(calls[0]?.retryRateLimit).toBe(false);
   });
 
   it("omits the labels query entirely when no labels are configured", async () => {
     const { client, calls } = recordGitHub([]);
     await githubConnector(client).fetch({
       ...githubSource,
-      config: { owner: "cat-cave", repo: "app" },
+      config: { owner: "cat-cave", repo: "app", labels: [] },
     });
     expect(calls[0]!.path).toBe("/repos/cat-cave/app/issues?state=open&per_page=50");
     expect(calls[0]!.path).not.toContain("labels=");
@@ -208,9 +228,9 @@ describe("github issues connector — normalization", () => {
   });
 
   it("THROWS loudly on a failed fetch (no-silent-fallbacks): non-200, auth, and non-array 200 are not 'no issues'", async () => {
-    // A 404/5xx-class non-200 is a LOUD transient fetch error, never an empty list.
+    // A stable 404 is a LOUD resource failure, never an empty list.
     const notOk = recordGitHub([{ number: 1, title: "x", labels: [] }], 404);
-    await expect(githubConnector(notOk.client).fetch(githubSource)).rejects.toThrow(IntakeSourceFetchError);
+    await expect(githubConnector(notOk.client).fetch(githubSource)).rejects.toThrow(IntakeSourceResourceError);
     // A 401 is a LOUD auth error (a misconfiguration), never "no issues".
     const denied = recordGitHub({ message: "Bad credentials" }, 401);
     await expect(githubConnector(denied.client).fetch(githubSource)).rejects.toThrow(IntakeSourceAuthError);
@@ -255,7 +275,6 @@ describe("sentry connector — request wire shape", () => {
     await sentryConnector(client).fetch({
       ...sentrySource,
       config: {
-        state: "active",
         org: "cat-cave",
         project: "app",
         baseUrl: "https://sentry.example",

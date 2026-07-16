@@ -13,132 +13,31 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 import {
-  Candidate,
-  CandidateTriage,
-  InboxSource,
-  SourceKind,
   parsePersistedInboxSourceConfig,
+  type Candidate,
   type CandidateStatus,
+  type CandidateTriage,
   type IngestedItem,
+  type InboxSource,
+  type SourceKind,
 } from "../forge/inbox/types.js";
+import {
+  InboxSourceDecodeError,
+  InboxSourceProjectScopeError,
+  SourceRowSchema,
+  mapCandidate,
+  mapSource,
+  type CandidateRow,
+  type InboxSourceReadFailure,
+  type SourceRow,
+} from "./inboxRows.js";
+
+export { InboxSourceDecodeError, InboxSourceProjectScopeError, type InboxSourceReadFailure } from "./inboxRows.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 interface ManagedSourceQueryClient {
   query(sql: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
-}
-
-interface SourceRow {
-  id: string;
-  org_id: string;
-  project_id: string | null;
-  kind: string;
-  name: string;
-  detail: string;
-  config: Record<string, unknown> | null;
-  enabled: string;
-  auto_route: string;
-  state?: string;
-  attention_code?: string | null;
-  attention_message?: string | null;
-  attention_observed_at?: Date | string | null;
-  webhook_configured?: boolean;
-  retry_not_before?: Date | string | null;
-  project_valid?: boolean;
-}
-
-const SourceRowSchema = z
-  .object({
-    id: z.string(),
-    org_id: z.string(),
-    project_id: z.string().nullable(),
-    kind: z.string(),
-    name: z.string(),
-    detail: z.string(),
-    config: z.record(z.string(), z.unknown()).nullable(),
-    enabled: z.string(),
-    auto_route: z.string(),
-    state: z.string().optional(),
-    attention_code: z.string().nullable().optional(),
-    attention_message: z.string().nullable().optional(),
-    attention_observed_at: z.union([z.date(), z.string()]).nullable().optional(),
-    webhook_configured: z.boolean().optional(),
-    retry_not_before: z.union([z.date(), z.string()]).nullable().optional(),
-    project_valid: z.boolean().optional(),
-  })
-  .strict();
-
-interface CandidateRow {
-  id: string;
-  source_id: string;
-  org_id: string;
-  project_id: string | null;
-  external_id: string;
-  title: string;
-  body: string;
-  severity: string;
-  status: string;
-  triage: unknown;
-  resolved_spec_id: string | null;
-  source_name: string | null;
-  source_kind: string | null;
-}
-
-function mapSource(row: SourceRow): InboxSource {
-  if (row.project_valid === false) throw new InboxSourceProjectScopeError();
-  const kind = SourceKind.parse(row.kind);
-  const state = row.state ?? "active";
-  const config =
-    row.config === null && state === "needs_attention" ? null : parsePersistedInboxSourceConfig(kind, row.config ?? {});
-  const observedAt = isoOrNull(row.attention_observed_at);
-  const attention =
-    row.attention_code === undefined ||
-    row.attention_code === null ||
-    row.attention_message == null ||
-    observedAt === null
-      ? null
-      : { code: row.attention_code, message: row.attention_message, observedAt };
-  return InboxSource.parse({
-    id: row.id,
-    orgId: row.org_id,
-    projectId: row.project_id,
-    kind,
-    name: row.name,
-    detail: row.detail,
-    config,
-    enabled: row.enabled === "true",
-    autoRoute: row.auto_route === "true",
-    state,
-    attention,
-    retryNotBefore: isoOrNull(row.retry_not_before),
-    webhookConfigured: row.webhook_configured ?? false,
-  });
-}
-
-function isoOrNull(value: Date | string | null | undefined): string | null {
-  if (value === undefined || value === null) return null;
-  return (value instanceof Date ? value : new Date(value)).toISOString();
-}
-
-function mapCandidate(row: CandidateRow): Candidate {
-  const triageRaw = row.triage;
-  const hasTriage = triageRaw !== null && typeof triageRaw === "object" && Object.keys(triageRaw).length > 0;
-  return Candidate.parse({
-    id: row.id,
-    sourceId: row.source_id,
-    orgId: row.org_id,
-    projectId: row.project_id,
-    externalId: row.external_id,
-    title: row.title,
-    body: row.body,
-    severity: row.severity,
-    status: row.status,
-    triage: hasTriage ? CandidateTriage.parse(triageRaw) : null,
-    resolvedSpecId: row.resolved_spec_id,
-    sourceName: row.source_name ?? "",
-    sourceKind: SourceKind.parse(row.source_kind ?? "manual"),
-  });
 }
 
 export interface CreateSourceInput {
@@ -152,13 +51,6 @@ export interface CreateSourceInput {
   autoRoute?: boolean;
 }
 
-export class InboxSourceProjectScopeError extends Error {
-  constructor() {
-    super("inbox source project does not belong to its organization");
-    this.name = "InboxSourceProjectScopeError";
-  }
-}
-
 export class InboxSourceUnavailableError extends Error {
   constructor() {
     super("inbox source is disabled or needs attention");
@@ -170,26 +62,6 @@ export class InboxCandidateLineageError extends Error {
   constructor() {
     super("candidate org/project lineage does not match its inbox source");
     this.name = "InboxCandidateLineageError";
-  }
-}
-
-export interface InboxSourceReadFailure {
-  id: string;
-  orgId: string;
-  projectId: string | null;
-}
-
-export class InboxSourceDecodeError extends Error {
-  readonly source: InboxSourceReadFailure;
-
-  constructor(row: SourceRow) {
-    super("persisted inbox source config is not canonical");
-    this.name = "InboxSourceDecodeError";
-    this.source = {
-      id: row.id,
-      orgId: row.org_id,
-      projectId: row.project_valid === false ? null : row.project_id,
-    };
   }
 }
 

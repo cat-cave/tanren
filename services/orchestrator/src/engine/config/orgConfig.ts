@@ -152,7 +152,6 @@ export function defaultOrgConfigV1(): OrgConfigV1 {
  */
 export function bindOrgGithubCredentialRefs(config: OrgConfigV1, orgId: string): OrgConfigV1 {
   const tokenRef = config.defaultCredentials?.github_token;
-  const appRef = config.github_app?.credentialRef;
   return OrgConfigV1.parse({
     ...config,
     ...(config.defaultCredentials === undefined

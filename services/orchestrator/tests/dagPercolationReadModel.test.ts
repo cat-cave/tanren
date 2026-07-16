@@ -91,7 +91,10 @@ class FakeClient {
             repo_url: "https://github.com/cat-cave/apex",
             default_branch: DEFAULT_BRANCH,
             project_config: { version: 1 },
-            org_config: { version: 1, defaultCredentials: { github_token: "credential/github/org/default" } },
+            org_config: {
+              version: 1,
+              defaultCredentials: { github_token: "credential/github/org/org_1/default" },
+            },
           },
         ],
       };

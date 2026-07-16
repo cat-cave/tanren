@@ -102,6 +102,12 @@ function stubPool(jobRowOverrides: Record<string, unknown>): {
         config: {},
         enabled,
         auto_route: autoRoute,
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       };
       sources.set(String(id), row);
       return { rows: [row], rowCount: 1 };

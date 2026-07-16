@@ -73,7 +73,7 @@ class ScriptedAllocator implements Allocator {
 
 // The missing-secret error `resolveGithubToken` raises when the static ref points at
 // nothing — the credential-resolution failure that makes the build fail AFTER allocation.
-const TOKEN_FAILURE = "missing GitHub credential ref: github/static/token";
+const TOKEN_FAILURE = "missing GitHub credential ref: credential/github/org/org_test/token";
 
 /** The GitHub transport for the failing-credential path (never reached — the secret is absent). */
 function tokenFailingGitHubHttp(): GitHubHttpClient {
@@ -88,12 +88,12 @@ function deps(allocator: Allocator): LiveJjWorkspaceDeps {
       repoUrl: "https://github.com/o/r.git",
       // Non-empty static ref ⇒ the token IS resolved (so the failing resolution runs);
       // the secret store below has NO secret at this ref ⇒ resolution throws after alloc.
-      githubCredentialRef: "github/static/token",
+      githubCredentialRef: "credential/github/org/org_test/token",
       identitySecretRef: "runner/identity",
     },
     allocator,
     ssh: new FakeCommandSubstrate(),
-    // No secret at `github/static/token` ⇒ credential resolution fails AFTER allocation.
+    // No secret at the org-owned ref ⇒ credential resolution fails AFTER allocation.
     secrets: new FakeSecretStore(),
     githubHttp: tokenFailingGitHubHttp(),
   };
@@ -150,7 +150,7 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
     // double-release the runner. Calling release() twice releases exactly once.
     const allocator = new ScriptedAllocator(() => Promise.resolve());
     const okSecrets = new FakeSecretStore();
-    await okSecrets.put({ ref: "github/static/token", value: "ghp_fake" });
+    await okSecrets.put({ ref: "credential/github/org/org_test/token", value: "ghp_fake" });
     const ws = await buildLiveJjWorkspace({
       ...deps(allocator),
       secrets: okSecrets,
@@ -191,7 +191,7 @@ describe("buildLiveJjWorkspace — fail-closed / no-leak error path", () => {
       },
     };
     const okSecrets = new FakeSecretStore();
-    await okSecrets.put({ ref: "github/static/token", value: "ghp_fake" });
+    await okSecrets.put({ ref: "credential/github/org/org_test/token", value: "ghp_fake" });
     const ws = await buildLiveJjWorkspace({
       ...deps(orgCapturingAllocator),
       secrets: okSecrets,

@@ -24,8 +24,9 @@ import {
   IntakePoller,
   intakeAutoRouteDeps,
 } from "../src/engine/forge/intake/index.js";
-import { UnsupportedInboxProviderError } from "../src/engine/forge/inbox/index.js";
-import type { InboxSource, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
+import { IntakeSourceRateLimitError, UnsupportedInboxProviderError } from "../src/engine/forge/inbox/index.js";
+import type { InboxSource, InboxSourceAttention, TriageAnswerer } from "../src/engine/forge/inbox/index.js";
+import { inboxSourceRow as sourceRow } from "./helpers/inboxSourceRow.js";
 
 const githubSource: InboxSource = {
   id: "src_gh",
@@ -34,7 +35,7 @@ const githubSource: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "",
-  config: { owner: "cat-cave", repo: "app" },
+  config: { owner: "cat-cave", repo: "app", labels: [] },
   enabled: true,
   autoRoute: false,
 };
@@ -105,7 +106,6 @@ describe("intake credential resolution — configured but credential missing (LO
       buildIntakeConnectorMapForOrg({ pool, secrets: fakeSecrets, githubHttp: http }, "org_a", [githubSource]),
     ).rejects.toBeInstanceOf(IntakeGithubCredentialMissingError);
 
-    // The error names the configured source + its org (a loud, actionable failure).
     const error = await buildIntakeConnectorMapForOrg({ pool, secrets: fakeSecrets, githubHttp: http }, "org_a", [
       githubSource,
     ]).catch((caught: unknown) => caught);
@@ -159,7 +159,7 @@ describe("intake credential resolution — not configured (legitimate no-poller)
       id: "src_sentry",
       kind: "errors",
       name: "sentry · cat-cave",
-      config: { org: "cat-cave", project: "app" },
+      config: { org: "cat-cave", project: "app", baseUrl: "https://sentry.io" },
     };
 
     // No throw — the map builds; Sentry authority is resolved only when it fetches.
@@ -169,21 +169,6 @@ describe("intake credential resolution — not configured (legitimate no-poller)
     expect(connectors.get("errors")).toBeDefined();
   });
 });
-
-// Map a source to its persisted row shape (the poller reads sources back).
-function sourceRow(s: InboxSource): Record<string, unknown> {
-  return {
-    id: s.id,
-    org_id: s.orgId,
-    project_id: s.projectId,
-    kind: s.kind,
-    name: s.name,
-    detail: s.detail,
-    config: s.config,
-    enabled: s.enabled ? "true" : "false",
-    auto_route: s.autoRoute ? "true" : "false",
-  };
-}
 
 interface PollerStub {
   pool: pg.Pool;
@@ -205,12 +190,28 @@ function pollerStubPool(source: InboxSource, orgConfig: unknown): PollerStub {
     if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
       return current.enabled ? { rows: [sourceRow(current)], rowCount: 1 } : { rows: [], rowCount: 0 };
     }
+    if (sql.includes("FROM inbox_sources WHERE id = $1")) {
+      return current.enabled && params[0] === current.id
+        ? { rows: [sourceRow(current)], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
+    }
     if (sql.includes("SELECT config FROM organizations")) {
       return { rows: [{ config: orgConfig }], rowCount: 1 };
     }
-    if (sql.startsWith("UPDATE inbox_sources SET config") && sql.includes("enabled = 'false'")) {
+    if (sql.startsWith("UPDATE inbox_sources SET state = 'needs_attention'")) {
       terminalWrites.value += 1;
-      current = { ...current, config: JSON.parse(String(params[2])) as Record<string, unknown>, enabled: false };
+      const discardConfig = params[5] === true;
+      current = {
+        ...current,
+        config: discardConfig ? null : current.config,
+        enabled: false,
+        state: "needs_attention",
+        attention: {
+          code: String(params[2]) as InboxSourceAttention["code"],
+          message: String(params[3]),
+          observedAt: String(params[4]),
+        },
+      };
       return { rows: [sourceRow(current)], rowCount: 1 };
     }
     if (sql.includes("event_type, payload") && sql.includes("RETURNING id::text AS id")) {
@@ -359,13 +360,23 @@ describe("poller convergence — permanent failure cannot starve later sources",
         const sources = [...(badEnabled ? [bad] : []), good];
         return { rows: sources.map((source) => sourceRow(source)), rowCount: sources.length };
       }
-      if (sql.startsWith("UPDATE inbox_sources SET config") && sql.includes("enabled = 'false'")) {
+      if (sql.includes("FROM inbox_sources WHERE id = $1")) {
+        const source = [...(badEnabled ? [bad] : []), good].find((candidate) => candidate.id === params[0]);
+        return source === undefined ? { rows: [], rowCount: 0 } : { rows: [sourceRow(source)], rowCount: 1 };
+      }
+      if (sql.startsWith("UPDATE inbox_sources SET state = 'needs_attention'")) {
         badEnabled = false;
         terminalWrites += 1;
         const parked = {
           ...bad,
           enabled: false,
-          config: JSON.parse(String(params[2])) as Record<string, unknown>,
+          config: params[5] === true ? null : bad.config,
+          state: "needs_attention" as const,
+          attention: {
+            code: String(params[2]) as InboxSourceAttention["code"],
+            message: String(params[3]),
+            observedAt: String(params[4]),
+          },
         };
         return { rows: [sourceRow(parked)], rowCount: 1 };
       }
@@ -417,5 +428,64 @@ describe("poller convergence — permanent failure cannot starve later sources",
     expect({ badCalls, goodCalls, terminalWrites }).toEqual({ badCalls: 1, goodCalls: 2, terminalWrites: 1 });
     expect(eventTypes).toEqual(["credential.failed"]);
     expect({ webhookSweeps, candidateSweeps }).toEqual({ webhookSweeps: 2, candidateSweeps: 2 });
+  });
+});
+
+describe("poller convergence — provider delay is durable and source-local", () => {
+  it("persists 73000ms for the first source, then polls its peer and runs both sweepers", async () => {
+    const limited: InboxSource = { ...githubSource, id: "src_limited", name: "limited" };
+    const good: InboxSource = { ...githubSource, id: "src_good", name: "good" };
+    const retryDeadlines: string[] = [];
+    let webhookSweeps = 0;
+    let candidateSweeps = 0;
+    const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
+      const sql = text.replaceAll(/\s+/gu, " ").trim();
+      if (sql.startsWith("SELECT DISTINCT org_id FROM inbox_sources")) {
+        return { rows: [{ org_id: "org_a" }], rowCount: 1 };
+      }
+      if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
+        return { rows: [sourceRow(limited), sourceRow(good)], rowCount: 2 };
+      }
+      if (sql.includes("FROM inbox_sources WHERE id = $1")) {
+        const source = [limited, good].find((candidate) => candidate.id === params[0]);
+        return source === undefined ? { rows: [], rowCount: 0 } : { rows: [sourceRow(source)], rowCount: 1 };
+      }
+      if (sql.startsWith("UPDATE inbox_sources SET retry_not_before")) {
+        retryDeadlines.push(String(params[2]));
+        return { rows: [{ id: params[0] }], rowCount: 1 };
+      }
+      if (sql.includes("FROM webhook_events")) {
+        webhookSweeps += 1;
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("FROM candidates c JOIN inbox_sources")) {
+        candidateSweeps += 1;
+        return { rows: [], rowCount: 0 };
+      }
+      return { rows: [], rowCount: 0 };
+    };
+    const pool = { query, connect: async () => ({ query, release() {} }) } as unknown as pg.Pool;
+    const calls: string[] = [];
+    const connector = {
+      kind: "issues" as const,
+      async fetch(source: InboxSource) {
+        calls.push(source.id);
+        if (source.id === limited.id) throw new IntakeSourceRateLimitError("github", 73_000);
+        return [];
+      },
+    };
+    const now = Date.parse("2026-07-16T12:00:00.000Z");
+    const poller = new IntakePoller({
+      pool,
+      connectors: new Map([["issues", connector]]),
+      answererFactory: () => fixedTriage,
+      autoRoute: intakeAutoRouteDeps(),
+      now: () => now,
+    });
+
+    expect((await poller.tick()).map((result) => result.source.id)).toEqual([good.id]);
+    expect(calls).toEqual([limited.id, good.id]);
+    expect(retryDeadlines).toEqual([new Date(now + 73_000).toISOString()]);
+    expect({ webhookSweeps, candidateSweeps }).toEqual({ webhookSweeps: 1, candidateSweeps: 1 });
   });
 });

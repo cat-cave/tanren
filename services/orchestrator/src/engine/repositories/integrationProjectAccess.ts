@@ -140,7 +140,15 @@ async function assertDeployAuthority(
 
   const deployRef = outcome.surfaces.deployRef;
   const separator = deployRef?.indexOf(":") ?? -1;
-  const boundResourceId = outcome.action === "bind" && separator >= 0 ? deployRef!.slice(separator + 1) : undefined;
+  const deployProvider = separator > 0 ? deployRef!.slice(0, separator) : undefined;
+  const deployResourceId = separator > 0 ? deployRef!.slice(separator + 1) : undefined;
+  if (
+    deployRef !== undefined &&
+    (deployProvider !== outcome.providerKind || deployResourceId === undefined || deployResourceId === "")
+  ) {
+    mismatch("deploy receipt ref does not match its provider and resource identity");
+  }
+  const boundResourceId = outcome.action === "bind" ? deployResourceId : undefined;
   if (outcome.action === "bind" && (boundResourceId === undefined || boundResourceId === "")) {
     mismatch("bound deploy receipt has no exact resource identity");
   }

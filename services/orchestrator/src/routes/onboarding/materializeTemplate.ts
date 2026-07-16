@@ -59,6 +59,7 @@ export function buildLiveMaterializeTemplate(
       }
       const creds = {
         secrets,
+        orgId,
         ...(installation !== undefined && { installation }),
         ...(staticRef !== undefined && { staticRef }),
         ...(githubAppMinter === undefined ? {} : { minter: githubAppMinter }),

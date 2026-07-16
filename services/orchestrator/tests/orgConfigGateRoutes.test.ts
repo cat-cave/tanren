@@ -92,6 +92,7 @@ describe("audit-gate org-config PATCH route", () => {
           auditGate: { repo: "cat-cave/tanren-config" },
           defaultCredentials: { github_token: "credential/github/org/org_other/default" },
         },
+        revision: "1",
       }),
     });
 
@@ -108,7 +109,10 @@ describe("audit-gate org-config PATCH route", () => {
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: { version: 1, defaultCredentials: { github_token: "default" } } }),
+      body: JSON.stringify({
+        config: { version: 1, defaultCredentials: { github_token: "default" } },
+        revision: "1",
+      }),
     });
 
     expect(response.status).toBe(200);

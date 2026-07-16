@@ -7,6 +7,7 @@ import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { GitHubPullRequestService } from "../src/engine/providers/githubPullRequestReuse.js";
 import { parseGitHubRepository } from "../src/engine/providers/github.js";
 import { publishDraftPullRequest, publishDraftPullRequestForRun } from "../src/engine/workflow/githubDraftPr.js";
+import { draftPrInputSchema } from "../src/inputSchemas.js";
 import {
   buildGitHubPushCommand,
   draftPrBranchName,
@@ -24,6 +25,14 @@ const target: RunnerHandle = {
 };
 
 describe("GitHub draft PR contract", () => {
+  it("rejects a body-supplied GitHub credential coordinate", () => {
+    expect(
+      draftPrInputSchema.safeParse({
+        githubCredentialRef: "credential/github/org/org_other/default",
+      }).success,
+    ).toBe(false);
+  });
+
   it("validates managed GitHub credential refs and redacts token import results", async () => {
     const secrets = new FakeSecretStore();
 
@@ -63,8 +72,7 @@ describe("GitHub draft PR contract", () => {
   it("constructs runner git push commands without embedding the token", async () => {
     const ssh = new RecordingSsh();
 
-    // The caller (the VcsProvider) always passes a pre-resolved push token; the
-    // push feeds it over stdin, never embedding it in the command string.
+    // The pre-resolved push token travels over stdin, never in the command string.
     await pushWorkspaceBranchToGitHub({
       ssh,
       target,
@@ -110,8 +118,7 @@ describe("GitHub draft PR contract", () => {
       sourceRef: PR_CLEAN_REF,
     });
     expect(clean).toContain(`${PR_CLEAN_REF}:refs/heads/tanren/run_123`);
-    // The run's own branch is force-updated (the cleaned ref is rebuilt on each
-    // review-rework re-entry).
+    // The cleaned run branch is rebuilt and force-updated on review re-entry.
     expect(clean).toContain("--force");
 
     // Only the working HEAD or the cleaned ref are valid push sources.
@@ -155,8 +162,7 @@ describe("GitHub draft PR contract", () => {
       baseBranch: "main",
       reused: true,
     });
-    // The lookup queries by HEAD ONLY (no &base=...): a spec maps to one head branch, so
-    // we must surface its open PR regardless of the PR's current base (see §2c re-exec).
+    // Query by head only so re-execution finds the spec's PR regardless of its current base.
     expect(http.requests).toHaveLength(1);
     expect(http.requests[0]?.path).toBe("/repos/cat-cave/repo/pulls?state=open&head=cat-cave%3Atanren%2Frun_123");
   });
@@ -278,8 +284,7 @@ describe("GitHub draft PR contract", () => {
   });
 
   it("422 race on POST → re-find by head returns the racing PR (no throw)", async () => {
-    // First find-by-head sees no PR (race window); POST races and loses with a 422;
-    // the re-find by head now surfaces the PR the racer created.
+    // POST loses a race with 422; re-find by head surfaces the PR the racer created.
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
       { status: 422, body: { message: "A pull request already exists for cat-cave:tanren/run_123." } },
@@ -354,7 +359,7 @@ describe("GitHub draft PR contract", () => {
 
   it("creates a draft PR, persists its URL, and appends redacted events", async () => {
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secretToken" });
     const ssh = new RecordingSsh();
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
@@ -381,12 +386,13 @@ describe("GitHub draft PR contract", () => {
       runId: "run_123",
       specId: "spec_123",
       projectId: "project_123",
+      appendEventOrgId: "org_fake",
       workspacePath: "/workspace/runs/run_123/repo",
       repoUrl: "https://github.com/cat-cave/repo.git",
       targetBranch: "main",
       runBranch: "tanren/run_123",
       title: "Tanren run run_123",
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_fake/dev",
       timeoutMs: 500,
     });
 
@@ -409,7 +415,7 @@ describe("GitHub draft PR contract", () => {
 
   it("loads persisted run context before publishing a draft PR", async () => {
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secretToken" });
     const ssh = new RecordingSsh();
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
@@ -450,7 +456,7 @@ describe("GitHub draft PR contract", () => {
 
   it("§3.1: the operator publish route stacks the PR on the IMMEDIATE ancestor's PR-head branch (a true stacked PR)", async () => {
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
+    await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secretToken" });
     const ssh = new RecordingSsh();
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },

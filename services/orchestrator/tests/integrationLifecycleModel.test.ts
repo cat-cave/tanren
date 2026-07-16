@@ -8,8 +8,8 @@ import { createProjectRoutes } from "../src/routes/projects/index.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
 const root = new URL("../../../", import.meta.url);
-const migrationPath = fileURLToPath(new URL("db/migrations/0041_integration_lifecycle.sql", root));
-const snapshotPath = fileURLToPath(new URL("db/migrations/meta/0041_snapshot.json", root));
+const migrationPath = fileURLToPath(new URL("db/migrations/0043_integration_lifecycle.sql", root));
+const snapshotPath = fileURLToPath(new URL("db/migrations/meta/0043_snapshot.json", root));
 const schemaPaths = [
   "db/src/schemaIntegrationConnections.ts",
   "db/src/schemaIntegrationRequirements.ts",

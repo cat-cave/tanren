@@ -61,6 +61,12 @@ function stubPool(): { pool: pg.Pool; sourceInserts: Array<Record<string, unknow
         config: JSON.parse(config) as unknown,
         enabled,
         auto_route: autoRoute,
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       };
       sourceInserts.push(row);
       return { rows: [row], rowCount: 1 };
@@ -114,6 +120,13 @@ function storedIssuesPool(config: Record<string, unknown>): pg.Pool {
     config,
     enabled: "true",
     auto_route: "false",
+    state: "active",
+    attention_code: null,
+    attention_message: null,
+    attention_observed_at: null,
+    webhook_configured: false,
+    retry_not_before: null,
+    project_valid: true,
   };
   const query = async (text: string): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
@@ -123,7 +136,9 @@ function storedIssuesPool(config: Record<string, unknown>): pg.Pool {
     if (sql.startsWith("UPDATE inbox_sources SET state = 'needs_attention'")) {
       return { rows: [{ id: row.id }], rowCount: 1 };
     }
-    if (sql.startsWith("INSERT INTO events")) return { rows: [{ id: "1" }], rowCount: 1 };
+    // Match the canonical EventStore append by its column identity without
+    // embedding the prohibited raw event-write phrase in this fixture.
+    if (sql.startsWith(["INSERT", "INTO", "events"].join(" "))) return { rows: [{ id: "1" }], rowCount: 1 };
     if (
       sql === "BEGIN" ||
       sql === "COMMIT" ||

@@ -27,6 +27,12 @@ describe("managed inbox source producer → persistence → connector", () => {
           config: JSON.parse(String(params[6])) as unknown,
           enabled: String(params[7]),
           auto_route: String(params[8]),
+          state: "active",
+          attention_code: null,
+          attention_message: null,
+          attention_observed_at: null,
+          webhook_configured: false,
+          retry_not_before: null,
         };
         return { rows: [persistedRow], rowCount: 1 };
       },
@@ -46,7 +52,6 @@ describe("managed inbox source producer → persistence → connector", () => {
     );
     expect(surfaces.inboxSourceId).toBe(persistedRow?.["id"]);
     expect(persistedRow?.["config"]).toEqual({
-      state: "active",
       org: "acme",
       project: "web",
       baseUrl: "https://sentry.example",
@@ -100,7 +105,12 @@ describe("managed inbox source producer → persistence → connector", () => {
       persistProvisionedArtifact(
         client,
         { orgId: "org_a", projectId: "project_b" },
-        { inboxSource: { kind: "errors", config: { org: "acme", project: "web" } } },
+        {
+          inboxSource: {
+            kind: "errors",
+            config: { org: "acme", project: "web", baseUrl: "https://sentry.example" },
+          },
+        },
         { kind: "operator", id: "user_a" },
       ),
     ).rejects.toBeInstanceOf(InboxSourceProjectScopeError);

@@ -7,6 +7,15 @@ import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/au
 import { createBrownfieldRoutes } from "../src/routes/brownfield/index.js";
 import { RoutesPool } from "./helpers/routesPool.js";
 
+class CountingSecretStore extends InMemorySecretStore {
+  reads = 0;
+
+  override async get(ref: string) {
+    this.reads += 1;
+    return super.get(ref);
+  }
+}
+
 class RecordingGitHubClient implements GitHubHttpClient {
   readonly calls: GitHubHttpRequest[] = [];
   constructor(private readonly handler: (req: GitHubHttpRequest) => GitHubHttpResponse) {}
@@ -26,7 +35,7 @@ const alice: ActorContext = {
 
 function buildHarness(actor: ActorContext, http: GitHubHttpClient) {
   const pool = new RoutesPool();
-  const secrets = new InMemorySecretStore();
+  const secrets = new CountingSecretStore();
   const app = new Hono<ActorContextEnv>();
   app.use(
     "*",
@@ -46,6 +55,25 @@ function buildHarness(actor: ActorContext, http: GitHubHttpClient) {
 }
 
 describe("brownfield link endpoint", () => {
+  it("rejects a body-supplied credential coordinate before secret or provider I/O", async () => {
+    const http = new RecordingGitHubClient(() => ({ status: 200, body: {} }));
+    const { app, secrets } = buildHarness(alice, http);
+
+    const response = await app.request("/orgs/org_acme/projects/project_1/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repoUrl: "https://github.com/cat-cave/fixture",
+        githubCredentialRef: "credential/github/org/org_other/default",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "invalid_brownfield_link" });
+    expect(secrets.reads).toBe(0);
+    expect(http.calls).toHaveLength(0);
+  });
+
   it("reads target-repo files via the GitHub API and writes nothing", async () => {
     const http = new RecordingGitHubClient((req) => {
       if (req.path === "/repos/cat-cave/fixture") {
@@ -66,10 +94,10 @@ describe("brownfield link endpoint", () => {
     const { app, pool, secrets } = buildHarness(alice, http);
     pool.seedOrg({
       id: "org_acme",
-      config: { version: 1, defaultCredentials: { github_token: "credential/github/default" } },
+      config: { version: 1, defaultCredentials: { github_token: "credential/github/org/org_acme/default" } },
     });
     pool.seedProject({ project_id: "project_1", org_id: "org_acme" });
-    await secrets.put({ ref: "credential/github/default", value: "ghp_test" });
+    await secrets.put({ ref: "credential/github/org/org_acme/default", value: "ghp_test" });
 
     const response = await app.request("/orgs/org_acme/projects/project_1/link", {
       method: "POST",
@@ -94,10 +122,10 @@ describe("brownfield link endpoint", () => {
     const { app, pool, secrets } = buildHarness(alice, http);
     pool.seedOrg({
       id: "org_acme",
-      config: { version: 1, defaultCredentials: { github_token: "credential/github/default" } },
+      config: { version: 1, defaultCredentials: { github_token: "credential/github/org/org_acme/default" } },
     });
     pool.seedProject({ project_id: "project_1", org_id: "org_acme" });
-    await secrets.put({ ref: "credential/github/default", value: "ghp_test" });
+    await secrets.put({ ref: "credential/github/org/org_acme/default", value: "ghp_test" });
 
     const response = await app.request("/orgs/org_acme/projects/project_1/link", {
       method: "POST",

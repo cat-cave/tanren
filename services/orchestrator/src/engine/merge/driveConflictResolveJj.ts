@@ -112,6 +112,7 @@ export async function driveResolveOverJj(
 /** The jj applier's repo/branch facts for the drive pass (rebase onto the base bookmark). */
 function jjApplierFacts(facts: DriveJjResolveFacts): JjConflictApplierFacts {
   return {
+    orgId: facts.orgId,
     repoUrl: facts.repoUrl,
     baseBranch: facts.baseBranch,
     // The freshly-cloned base bookmark jj imports (`<baseBranch>@origin`) — the

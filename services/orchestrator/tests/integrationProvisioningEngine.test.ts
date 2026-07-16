@@ -174,6 +174,12 @@ function stubClient(state: StubState): IntegrationQueryClient {
         config: JSON.parse(row.config) as unknown,
         enabled: String(params[7]),
         auto_route: String(params[8]),
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       });
       if (existing !== undefined) {
         existing.name = String(params[4]);

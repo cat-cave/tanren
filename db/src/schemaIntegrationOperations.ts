@@ -12,7 +12,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { organizations, projects, specs } from "./schemaCore.js";
-import { integrationBindingGenerations, integrationBindings } from "./schemaIntegrationBindings.js";
+import { integrationBindingGenerations } from "./schemaIntegrationBindings.js";
 import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
 import { integrationRequirements } from "./schemaIntegrationRequirements.js";
 import {
@@ -68,9 +68,10 @@ export const integrationReconciliations = pgTable(
       name: "integration_reconciliations_requirement_lineage_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.bindingGeneration],
+      columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration],
       foreignColumns: [
         integrationBindingGenerations.orgId,
+        integrationBindingGenerations.projectId,
         integrationBindingGenerations.bindingId,
         integrationBindingGenerations.generation,
       ],
@@ -139,9 +140,10 @@ export const integrationResourceSnapshots = pgTable(
       name: "integration_resource_snapshots_requirement_lineage_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.bindingGeneration],
+      columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration],
       foreignColumns: [
         integrationBindingGenerations.orgId,
+        integrationBindingGenerations.projectId,
         integrationBindingGenerations.bindingId,
         integrationBindingGenerations.generation,
       ],
@@ -195,12 +197,16 @@ export const deliveryRuns = pgTable(
       name: "delivery_runs_project_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.authorityDecisionId],
-      foreignColumns: [authorityDecisionsReference.orgId, authorityDecisionsReference.id],
+      columns: [table.orgId, table.projectId, table.authorityDecisionId],
+      foreignColumns: [
+        authorityDecisionsReference.orgId,
+        authorityDecisionsReference.projectId,
+        authorityDecisionsReference.id,
+      ],
       name: "delivery_runs_authority_decision_fk",
     }),
     uniqueIndex("delivery_runs_project_id_unique").on(table.orgId, table.projectId, table.id),
-    uniqueIndex("delivery_runs_authority_decision_unique").on(table.orgId, table.authorityDecisionId),
+    uniqueIndex("delivery_runs_authority_decision_unique").on(table.orgId, table.projectId, table.authorityDecisionId),
     index("delivery_runs_org_id").on(table.orgId),
     index("delivery_runs_claimable").on(table.orgId, table.status, table.retryAfter, table.id),
     check(
@@ -247,18 +253,14 @@ export const deliveryRunBindings = pgTable(
       name: "delivery_run_bindings_run_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.bindingGeneration],
+      columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration],
       foreignColumns: [
         integrationBindingGenerations.orgId,
+        integrationBindingGenerations.projectId,
         integrationBindingGenerations.bindingId,
         integrationBindingGenerations.generation,
       ],
       name: "delivery_run_bindings_binding_generation_fk",
-    }),
-    foreignKey({
-      columns: [table.orgId, table.bindingId],
-      foreignColumns: [integrationBindings.orgId, integrationBindings.id],
-      name: "delivery_run_bindings_binding_fk",
     }),
     index("delivery_run_bindings_org_id").on(table.orgId),
     check("delivery_run_bindings_generation_check", sql`${table.bindingGeneration} >= 1`),
@@ -356,23 +358,31 @@ export const integrationValidationProofs = pgTable(
       name: "integration_validation_proofs_project_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.specId],
-      foreignColumns: [specs.orgId, specs.specId],
+      columns: [table.orgId, table.projectId, table.specId],
+      foreignColumns: [specs.orgId, specs.projectId, specs.specId],
       name: "integration_validation_proofs_spec_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.behaviorRevisionId],
-      foreignColumns: [behaviorRevisionsReference.orgId, behaviorRevisionsReference.id],
+      columns: [table.orgId, table.projectId, table.behaviorRevisionId],
+      foreignColumns: [
+        behaviorRevisionsReference.orgId,
+        behaviorRevisionsReference.projectId,
+        behaviorRevisionsReference.id,
+      ],
       name: "integration_validation_proofs_behavior_revision_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.behaviorVerdictId],
-      foreignColumns: [behaviorVerdictsReference.orgId, behaviorVerdictsReference.id],
+      columns: [table.orgId, table.projectId, table.behaviorVerdictId],
+      foreignColumns: [
+        behaviorVerdictsReference.orgId,
+        behaviorVerdictsReference.projectId,
+        behaviorVerdictsReference.id,
+      ],
       name: "integration_validation_proofs_behavior_verdict_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.proofUnitDigest],
-      foreignColumns: [proofUnitsReference.orgId, proofUnitsReference.proofUnitDigest],
+      columns: [table.orgId, table.projectId, table.proofUnitDigest],
+      foreignColumns: [proofUnitsReference.orgId, proofUnitsReference.projectId, proofUnitsReference.proofUnitDigest],
       name: "integration_validation_proofs_proof_unit_fk",
     }),
     foreignKey({
@@ -381,9 +391,10 @@ export const integrationValidationProofs = pgTable(
       name: "integration_validation_proofs_requirement_lineage_fk",
     }),
     foreignKey({
-      columns: [table.orgId, table.bindingId, table.bindingGeneration],
+      columns: [table.orgId, table.projectId, table.bindingId, table.bindingGeneration],
       foreignColumns: [
         integrationBindingGenerations.orgId,
+        integrationBindingGenerations.projectId,
         integrationBindingGenerations.bindingId,
         integrationBindingGenerations.generation,
       ],
@@ -407,6 +418,7 @@ export const integrationValidationProofs = pgTable(
     }),
     uniqueIndex("integration_validation_proofs_reuse_unique").on(
       table.orgId,
+      table.projectId,
       table.behaviorRevisionId,
       table.bindingId,
       table.bindingGeneration,

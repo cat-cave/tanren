@@ -103,7 +103,7 @@ class RecordingPlaneSplitWriter {
 describe("apex v86 — post-PR-open writes route through RunStateWriter (plane-split)", () => {
   it("publishDraftPullRequest succeeds when the pool denies events INSERT (writer owns the atomic block)", async () => {
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "credential/github/dev", value: "ghp_test" });
+    await secrets.put({ ref: "credential/github/org/org_v86/dev", value: "ghp_test" });
     const http = new ScriptedGitHubHttp([
       { status: 200, body: [] },
       {
@@ -136,7 +136,7 @@ describe("apex v86 — post-PR-open writes route through RunStateWriter (plane-s
       acceptanceCriteria: [],
       runnerImage: "ghcr.io/example/runner:latest",
       identitySecretRef: "runner/test/identity",
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_v86/dev",
       mergeIntegration: "native_queue",
     };
     const loopInput = {
@@ -170,7 +170,7 @@ describe("apex v86 — post-PR-open writes route through RunStateWriter (plane-s
       targetBranch: context.targetBranch,
       runBranch: context.runBranch,
       title: "Tanren: Scaffold",
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_v86/dev",
       ...seam,
     });
 
@@ -216,7 +216,7 @@ describe("apex v86 — post-PR-open writes route through RunStateWriter (plane-s
       acceptanceCriteria: [],
       runnerImage: "ghcr.io/example/runner:latest",
       identitySecretRef: "runner/test/identity",
-      githubCredentialRef: "credential/github/dev",
+      githubCredentialRef: "credential/github/org/org_legacy/dev",
       mergeIntegration: "native_queue",
     };
     const loopInput = {

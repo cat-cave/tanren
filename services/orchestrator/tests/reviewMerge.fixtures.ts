@@ -23,11 +23,11 @@ import { InMemoryCodeHost } from "./conformance/fakes/inMemoryCodeHost.js";
 
 /**
  * MERGE-SAFETY (self-identity): a secret store seeded with a static GitHub token at
- * the credential ref `ReviewMergePool` carries (`credential/github/dev`), so the
+ * the credential ref `ReviewMergePool` carries, so the
  * merge stage's `resolveActorIdentity` token resolution succeeds and proceeds to
  * the static `GET /user` served by {@link tanrenUserHttp}.
  */
-export const GOVERNANCE_CREDENTIAL_REF = "credential/github/dev";
+export const GOVERNANCE_CREDENTIAL_REF = "credential/github/org/org_1/dev";
 export async function tanrenSecrets(): Promise<FakeSecretStore> {
   const secrets = new FakeSecretStore();
   await storeGithubToken(secrets, { ref: GOVERNANCE_CREDENTIAL_REF, token: "ghp_governanceFixtureToken" });
@@ -328,7 +328,7 @@ export class ReviewMergePool {
           ...(this.governancePlatformLogins !== undefined && {
             governancePlatformLogins: this.governancePlatformLogins,
           }),
-          credentials: { githubCredentialRef: "credential/github/dev" },
+          credentials: { githubCredentialRef: GOVERNANCE_CREDENTIAL_REF },
         },
         default_branch: "main",
         org_config: null,

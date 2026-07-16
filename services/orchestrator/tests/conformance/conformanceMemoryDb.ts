@@ -182,8 +182,8 @@ export class MemoryDb {
       runner_image: p.runnerImage,
       allocator: p.allocator,
       config: p.config,
-  config_revision: 1,
-  lifecycle: "active",
+      config_revision: 1,
+      lifecycle: "active",
       org_id: p.orgId,
     });
   }

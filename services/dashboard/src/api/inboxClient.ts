@@ -13,7 +13,17 @@
  */
 
 import { OrchestratorHttpClient } from "./httpClient.js";
-import { Candidate, InboxSnapshot, InboxSourceResponse, type InboxSource } from "./inboxTypes.js";
+import {
+  Candidate,
+  InboxRecoveryErrorResponse,
+  InboxSnapshot,
+  InboxSourceResponse,
+  type InboxSource,
+} from "./inboxTypes.js";
+
+export type InboxRecoveryResult =
+  | { ok: true; source: InboxSource }
+  | { ok: false; status: number; error: string; message?: string };
 
 export class InboxClient extends OrchestratorHttpClient {
   private base(orgId: string): string {
@@ -42,7 +52,7 @@ export class InboxClient extends OrchestratorHttpClient {
       placementLabel: string;
     },
   ): Promise<{ ok: boolean; candidate?: Candidate }> {
-    const r = await this.sendJson<unknown>(
+    const r = await this.sendJson(
       "POST",
       `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/accept`,
       input,
@@ -57,27 +67,35 @@ export class InboxClient extends OrchestratorHttpClient {
     candidateId: string,
     verb: "fold" | "dismiss" | "close-duplicate",
   ): Promise<{ ok: boolean; candidate?: Candidate }> {
-    const r = await this.sendJson<unknown>(
-      "POST",
-      `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`,
-    );
+    const r = await this.sendJson("POST", `${this.base(orgId)}/candidates/${encodeURIComponent(candidateId)}/${verb}`);
     const candidate = candidateFromResponse(r.body);
     return { ok: r.ok, ...(candidate === undefined ? {} : { candidate }) };
   }
 
   /** Compare-and-set recovery of a repaired terminal source. */
-  async recover(
-    orgId: string,
-    sourceId: string,
-    expectedObservedAt: string,
-  ): Promise<{ ok: boolean; source?: InboxSource }> {
-    const r = await this.sendJson<unknown>(
-      "POST",
-      `${this.base(orgId)}/sources/${encodeURIComponent(sourceId)}/recover`,
-      { expectedObservedAt },
-    );
-    const parsed = InboxSourceResponse.safeParse(r.body);
-    return { ok: r.ok, ...(parsed.success ? { source: parsed.data.source } : {}) };
+  async recover(orgId: string, sourceId: string, expectedObservedAt: string): Promise<InboxRecoveryResult> {
+    const r = await this.sendJson("POST", `${this.base(orgId)}/sources/${encodeURIComponent(sourceId)}/recover`, {
+      expectedObservedAt,
+    });
+    if (r.ok) {
+      // A 2xx acknowledgement is authoritative only when the complete strict
+      // lifecycle DTO is present. Malformed success must fail visibly.
+      return { ok: true, source: InboxSourceResponse.parse(r.body).source };
+    }
+    const parsed = InboxRecoveryErrorResponse.safeParse(r.body);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        status: r.status,
+        error: r.status === 0 ? "source_recovery_unreachable" : "source_recovery_failed",
+      };
+    }
+    return {
+      ok: false,
+      status: r.status,
+      error: parsed.data.error,
+      ...(parsed.data.message === undefined ? {} : { message: parsed.data.message }),
+    };
   }
 }
 

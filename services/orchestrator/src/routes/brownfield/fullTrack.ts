@@ -312,6 +312,7 @@ async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: strin
     installation === undefined ? await loadOrgDefaultGithubCredentialRef(options.pool, orgId) : undefined;
   return resolveGithubToken({
     secrets: options.secrets,
+    orgId,
     ...(installation === undefined ? {} : { installation }),
     ...(staticRef === undefined ? {} : { staticRef }),
     ...(options.githubAppMinter === undefined ? {} : { minter: options.githubAppMinter }),

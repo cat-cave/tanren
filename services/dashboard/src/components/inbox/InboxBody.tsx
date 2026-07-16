@@ -13,7 +13,13 @@
  * to the discovery surface scoped to the candidate's project.
  */
 
-import type { Candidate, InboxSnapshot, InboxSource, TriageVerdict } from "../../api/inboxTypes.js";
+import {
+  inboxSourceIsRecoverable,
+  type Candidate,
+  type InboxSnapshot,
+  type InboxSource,
+  type TriageVerdict,
+} from "../../api/inboxTypes.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { ScreenStyles } from "../project/screenStyles.js";
 import { KpiStrip, PageHead } from "../project/shared.js";
@@ -48,6 +54,7 @@ function isResolved(c: Candidate): boolean {
 function SourceRow(props: { source: InboxSource; csrfToken: string | undefined }) {
   const { source } = props;
   const attention = source.attention;
+  const recoverable = inboxSourceIsRecoverable(source);
   return (
     <div
       class={`source-row${source.enabled ? " on" : ""}${attention === null ? "" : " needs-attention"}`}
@@ -66,7 +73,7 @@ function SourceRow(props: { source: InboxSource; csrfToken: string | undefined }
       <div class={`toggle${source.enabled ? " on" : ""}`}>
         {attention === null ? (source.enabled ? "on" : "off") : "attention"}
       </div>
-      {attention !== null && (
+      {recoverable && attention !== null && (
         <form method="post" action={`/inbox/sources/${source.id}/recover`}>
           <CsrfField token={props.csrfToken} />
           <input type="hidden" name="expectedObservedAt" value={attention.observedAt} />
@@ -211,6 +218,7 @@ export interface InboxBodyProps {
   orgId: string;
   snapshot: InboxSnapshot;
   error?: string;
+  notice?: string;
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
 }
@@ -253,8 +261,13 @@ export function InboxBody(props: InboxBodyProps) {
           ]}
         />
         {props.error !== undefined && (
-          <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">
+          <div class="placeholder-card" data-recovery-error style="border-left:2px solid var(--ember-08)">
             {props.error}
+          </div>
+        )}
+        {props.notice !== undefined && (
+          <div class="placeholder-card" data-recovery-notice style="border-left:2px solid var(--status-ok)">
+            {props.notice}
           </div>
         )}
         <div class="inbox-split">

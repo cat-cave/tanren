@@ -77,7 +77,7 @@ export const target: RunnerHandle = {
 };
 
 export const codexCredentialRef = "credential/codex/dev";
-export const githubCredentialRef = "credential/github/dev";
+export const githubCredentialRef = "credential/github/org/org_hard_tier_seed/dev";
 export const identitySecretRef = "runner/test/identity";
 
 export function healthyWindow(): WindowObservation {
@@ -279,7 +279,13 @@ export async function setupSeededRun() {
         governancePosture: "open",
       },
     },
-    undefined,
+    {
+      userId: "user_hard_tier_fixture",
+      orgId: SEEDED_ORG_ID,
+      projectId: null,
+      scopes: ["org:admin"],
+      source: "session",
+    },
     { configWriteProof: provisionedGreenfieldProjectConfigProof },
   );
   const spec = await createSpec(pool.asPgPool(), {

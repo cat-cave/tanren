@@ -73,17 +73,18 @@ export function mountRootApiRoutes(app: Hono<ActorContextEnv>, deps: RootApiDeps
   const scopedPool = orgScopingPool(pool);
 
   app.post("/projects", async (c) => {
+    const actor = actorOf(c);
     const parsed = projectInputSchema.safeParse(await c.req.json().catch(() => {}));
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
-    const configCheck = checkGenericProjectCreateConfig(parsed.data.config);
+    const configCheck = checkGenericProjectCreateConfig(parsed.data.config, actor?.orgId ?? undefined);
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }
     // Pass caller raw body (not the migrated check snapshot) so createProject's
     // re-assert does not false-flag defaulted governance nests like auditPosture.
-    return c.json(await createProject(pool, parsed.data, actorOf(c)), 201);
+    return c.json(await createProject(pool, parsed.data, actor), 201);
   });
 
   app.post("/specs", async (c) => {

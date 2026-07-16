@@ -46,10 +46,6 @@ export const ActiveGitHubIssuesConfig = z
   .strict();
 export type ActiveGitHubIssuesConfig = z.infer<typeof ActiveGitHubIssuesConfig>;
 
-/** The persisted GitHub shape has no lifecycle or credential compatibility form. */
-export const GitHubIssuesConfig = ActiveGitHubIssuesConfig;
-export type GitHubIssuesConfig = z.infer<typeof GitHubIssuesConfig>;
-
 /** The sole active persisted shape for a Sentry error source. */
 export const ActiveSentryConfig = z
   .object({
@@ -63,10 +59,6 @@ export const ActiveSentryConfig = z
   })
   .strict();
 export type ActiveSentryConfig = z.infer<typeof ActiveSentryConfig>;
-
-/** The persisted Sentry shape has no lifecycle or credential compatibility form. */
-export const SentryConfig = ActiveSentryConfig;
-export type SentryConfig = z.infer<typeof SentryConfig>;
 
 export const ManualSourceConfig = z.object({}).strict();
 export const ScheduledAuditSourceConfig = z.object({}).strict();

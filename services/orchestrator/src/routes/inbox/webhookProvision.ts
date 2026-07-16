@@ -92,8 +92,9 @@ export async function handleProvisionWebhook(
     const staticRef = await loadOrgDefaultGithubCredentialRef(deps.pool, orgId);
     token = await resolveGithubToken({
       secrets: deps.secrets,
+      orgId,
       ...(installation === undefined ? {} : { installation }),
-      ...(staticRef === undefined ? {} : { staticRef, staticRefOrgId: orgId }),
+      ...(staticRef === undefined ? {} : { staticRef }),
       ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
     });
   } catch (error) {

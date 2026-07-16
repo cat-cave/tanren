@@ -5,10 +5,19 @@
 
 import type pg from "pg";
 import { z } from "zod";
-import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
-import { migrateProjectConfig } from "../../config/projectConfig.js";
+import {
+  bindOrgGithubCredentialRefs,
+  migrateOrgConfig,
+  type OrgGithubAppInstallation,
+} from "../../config/orgConfig.js";
+import {
+  bindProjectGithubCredentialRefs,
+  migrateProjectConfig,
+  type ProjectConfigV1,
+} from "../../config/projectConfig.js";
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../../config/shared.js";
-import { normalizeStaticGithubRef, validateGithubCredentialRef } from "../../credentials/githubToken.js";
+import { normalizeStaticGithubRef } from "../../credentials/githubToken.js";
+import { canonicalOrgGithubCredentialRef } from "../../credentials/refNamespace.js";
 
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -148,9 +157,16 @@ export async function loadReviewMergeRunContext(
   if (row.pr_url === null) {
     throw new ReviewMergePullRequestNotFoundError(runId);
   }
-  const projectConfig = migrateProjectConfig(row.config);
-  const installation = installationFromOrgConfig(row.org_config);
-  const staticCredentialRef = resolvedStaticCredentialRef(options.resolvedGithubCredentialRef, row.config);
+  const projectConfig = bindProjectGithubCredentialRefs(migrateProjectConfig(row.config), row.org_id);
+  const installation =
+    row.org_config === null || row.org_config === undefined
+      ? undefined
+      : bindOrgGithubCredentialRefs(migrateOrgConfig(row.org_config), row.org_id).github_app;
+  const staticCredentialRef = resolvedStaticCredentialRef(
+    options.resolvedGithubCredentialRef,
+    projectConfig,
+    row.org_id,
+  );
   return {
     runId: row.run_id,
     specId: row.spec_id,
@@ -176,11 +192,15 @@ export async function loadReviewMergeRunContext(
  * used) wins; otherwise fall back to the project-config-JSONB ref for out-of-band
  * callers that did not pre-resolve.
  */
-function resolvedStaticCredentialRef(resolvedRef: string | undefined, config: unknown): string | undefined {
+function resolvedStaticCredentialRef(
+  resolvedRef: string | undefined,
+  config: ProjectConfigV1,
+  orgId: string,
+): string | undefined {
   if (typeof resolvedRef === "string" && resolvedRef.trim() !== "") {
-    return validateGithubCredentialRef(resolvedRef);
+    return canonicalOrgGithubCredentialRef({ orgId, supplied: resolvedRef, kind: "github_token" });
   }
-  return credentialRefFromConfig(config);
+  return normalizeStaticGithubRef(config.credentials?.githubCredentialRef);
 }
 
 /**
@@ -195,20 +215,6 @@ function resolvedStaticCredentialRef(resolvedRef: string | undefined, config: un
  */
 function tanrenLoginsFor(configured: ReadonlyArray<string> | undefined): ReadonlyArray<string> {
   return [DEFAULT_TANREN_LOGIN, ...(configured ?? [])];
-}
-
-function credentialRefFromConfig(config: unknown): string | undefined {
-  const record =
-    typeof config === "object" && config !== null && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
-  const credentials =
-    typeof record["credentials"] === "object" && record["credentials"] !== null
-      ? (record["credentials"] as Record<string, unknown>)
-      : {};
-  const ref = credentials["githubCredentialRef"] ?? record["githubCredentialRef"];
-  // App-FIRST: an EMPTY-STRING ref (the App sentinel) or whitespace collapses to
-  // "no static ref" → mint the App token, never `validateGithubCredentialRef("")`
-  // (the apex v30 empty-ref crash). A non-empty ref is grammar-validated as before.
-  return normalizeStaticGithubRef(typeof ref === "string" ? ref : undefined);
 }
 
 // Typed row decode (no raw `as` cast — the architecture check forbids those in

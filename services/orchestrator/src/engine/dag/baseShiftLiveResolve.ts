@@ -147,6 +147,7 @@ async function prepareResolveWorkspace(input: {
       // The applier skips the re-clone (`preOpenedWorkspace`) + rebases onto the LOCAL assembled
       // head sha. `baseBranch` stays the default branch (the assembly's clone base) for diagnostics.
       applierFacts: {
+        orgId: ctx.orgId,
         repoUrl: ctx.repoUrl,
         baseBranch: ctx.defaultBranch,
         baseRevision: assembled.assembledHeadSha,
@@ -190,6 +191,7 @@ async function prepareResolveWorkspace(input: {
  */
 export function baseShiftApplierFacts(ctx: BaseShiftRunContext, shiftedBase: string): JjConflictApplierFacts {
   return {
+    orgId: ctx.orgId,
     repoUrl: ctx.repoUrl,
     baseBranch: shiftedBase,
     baseRevision: `${shiftedBase}@origin`,
@@ -351,6 +353,7 @@ async function readResolvedHeadSha(deps: LiveBaseShiftDeps, ctx: BaseShiftRunCon
   const codeHost = new GitHubCodeHost(http, async () => {
     const resolved = await resolveVcsToken(http, {
       secrets: deps.secrets,
+      orgId: ctx.orgId,
       ...(ctx.installation !== undefined && { installation: ctx.installation }),
       ...(staticRef !== "" && { staticRef }),
       ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),

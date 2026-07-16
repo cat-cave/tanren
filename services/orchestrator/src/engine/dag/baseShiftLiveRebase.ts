@@ -29,6 +29,7 @@ import type { LiveBaseShiftDeps } from "./baseShiftLiveSeams.js";
  * PUSHED tree, not the un-rebased forge branch — NEVER-MERGE-UNVERIFIED).
  */
 export interface LiveBaseShiftPushFacts {
+  orgId: string;
   target: RunnerHandle;
   workspacePath: string;
   repoUrl: string;
@@ -128,6 +129,7 @@ export async function openLiveBaseShiftWorkspace(input: {
       handle,
       newBaseSha,
       pushFacts: {
+        orgId: ctx.orgId,
         target: live.target,
         workspacePath: live.workspacePath,
         repoUrl: ctx.repoUrl,

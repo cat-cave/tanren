@@ -40,9 +40,13 @@ const source: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "",
-  config: { owner: "cat-cave", repo: "app", webhookSecretRef: "wh/src_gh" },
+  config: { owner: "cat-cave", repo: "app", labels: [] },
   enabled: true,
   autoRoute: false,
+  state: "active",
+  attention: null,
+  webhookConfigured: true,
+  retryNotBefore: null,
 };
 
 function fixedTriage(verdict: CandidateTriage["verdict"], routableSpec: TriageRoutableSpec | null): TriageAnswerer {
@@ -86,6 +90,13 @@ function stubPool(): StubState {
     config: source.config,
     enabled: "true",
     auto_route: "false",
+    state: "active",
+    attention_code: null,
+    attention_message: null,
+    attention_observed_at: null,
+    webhook_configured: true,
+    retry_not_before: null,
+    project_valid: true,
   };
   const candidateRow = (id: string) => ({ ...candidates.get(id)!, source_name: source.name, source_kind: source.kind });
 
@@ -93,6 +104,11 @@ function stubPool(): StubState {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
     if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.startsWith("SET LOCAL")) {
       return { rows: [], rowCount: 0 };
+    }
+    if (sql.startsWith("SELECT webhook_secret_ref FROM inbox_sources")) {
+      return params[0] === source.id && params[1] === source.orgId
+        ? { rows: [{ webhook_secret_ref: "wh/src_gh" }], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
     if (sql.includes("FROM inbox_sources WHERE id = $1")) {
       return params[0] === source.id ? { rows: [sourceRow], rowCount: 1 } : { rows: [], rowCount: 0 };

@@ -70,10 +70,9 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
       // source config has no credential coordinate and cannot become a deputy.
       const resolved = await resolveGithubToken({
         secrets: deps.secrets,
+        orgId: source.orgId,
         ...(deps.installation === undefined ? {} : { installation: deps.installation }),
-        ...(deps.defaultStaticRef === undefined
-          ? {}
-          : { staticRef: deps.defaultStaticRef, staticRefOrgId: source.orgId }),
+        ...(deps.defaultStaticRef === undefined ? {} : { staticRef: deps.defaultStaticRef }),
         minter: deps.minter ?? new GithubAppTokenMinter({ secrets: deps.secrets }),
       });
 
@@ -87,13 +86,16 @@ export function createGitHubIssuesConnector(deps: GitHubConnectorDeps): SourceCo
         path,
         token: resolved.token,
         refreshToken: resolved.refresh,
+        // The durable intake scheduler owns rate-limit delays. Surface the raw
+        // classified response so this source never sleeps ahead of its peers.
+        retryRateLimit: false,
       });
       // No-silent-fallbacks: a non-200 is a LOUD throw (a 401/403 ⇒ auth error
       // the poller re-throws; any other non-200 ⇒ a transient fetch error), NEVER
       // an empty list masking a failed fetch. Only a genuine 200-with-an-array is
       // an empty result. A 200 whose body is not the expected array is itself a
       // failed read (the API shape changed / an error envelope) — also LOUD.
-      assertIntakeResponseOk("github", response.status);
+      assertIntakeResponseOk("github", response.status, response.errorDetail ?? "", response.retryAfterMs);
       if (!Array.isArray(response.body)) {
         throw new IntakeSourceFetchError("github", response.status, "200 body was not an issues array");
       }

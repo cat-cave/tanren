@@ -84,7 +84,7 @@ function runContextPool(): pg.Pool {
             config: {
               version: 1,
               defaultCredentials: {
-                github_token: "secret/github/clone",
+                github_token: `credential/github/org/${RUN_ORG}/clone`,
                 defaultLlm: { cli: "codex", model: "default", authRef: "credential/codex/default" },
               },
             },

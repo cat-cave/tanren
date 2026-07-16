@@ -5,12 +5,7 @@ export { EventStore, type EventCursor, type RawEventRow } from "./events.js";
 export { CostStore, type CostCursor } from "./costs.js";
 export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
-export {
-  ProjectRow,
-  ProjectStore,
-  type ProjectConfigSnapshot,
-  type ProjectLifecycle,
-} from "./projects.js";
+export { ProjectRow, ProjectStore, type ProjectConfigSnapshot, type ProjectLifecycle } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
 // Integration lifecycle foundation: a connection owns authentication identity;
 // explicit grants own plane/environment/capability authority.

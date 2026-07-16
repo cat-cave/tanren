@@ -1,6 +1,7 @@
 import { runWithOrgScope } from "@tanren/db";
 import type { Pool } from "pg";
 import type { ActorContext } from "../../src/auth/schemas.js";
+import { integrationCatalogRevision } from "../../src/engine/contracts/integrationCatalog.js";
 import { InterviewCapture } from "../../src/engine/forge/interview/types.js";
 import {
   buildDerivationDesignPlan,
@@ -198,9 +199,13 @@ export async function seedActivationPrerequisites(
           provider_scopes, resource_constraints, policy_revision, consent_revision,
           consent_actor_id, consented_at, status)
        VALUES ($1, 'deploy.vercel', 'connection_1', 'grant_1', 1, ARRAY['deploy'],
-               ARRAY['discover','provision','bind','teardown'], ARRAY[]::text[], '{}'::jsonb,
-               'integration-catalog.v1', 'consent.test', 'derivation-test', now(), 'active')`,
-      [orgId],
+               ARRAY['discover','provision','bind','teardown'], ARRAY[]::text[], $2::jsonb,
+               $3, 'consent.test', 'derivation-test', now(), 'active')`,
+      [
+        orgId,
+        JSON.stringify({ version: 1, projectBinding: "selected", resourceIds: "*", environments: "*" }),
+        integrationCatalogRevision(),
+      ],
     );
   });
 

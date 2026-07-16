@@ -50,12 +50,12 @@ describe("loadReviewMergeRunContext credential resolution", () => {
     // DIFFERENT ref. The resolved ref must win — proving the review/merge step
     // resolves from the same source as the PR-creation + CI-poll steps.
     const pool = poolReturning({
-      config: { version: 1, credentials: { githubCredentialRef: "credential/github/stale-config" } },
+      config: { version: 1, credentials: { githubCredentialRef: "credential/github/org/org_1/stale-config" } },
     });
     const context = await loadReviewMergeRunContext(pool, "run_1", {
-      resolvedGithubCredentialRef: "credential/github/project-record",
+      resolvedGithubCredentialRef: "credential/github/org/org_1/project-record",
     });
-    expect(context.staticCredentialRef).toBe("credential/github/project-record");
+    expect(context.staticCredentialRef).toBe("credential/github/org/org_1/project-record");
   });
 
   it("resolves the org default ref when the project record had only the org default", async () => {
@@ -64,18 +64,18 @@ describe("loadReviewMergeRunContext credential resolution", () => {
     // setup still resolves at review/merge.
     const pool = poolReturning({ config: { version: 1 } });
     const context = await loadReviewMergeRunContext(pool, "run_1", {
-      resolvedGithubCredentialRef: "credential/github/org-default",
+      resolvedGithubCredentialRef: "credential/github/org/org_1/org-default",
     });
-    expect(context.staticCredentialRef).toBe("credential/github/org-default");
+    expect(context.staticCredentialRef).toBe("credential/github/org/org_1/org-default");
   });
 
   it("falls back to the config JSONB ref when no resolved ref is threaded in", async () => {
     // Out-of-band callers that do not pre-resolve keep the prior behavior.
     const pool = poolReturning({
-      config: { version: 1, credentials: { githubCredentialRef: "credential/github/from-config" } },
+      config: { version: 1, credentials: { githubCredentialRef: "credential/github/org/org_1/from-config" } },
     });
     const context = await loadReviewMergeRunContext(pool, "run_1");
-    expect(context.staticCredentialRef).toBe("credential/github/from-config");
+    expect(context.staticCredentialRef).toBe("credential/github/org/org_1/from-config");
   });
 
   it("leaves staticCredentialRef unset when neither a resolved ref nor a config ref exists", async () => {
@@ -90,7 +90,7 @@ describe("loadReviewMergeRunContext credential resolution", () => {
     const pool = poolReturning({ config: { version: 1 } });
     await expect(
       loadReviewMergeRunContext(pool, "run_1", { resolvedGithubCredentialRef: "credential/openai/wrong" }),
-    ).rejects.toThrow(/credential\/github\//u);
+    ).rejects.toThrow("credential ref does not belong to the authenticated owner");
   });
 
   it("throws ReviewMergeRunNotFoundError when the run row is absent (genuinely missing run, even under a valid scope)", async () => {

@@ -80,7 +80,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_project", issues: parsed.error.issues }, 400);
     }
-    const configCheck = checkGenericProjectCreateConfig(parsed.data.config);
+    const configCheck = checkGenericProjectCreateConfig(parsed.data.config, orgId);
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }
@@ -167,7 +167,7 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       return c.json(projectConfigConflict(orgId, projectId, snapshot.revision), 409);
     }
     const currentConfig = migrateProjectConfig(snapshot.config);
-    const configCheck = checkFullProjectConfigPatch(parsed.data.config, currentConfig);
+    const configCheck = checkFullProjectConfigPatch(parsed.data.config, currentConfig, orgId);
     if (!configCheck.ok) {
       return c.json(configCheck.response, 400);
     }

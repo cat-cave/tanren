@@ -15,6 +15,7 @@ import { AuditsStore, runAuditJob, type AuditPassRunner } from "../src/engine/fo
 import { intakeAutoRouteDeps } from "../src/engine/forge/intake/index.js";
 import { DEFAULT_AUDIT_POSTURE } from "../src/engine/config/index.js";
 import type { CandidateTriage, TriageAnswerer } from "../src/engine/forge/inbox/types.js";
+import { inboxSourceRow } from "./helpers/inboxSourceRow.js";
 
 // A `route-to-dag` posture WITHOUT autonomousRemediation — isolates the residual-route
 // authority from the blocking-remediation path.
@@ -96,17 +97,24 @@ function stubPool(projectConfig: unknown): {
     }
     if (sql.startsWith("INSERT INTO inbox_sources")) {
       const [id, orgId, projectId, kind, name, detail, , enabled, autoRoute] = params as (string | null)[];
-      sources.set(String(id), {
-        id,
-        org_id: orgId,
-        project_id: projectId,
-        kind,
-        name,
-        detail,
-        config: {},
-        enabled,
-        auto_route: autoRoute,
-      });
+      sources.set(
+        String(id),
+        inboxSourceRow({
+          id: String(id),
+          orgId: String(orgId),
+          projectId: projectId === null ? null : String(projectId),
+          kind: kind as "scheduled_audit",
+          name: String(name),
+          detail: String(detail),
+          config: {},
+          enabled: enabled === "true",
+          autoRoute: autoRoute === "true",
+          state: "active",
+          attention: null,
+          retryNotBefore: null,
+          webhookConfigured: false,
+        }),
+      );
       return { rows: [{ ...sources.get(String(id))! }], rowCount: 1 };
     }
 

@@ -23,6 +23,7 @@ import type {
   TriageAnswerer,
   TriageRoutableSpec,
 } from "../src/engine/forge/inbox/index.js";
+import { inboxSourceRow } from "./helpers/inboxSourceRow.js";
 
 const ORG = "org_a";
 const PROJECT = "project_a";
@@ -106,18 +107,25 @@ function stubPool(testRows: TestRowSeed[]): {
       return { rows: list, rowCount: list.length };
     }
     if (sql.startsWith("INSERT INTO inbox_sources")) {
-      const [id, orgId, projectId, kind, name, detail, config, enabled, autoRoute] = params as (string | null)[];
-      sources.set(String(id), {
-        id,
-        org_id: orgId,
-        project_id: projectId,
-        kind,
-        name,
-        detail,
-        config: JSON.parse(String(config)),
-        enabled,
-        auto_route: autoRoute,
-      });
+      const [id, orgId, projectId, , name, detail, config, enabled, autoRoute] = params as (string | null)[];
+      sources.set(
+        String(id),
+        inboxSourceRow({
+          id: String(id),
+          orgId: String(orgId),
+          projectId: projectId === null ? null : String(projectId),
+          kind: "system",
+          name: String(name),
+          detail: String(detail),
+          config: JSON.parse(String(config)) as { ciInsights: true },
+          enabled: enabled === "true",
+          autoRoute: autoRoute === "true",
+          state: "active",
+          attention: null,
+          retryNotBefore: null,
+          webhookConfigured: false,
+        }),
+      );
       return { rows: [{ ...sources.get(String(id))! }], rowCount: 1 };
     }
     if (sql.startsWith("SELECT external_id, status FROM candidates")) {

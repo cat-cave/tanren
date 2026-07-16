@@ -33,16 +33,18 @@
 
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { migrate, setSystemPool } from "@tanren/db";
+import { migrate, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { FakeSecretStore } from "../src/engine/contracts/secretStore.js";
 import { PgJobQueue } from "../src/engine/contracts/jobQueue.js";
 import type { RunnerHandle } from "../src/engine/contracts/allocator.js";
 import type { RunnerCommand, CommandResult, CommandSubstrate } from "../src/engine/contracts/commandSubstrate.js";
 import { storeGithubToken } from "../src/engine/credentials/githubToken.js";
+import { deriveCredentialRef } from "../src/engine/credentials/refNamespace.js";
 import { StaticRunnerAllocator } from "../src/engine/allocators/staticRunnerAllocator.js";
 import { PgRunnerStore } from "../src/engine/allocators/runnerStore.js";
 import { runPlannerLoopWorkflow } from "../src/engine/workflow/plannerRun.js";
 import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
+import { loadRunExecutionContext } from "../src/engine/worker/runExecutionContext.js";
 import { executeNextPlanJob } from "../src/engine/worker/runExecutor.js";
 import {
   lifecycleAuthorityBundle,
@@ -86,9 +88,20 @@ const PROJECT = `proj_${ORG}`;
 const SPEC = `spec_${ORG}`;
 const RUN = "run_lifecycle";
 const PLAN_TASK = `task_plan_${ORG}`;
-const GITHUB_REF = "credential/github/dev";
+const GITHUB_REF = deriveCredentialRef({ kind: "github_token", scope: "org", ownerId: ORG, name: "dev" });
 const CODEX_REF = "credential/codex/dev";
 const RUNNER_FINGERPRINT = "SHA256:lifecycle-runner-host";
+const FOREIGN_OWNER = "org_lifecycle_foreign";
+const FOREIGN_PROJECT = `proj_${ORG}_foreign_ref`;
+const FOREIGN_SPEC = `spec_${ORG}_foreign_ref`;
+const FOREIGN_RUN = "run_lifecycle_foreign_ref";
+const FOREIGN_PLAN_TASK = `task_plan_${ORG}_foreign_ref`;
+const FOREIGN_GITHUB_REF = deriveCredentialRef({
+  kind: "github_token",
+  scope: "org",
+  ownerId: FOREIGN_OWNER,
+  name: "dev",
+});
 
 // A no-op SSH substrate: the workflow's git-clone / bootstrap / branch-push AND the
 // NATIVE GATE (deps-ensure + the gate tiers, all over `ssh.run`) run here; success
@@ -302,6 +315,65 @@ describeDb("RLS run lifecycle — a real org-scoped run writes every lifecycle t
     const spec = await ownerPool.query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [SPEC]);
     expect(spec.rows[0]?.status).toBe("merged");
   });
+
+  it("rejects a foreign-owner project ref during hydration with zero lifecycle side effects", async () => {
+    await seedForeignCredentialRun(ownerPool);
+
+    await expect(
+      runWithOrgScope(appPool, ORG, (client) =>
+        loadRunExecutionContext(client, {
+          runId: FOREIGN_RUN,
+          identitySecretRef: "runner/test/identity",
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "CredentialRefOwnershipError",
+      credentialKind: "github_token",
+    });
+
+    // Context hydration is a read boundary. The hostile persisted coordinate is
+    // rejected before allocation, workflow, GitHub, or finalization can mutate
+    // any lifecycle table; the seed rows remain byte-for-byte in their initial
+    // queued/in-flight state and no derived row exists.
+    const state = await ownerPool.query<{
+      run_status: string;
+      run_outcome: string | null;
+      run_ended_at: Date | null;
+      spec_status: string;
+      plan_status: string;
+      derived_tasks: string;
+      runners: string;
+      events: string;
+      costs: string;
+    }>(
+      `SELECT
+         r.status AS run_status,
+         r.outcome AS run_outcome,
+         r.ended_at AS run_ended_at,
+         s.status AS spec_status,
+         t.status AS plan_status,
+         (SELECT count(*) FROM tasks WHERE run_id = r.run_id AND task_id <> $2)::text AS derived_tasks,
+         (SELECT count(*) FROM runners WHERE run_id = r.run_id)::text AS runners,
+         (SELECT count(*) FROM events WHERE run_id = r.run_id)::text AS events,
+         (SELECT count(*) FROM cost_records WHERE run_id = r.run_id)::text AS costs
+       FROM runs r
+       JOIN specs s ON s.spec_id = r.spec_id
+       JOIN tasks t ON t.task_id = $2
+       WHERE r.run_id = $1`,
+      [FOREIGN_RUN, FOREIGN_PLAN_TASK],
+    );
+    expect(state.rows[0]).toEqual({
+      run_status: "queued",
+      run_outcome: null,
+      run_ended_at: null,
+      spec_status: "in_flight",
+      plan_status: "queued",
+      derived_tasks: "0",
+      runners: "0",
+      events: "0",
+      costs: "0",
+    });
+  });
 });
 
 async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
@@ -341,5 +413,37 @@ async function seedCredentialCompleteRun(owner: Pool): Promise<void> {
     `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
      VALUES ($1, $2, $3, 'plan', 'plan', 'queued', 'answerer', 'fake', 'm')`,
     [PLAN_TASK, RUN, ORG],
+  );
+}
+
+async function seedForeignCredentialRun(owner: Pool): Promise<void> {
+  const config = {
+    version: 1,
+    mergeIntegration: "direct_merge",
+    governancePosture: "open",
+    credentials: {
+      defaultLlm: { cli: "codex", model: "default", authRef: CODEX_REF },
+      githubCredentialRef: FOREIGN_GITHUB_REF,
+    },
+  };
+  await owner.query(
+    `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, org_id, config)
+     VALUES ($1, 'foreign-ref', 'https://github.com/cat-cave/foreign-ref', 'main', 'runner:v0', $2, $3::jsonb)`,
+    [FOREIGN_PROJECT, ORG, JSON.stringify(config)],
+  );
+  await owner.query(
+    `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, status)
+     VALUES ($1, $2, $3, 'Foreign ref', 'Must fail before work.', $4::jsonb, 'in_flight')`,
+    [FOREIGN_SPEC, FOREIGN_PROJECT, ORG, JSON.stringify(["no lifecycle side effects"])],
+  );
+  await owner.query(
+    `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status)
+     VALUES ($1, $2, $3, $4, 'cli', 'tanren/foreign-ref', 'queued')`,
+    [FOREIGN_RUN, FOREIGN_SPEC, FOREIGN_PROJECT, ORG],
+  );
+  await owner.query(
+    `INSERT INTO tasks (task_id, run_id, org_id, kind, title, status, agent_kind, cli, model)
+     VALUES ($1, $2, $3, 'plan', 'plan', 'queued', 'answerer', 'fake', 'm')`,
+    [FOREIGN_PLAN_TASK, FOREIGN_RUN, ORG],
   );
 }

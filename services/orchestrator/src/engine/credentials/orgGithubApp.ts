@@ -29,7 +29,7 @@ export async function loadOrgGithubAppInstallation(
     // Read-only path keeps the historical SELECT shape (no revision token needed).
     const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
-    if (row === undefined) return undefined;
+    if (row === undefined) return row;
     return bindOrgGithubCredentialRefs(migrateOrgConfig(row.config), orgId).github_app;
   });
 }
@@ -48,7 +48,7 @@ export async function loadOrgDefaultGithubCredentialRef(pool: pg.Pool, orgId: st
   return runWithOrgScope(pool, orgId, async (client) => {
     const result = await client.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
     const row = result.rows[0];
-    if (row === undefined) return undefined;
+    if (row === undefined) return row;
     const ref = migrateOrgConfig(row.config).defaultCredentials?.github_token;
     return ref === undefined
       ? undefined

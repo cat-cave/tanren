@@ -18,6 +18,20 @@ export const InboxSourceAttention = z
   .strict();
 export type InboxSourceAttention = z.infer<typeof InboxSourceAttention>;
 
+export const RecoverableInboxSourceAttentionCode = z.enum([
+  "credential_unavailable",
+  "authority_unavailable",
+  "resource_unavailable",
+]);
+
+export function inboxSourceIsRecoverable(source: { attention: InboxSourceAttention | null; config: unknown }): boolean {
+  return (
+    source.config !== null &&
+    source.attention !== null &&
+    RecoverableInboxSourceAttentionCode.safeParse(source.attention.code).success
+  );
+}
+
 const GithubConfig = z
   .object({
     owner: z.string().min(1),
@@ -152,3 +166,10 @@ export const InboxSnapshot = z.object({ sources: z.array(InboxSource), candidate
 export type InboxSnapshot = z.infer<typeof InboxSnapshot>;
 
 export const InboxSourceResponse = z.object({ source: InboxSource }).strict();
+
+export const InboxRecoveryErrorResponse = z
+  .object({
+    error: z.string().min(1),
+    message: z.string().min(1).optional(),
+  })
+  .passthrough();

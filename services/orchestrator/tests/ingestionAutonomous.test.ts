@@ -29,6 +29,7 @@ import type {
   TriageRoutableSpec,
 } from "../src/engine/forge/inbox/index.js";
 import type { ActorContext } from "../src/auth/schemas.js";
+import { inboxSourceRow as sourceRow } from "./helpers/inboxSourceRow.js";
 
 const ACTOR: ActorContext = {
   userId: "user_a",
@@ -45,7 +46,7 @@ const ISSUES_SOURCE: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "",
-  config: { owner: "cat-cave", repo: "app" },
+  config: { owner: "cat-cave", repo: "app", labels: [] },
   enabled: true,
   autoRoute: false,
 };
@@ -66,20 +67,6 @@ function fixedTriage(verdict: CandidateTriage["verdict"], routableSpec: TriageRo
   };
 }
 
-function sourceRow(s: InboxSource): Record<string, unknown> {
-  return {
-    id: s.id,
-    org_id: s.orgId,
-    project_id: s.projectId,
-    kind: s.kind,
-    name: s.name,
-    detail: s.detail,
-    config: s.config,
-    enabled: s.enabled ? "true" : "false",
-    auto_route: s.autoRoute ? "true" : "false",
-  };
-}
-
 // A SQL-substring stub pool capturing the spec INSERTs (so tests assert the DAG
 // insert) and modeling the candidate + (optionally) the `specs` dependency check.
 interface StubOpts {
@@ -92,13 +79,13 @@ function stubPool(opts: StubOpts = {}): {
   pool: pg.Pool;
   specInserts: Array<{ specId: string; dependsOn: string[]; title: string; priority: string }>;
   sourceInserts: Array<Record<string, unknown>>;
-  configUpdates: Array<{ id: string; config: unknown }>;
+  webhookWrites: Array<{ id: string; ref: string }>;
 } {
   const candidates = new Map<string, Record<string, unknown>>();
   const byExternal = new Map<string, string>();
   const specInserts: Array<{ specId: string; dependsOn: string[]; title: string; priority: string }> = [];
   const sourceInserts: Array<Record<string, unknown>> = [];
-  const configUpdates: Array<{ id: string; config: unknown }> = [];
+  const webhookWrites: Array<{ id: string; ref: string }> = [];
   const existing = new Set(opts.existingSpecIds ?? []);
   const sources = [...(opts.sources ?? [])];
 
@@ -135,6 +122,12 @@ function stubPool(opts: StubOpts = {}): {
         config: JSON.parse(config),
         enabled: "true",
         auto_route: "false",
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       };
       sourceInserts.push(inserted);
       sources.push({
@@ -150,12 +143,11 @@ function stubPool(opts: StubOpts = {}): {
       });
       return { rows: [inserted], rowCount: 1 };
     }
-    if (sql.startsWith("UPDATE inbox_sources SET config")) {
-      const [id, config] = params as string[];
-      configUpdates.push({ id, config: JSON.parse(config) });
+    if (sql.startsWith("UPDATE inbox_sources SET webhook_secret_ref")) {
+      const [id, _orgId, ref] = params as string[];
+      webhookWrites.push({ id, ref });
       const src = sources.find((s) => s.id === id);
-      if (src !== undefined) src.config = JSON.parse(config);
-      return { rows: src === undefined ? [] : [sourceRow(src)], rowCount: src === undefined ? 0 : 1 };
+      return { rows: [], rowCount: src === undefined ? 0 : 1 };
     }
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
       return {
@@ -226,7 +218,7 @@ function stubPool(opts: StubOpts = {}): {
     return { rows: [], rowCount: 0 };
   };
   const pool = { query, connect: async () => ({ query, release() {} }) };
-  return { pool: pool as unknown as pg.Pool, specInserts, sourceInserts, configUpdates };
+  return { pool: pool as unknown as pg.Pool, specInserts, sourceInserts, webhookWrites };
 }
 
 // A fake GitHubHttpClient recording the requests (and the token used per request).
@@ -328,10 +320,11 @@ describe("B3 — manual /ingest now auto-routes", () => {
       priority: "P2",
     };
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "gh-pat", value: "pat-token" });
+    const credentialRef = "credential/github/org/org_a/default";
+    await secrets.put({ ref: credentialRef, value: "pat-token" });
     const local = stubPool({
       sources: [ISSUES_SOURCE],
-      orgConfig: { version: 1, defaultCredentials: { github_token: "gh-pat" } },
+      orgConfig: { version: 1, defaultCredentials: { github_token: credentialRef } },
     });
     const app = withActor(
       buildInboxApp({
@@ -360,11 +353,11 @@ describe("App-only intake — per-org connector mints an installation token", ()
       github_app: {
         installationId: "inst_1",
         appId: "app_1",
-        credentialRef: "gh-app/key",
+        credentialRef: "credential/github_app/org/org_a/default",
         installedAt: "2026-01-01T00:00:00Z",
       },
     };
-    const { pool } = stubPool({ orgConfig });
+    const { pool } = stubPool({ orgConfig, sources: [ISSUES_SOURCE] });
     // A fake minter: override the token mint so we don't sign a JWT / hit the network.
     const minter = new GithubAppTokenMinter({ secrets: new FakeSecretStore() });
     let mintedFor: string | undefined;
@@ -443,11 +436,12 @@ describe("L2 — linking a repo creates the issues inbox source", () => {
 
 describe("B1 — webhook provisioning endpoint", () => {
   it("creates the GitHub webhook, stores the secret ref, wires the source", async () => {
-    const { pool, sourceInserts, configUpdates } = stubPool({ sources: [], orgConfig: {} });
+    const { pool, sourceInserts, webhookWrites } = stubPool({ sources: [], orgConfig: {} });
     const secrets = new FakeSecretStore();
-    await secrets.put({ ref: "gh-pat", value: "pat" });
+    const credentialRef = "credential/github/org/org_a/default";
+    await secrets.put({ ref: credentialRef, value: "pat" });
     // Seed the org default credential so the App-less token resolves via PAT.
-    const orgConfig = { version: 1, defaultCredentials: { github_token: "gh-pat" } };
+    const orgConfig = { version: 1, defaultCredentials: { github_token: credentialRef } };
     const seeded = stubPool({ sources: [], orgConfig });
     const gh = fakeGithub((req) => {
       if (req.method === "POST" && req.path.endsWith("/hooks")) return { status: 201, body: { id: 9001 } };
@@ -471,20 +465,18 @@ describe("B1 — webhook provisioning endpoint", () => {
     expect(res.status).toBe(201);
     const json = (await res.json()) as {
       sourceId: string;
-      webhookSecretRef: string;
       callbackUrl: string;
       hookId: unknown;
     };
     expect(json.hookId).toBe(9001);
-    expect(json.webhookSecretRef).toMatch(/^webhook\/issues\//u);
     expect(json.callbackUrl).toBe(`https://tanren.example/github/webhooks/issues/${json.sourceId}`);
-    // The source was created and its config got the webhookSecretRef stamped.
+    // The source was created and its internal metadata column got the secret ref.
     expect(sourceInserts.length + seeded.sourceInserts.length).toBeGreaterThanOrEqual(1);
-    const update = seeded.configUpdates.find((u) => u.id === json.sourceId);
+    const update = seeded.webhookWrites.find((u) => u.id === json.sourceId);
     expect(update).toBeDefined();
-    expect((update!.config as { webhookSecretRef?: string }).webhookSecretRef).toBe(json.webhookSecretRef);
+    expect(update!.ref).toBe(`webhook/issues/${json.sourceId}`);
     // The HMAC secret was stored.
-    expect(await secrets.get(json.webhookSecretRef)).toBeDefined();
+    expect(await secrets.get(update!.ref)).toBeDefined();
     // The GitHub hook POST carried the issues event + the secret.
     const hookCall = gh.requests.find((r) => r.path.endsWith("/hooks"));
     expect(hookCall).toBeDefined();
@@ -492,6 +484,6 @@ describe("B1 — webhook provisioning endpoint", () => {
     expect(body.events).toEqual(["issues"]);
     expect(body.config.url).toBe(json.callbackUrl);
     void pool;
-    void configUpdates;
+    void webhookWrites;
   });
 });

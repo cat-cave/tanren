@@ -133,20 +133,22 @@ CREATE TABLE "org_integration_grants" (
 --> statement-breakpoint
 CREATE TABLE "behavior_integration_requirements" (
 	"org_id" text NOT NULL,
+	"project_id" text NOT NULL,
 	"behavior_revision_id" text NOT NULL,
 	"requirement_id" text NOT NULL,
 	"relation_role" text DEFAULT 'requires' NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "behavior_integration_requirements_org_id_behavior_revision_id_requirement_id_pk" PRIMARY KEY("org_id","behavior_revision_id","requirement_id"),
+	CONSTRAINT "behavior_integration_requirements_org_id_project_id_behavior_revision_id_requirement_id_pk" PRIMARY KEY("org_id","project_id","behavior_revision_id","requirement_id"),
 	CONSTRAINT "behavior_integration_requirements_role_check" CHECK ("behavior_integration_requirements"."relation_role" IN ('requires','triggers','observes'))
 );
 --> statement-breakpoint
 CREATE TABLE "capability_node_dependencies" (
 	"org_id" text NOT NULL,
+	"project_id" text NOT NULL,
 	"capability_node_id" text NOT NULL,
 	"depends_on_capability_node_id" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "capability_node_dependencies_org_id_capability_node_id_depends_on_capability_node_id_pk" PRIMARY KEY("org_id","capability_node_id","depends_on_capability_node_id"),
+	CONSTRAINT "capability_node_dependencies_org_id_project_id_capability_node_id_depends_on_capability_node_id_pk" PRIMARY KEY("org_id","project_id","capability_node_id","depends_on_capability_node_id"),
 	CONSTRAINT "capability_node_dependencies_no_self_check" CHECK ("capability_node_dependencies"."capability_node_id" <> "capability_node_dependencies"."depends_on_capability_node_id")
 );
 --> statement-breakpoint
@@ -202,14 +204,16 @@ CREATE TABLE "integration_requirements" (
 --> statement-breakpoint
 CREATE TABLE "spec_capability_dependencies" (
 	"org_id" text NOT NULL,
+	"project_id" text NOT NULL,
 	"spec_id" text NOT NULL,
 	"capability_node_id" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "spec_capability_dependencies_org_id_spec_id_capability_node_id_pk" PRIMARY KEY("org_id","spec_id","capability_node_id")
+	CONSTRAINT "spec_capability_dependencies_org_id_project_id_spec_id_capability_node_id_pk" PRIMARY KEY("org_id","project_id","spec_id","capability_node_id")
 );
 --> statement-breakpoint
 CREATE TABLE "integration_binding_env" (
 	"org_id" text NOT NULL,
+	"project_id" text NOT NULL,
 	"binding_id" text NOT NULL,
 	"binding_generation" integer NOT NULL,
 	"key" text NOT NULL,
@@ -217,7 +221,7 @@ CREATE TABLE "integration_binding_env" (
 	"required" integer DEFAULT 1 NOT NULL,
 	"scopes" text[] DEFAULT '{}'::text[] NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
-	CONSTRAINT "integration_binding_env_org_id_binding_id_binding_generation_key_pk" PRIMARY KEY("org_id","binding_id","binding_generation","key"),
+	CONSTRAINT "integration_binding_env_org_id_project_id_binding_id_binding_generation_key_pk" PRIMARY KEY("org_id","project_id","binding_id","binding_generation","key"),
 	CONSTRAINT "integration_binding_env_generation_check" CHECK ("integration_binding_env"."binding_generation" >= 1),
 	CONSTRAINT "integration_binding_env_classification_check" CHECK ("integration_binding_env"."classification" IN ('secret','non_secret')),
 	CONSTRAINT "integration_binding_env_required_check" CHECK ("integration_binding_env"."required" IN (0,1))
@@ -535,9 +539,13 @@ CREATE UNIQUE INDEX "org_integration_grants_provider_connection_id_unique" ON "o
 --> statement-breakpoint
 CREATE UNIQUE INDEX "integration_requirements_project_id_unique" ON "integration_requirements" USING btree ("org_id","project_id","id");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "integration_binding_env_output_unique" ON "integration_binding_env" USING btree ("org_id","binding_id","binding_generation","key");
+CREATE UNIQUE INDEX "capability_nodes_org_project_id_unique" ON "capability_nodes" USING btree ("org_id","project_id","id");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "integration_binding_generations_binding_generation_unique" ON "integration_binding_generations" USING btree ("org_id","binding_id","generation");
+CREATE UNIQUE INDEX "specs_org_project_spec_unique" ON "specs" USING btree ("org_id","project_id","spec_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_binding_env_output_unique" ON "integration_binding_env" USING btree ("org_id","project_id","binding_id","binding_generation","key");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "integration_binding_generations_binding_generation_unique" ON "integration_binding_generations" USING btree ("org_id","project_id","binding_id","generation");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "integration_bindings_lineage_unique" ON "integration_bindings" USING btree ("org_id","project_id","requirement_id","environment","id");
 --> statement-breakpoint
@@ -548,6 +556,14 @@ CREATE UNIQUE INDEX "delivery_runs_project_id_unique" ON "delivery_runs" USING b
 CREATE UNIQUE INDEX "projects_org_project_unique" ON "projects" USING btree ("org_id","project_id");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "specs_org_spec_unique" ON "specs" USING btree ("org_id","spec_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "behavior_revisions_org_project_id_unique" ON "behavior_revisions" USING btree ("org_id","project_id","id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "behavior_verdicts_org_project_id_unique" ON "behavior_verdicts" USING btree ("org_id","project_id","id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "proof_units_org_project_digest_unique" ON "proof_units" USING btree ("org_id","project_id","proof_unit_digest");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "authority_decisions_org_project_id_unique" ON "authority_decisions" USING btree ("org_id","project_id","id");
 --> statement-breakpoint
 ALTER TABLE "org_integration_connection_auth_generations" ADD CONSTRAINT "org_integration_connection_auth_generations_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -569,15 +585,19 @@ ALTER TABLE "org_integration_grants" ADD CONSTRAINT "org_integration_grants_conn
 --> statement-breakpoint
 ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_requirement_fk" FOREIGN KEY ("org_id","requirement_id") REFERENCES "public"."integration_requirements"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_behavior_revision_fk" FOREIGN KEY ("org_id","behavior_revision_id") REFERENCES "public"."behavior_revisions"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_requirement_fk" FOREIGN KEY ("org_id","project_id","requirement_id") REFERENCES "public"."integration_requirements"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "behavior_integration_requirements" ADD CONSTRAINT "behavior_integration_requirements_behavior_revision_fk" FOREIGN KEY ("org_id","project_id","behavior_revision_id") REFERENCES "public"."behavior_revisions"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "capability_node_dependencies" ADD CONSTRAINT "capability_node_dependencies_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "capability_node_dependencies" ADD CONSTRAINT "capability_node_dependencies_node_fk" FOREIGN KEY ("org_id","capability_node_id") REFERENCES "public"."capability_nodes"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "capability_node_dependencies" ADD CONSTRAINT "capability_node_dependencies_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "capability_node_dependencies" ADD CONSTRAINT "capability_node_dependencies_parent_fk" FOREIGN KEY ("org_id","depends_on_capability_node_id") REFERENCES "public"."capability_nodes"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "capability_node_dependencies" ADD CONSTRAINT "capability_node_dependencies_node_fk" FOREIGN KEY ("org_id","project_id","capability_node_id") REFERENCES "public"."capability_nodes"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "capability_node_dependencies" ADD CONSTRAINT "capability_node_dependencies_parent_fk" FOREIGN KEY ("org_id","project_id","depends_on_capability_node_id") REFERENCES "public"."capability_nodes"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "capability_nodes" ADD CONSTRAINT "capability_nodes_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -589,17 +609,19 @@ ALTER TABLE "integration_requirements" ADD CONSTRAINT "integration_requirements_
 --> statement-breakpoint
 ALTER TABLE "integration_requirements" ADD CONSTRAINT "integration_requirements_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_requirements" ADD CONSTRAINT "integration_requirements_superseded_by_fk" FOREIGN KEY ("org_id","superseded_by") REFERENCES "public"."integration_requirements"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_requirements" ADD CONSTRAINT "integration_requirements_superseded_by_fk" FOREIGN KEY ("org_id","project_id","superseded_by") REFERENCES "public"."integration_requirements"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "spec_capability_dependencies" ADD CONSTRAINT "spec_capability_dependencies_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "spec_capability_dependencies" ADD CONSTRAINT "spec_capability_dependencies_spec_fk" FOREIGN KEY ("org_id","spec_id") REFERENCES "public"."specs"("org_id","spec_id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "spec_capability_dependencies" ADD CONSTRAINT "spec_capability_dependencies_spec_fk" FOREIGN KEY ("org_id","project_id","spec_id") REFERENCES "public"."specs"("org_id","project_id","spec_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "spec_capability_dependencies" ADD CONSTRAINT "spec_capability_dependencies_node_fk" FOREIGN KEY ("org_id","capability_node_id") REFERENCES "public"."capability_nodes"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "spec_capability_dependencies" ADD CONSTRAINT "spec_capability_dependencies_node_fk" FOREIGN KEY ("org_id","project_id","capability_node_id") REFERENCES "public"."capability_nodes"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_binding_env" ADD CONSTRAINT "integration_binding_env_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_binding_env" ADD CONSTRAINT "integration_binding_env_binding_generation_fk" FOREIGN KEY ("org_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_binding_env" ADD CONSTRAINT "integration_binding_env_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "integration_binding_env" ADD CONSTRAINT "integration_binding_env_binding_generation_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","project_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_binding_generations" ADD CONSTRAINT "integration_binding_generations_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -623,15 +645,13 @@ ALTER TABLE "delivery_run_bindings" ADD CONSTRAINT "delivery_run_bindings_org_id
 --> statement-breakpoint
 ALTER TABLE "delivery_run_bindings" ADD CONSTRAINT "delivery_run_bindings_run_fk" FOREIGN KEY ("org_id","project_id","delivery_run_id") REFERENCES "public"."delivery_runs"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "delivery_run_bindings" ADD CONSTRAINT "delivery_run_bindings_binding_generation_fk" FOREIGN KEY ("org_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
---> statement-breakpoint
-ALTER TABLE "delivery_run_bindings" ADD CONSTRAINT "delivery_run_bindings_binding_fk" FOREIGN KEY ("org_id","binding_id") REFERENCES "public"."integration_bindings"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "delivery_run_bindings" ADD CONSTRAINT "delivery_run_bindings_binding_generation_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","project_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "delivery_runs" ADD CONSTRAINT "delivery_runs_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "delivery_runs" ADD CONSTRAINT "delivery_runs_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "delivery_runs" ADD CONSTRAINT "delivery_runs_authority_decision_fk" FOREIGN KEY ("org_id","authority_decision_id") REFERENCES "public"."authority_decisions"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "delivery_runs" ADD CONSTRAINT "delivery_runs_authority_decision_fk" FOREIGN KEY ("org_id","project_id","authority_decision_id") REFERENCES "public"."authority_decisions"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "delivery_stage_attempts" ADD CONSTRAINT "delivery_stage_attempts_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -643,7 +663,7 @@ ALTER TABLE "integration_reconciliations" ADD CONSTRAINT "integration_reconcilia
 --> statement-breakpoint
 ALTER TABLE "integration_reconciliations" ADD CONSTRAINT "integration_reconciliations_requirement_lineage_fk" FOREIGN KEY ("org_id","project_id","requirement_id") REFERENCES "public"."integration_requirements"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_reconciliations" ADD CONSTRAINT "integration_reconciliations_binding_generation_fk" FOREIGN KEY ("org_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_reconciliations" ADD CONSTRAINT "integration_reconciliations_binding_generation_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","project_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_resource_snapshots" ADD CONSTRAINT "integration_resource_snapshots_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -651,23 +671,23 @@ ALTER TABLE "integration_resource_snapshots" ADD CONSTRAINT "integration_resourc
 --> statement-breakpoint
 ALTER TABLE "integration_resource_snapshots" ADD CONSTRAINT "integration_resource_snapshots_requirement_lineage_fk" FOREIGN KEY ("org_id","project_id","requirement_id") REFERENCES "public"."integration_requirements"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_resource_snapshots" ADD CONSTRAINT "integration_resource_snapshots_binding_generation_fk" FOREIGN KEY ("org_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_resource_snapshots" ADD CONSTRAINT "integration_resource_snapshots_binding_generation_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","project_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_spec_fk" FOREIGN KEY ("org_id","spec_id") REFERENCES "public"."specs"("org_id","spec_id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_spec_fk" FOREIGN KEY ("org_id","project_id","spec_id") REFERENCES "public"."specs"("org_id","project_id","spec_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_behavior_revision_fk" FOREIGN KEY ("org_id","behavior_revision_id") REFERENCES "public"."behavior_revisions"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_behavior_revision_fk" FOREIGN KEY ("org_id","project_id","behavior_revision_id") REFERENCES "public"."behavior_revisions"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_behavior_verdict_fk" FOREIGN KEY ("org_id","behavior_verdict_id") REFERENCES "public"."behavior_verdicts"("org_id","id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_behavior_verdict_fk" FOREIGN KEY ("org_id","project_id","behavior_verdict_id") REFERENCES "public"."behavior_verdicts"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_proof_unit_fk" FOREIGN KEY ("org_id","proof_unit_digest") REFERENCES "public"."proof_units"("org_id","proof_unit_digest") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_proof_unit_fk" FOREIGN KEY ("org_id","project_id","proof_unit_digest") REFERENCES "public"."proof_units"("org_id","project_id","proof_unit_digest") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_requirement_lineage_fk" FOREIGN KEY ("org_id","project_id","requirement_id") REFERENCES "public"."integration_requirements"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_binding_generation_fk" FOREIGN KEY ("org_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_binding_generation_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation") REFERENCES "public"."integration_binding_generations"("org_id","project_id","binding_id","generation") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "integration_validation_proofs" ADD CONSTRAINT "integration_validation_proofs_delivery_binding_set_fk" FOREIGN KEY ("org_id","project_id","delivery_run_id","binding_id","binding_generation") REFERENCES "public"."delivery_run_bindings"("org_id","project_id","delivery_run_id","binding_id","binding_generation") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -677,7 +697,7 @@ ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_org_id_organizatio
 --> statement-breakpoint
 ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
-ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_binding_output_fk" FOREIGN KEY ("org_id","binding_id","binding_generation","key") REFERENCES "public"."integration_binding_env"("org_id","binding_id","binding_generation","key") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "project_app_env" ADD CONSTRAINT "project_app_env_binding_output_fk" FOREIGN KEY ("org_id","project_id","binding_id","binding_generation","key") REFERENCES "public"."integration_binding_env"("org_id","project_id","binding_id","binding_generation","key") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "project_integration_grant_selections" ADD CONSTRAINT "project_integration_grant_selections_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
@@ -751,7 +771,7 @@ CREATE INDEX "integration_bindings_org_project" ON "integration_bindings" USING 
 --> statement-breakpoint
 CREATE INDEX "delivery_run_bindings_org_id" ON "delivery_run_bindings" USING btree ("org_id");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "delivery_runs_authority_decision_unique" ON "delivery_runs" USING btree ("org_id","authority_decision_id");
+CREATE UNIQUE INDEX "delivery_runs_authority_decision_unique" ON "delivery_runs" USING btree ("org_id","project_id","authority_decision_id");
 --> statement-breakpoint
 CREATE INDEX "delivery_runs_org_id" ON "delivery_runs" USING btree ("org_id");
 --> statement-breakpoint
@@ -775,7 +795,7 @@ CREATE INDEX "integration_resource_snapshots_org_id" ON "integration_resource_sn
 --> statement-breakpoint
 CREATE INDEX "integration_resource_snapshots_org_requirement" ON "integration_resource_snapshots" USING btree ("org_id","requirement_id");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "integration_validation_proofs_reuse_unique" ON "integration_validation_proofs" USING btree ("org_id","behavior_revision_id","binding_id","binding_generation","deploy_sha","probe_version","correlation_id");
+CREATE UNIQUE INDEX "integration_validation_proofs_reuse_unique" ON "integration_validation_proofs" USING btree ("org_id","project_id","behavior_revision_id","binding_id","binding_generation","deploy_sha","probe_version","correlation_id");
 --> statement-breakpoint
 CREATE INDEX "integration_validation_proofs_org_id" ON "integration_validation_proofs" USING btree ("org_id");
 --> statement-breakpoint

@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type pg from "pg";
 import { z } from "zod";
 import type { ProvisionedArtifact } from "../contracts/integrationProvisioner.js";
+import { mutateProjectConfig } from "../config/projectConfigMutate.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import { InboxStore } from "../repositories/inbox.js";
 import { SourceKind } from "../forge/inbox/types.js";
-import { mutateProjectConfig } from "../repositories/projects.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { ActorRef } from "../state/actor.js";
 
@@ -32,7 +33,7 @@ export async function persistProvisionedArtifact(
   const projectConfig = artifact.projectConfig;
   if (projectConfig !== undefined && Object.keys(projectConfig).length > 0) {
     // Preserve the ProjectsStore generation-aware compare-and-swap boundary.
-    await mutateProjectConfig(client, request.projectId, actor, (rawCurrent) => ({
+    await mutateProjectConfig(asProjectConfigClient(client), request.projectId, actor, (rawCurrent) => ({
       ...asRecord(rawCurrent),
       ...projectConfig,
     }));
@@ -48,6 +49,15 @@ export async function persistProvisionedArtifact(
     result.deployRef = `${artifact.deployRef.provider}:${artifact.deployRef.appId}`;
   }
   return result;
+}
+
+/**
+ * Integration repositories deliberately expose a narrow, fake-friendly SQL
+ * port. At runtime it is the same pg client used by ProjectStore; retain that
+ * narrow contract here while adapting only the overloaded query signature.
+ */
+function asProjectConfigClient(client: IntegrationQueryClient): Pick<pg.PoolClient, "query"> {
+  return { query: client.query.bind(client) as Pick<pg.PoolClient, "query">["query"] };
 }
 
 /** Marker used by the partial idempotency index for provisioner-owned rows. */

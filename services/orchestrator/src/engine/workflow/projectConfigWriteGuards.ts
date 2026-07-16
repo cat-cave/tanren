@@ -1,4 +1,5 @@
 import { migrateProjectConfig, type ProjectConfigV1 } from "../config/index.js";
+import { bindProjectGithubCredentialRefs } from "../config/projectConfig.js";
 
 const projectConfigWriteProofBrand = Symbol("projectConfigWriteProof");
 
@@ -60,12 +61,15 @@ type ProjectConfigPatchCheck =
   | { ok: true; config: ProjectConfigV1 }
   | { ok: false; response: ProjectConfigWriteRejectionResponse };
 
-export function checkGenericProjectCreateConfig(rawConfig: Record<string, unknown> | undefined): ProjectConfigCheck {
+export function checkGenericProjectCreateConfig(
+  rawConfig: Record<string, unknown> | undefined,
+  orgId?: string,
+): ProjectConfigCheck {
   if (rawConfig === undefined) {
     return { ok: true };
   }
   try {
-    return { ok: true, config: assertProjectCreateConfigAllowed(rawConfig) };
+    return { ok: true, config: assertProjectCreateConfigAllowed(rawConfig, undefined, orgId) };
   } catch (error) {
     if (error instanceof ProjectConfigWriteRejectedError) {
       return { ok: false, response: error.response };
@@ -74,10 +78,14 @@ export function checkGenericProjectCreateConfig(rawConfig: Record<string, unknow
   }
 }
 
-export function assertProjectCreateConfigAllowed(rawConfig: unknown, proof?: ProjectConfigWriteProof): ProjectConfigV1 {
+export function assertProjectCreateConfigAllowed(
+  rawConfig: unknown,
+  proof?: ProjectConfigWriteProof,
+  orgId?: string,
+): ProjectConfigV1 {
   const config = migrateProjectConfig(rawConfig);
   if (proof === provisionedGreenfieldProjectConfigProof) {
-    return config;
+    return bindProjectConfigOwner(config, orgId);
   }
 
   const raw = rawRecord(rawConfig);
@@ -107,16 +115,17 @@ export function assertProjectCreateConfigAllowed(rawConfig: unknown, proof?: Pro
     });
   }
 
-  return config;
+  return bindProjectConfigOwner(config, orgId);
 }
 
 export function checkFullProjectConfigPatch(
   rawConfig: Record<string, unknown>,
   currentConfig: ProjectConfigV1,
+  orgId: string,
 ): ProjectConfigPatchCheck {
   let config: ProjectConfigV1;
   try {
-    config = migrateProjectConfig(rawConfig);
+    config = bindProjectConfigOwner(migrateProjectConfig(rawConfig), orgId);
   } catch (error) {
     return { ok: false, response: { error: "invalid_project_config", message: messageOf(error) } };
   }
@@ -134,6 +143,28 @@ export function checkFullProjectConfigPatch(
   }
 
   return { ok: true, config };
+}
+
+function bindProjectConfigOwner(config: ProjectConfigV1, orgId: string | undefined): ProjectConfigV1 {
+  if (config.credentials?.githubCredentialRef === undefined) {
+    return config;
+  }
+  if (orgId === undefined || orgId.trim() === "") {
+    throw new ProjectConfigWriteRejectedError({
+      error: "invalid_project_config",
+      message: "a project GitHub credential requires an authenticated organization owner",
+      fields: ["credentials.githubCredentialRef"],
+    });
+  }
+  try {
+    return bindProjectGithubCredentialRefs(config, orgId);
+  } catch {
+    throw new ProjectConfigWriteRejectedError({
+      error: "invalid_project_config",
+      message: "project GitHub credential does not belong to the project organization",
+      fields: ["credentials.githubCredentialRef"],
+    });
+  }
 }
 
 function reservedAutonomyCreateFields(config: ProjectConfigV1, raw: Record<string, unknown>): string[] {
