@@ -295,6 +295,13 @@
       "when": 1784206094132,
       "tag": "0043_integration_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1784206094133,
+      "tag": "0044_behavior_coverage_selection",
+      "breakpoints": true
     }
   ]
 }
