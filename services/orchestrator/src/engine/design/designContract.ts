@@ -58,6 +58,7 @@
 // seam); injection is WS-D2; the oracle is WS-D4. Those are the clean seams this
 // foundation leaves.
 
+import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export const DESIGN_CONTRACT_VERSION = 1 as const;
@@ -165,12 +166,44 @@ export type DesignContractV1 = z.infer<typeof DesignContractV1>;
 // Parse an UNKNOWN blob (e.g. the persisted jsonb) back through the schema. Throws
 // LOUDLY on a malformed/legacy-shaped contract (no silent degrade), exactly like
 // the template-manifest parser — a mangled contract never reaches injection.
+export function normalizeDesignContract(value: unknown): DesignContractV1 {
+  const parsed = DesignContractV1.parse(value);
+  return {
+    version: parsed.version,
+    domain: parsed.domain,
+    identity: parsed.identity,
+    intent: parsed.intent,
+    principles: [...parsed.principles],
+    constraints: [...parsed.constraints],
+    personaRefs: [...parsed.personaRefs],
+    behaviorRefs: [...parsed.behaviorRefs],
+    dimensions: parsed.dimensions.map((dimension) => ({
+      key: dimension.key,
+      label: dimension.label,
+      intent: dimension.intent,
+      guidance: dimension.guidance,
+      personaRefs: [...dimension.personaRefs],
+    })),
+  };
+}
+
 export function parseDesignContract(value: unknown): DesignContractV1 {
-  return DesignContractV1.parse(value);
+  return normalizeDesignContract(value);
+}
+
+/** Exact schema-normalized JSON used by derivation receipts and activation. */
+export function canonicalDesignContractJson(value: unknown): string {
+  return JSON.stringify(normalizeDesignContract(value));
+}
+
+/** A derivation-receipt fingerprint, not a second CAS/proof-store identity. */
+export function designContractDigest(value: unknown): string {
+  const body = JSON.stringify(["tanren.design-contract.v1", normalizeDesignContract(value)]);
+  return `sha256:${createHash("sha256").update(body, "utf8").digest("hex")}`;
 }
 
 // Serialize a contract to a plain JSON object for the jsonb column. A round-trip
 // through the schema is identity by construction (no transient fields).
 export function designContractToJson(contract: DesignContractV1): Record<string, unknown> {
-  return DesignContractV1.parse(contract) as Record<string, unknown>;
+  return normalizeDesignContract(contract) as Record<string, unknown>;
 }

@@ -121,7 +121,8 @@ describe("deriveProductGraph · the required design contract (no silent no-op)",
         bootstrapProject: successfulBootstrapProject,
       },
     );
-    expect(derived.designContractId).toBeDefined();
+    expect(derived.designContract.id).toBeDefined();
+    expect(derived.designContract.digest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(state.designContracts).toHaveLength(1);
   });
 

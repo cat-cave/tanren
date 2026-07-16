@@ -1,5 +1,4 @@
 // cspell:ignore nobypassrls plpgsql
-// Opt-in real-Postgres proof for lifecycle, receipt, replay, and NOBYPASSRLS boundaries.
 import { migrate, resetSystemPool, runWithOrgScope, setSystemPool } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -24,7 +23,7 @@ import {
   directSanitizedInput,
   GRAPH_CAPTURE,
   graphCounts,
-  graphDesignPlan,
+  graphCapturedDesign,
   ownership as buildOwnership,
   repository,
   SEED,
@@ -68,12 +67,10 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
     if (owner === undefined) throw new Error("owner pool is not initialized");
     return owner;
   }
-
   function runtimePool(): Pool {
     if (runtime === undefined) throw new Error("runtime pool is not initialized");
     return runtime;
   }
-
   const bootstrap = (projectId: string) => bootstraps.get(projectId)!;
 
   beforeAll(async () => {
@@ -422,7 +419,7 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       repoUrl,
       request: { capture: "graph-receipt-proof" },
     });
-    const designPlan = graphDesignPlan(fingerprint);
+    const design = graphCapturedDesign(fingerprint);
     const operation = await ProjectDerivationStore.begin(pool, {
       orgId: ORG_A,
       projectId: PROJECT_GRAPH,
@@ -431,7 +428,7 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
         kind: "interview",
         deploy: { providerKind: "deploy.vercel" },
         designMode: "captured",
-        designInputDigest: designPlan.inputDigest,
+        designInputDigest: design.inputDigest,
       },
       ownershipReceipt: ownership(PROJECT_GRAPH, repoUrl, fingerprint),
     });
@@ -459,6 +456,7 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
         ACTOR,
         scaffold,
         operation,
+        design,
       ),
     ).rejects.toThrow(/graph receipt failure/iu);
 
@@ -481,6 +479,7 @@ describeDb("project derivation lifecycle — real PostgreSQL, RLS, and concurren
       ACTOR,
       scaffold,
       operation,
+      design,
     );
     const persisted = await graphCounts(ownerPool(), PROJECT_GRAPH);
     expect(persisted).toEqual({

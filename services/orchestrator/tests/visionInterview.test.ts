@@ -454,7 +454,8 @@ describe("deriveFromCapture · creates the product graph (no migration)", () => 
     // The interview captured a design contract → derive persists it as a
     // first-class `design_contracts` row (version 1), and surfaces its id. The
     // contract is DOMAIN-GENERAL: a typed core + domain-adaptive dimensions.
-    expect(derived.designContractId).toBeDefined();
+    expect(derived.designContract.id).toBeDefined();
+    expect(derived.designContract.digest).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(state.designContracts).toHaveLength(1);
     const contract = state.designContracts[0] as {
       version?: number;

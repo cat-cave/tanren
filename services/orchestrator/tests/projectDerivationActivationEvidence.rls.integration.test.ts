@@ -12,6 +12,7 @@ import {
   directSanitizedInput,
   GRAPH_CAPTURE,
   graphDesignPlan,
+  graphProviderDesign,
   ownership,
   repository,
   SEED,
@@ -201,6 +202,70 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       "UPDATE org_integration_connections SET health = 'healthy' WHERE org_id = $1 AND id = 'connection_1'",
       [ORG],
     );
+
+    await ownerPool().query(
+      "UPDATE audit_jobs SET kind = 'a11y' WHERE org_id = $1 AND project_id = $2 AND kind = 'deps'",
+      [ORG, DIRECT_PROJECT],
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    await ownerPool().query(
+      "UPDATE audit_jobs SET kind = 'deps' WHERE org_id = $1 AND project_id = $2 AND kind = 'a11y'",
+      [ORG, DIRECT_PROJECT],
+    );
+    await ownerPool().query(
+      "UPDATE audit_jobs SET enabled = 'false' WHERE org_id = $1 AND project_id = $2 AND kind = 'security'",
+      [ORG, DIRECT_PROJECT],
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    await ownerPool().query(
+      "UPDATE audit_jobs SET enabled = 'true' WHERE org_id = $1 AND project_id = $2 AND kind = 'security'",
+      [ORG, DIRECT_PROJECT],
+    );
+
+    const targetId = bootstrap(DIRECT_PROJECT).notificationRoute!.targetId;
+    await ownerPool().query(
+      "UPDATE notification_routes SET event_name = 'allocator.allocated' WHERE target_id = $1 AND event_name = 'deploy.verified'",
+      [targetId],
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    await ownerPool().query(
+      "UPDATE notification_routes SET event_name = 'deploy.verified' WHERE target_id = $1 AND event_name = 'allocator.allocated'",
+      [targetId],
+    );
+    await ownerPool().query(
+      "UPDATE notification_routes SET enabled = 0 WHERE target_id = $1 AND event_name = 'deploy.verified'",
+      [targetId],
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    await ownerPool().query(
+      "UPDATE notification_routes SET enabled = 1, min_severity = 'fail' WHERE target_id = $1 AND event_name = 'deploy.verified'",
+      [targetId],
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    await ownerPool().query(
+      "UPDATE notification_routes SET min_severity = 'warn' WHERE target_id = $1 AND event_name = 'deploy.verified'",
+      [targetId],
+    );
+    await ownerPool().query(
+      `INSERT INTO audit_jobs (id, org_id, project_id, kind, name, cadence, target_window, enabled)
+       VALUES ('audit_extra', $1, $2, 'a11y', 'extra a11y audit', 'monthly', 'intentional extra', 'true')`,
+      [ORG, DIRECT_PROJECT],
+    );
+    await ownerPool().query(
+      `INSERT INTO notification_routes (id, target_id, event_name, enabled, min_severity)
+       VALUES ('route_extra', $1, 'allocator.allocated', 1, 'warn')`,
+      [targetId],
+    );
     expect((await ProjectDerivationStore.activate(runtimePool(), operation)).status).toBe("succeeded");
   });
 
@@ -272,21 +337,10 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       dimensions: [{ key: "status", label: "Status", intent: "Legible state", guidance: "", personaIds: [persona.id] }],
       coverage: [{ behaviorId: behavior.id, personaId: persona.id, dimensionKey: "status", surface: "status console" }],
     };
-    operation = await ProjectDerivationStore.recordReceipt(
-      runtimePool(),
-      operation,
-      "design",
-      { inputDigest: designPlan.inputDigest, answer: designAnswer },
-      "graph",
-    );
+    const design = graphProviderDesign(fingerprint, designAnswer);
+    operation = await ProjectDerivationStore.recordReceipt(runtimePool(), operation, "design", design, "graph");
     await expect(
-      ProjectDerivationStore.recordReceipt(
-        runtimePool(),
-        operation,
-        "design",
-        { inputDigest: designPlan.inputDigest, answer: designAnswer },
-        "graph",
-      ),
+      ProjectDerivationStore.recordReceipt(runtimePool(), operation, "design", design, "graph"),
     ).rejects.toMatchObject({ reason: "invalid_lifecycle" });
     const lifecycle = GRAPH_CAPTURE.lifecycle;
     if (lifecycle === null) throw new Error("graph lifecycle fixture missing");
@@ -301,7 +355,7 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       DERIVATION_ACTOR,
       scaffoldSpecsFor(lifecycle, SEED),
       operation,
-      designAnswer,
+      design,
     );
     operation = graphWrite.operation;
     operation = await ProjectDerivationStore.recordReceipt(
@@ -313,7 +367,7 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
     );
 
     await ownerPool().query(
-      "UPDATE project_derivations SET result_receipt = result_receipt #- '{graph,value,designContractId}' WHERE project_id = $1",
+      "UPDATE project_derivations SET result_receipt = result_receipt #- '{graph,value,designContract}' WHERE project_id = $1",
       [GRAPH_PROJECT],
     );
     await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
@@ -337,7 +391,7 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       graphWrite.graph,
       "graph",
     );
-    await setReceiptValue(ownerPool(), GRAPH_PROJECT, "{graph,value,designContractId}", "design_contract_foreign");
+    await setReceiptValue(ownerPool(), GRAPH_PROJECT, "{graph,value,designContract,id}", "design_contract_foreign");
     await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
       reason: "binding_mismatch",
     });
@@ -348,6 +402,18 @@ describeDb("project derivation activation evidence — real PostgreSQL", () => {
       graphWrite.graph,
       "graph",
     );
+    await ownerPool().query(
+      "UPDATE design_contracts SET contract = jsonb_set(contract, '{identity}', to_jsonb('a changed valid identity'::text)) WHERE id = $1",
+      [graphWrite.graph.designContract.id],
+    );
+    await expect(ProjectDerivationStore.activate(runtimePool(), operation)).rejects.toMatchObject({
+      reason: "binding_mismatch",
+    });
+    await ownerPool().query("UPDATE design_contracts SET domain = $2, contract = $3::jsonb WHERE id = $1", [
+      graphWrite.graph.designContract.id,
+      design.contract.domain,
+      JSON.stringify(design.contract),
+    ]);
     expect((await ProjectDerivationStore.activate(runtimePool(), operation)).status).toBe("succeeded");
   });
 });

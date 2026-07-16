@@ -47,7 +47,9 @@ import { DeployIneligibleError } from "./deployIneligibleError.js";
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
 import {
   buildDerivationDesignPlan,
+  capturedDesignResult,
   MissingDesignContractError,
+  providerDesignResult,
   type DerivationDesignPlan,
 } from "./deriveDesignContract.js";
 import { InterviewCapture, safeProjectSlug, type CaptureLifecycle } from "./types.js";
@@ -171,21 +173,26 @@ function completed(derivation: ReturnType<typeof ProjectDerivationStore.requireC
 }
 
 type DecodedDerivation = ReturnType<typeof ProjectDerivationStore.decode>;
-type DurableDesignAnswer = NonNullable<DecodedDerivation["results"]["design"]>["answer"];
+type DurableDesignResult = NonNullable<DecodedDerivation["results"]["design"]>;
 
 async function resolveDurableDesign(input: {
   pool: pg.Pool;
   deriveInput: DeriveInput;
   plan: DerivationDesignPlan;
+  capture: InterviewCapture;
   fingerprint: string;
   projectId: string;
   operation: ProjectDerivationRow;
   state: DecodedDerivation;
-}): Promise<{ operation: ProjectDerivationRow; designAnswer?: DurableDesignAnswer }> {
+}): Promise<{ operation: ProjectDerivationRow; design: DurableDesignResult }> {
   let operation = input.operation;
-  let designAnswer = input.state.results.design?.answer;
-  if (input.state.designMode !== "provider" || designAnswer !== undefined) {
-    return { operation, ...(designAnswer === undefined ? {} : { designAnswer }) };
+  let design = input.state.results.design;
+  if (design !== undefined) return { operation, design };
+  if (input.state.designMode === "captured") {
+    if (input.capture.designContract === null) throw new MissingDesignContractError();
+    design = capturedDesignResult(input.capture.designContract, input.plan);
+    operation = await ProjectDerivationStore.recordReceipt(input.pool, operation, "design", design, "graph");
+    return { operation, design };
   }
   if (input.state.results.design_intent !== undefined) {
     throw new ProjectDesignElaborationStateUnknownError(operation.id);
@@ -204,41 +211,36 @@ async function resolveDurableDesign(input: {
     "graph",
   );
   try {
-    designAnswer = await agent.elaborate(input.plan.agentInput);
+    const answer = await agent.elaborate(input.plan.agentInput);
+    design = providerDesignResult(answer, input.plan);
   } catch (error) {
     throw new ProjectDesignElaborationStateUnknownError(operation.id, { cause: error });
   }
   try {
-    operation = await ProjectDerivationStore.recordReceipt(
-      input.pool,
-      operation,
-      "design",
-      { inputDigest: input.plan.inputDigest, answer: designAnswer },
-      "graph",
-    );
+    operation = await ProjectDerivationStore.recordReceipt(input.pool, operation, "design", design, "graph");
   } catch (error) {
     const persisted =
       (await ProjectDerivationStore.findByFingerprint(input.pool, input.deriveInput.orgId, input.fingerprint).catch(
         () => null,
       )) ?? null;
-    let persistedAnswer: DecodedDerivation["results"]["design"] | null = null;
+    let persistedDesign: DecodedDerivation["results"]["design"] | null = null;
     try {
-      persistedAnswer = persisted === null ? null : (ProjectDerivationStore.decode(persisted).results.design ?? null);
+      persistedDesign = persisted === null ? null : (ProjectDerivationStore.decode(persisted).results.design ?? null);
     } catch {
-      persistedAnswer = null;
+      persistedDesign = null;
     }
     if (
       persisted === null ||
       persisted.id !== operation.id ||
       persisted.projectId !== input.projectId ||
-      persistedAnswer === null
+      persistedDesign === null
     ) {
       throw new ProjectDesignElaborationStateUnknownError(operation.id, { cause: error });
     }
     operation = persisted;
-    designAnswer = persistedAnswer.answer;
+    design = persistedDesign;
   }
-  return { operation, designAnswer };
+  return { operation, design };
 }
 
 export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Promise<DeriveResult> {
@@ -404,6 +406,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
           pool,
           deriveInput: input,
           plan: designPlan,
+          capture,
           fingerprint,
           projectId: project.projectId,
           operation,
@@ -422,7 +425,7 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
           actor,
           scaffoldSpecsFor(lifecycle, seed),
           operation,
-          design.designAnswer,
+          design.design,
         );
         operation = graphWrite.operation;
         state = ProjectDerivationStore.decode(operation);

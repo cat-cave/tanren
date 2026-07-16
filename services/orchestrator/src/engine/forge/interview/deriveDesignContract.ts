@@ -17,7 +17,13 @@
 
 import { createHash } from "node:crypto";
 import type { ProjectSpecQueryClient } from "../../workflow/projectSpec.js";
-import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } from "../../design/designContract.js";
+import {
+  DESIGN_CONTRACT_VERSION,
+  designContractDigest,
+  normalizeDesignContract,
+  parseDesignContract,
+  type DesignContractV1,
+} from "../../design/designContract.js";
 import type {
   CapturedDesignSeed,
   DesignAgentAnswer,
@@ -154,6 +160,12 @@ export interface DerivationDesignPlan {
   behaviorIdByKey: Map<string, string>;
 }
 
+export interface DerivationDesignResult {
+  inputDigest: string;
+  contract: DesignContractV1;
+  contractDigest: string;
+}
+
 function plannedId(kind: "persona" | "behavior", fingerprint: string, key: string): string {
   const digest = createHash("sha256")
     .update(JSON.stringify(["tanren.derivation-graph-identity.v1", fingerprint, kind, key]), "utf8")
@@ -203,6 +215,21 @@ export function buildDerivationDesignPlan(capture: InterviewCapture, fingerprint
   return { inputDigest, agentInput, personaIdByName, behaviorIdByKey };
 }
 
+export function capturedDesignResult(
+  capture: CaptureDesignContract,
+  plan: DerivationDesignPlan,
+): DerivationDesignResult {
+  const contract = normalizeDesignContract(toDesignContract(capture, plan.personaIdByName, plan.behaviorIdByKey));
+  return { inputDigest: plan.inputDigest, contract, contractDigest: designContractDigest(contract) };
+}
+
+export function providerDesignResult(answer: DesignAgentAnswer, plan: DerivationDesignPlan): DerivationDesignResult {
+  const contract = normalizeDesignContract(
+    designContractFromAnswer({ answer, personas: plan.agentInput.personas, behaviors: plan.agentInput.behaviors }),
+  );
+  return { inputDigest: plan.inputDigest, contract, contractDigest: designContractDigest(contract) };
+}
+
 // Persist the project's first-class `DesignContract` entity (WS-D1/WS-D3), returning
 // the HEAD record's id. The captured contract is REQUIRED (the derive guards it with
 // `MissingDesignContractError` before reaching here) — a null capture is a LOUD failure,
@@ -221,25 +248,12 @@ export async function persistDesignContract(
   input: {
     orgId: string;
     projectId: string;
-    capture: CaptureDesignContract | null;
-    designPlan: DerivationDesignPlan;
-    designAnswer?: DesignAgentAnswer;
+    design: DerivationDesignResult;
   },
-): Promise<string> {
-  // The contract is REQUIRED — the derive guards null upstream
-  // (`MissingDesignContractError`); this is defence-in-depth on the helper boundary so a
-  // null capture is a LOUD failure here too, never a silently-skipped design row.
-  if (input.capture === null) throw new MissingDesignContractError();
-
-  const contract =
-    input.designAnswer === undefined
-      ? toDesignContract(input.capture, input.designPlan.personaIdByName, input.designPlan.behaviorIdByKey)
-      : designContractFromAnswer({
-          answer: input.designAnswer,
-          personas: input.designPlan.agentInput.personas,
-          behaviors: input.designPlan.agentInput.behaviors,
-        });
-
+): Promise<{ id: string; version: number; domain: string; digest: string }> {
+  const contract = normalizeDesignContract(input.design.contract);
+  const digest = designContractDigest(contract);
+  if (digest !== input.design.contractDigest) throw new Error("design result contract digest mismatch");
   // The provider call (when present) already completed behind the derivation's
   // durable result boundary. This transaction only persists the validated answer.
   // The design contract is PROJECT-scoped (H2 BLOCKING unify): the whole-product
@@ -254,5 +268,5 @@ export async function persistDesignContract(
     },
     { kind: "operator" },
   );
-  return record.id;
+  return { id: record.id, version: record.version, domain: record.domain, digest };
 }

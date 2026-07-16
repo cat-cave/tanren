@@ -2,7 +2,12 @@ import { runWithOrgScope } from "@tanren/db";
 import type { Pool } from "pg";
 import type { ActorContext } from "../../src/auth/schemas.js";
 import { InterviewCapture } from "../../src/engine/forge/interview/types.js";
-import { buildDerivationDesignPlan } from "../../src/engine/forge/interview/deriveDesignContract.js";
+import {
+  buildDerivationDesignPlan,
+  capturedDesignResult,
+  providerDesignResult,
+} from "../../src/engine/forge/interview/deriveDesignContract.js";
+import type { DesignAgentAnswer } from "../../src/engine/design/designAgent.js";
 import { IntegrationConnectionsStore } from "../../src/engine/repositories/integrationConnections.js";
 import { buildDerivationOwnership, repositoryOwnershipMarker } from "../../src/engine/repositories/projects.js";
 import { systemActor } from "../../src/engine/state/actor.js";
@@ -66,6 +71,13 @@ export const GRAPH_CAPTURE = InterviewCapture.parse({
 /* eslint-enable unicorn/no-thenable */
 
 export const graphDesignPlan = (fingerprint: string) => buildDerivationDesignPlan(GRAPH_CAPTURE, fingerprint);
+export const graphCapturedDesign = (fingerprint: string) => {
+  const capture = GRAPH_CAPTURE.designContract;
+  if (capture === null) throw new Error("graph design fixture missing");
+  return capturedDesignResult(capture, graphDesignPlan(fingerprint));
+};
+export const graphProviderDesign = (fingerprint: string, answer: DesignAgentAnswer) =>
+  providerDesignResult(answer, graphDesignPlan(fingerprint));
 
 export function directSanitizedInput(): Record<string, unknown> {
   return { kind: "direct_greenfield", input: { deploy: { providerKind: "deploy.vercel" } } };

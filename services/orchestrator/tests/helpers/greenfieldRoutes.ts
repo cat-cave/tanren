@@ -74,6 +74,7 @@ export function appWithGreenfieldRoutes(
       | "materializeTemplate"
       | "runFragmentAuthoring"
       | "bootstrapProject"
+      | "designAgentFactory"
     >
   > = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential

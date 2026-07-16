@@ -19,8 +19,9 @@
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
+import type { EventName } from "../events/index.js";
 import { NotificationRouteStore, NotificationTargetStore } from "./store.js";
-import type { NotificationRouteRow, NotificationTargetRow } from "./schemas.js";
+import type { NotificationRouteRow, NotificationTargetRow, Severity } from "./schemas.js";
 
 // The label the onboarding seed stamps on the org-scoped ntfy target so the
 // idempotency check (and the dashboard) can recognize it as the seeded default.
@@ -43,7 +44,7 @@ export const DEFAULT_ROUTE_TARGET_LABEL = "default route (onboarding)";
 // hole under the plane-split; a fail-closed signal that budget deltas may have
 // been skipped). Apex must see it for the same reason — visible on the matrix,
 // not just carried via the env-default.
-export const DEFAULT_ROUTE_EVENTS: readonly string[] = [
+export const DEFAULT_ROUTE_EVENTS = [
   "dag.budget.milestone",
   "dag.budget.paused",
   "deploy.verified",
@@ -52,7 +53,12 @@ export const DEFAULT_ROUTE_EVENTS: readonly string[] = [
   "dag.spec.needs_attention",
   "demo.failed",
   "usage.accounting_failed",
-] as const;
+] as const satisfies readonly EventName[];
+
+// The canonical floor is part of each required route's identity. Activation
+// requires this exact value; a same-count route set with a stricter or looser
+// floor is not the seeded autonomous notification surface.
+export const DEFAULT_ROUTE_MIN_SEVERITY = "warn" as const satisfies Severity;
 
 export interface EnsureDefaultRouteInput {
   pool: pg.Pool;
@@ -117,7 +123,7 @@ export async function ensureDefaultNotificationRoute(
         enabled: true,
         // The `warn` floor: every milestone event is warn-severity, so a warn
         // route delivers them while staying silent on routine info/ok lifecycle.
-        minSeverity: "warn",
+        minSeverity: DEFAULT_ROUTE_MIN_SEVERITY,
       });
       created.push(route);
     }

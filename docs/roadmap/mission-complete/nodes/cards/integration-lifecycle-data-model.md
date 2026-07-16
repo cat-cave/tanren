@@ -29,7 +29,7 @@ activate completely; binding workers remain schema-only for later slices.
 This Slice 1 ships as one cumulative clean-replacement PR from exact
 `origin/main` (`9f20c3ea9a4d972a2564374abd16c63ed5f6fe87`). It is not a final-repair
 delta layered on an undeclared branch. The complete comparison contains exactly
-202 paths: 72 additions, 126 modifications, and 4 deletions. The deleted paths are
+207 paths: 72 additions, 131 modifications, and 4 deletions. The deleted paths are
 `db/src/schemaIntegrations.ts`,
 `services/orchestrator/src/engine/repositories/orgIntegrations.ts`, and
 `services/orchestrator/tests/conformance/integrationRepositories.conformance.test.ts`,
@@ -44,7 +44,7 @@ That count cannot advance before exact-candidate independent audit, live proof,
 CI, shared smoke, and hosted merge; even then, IN-1 remains incomplete until the
 downstream binding activation and remaining cutover slices land.
 
-### Exhaustive 202-path manifest
+### Exhaustive 207-path manifest
 
 <!-- final-freeze-manifest:start -->
 
@@ -90,6 +90,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/engine/deploy/mobileReleaseDeployAdapter.ts`
 - `services/orchestrator/src/engine/deploy/packageReleaseDeployAdapter.ts`
 - `services/orchestrator/src/engine/deploy/pulumiDeployAdapter.ts`
+- `services/orchestrator/src/engine/forge/audits/seedCatalog.ts`
 - `services/orchestrator/src/engine/forge/interview/deployDependency.ts`
 - `services/orchestrator/src/engine/forge/interview/deployIneligibleError.ts`
 - `services/orchestrator/src/engine/forge/interview/derive.ts`
@@ -104,6 +105,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/engine/integrations/principalVerifiers.ts`
 - `services/orchestrator/src/engine/integrations/provisioningEngine.ts`
 - `services/orchestrator/src/engine/integrations/slack/slackProvisioner.ts`
+- `services/orchestrator/src/engine/notifications/seedDefaultRoute.ts`
 - `services/orchestrator/src/engine/postMerge/demoOnDeploy.ts`
 - `services/orchestrator/src/engine/postMerge/deployOnMerge.ts`
 - `services/orchestrator/src/engine/postMerge/deployTargetResolution.ts`
@@ -127,6 +129,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/engine/worker/boot.ts`
 - `services/orchestrator/src/engine/worker/runExecutor.ts`
 - `services/orchestrator/src/engine/workflow/attachRuntimeAppEnv.ts`
+- `services/orchestrator/src/engine/workflow/provisionAutonomousProject.ts`
 - `services/orchestrator/src/engine/workflow/resolveAppEnv.ts`
 - `services/orchestrator/src/routes/brownfield/fullTrack.ts`
 - `services/orchestrator/src/routes/integrations/authorityPayloads.ts`
@@ -204,6 +207,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/engine/contracts/dagWalker.ts`
 - `services/orchestrator/src/engine/dag/walker.ts`
 - `services/orchestrator/src/engine/dag/walkerPg.ts`
+- `services/orchestrator/src/engine/design/designContract.ts`
 - `services/orchestrator/src/engine/design/designPhase.ts`
 - `services/orchestrator/src/engine/forge/interview/deriveBehaviorSpec.ts`
 - `services/orchestrator/src/engine/forge/interview/deriveDesignContract.ts`
@@ -246,6 +250,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/tests/projectDerivationResponseLoss.test.ts`
 - `services/orchestrator/tests/projectLifecycleRoutes.test.ts`
 - `services/orchestrator/tests/projectSpecWorkflow.test.ts`
+- `services/orchestrator/tests/provisionAutonomousProject.test.ts`
 - `services/orchestrator/tests/specProgress.test.ts`
 - `services/orchestrator/tests/visionInterview.test.ts`
 - `services/orchestrator/tests/visionInterviewDesignContract.test.ts`

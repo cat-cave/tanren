@@ -17,10 +17,13 @@ import type { DeriveInput, DeriveResult } from "./derive.js";
 import type { ScaffoldSpecDef } from "./deriveScaffoldSpecs.js";
 import type { SeededTemplate } from "../../templates/index.js";
 import type { CreatedRepository } from "../../contracts/codeHostTypes.js";
-import type { DesignAgentAnswer } from "../../design/designAgent.js";
 import type { InterviewCapture } from "./types.js";
 import { ProjectDerivationStore, type ProjectDerivationRow } from "../../repositories/projectDerivations.js";
-import { buildDerivationDesignPlan, type DerivationDesignPlan } from "./deriveDesignContract.js";
+import {
+  buildDerivationDesignPlan,
+  type DerivationDesignPlan,
+  type DerivationDesignResult,
+} from "./deriveDesignContract.js";
 
 /** Graph rows and their durable receipt commit or roll back as one org-scoped unit. */
 export async function buildEntityGraphWithReceipt(
@@ -34,7 +37,7 @@ export async function buildEntityGraphWithReceipt(
   actor: ActorContext,
   scaffoldSpecs: ScaffoldSpecDef[],
   operation: ProjectDerivationRow,
-  designAnswer?: DesignAgentAnswer,
+  design: DerivationDesignResult,
 ): Promise<{ graph: DeriveResult; operation: ProjectDerivationRow }> {
   const designPlan = buildDerivationDesignPlan(capture, operation.idempotencyFingerprint);
   return runWithOrgScope(pool, input.orgId, async (client) => {
@@ -49,7 +52,7 @@ export async function buildEntityGraphWithReceipt(
       actor,
       scaffoldSpecs,
       designPlan,
-      designAnswer,
+      design,
     );
     const updated = await ProjectDerivationStore.recordReceiptOnClient(client, operation, "graph", graph, "graph");
     return { graph, operation: updated };
@@ -67,7 +70,7 @@ export async function buildEntityGraphOnClient(
   actor: ActorContext,
   scaffoldSpecs: ScaffoldSpecDef[],
   designPlan: DerivationDesignPlan,
-  designAnswer?: DesignAgentAnswer,
+  design: DerivationDesignResult,
 ): Promise<DeriveResult> {
   // 1 · personas (project-scoped).
   const personaIdByName = new Map<string, string>();
@@ -152,12 +155,10 @@ export async function buildEntityGraphOnClient(
   const behaviorIds = ifaceResult.behaviorIds;
 
   // 4 · design contract.
-  const designContractId = await persistDesignContract(pool, {
+  const designContract = await persistDesignContract(pool, {
     orgId: input.orgId,
     projectId,
-    capture: capture.designContract,
-    designPlan,
-    ...(designAnswer === undefined ? {} : { designAnswer }),
+    design,
   });
 
   return {
@@ -168,7 +169,7 @@ export async function buildEntityGraphOnClient(
     personaIds: [...personaIdByName.values()],
     behaviorIds,
     milestoneIds,
-    designContractId,
+    designContract,
     templateSeed: seed,
   };
 }

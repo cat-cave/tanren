@@ -4,16 +4,14 @@ import type { DeriveResult } from "../forge/interview/derive.js";
 import type { SeededTemplate } from "../templates/index.js";
 import type { ProvisionAutonomousProjectResult } from "../workflow/provisionAutonomousProject.js";
 import type { CreatedRepository } from "../contracts/codeHostTypes.js";
-import { DesignAgentAnswer } from "../answerers/schemas/designAgent.js";
+import { DesignContractV1, designContractDigest } from "../design/designContract.js";
 
 export const DerivationKindSchema = z.enum(["direct_greenfield", "interview"]);
 export type DerivationKind = z.infer<typeof DerivationKindSchema>;
-
 const FingerprintSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const NonEmpty = z.string().min(1);
 const JsonRecord = z.record(z.string(), z.unknown());
 const RepositorySchema = z.object({ fullName: NonEmpty, repoUrl: NonEmpty, defaultBranch: NonEmpty }).strict();
-
 const BindingSchema = z
   .object({
     orgId: NonEmpty,
@@ -23,14 +21,12 @@ const BindingSchema = z
     ownershipMarker: NonEmpty,
   })
   .strict();
-
 export const DerivationOwnershipReceiptSchema = BindingSchema.extend({
   receipt: z.literal("repository_ownership"),
   mode: z.enum(["managed", "explicit"]),
   repository: z.object({ fullName: NonEmpty, repoUrl: NonEmpty, requestedDefaultBranch: NonEmpty }).strict(),
 }).strict();
 export type DerivationOwnershipReceipt = z.infer<typeof DerivationOwnershipReceiptSchema>;
-
 const EffectIntentSchema = z.object({ effect: z.enum(["template", "deploy"]), idempotencyKey: NonEmpty }).strict();
 const SeededTemplateSchema = z
   .object({ templateRef: NonEmpty, validatedAt: z.string().datetime({ offset: true }) })
@@ -67,11 +63,17 @@ export const BootstrapSchema = z
   .object({
     inboxSource: z.object({ id: NonEmpty, created: z.boolean() }).strict(),
     notificationRoute: z
-      .object({ targetId: NonEmpty, created: z.boolean(), events: z.number().int().positive() })
+      .object({
+        targetId: NonEmpty,
+        created: z.boolean(),
+        requiredEvents: z.array(
+          z.object({ eventName: NonEmpty, minSeverity: z.enum(["ok", "info", "warn", "fail"]) }).strict(),
+        ),
+      })
       .strict(),
     auditCatalog: z
       .object({
-        jobs: z.number().int().positive(),
+        requiredCategories: z.array(z.enum(["security", "deps", "a11y", "mutation", "perf", "license", "stale_specs"])),
         created: z.array(z.enum(["security", "deps", "a11y", "mutation", "perf", "license", "stale_specs"])),
       })
       .strict(),
@@ -89,7 +91,9 @@ const GraphResultSchema = z
     personaIds: z.array(NonEmpty),
     behaviorIds: z.array(NonEmpty),
     milestoneIds: z.array(NonEmpty),
-    designContractId: NonEmpty,
+    designContract: z
+      .object({ id: NonEmpty, version: z.number().int().positive(), domain: NonEmpty, digest: FingerprintSchema })
+      .strict(),
     templateSeed: SeededTemplateSchema.optional(),
     bootstrap: BootstrapSchema.optional(),
   })
@@ -97,12 +101,12 @@ const GraphResultSchema = z
 
 const envelope = <T extends z.ZodType>(receipt: string, value: T) =>
   z.object({ receipt: z.literal(receipt), binding: BindingSchema, value }).strict();
-
 const DesignIntentSchema = z
   .object({ effect: z.literal("design"), idempotencyKey: NonEmpty, inputDigest: FingerprintSchema })
   .strict();
-const DesignResultSchema = z.object({ inputDigest: FingerprintSchema, answer: DesignAgentAnswer }).strict();
-
+const DesignResultSchema = z
+  .object({ inputDigest: FingerprintSchema, contract: DesignContractV1, contractDigest: FingerprintSchema })
+  .strict();
 const ResultEnvelopeSchemas = {
   repository: envelope("repository", RepositorySchema),
   template_intent: envelope("template_intent", EffectIntentSchema),
@@ -121,7 +125,7 @@ export interface DerivationReceiptValueByKey {
   deploy_intent: { effect: "deploy"; idempotencyKey: string };
   deploy: PreparedGreenfieldDeploy;
   design_intent: { effect: "design"; idempotencyKey: string; inputDigest: string };
-  design: { inputDigest: string; answer: z.infer<typeof DesignAgentAnswer> };
+  design: { inputDigest: string; contract: z.infer<typeof DesignContractV1>; contractDigest: string };
   graph: DeriveResult;
   bootstrap: ProvisionAutonomousProjectResult;
 }
@@ -153,10 +157,10 @@ export interface CompleteInterviewDerivation extends DecodedDerivationReceipts {
   results: Required<
     Pick<
       DerivationReceiptValueByKey,
-      "repository" | "template_intent" | "deploy_intent" | "deploy" | "graph" | "bootstrap"
+      "repository" | "template_intent" | "deploy_intent" | "deploy" | "design" | "graph" | "bootstrap"
     >
   > &
-    Partial<Pick<DerivationReceiptValueByKey, "design_intent" | "design">>;
+    Partial<Pick<DerivationReceiptValueByKey, "design_intent">>;
 }
 
 export type CompleteProjectDerivation = CompleteDirectDerivation | CompleteInterviewDerivation;
@@ -170,6 +174,7 @@ export function completeDerivationReceipts(decoded: DecodedDerivationReceipts): 
           "deploy_intent",
           "deploy",
           ...(decoded.designMode === "provider" ? (["design_intent", "design"] as const) : []),
+          ...(decoded.designMode === "captured" ? (["design"] as const) : []),
           "graph",
           "bootstrap",
         ] as const)
@@ -439,10 +444,10 @@ export function decodeDerivationReceipts(input: {
     if (design !== undefined) {
       const intent = results.design_intent;
       const result = results.design;
-      if (design.mode === "captured" && (intent !== undefined || result !== undefined)) {
-        fail("binding_mismatch", "captured design mode cannot carry provider design evidence");
+      if (design.mode === "captured" && intent !== undefined) {
+        fail("binding_mismatch", "captured design mode cannot carry provider design intent");
       }
-      if (result !== undefined && intent === undefined) {
+      if (design.mode === "provider" && result !== undefined && intent === undefined) {
         fail("invalid_receipt", "design result has no durable design intent");
       }
       if (
@@ -450,7 +455,9 @@ export function decodeDerivationReceipts(input: {
           (intent.effect !== "design" ||
             intent.idempotencyKey !== `${input.idempotencyFingerprint}:design` ||
             intent.inputDigest !== design.inputDigest)) ||
-        (result !== undefined && result.inputDigest !== design.inputDigest)
+        (result !== undefined &&
+          (result.inputDigest !== design.inputDigest ||
+            result.contractDigest !== designContractDigest(result.contract)))
       ) {
         fail("binding_mismatch", "design evidence does not match the derivation design intent");
       }

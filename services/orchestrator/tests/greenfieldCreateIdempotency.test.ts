@@ -311,6 +311,60 @@ describe("greenfield create — atomicity + idempotency (audit §3.10)", () => {
     expect(pool.projects.size).toBe(1);
   });
 
+  it("returns the typed state_unknown contract and never replays an ambiguous design-provider call", async () => {
+    const pool = new RoutesPool();
+    seedGithubAppOrg(pool);
+    pool.seedMembership("org_acme", "user_alice", "admin");
+    let designCalls = 0;
+    let deployProvisions = 0;
+    const { app } = appWithGreenfieldRoutes(pool, new FakeRepoCreateHttp(), {
+      async preflightDeploy() {},
+      async prepareDeploy() {
+        deployProvisions += 1;
+        return preparedDeploy();
+      },
+      designAgentFactory: () => ({
+        async elaborate() {
+          designCalls += 1;
+          throw new Error("provider response became ambiguous");
+        },
+      }),
+    });
+    const body = JSON.stringify({
+      capture: apexCapture(),
+      owner: "cat-cave",
+      deploy: { providerKind: "deploy.vercel" },
+    });
+
+    const first = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(first.status).toBe(409);
+    const firstBody = (await first.json()) as Record<string, unknown>;
+    expect(firstBody).toMatchObject({
+      error: "project_design_elaboration_state_unknown",
+      reason: "state_unknown",
+      derivationId: expect.stringMatching(/^derivation_/u),
+      message: expect.stringContaining("replay is forbidden"),
+    });
+
+    const retry = await app.request("/orgs/org_acme/onboarding/interview/derive", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body,
+    });
+    expect(retry.status).toBe(409);
+    await expect(retry.json()).resolves.toMatchObject({
+      error: "project_design_elaboration_state_unknown",
+      reason: "state_unknown",
+      derivationId: firstBody["derivationId"],
+    });
+    expect(designCalls).toBe(1);
+    expect(deployProvisions).toBe(1);
+  });
+
   it("NORMALIZES an unsafe (LLM-authored) slug into a hostname-safe repo name", async () => {
     const pool = new RoutesPool();
     seedGithubAppOrg(pool);

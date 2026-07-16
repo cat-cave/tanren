@@ -1,5 +1,12 @@
 import type { ActorContext } from "../../auth/schemas.js";
+import {
+  canonicalDesignContractJson,
+  designContractDigest,
+  normalizeDesignContract,
+} from "../design/designContract.js";
+import { AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES } from "../forge/audits/seedCatalog.js";
 import { PgIntegrationAuthority } from "../integrations/integrationAuthorityImpl.js";
+import { DEFAULT_ROUTE_EVENTS, DEFAULT_ROUTE_MIN_SEVERITY } from "../notifications/seedDefaultRoute.js";
 import { systemActor } from "../state/actor.js";
 import {
   BootstrapSchema,
@@ -24,42 +31,65 @@ function canonicalRepoUrl(value: string): string {
   return value.replace(/\.git$/u, "");
 }
 
-function sameIds(receiptIds: string[], storedIds: string[]): boolean {
+function sameIds(receiptIds: readonly string[], storedIds: readonly string[]): boolean {
   if (receiptIds.length !== new Set(receiptIds).size || receiptIds.length !== storedIds.length) return false;
   return [...receiptIds].sort().every((id, index) => id === [...storedIds].sort()[index]);
 }
 
 async function assertBootstrap(client: IntegrationQueryClient, derivation: CompleteProjectDerivation): Promise<void> {
   const bootstrap = BootstrapSchema.parse(derivation.results.bootstrap);
-  const result = await client.query(
-    `SELECT
-       EXISTS(
-         SELECT 1 FROM inbox_sources
-          WHERE org_id = $1 AND project_id = $2 AND id = $3
-       ) AS inbox_exists,
-       (SELECT count(*)::int FROM notification_routes r
-         JOIN notification_targets t ON t.id = r.target_id
-        WHERE t.org_id = $1 AND t.id = $4) AS notification_events,
-       (SELECT count(*)::int FROM audit_jobs
-        WHERE org_id = $1 AND project_id = $2) AS audit_jobs`,
-    [
-      derivation.ownership.orgId,
-      derivation.ownership.projectId,
-      bootstrap.inboxSource.id,
-      bootstrap.notificationRoute.targetId,
-    ],
+  const receiptRoutes = bootstrap.notificationRoute.requiredEvents.map(
+    (route) => `${route.eventName}:${route.minSeverity}`,
   );
-  const row = result.rows[0] as
-    | {
-        inbox_exists: boolean;
-        notification_events: number | string;
-        audit_jobs: number | string;
-      }
-    | undefined;
+  const requiredRoutes = DEFAULT_ROUTE_EVENTS.map((eventName) => `${eventName}:${DEFAULT_ROUTE_MIN_SEVERITY}`);
   if (
-    row?.inbox_exists !== true ||
-    Number(row.notification_events) !== bootstrap.notificationRoute.events ||
-    Number(row.audit_jobs) !== bootstrap.auditCatalog.jobs
+    !sameIds(bootstrap.auditCatalog.requiredCategories, AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES) ||
+    !sameIds(receiptRoutes, requiredRoutes)
+  ) {
+    mismatch("bootstrap receipt does not name the canonical autonomous surfaces");
+  }
+
+  const inbox = await client.query("SELECT id FROM inbox_sources WHERE org_id = $1 AND project_id = $2 AND id = $3", [
+    derivation.ownership.orgId,
+    derivation.ownership.projectId,
+    bootstrap.inboxSource.id,
+  ]);
+  const audits = await client.query("SELECT kind, enabled FROM audit_jobs WHERE org_id = $1 AND project_id = $2", [
+    derivation.ownership.orgId,
+    derivation.ownership.projectId,
+  ]);
+  const routes = await client.query(
+    `SELECT t.enabled AS target_enabled, r.event_name, r.enabled AS route_enabled, r.min_severity
+       FROM notification_targets t
+       LEFT JOIN notification_routes r ON r.target_id = t.id
+      WHERE t.org_id = $1 AND t.id = $2`,
+    [derivation.ownership.orgId, bootstrap.notificationRoute.targetId],
+  );
+  const enabledAuditKinds = new Set(
+    (audits.rows as Array<{ kind: string; enabled: unknown }>)
+      .filter((row) => row.enabled === true || row.enabled === "true")
+      .map((row) => row.kind),
+  );
+  const routeRows = routes.rows as Array<{
+    target_enabled: unknown;
+    event_name: string | null;
+    route_enabled: unknown;
+    min_severity: string | null;
+  }>;
+  const targetEnabled = routeRows.some((row) => row.target_enabled === true || row.target_enabled === 1);
+  const routesComplete = DEFAULT_ROUTE_EVENTS.every((eventName) =>
+    routeRows.some(
+      (row) =>
+        row.event_name === eventName &&
+        (row.route_enabled === true || row.route_enabled === 1) &&
+        row.min_severity === DEFAULT_ROUTE_MIN_SEVERITY,
+    ),
+  );
+  if (
+    inbox.rows[0] === undefined ||
+    !AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES.every((kind) => enabledAuditKinds.has(kind)) ||
+    !targetEnabled ||
+    !routesComplete
   ) {
     mismatch("bootstrap receipt does not match the project bootstrap surfaces");
   }
@@ -130,7 +160,8 @@ async function assertInterviewGraph(
   project: DerivationActivationProject,
 ): Promise<void> {
   const graph = derivation.results.graph;
-  if (graph.designContractId === undefined) mismatch("graph receipt has no design-contract lineage");
+  const designResult = derivation.results.design;
+  const graphDesign = graph.designContract;
   const repository = graph.repository;
   if (
     graph.projectName !== project.name ||
@@ -168,9 +199,36 @@ async function assertInterviewGraph(
     !sameIds(graph.personaIds, stored.persona_ids) ||
     !sameIds(graph.behaviorIds, stored.behavior_ids) ||
     !sameIds(graph.milestoneIds, stored.milestone_ids) ||
-    !sameIds([graph.designContractId], stored.design_contract_ids)
+    !sameIds([graphDesign.id], stored.design_contract_ids)
   ) {
     mismatch("graph receipt does not match the project's complete persisted graph lineage");
+  }
+
+  const designRows = await client.query(
+    `SELECT id, org_id, project_id, version, domain, contract
+       FROM design_contracts
+      WHERE org_id = $1 AND project_id = $2 AND id = $3 AND version = $4`,
+    [derivation.ownership.orgId, derivation.ownership.projectId, graphDesign.id, graphDesign.version],
+  );
+  const designRow = designRows.rows[0] as
+    | { id: string; org_id: string; project_id: string; version: number | string; domain: string; contract: unknown }
+    | undefined;
+  if (designRow === undefined) mismatch("graph receipt does not resolve its exact design-contract row");
+  const storedContract = normalizeDesignContract(designRow.contract);
+  const storedDigest = designContractDigest(storedContract);
+  if (
+    designRow.org_id !== derivation.ownership.orgId ||
+    designRow.project_id !== derivation.ownership.projectId ||
+    designRow.id !== graphDesign.id ||
+    Number(designRow.version) !== graphDesign.version ||
+    designRow.domain !== graphDesign.domain ||
+    storedContract.domain !== graphDesign.domain ||
+    graphDesign.digest !== designResult.contractDigest ||
+    storedDigest !== graphDesign.digest ||
+    designContractDigest(designResult.contract) !== designResult.contractDigest ||
+    canonicalDesignContractJson(storedContract) !== canonicalDesignContractJson(designResult.contract)
+  ) {
+    mismatch("persisted design contract does not match the immutable design result and graph receipt");
   }
 }
 

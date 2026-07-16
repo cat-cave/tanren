@@ -65,7 +65,7 @@ export interface DeriveResult {
   personaIds: string[];
   behaviorIds: string[];
   milestoneIds: string[];
-  designContractId?: string;
+  designContract: { id: string; version: number; domain: string; digest: string };
   templateSeed?: SeededTemplate;
   /** Complete, error-free autonomous bootstrap receipt required for activation. */
   bootstrap?: ProvisionAutonomousProjectResult;

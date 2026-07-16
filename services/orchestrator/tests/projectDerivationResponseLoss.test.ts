@@ -13,6 +13,7 @@ import {
   type InterviewCapture,
   type PreparedGreenfieldDeploy,
 } from "../src/engine/forge/interview/index.js";
+import { designContractDigest } from "../src/engine/design/designContract.js";
 import { ProjectDerivationStore } from "../src/engine/repositories/projects.js";
 import type { MaterializeTemplate, SeededTemplate } from "../src/engine/templates/index.js";
 import { stubPool, successfulBootstrapProject } from "./fixtures/forge/interviewDeriveStub.js";
@@ -201,6 +202,38 @@ describe("project derivation — provider response loss at receipt boundaries", 
 
     expect(result.projectName).toBe("response-loss");
     expect(calls).toBe(1);
+    const operation = await ProjectDerivationStore.findForProject(pool, "org_a", result.projectId);
+    if (operation === undefined) throw new Error("provider derivation missing");
+    const receipts = ProjectDerivationStore.decode(operation).results;
+    expect(receipts.design?.contractDigest).toBe(designContractDigest(receipts.design?.contract));
+    expect(receipts.graph?.designContract.digest).toBe(receipts.design?.contractDigest);
+  });
+
+  it("records the same normalized immutable design result in captured mode", async () => {
+    const { pool, state } = stubPool();
+    const result = await deriveFromCapture(
+      {
+        pool,
+        async prepareDeploy() {
+          return deployReceipt();
+        },
+      },
+      deriveInput(
+        async () => SEED,
+        async () => ({
+          fullName: "cat-cave/response-loss",
+          repoUrl: "https://github.com/cat-cave/response-loss",
+          defaultBranch: "main",
+        }),
+      ),
+    );
+    const operation = await ProjectDerivationStore.findForProject(pool, "org_a", result.projectId);
+    if (operation === undefined) throw new Error("captured derivation missing");
+    const receipts = ProjectDerivationStore.decode(operation).results;
+    expect(receipts.design_intent).toBeUndefined();
+    expect(receipts.design?.contract).toEqual(state.designContracts[0]);
+    expect(receipts.design?.contractDigest).toBe(designContractDigest(receipts.design?.contract));
+    expect(receipts.graph?.designContract.digest).toBe(receipts.design?.contractDigest);
   });
 
   it("parks an uncommitted design result as state_unknown and never calls the provider twice", async () => {
