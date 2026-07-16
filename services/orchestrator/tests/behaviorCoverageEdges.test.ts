@@ -137,6 +137,7 @@ describe("BehaviorCoverageEdgesStore", () => {
       memberKey: MEMBER,
     });
     expect(bound.authorityFingerprint).toBe("");
+    expect(Object.keys(bound)).toEqual(["binding", "authorityFingerprint", "snapshot"]);
     const [sql, params] = query.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("org_id = $1");
     expect(sql).toContain("project_id = $2");
