@@ -2,7 +2,7 @@
 
 **Phase**: Mission-complete event substrate (SP-8)
 **Node credit**: **0**
-**State**: production complete; migration unparked after CAS-SUB landed
+**State**: production complete; migration authorized after CAS-SUB landed
 **Base**: `origin/main` / `55c53ab1f07abce4cf29a53411b44a2eddf0828e`
 **Branch**: `mission/ev-sub-w0`
 **Consumes**: [`event-vocabulary-waves.md`](../../event-vocabulary-waves.md)
@@ -46,7 +46,7 @@ apex behavior. It cannot earn consumer-node credit.
 | `services/orchestrator/tests/eventVocabularyW0.test.ts`                         | Unit and drift-boundary proof                                 |
 | `services/orchestrator/tests/eventVocabularyW0Catalog.integration.test.ts`      | Gated real-Postgres catalog/FK/RLS append proof               |
 
-### Serialized migration paths — unparked after CAS-SUB landed
+### Serialized migration paths — authorized after CAS-SUB landed
 
 | Path                                         | Action after CAS-SUB `0041` is on `origin/main`       |
 | -------------------------------------------- | ----------------------------------------------------- |
@@ -98,7 +98,7 @@ runtime behavior must remain byte-for-byte equivalent at the public boundary.
 
 ## Validation
 
-Before the migration is unparked:
+Before the migration is authorized:
 
 1. focused W0 unit tests;
 2. existing event registry, semantic-field, severity, drift, and contract-schema tests;

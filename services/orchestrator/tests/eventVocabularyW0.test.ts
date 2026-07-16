@@ -1,3 +1,4 @@
+// cspell:ignore mqeval mqgrp mqwake
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { EventRegistry, listEventNames, listSensitivityPathsFor, sensitivityFor } from "../src/engine/events/index.js";

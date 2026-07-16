@@ -1,6 +1,7 @@
+// cspell:ignore mqeval mqgrp mqwake
 // Real-Postgres proof for the SP-8 W0 catalog extension and org-scoped append
-// path. This stays gated until migration 0042 is unparked after CAS migration
-// 0041 lands; once enabled, it exercises the same migration runner and runtime
+// path. This stays gated until migration 0042 follows CAS migration 0041; once
+// enabled, it exercises the same migration runner and runtime
 // RLS role used by the production service.
 
 import { migrate, runWithOrgScope } from "@tanren/db";

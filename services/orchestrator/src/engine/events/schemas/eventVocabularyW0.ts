@@ -1,3 +1,4 @@
+// cspell:ignore mqeval mqgrp mqwake
 import { z } from "zod";
 
 const Sha256Digest = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
