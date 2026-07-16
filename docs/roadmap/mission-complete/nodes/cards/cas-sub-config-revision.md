@@ -1,9 +1,9 @@
 # cas-sub-config-revision — sole config-write authority (migration 0041)
 
-**Phase**: shared spine substrate (config generation) · not a consumer node  
-**Base**: `origin/main` `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee`  
-**Branch**: `mission/cas-sub-config-revision`  
-**Worktree**: `.codex/worktrees/cas-sub-config-revision`  
+**Phase**: shared spine substrate (config generation) · not a consumer node
+**Base**: `origin/main` `1f1eda2ed678f8ea7f12eef4a8362e22dbd39fee`
+**Branch**: `mission/cas-sub-config-revision`
+**Worktree**: `.codex/worktrees/cas-sub-config-revision`
 **Migration slot**: **0041** (`0041_config_revision`) — sole owner of this slot
 
 **Purpose**: install the one application-owned concurrency token and the one store
