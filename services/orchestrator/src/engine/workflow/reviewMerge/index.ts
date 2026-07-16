@@ -37,9 +37,13 @@ export {
 } from "./simulatedReviewer.js";
 export {
   assertStrictForgeReceipt,
+  bodyContainsTanrenSimulatedMarker,
+  publishSimulatedReviewConvergent,
+  reconcileExistingSimulatedReviews,
   resolveDistinctSimulatedReviewerToken,
   SimulatedReviewPublicationError,
   strictReviewEventFor,
+  tanrenSimulatedReviewMarker,
   type ForgeReviewPublication,
 } from "./simulatedReviewPublication.js";
 export {

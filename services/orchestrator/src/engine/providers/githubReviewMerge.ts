@@ -8,7 +8,18 @@
 // the resolver's 401-retry path flows through unchanged — no static-token reads.
 
 import type { GitHubHttpClient, GitHubRepository } from "./github.js";
-import { parseMessage, parseSubmitReviewReceipt, type ParsedSubmitReviewReceipt } from "./githubReviewMergeParse.js";
+import {
+  parseListedReviews,
+  parseMessage,
+  parseSubmitReviewReceipt,
+  type ListedPullRequestReview,
+  type ParsedSubmitReviewReceipt,
+} from "./githubReviewMergeParse.js";
+
+export type { ListedPullRequestReview } from "./githubReviewMergeParse.js";
+
+/** GitHub list page size for review reconcile (host max is 100). */
+export const LIST_REVIEWS_PER_PAGE = 100;
 
 /** A GitHub PR review state, normalized to the states the run loop reacts to. */
 export type GitHubReviewState = "approved" | "changes_requested" | "commented" | "dismissed" | "pending";
@@ -121,17 +132,59 @@ export class GitHubReviewMergeService {
   async fetchReviewVerdict(
     input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
   ): Promise<ReviewVerdictResult> {
-    const response = await this.http.request({
-      method: "GET",
-      path: repoPath(input.repo, `/pulls/${input.pullNumber}/reviews`),
-      token: input.token,
-      refreshToken: input.refreshToken,
-    });
-    if (response.status !== 200) {
-      throw new Error(`GitHub PR reviews fetch failed: HTTP ${response.status}`);
+    const reviews = await this.listPullRequestReviews(input);
+    return reduceReviewVerdict(
+      reviews.map((r) => ({
+        state: r.state,
+        reviewer: r.reviewerLogin,
+        body: r.body,
+      })),
+    );
+  }
+
+  /**
+   * List every PR review with progress-based pagination (`per_page=100`).
+   * Each non-empty page must introduce new review ids (progress); a repeated
+   * id or malformed body fails loud (silent truncation/stuck page would hide
+   * a conflicting Tanren review). Exhaustion is a short page (`length < 100`).
+   */
+  async listPullRequestReviews(
+    input: { repo: GitHubRepository; pullNumber: number } & TokenInput,
+  ): Promise<ListedPullRequestReview[]> {
+    const all: ListedPullRequestReview[] = [];
+    const seenIds = new Set<string>();
+    let page = 1;
+    for (;;) {
+      const response = await this.http.request({
+        method: "GET",
+        path: repoPath(input.repo, `/pulls/${input.pullNumber}/reviews?per_page=${LIST_REVIEWS_PER_PAGE}&page=${page}`),
+        token: input.token,
+        refreshToken: input.refreshToken,
+      });
+      if (response.status !== 200) {
+        throw new Error(`GitHub PR reviews list failed: HTTP ${response.status}`);
+      }
+      let pageRows: ListedPullRequestReview[];
+      try {
+        pageRows = parseListedReviews(response.body);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`GitHub PR reviews list malformed: ${message}`, { cause: err });
+      }
+      for (const row of pageRows) {
+        if (seenIds.has(row.forgeReviewId)) {
+          throw new Error(
+            `GitHub PR reviews list stuck/repeated id ${row.forgeReviewId} on page ${page}; cannot reconcile safely`,
+          );
+        }
+        seenIds.add(row.forgeReviewId);
+      }
+      all.push(...pageRows);
+      if (pageRows.length < LIST_REVIEWS_PER_PAGE) {
+        return all;
+      }
+      page += 1;
     }
-    const reviews = parseReviews(response.body);
-    return reduceReviewVerdict(reviews);
   }
 
   /**
@@ -141,6 +194,10 @@ export class GitHubReviewMergeService {
    * with a missing/malformed id/state/url/commit_id also throws (fail closed —
    * no silent skip). Callers that require land-authoritative publication MUST
    * use `APPROVE`/`REQUEST_CHANGES` with a distinct reviewer identity.
+   *
+   * Non-COMMENT submits disable transport auto-retry (`retryTransient: false`):
+   * a 504 may have accepted the review server-side; the convergent publisher
+   * re-lists and reclaims instead of double-POSTing.
    */
   async submitReview(
     input: {
@@ -157,6 +214,9 @@ export class GitHubReviewMergeService {
       path: repoPath(input.repo, `/pulls/${input.pullNumber}/reviews`),
       token: input.token,
       refreshToken: input.refreshToken,
+      // COMMENT is still a non-authoritative mirror; APPROVE/REQUEST_CHANGES must
+      // not auto-retry on gateway errors (double-POST risk).
+      ...(input.event !== "COMMENT" && { retryTransient: false }),
       body: {
         event: input.event,
         body: input.body,
@@ -173,50 +233,6 @@ export class GitHubReviewMergeService {
     }
     return parseSubmitReviewReceipt(response.body);
   }
-}
-
-function parseReviews(value: unknown): GitHubReview[] {
-  if (!Array.isArray(value)) {
-    throw new TypeError("GitHub PR reviews response was not an array");
-  }
-  return value.map((review) => parseReview(review));
-}
-
-function parseReview(value: unknown): GitHubReview {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("GitHub PR review was not an object");
-  }
-  const object = value as Record<string, unknown>;
-  const rawState = typeof object["state"] === "string" ? object["state"].toLowerCase() : "pending";
-  return {
-    state: normalizeReviewState(rawState),
-    reviewer: reviewerLogin(object["user"]),
-    body: typeof object["body"] === "string" && object["body"] !== "" ? object["body"] : undefined,
-    submittedAt: typeof object["submitted_at"] === "string" ? object["submitted_at"] : undefined,
-  };
-}
-
-function normalizeReviewState(state: string): GitHubReviewState {
-  switch (state) {
-    case "approved":
-      return "approved";
-    case "changes_requested":
-      return "changes_requested";
-    case "commented":
-      return "commented";
-    case "dismissed":
-      return "dismissed";
-    default:
-      return "pending";
-  }
-}
-
-function reviewerLogin(user: unknown): string | undefined {
-  if (typeof user !== "object" || user === null || Array.isArray(user)) {
-    return undefined;
-  }
-  const login = (user as Record<string, unknown>)["login"];
-  return typeof login === "string" ? login : undefined;
 }
 
 /**

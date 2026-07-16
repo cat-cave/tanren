@@ -20,6 +20,7 @@
 // payload — no second audit store.
 
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
+import type { EventPayload } from "../../events/index.js";
 import type { PriorEventInput } from "../../eventStore.js";
 import type { ForgeReviewPublication } from "./simulatedReviewPublication.js";
 
@@ -80,54 +81,89 @@ export async function markReviewTaskDoneWithEvent(input: {
   //
   // The forge review id is NOT part of the key (receipt id is observation,
   // not identity of the terminal). No second receipt store; one event stream.
-  const eventType = verdict === "approved" ? "review.approved" : "review.changes_requested";
-  const forgeFields =
-    forgePublication === undefined
-      ? {}
-      : {
-          forgeReviewId: forgePublication.forgeReviewId,
-          forgeReviewState: forgePublication.forgeReviewState,
-          forgeReviewUrl: forgePublication.forgeReviewUrl,
-          headSha: forgePublication.headSha,
-        };
   const effectiveReviewer = reviewer ?? forgePublication?.reviewerLogin;
   // Head-bound key only when a forge receipt is present — human/auto omit it.
   const idempotencyKey =
     forgePublication === undefined
       ? `${base.runId}:review:${verdict}`
       : `${base.runId}:review:${verdict}:${forgePublication.headSha}`;
+
   const verdictEvent: PriorEventInput =
     verdict === "approved"
       ? {
           ...base,
-          eventType,
-          payload: {
-            prUrl,
-            prNumber,
-            ...(effectiveReviewer !== undefined && { reviewer: effectiveReviewer }),
-            ...forgeFields,
-          } as never,
+          eventType: "review.approved",
+          payload: approvedPayload({ prUrl, prNumber, reviewer: effectiveReviewer, forgePublication }),
           idempotencyKey,
         }
       : {
           ...base,
-          eventType,
-          payload: {
+          eventType: "review.changes_requested",
+          payload: changesRequestedPayload({
             prUrl,
             prNumber,
-            ...(effectiveReviewer !== undefined && { reviewer: effectiveReviewer }),
-            ...(feedback !== undefined && { message: feedback }),
-            ...forgeFields,
-          } as never,
+            reviewer: effectiveReviewer,
+            feedback,
+            forgePublication,
+          }),
           idempotencyKey,
         };
+
+  const completedPayload: EventPayload<"task.completed"> = {
+    taskKind: "review",
+    status: verdict,
+  };
   await writer.updateTaskWithEvent({
     task: { taskId: base.taskId, transition: "done", outcome: "ok" },
     event: {
       ...base,
       eventType: "task.completed",
-      payload: { taskKind: "review", status: verdict } as never,
+      payload: completedPayload,
     },
     priorEvents: [verdictEvent],
   });
+}
+
+function approvedPayload(input: {
+  prUrl: string;
+  prNumber: number;
+  reviewer?: string;
+  forgePublication?: ForgeReviewPublication;
+}): EventPayload<"review.approved"> {
+  const base = {
+    prUrl: input.prUrl,
+    prNumber: input.prNumber,
+    ...(input.reviewer !== undefined && { reviewer: input.reviewer }),
+  };
+  if (input.forgePublication === undefined) return base;
+  return {
+    ...base,
+    forgeReviewId: input.forgePublication.forgeReviewId,
+    forgeReviewState: input.forgePublication.forgeReviewState,
+    forgeReviewUrl: input.forgePublication.forgeReviewUrl,
+    headSha: input.forgePublication.headSha,
+  };
+}
+
+function changesRequestedPayload(input: {
+  prUrl: string;
+  prNumber: number;
+  reviewer?: string;
+  feedback?: string;
+  forgePublication?: ForgeReviewPublication;
+}): EventPayload<"review.changes_requested"> {
+  const base = {
+    prUrl: input.prUrl,
+    prNumber: input.prNumber,
+    ...(input.reviewer !== undefined && { reviewer: input.reviewer }),
+    ...(input.feedback !== undefined && { message: input.feedback }),
+  };
+  if (input.forgePublication === undefined) return base;
+  return {
+    ...base,
+    forgeReviewId: input.forgePublication.forgeReviewId,
+    forgeReviewState: input.forgePublication.forgeReviewState,
+    forgeReviewUrl: input.forgePublication.forgeReviewUrl,
+    headSha: input.forgePublication.headSha,
+  };
 }

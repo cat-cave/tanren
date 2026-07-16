@@ -2,7 +2,9 @@
 // reviewPolling.ts stays under the 500-line architecture cap). Ready-flip and
 // external-approval reads stay best-effort via SafeVisibilityProjection; strict
 // simulated-review publication calls GitHubReviewMergeService with a distinct
-// reviewer token and throws on any failure (gv-2).
+// reviewer token and throws on any failure (gv-2). Forge-side convergent
+// publish (list → reconcile → POST only if absent → response-loss re-list)
+// lives here so production composition always converges the external artifact.
 
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { PullRequestRef, RepoRef } from "../../contracts/codeHostTypes.js";
@@ -18,6 +20,8 @@ import {
 } from "../../providers/githubReviewMerge.js";
 import type { ReviewMergeRunContext } from "./context.js";
 import {
+  bodyContainsTanrenSimulatedMarker,
+  publishSimulatedReviewConvergent,
   resolveDistinctSimulatedReviewerToken,
   SimulatedReviewPublicationError,
 } from "./simulatedReviewPublication.js";
@@ -34,8 +38,9 @@ export interface ReviewProbe {
   /** Exact PR head SHA the simulated review is bound to. */
   fetchHeadSha?(): Promise<string>;
   /**
-   * Strict forge publication: posts the event and returns a durable receipt.
-   * Must throw (not swallow) on failure — no best-effort path for simulated land.
+   * Strict forge publication: posts the event (or reclaims an existing exact
+   * match) and returns a durable receipt. Must throw (not swallow) on failure
+   * — no best-effort path for simulated land.
    */
   submitReview?(event: SubmitReviewEvent, body: string, headSha: string): Promise<SubmittedReviewReceipt>;
 }
@@ -84,7 +89,13 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
           "strict simulated review refuses COMMENT event — only APPROVE/REQUEST_CHANGES",
         );
       }
-      const { reviewer } = await resolveDistinctSimulatedReviewerToken({
+      const expectedState = event === "APPROVE" ? "approved" : "changes_requested";
+      if (!bodyContainsTanrenSimulatedMarker(body, expectedState)) {
+        throw new SimulatedReviewPublicationError(
+          `strict simulated review body missing durable Tanren marker for ${expectedState}`,
+        );
+      }
+      const { reviewer, reviewerLogin } = await resolveDistinctSimulatedReviewerToken({
         secrets,
         githubHttp,
         writerInstallation: context.installation,
@@ -92,21 +103,41 @@ export async function buildGitHubReviewProbe(input: BuildGitHubReviewProbeInput)
         githubAppMinter,
         reviewerGithubCredentialRef: input.reviewerGithubCredentialRef,
       });
-      const receipt = await reviewMerge.submitReview({
-        repo,
-        pullNumber,
-        event,
-        body,
-        commitId: headSha,
-        token: reviewer.token,
-        refreshToken: reviewer.refresh,
-      });
-      if (receipt === undefined) {
-        throw new SimulatedReviewPublicationError(
-          "strict simulated review got no forge receipt (COMMENT or empty response)",
-        );
+      try {
+        return await publishSimulatedReviewConvergent({
+          expectedState,
+          expectedHeadSha: headSha,
+          expectedReviewerLogin: reviewerLogin,
+          listReviews: () =>
+            reviewMerge.listPullRequestReviews({
+              repo,
+              pullNumber,
+              token: reviewer.token,
+              refreshToken: reviewer.refresh,
+            }),
+          postReview: async () => {
+            const receipt = await reviewMerge.submitReview({
+              repo,
+              pullNumber,
+              event,
+              body,
+              commitId: headSha,
+              token: reviewer.token,
+              refreshToken: reviewer.refresh,
+            });
+            if (receipt === undefined) {
+              throw new SimulatedReviewPublicationError(
+                "strict simulated review got no forge receipt (COMMENT or empty response)",
+              );
+            }
+            return receipt;
+          },
+        });
+      } catch (err) {
+        if (err instanceof SimulatedReviewPublicationError) throw err;
+        const message = err instanceof Error ? err.message : String(err);
+        throw new SimulatedReviewPublicationError(`simulated review forge publication failed: ${message}`);
       }
-      return receipt;
     },
   };
 }
