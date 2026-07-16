@@ -146,8 +146,9 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
         if (payload["when"] === "pre_merge") latestGateHead = asString(payload["headSha"]);
         break;
       case "run.failed":
+        if (isSimulatedPublicationFailure(payload)) latestPublicationFailureIndex = index;
+        break;
       case "task.failed":
-        latestPublicationFailureIndex = index;
         break;
       case "merge.queued":
         state.phase = "merge_queued";
@@ -178,7 +179,6 @@ export function reviewMergeStateFromEvents(events: RunEventRow[]): ReviewMergeSt
     latestTerminal,
     latestGateHead,
     latestPublicationFailureIndex,
-    reviewRequested: state.phase === "review_requested",
   });
   return state;
 }
@@ -188,12 +188,11 @@ function publicationStatus(input: {
   latestTerminal: { index: number; eventType: string; publication: ForgeReviewPublicationView | undefined } | undefined;
   latestGateHead: string | undefined;
   latestPublicationFailureIndex: number;
-  reviewRequested: boolean;
 }): ReviewMergeState["publicationStatus"] {
   const { latestIntent: intent, latestTerminal: terminal } = input;
   if (terminal === undefined || (intent !== undefined && terminal.index < intent.index)) {
     if (intent !== undefined) return input.latestPublicationFailureIndex > intent.index ? "failed" : "publishing";
-    return input.reviewRequested ? "intent_pending" : "non_simulated";
+    return "non_simulated";
   }
   const publication = terminal.publication;
   if (intent === undefined) {
@@ -213,6 +212,22 @@ function publicationStatus(input: {
     return "stale";
   }
   return "published";
+}
+
+const SIMULATED_PUBLICATION_FAILURE_MESSAGES = new Set([
+  "strict simulated-review publication failed",
+  "strict simulated-review publication is contended",
+  "the pull request advanced before strict simulated-review publication",
+]);
+
+function isSimulatedPublicationFailure(payload: Record<string, unknown>): boolean {
+  const message = asString(payload["message"]);
+  return (
+    payload["failureCode"] === "merge" &&
+    payload["stage"] === "merge" &&
+    message !== undefined &&
+    SIMULATED_PUBLICATION_FAILURE_MESSAGES.has(message)
+  );
 }
 
 /** Human label + pill class; approved is green only with honest publication state. */

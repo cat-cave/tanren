@@ -96,6 +96,7 @@ export class PgAdvisorySimulatedReviewPublishFence implements SimulatedReviewPub
       const message = err instanceof Error ? err.message : String(err);
       throw new SimulatedReviewPublicationError(
         `simulated review publish fence could not pin a pool client: ${message}`,
+        { retriable: true },
       );
     }
     let locked = false;
@@ -115,7 +116,10 @@ export class PgAdvisorySimulatedReviewPublishFence implements SimulatedReviewPub
         acquired = lockResult.rows[0]?.acquired === true;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        throw new SimulatedReviewPublicationError(`simulated review publish fence lock acquisition failed: ${message}`);
+        throw new SimulatedReviewPublicationError(
+          `simulated review publish fence lock acquisition failed: ${message}`,
+          { retriable: true },
+        );
       }
       if (!acquired) {
         // Zero provider I/O — canonical job redrive will re-list/reclaim.
@@ -190,6 +194,7 @@ export class PgAdvisorySimulatedReviewPublishFence implements SimulatedReviewPub
           const message = unlockError instanceof Error ? unlockError.message : String(unlockError);
           throw new SimulatedReviewPublicationError(
             `simulated review publish fence unlock failed after successful work (client destroyed): ${message}`,
+            { retriable: true },
           );
         }
         if (workError !== undefined) {

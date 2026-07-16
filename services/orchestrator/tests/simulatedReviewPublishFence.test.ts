@@ -117,7 +117,7 @@ describe("gv-2 publish fence key isolation + try-advisory lock", () => {
     expect((busy as SimulatedReviewPublicationError).retriable).toBe(true);
   });
 
-  it("lock query failure fails loud (never unfenced work)", async () => {
+  it("lock query failure is retriable and fails loud (never unfenced work)", async () => {
     const client = {
       query: async (sql: string) => {
         if (sql.includes("pg_try_advisory_lock")) throw new Error("lock denied");
@@ -129,32 +129,44 @@ describe("gv-2 publish fence key isolation + try-advisory lock", () => {
       connect: async () => client as unknown as pg.PoolClient,
     });
     let worked = false;
-    await expect(
-      fence.withExclusivePublish(baseKey, async () => {
+    const failure = await fence
+      .withExclusivePublish(baseKey, async () => {
         worked = true;
         return 1;
-      }),
-    ).rejects.toThrow(/lock acquisition failed/iu);
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(SimulatedReviewPublicationError);
+    expect((failure as SimulatedReviewPublicationError).message).toMatch(/lock acquisition failed/iu);
+    expect((failure as SimulatedReviewPublicationError).retriable).toBe(true);
     expect(worked).toBe(false);
   });
 
-  it("connect failure fails loud with zero work", async () => {
+  it("connect failure is retriable and fails loud with zero work", async () => {
     const fence = new PgAdvisorySimulatedReviewPublishFence({
       connect: async () => {
         throw new Error("pool exhausted");
       },
     });
     let worked = false;
-    await expect(
-      fence.withExclusivePublish(baseKey, async () => {
+    const failure = await fence
+      .withExclusivePublish(baseKey, async () => {
         worked = true;
         return 1;
-      }),
-    ).rejects.toThrow(/could not pin a pool client/iu);
+      })
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(SimulatedReviewPublicationError);
+    expect((failure as SimulatedReviewPublicationError).message).toMatch(/could not pin a pool client/iu);
+    expect((failure as SimulatedReviewPublicationError).retriable).toBe(true);
     expect(worked).toBe(false);
   });
 
-  it("unlock failure destroys client and does not return it healthy", async () => {
+  it("post-success unlock failure is retriable, destroys client, and does not return it healthy", async () => {
     const releases: Array<boolean | Error | undefined> = [];
     const client = {
       query: async (sql: string) => {
@@ -169,9 +181,15 @@ describe("gv-2 publish fence key isolation + try-advisory lock", () => {
     const fence = new PgAdvisorySimulatedReviewPublishFence({
       connect: async () => client as unknown as pg.PoolClient,
     });
-    await expect(fence.withExclusivePublish(baseKey, async () => "ok")).rejects.toThrow(
-      /unlock failed after successful work/iu,
-    );
+    const failure = await fence
+      .withExclusivePublish(baseKey, async () => "ok")
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(SimulatedReviewPublicationError);
+    expect((failure as SimulatedReviewPublicationError).message).toMatch(/unlock failed after successful work/iu);
+    expect((failure as SimulatedReviewPublicationError).retriable).toBe(true);
     expect(releases).toEqual([true]);
   });
 

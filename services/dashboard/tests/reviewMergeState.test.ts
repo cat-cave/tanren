@@ -137,8 +137,8 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
     expect(state.publicationStatus).toBe("failed");
   });
 
-  it("gv-2 UI states: requested without intent is intent_pending", () => {
-    expect(reviewMergeStateFromEvents([ev("review.requested")]).publicationStatus).toBe("intent_pending");
+  it("gv-2 UI states: a bare human review request is not presented as simulated intent", () => {
+    expect(reviewMergeStateFromEvents([ev("review.requested")]).publicationStatus).toBe("non_simulated");
   });
 
   it("gv-2 UI states: durable intent without terminal receipt is publishing", () => {
@@ -186,13 +186,29 @@ describe("reviewMergeStateFromEvents — P3-0008 review/merge phase", () => {
     expect(state.publicationStatus).toBe("stale");
   });
 
-  it("gv-2 UI states: failure after intent and incomplete receipt are failed", () => {
+  it("gv-2 UI states: only a proven publication failure after intent is failed", () => {
     const intent = ev("review.simulated_intent", {
       headSha: "a".repeat(40),
       state: "approved",
       reviewerLogin: "reviewer-bot",
     });
-    expect(reviewMergeStateFromEvents([intent, ev("task.failed")]).publicationStatus).toBe("failed");
+    expect(reviewMergeStateFromEvents([intent, ev("task.failed")]).publicationStatus).toBe("publishing");
+    expect(
+      reviewMergeStateFromEvents([
+        intent,
+        ev("run.failed", { failureCode: "merge", stage: "merge", message: "an unrelated merge failed" }),
+      ]).publicationStatus,
+    ).toBe("publishing");
+    expect(
+      reviewMergeStateFromEvents([
+        intent,
+        ev("run.failed", {
+          failureCode: "merge",
+          stage: "merge",
+          message: "strict simulated-review publication failed",
+        }),
+      ]).publicationStatus,
+    ).toBe("failed");
     expect(
       reviewMergeStateFromEvents([intent, ev("review.approved", { forgeReviewId: "partial" })]).publicationStatus,
     ).toBe("failed");

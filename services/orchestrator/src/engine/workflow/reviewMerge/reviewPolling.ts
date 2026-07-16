@@ -18,7 +18,7 @@ import type { ReviewAnswer } from "../../answerers/schemas/index.js";
 import type { RunStateWriter } from "../../contracts/runStateWriter.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import { ensureSystemTask, routeTaskUpdate } from "../taskWriteRouting.js";
-import { type EventStore, PgEventStore } from "../../eventStore.js";
+import type { EventStore } from "../../eventStore.js";
 import type { AnswererAdapter } from "../../providers/types.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
@@ -35,8 +35,7 @@ import { buildGitHubReviewProbe, type ReviewProbe } from "./reviewProbeGithub.js
 import { markReviewTaskDoneWithEvent } from "./reviewTaskTerminal.js";
 import { SimulatedReviewPublicationError, type ForgeReviewPublication } from "./simulatedReviewPublication.js";
 import {
-  InMemorySimulatedReviewIntentRepository,
-  PgSimulatedReviewIntentRepository,
+  durableSimulatedReviewIntentRepository,
   type SimulatedReviewIntentRepository,
 } from "./simulatedReviewIntent.js";
 import {
@@ -135,7 +134,11 @@ export interface PollReviewForRunResult {
 
 export async function pollReviewForRun(input: PollReviewForRunInput): Promise<PollReviewForRunResult> {
   const context = await loadReviewMergeRunContext(input.pool, input.runId, contextOptionsFor(input));
-  const eventStore = input.eventStore ?? new PgEventStore(input.pool);
+  const eventStore = input.eventStore ?? input.runStateWriter;
+  const simulatedIntent =
+    context.reviewPolicy === "simulated"
+      ? { repository: input.intentRepository ?? durableSimulatedReviewIntentRepository(input.pool, eventStore) }
+      : undefined;
   const prRef = parsePullRequestRef(context.prUrl);
   const pr = { repo: prRef.repo, pullNumber: prRef.number };
   const taskId = await ensureReviewTask(input.pool, context, input.runStateWriter);
@@ -214,7 +217,15 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
   // REQUEST_CHANGES publication (distinct reviewer). Fail closed on any
   // publication hole — never authorize land from the internal verdict alone.
   if (context.reviewPolicy === "simulated") {
-    const result = await runSimulatedReviewPath(input, context, probe, eventStore, taskId, pr);
+    if (simulatedIntent === undefined) throw new Error("simulated review intent preflight was not composed");
+    const result = await runSimulatedReviewPath({
+      input,
+      context,
+      probe,
+      taskId,
+      pr,
+      intentRepository: simulatedIntent.repository,
+    });
     await finalizeReviewTask(input.pool, eventStore, context, result, input.runStateWriter);
     return result;
   }
@@ -272,8 +283,7 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
         orgId: context.orgId,
         // Test-inject seam: route the event append through the run's
         // eventStore so a `FakeEventStore` (unit tests) sees the emitted
-        // `run.paused`; production paths pass a real `PgEventStore` which
-        // shares the row UPDATE's transaction via the client wrapper.
+        // `run.paused`; production paths pass the canonical run-state writer.
         eventStore,
         // Legacy-arm fallback event append via the run's event store — the
         // real-pool arm never uses it, but the seam signature requires it for
@@ -316,14 +326,15 @@ export async function pollReviewForRun(input: PollReviewForRunInput): Promise<Po
   return result;
 }
 
-async function runSimulatedReviewPath(
-  input: PollReviewForRunInput,
-  context: ReviewMergeRunContext,
-  probe: ReviewProbe,
-  eventStore: EventStore,
-  taskId: string,
-  pr: { repo: { owner: string; name: string }; pullNumber: number },
-): Promise<PollReviewForRunResult> {
+async function runSimulatedReviewPath(args: {
+  input: PollReviewForRunInput;
+  context: ReviewMergeRunContext;
+  probe: ReviewProbe;
+  taskId: string;
+  pr: { repo: { owner: string; name: string }; pullNumber: number };
+  intentRepository: SimulatedReviewIntentRepository;
+}): Promise<PollReviewForRunResult> {
+  const { input, context, probe, taskId, pr, intentRepository } = args;
   const resolveReviewer = input.simulatedReviewer;
   const spec = input.simulatedReviewContext;
   if (resolveReviewer === undefined || spec === undefined) {
@@ -331,7 +342,6 @@ async function runSimulatedReviewPath(
       "reviewPolicy 'simulated' requires both simulatedReviewer (the reviewer Answerer factory) and simulatedReviewContext",
     );
   }
-  const intentRepository = input.intentRepository ?? defaultIntentRepository(input.pool, eventStore);
   const publishFence = input.publishFence ?? defaultPublishFence(input.pool);
   const stage = await runSimulatedReviewStage({
     context,
@@ -357,28 +367,6 @@ async function runSimulatedReviewPath(
     feedback: stage.feedback,
     forgePublication: stage.forgePublication,
   };
-}
-
-function defaultIntentRepository(pool: RunStateClient, eventStore: EventStore): SimulatedReviewIntentRepository {
-  // Prefer the production eventStore-backed path when we have a real Pg store.
-  if (eventStore instanceof PgEventStore) {
-    return new PgSimulatedReviewIntentRepository(pool, eventStore as never);
-  }
-  // Test / non-Pg path: in-memory first-wins (still mirrors into the eventStore
-  // timeline when append is available so intent never looks like a terminal review).
-  return new InMemorySimulatedReviewIntentRepository({
-    append: async (entry) => {
-      await eventStore.append({
-        runId: entry.runId,
-        orgId: entry.orgId,
-        ...(entry.projectId !== undefined && { projectId: entry.projectId }),
-        ...(entry.specId !== undefined && { specId: entry.specId }),
-        ...(entry.taskId !== undefined && { taskId: entry.taskId }),
-        eventType: entry.eventType,
-        payload: entry.payload,
-      });
-    },
-  });
 }
 
 function defaultPublishFence(pool: RunStateClient): SimulatedReviewPublishFence {

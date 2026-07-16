@@ -1,5 +1,5 @@
-// Remote run-state writer: the control plane performs the same org-scoped writes
-// over mTLS, keeping the data plane free of broad tenant-write grants.
+// The control plane performs org-scoped writes over mTLS, keeping the data plane
+// free of broad tenant-write grants.
 
 import { getJobOrgId } from "@tanren/db";
 import type { MtlsFetch } from "../contracts/mtlsChannel.js";
@@ -48,7 +48,7 @@ import type {
 } from "../contracts/recoveryPreparation.js";
 import type { RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
-import type { AppendEventInput } from "../eventStore.js";
+import type { AppendEventInput, PriorEventInput } from "../eventStore.js";
 import type { SpecContract, SpecRunContract } from "../workflow/projectSpec.js";
 import { SpecDependenciesBlockedError, SpecNotRunnableError } from "../workflow/projectSpecErrors.js";
 import {
@@ -77,14 +77,8 @@ export class RunStateWriteTransportError extends Error {
   }
 }
 
-/**
- * The remote run-state writer. POSTs each write to the control plane over mTLS.
- * A 401 (untrusted peer) or any non-2xx surfaces as {@link
- * RunStateWriteTransportError}, which the worker treats as an infra fault — the
- * write did NOT land, so the worker never assumes a phantom success. Recovery
- * operations are the deliberate exception: their typed results preserve transport
- * uncertainty for exact readback or paced idempotent redrive.
- */
+/** Remote mTLS writer. Non-2xx responses fail loud; recovery methods preserve
+ * transport uncertainty for exact readback or paced idempotent redrive. */
 export class HttpRunStateWriter
   implements RunStateWriter, RecoveryParkWriter, RecoveryOwnedSettlementWriter, RecoveryPreparationWriter
 {
@@ -94,8 +88,15 @@ export class HttpRunStateWriter
   ) {}
 
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    // The body carries the explicit tenant identity used by the server-side scope.
     await this.post<void>("/internal/append-event", { ...input, orgId: this.requireOrgId() });
+  }
+
+  async appendPriorIfAbsent<N extends EventName>(input: PriorEventInput<N>): Promise<boolean> {
+    const result = await this.post<{ inserted: boolean }>("/internal/append-prior-event", {
+      ...input,
+      orgId: this.requireOrgId(),
+    });
+    return result.inserted;
   }
 
   async recordCost(input: RecordCostInput): Promise<RecordedCost> {
@@ -115,8 +116,7 @@ export class HttpRunStateWriter
     return this.post<FinalizeRunResult>("/internal/finalize-run", input);
   }
 
-  // --- the run/spec/task lifecycle writes. ---
-  //
+  // --- run/spec/task lifecycle writes ---
   // The run/spec ops carry an explicit org (the workflow has the run context);
   // the task ops resolve org from the ambient per-job scope (`requireOrgId`),
   // exactly like `append` — the server scopes every write with `runWithOrgScope`.
@@ -378,12 +378,8 @@ export class HttpRunStateWriter
   private async post<T>(
     endpoint: string,
     body: unknown,
-    // An optional per-call mapper for a non-2xx response: it reconstructs an
-    // endpoint-specific TYPED error (e.g. the create-queued-run 409
-    // `spec_not_runnable`) so the typed error crosses the wire intact. Returning
-    // `undefined` falls back to the default RunStateWriteTransportError — so a
-    // genuine fault on ANY endpoint (and any status this mapper does not claim)
-    // still surfaces loudly. Other callers pass no mapper and keep the default.
+    // Reconstruct an endpoint-specific typed error when possible; undefined
+    // preserves the default RunStateWriteTransportError.
     mapError?: (status: number, responseBody: string) => Error | undefined,
   ): Promise<T> {
     const response = await this.mtlsFetch(`${this.baseUrl.replace(/\/$/u, "")}${endpoint}`, {

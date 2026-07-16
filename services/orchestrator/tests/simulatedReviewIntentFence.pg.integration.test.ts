@@ -8,8 +8,10 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { PgEventStore } from "../src/engine/eventStore.js";
+import { DirectRunStateWriter } from "../src/engine/worker/directRunStateWriter.js";
 import { reviewBodyFor } from "../src/engine/workflow/reviewMerge/simulatedReviewer.js";
 import {
+  durableSimulatedReviewIntentRepository,
   PgSimulatedReviewIntentRepository,
   REVIEW_SIMULATED_INTENT_EVENT,
   type SimulatedReviewIntent,
@@ -195,6 +197,23 @@ describeDb("gv-2 intent fence + publish fence against migrated 0042 Postgres", (
     expect(count.rows[0]?.n).toBe("1");
   });
 
+  it("canonical DirectRunStateWriter composes the same durable keyed first-wins repository", async () => {
+    const composedHead = "d".repeat(40);
+    const candidate = { ...intentCandidate("approved", "writer-seam"), headSha: composedHead };
+    const repo = durableSimulatedReviewIntentRepository(runtimePool, new DirectRunStateWriter(runtimePool));
+
+    const winner = await runWithOrgScope(runtimePool, ORG, () =>
+      repo.adoptOrRecord({ runId: RUN, orgId: ORG, projectId: PROJECT, specId: SPEC, candidate }),
+    );
+    expect(winner).toEqual(candidate);
+    const stored = await ownerPool.query<{ idempotency_key: string }>(
+      `SELECT idempotency_key FROM events
+        WHERE run_id = $1 AND event_type = $2 AND payload->>'headSha' = $3`,
+      [RUN, REVIEW_SIMULATED_INTENT_EVENT, composedHead],
+    );
+    expect(stored.rows).toEqual([{ idempotency_key: `run_gv2_intent:simulated-review-intent:${composedHead}` }]);
+  });
+
   it("two clients contend on publication fence: one posts, other busy with zero provider I/O; redrive reuses", async () => {
     const fence = new PgAdvisorySimulatedReviewPublishFence(ownerPool);
     const key = {
@@ -307,7 +326,7 @@ describeDb("gv-2 intent fence + publish fence against migrated 0042 Postgres", (
           candidate: intentCandidate("approved", "cross-org must fail"),
         }),
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/simulated review intent append failed/iu);
     const count = await ownerPool.query<{ n: string }>(
       "SELECT count(*)::text AS n FROM events WHERE run_id = $1 AND event_type = $2",
       [OTHER_RUN, REVIEW_SIMULATED_INTENT_EVENT],

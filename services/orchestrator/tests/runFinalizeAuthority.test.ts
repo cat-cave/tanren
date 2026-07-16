@@ -39,6 +39,14 @@ describe("decideRunDisposition — RE-DRIVE: every random/transient/internal/cra
       });
     }
   });
+  it("a typed transient publication infrastructure failure always re-drives", () => {
+    const error = new SimulatedReviewPublicationError("transient database fault", { retriable: true });
+    expect(decideRunDisposition({ kind: "error", error }, FIXED_POINT)).toMatchObject({
+      bucket: "re_drive",
+      failure: { code: "merge", stage: "merge" },
+      subReason: "simulated_review_publication_retriable",
+    });
+  });
   it("an UNRECOGNIZED / generic error RE-DRIVES (the bare internal error that used to strand)", () => {
     const d = decideRunDisposition({ kind: "error", error: new Error("boom") }, PROGRESS);
     expect(d).toMatchObject({ bucket: "re_drive", failure: { code: "internal" } });

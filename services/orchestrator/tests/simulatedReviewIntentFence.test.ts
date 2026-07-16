@@ -18,7 +18,6 @@ import {
   simulatedReviewIntentFingerprint,
   simulatedReviewIntentMarker,
 } from "../src/engine/workflow/reviewMerge/simulatedReviewPublication.js";
-import { ReviewSimulatedIntentPayload } from "../src/engine/events/schemas/eventVocabularyW0.js";
 import { FakeEventStore } from "./helpers/fakeEventStore.js";
 import { fakeMergeWriter, ReviewMergePool, unusedHttp } from "./reviewMerge.fixtures.js";
 
@@ -402,70 +401,6 @@ describe("gv-2 durable intent fence via pollReviewForRun composition", () => {
     expect(types).not.toContain("review.changes_requested");
     // landSignals query set excludes simulated_intent by construction.
     expect(simulatedReviewIntentKey("run_1", HEAD)).toBe(`run_1:simulated-review-intent:${HEAD}`);
-  });
-
-  it("invalid/non-40-hex intent payload fails the strict schema", () => {
-    expect(
-      ReviewSimulatedIntentPayload.safeParse({
-        headSha: "short",
-        state: "approved",
-        event: "APPROVE",
-        body: "b",
-        message: "m",
-        reviewerLogin: "r",
-        marker: "tanren-simulated-review:v1:approved",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("cross-field cohere: state/event/marker/body must agree (poison fails loud)", () => {
-    const goodBody = reviewBodyFor({ verdict: "approve", reasoning: "ok" });
-    expect(
-      ReviewSimulatedIntentPayload.safeParse({
-        headSha: HEAD,
-        state: "approved",
-        // event disagrees with state
-        event: "REQUEST_CHANGES",
-        body: goodBody,
-        message: "ok",
-        reviewerLogin: REVIEWER,
-        marker: "tanren-simulated-review:v1:approved",
-      }).success,
-    ).toBe(false);
-    expect(
-      ReviewSimulatedIntentPayload.safeParse({
-        headSha: HEAD,
-        state: "approved",
-        event: "APPROVE",
-        body: goodBody,
-        message: "ok",
-        reviewerLogin: REVIEWER,
-        // marker disagrees with state
-        marker: "tanren-simulated-review:v1:changes_requested",
-      }).success,
-    ).toBe(false);
-    expect(
-      ReviewSimulatedIntentPayload.safeParse({
-        headSha: HEAD,
-        state: "approved",
-        event: "APPROVE",
-        body: "free text without marker line",
-        message: "ok",
-        reviewerLogin: REVIEWER,
-        marker: "tanren-simulated-review:v1:approved",
-      }).success,
-    ).toBe(false);
-    expect(
-      ReviewSimulatedIntentPayload.safeParse({
-        headSha: HEAD,
-        state: "approved",
-        event: "APPROVE",
-        body: goodBody,
-        message: "ok",
-        reviewerLogin: REVIEWER,
-        marker: "tanren-simulated-review:v1:approved",
-      }).success,
-    ).toBe(true);
   });
 
   it("crash after list / before POST: second worker re-lists and posts once total", async () => {

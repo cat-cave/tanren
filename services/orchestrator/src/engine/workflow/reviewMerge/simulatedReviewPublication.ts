@@ -301,44 +301,7 @@ export function reconcileExistingSimulatedReviews(
 
   const sameMatches: ListedPullRequestReview[] = [];
   for (const review of input.reviews) {
-    if (review.headSha === undefined || review.headSha.toLowerCase() !== head) continue;
-    if (review.reviewerLogin === undefined || review.reviewerLogin.toLowerCase() !== login) continue;
-    if (!bodyContainsSimulatedReviewIntentMarker(review.body, input.expectedIntentMarker)) continue;
-
-    const hasExpectedMarker = bodyContainsTanrenSimulatedMarker(review.body, input.expectedState);
-    const hasOppositeMarker = bodyContainsTanrenSimulatedMarker(review.body, opposite);
-
-    // Marker is the Tanren ownership proof — no marker ⇒ coincidental human/other.
-    if (!hasExpectedMarker && !hasOppositeMarker) continue;
-
-    // COMMENT (or pending/dismissed) is never land-authoritative, even with a marker.
-    if (review.state !== "approved" && review.state !== "changes_requested") {
-      if (hasExpectedMarker || hasOppositeMarker) {
-        throw new SimulatedReviewPublicationError(
-          `simulated review forge convergence rejects non-authoritative state '${review.state}' ` +
-            `for Tanren-marked review ${review.forgeReviewId} on head ${input.expectedHeadSha}`,
-        );
-      }
-      continue;
-    }
-
-    if (hasOppositeMarker || review.state === opposite) {
-      throw new SimulatedReviewPublicationError(
-        `simulated review forge convergence conflict: existing Tanren review ` +
-          `${review.forgeReviewId} is ${review.state} on head ${input.expectedHeadSha}, ` +
-          `refusing to publish ${input.expectedState}`,
-      );
-    }
-
-    if (hasExpectedMarker && review.state === input.expectedState) {
-      sameMatches.push(review);
-    } else if (hasExpectedMarker) {
-      // Marker claims expected state but host state disagrees — fail loud.
-      throw new SimulatedReviewPublicationError(
-        `simulated review forge convergence ambiguity: review ${review.forgeReviewId} ` +
-          `marker is ${input.expectedState} but host state is ${review.state}`,
-      );
-    }
+    if (isMatchingExistingReview(review, input, head, login, opposite)) sameMatches.push(review);
   }
 
   if (sameMatches.length === 0) return { kind: "absent" };
@@ -359,6 +322,39 @@ export function reconcileExistingSimulatedReviews(
       `simulated review forge convergence found malformed durable review ${match.forgeReviewId}: ${message}`,
     );
   }
+}
+
+function isMatchingExistingReview(
+  review: ListedPullRequestReview,
+  input: SimulatedReviewReconcileInput,
+  head: string,
+  login: string,
+  opposite: "approved" | "changes_requested",
+): boolean {
+  if (review.headSha === undefined || review.headSha.toLowerCase() !== head) return false;
+  if (review.reviewerLogin === undefined || review.reviewerLogin.toLowerCase() !== login) return false;
+  if (!bodyContainsSimulatedReviewIntentMarker(review.body, input.expectedIntentMarker)) return false;
+  const hasExpectedMarker = bodyContainsTanrenSimulatedMarker(review.body, input.expectedState);
+  const hasOppositeMarker = bodyContainsTanrenSimulatedMarker(review.body, opposite);
+  if (!hasExpectedMarker && !hasOppositeMarker) return false;
+  if (review.state !== "approved" && review.state !== "changes_requested") {
+    throw new SimulatedReviewPublicationError(
+      `simulated review forge convergence rejects non-authoritative state '${review.state}' ` +
+        `for Tanren-marked review ${review.forgeReviewId} on head ${input.expectedHeadSha}`,
+    );
+  }
+  if (hasOppositeMarker || review.state === opposite) {
+    throw new SimulatedReviewPublicationError(
+      `simulated review forge convergence conflict: existing Tanren review ` +
+        `${review.forgeReviewId} is ${review.state} on head ${input.expectedHeadSha}, ` +
+        `refusing to publish ${input.expectedState}`,
+    );
+  }
+  if (hasExpectedMarker && review.state === input.expectedState) return true;
+  throw new SimulatedReviewPublicationError(
+    `simulated review forge convergence ambiguity: review ${review.forgeReviewId} ` +
+      `marker is ${input.expectedState} but host state is ${review.state}`,
+  );
 }
 
 /**

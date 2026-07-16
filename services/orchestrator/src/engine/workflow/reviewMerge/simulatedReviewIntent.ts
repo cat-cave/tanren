@@ -8,7 +8,7 @@
 
 import type pg from "pg";
 import type { z } from "zod";
-import { type EventStore, type PriorEventInput, PgEventStore } from "../../eventStore.js";
+import { type EventStore, type PriorEventInput } from "../../eventStore.js";
 import { ReviewSimulatedIntentPayload } from "../../events/schemas/eventVocabularyW0.js";
 import { resolveWritableClient } from "../../data/orgScopedDb.js";
 import { SimulatedReviewPublicationError } from "./simulatedReviewPublication.js";
@@ -57,9 +57,9 @@ export class PgSimulatedReviewIntentRepository implements SimulatedReviewIntentR
 
   constructor(
     private readonly pool: IntentQueryClient,
-    store?: PriorCapableStore,
+    store: PriorCapableStore,
   ) {
-    this.store = store ?? (new PgEventStore(pool) as unknown as PriorCapableStore);
+    this.store = store;
   }
 
   async lookup(orgId: string, runId: string, headSha: string): Promise<SimulatedReviewIntent | undefined> {
@@ -127,6 +127,23 @@ export class PgSimulatedReviewIntentRepository implements SimulatedReviewIntentR
     }
     return winner;
   }
+}
+
+/**
+ * Production composition: reads from the org-scoped events table and writes
+ * through the one writer-backed atomic prior-event seam. An append-only store
+ * is never silently replaced with process-local memory.
+ */
+export function durableSimulatedReviewIntentRepository(
+  pool: IntentQueryClient,
+  store: EventStore,
+): PgSimulatedReviewIntentRepository {
+  if (typeof store.appendPriorIfAbsent !== "function") {
+    throw new SimulatedReviewPublicationError(
+      "strict simulated review requires a durable EventStore appendPriorIfAbsent seam; in-memory intent is test-only",
+    );
+  }
+  return new PgSimulatedReviewIntentRepository(pool, store as PriorCapableStore);
 }
 
 /**
