@@ -1,10 +1,6 @@
 # Tanren owns design — a native, domain-general design subsystem
 
-> ⛔ **FROZEN — superseded as live work.** The design substrate here is built; the
-> forward design work is now the **design-system bucket (ds-0..8)** in
-> `docs/roadmap/mission-complete/nodes/design.md`. Kept for rationale only.
-
-> Status: **subsystem CORE built, merged, and live-wired into the spec loop;
+> ⛔ **FROZEN — superseded; live design work is the ds-0..8 bucket in `docs/roadmap/mission-complete/nodes/design.md`.** Status: **subsystem CORE built, merged, and live-wired into the spec loop;
 > remaining work is dogfood + apex + templates (WS-D5..D8).** The foundation
 > workstreams are done on `main`: **WS-D1** (the `DesignContract` entity, #596),
 > **WS-D2** (writer injection, #598), **WS-D3** (design agent + design phase,

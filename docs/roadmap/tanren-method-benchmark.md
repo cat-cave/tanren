@@ -1,10 +1,6 @@
 # Tanren-Method Benchmark + Experimentation Harness
 
-> ⛔ **FROZEN — deferred, not live work.** The harness toolkit is built; running the
-> experiments is a long-horizon item that resumes AFTER the mission-complete nodes
-> land. The live mission is `docs/roadmap/mission-complete/`.
-
-> **Status: the toolkit described here is BUILT** (prerequisite met — the run
+> ⛔ **FROZEN — deferred; resumes after the mission-complete nodes land.** **Status: the toolkit described here is BUILT** (prerequisite met — the run
 > loop is live-validated to merged PRs across three tiers). Code-complete on
 > `main` under `engine/benchmark/**` (experiment/cell/trial entities — now folded
 > into the collapsed baseline + `db/src/schema*.ts`; the `TrialScorecard`
