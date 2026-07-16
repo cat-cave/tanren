@@ -5,8 +5,8 @@
 **State**: local authoring candidate; not published, frozen, registered, or emitted
 **Base**: `origin/main` @ `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
 **Branch**: `mission/in-7-event-prep`
-**Consumes**: SP-2 `AuthoringLifecyclePoint` and the verified
-[`in7-event-prep-grok-recon-report.md`](../../../../../.codex/orchestration-prompts/in7-event-prep-grok-recon-report.md)
+**Consumes**: SP-2 `AuthoringLifecyclePoint` and the verified local
+reconciliation report `in7-event-prep-grok-recon-report.md`
 
 ## Purpose
 
@@ -34,13 +34,13 @@ lifecycle tables, a kernel implementation, or a migration slot.
 
 ## Exact exclusive path lease
 
-| Path | Purpose |
-| --- | --- |
-| `docs/roadmap/mission-complete/nodes/cards/in-7-event-prep.md` | Ownership, dependency, exclusion, and validation authority |
-| `docs/roadmap/mission-complete/prep/integration-author-events.md` | Prospective vocabulary, emit rules, sensitivities, severities, and later-wave handoff |
-| `services/orchestrator/src/engine/contracts/prep/integrationAuthorEventPayloads.ts` | Unregistered strict Zod payload drafts and metadata |
-| `services/orchestrator/src/engine/contracts/prep/integrationAuthorEventFactory.ts` | Pure SP-2 lifecycle mapping and best-effort draft sink helper |
-| `services/orchestrator/tests/prep/integrationAuthorEventPrep.test.ts` | Exact schema, mapping, ordering, throw-safety, and non-authority pins |
+| Path                                                                                | Purpose                                                                               |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `docs/roadmap/mission-complete/nodes/cards/in-7-event-prep.md`                      | Ownership, dependency, exclusion, and validation authority                            |
+| `docs/roadmap/mission-complete/prep/integration-author-events.md`                   | Prospective vocabulary, emit rules, sensitivities, severities, and later-wave handoff |
+| `services/orchestrator/src/engine/contracts/prep/integrationAuthorEventPayloads.ts` | Unregistered strict Zod payload drafts and metadata                                   |
+| `services/orchestrator/src/engine/contracts/prep/integrationAuthorEventFactory.ts`  | Pure SP-2 lifecycle mapping and best-effort draft sink helper                         |
+| `services/orchestrator/tests/prep/integrationAuthorEventPrep.test.ts`               | Exact schema, mapping, ordering, throw-safety, and non-authority pins                 |
 
 No wildcard ownership. Amend this card and commit the dependency/path change
 before editing any additional path.
@@ -89,8 +89,11 @@ before editing any additional path.
    authority unchanged.
 4. Source-import pins prove the prep modules do not import EventRegistry,
    EventStore, CAS/gate/merge authority, migration, or template event modules.
-5. Run `just affected-typecheck`, the focused test, `just affected-test`, format,
-   architecture, and diff checks. Root owns full publication gates and smoke.
+5. Run the focused test from the monorepo root with
+   `corepack pnpm exec vitest run services/orchestrator/tests/prep/integrationAuthorEventPrep.test.ts`;
+   package-local Vitest does not resolve the root setup path correctly. Then run
+   `just affected-typecheck`, `just affected-test`, format, architecture, and
+   diff checks. Root owns full publication gates and smoke.
 
 ## Credit and publication
 
