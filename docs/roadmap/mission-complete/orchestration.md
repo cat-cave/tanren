@@ -1,3 +1,5 @@
+<!-- cspell:ignore rootlessport -->
+
 # Mission-complete orchestration playbook
 
 How a **no-code root orchestrator** drives the 142 consumer nodes to merge, fast,

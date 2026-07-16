@@ -1,3 +1,5 @@
+<!-- cspell:ignore evsub -->
+
 # Mission-complete node ledger — the single source of truth
 
 **This file is the authoritative live status of the 142 consumer nodes.** Prose
