@@ -125,10 +125,10 @@ async function loadSpecDetail(
   if (spec === undefined) return undefined;
 
   // Spec-scoped runs drive the history + economics panels; project-wide runs
-  // only colour dependency chips. Either failure degrades its own surface.
-  const runsAvailable = specRunsMaybe !== undefined;
-  const specRuns = specRunsMaybe ?? [];
-  const allRuns = allRunsMaybe ?? [];
+  // colour dependency chips. Either failure is loud — never fake empty/status.
+  const runsAvailable = specRunsMaybe !== undefined && allRunsMaybe !== undefined;
+  const specRuns = runsAvailable ? (specRunsMaybe ?? []) : [];
+  const allRuns = runsAvailable ? (allRunsMaybe ?? []) : [];
 
   const latestBySpec = new Map<string, RunListItem>();
   for (const run of allRuns) {
@@ -136,10 +136,19 @@ async function loadSpecDetail(
   }
   const statusBySpecId = new Map<string, DagStatus>();
   for (const other of allSpecs) {
-    statusBySpecId.set(other.specId, depStatus(other, latestBySpec.get(other.specId)));
+    // When the project run-list is unavailable, do not invent dep status from
+    // empty maps (which would look like every dep is merely "queued").
+    statusBySpecId.set(other.specId, runsAvailable ? depStatus(other, latestBySpec.get(other.specId)) : "queued");
   }
 
-  return buildSpecDetail({ spec, allSpecs, runs: specRuns, statusBySpecId, runsAvailable });
+  return buildSpecDetail({
+    spec,
+    allSpecs,
+    runs: specRuns,
+    statusBySpecId,
+    runsAvailable,
+    depsRunsAvailable: allRunsMaybe !== undefined,
+  });
 }
 
 // HALTED-outcome policy set imported from @tanren/db — the prior private copy

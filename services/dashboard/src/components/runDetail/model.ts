@@ -1,13 +1,6 @@
 /**
- * Pure presentation helpers for the run-detail surface. These take
- * the contract-typed run-detail payload and derive the view-model
- * the TSX renders: the unified cost bar, the trajectory spine, and the
- * reasoning pane for a selected moment. No DOM, no JSX — kept pure so the unit
- * tests can assert the derivation without rendering.
- *
- * Every field read here is contract-typed (see `../../api/types.ts`). The API
- * ships data; this module composes presentation. No UI-specific shaping is
- * requested back into the API.
+ * Pure run-detail presentation helpers (cost bar, trajectory, reasoning).
+ * Contract-typed inputs only; no DOM/JSX. See `../../api/types.ts`.
  */
 
 import type { RunCostRecord, RunDetail, RunEventRow, TaskTimelineEntry } from "../../api/types.js";
@@ -56,6 +49,8 @@ export interface SourceAgg {
   knownUsd: number;
   /** Count of records whose costUsd is null (unknown — not zero). */
   unknownRecords: number;
+  /** Count of records with a finite priced costUsd (including genuine $0). */
+  pricedRecords: number;
 }
 
 export interface CostTotals {
@@ -105,21 +100,33 @@ export function summarizeCosts(costs: RunCostRecord[]): CostTotals {
         perTokenPriced += 1;
       }
     }
-    const src = bySource.get(cost.billingMode) ?? { tokens: 0, knownUsd: 0, unknownRecords: 0 };
+    const src = bySource.get(cost.billingMode) ?? {
+      tokens: 0,
+      knownUsd: 0,
+      unknownRecords: 0,
+      pricedRecords: 0,
+    };
     src.tokens += cost.totalTokens;
     if (knownUsd === null) src.unknownRecords += 1;
-    else src.knownUsd += knownUsd;
+    else {
+      src.knownUsd += knownUsd;
+      src.pricedRecords += 1;
+    }
     bySource.set(cost.billingMode, src);
 
     const model = byModel.get(cost.model) ?? {
       tokens: 0,
       knownUsd: 0,
       unknownRecords: 0,
+      pricedRecords: 0,
       provider: cost.provider,
     };
     model.tokens += cost.totalTokens;
     if (knownUsd === null) model.unknownRecords += 1;
-    else model.knownUsd += knownUsd;
+    else {
+      model.knownUsd += knownUsd;
+      model.pricedRecords += 1;
+    }
     byModel.set(cost.model, model);
   }
 
@@ -157,14 +164,12 @@ export function formatCostUsd(
   return formatUsd(totals.perTokenKnownUsd);
 }
 
-/** Source-row amount label: tokens plus known/unknown USD (never null→$0). */
+/** Tokens + USD from priced/unknown counts (never magnitude; $0+null → partial). */
 export function formatSourceAmt(agg: SourceAgg): string {
-  const usd =
-    agg.knownUsd > 0
-      ? ` · ${formatUsd(agg.knownUsd)}${agg.unknownRecords > 0 ? " known" : ""}`
-      : agg.unknownRecords > 0
-        ? " · unknown"
-        : "";
+  let usd = "";
+  if (agg.pricedRecords === 0 && agg.unknownRecords > 0) usd = " · unknown";
+  else if (agg.pricedRecords > 0 && agg.unknownRecords > 0) usd = ` · ${formatUsd(agg.knownUsd)} known`;
+  else if (agg.pricedRecords > 0) usd = ` · ${formatUsd(agg.knownUsd)}`;
   return `${formatTokens(agg.tokens)} tok${usd}`;
 }
 

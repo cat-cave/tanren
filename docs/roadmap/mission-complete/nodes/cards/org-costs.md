@@ -163,3 +163,24 @@ dashboard types are regenerated from the Zod catalog, never hand-maintained.
   unattributed contributor; no notional partial CSV case is claimed.
 - Regenerate contract JSON/dashboard types; run affected tests/typechecks,
   format, lint, architecture, schema drift, then full gates after main refresh.
+
+## P1 redrive (post-audit, seven-item convergence)
+
+Independent audits returned NO-GO on seven live-path gaps. Closed as one
+fail-loud authority (no compatibility fallbacks):
+
+1. Run-detail spec header/behavior/milestone constrained by exact
+   `(orgId, projectId, specId)`; same-org cross-project fails non-200 with no
+   foreign metadata leak; DB/schema failure no longer launders to `[]`/`null`.
+2. Dashboard run-list and run-detail require exact HTTP 200 + strict Zod decode
+   (`api/runReads.ts`); non-200/malformed/binding mismatch → unavailable.
+3. Every `listRunsMaybe` consumer propagates availability (project view, spec
+   list/detail, halted aggregate, DAG, trigger re-render).
+4. Audits keeps independent `snapshotAvailable` vs `heatmapUnavailable` planes.
+5. Per-source cost coverage uses priced-record counts (SSR + browser stream),
+   never `knownUsd > 0`.
+6. SSE same-id cost fingerprint reconciliation; truth frames before terminal
+   status; client upserts by bigint-decimal id (no double-count).
+7. Behavior/milestone reads fail loud on relation failure.
+
+Live PostgreSQL/HTTP/UI/smoke proof remains required before merge.

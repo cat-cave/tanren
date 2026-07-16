@@ -88,10 +88,14 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
         />,
       );
     }
-    const snapshot = (await readAuditsClient(c, deps).snapshot(ctx.org.id)) ?? EMPTY;
-    const { records, unavailable: recordsUnavailable } = await gatherRecords(c, deps, ctx.org.id);
-    const matrix = buildHeatmap(records, { now: new Date() });
-    const columns = windowFillColumns(matrix);
+    const snapshotMaybe = await readAuditsClient(c, deps).snapshot(ctx.org.id);
+    // Independent unavailable planes: snapshot failure is NOT EMPTY success,
+    // and heatmap failure is NOT zero utilization.
+    const snapshotAvailable = snapshotMaybe !== undefined;
+    const snapshot = snapshotMaybe ?? EMPTY;
+    const { records, unavailable: heatmapUnavailable } = await gatherRecords(c, deps, ctx.org.id);
+    const matrix = heatmapUnavailable ? null : buildHeatmap(records, { now: new Date() });
+    const columns = matrix === null ? [] : windowFillColumns(matrix);
     return renderShell(
       c,
       ctx,
@@ -99,9 +103,10 @@ export function mountAuditScreens(app: Hono, deps: ShellDeps): void {
       <AuditsBody
         orgId={ctx.org.id}
         snapshot={snapshot}
+        snapshotAvailable={snapshotAvailable}
         windowColumns={columns}
-        lowNames={underfilledNames(columns)}
-        heatmapUnavailable={recordsUnavailable}
+        lowNames={heatmapUnavailable ? [] : underfilledNames(columns)}
+        heatmapUnavailable={heatmapUnavailable}
         csrfToken={ctx.csrfToken}
       />,
     );

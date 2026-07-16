@@ -168,7 +168,11 @@ export function createRunRoutes(options: RunRoutesOptions) {
     const rawView = parseRawViewOptIn(c);
     const [spec, tasks, recentEvents, costs] = await runWithOrgScope(options.pool, orgId, (client) =>
       Promise.all([
-        fetchRunSpecSummary(client, summary.specId),
+        fetchRunSpecSummary(client, {
+          specId: summary.specId,
+          projectId: summary.projectId,
+          orgId,
+        }),
         fetchRunTasks(client, runId, orgId),
         fetchRunEventsForSnapshot(client, { runId, orgId, limit: RECENT_EVENT_CAP, actor, rawView }),
         fetchRunCostsForSnapshot(client, runId, orgId),

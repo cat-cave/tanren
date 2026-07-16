@@ -109,11 +109,19 @@ export async function fetchRunTasks(pool: QueryClient, runId: string, orgId: str
 }
 
 // --- Spec summary (with milestone + behaviors) -----------------------------
-export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Promise<RunSpecSummary | undefined> {
-  const spec = await SpecStore.selectSummaryHeader(pool, specId, systemActor);
+// Constrained by the authorized run's (orgId, projectId, specId). Specs RLS is
+// org-only and does not enforce run/spec project equality — without the project
+// predicate a same-org foreign-project spec id would leak its title/description.
+// Behavior/milestone reads are fail-loud: genuine empty associations are valid;
+// DB/schema/RLS failure must not launder into []/null recovery context.
+export async function fetchRunSpecSummary(
+  pool: QueryClient,
+  args: { specId: string; projectId: string; orgId: string },
+): Promise<RunSpecSummary | undefined> {
+  const spec = await SpecStore.selectSummaryHeader(pool, args, systemActor);
   if (spec === undefined) return undefined;
-  const behaviorIds = await fetchBehaviorIds(pool, specId);
-  const milestoneId = await fetchSpecMilestone(pool, specId);
+  const behaviorIds = await SpecStore.selectBehaviorIds(pool, args, systemActor);
+  const milestoneId = await SpecStore.selectMilestoneId(pool, args, systemActor);
   return RunSpecSummary.parse({
     specId: spec.spec_id,
     title: spec.title,
@@ -121,24 +129,6 @@ export async function fetchRunSpecSummary(pool: QueryClient, specId: string): Pr
     behaviorIds,
     milestoneId,
   });
-}
-
-async function fetchBehaviorIds(pool: QueryClient, specId: string): Promise<string[]> {
-  // spec_behaviors table arrived with; older deployments without
-  // the table degrade to an empty list rather than 500ing.
-  try {
-    return await SpecStore.selectBehaviorIds(pool, specId, systemActor);
-  } catch {
-    return [];
-  }
-}
-
-async function fetchSpecMilestone(pool: QueryClient, specId: string): Promise<string | null> {
-  try {
-    return await SpecStore.selectMilestoneId(pool, specId, systemActor);
-  } catch {
-    return null;
-  }
 }
 
 // --- Events (recent for snapshot + paginated) ------------------------------

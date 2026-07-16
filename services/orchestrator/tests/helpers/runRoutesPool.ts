@@ -11,6 +11,7 @@
 import type pg from "pg";
 import { queryOrgCostsReadModel } from "./runRoutesPoolOrgCosts.js";
 import { queryProjectListReadModel } from "./runRoutesPoolProjectList.js";
+import { queryRunDetailSpec } from "./runRoutesPoolSpec.js";
 
 function taskKindOrder(kind: string): number {
   return ({ plan: 1, write: 2, check: 3, audit: 4, ci: 5 } as Record<string, number>)[kind] ?? 99;
@@ -112,6 +113,9 @@ export class RunRoutesPool {
   specs: SpecRow[] = [];
   specBehaviors = new Map<string, string[]>();
   specMilestones = new Map<string, string>();
+  /** Injected fail-loud proof for behavior/milestone reads. */
+  behaviorReadError: Error | undefined;
+  milestoneReadError: Error | undefined;
   projects = new Map<string, { project_id: string; org_id: string | null }>();
   projectMembers = new Set<string>();
   forgeThreads: Array<{
@@ -288,21 +292,8 @@ export class RunRoutesPool {
         });
       return { rows, rowCount: rows.length };
     }
-    // Spec read
-    if (trimmed.startsWith("SELECT spec_id, title, description FROM specs WHERE spec_id = $1")) {
-      const spec = this.specs.find((s) => s.spec_id === String(params[0]));
-      return spec === undefined ? { rows: [], rowCount: 0 } : { rows: [spec], rowCount: 1 };
-    }
-    if (trimmed.startsWith("SELECT behavior_id FROM spec_behaviors")) {
-      const ids = this.specBehaviors.get(String(params[0])) ?? [];
-      return { rows: ids.map((behavior_id) => ({ behavior_id })), rowCount: ids.length };
-    }
-    if (trimmed.startsWith("SELECT milestone_id FROM spec_milestones")) {
-      const milestoneId = this.specMilestones.get(String(params[0]));
-      return milestoneId === undefined
-        ? { rows: [], rowCount: 0 }
-        : { rows: [{ milestone_id: milestoneId }], rowCount: 1 };
-    }
+    const specRead = queryRunDetailSpec(trimmed, params, this);
+    if (specRead !== undefined) return specRead;
     // Events: snapshot (run_id = $1 AND org_id = $3; params [runId, limit, orgId])
     if (
       /FROM \(\s*SELECT id, ts, run_id, task_id, spec_id, project_id, event_type, payload\s+FROM events\s+WHERE run_id = \$1 AND org_id = \$3/u.test(

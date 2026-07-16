@@ -66,7 +66,7 @@ export function ProjectViewBody(props: ProjectViewBodyProps) {
         <div class="split-chat">
           <ForgeNarrationCard {...props} />
           <div class="col">
-            <DagSnapshot nodes={model.dagNodes} />
+            <DagSnapshot nodes={model.dagNodes} runsAvailable={model.runsAvailable} />
             {model.velocity !== null && <VelocityCard velocity={model.velocity} />}
             <ActivityFeed rows={model.activity} />
           </div>
@@ -100,15 +100,21 @@ function ForgeNarrationCard(props: ProjectViewBodyProps) {
         {/* 2. ATTENTION QUEUE: ranked things-that-need-you */}
         <div class="forge-turn">
           <div class="turn-label">▮ {model.attention.length} things need you · ranked</div>
-          {model.attention.length === 0 ? (
-            <div class="empty-note">
-              Nothing needs you right now. Forge will surface review handoffs and open runs here.
-            </div>
+          {model.runsAvailable ? (
+            model.attention.length === 0 ? (
+              <div class="empty-note">
+                Nothing needs you right now. Forge will surface review handoffs and open runs here.
+              </div>
+            ) : (
+              <div class="col" style="gap:6px">
+                {model.attention.map((entry) => (
+                  <AttentionRow entry={entry} />
+                ))}
+              </div>
+            )
           ) : (
-            <div class="col" style="gap:6px">
-              {model.attention.map((entry) => (
-                <AttentionRow entry={entry} />
-              ))}
+            <div class="empty-note" role="alert" data-attention-unavailable>
+              Attention queue unavailable — run state could not be loaded. This is not an all-clear.
             </div>
           )}
         </div>
@@ -215,7 +221,7 @@ function SuboptCallout(props: {
  * routes per the hi-fi rule: live/done/review → run detail; blocked/queued →
  * no-op.
  */
-function DagSnapshot(props: { nodes: DagNode[] }) {
+function DagSnapshot(props: { nodes: DagNode[]; runsAvailable: boolean }) {
   const cols = 4;
   const cellW = 250;
   const cellH = 56;
@@ -231,9 +237,7 @@ function DagSnapshot(props: { nodes: DagNode[] }) {
         <span class="note">{props.nodes.length} nodes · click any node</span>
       </div>
       <div class="dag-canvas">
-        {props.nodes.length === 0 ? (
-          <div class="empty-note">No runs yet — the DAG snapshot renders nodes once a spec runs.</div>
-        ) : (
+        {props.runsAvailable && props.nodes.length > 0 ? (
           <svg
             viewBox={`0 0 ${width} ${height}`}
             preserveAspectRatio="xMidYMid meet"
@@ -249,6 +253,12 @@ function DagSnapshot(props: { nodes: DagNode[] }) {
               />
             ))}
           </svg>
+        ) : props.runsAvailable ? (
+          <div class="empty-note">No runs yet — the DAG snapshot renders nodes once a spec runs.</div>
+        ) : (
+          <div class="empty-note" role="alert" data-dag-unavailable>
+            DAG snapshot unavailable — the run-list read failed. This is not an empty project.
+          </div>
         )}
       </div>
       <div class="dag-placeholder">dag-primary mode (full canvas + group-by) → Phase 3</div>

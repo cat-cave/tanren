@@ -220,12 +220,17 @@ function Composer(props: { csrfToken: string | undefined }) {
 export interface AuditsBodyProps {
   orgId: string;
   snapshot: AuditsSnapshot;
+  /**
+   * False when the audits snapshot orchestrator read failed. Distinct from a
+   * legitimate empty job library. Independent of heatmap availability.
+   */
+  snapshotAvailable?: boolean;
   windowColumns: WindowFillColumn[];
   lowNames: string[];
   error?: string;
   /**
    * True when the org-costs heatmap gather failed. Distinct from a legitimate
-   * empty heatmap (no subscription records in window).
+   * empty heatmap (no subscription records in window). Independent of snapshot.
    */
   heatmapUnavailable?: boolean;
   /** Session CSRF for pure HTML form posts. */
@@ -233,6 +238,8 @@ export interface AuditsBodyProps {
 }
 
 export function AuditsBody(props: AuditsBodyProps) {
+  const snapshotAvailable = props.snapshotAvailable !== false;
+  const heatmapAvailable = props.heatmapUnavailable !== true;
   const { jobs } = props.snapshot;
   const csrfToken = props.csrfToken;
   const active = jobs.filter((j) => j.enabled).length;
@@ -256,31 +263,54 @@ export function AuditsBody(props: AuditsBodyProps) {
         }
       />
       <div class="page-body">
-        <KpiStrip
-          items={[
-            { k: "audit jobs", v: String(jobs.length) },
-            { k: "active", v: String(active) },
-            { k: "open findings", v: String(open), tone: open > 0 ? "hot" : undefined },
-            { k: "recommended", v: String(props.snapshot.recommended.length) },
-          ]}
-        />
+        {snapshotAvailable ? (
+          <KpiStrip
+            items={[
+              { k: "audit jobs", v: String(jobs.length) },
+              { k: "active", v: String(active) },
+              { k: "open findings", v: String(open), tone: open > 0 ? "hot" : undefined },
+              { k: "recommended", v: String(props.snapshot.recommended.length) },
+            ]}
+          />
+        ) : (
+          <div
+            class="placeholder-card"
+            style="border-left:2px solid var(--ember-08);margin-bottom:12px"
+            role="alert"
+            data-snapshot-unavailable
+          >
+            Audit job library is unavailable — the orchestrator snapshot read failed. Zero KPIs and empty-library claims
+            are suppressed; this is not an empty schedule.
+          </div>
+        )}
         {props.error !== undefined && (
           <div class="placeholder-card" style="border-left:2px solid var(--ember-08)">
             {props.error}
           </div>
         )}
-        {props.heatmapUnavailable === true && (
+        {!heatmapAvailable && (
           <div
             class="placeholder-card"
             style="border-left:2px solid var(--ember-08)"
             role="alert"
             data-heatmap-unavailable
           >
-            Subscription-window heatmap is incomplete — the org cost read failed, so the idle-window fill below may
-            under-represent availability. This is not an empty heatmap.
+            Subscription-window heatmap is incomplete — the org cost read failed. Idle-window fill bars and
+            under/over-fill pitches are suppressed; this is not zero utilization.
           </div>
         )}
-        <WhyAudits columns={props.windowColumns} lowNames={props.lowNames} />
+        {heatmapAvailable ? (
+          <WhyAudits columns={props.windowColumns} lowNames={props.lowNames} />
+        ) : (
+          <div class="why-audits" data-heatmap-suppressed>
+            <div class="wtext">
+              <div class="wlabel">▮ why schedule audits</div>
+              <div class="wbody">
+                Window-fill data is unavailable, so no utilization claim (under 30% / filling well) is shown.
+              </div>
+            </div>
+          </div>
+        )}
 
         <section class="panel" style="padding:0;overflow:hidden">
           <div class="panel-head">
@@ -288,18 +318,21 @@ export function AuditsBody(props: AuditsBodyProps) {
               audit <em>jobs</em>
             </h3>
             <span class="meta">
-              {active} active · {jobs.length} total
+              {snapshotAvailable ? `${active} active · ${jobs.length} total` : "snapshot unavailable"}
             </span>
           </div>
           <div class="audit-jobs">
-            {jobs.length === 0 && (
+            {snapshotAvailable && jobs.length > 0 ? (
+              jobs.map((job) => <AuditRow job={job} csrfToken={csrfToken} />)
+            ) : snapshotAvailable ? (
               <div class="placeholder-card" style="margin:12px 14px">
                 No scheduled audits yet — compose one below or schedule a forge-recommended coverage gap.
               </div>
+            ) : (
+              <div class="placeholder-card" style="margin:12px 14px" role="alert" data-jobs-unavailable>
+                Audit jobs could not be loaded. This is not an empty schedule.
+              </div>
             )}
-            {jobs.map((job) => (
-              <AuditRow job={job} csrfToken={csrfToken} />
-            ))}
           </div>
           <div class="audit-foot">
             <span style="color:var(--ember-08);margin-right:6px">↑</span>
@@ -310,7 +343,7 @@ export function AuditsBody(props: AuditsBodyProps) {
           </div>
         </section>
 
-        <Recommended snapshot={props.snapshot} orgId={props.orgId} csrfToken={csrfToken} />
+        {snapshotAvailable && <Recommended snapshot={props.snapshot} orgId={props.orgId} csrfToken={csrfToken} />}
         <Composer csrfToken={csrfToken} />
       </div>
     </div>

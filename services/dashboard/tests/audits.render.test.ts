@@ -198,6 +198,44 @@ describe("scheduled audits surface", () => {
     const html = await (await (await build()).request("/audits")).text();
     expect(html).toContain("data-heatmap-unavailable");
     expect(html).toContain("org cost read failed");
+    // Independent plane: heatmap failure must not invent fill claims.
+    expect(html).not.toContain("under 30% filled");
+    expect(html).not.toContain("windows are filling well");
+    expect(html).toContain("data-heatmap-suppressed");
+    // Snapshot still available — jobs render; no empty-library claim.
+    expect(html).toContain("security scan");
+    expect(html).not.toContain("No scheduled audits yet");
+  });
+
+  it("snapshot failure is independent of heatmap and suppresses zero KPIs / empty claims", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url))
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/audits$/u.test(url) && method === "GET") return new Response("down", { status: 503 });
+      if (/\/orgs\/[^/]+\/costs(?:\?|$)/u.test(url)) {
+        return new Response(JSON.stringify({ orgId: ORG.id, costs: [], runs: [], nextCursor: null }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const html = await (await (await build()).request("/audits")).text();
+    expect(html).toContain("data-snapshot-unavailable");
+    expect(html).toContain("data-jobs-unavailable");
+    expect(html).not.toContain("No scheduled audits yet");
+    // No job rows from the failed snapshot (composer options may still list kinds).
+    expect(html).not.toContain("data-job-id=");
+    expect(html).not.toContain("data-rec-kind=");
+    // Heatmap plane still independent — not forced unavailable.
+    expect(html).not.toContain("data-heatmap-unavailable");
   });
 
   it("composer POST creates a job and redirects back", async () => {

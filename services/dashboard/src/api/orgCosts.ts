@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { RunListItemWire } from "./runReads.js";
 import type { CostRecord, RunListItem } from "./types.js";
 
 const DecimalString = z.string().regex(/^\d+(?:\.\d+)?$/u);
@@ -12,6 +13,8 @@ const WireDate = z.string().datetime({ offset: true });
 const SafeId = z.union([z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), z.string().regex(/^\d+$/u)]);
 const NonnegativeCount = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 
+// Cost wire schema stays local (org-costs page walks only); RunListItemWire is
+// the single shared run-list decoder (see runReads.ts) so schemas cannot drift.
 const CostRecordSchema = z
   .object({
     id: SafeId,
@@ -49,43 +52,11 @@ const CostRecordSchema = z
     }
   });
 
-const RunListItemSchema = z
-  .object({
-    runId: z.string().min(1),
-    specId: z.string().min(1),
-    projectId: z.string().min(1),
-    branch: z.string().min(1),
-    trigger: z.string().min(1),
-    status: z.enum(["queued", "running", "paused", "halted", "completed", "failed", "cancelled"]),
-    outcome: z
-      .enum([
-        "ok",
-        "halted",
-        "escape_hatch_hit",
-        "retry_budget_exhausted",
-        "convergence_stalled",
-        "window_exhausted",
-        "window_paused",
-        "awaiting_review",
-        "cancelled",
-        "failed",
-      ])
-      .nullable(),
-    startedAt: WireDate,
-    endedAt: WireDate.nullable(),
-    prUrl: z.string().nullable(),
-    specTitle: z.string(),
-    costTotalUsd: DecimalString.nullable(),
-    lastEventAt: WireDate.nullable(),
-    needsReview: z.boolean(),
-  })
-  .strict();
-
 const OrgCostsPageSchema = z
   .object({
     orgId: z.string().min(1),
     costs: z.array(CostRecordSchema),
-    runs: z.array(RunListItemSchema),
+    runs: z.array(RunListItemWire),
     nextCursor: z.string().min(1).nullable(),
   })
   .strict();

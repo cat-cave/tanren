@@ -29,7 +29,8 @@ export interface SpecRunRow {
 export interface SpecDepChip {
   specId: string;
   title: string;
-  status: DagStatus;
+  /** Run-derived status; `"unavailable"` when the project run-list read failed. */
+  status: DagStatus | "unavailable";
 }
 
 /** Economics figures for the full-page panel (and the lighter drawer strip). */
@@ -190,51 +191,66 @@ export interface BuildSpecDetailInput {
    * confirmed an empty successful list).
    */
   runsAvailable?: boolean;
+  /**
+   * False when the project-wide run-list (dep status chips) failed. Defaults
+   * to `runsAvailable`.
+   */
+  depsRunsAvailable?: boolean;
 }
 
-function depChip(specId: string, allSpecs: SpecSummary[], statusBySpecId: Map<string, DagStatus>): SpecDepChip {
+function depChip(
+  specId: string,
+  allSpecs: SpecSummary[],
+  statusBySpecId: Map<string, DagStatus>,
+  depsAvailable: boolean,
+): SpecDepChip {
   const found = allSpecs.find((s) => s.specId === specId);
   return {
     specId,
     title: found?.title ?? specId,
-    status: statusBySpecId.get(specId) ?? "queued",
+    status: depsAvailable ? (statusBySpecId.get(specId) ?? "queued") : "unavailable",
   };
 }
 
 export function buildSpecDetail(input: BuildSpecDetailInput): SpecDetail {
   const { spec, allSpecs, runs } = input;
   const runsAvailable = input.runsAvailable !== false;
+  const depsRunsAvailable = input.depsRunsAvailable ?? runsAvailable;
   const latest = runsAvailable ? runs[0] : undefined;
-  const status = statusForSpec(spec.status, latest);
-  const meta = STATUS_META[status];
+  const status = runsAvailable ? statusForSpec(spec.status, latest) : "queued";
+  const meta = runsAvailable ? STATUS_META[status] : { label: "unavailable", pill: "cold" as const, glyph: "?" };
   const projectId = spec.projectId;
 
-  const dependsOn = spec.dependsOn.map((id) => depChip(id, allSpecs, input.statusBySpecId));
+  const dependsOn = spec.dependsOn.map((id) => depChip(id, allSpecs, input.statusBySpecId, depsRunsAvailable));
   const blocks = allSpecs
     .filter((s) => s.dependsOn.includes(spec.specId))
-    .map((s) => depChip(s.specId, allSpecs, input.statusBySpecId));
+    .map((s) => depChip(s.specId, allSpecs, input.statusBySpecId, depsRunsAvailable));
 
   const runRows = runsAvailable ? runs.map((run) => toRunRow(projectId, run)) : [];
   const latestRun = runRows[0] ?? null;
   const economics = buildEconomics(runsAvailable ? runs : [], runsAvailable);
 
-  const blockedDeps = dependsOn.filter((d) => d.status !== "done");
-  const blockedReason =
-    status === "blocked"
+  const blockedDeps = dependsOn.filter((d) => d.status !== "done" && d.status !== "unavailable");
+  const blockedReason = runsAvailable
+    ? status === "blocked"
       ? blockedDeps.length > 0
         ? `Waiting on ${blockedDeps.map((d) => d.title).join(", ")} — ${blockedDeps.length} upstream dep(s) not yet merged.`
         : "This spec's latest run halted. Open the run to see why."
-      : null;
+      : null
+    : "Run state unavailable — the orchestrator read failed.";
 
+  // Never invent forge/start/nav affordances from a failed empty run-list.
   let primaryAction: SpecDetail["primaryAction"] = null;
-  if (status === "review" && latestRun !== null) {
-    primaryAction = { label: "open review ↗", href: `/runs/${latestRun.runId}/review` };
-  } else if (status === "live" && latestRun !== null) {
-    primaryAction = { label: "open live run ↗", href: runHref(projectId, latestRun.runId) };
-  } else if (status === "done" && latestRun !== null) {
-    primaryAction = { label: "view merged run ↗", href: runHref(projectId, latestRun.runId) };
-  } else if (status === "queued") {
-    primaryAction = { label: "forge it now ↗", href: `/projects/${projectId}/specs/new` };
+  if (runsAvailable) {
+    if (status === "review" && latestRun !== null) {
+      primaryAction = { label: "open review ↗", href: `/runs/${latestRun.runId}/review` };
+    } else if (status === "live" && latestRun !== null) {
+      primaryAction = { label: "open live run ↗", href: runHref(projectId, latestRun.runId) };
+    } else if (status === "done" && latestRun !== null) {
+      primaryAction = { label: "view merged run ↗", href: runHref(projectId, latestRun.runId) };
+    } else if (status === "queued") {
+      primaryAction = { label: "forge it now ↗", href: `/projects/${projectId}/specs/new` };
+    }
   }
 
   return {

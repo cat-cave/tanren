@@ -120,9 +120,12 @@ async function renderSpecListWithError(
     client.listSpecs(ctx.org.id, projectId),
     client.listRunsMaybe(ctx.org.id, projectId),
   ]);
+  const runsAvailable = runsMaybe !== undefined;
   const runBySpec: Record<string, string | undefined> = {};
-  for (const run of runsMaybe ?? []) {
-    if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
+  if (runsAvailable) {
+    for (const run of runsMaybe) {
+      if (runBySpec[run.specId] === undefined) runBySpec[run.specId] = run.runId;
+    }
   }
   return renderShell(
     c,
@@ -132,6 +135,7 @@ async function renderSpecListWithError(
       project={ctx.project}
       specs={specs}
       runBySpec={runBySpec}
+      runsAvailable={runsAvailable}
       error={error}
       errorSpecId={specId}
       csrfToken={ctx.csrfToken}

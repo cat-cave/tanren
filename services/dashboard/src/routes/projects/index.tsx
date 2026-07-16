@@ -1,24 +1,6 @@
 /**
- * mount: the chat-primary project view, the spec creation surface +
- * spec list, and the routing & limits settings — all registered through the
- * append-only screen registry (see `app/screens.ts`). Routes reuse the shell's
- * `loadShellContext` + `renderShell` and never touch the chrome. Backend reads
- * go through the typed `OrchestratorClient` (extended additively); writes are
- * server-side form POSTs that call the product API and redirect back.
- *
- * adds a DAG-primary mode (`?mode=dag` + persisted cookie) and
- * delegates the spec drawer / full-page routes to `./specRoutes`.
- *
- * Routes registered:
- *   GET  /projects/:projectId                          project view (chat | dag)
- *   GET  /projects/:projectId/specs                    spec list
- *   GET  /projects/:projectId/specs/new                spec creation form
- *   POST /projects/:projectId/specs                    create spec
- *   POST /projects/:projectId/insights/act             subopt callout action
- *   GET  /settings/routing                             routing & limits (active project)
- *   GET  /settings/routing/:projectId                  routing & limits (explicit project)
- *   POST /settings/routing/:projectId/add|remove|reorder          routing mutations
- *   POST /settings/routing/:projectId/credentials                 bind codex+github refs
+ * Project view, specs, and routing settings (append-only screen registry).
+ * DAG mode via `?mode=dag`; spec drawer/full-page lives in `./specRoutes`.
  */
 
 import type { Context, Hono } from "hono";
@@ -158,7 +140,13 @@ export function mountProjectScreens(app: Hono, deps: ShellDeps): void {
       c,
       ctx,
       { title: `tanren · ${ctx.project.name} specs` },
-      <SpecListBody project={ctx.project} specs={specs} runBySpec={runBySpec} csrfToken={ctx.csrfToken} />,
+      <SpecListBody
+        project={ctx.project}
+        specs={specs}
+        runBySpec={runBySpec}
+        runsAvailable={runsMaybe !== undefined}
+        csrfToken={ctx.csrfToken}
+      />,
     );
   });
 

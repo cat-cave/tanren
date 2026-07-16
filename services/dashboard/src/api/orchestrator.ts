@@ -15,6 +15,7 @@ import type { DoraMetrics } from "./dora.js";
 import { OrchestratorNotificationsClient } from "./notificationsClient.js";
 import { getOrgCosts as readOrgCosts, type GetOrgCostsResult } from "./orgCosts.js";
 import { findRunLocation as resolveRunLocation, type FindRunLocationResult } from "./runLocation.js";
+import { readRunDetail, readRunList } from "./runReads.js";
 import type {
   BehaviorSummary,
   BrownfieldLinkResult,
@@ -122,23 +123,20 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
   /**
    * Runs for attention queue + KPIs. `undefined` on failure (unavailable,
    * not fake empty/zeros) — callers MUST distinguish that from a legitimate
-   * empty 200 response.
+   * empty 200 response. Exact HTTP 200 + strict Zod decode of every row.
    */
   async listRunsMaybe(
     orgId: string,
     projectId: string,
     query: { status?: string; specId?: string } = {},
   ): Promise<RunListItem[] | undefined> {
-    const params = new URLSearchParams();
-    if (query.status !== undefined && query.status !== "") params.set("status", query.status);
-    if (query.specId !== undefined && query.specId !== "") params.set("specId", query.specId);
-    const qs = params.toString();
-    const json = await this.getJson<{ items?: RunListItem[] }>(
-      `/orgs/${encodeURIComponent(orgId)}/projects/${encodeURIComponent(projectId)}/runs${qs ? `?${qs}` : ""}`,
+    const result = await readRunList(
+      { orchestratorUrl: this.orchestratorUrl, headers: this.headers(), fetchImpl: this.fetchImpl },
+      orgId,
+      projectId,
+      query,
     );
-    // Missing/non-array items is a broken contract, not empty success.
-    if (json === undefined || !Array.isArray(json.items)) return undefined;
-    return json.items;
+    return result.kind === "ok" ? result.items : undefined;
   }
 
   /** Project activity feed. */
@@ -402,23 +400,25 @@ export class OrchestratorClient extends OrchestratorNotificationsClient {
   /**
    * Fetch the full run-detail snapshot. `rawView` opts into unredacted
    * payloads via `?raw=true` (the orchestrator emits the audit
-   * trail); the dashboard only sets it for admins. `undefined` when the run
-   * is missing or access is denied.
+   * trail); the dashboard only sets it for admins. `undefined` on missing,
+   * access denial, non-200, or strict decode/domain-binding failure —
+   * never a cast partial object.
    */
   async getRunDetail(
     loc: RunLocation,
     runId: string,
     opts: { rawView?: boolean } = {},
   ): Promise<RunDetail | undefined> {
-    const query = opts.rawView === true ? "?raw=true" : "";
-    const response = await this.fetchImpl(
-      `${this.orchestratorUrl}/orgs/${encodeURIComponent(loc.orgId)}/projects/${encodeURIComponent(loc.projectId)}/runs/${encodeURIComponent(runId)}${query}`,
-      { headers: this.headers(opts.rawView === true ? { "x-view-raw": "true" } : undefined) },
-    ).catch(() => {});
-    if (response === undefined || !response.ok) {
-      return undefined;
-    }
-    return (await response.json()) as RunDetail;
+    const result = await readRunDetail(
+      { orchestratorUrl: this.orchestratorUrl, headers: this.headers(), fetchImpl: this.fetchImpl },
+      loc,
+      runId,
+      {
+        rawView: opts.rawView,
+        extraHeaders: opts.rawView === true ? { "x-view-raw": "true" } : undefined,
+      },
+    );
+    return result.kind === "ok" ? result.detail : undefined;
   }
 
   /** Build the SSE stream URL for the run's live feed (consumed by the client island). */
