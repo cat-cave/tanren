@@ -70,15 +70,24 @@ function stubPool(): pg.Pool {
 }
 
 let catalogMode: "ok" | "down" = "ok";
+let sessionMode: "session" | "no-session" = "session";
+const SESSION_CSRF = "csrf-from-auth-me";
 /** R3: captures every validate request body the dashboard issues. */
-const validateCalls: Array<{ requirement?: unknown; persist?: boolean }> = [];
+const validateCalls: Array<{
+  requirement?: unknown;
+  persist?: boolean;
+  csrfToken: string | null;
+  cookie: string | null;
+}> = [];
+const catalogCalls: Array<{ method: string; csrfToken: string | null }> = [];
 
 function mockOrchestrator(): void {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
 
     if (url.endsWith("/auth/me")) {
-      return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+      if (sessionMode === "no-session") return new Response("unauthorized", { status: 401 });
+      return new Response(JSON.stringify({ userId: "u1", csrfToken: SESSION_CSRF, expiresAt: "2030-01-01" }), {
         status: 200,
       });
     }
@@ -86,12 +95,20 @@ function mockOrchestrator(): void {
       return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
     }
     if (url.includes("integration-contracts/catalog")) {
+      const headers = new Headers(init?.headers);
+      catalogCalls.push({ method: init?.method ?? "GET", csrfToken: headers.get("x-csrf-token") });
       if (catalogMode === "down") return new Response("boom", { status: 500 });
       return new Response(JSON.stringify(CATALOG), { status: 200 });
     }
     if (url.includes("integration-contracts:validate")) {
       const body = init?.body === undefined ? {} : JSON.parse(String(init.body));
-      validateCalls.push({ requirement: body.requirement, persist: body.persist });
+      const headers = new Headers(init?.headers);
+      validateCalls.push({
+        requirement: body.requirement,
+        persist: body.persist,
+        csrfToken: headers.get("x-csrf-token"),
+        cookie: headers.get("cookie"),
+      });
       const req = body.requirement as { plane?: string; bindingOutputs?: Array<{ kind: string }> };
       const kinds = req?.bindingOutputs?.map((b) => b.kind) ?? [];
       if (req?.plane === "product" && kinds.some((k) => k.startsWith("control."))) {
@@ -133,7 +150,9 @@ function mockOrchestrator(): void {
 beforeEach(() => {
   delete process.env.TANREN_REQUIRE_AUTH;
   catalogMode = "ok";
+  sessionMode = "session";
   validateCalls.length = 0;
+  catalogCalls.length = 0;
   mockOrchestrator();
 });
 
@@ -180,13 +199,27 @@ describe("IntegrationContractPanel on overview (visible UI)", () => {
     expect(html).toContain('data-in2-state="invalid"');
   });
 
-  it("overview samples validate with persist:false (zero CAS writes on page load)", async () => {
+  it("overview samples send the real session CSRF and persist:false", async () => {
     const app = await build();
-    await app.request("/overview");
+    await app.request("/overview", { headers: { cookie: "tanren_session=session-1" } });
     // R3: every live sample from the overview read path must opt out of persistence.
-    expect(validateCalls.length).toBeGreaterThanOrEqual(3);
+    expect(validateCalls).toHaveLength(3);
     for (const call of validateCalls) {
       expect(call.persist).toBe(false);
+      expect(call.csrfToken).toBe(SESSION_CSRF);
+      expect(call.cookie).toBe("tanren_session=session-1");
+    }
+    expect(catalogCalls).toEqual([{ method: "GET", csrfToken: null }]);
+  });
+
+  it("no-session/local-dev samples omit CSRF instead of inventing a token", async () => {
+    sessionMode = "no-session";
+    const app = await build();
+    await app.request("/overview");
+    expect(validateCalls).toHaveLength(3);
+    for (const call of validateCalls) {
+      expect(call.persist).toBe(false);
+      expect(call.csrfToken).toBeNull();
     }
   });
 

@@ -151,6 +151,7 @@ async function loadIntegrationContracts(
   deps: ShellDeps,
   c: Context,
   orgId: string,
+  csrfToken: string | undefined,
 ): Promise<IntegrationContractPanelProps> {
   const headers: Record<string, string> = {};
   const cookie = c.req.header("cookie");
@@ -160,6 +161,7 @@ async function loadIntegrationContracts(
   const fetchDeps = {
     orchestratorUrl: deps.orchestratorUrl,
     headers,
+    ...(csrfToken === undefined || csrfToken === "" ? {} : { csrfToken }),
     fetchImpl: fetch,
   };
   const [catalog, productSample, controlSample, crossPlaneSample] = await Promise.all([
@@ -340,7 +342,7 @@ export function mountOverviewScreen(app: Hono, deps: ShellDeps): void {
             })
           : loadActivity(reads, org.id, projects),
         // in-2: live catalog + plane-separation samples against orchestrator.
-        loadIntegrationContracts(deps, c, org.id),
+        loadIntegrationContracts(deps, c, org.id, ctx.csrfToken),
       ]);
       mtd = budgetResult.mtd;
       orgBudgetUnavailable = budgetResult.orgBudgetUnavailable;

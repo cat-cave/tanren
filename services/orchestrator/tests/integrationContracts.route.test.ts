@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { Hono } from "hono";
 import type { Pool } from "pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
 import type { CasArtifactBytes, CasArtifactRef, CasByteStore, Digest } from "../src/engine/contracts/cas.js";
 import { parseDigest } from "../src/engine/contracts/cas.js";
@@ -59,6 +59,16 @@ class RecordingEventStore implements EventStore {
 
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
     this.appends.push(input);
+  }
+}
+
+class ThrowingEventStore extends RecordingEventStore {
+  attempts = 0;
+
+  override async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
+    this.attempts += 1;
+    void input;
+    throw new Error("injected event append failure");
   }
 }
 
@@ -231,6 +241,26 @@ describe("integration-contracts HTTP (in-2)", () => {
     expect(events.appends).toHaveLength(2);
     expect(validatedAppendAt(events, 0).payload.artifact.digest).toBe(firstBody.artifact.digest);
     expect(validatedAppendAt(events, 1).payload.artifact.digest).toBe(firstBody.artifact.digest);
+  });
+
+  it("fails closed after CAS put when the governed event append rejects", async () => {
+    const cas = new MemoryCas();
+    const events = new ThrowingEventStore();
+    const app = buildHarness(cas, alice, events);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await app
+      .request("/orgs/org_acme/integration-contracts:validate", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+        body: JSON.stringify({ requirement: goldenProductMessagingRequirement() }),
+      })
+      .finally(() => consoleError.mockRestore());
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('"ok":true');
+    expect(cas.puts).toBe(1);
+    expect(cas.store.size).toBe(1);
+    expect(events.attempts).toBe(1);
+    expect(events.appends).toHaveLength(0);
   });
 
   it("POST validate with persist:false performs zero CAS puts and reports persisted:false", async () => {

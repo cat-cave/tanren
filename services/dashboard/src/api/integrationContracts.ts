@@ -64,6 +64,8 @@ export type FetchValidateResult =
 export interface IntegrationContractsFetchDeps {
   orchestratorUrl: string;
   headers: Record<string, string>;
+  /** Session CSRF for validate POSTs; omitted in local-dev/no-session mode. */
+  csrfToken?: string;
   fetchImpl: typeof fetch;
 }
 
@@ -230,9 +232,13 @@ export async function validateIntegrationRequirement(
   const persist = options?.persist ?? true;
   let res: Response;
   try {
+    const headers: Record<string, string> = { ...deps.headers, "content-type": "application/json" };
+    if (deps.csrfToken !== undefined && deps.csrfToken !== "") {
+      headers["x-csrf-token"] = deps.csrfToken;
+    }
     res = await deps.fetchImpl(url, {
       method: "POST",
-      headers: { ...deps.headers, "content-type": "application/json" },
+      headers,
       body: JSON.stringify({ requirement, persist }),
     });
   } catch {

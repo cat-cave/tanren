@@ -5,7 +5,8 @@ import { migrate, runWithOrgScope } from "@tanren/db";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ActorContext } from "../src/auth/schemas.js";
+import { IdentityStore } from "../src/auth/identityStore.js";
+import type { Session } from "../src/auth/schemas.js";
 import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
 import { contentDigestOf, parseDigest } from "../src/engine/contracts/cas.js";
 import {
@@ -16,7 +17,7 @@ import {
 } from "../src/engine/contracts/integrationRequirement.js";
 import { orgScopingPool } from "../src/engine/data/orgScopedDb.js";
 import { IntegrationRequirementValidatedPayload } from "../src/engine/events/schemas/eventVocabularyW0.js";
-import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
+import { createAuthMiddleware, CSRF_HEADER, SESSION_COOKIE, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createBehaviorRoutes } from "../src/routes/behaviors/index.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -58,29 +59,39 @@ function runtimeUrl(adminUrl: string, database: string): string {
   return parsed.toString();
 }
 
-function actorFor(orgId: string): ActorContext {
-  return {
-    userId: `user_${orgId}`,
-    orgId,
-    projectId: null,
-    scopes: ["org:member"],
-    source: "session",
-  };
+async function seedSession(store: IdentityStore, orgId: string): Promise<Session> {
+  const { user } = await store.upsertIdentity("oidc", {
+    providerSubject: `subject_${orgId}`,
+    login: `user_${orgId}`,
+    email: null,
+    displayName: `User ${orgId}`,
+    orgs: [
+      {
+        kind: "oidc",
+        externalId: orgId,
+        login: orgId,
+        displayName: orgId,
+      },
+    ],
+  });
+  return store.createSession(user.id);
 }
 
-function buildProductionWire(pool: Pool, actor: ActorContext) {
+function postHeaders(session: Session, csrfToken?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    cookie: `${SESSION_COOKIE}=${session.id}`,
+  };
+  if (csrfToken !== undefined) headers[CSRF_HEADER] = csrfToken;
+  return headers;
+}
+
+function buildProductionWire(pool: Pool, identityStore: IdentityStore) {
   const app = new Hono<ActorContextEnv>();
   app.use(
     "*",
     createAuthMiddleware({
-      store: {
-        async findApiTokenByRaw() {},
-        async loadSession() {},
-        async resolveActorContext() {
-          return actor;
-        },
-      } as never,
-      localDevActor: actor,
+      store: identityStore,
       pool,
     }),
   );
@@ -92,6 +103,9 @@ describeDb("integration contracts apex (in-2)", () => {
   const database = dbName();
   let ownerPool: Pool;
   let runtimePool: Pool;
+  let identityStore: IdentityStore;
+  let sessionA: Session;
+  let sessionNegative: Session;
 
   beforeAll(async () => {
     const adminPool = new Pool({ connectionString: ADMIN_URL });
@@ -109,6 +123,9 @@ describeDb("integration contracts apex (in-2)", () => {
               ($3, 'oidc', $3, $3, $3, '{"version":1}'::jsonb)`,
       [ORG_A, ORG_B, ORG_NEGATIVE],
     );
+    identityStore = new IdentityStore(ownerPool);
+    sessionA = await seedSession(identityStore, ORG_A);
+    sessionNegative = await seedSession(identityStore, ORG_NEGATIVE);
   }, 60_000);
 
   afterAll(async () => {
@@ -124,13 +141,31 @@ describeDb("integration contracts apex (in-2)", () => {
   }, 30_000);
 
   it("proves HTTP validation -> governed event -> retrievable CAS bytes under RLS", async () => {
-    const app = buildProductionWire(runtimePool, actorFor(ORG_A));
+    const app = buildProductionWire(runtimePool, identityStore);
     const requirement = goldenProductMessagingRequirement();
     const requestBody = JSON.stringify({ requirement, persist: true });
 
+    const missingCsrf = await app.request(`/orgs/${ORG_A}/integration-contracts:validate`, {
+      method: "POST",
+      headers: postHeaders(sessionA),
+      body: requestBody,
+    });
+    expect(missingCsrf.status).toBe(403);
+    expect(await loadValidationEvents(runtimePool, ORG_A, ORG_A)).toHaveLength(0);
+    expect(await countAllCasArtifacts(runtimePool, ORG_A)).toBe(0);
+
+    const wrongCsrf = await app.request(`/orgs/${ORG_A}/integration-contracts:validate`, {
+      method: "POST",
+      headers: postHeaders(sessionA, "wrong-csrf"),
+      body: requestBody,
+    });
+    expect(wrongCsrf.status).toBe(403);
+    expect(await loadValidationEvents(runtimePool, ORG_A, ORG_A)).toHaveLength(0);
+    expect(await countAllCasArtifacts(runtimePool, ORG_A)).toBe(0);
+
     const first = await app.request(`/orgs/${ORG_A}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionA, sessionA.csrfToken),
       body: requestBody,
     });
     expect(first.status).toBe(200);
@@ -155,7 +190,7 @@ describeDb("integration contracts apex (in-2)", () => {
 
     const second = await app.request(`/orgs/${ORG_A}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionA, sessionA.csrfToken),
       body: requestBody,
     });
     expect(second.status).toBe(200);
@@ -166,7 +201,7 @@ describeDb("integration contracts apex (in-2)", () => {
 
     const denied = await app.request(`/orgs/${ORG_B}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionA, sessionA.csrfToken),
       body: requestBody,
     });
     expect(denied.status).toBe(403);
@@ -174,10 +209,10 @@ describeDb("integration contracts apex (in-2)", () => {
   });
 
   it("proves preview, invalid, malformed, and denied requests have zero durable effects", async () => {
-    const app = buildProductionWire(runtimePool, actorFor(ORG_NEGATIVE));
+    const app = buildProductionWire(runtimePool, identityStore);
     const preview = await app.request(`/orgs/${ORG_NEGATIVE}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionNegative, sessionNegative.csrfToken),
       body: JSON.stringify({ requirement: goldenControlNotifyRequirement(), persist: false }),
     });
     expect(preview.status).toBe(200);
@@ -189,21 +224,21 @@ describeDb("integration contracts apex (in-2)", () => {
 
     const invalid = await app.request(`/orgs/${ORG_NEGATIVE}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionNegative, sessionNegative.csrfToken),
       body: JSON.stringify({ requirement: goldenCrossPlaneForbiddenRequirement() }),
     });
     expect(invalid.status).toBe(422);
 
     const malformed = await app.request(`/orgs/${ORG_NEGATIVE}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionNegative, sessionNegative.csrfToken),
       body: JSON.stringify({ requirement: goldenProductMessagingRequirement(), persist: "yes" }),
     });
     expect(malformed.status).toBe(400);
 
     const denied = await app.request(`/orgs/${ORG_B}/integration-contracts:validate`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie: "tanren_session=dev" },
+      headers: postHeaders(sessionNegative, sessionNegative.csrfToken),
       body: JSON.stringify({ requirement: goldenProductMessagingRequirement() }),
     });
     expect(denied.status).toBe(403);

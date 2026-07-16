@@ -143,7 +143,9 @@ touches only owned/shared paths above:
   one append follows each successful persisting CAS put; event and response
   reference the same stored artifact. Non-persisting and failure paths append
   zero events. EV-SUB-W0 owns the catalog/schema/migration; IN-2 owns only the
-  consumer emit.
+  consumer emit. A rejected append cannot return success, and the visible
+  overview samples forward the real session CSRF token without inventing one
+  for local-dev/no-session mode.
 
 - **R2 — CAS adapter truth/integrity** (`pgCasByteStore.ts`, `cas.ts`):
   `put` returns the STORED winner's media type/byte size (re-read after
@@ -171,7 +173,7 @@ touches only owned/shared paths above:
 - Golden contract vectors (always-on)
 - Route unit tests (authz, 422 plane separation, CAS put path mocked/in-memory ok)
 - Real-PG apex: HTTP validate → governed event → matching retrievable CAS bytes;
-  cross-org and no-effect negative controls
+  real session + CSRF, cross-org, wrong/missing-CSRF, and no-effect controls
 - Real-PG RLS: same-org put/get; cross-org denied (`TANREN_RLS_DB_TEST=1`)
 - Dashboard render test: panel shows live result markers + unavailable branch
 - `just affected-typecheck` + `just affected-test`
