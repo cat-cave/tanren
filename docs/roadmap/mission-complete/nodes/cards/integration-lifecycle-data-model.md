@@ -269,8 +269,11 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/engine/credentials/refNamespace.ts`
 - `services/orchestrator/src/engine/deploy/directApiDeployAdapter.ts`
 - `services/orchestrator/src/engine/deploy/manualExternalDeployAdapter.ts`
+- `services/orchestrator/src/engine/forge/audits/scheduler.ts`
+- `services/orchestrator/src/engine/forge/inbox/ciInsightsSource.ts`
 - `services/orchestrator/src/engine/forge/inbox/connectorErrors.ts`
 - `services/orchestrator/src/engine/forge/inbox/connectorMap.ts`
+- `services/orchestrator/src/engine/forge/inbox/engine.ts`
 - `services/orchestrator/src/engine/forge/inbox/githubConnector.ts`
 - `services/orchestrator/src/engine/forge/inbox/index.ts`
 - `services/orchestrator/src/engine/forge/inbox/issuesConnector.ts`
@@ -287,6 +290,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/src/engine/forge/intake/sourceValidation.ts`
 - `services/orchestrator/src/engine/forge/intake/webhookMapping.ts`
 - `services/orchestrator/src/engine/forge/intake/webhookProcessor.ts`
+- `services/orchestrator/src/engine/insights/ciInsightsCandidates.ts`
 - `services/orchestrator/src/engine/integrations/integrationAuthorityEligibility.ts`
 - `services/orchestrator/src/engine/integrations/integrationAuthorityValidation.ts`
 - `services/orchestrator/src/engine/integrations/provisioningPersistence.ts`
@@ -326,6 +330,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/orchestrator/tests/ingestionAutonomous.test.ts`
 - `services/orchestrator/tests/intakeCredentialResolution.test.ts`
 - `services/orchestrator/tests/intakeTerminalization.test.ts`
+- `services/orchestrator/tests/issueWebhookRoute.test.ts`
 - `services/orchestrator/tests/integrationAuthority.exactOperation.integration.test.ts`
 - `services/orchestrator/tests/integrationAuthority.exactOperation.test.ts`
 - `services/orchestrator/tests/integrationFinalizationAuthority.test.ts`
