@@ -1,3 +1,5 @@
+<!-- cspell:ignore evsub -->
+
 # ev-sub-w1a-implementation — W1-A integration.author event vocabulary
 
 **Phase**: Mission-complete event substrate (SP-8)
