@@ -30,7 +30,18 @@ contributor) needs to drive the remaining work is here or linked from here.
 | `README.md` (this)                                                      | The master handover: objective, DAG, principles, build flow                                                                                                                                                                                                                                                                                                                    |
 | `integrated-build-dag.html`                                             | The visual blueprint — spine + 142 nodes + seams + waves. Open in a browser                                                                                                                                                                                                                                                                                                    |
 | `build-workflow.mjs.txt`                                                | **The authoritative frozen spec + the build workflow-as-code.** Contains the `RECON`, `CLEAN`, `TYPES`, `PINS` consts (the reconciliation that makes the contracts compose — obey them exactly), the `SPINE`/`CONSUMER`/`MIG` node data, and the runnable Tanren `Workflow` (design → sol audit → build → PR). This is how the spine was built and how the consumers get built |
-| `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, apex-proof, deps, validation) from the six `sol` audits. The authoritative node detail                                                                                                                                                                                                                                          |
+| `nodes/{mergequeue,runtime,integrations,backhalf,design,governance}.md` | The full per-node specs (data-model, HTTP, UI, apex-proof, deps, validation) from the six `sol` audits. The authoritative node detail. The four oversized buckets (runtime, backhalf, integrations, design) are split into a canonical entry plus sibling continuation files; see the reading note below                                                                       |
+
+> **Reading the node specs:** `mergequeue.md` and `governance.md` are single files. The
+> four oversized buckets are split to respect the 500-line source-file cap. Each keeps a
+> canonical entry holding §1 ideal design, followed in spec order by sibling continuations:
+>
+> - **runtime** → `runtime.md` · [`runtime-comparator-data-engine-http.md`](./nodes/runtime-comparator-data-engine-http.md) (§2 to §5) · [`runtime-ui-apex-phasing-risks.md`](./nodes/runtime-ui-apex-phasing-risks.md) (§6 to §9)
+> - **backhalf** → `backhalf.md` · [`backhalf-comparator-data-engine-http.md`](./nodes/backhalf-comparator-data-engine-http.md) (§2 to §5) · [`backhalf-ui-apex-phasing-risks.md`](./nodes/backhalf-ui-apex-phasing-risks.md) (§6 to §9)
+> - **integrations** → `integrations.md` · [`integrations-engine-surfaces-phasing-risks.md`](./nodes/integrations-engine-surfaces-phasing-risks.md) (§2 to §9)
+> - **design** → `design.md` · [`design-engine-surfaces-phasing-risks.md`](./nodes/design-engine-surfaces-phasing-risks.md) (§2 to §9)
+>
+> Following each canonical entry's "Continue reading" links yields the full spec unchanged.
 
 ## 3. The spine (built) — 8 shared contracts
 
