@@ -285,6 +285,79 @@ describe("generic project creation deploy guard", () => {
     });
   });
 
+  // gv-1: member PATCH must not mutate governance-owned auditPosture (nested object).
+  it("rejects full config PATCH that changes auditPosture (authorization bypass)", async () => {
+    const { app, pool } = orgProjectHarness(memberActor);
+    pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditPosture: { blockReviewAt: "P3", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+        },
+        revision: "1",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "reserved_project_config_patch",
+      fields: ["auditPosture"],
+    });
+    expect(pool.projects.get("project_existing")?.config).toEqual({ version: 1 });
+    expect(pool.events).toEqual([]);
+  });
+
+  // Structural equality: re-stated default posture is not a reserved change.
+  it("allows full config PATCH when auditPosture is re-stated unchanged", async () => {
+    const { app, pool } = orgProjectHarness(memberActor);
+    pool.seedProject({ project_id: "project_existing", org_id: "org_acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme/projects/project_existing", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+          credentials: { githubCredentialRef: "credential/github/project" },
+        },
+        revision: "1",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(pool.projects.get("project_existing")?.config).toMatchObject({
+      auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+    });
+    expect(pool.events).toEqual([]);
+  });
+
+  it("rejects org-scoped create that supplies auditPosture before insert", async () => {
+    const { app, pool } = orgProjectHarness();
+    const response = await app.request("/orgs/org_acme/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Posture create",
+        repoUrl: "https://github.com/acme/posture-create",
+        config: {
+          version: 1,
+          auditPosture: { blockReviewAt: "P3", p2p3Handling: "route-to-dag", autonomousRemediation: true },
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "manual_autonomous_project_config",
+      fields: ["auditPosture"],
+    });
+    expect(pool.projects.size).toBe(0);
+  });
+
   it.each([
     [
       "fake deploy target",
@@ -331,8 +404,18 @@ describe("generic project creation deploy guard", () => {
   );
 });
 
-function orgProjectHarness() {
+const memberActor: ActorContext = {
+  userId: "user_bob",
+  orgId: "org_acme",
+  projectId: null,
+  scopes: ["org:member"],
+  source: "session",
+};
+
+function orgProjectHarness(boundActor: ActorContext = actor) {
   const pool = new RoutesPool();
+  pool.seedOrg({ id: "org_acme" });
+  pool.seedMembership("org_acme", boundActor.userId, boundActor.scopes.includes("org:admin") ? "admin" : "member");
   const app = new Hono<ActorContextEnv>();
   app.use(
     "*",
@@ -341,10 +424,10 @@ function orgProjectHarness() {
         async findApiTokenByRaw() {},
         async loadSession() {},
         async resolveActorContext() {
-          return actor;
+          return boundActor;
         },
       } as never,
-      localDevActor: actor,
+      localDevActor: boundActor,
     }),
   );
   app.route(

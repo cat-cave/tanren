@@ -28,6 +28,9 @@ const FULL_CONFIG_PATCH_RESERVED_FIELDS = [
   "reviewPolicy",
   "mergeIntegration",
   "governancePosture",
+  // gv-1: governance-owned DORA knob — only org-admin governance PUT mutates it.
+  // Compared structurally (nested object) so an unchanged value round-trips.
+  "auditPosture",
   ...PROVISIONED_DEPLOY_CONFIG_FIELDS,
 ] as const;
 
@@ -144,6 +147,10 @@ function reservedAutonomyCreateFields(config: ProjectConfigV1, raw: Record<strin
   if (config.governancePosture !== BROWNFIELD_SAFE_GOVERNANCE_POSTURE && raw["governancePosture"] !== undefined) {
     fields.push("governancePosture");
   }
+  // Even defaults are governance-owned; branded provisioner proof bypasses this guard.
+  if (raw["auditPosture"] !== undefined) {
+    fields.push("auditPosture");
+  }
   return fields;
 }
 
@@ -156,7 +163,9 @@ function changedFields(
   currentConfig: ProjectConfigV1,
   fields: readonly (keyof ProjectConfigV1)[],
 ): string[] {
-  return fields.filter((field) => nextConfig[field] !== currentConfig[field]);
+  // Nested governed settings (auditPosture) re-parse to new object refs; structural
+  // equality keeps primitives identical to === while correctly diffing nests.
+  return fields.filter((field) => !jsonEqual(nextConfig[field], currentConfig[field]));
 }
 
 function rawRecord(raw: unknown): Record<string, unknown> {
@@ -165,4 +174,26 @@ function rawRecord(raw: unknown): Record<string, unknown> {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function jsonEqual(a: unknown, b: unknown): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) {
+    return false;
+  }
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return (
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      a.every((value, index) => jsonEqual(value, b[index]))
+    );
+  }
+  const ar = a as Record<string, unknown>;
+  const br = b as Record<string, unknown>;
+  const ak = Object.keys(ar);
+  const bk = Object.keys(br);
+  return ak.length === bk.length && ak.every((key) => jsonEqual(ar[key], br[key]));
 }
