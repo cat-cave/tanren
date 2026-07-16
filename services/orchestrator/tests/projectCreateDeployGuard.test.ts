@@ -346,7 +346,7 @@ describe("generic project creation deploy guard", () => {
         config: {
           version: 1,
           auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
-          credentials: { githubCredentialRef: "credential/github/project" },
+          credentials: { githubCredentialRef: "project" },
         },
         revision: "1",
       }),
@@ -355,6 +355,7 @@ describe("generic project creation deploy guard", () => {
     expect(response.status).toBe(200);
     expect(pool.projects.get("project_existing")?.config).toMatchObject({
       auditPosture: { blockReviewAt: "P1", p2p3Handling: "fix-if-idle", autonomousRemediation: false },
+      credentials: { githubCredentialRef: "credential/github/org/org_acme/project" },
     });
     expect(pool.events).toEqual([]);
   });
