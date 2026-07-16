@@ -78,6 +78,8 @@ export interface SeededTemplate {
 
 /** The materializer input — what derive.ts gives the seam per call. */
 export interface MaterializeInput {
+  /** Stable derivation intent identity used to reconcile a lost push response. */
+  idempotencyKey?: string;
   /** The composer config the VFS will be built from (curated lookup or
    * lifecycle-derived synthesis — `selectFragmentConfig` produced it). */
   config: TemplateConfig;

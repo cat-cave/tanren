@@ -32,7 +32,7 @@ import {
 } from "./budget.js";
 import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
 import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
-import { GreenfieldCreateSchema, handleGreenfieldCreate } from "./greenfield.js";
+import { GreenfieldCreateSchema, handleGreenfieldCreate, type GreenfieldCreateDeps } from "./greenfield.js";
 import { handleProjectArchive, handleProjectUnarchive, handleProjectUpgrade } from "./lifecycle.js";
 
 interface ProjectRoutesOptions {
@@ -43,6 +43,9 @@ interface ProjectRoutesOptions {
   secrets: SecretStore;
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
+  bootstrapProject?: GreenfieldCreateDeps["bootstrapProject"];
+  greenfieldPreflightDeploy?: GreenfieldCreateDeps["preflightDeploy"];
+  greenfieldPrepareDeploy?: GreenfieldCreateDeps["prepareDeploy"];
 }
 
 const ProjectCreateSchema = z.object({
@@ -112,6 +115,11 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
       orgId,
       actor,
       input: parsed.data,
+      ...(options.bootstrapProject === undefined ? {} : { bootstrapProject: options.bootstrapProject }),
+      ...(options.greenfieldPreflightDeploy === undefined
+        ? {}
+        : { preflightDeploy: options.greenfieldPreflightDeploy }),
+      ...(options.greenfieldPrepareDeploy === undefined ? {} : { prepareDeploy: options.greenfieldPrepareDeploy }),
     });
   });
 

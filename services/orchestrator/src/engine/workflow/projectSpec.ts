@@ -16,9 +16,11 @@ import {
 import { loadProjectOrgId, loadSpecWithProject } from "./projectSpecRowSchema.js";
 import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+import type { ProjectLifecycle } from "../repositories/projects.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+export type ProjectSpecQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+type QueryClient = ProjectSpecQueryClient;
 
 const defaultBranch = "main";
 const defaultRunnerImage = "ghcr.io/cat-cave/tanren-runner:v0";
@@ -31,18 +33,17 @@ export interface CreateProjectInput {
   defaultBranch?: string;
   runnerImage?: string;
   allocator?: string;
-  // Optional jsonb blob, parsed via `migrateProjectConfig` (fail-hard on missing/unknown
-  // `version`). Omitted ⇒ a defaulted V1; supplied ⇒ MUST be an explicit `version: 1` blob.
   config?: unknown;
 }
 
 export interface CreateProjectOptions {
   configWriteProof?: ProjectConfigWriteProof;
+  /** Greenfield/derive shells are explicitly non-runnable until their receipts complete. */
+  initialLifecycle?: Extract<ProjectLifecycle, "deriving" | "active">;
 }
 
 export interface ProjectContract {
   projectId: string;
-  // v68 fix: projects.org_id (NOT NULL); see {@link AppendEventInput.orgId}.
   orgId: string;
   name: string;
   repoUrl: string;
@@ -50,13 +51,9 @@ export interface ProjectContract {
   runnerImage: string;
   allocator: string;
   config: ProjectConfigV1;
+  lifecycle: ProjectLifecycle;
 }
 
-/**
- * Triage-routing PROVENANCE (Claude RA2 — schemaCore.ts specs' new columns). A triage
- * decision that routes an out-of-scope finding into a new spec stamps these on the
- * created spec so the routing trail is queryable; operator/discovery/seed specs omit.
- */
 export interface SpecTriageProvenance {
   parentSpecId: string;
   sourceFindingIds: ReadonlyArray<string>;
@@ -81,7 +78,6 @@ export interface CreateSpecInput {
 export interface SpecContract {
   specId: string;
   projectId: string;
-  // v68 fix: specs.org_id (NOT NULL).
   orgId: string;
   title: string;
   description: string;
@@ -89,9 +85,7 @@ export interface SpecContract {
   dependsOn: string[];
   status: string;
   priority: SpecPriority;
-  /** Writer-prompt MODE (task #86). */
   mode: SpecMode;
-  /** Triage routing provenance (Claude RA2); undefined for a non-routed spec. */
   triageProvenance?: SpecTriageProvenance;
 }
 
@@ -156,6 +150,7 @@ export async function createProject(
     defaultBranch: input.defaultBranch ?? defaultBranch,
     runnerImage: input.runnerImage ?? defaultRunnerImage,
     allocator: input.allocator ?? defaultAllocator,
+    lifecycle: options.initialLifecycle ?? "active",
     // No config ⇒ defaulted V1; a supplied config must be an explicit `version: 1`
     // blob (an unversioned blob / unknown keys are rejected — fail-hard).
     config:
@@ -169,8 +164,9 @@ export async function createProject(
   const orgId = _actor?.orgId ?? null;
   const persist = async (client: QueryClient): Promise<void> => {
     await client.query(
-      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
+      `INSERT INTO projects
+         (project_id, name, repo_url, default_branch, runner_image, allocator, config, lifecycle, org_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)`,
       [
         project.projectId,
         project.name,
@@ -179,6 +175,7 @@ export async function createProject(
         project.runnerImage,
         project.allocator,
         JSON.stringify(project.config),
+        project.lifecycle,
         orgId,
       ],
     );
@@ -203,7 +200,7 @@ export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: 
   return createSpecOnClient(pool, input, actor);
 }
 
-async function createSpecOnClient(
+export async function createSpecOnClient(
   client: QueryClient,
   input: CreateSpecInput,
   actor?: ActorContext,

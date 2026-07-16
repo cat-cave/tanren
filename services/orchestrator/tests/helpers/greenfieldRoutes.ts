@@ -68,7 +68,12 @@ export function appWithGreenfieldRoutes(
   onboardingOverrides: Partial<
     Pick<
       OnboardingRoutesOptions,
-      "preflightDeploy" | "prepareDeploy" | "persistDeploySelection" | "materializeTemplate" | "runFragmentAuthoring"
+      | "preflightDeploy"
+      | "prepareDeploy"
+      | "persistDeploySelection"
+      | "materializeTemplate"
+      | "runFragmentAuthoring"
+      | "bootstrapProject"
     >
   > = {},
   // INFRA-FAILURE injection (decomposition PR-3): when set, the static-credential
@@ -90,6 +95,35 @@ export function appWithGreenfieldRoutes(
     void secrets.put({ ref: STATIC_GITHUB_TOKEN_REF, value: "ghp_static_repo_create_token" });
   }
   const githubAppMinter = fakeGithubAppMinter();
+  const preflightDeploy = onboardingOverrides.preflightDeploy;
+  const prepareDeploy = onboardingOverrides.prepareDeploy;
+  const bootstrapProject =
+    onboardingOverrides.bootstrapProject ??
+    (async (input) => {
+      const existing = pool.inboxSources.find(
+        (source) => source["org_id"] === input.orgId && source["project_id"] === input.projectId,
+      );
+      const source =
+        existing ??
+        ({
+          id: `src_${input.projectId}`,
+          org_id: input.orgId,
+          project_id: input.projectId,
+          kind: "issues",
+          name: "github issues",
+          detail: "test bootstrap",
+          config: {},
+          enabled: "true",
+          auto_route: "false",
+        } satisfies Record<string, unknown>);
+      if (existing === undefined) pool.inboxSources.push(source);
+      return {
+        inboxSource: { id: String(source["id"]), created: existing === undefined },
+        notificationRoute: { targetId: `notif_${input.orgId}`, created: existing === undefined, events: 8 },
+        auditCatalog: { jobs: 4, created: ["security", "deps", "mutation", "stale_specs"] as const },
+        errors: [],
+      };
+    });
   app.use(
     "*",
     createAuthMiddleware({
@@ -117,9 +151,51 @@ export function appWithGreenfieldRoutes(
       // touching GitHub. Overridable per test.
       materializeTemplate: () => stubMaterialize(),
       ...onboardingOverrides,
+      bootstrapProject,
     }),
   );
-  app.route("/orgs", createProjectRoutes({ pool: pool.asPgPool(), secrets, githubHttp, githubAppMinter }));
+  app.route(
+    "/orgs",
+    createProjectRoutes({
+      pool: pool.asPgPool(),
+      secrets,
+      githubHttp,
+      githubAppMinter,
+      bootstrapProject,
+      ...(preflightDeploy === undefined
+        ? {}
+        : {
+            greenfieldPreflightDeploy: async (input) =>
+              preflightDeploy({
+                orgId: input.orgId,
+                providerKind: input.providerKind,
+                ...(input.connectionId === undefined ? {} : { connectionId: input.connectionId }),
+                ...(input.grantId === undefined ? {} : { grantId: input.grantId }),
+              }),
+          }),
+      ...(prepareDeploy === undefined
+        ? {}
+        : {
+            greenfieldPrepareDeploy: async (input) =>
+              prepareDeploy({
+                orgId: input.orgId,
+                projectId: input.projectId,
+                capability: "deploy",
+                providerKind: input.deploy.providerKind,
+                mode: input.deploy.mode,
+                projectKey: input.projectKey,
+                projectName: input.projectName,
+                ...(input.deploy.connectionId === undefined ? {} : { connectionId: input.deploy.connectionId }),
+                ...(input.deploy.grantId === undefined ? {} : { grantId: input.deploy.grantId }),
+                ...(input.deploy.chosenResourceId === undefined
+                  ? {}
+                  : { chosenResourceId: input.deploy.chosenResourceId }),
+                ...(input.deploy.stack === undefined ? {} : { stack: input.deploy.stack }),
+                ...(input.deploy.name === undefined ? {} : { name: input.deploy.name }),
+              }),
+          }),
+    }),
+  );
   // `githubHttp` is the repo-create transport fake; its `createdRepositories` is the
   // assertable record of what the route created (the pre-decomposition tests asserted
   // on `vcsProvider.createdRepositories`).

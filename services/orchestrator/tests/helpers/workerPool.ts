@@ -14,6 +14,7 @@ interface ProjectRow {
   default_branch: string;
   runner_image: string;
   config: unknown;
+  lifecycle: string;
   org_id: string | null;
 }
 interface SpecRow {
@@ -92,7 +93,8 @@ export class WorkerPool {
         default_branch: String(params[3]),
         runner_image: String(params[4]),
         config: JSON.parse(String(params[6])) as unknown,
-        org_id: params[7] === null ? null : String(params[7]),
+        lifecycle: String(params[7]),
+        org_id: params[8] === null ? null : String(params[8]),
       });
       return { rows: [], rowCount: 1 };
     }
@@ -156,6 +158,7 @@ export class WorkerPool {
         runner_image: project.runner_image,
         allocator: "local-docker",
         config: project.config,
+        lifecycle: project.lifecycle,
         spec_id: spec.spec_id,
         title: spec.title,
         description: spec.description,

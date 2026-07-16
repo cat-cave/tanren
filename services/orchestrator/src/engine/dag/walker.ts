@@ -133,12 +133,10 @@ export class EventEmittingDagWalker implements DagWalker {
       this.deps.budgetGate.resolveBudget(projectId),
     ]);
 
-    // Operator lifecycle gate: an ARCHIVED project is dormant. Enqueue nothing this
-    // tick (and every tick) — the in-flight runs were already cancelled at archive
-    // time, and the periodic backstop re-walks reach this same short-circuit, so an
-    // archived project never advances until it is unarchived.
-    if (snapshot.archived) {
-      return { projectId, status: "archived", enqueuedSpecIds: [], enqueuedRunIds: [] };
+    // Exact lifecycle gate: only a fully activated project may enter planning.
+    if (snapshot.projectLifecycle !== "active") {
+      const status = snapshot.projectLifecycle === "missing" ? "inactive" : snapshot.projectLifecycle;
+      return { projectId, status, enqueuedSpecIds: [], enqueuedRunIds: [] };
     }
 
     // Plan the tick BEFORE the budget short-circuit. The plan is the sole

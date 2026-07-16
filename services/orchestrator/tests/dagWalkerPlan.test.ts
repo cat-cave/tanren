@@ -10,7 +10,7 @@ import { classifySpecStatus } from "../src/engine/dag/walker.js";
 import type { SpecPriority } from "../src/engine/state/spec.js";
 
 function snap(nodes: DagSpecNode[]): DagSnapshot {
-  return { projectId: "project_p", nodes, archived: false };
+  return { projectId: "project_p", nodes, projectLifecycle: "active" };
 }
 function n(
   specId: string,

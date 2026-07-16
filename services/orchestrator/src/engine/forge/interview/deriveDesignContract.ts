@@ -15,7 +15,7 @@
 // versioned entity is the durable artifact later workstreams inject into the
 // writer (WS-D2) + verify with a design oracle (WS-D4) — the clean seam left here.
 
-import type pg from "pg";
+import type { ProjectSpecQueryClient } from "../../workflow/projectSpec.js";
 import type { ActorContext } from "../../../auth/schemas.js";
 import { DESIGN_CONTRACT_VERSION, parseDesignContract, type DesignContractV1 } from "../../design/designContract.js";
 import type { CapturedDesignSeed, DesignAgent } from "../../design/designAgent.js";
@@ -155,7 +155,7 @@ function toDesignSeed(capture: CaptureDesignContract): CapturedDesignSeed {
 // exactly like the optional `templateRegistryQuery`/`createTemplateForNoMatch`
 // seams), the thin captured contract is persisted verbatim as version 1.
 export async function persistDesignContract(
-  pool: pg.Pool,
+  pool: ProjectSpecQueryClient,
   input: {
     orgId: string;
     projectId: string;

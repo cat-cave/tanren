@@ -27,7 +27,6 @@ import type { ActorContext } from "../../auth/schemas.js";
 import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { CreateRepositoryInput } from "../../engine/contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
-import { provisionAutonomousProject } from "../../engine/workflow/provisionAutonomousProject.js";
 import {
   DeployNotLinkedError,
   DeploySelectionRequiredError,
@@ -41,6 +40,8 @@ import {
   JitBuildRequiredError,
   MissingLifecycleError,
   MissingProjectSlugError,
+  ProjectBootstrapIncompleteError,
+  ProjectDerivationConflictError,
   runRound,
   UnresolvableLifecycleError,
   type DeployPreflightCallback,
@@ -78,7 +79,6 @@ import {
 } from "../projects/greenfield.js";
 import { deleteGreenfieldRepository } from "../projects/greenfieldRepoDelete.js";
 import { probeGreenfieldRepositoryBareAutoInit } from "../projects/greenfieldRepoProbe.js";
-import { destroyGreenfieldDeployApp } from "../projects/greenfieldDeployDestroy.js";
 import { persistGreenfieldDeploySelection } from "../projects/greenfieldDeployAuthority.js";
 
 export interface OnboardingRoutesOptions {
@@ -114,6 +114,8 @@ export interface OnboardingRoutesOptions {
   /** UNIFIED LIBRARY LOADER (F2): combines bundled core + org-authored
    * fragments (the per-org `fragments` table). */
   loadFragmentLibrary?: (orgId: string) => Promise<FragmentLibrary>;
+  /** Test seam; production omits this and executes the real bootstrap. */
+  bootstrapProject?: NonNullable<Parameters<typeof deriveFromCapture>[1]["bootstrapProject"]>;
 }
 
 const RoundBody = z
@@ -232,19 +234,6 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             (async (selection) => {
               await persistGreenfieldDeploySelection(options.pool, selection, actor.userId);
             }),
-          // TASK #78 — derive transactional rollback. Threads the deploy-DESTROY
-          // compensation through the same org grant + provisioner registry the
-          // prepareDeploy uses, so a derive that provisions a deploy app + then
-          // fails later in the call destroys it before re-raising.
-          destroyDeployApp: (target) =>
-            destroyGreenfieldDeployApp({
-              pool: options.pool,
-              secrets: options.secrets,
-              orgId,
-              projectId: target.projectId,
-              actorId: actor.userId,
-              target,
-            }),
           // WS-D3: resolve the design agent for THIS org so the derive's design phase
           // elaborates the captured intent into the designed HEAD `DesignContract`.
           ...(options.designAgentFactory === undefined ? {} : { designAgent: options.designAgentFactory({ orgId }) }),
@@ -270,18 +259,14 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
           ...(options.loadFragmentLibrary === undefined
             ? {}
             : { fragmentLibrary: await options.loadFragmentLibrary(orgId) }),
+          ...(options.bootstrapProject === undefined ? {} : { bootstrapProject: options.bootstrapProject }),
         },
       );
       if (result.repository === undefined) {
         throw new Error("greenfield repository missing after derive");
       }
-      const bootstrap = await provisionAutonomousProject({
-        pool: options.pool,
-        orgId,
-        projectId: result.projectId,
-        repoUrl: result.repository.repoUrl,
-      });
-      return c.json({ ...result, inboxSource: bootstrap.inboxSource, bootstrap }, 201);
+      if (result.bootstrap === undefined) throw new Error("greenfield derivation completed without bootstrap receipt");
+      return c.json({ ...result, inboxSource: result.bootstrap.inboxSource }, 201);
     } catch (caught) {
       // TASK #78 — derive transactional rollback. A `DeriveRollbackError` wraps the
       // ORIGINAL failure (as `cause`) + the list of compensations that FAILED
@@ -314,6 +299,12 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       }
       if (error instanceof SpecNotFoundError) {
         return respond({ error: "spec_dependency_not_found", message: error.message }, 404);
+      }
+      if (error instanceof ProjectDerivationConflictError) {
+        return respond({ error: "project_derivation_conflict", reason: error.reason, message: error.message }, 409);
+      }
+      if (error instanceof ProjectBootstrapIncompleteError) {
+        return respond({ error: "project_bootstrap_incomplete", bootstrap: error.bootstrap }, 503);
       }
       // The architecture step never captured a project lifecycle — the scaffold
       // can't author a justfile without it. A bad/incomplete capture (400), NOT a

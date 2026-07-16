@@ -63,9 +63,9 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     expect(greenfieldAuth).toContain("authorizeGreenfieldDeploy");
     expect(greenfieldAuth).not.toMatch(/candidates\[0\]/u);
 
-    const destroy = readSrc("routes/projects/greenfieldDeployDestroy.ts");
-    expect(destroy).toContain("authorizeGreenfieldDeploy");
-    expect(destroy).not.toContain("resolveExactControlGrant");
+    // Durable derivation receipts own provisioned apps after the project shell
+    // exists. A late compensation destroy path would violate replay ownership.
+    expect(() => readSrc("routes/projects/greenfieldDeployDestroy.ts")).toThrow(/ENOENT/u);
 
     // Integration provisioner token paths must use secretValueForLease / getExact.
     for (const rel of [

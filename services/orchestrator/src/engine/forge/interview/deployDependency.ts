@@ -54,6 +54,8 @@ export type PrepareDeployCallback = (input: {
   capability: "deploy";
   providerKind: "deploy.vercel" | "deploy.flyio";
   mode: ProvisionMode;
+  /** Stable derivation intent identity used to reconcile a lost provider response. */
+  idempotencyKey?: string;
   projectKey: string;
   projectName: string;
   connectionId?: string;

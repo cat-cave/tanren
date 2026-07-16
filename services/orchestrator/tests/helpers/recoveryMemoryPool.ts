@@ -230,6 +230,7 @@ export class RecoveryMemoryPool {
             runner_image: project.runner_image,
             allocator: project.allocator,
             config: project.config,
+            lifecycle: "active",
             spec_id: spec.spec_id,
             title: spec.title,
             description: spec.description,

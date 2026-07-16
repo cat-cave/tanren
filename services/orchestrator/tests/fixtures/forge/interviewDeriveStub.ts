@@ -9,6 +9,14 @@
 // the thenable-object lint does not apply to this plain data literal.
 
 import type pg from "pg";
+import type { DeriveInput } from "../../../src/engine/forge/interview/derive.js";
+
+export const successfulBootstrapProject: NonNullable<DeriveInput["bootstrapProject"]> = async (input) => ({
+  inboxSource: { id: `src_${input.projectId}`, created: true },
+  notificationRoute: { targetId: `notif_${input.orgId}`, created: true, events: 8 },
+  auditCatalog: { jobs: 4, created: ["security", "deps", "mutation", "stale_specs"] },
+  errors: [],
+});
 
 // What the stub observed across the derive's create calls.
 export interface StubState {
@@ -76,15 +84,104 @@ export function stubPool(): {
     designContracts: [],
   };
   const configs = new Map<string, Record<string, unknown>>();
+  const projects = new Map<
+    string,
+    {
+      project_id: string;
+      org_id: string;
+      name: string;
+      repo_url: string;
+      default_branch: string;
+      runner_image: string;
+      allocator: string;
+      config: Record<string, unknown>;
+      lifecycle: string;
+    }
+  >();
+  const derivations = new Map<string, Record<string, unknown>>();
   const personaIds = new Set<string>();
   const query = async (text: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> => {
     const sql = text.replaceAll(/\s+/gu, " ").trim();
+    if (sql.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
+    if (sql.includes("FROM project_derivations")) {
+      const row = sql.includes("AND id = $2")
+        ? derivations.get(String(params[1]))
+        : [...derivations.values()].find(
+            (candidate) => candidate["org_id"] === params[0] && candidate["project_id"] === params[1],
+          );
+      return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("INSERT INTO project_derivations")) {
+      const existing = [...derivations.values()].find(
+        (candidate) => candidate["org_id"] === params[0] && candidate["idempotency_fingerprint"] === params[3],
+      );
+      if (existing !== undefined) return { rows: [existing], rowCount: 1 };
+      const row: Record<string, unknown> = {
+        org_id: params[0],
+        id: params[1],
+        project_id: params[2],
+        idempotency_fingerprint: params[3],
+        phase: "shell",
+        status: "in_progress",
+        sanitized_input: JSON.parse(String(params[4])) as unknown,
+        sanitized_error: null,
+        ownership_receipt: JSON.parse(String(params[5])) as unknown,
+        template_receipt: params[6] === null ? null : (JSON.parse(String(params[6])) as unknown),
+        result_receipt: {},
+        created_at: new Date(),
+        updated_at: new Date(),
+        completed_at: null,
+      };
+      derivations.set(String(params[1]), row);
+      return { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("UPDATE project_derivations")) {
+      const row = derivations.get(String(params[1]));
+      if (row === undefined || row["status"] !== "in_progress") return { rows: [], rowCount: 0 };
+      if (sql.includes("template_receipt =")) {
+        row["template_receipt"] = JSON.parse(String(params[2])) as unknown;
+        row["phase"] = params[3];
+      } else if (sql.includes("result_receipt = jsonb_set")) {
+        (row["result_receipt"] as Record<string, unknown>)[String(params[2])] = JSON.parse(
+          String(params[3]),
+        ) as unknown;
+        row["phase"] = params[4];
+      } else if (sql.includes("sanitized_error = $3")) {
+        row["sanitized_error"] = JSON.parse(String(params[2])) as unknown;
+        return { rows: [], rowCount: 1 };
+      } else if (sql.includes("status = 'succeeded'")) {
+        row["phase"] = "activate";
+        row["status"] = "succeeded";
+        row["completed_at"] = new Date();
+      }
+      row["sanitized_error"] = null;
+      row["updated_at"] = new Date();
+      return { rows: [row], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT project_id, name, repo_url") && sql.includes("regexp_replace(repo_url")) {
+      const canonical = String(params[0]).replace(/\.git$/u, "");
+      const row = [...projects.values()].find(
+        (item) => item.repo_url.replace(/\.git$/u, "") === canonical && item.org_id === String(params[1]),
+      );
+      return row === undefined ? { rows: [], rowCount: 0 } : { rows: [row], rowCount: 1 };
+    }
     if (sql.startsWith("INSERT INTO projects")) {
       state.projects.add(String(params[0]));
       const rawConfig = params[6];
       if (typeof rawConfig === "string") {
         configs.set(String(params[0]), JSON.parse(rawConfig) as Record<string, unknown>);
       }
+      projects.set(String(params[0]), {
+        project_id: String(params[0]),
+        name: String(params[1]),
+        repo_url: String(params[2]),
+        default_branch: String(params[3]),
+        runner_image: String(params[4]),
+        allocator: String(params[5]),
+        config: configs.get(String(params[0])) ?? {},
+        lifecycle: String(params[7]),
+        org_id: String(params[8]),
+      });
       return { rows: [], rowCount: 1 };
     }
     // Post-deploy config merge (project shell created first, deploy fields applied after).
@@ -103,8 +200,24 @@ export function stubPool(): {
         // Production updateConfig overwrites the config blob entirely with the
         // caller's merged object (base + vision + lifecycle + deploy).
         configs.set(projectId, JSON.parse(rawConfig) as Record<string, unknown>);
+        const project = projects.get(projectId);
+        if (project !== undefined) project.config = configs.get(projectId)!;
       }
       return { rows: [], rowCount: 1 };
+    }
+    if (sql.startsWith("UPDATE projects") && sql.includes("lifecycle = 'active'")) {
+      const project = projects.get(String(params[1]));
+      if (project === undefined || project.org_id !== String(params[0]) || project.lifecycle !== "deriving") {
+        return { rows: [], rowCount: 0 };
+      }
+      project.lifecycle = "active";
+      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    if (sql.startsWith("SELECT lifecycle FROM projects WHERE org_id = $1")) {
+      const project = projects.get(String(params[1]));
+      return project === undefined
+        ? { rows: [], rowCount: 0 }
+        : { rows: [{ lifecycle: project.lifecycle }], rowCount: 1 };
     }
     if (sql.startsWith("INSERT INTO project_members")) return { rows: [], rowCount: 1 };
     if (sql.startsWith("SELECT project_id FROM projects")) {

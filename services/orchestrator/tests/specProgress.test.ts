@@ -17,7 +17,7 @@ function snap(
 ): DagSnapshot {
   return {
     projectId: "p",
-    archived: false,
+    projectLifecycle: "active",
     nodes: nodes.map((n, i) => ({
       specId: n.specId,
       phase: n.phase,

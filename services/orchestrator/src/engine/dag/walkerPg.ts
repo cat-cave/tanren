@@ -30,6 +30,7 @@ import type {
 } from "../contracts/dagWalker.js";
 import type { DagConfigCorruptPayload } from "../events/schemas/dag.js";
 import { SpecPriority } from "../state/spec.js";
+import { ProjectLifecycleEnum, type ProjectLifecycle } from "../repositories/projects.js";
 import { createQueuedRunFromSpec } from "../workflow/projectSpec.js";
 import type { AncestorStack } from "./ancestorStack.js";
 // Re-export the ancestor-stack resolver seam + wiring (split into `ancestorStackResolverPg.ts`
@@ -138,12 +139,11 @@ export class PgDagReadModel implements DagReadModel {
     if (project.orgId === null) {
       // No resolvable org ⇒ no DAG the walker may schedule (RLS would deny every
       // read anyway). An empty snapshot drains cleanly rather than throwing.
-      return { projectId, nodes: [], archived: false };
+      return { projectId, nodes: [], projectLifecycle: "missing" };
     }
-    if (project.archived) {
-      // Archived ⇒ dormant. Skip the spec read entirely; the walker short-circuits
-      // on `archived` and enqueues nothing.
-      return { projectId, nodes: [], archived: true };
+    if (project.lifecycle !== "active") {
+      // Deriving and archived are both dormant; skip spec reads entirely.
+      return { projectId, nodes: [], projectLifecycle: project.lifecycle };
     }
     const orgId = project.orgId;
     const nodes = await runWithOrgScope(this.pool, orgId, async (client) => {
@@ -172,17 +172,20 @@ export class PgDagReadModel implements DagReadModel {
         };
       });
     });
-    return { projectId, nodes, archived: false };
+    return { projectId, nodes, projectLifecycle: "active" };
   }
 
-  private async resolveProject(projectId: string): Promise<{ orgId: string | null; archived: boolean }> {
+  private async resolveProject(
+    projectId: string,
+  ): Promise<{ orgId: string | null; lifecycle: ProjectLifecycle | "missing" }> {
     return runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ org_id: string | null; lifecycle: string }>(
         "SELECT org_id, lifecycle FROM projects WHERE project_id = $1",
         [projectId],
       );
       const row = result.rows[0];
-      return { orgId: row?.org_id ?? null, archived: row?.lifecycle === "archived" };
+      if (row === undefined) return { orgId: null, lifecycle: "missing" };
+      return { orgId: row.org_id, lifecycle: ProjectLifecycleEnum.parse(row.lifecycle) };
     });
   }
 }

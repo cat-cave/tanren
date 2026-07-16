@@ -7,6 +7,7 @@ import { z } from "zod";
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/index.js";
 import { SpecMode, SpecPriority } from "../state/spec.js";
+import { ProjectLifecycleEnum } from "../repositories/projects.js";
 import { ProjectNotFoundError, SpecNotFoundError } from "./projectSpecErrors.js";
 import type { ProjectContract, SpecContract } from "./projectSpec.js";
 
@@ -33,7 +34,7 @@ export async function loadSpecWithProject(
   // write-only outside the dedupe query in `plannerRunTriageNewSpecs.ts`.
   const result = await pool.query(
     `SELECT p.project_id, p.org_id AS project_org_id, p.name, p.repo_url, p.default_branch, p.runner_image,
-            p.allocator, p.config, s.spec_id, s.org_id AS spec_org_id, s.title, s.description,
+            p.allocator, p.config, p.lifecycle, s.spec_id, s.org_id AS spec_org_id, s.title, s.description,
             s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode,
             s.parent_spec_id, s.source_finding_ids, s.origin_triage_task_id, s.origin_run_id
        FROM specs s JOIN projects p ON p.project_id = s.project_id WHERE s.spec_id = $1`,
@@ -53,6 +54,7 @@ export async function loadSpecWithProject(
       allocator: decoded.allocator,
       // migrateProjectConfig fails LOUD on missing/unknown `version` — no silent default.
       config: migrateProjectConfig(decoded.config),
+      lifecycle: decoded.lifecycle,
     },
     spec: {
       specId: decoded.spec_id,
@@ -133,6 +135,7 @@ export const SpecProjectRowSchema = z.object({
   runner_image: z.string(),
   allocator: z.string(),
   config: RecordOrEmpty,
+  lifecycle: ProjectLifecycleEnum,
   spec_id: z.string(),
   title: z.string(),
   description: z.string(),

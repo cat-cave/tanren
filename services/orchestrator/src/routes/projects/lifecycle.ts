@@ -49,27 +49,36 @@ async function setLifecycleCascade(
   orgId: string,
   projectId: string,
   target: ProjectLifecycle,
-): Promise<LifecycleView | undefined> {
-  return runWithOrgScope(pool, orgId, async (client): Promise<LifecycleView | undefined> => {
-    const updated = await client.query(
-      "UPDATE projects SET lifecycle = $1 WHERE project_id = $2 RETURNING project_id",
-      [target, projectId],
-    );
-    if (updated.rowCount === 0) {
-      return undefined;
-    }
-    let cancelledRuns = 0;
-    if (target === "archived") {
-      const cancelled = await client.query(
-        `UPDATE runs SET status = 'cancelled', outcome = 'cancelled', ended_at = now()
+): Promise<LifecycleView | { conflict: ProjectLifecycle } | undefined> {
+  return runWithOrgScope(
+    pool,
+    orgId,
+    async (client): Promise<LifecycleView | { conflict: ProjectLifecycle } | undefined> => {
+      const expected: ProjectLifecycle = target === "archived" ? "active" : "archived";
+      const updated = await client.query(
+        "UPDATE projects SET lifecycle = $1 WHERE project_id = $2 AND lifecycle = $3 RETURNING project_id",
+        [target, projectId, expected],
+      );
+      if (updated.rowCount === 0) {
+        const current = await client.query<{ lifecycle: ProjectLifecycle }>(
+          "SELECT lifecycle FROM projects WHERE project_id = $1",
+          [projectId],
+        );
+        return current.rows[0] === undefined ? undefined : { conflict: current.rows[0].lifecycle };
+      }
+      let cancelledRuns = 0;
+      if (target === "archived") {
+        const cancelled = await client.query(
+          `UPDATE runs SET status = 'cancelled', outcome = 'cancelled', ended_at = now()
           WHERE project_id = $1 AND status IN ('queued', 'running')
         RETURNING run_id`,
-        [projectId],
-      );
-      cancelledRuns = cancelled.rowCount ?? 0;
-    }
-    return { projectId, lifecycle: target, cancelledRuns };
-  });
+          [projectId],
+        );
+        cancelledRuns = cancelled.rowCount ?? 0;
+      }
+      return { projectId, lifecycle: target, cancelledRuns };
+    },
+  );
 }
 
 /** POST archive handler. */
@@ -82,6 +91,12 @@ export async function handleProjectArchive(
   const view = await setLifecycleCascade(pool, orgId, projectId, "archived");
   if (view === undefined) {
     return c.json({ error: "project_not_found" }, 404);
+  }
+  if ("conflict" in view) {
+    return c.json(
+      { error: "project_lifecycle_conflict", currentLifecycle: view.conflict, expectedLifecycle: "active" },
+      409,
+    );
   }
   return c.json(view);
 }
@@ -96,6 +111,12 @@ export async function handleProjectUnarchive(
   const view = await setLifecycleCascade(pool, orgId, projectId, "active");
   if (view === undefined) {
     return c.json({ error: "project_not_found" }, 404);
+  }
+  if ("conflict" in view) {
+    return c.json(
+      { error: "project_lifecycle_conflict", currentLifecycle: view.conflict, expectedLifecycle: "archived" },
+      409,
+    );
   }
   return c.json(view);
 }
