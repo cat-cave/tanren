@@ -106,6 +106,12 @@ export class ReviewMergePullRequestNotFoundError extends Error {
   }
 }
 
+export class ReviewMergeRunLineageMismatchError extends Error {
+  constructor(runId: string) {
+    super(`run ownership lineage does not match for review/merge: ${runId}`);
+  }
+}
+
 /**
  * Options for {@link loadReviewMergeRunContext}.
  *
@@ -142,10 +148,14 @@ export async function loadReviewMergeRunContext(
   const result = await pool.query(
     // org_id is the run's tenant key (NOT NULL on `runs`); surfaced on the context so
     // every downstream tenant write (event-store append) stamps it directly (v68 fix).
-    `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url, r.branch, p.config, p.default_branch, o.config AS org_config
+    `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url, r.branch,
+            p.config, p.default_branch, p.org_id AS project_org_id,
+            s.org_id AS spec_org_id, s.project_id AS spec_project_id,
+            o.config AS org_config
      FROM runs r
-     JOIN projects p ON p.project_id = r.project_id
-     LEFT JOIN organizations o ON o.id = p.org_id
+     LEFT JOIN projects p ON p.project_id = r.project_id
+     LEFT JOIN specs s ON s.spec_id = r.spec_id
+     LEFT JOIN organizations o ON o.id = r.org_id
      WHERE r.run_id = $1`,
     [runId],
   );
@@ -154,6 +164,9 @@ export async function loadReviewMergeRunContext(
     throw new ReviewMergeRunNotFoundError(runId);
   }
   const row = ReviewMergeRunRow.parse(rawRow);
+  if (row.project_org_id !== row.org_id || row.spec_org_id !== row.org_id || row.spec_project_id !== row.project_id) {
+    throw new ReviewMergeRunLineageMismatchError(runId);
+  }
   if (row.pr_url === null) {
     throw new ReviewMergePullRequestNotFoundError(runId);
   }
@@ -225,6 +238,9 @@ const ReviewMergeRunRow = z.object({
   project_id: z.string(),
   // runs.org_id is NOT NULL on the table — every loaded run resolves a real org.
   org_id: z.string(),
+  project_org_id: z.string().nullable(),
+  spec_org_id: z.string().nullable(),
+  spec_project_id: z.string().nullable(),
   pr_url: z.string().nullable(),
   branch: z.string().nullish(),
   config: z.unknown(),

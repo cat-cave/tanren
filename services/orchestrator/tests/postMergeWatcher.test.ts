@@ -48,6 +48,7 @@ interface FakePoolState {
   merged?: { mergeSha?: string };
   projectConfig?: unknown;
   orgConfig?: unknown;
+  projectOwnerOrgId?: string;
 }
 
 function defaultOrgConfig() {
@@ -72,6 +73,32 @@ function fakePool(state: FakePoolState): pg.Pool {
     query: async (sql: string, params: unknown[] = []) => {
       const text = sql.trim();
       if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL)/u.test(text)) return { rows: [], rowCount: 0 };
+      if (/FROM events e/u.test(sql) && params[1] === "merge.completed") {
+        if (state.merged === undefined) return { rows: [], rowCount: 0 };
+        return {
+          rows: [
+            {
+              event_run_id: RUN_ID,
+              event_spec_id: SPEC_ID,
+              event_project_id: PROJECT_ID,
+              event_org_id: ORG_ID,
+              payload: {
+                prNumber: PR_NUMBER,
+                ...(state.merged.mergeSha !== undefined && { mergeSha: state.merged.mergeSha }),
+              },
+              run_id: RUN_ID,
+              run_spec_id: SPEC_ID,
+              run_project_id: PROJECT_ID,
+              run_org_id: ORG_ID,
+              pr_url: PR_URL,
+              project_org_id: state.projectOwnerOrgId ?? ORG_ID,
+              spec_org_id: ORG_ID,
+              spec_project_id: PROJECT_ID,
+            },
+          ],
+          rowCount: 1,
+        };
+      }
       if (/event_type = 'merge\.completed'/u.test(sql)) {
         if (state.merged === undefined) return { rows: [], rowCount: 0 };
         return {
@@ -95,16 +122,9 @@ function fakePool(state: FakePoolState): pg.Pool {
           ? { rows: [{ config: state.orgConfig ?? defaultOrgConfig() }], rowCount: 1 }
           : { rows: [], rowCount: 0 };
       }
-      if (/SELECT r\.org_id, r\.project_id, r\.spec_id, p\.config/u.test(sql)) {
+      if (/SELECT p\.config/u.test(sql) && /JOIN specs s/u.test(sql)) {
         return {
-          rows: [
-            {
-              org_id: ORG_ID,
-              project_id: PROJECT_ID,
-              spec_id: SPEC_ID,
-              config: state.projectConfig ?? { version: 1 },
-            },
-          ],
+          rows: [{ config: state.projectConfig ?? { version: 1 } }],
           rowCount: 1,
         };
       }
@@ -115,6 +135,9 @@ function fakePool(state: FakePoolState): pg.Pool {
           spec_id: SPEC_ID,
           project_id: PROJECT_ID,
           org_id: ORG_ID,
+          project_org_id: ORG_ID,
+          spec_org_id: ORG_ID,
+          spec_project_id: PROJECT_ID,
           pr_url: PR_URL,
           branch: "feat/x",
           config: state.projectConfig ?? { version: 1 },
@@ -439,6 +462,20 @@ describe("PostMergeWatcher", () => {
     await retry.watcher.check(RUN_ID);
     expect(retry.vcs.createdIssues).toHaveLength(1);
     expect(await claims.exists(RUN_ID)).toBe(true);
+  });
+
+  it("rejects foreign project ownership before credentials, claim, or host I/O", async () => {
+    const secrets = new RecordingSecretStore();
+    const result = makeWatcher({
+      state: { merged: { mergeSha: "abc123" }, projectOwnerOrgId: "org_foreign" },
+      outcome: "fail",
+      secrets,
+    });
+    await expect(result.watcher.check(RUN_ID)).rejects.toThrow(/run lineage mismatch.*does not own its project/u);
+    expect(secrets.reads).toEqual([]);
+    expect(result.claims.claimCount).toBe(0);
+    expect(result.vcs.createdIssues).toEqual([]);
+    expect(result.events.appends).toEqual([]);
   });
 
   it("an empty run id is a no-op", async () => {

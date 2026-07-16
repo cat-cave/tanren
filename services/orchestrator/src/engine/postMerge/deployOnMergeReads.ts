@@ -18,6 +18,9 @@ import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
 
+export type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
+export { loadValidatedRunEvent, type ValidatedRunLineage } from "./runLineage.js";
+
 // Structured logger for the deploy-verify convergence loop's per-iteration `*.retrying`
 // observability (Codex critic #13). The wrapping helper's own failures + successes fire
 // their own events (`deploy.failed`, `deploy.verified`); the retry observability is a

@@ -312,12 +312,14 @@ export class ReviewMergePool {
     if (sql.includes("FROM runs r") && sql.includes("default_branch")) {
       const run = this.runs.find((r) => r.run_id === params[0]);
       if (run === undefined) return { rows: [], rowCount: 0 };
-      // v68 fix: surface runs.org_id (NOT NULL) on the review/merge context row.
       const row = {
         run_id: run.run_id,
         spec_id: run.spec_id,
         project_id: run.project_id,
         org_id: run.org_id,
+        project_org_id: run.org_id,
+        spec_org_id: run.org_id,
+        spec_project_id: run.project_id,
         pr_url: run.pr_url,
         branch: run.branch,
         config: {

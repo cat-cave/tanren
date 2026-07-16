@@ -247,7 +247,7 @@ export const IntegrationConnectionsStore = {
               g.current_generation AS grant_generation, g.status AS grant_status,
               ag.expires_at AS auth_expires_at, gg.provider_scopes,
               op.id AS operation_id, op.stage AS operation_stage, op.status AS operation_status,
-              (s.connection_id = c.id AND s.grant_id = g.id) AS selected_for_project
+              COALESCE(s.connection_id = c.id AND s.grant_id = g.id, false) AS selected_for_project
        FROM org_integration_connections c
        LEFT JOIN org_integration_grants g
          ON g.org_id = c.org_id AND g.connection_id = c.id

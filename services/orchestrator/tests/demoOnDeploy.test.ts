@@ -44,6 +44,8 @@ interface PoolState {
   grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown> };
   /** The spec's behaviors (returned by BehaviorStore.listForSpec). */
   behaviors: BehaviorSeed[];
+  projectOwnerOrgId?: string;
+  authorityReads?: { count: number };
 }
 
 const VERCEL_GRANT = {
@@ -57,6 +59,32 @@ function fakePool(state: PoolState): pg.Pool {
   const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
+    if (/FROM events e/u.test(sql) && params[1] === "deploy.verified") {
+      if (!state.verified) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            event_run_id: RUN_ID,
+            event_spec_id: null,
+            event_project_id: PROJECT_ID,
+            event_org_id: ORG_ID,
+            payload: { provider: "deploy.vercel", appId: APP_ID, deploymentId: DEPLOYMENT_ID },
+            run_id: RUN_ID,
+            run_spec_id: SPEC_ID,
+            run_project_id: PROJECT_ID,
+            run_org_id: ORG_ID,
+            pr_url: "https://github.com/acme/widget/pull/1",
+            project_org_id: state.projectOwnerOrgId ?? ORG_ID,
+            spec_org_id: ORG_ID,
+            spec_project_id: PROJECT_ID,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (/SELECT EXISTS \(/u.test(sql) && /demo\.completed/u.test(sql)) {
+      return { rows: [{ demoed: state.alreadyTerminalDemo === true }], rowCount: 1 };
+    }
     // loadVerifiedDeploy: the deploy.verified event + run/project + a prior TERMINAL
     // demo flag. The `demoed` EXISTS subquery targets `demo.completed` OR
     // `demo.failed` — both wake the run-activity bus, so gating on the failed
@@ -85,6 +113,7 @@ function fakePool(state: PoolState): pg.Pool {
         : { rows: [], rowCount: 0 };
     }
     if (/FROM org_integration_connections c/u.test(sql)) {
+      if (state.authorityReads !== undefined) state.authorityReads.count += 1;
       if (state.grant === undefined) return { rows: [], rowCount: 0 };
       // authorizeOperation eligibility row (selected generations match).
       if (/project_integration_grant_selections/u.test(sql) || /selected_auth_generation/u.test(sql)) {
@@ -210,11 +239,16 @@ function scriptedProbe(byPath: Record<string, number>): DemoWebProbe & { probed:
   };
 }
 
-async function run(state: PoolState, probe: DemoWebProbe, events: RecordingEventStore): Promise<void> {
+async function run(
+  state: PoolState,
+  probe: DemoWebProbe,
+  events: RecordingEventStore,
+  transport = scriptedDeployTransport("vercel", ["acme-web"]),
+): Promise<void> {
   const watcher = new DemoOnDeployWatcher({
     pool: fakePool(state),
     secrets: secrets(),
-    transport: scriptedDeployTransport("vercel", ["acme-web"]),
+    transport,
     eventStore: events,
     webProbe: probe,
   });
@@ -341,5 +375,22 @@ describe("DemoOnDeployWatcher (demos-as-evidence wiring)", () => {
     expect(failed!.payload["surfaceKind"]).toBeUndefined();
     // No secret material reached the event.
     expect(JSON.stringify(failed)).not.toContain("deploy_token");
+  });
+
+  it("rejects a foreign project owner before demo authority or provider I/O", async () => {
+    const authorityReads = { count: 0 };
+    const transport = scriptedDeployTransport("vercel", ["acme-web"]);
+    const events = new RecordingEventStore();
+    await expect(
+      run(
+        { verified: true, behaviors: [], projectOwnerOrgId: "org_foreign", authorityReads },
+        scriptedProbe({}),
+        events,
+        transport,
+      ),
+    ).rejects.toThrow(/run lineage mismatch.*does not own its project/u);
+    expect(authorityReads.count).toBe(0);
+    expect(transport.requestLog()).toEqual([]);
+    expect(events.appends).toEqual([]);
   });
 });

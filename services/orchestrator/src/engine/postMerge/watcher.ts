@@ -25,6 +25,7 @@
 
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import type pg from "pg";
+import { z } from "zod";
 import { migrateProjectConfig } from "../config/projectConfig.js";
 import { orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
 import type { EventStore } from "../eventStore.js";
@@ -40,8 +41,14 @@ import { buildProjectHostSeams, type ProjectHostSeams } from "../providers/hostF
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { type ActiveQuarantine, loadActiveQuarantine } from "../workflow/ciQuarantine.js";
 import { evaluateCiObservation, type CiObservation } from "../workflow/ciObservation.js";
-import { loadReviewMergeRunContext, type ReviewMergeRunContext } from "../workflow/reviewMerge/context.js";
 import { PgPostMergeIssueClaimStore, type PostMergeIssueClaimStore } from "./issueClaimStore.js";
+import {
+  loadValidatedReviewMergeContext,
+  loadValidatedRunEvent,
+  type ReviewMergeRunContext,
+  RunLineageMismatchError,
+  type ValidatedRunLineage,
+} from "./runLineage.js";
 
 /** The label every auto-filed post-merge-failure tracking issue carries. */
 export const POST_MERGE_FAILURE_LABEL = "tanren:post-merge-failure";
@@ -86,6 +93,7 @@ interface MergeRecord {
   prNumber: number;
   mergeSha?: string;
 }
+const MergePayload = z.object({ prNumber: z.number(), mergeSha: z.string().optional() });
 
 /**
  * The post-merge watcher. `check(runId)` is the per-run pass the subscriber drives
@@ -127,14 +135,14 @@ export class PostMergeWatcher {
   async check(runId: string): Promise<void> {
     if (runId === "") return;
     // Not merged yet — nothing to watch.
-    const merge = await this.loadMergeRecord(runId);
-    if (merge === undefined) return;
+    const merged = await this.loadMergeRecord(runId);
+    if (merged === undefined) return;
     // Cheap fast-path: this merge's issue was already claimed/filed — skip the
     // base-branch CI read entirely. Only an optimization; the atomic claim below is
     // the real guard, so a stale `false` here can never cause a duplicate.
     if (await this.claimStore.exists(runId)) return;
 
-    const context = await this.loadContext(runId);
+    const context = await this.loadContext(runId, merged.lineage);
     if (context === undefined) return;
 
     const resolved = await this.resolveToken(context);
@@ -150,8 +158,7 @@ export class PostMergeWatcher {
     // EXCLUDED from the failure verdict, so a known-flaky post-merge check no longer
     // auto-opens a spurious regression issue. orgId-absent ⇒ no scoped read ⇒ no
     // exclusion (the strict default), and the issue-claim below needs it regardless.
-    const orgId = await this.resolveOrg(context.projectId);
-    if (orgId === undefined) return;
+    const orgId = context.orgId;
     const quarantine = await this.loadQuarantine(orgId, context.projectId);
     const observation = evaluateCiObservation(checks, { quarantinedCheckNames: quarantine.checkNames });
     // ONLY a genuine FAILURE files an issue. Pending → leave for the next wake;
@@ -168,38 +175,41 @@ export class PostMergeWatcher {
     });
     if (!won) return;
 
-    await this.fileTrackingIssue({ runId, orgId, context, repo, visibility: seams.visibility, merge, observation });
-  }
-
-  /** Read the run's `merge.completed` event (the authoritative merge signal), system-scoped. */
-  private async loadMergeRecord(runId: string): Promise<MergeRecord | undefined> {
-    return runWithSystemScope(this.deps.pool, async (client): Promise<MergeRecord | undefined> => {
-      const result = await client.query<{ payload: unknown }>(
-        `SELECT payload FROM events
-           WHERE run_id = $1 AND event_type = 'merge.completed'
-           ORDER BY ts DESC, id DESC
-           LIMIT 1`,
-        [runId],
-      );
-      const payload = result.rows[0]?.payload;
-      if (payload === null || typeof payload !== "object") return undefined;
-      const record = payload as { prNumber?: unknown; mergeSha?: unknown };
-      if (typeof record.prNumber !== "number") return undefined;
-      return {
-        prNumber: record.prNumber,
-        ...(typeof record.mergeSha === "string" && { mergeSha: record.mergeSha }),
-      };
+    await this.fileTrackingIssue({
+      runId,
+      orgId,
+      context,
+      repo,
+      visibility: seams.visibility,
+      merge: merged.record,
+      observation,
     });
   }
 
-  /** Resolve the run's project org (for the org-scoped atomic claim), system-scoped. */
-  private async resolveOrg(projectId: string): Promise<string | undefined> {
+  /** Read the run's `merge.completed` event (the authoritative merge signal), system-scoped. */
+  private async loadMergeRecord(
+    runId: string,
+  ): Promise<{ record: MergeRecord; lineage: ValidatedRunLineage } | undefined> {
     return runWithSystemScope(this.deps.pool, async (client) => {
-      const result = await client.query<{ org_id: string | null }>(
-        "SELECT org_id FROM projects WHERE project_id = $1",
-        [projectId],
-      );
-      return result.rows[0]?.org_id ?? undefined;
+      const merged = await loadValidatedRunEvent(client, {
+        runId,
+        eventType: "merge.completed",
+        requireEventSpec: true,
+      });
+      let resolved: { record: MergeRecord; lineage: ValidatedRunLineage } | undefined;
+      if (merged !== undefined) {
+        const payload = MergePayload.safeParse(merged.payload);
+        if (payload.success) {
+          resolved = {
+            record: {
+              prNumber: payload.data.prNumber,
+              ...(payload.data.mergeSha !== undefined && { mergeSha: payload.data.mergeSha }),
+            },
+            lineage: merged.lineage,
+          };
+        }
+      }
+      return resolved;
     });
   }
 
@@ -223,33 +233,30 @@ export class PostMergeWatcher {
   }
 
   /** Load the review/merge run context (prUrl, baseBranch=default_branch, credentials), system-scoped. */
-  private async loadContext(runId: string): Promise<ReviewMergeRunContext | undefined> {
-    const githubCredentialRef = await this.resolveGithubCredentialRef(runId);
-    return runWithSystemScope(this.deps.pool, async (client) =>
-      loadReviewMergeRunContext(client, runId, { resolvedGithubCredentialRef: githubCredentialRef }),
+  private async loadContext(runId: string, lineage: ValidatedRunLineage): Promise<ReviewMergeRunContext | undefined> {
+    const githubCredentialRef = await this.resolveGithubCredentialRef(runId, lineage);
+    return runWithSystemScope(this.deps.pool, (client) =>
+      loadValidatedReviewMergeContext(client, { runId, lineage, resolvedGithubCredentialRef: githubCredentialRef }),
     );
   }
 
   /** Resolve the run's effective GitHub credential ref using the same project→org-default chain as merge. */
-  private async resolveGithubCredentialRef(runId: string): Promise<string> {
+  private async resolveGithubCredentialRef(runId: string, lineage: ValidatedRunLineage): Promise<string> {
     const base = await runWithSystemScope(this.deps.pool, async (client) => {
-      const result = await client.query<{
-        org_id: string | null;
-        project_id: string | null;
-        spec_id: string | null;
-        config: unknown;
-      }>(
-        `SELECT r.org_id, r.project_id, r.spec_id, p.config
-           FROM runs r JOIN projects p ON p.project_id = r.project_id
-          WHERE r.run_id = $1`,
-        [runId],
+      const result = await client.query<{ config: unknown }>(
+        `SELECT p.config
+           FROM runs r
+           JOIN projects p ON p.project_id = r.project_id AND p.org_id = r.org_id
+           JOIN specs s ON s.spec_id = r.spec_id AND s.project_id = r.project_id AND s.org_id = r.org_id
+          WHERE r.run_id = $1 AND r.org_id = $2 AND r.project_id = $3 AND r.spec_id = $4`,
+        [runId, lineage.orgId, lineage.projectId, lineage.specId],
       );
       return result.rows[0];
     });
-    if (base === undefined || base.org_id === null || base.project_id === null || base.spec_id === null) {
-      throw new Error(`cannot check post-merge state: run ${runId} has no resolvable org/project/spec`);
+    if (base === undefined) {
+      throw new RunLineageMismatchError(runId, "credential context no longer matches validated ownership");
     }
-    const orgId = base.org_id;
+    const orgId = lineage.orgId;
     const projectConfig = migrateProjectConfig(base.config);
     const credentials = await runWithOrgScope(this.deps.pool, orgId, (client) =>
       resolveCredentialsForRun(client, { projectConfig, orgScope: orgScopeFromRunOrgId(orgId) }),

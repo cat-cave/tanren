@@ -54,6 +54,29 @@ function fakePool(state: PoolState): pg.Pool {
   const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
+    if (/FROM events e/u.test(sql) && params[1] === "deploy.verified") {
+      if (!state.verified) return { rows: [], rowCount: 0 };
+      return {
+        rows: [
+          {
+            event_run_id: RUN_ID,
+            event_spec_id: null,
+            event_project_id: PROJECT_ID,
+            event_org_id: ORG_ID,
+            payload: { provider: state.provider, appId: state.appId, deploymentId: state.deploymentId },
+            run_id: RUN_ID,
+            run_spec_id: SPEC_ID,
+            run_project_id: PROJECT_ID,
+            run_org_id: ORG_ID,
+            pr_url: "https://github.com/acme/widget/pull/1",
+            project_org_id: ORG_ID,
+            spec_org_id: ORG_ID,
+            spec_project_id: PROJECT_ID,
+          },
+        ],
+        rowCount: 1,
+      };
+    }
     if (/event_type = 'deploy\.verified'/u.test(sql)) {
       if (!state.verified) return { rows: [], rowCount: 0 };
       return {

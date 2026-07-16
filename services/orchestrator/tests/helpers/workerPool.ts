@@ -365,6 +365,7 @@ export class WorkerPool {
       const runId = String(params[0]);
       const run = this.runs.get(runId)!;
       const project = this.projects.get(run.project_id);
+      const orgId = this.forcedProjectOrgId ?? project?.org_id ?? "org_fake";
       // The project's stored config already carries credentials.githubCredentialRef
       // (CI poll takes its cred ref from the workflow's explicit override). Return
       // it verbatim — a synthesized top-level key would trip the strict V1 parse.
@@ -374,7 +375,10 @@ export class WorkerPool {
         spec_id: run.spec_id,
         project_id: run.project_id,
         // v68 fix: runs.org_id (NOT NULL) is surfaced on the review/merge context.
-        org_id: this.forcedProjectOrgId ?? project?.org_id ?? "org_fake",
+        org_id: orgId,
+        project_org_id: orgId,
+        spec_org_id: orgId,
+        spec_project_id: run.project_id,
         pr_url: this.prUrl,
         branch: run.branch,
         config: storedConfig,

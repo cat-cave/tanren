@@ -24,16 +24,22 @@ export async function listExactControlGrants(
     health: IntegrationConnectionHealth;
     authGeneration: number;
     grantGeneration: number;
+    capabilities: string[];
   }>
 > {
   const result = await client.query(
     `SELECT c.id AS connection_id, g.id AS grant_id, c.provider_kind, c.provider_principal_id,
             c.display_name, c.health, c.current_auth_generation, g.current_generation AS grant_generation,
+            gg.capabilities,
             g.status AS grant_status, c.status AS connection_status
      FROM org_integration_connections c
      LEFT JOIN org_integration_grants g
        ON g.org_id = c.org_id AND g.connection_id = c.id
       AND g.plane = 'control' AND g.environment = 'control' AND g.status = 'active'
+     LEFT JOIN org_integration_grant_generations gg
+       ON gg.org_id = g.org_id AND gg.provider_kind = g.provider_kind
+      AND gg.connection_id = g.connection_id AND gg.grant_id = g.id
+      AND gg.generation = g.current_generation
      WHERE c.org_id = $1 AND c.status = 'active'
        AND ($2::text IS NULL OR c.provider_kind = $2)`,
     [orgId, providerKind ?? null],
@@ -50,6 +56,7 @@ export async function listExactControlGrants(
       grant_generation: number | null;
       grant_status: string | null;
       connection_status: string;
+      capabilities?: unknown;
     };
     if (
       row.grant_id === null ||
@@ -70,6 +77,9 @@ export async function listExactControlGrants(
         health: row.health,
         authGeneration: row.current_auth_generation,
         grantGeneration: row.grant_generation,
+        capabilities: Array.isArray(row.capabilities)
+          ? row.capabilities.filter((capability): capability is string => typeof capability === "string")
+          : [],
       },
     ];
   });

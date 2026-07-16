@@ -1,170 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type pg from "pg";
-import { getJobOrgId } from "@tanren/db";
 import { DeployOnMergeWatcher } from "../src/engine/postMerge/deployOnMerge.js";
-import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
-import type { EventName } from "../src/engine/events/index.js";
-import { scriptedDeployTransport, type ScriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
+import { scriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./conformance/fakes/scriptedUrlProbe.js";
-import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
-const RUN_ID = "run_dep";
-const PROJECT_ID = "project_dep";
-const ORG_ID = "org_dep";
-const PR_URL = "https://github.com/acme/widget/pull/7";
-const MERGE_SHA = "abc1234def5678901234567890abcdef12345678";
-const PRIOR_DEPLOYMENT_ID = "vercel_dep_prior";
-interface PoolState {
-  merged: boolean;
-  config: Record<string, unknown>;
-  grant?: { provider_kind: string; credential_ref: string; metadata: Record<string, unknown>; status?: string };
-  /** The deploy-intent grant LIST (IntegrationConnectionsStore.list); [] = no deploy intent. */
-  linkedGrants?: Array<{ provider_kind: string; capabilities?: string[]; credential_ref?: string }>;
-  alreadyDeployed?: boolean;
-  alreadyVerified?: boolean;
-  alreadyFailed?: boolean;
-  alreadySkipped?: boolean;
-  noMergeSha?: boolean;
-  appEnv?: Record<string, unknown>[];
-}
-function fakePool(state: PoolState): pg.Pool {
-  const query = async (sql: string, params: readonly unknown[] = []) => {
-    const text = sql.trim();
-    if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
-    if (/event_type = 'merge\.completed'/u.test(sql)) {
-      if (!state.merged) return { rows: [], rowCount: 0 };
-      const payload = state.noMergeSha === true ? { prNumber: 7 } : { prNumber: 7, mergeSha: MERGE_SHA };
-      return { rows: [{ payload }], rowCount: 1 };
-    }
-    if (/event_type IN \('deploy\.verified', 'deploy\.failed', 'deploy\.skipped'\)/u.test(sql)) {
-      return state.alreadyVerified === true || state.alreadyFailed === true || state.alreadySkipped === true
-        ? { rows: [{ id: "t1" }], rowCount: 1 }
-        : { rows: [], rowCount: 0 };
-    }
-    if (/event_type = 'deploy\.triggered'/u.test(sql)) {
-      return state.alreadyDeployed === true
-        ? { rows: [{ payload: { deploymentId: PRIOR_DEPLOYMENT_ID } }], rowCount: 1 }
-        : { rows: [], rowCount: 0 };
-    }
-    if (/FROM runs r WHERE/u.test(sql)) {
-      return { rows: [{ project_id: PROJECT_ID, pr_url: PR_URL }], rowCount: 1 };
-    }
-    if (/SELECT config, org_id FROM projects/u.test(sql)) {
-      return { rows: [{ config: state.config, org_id: ORG_ID }], rowCount: 1 };
-    }
-    if (/SELECT connection_id, grant_id FROM project_integration_grant_selections/u.test(sql)) {
-      const providerKind = params[2] as string;
-      const selected = state.grant !== undefined && state.grant.provider_kind === providerKind;
-      return selected
-        ? { rows: [{ connection_id: "connection_0", grant_id: "grant_0" }], rowCount: 1 }
-        : { rows: [], rowCount: 0 };
-    }
-    if (/FROM org_integration_connections c/u.test(sql) && /JOIN org_integration_grants g/u.test(sql)) {
-      const grantsSource =
-        state.grant === undefined
-          ? (state.linkedGrants ?? []).map((grant) => ({
-              ...grant,
-              metadata: {},
-              credential_ref: grant.credential_ref ?? "secret://org/x",
-            }))
-          : [state.grant];
-      if (params.length > 2) {
-        const rows = grantsSource.map((grant, index) => ({
-          connection_id: `connection_${index}`,
-          provider_kind: grant.provider_kind,
-          provider_principal_id: `account_${index}`,
-          display_name: `account_${index}`,
-          principal_metadata: "metadata" in grant ? grant.metadata : {},
-          connection_health: "healthy",
-          connection_status: "active",
-          current_auth_generation: 1,
-          grant_id: `grant_${index}`,
-          grant_current_generation: 1,
-          grant_status: "status" in grant && grant.status === "revoked" ? "revoked" : "active",
-          plane: "control",
-          environment: "control",
-          credential_ref: (grant.credential_ref ?? "secret://org/x").includes("/g/")
-            ? (grant.credential_ref ?? "secret://org/x")
-            : `${grant.credential_ref ?? "secret://org/x"}/g/1`,
-          auth_expires_at: null,
-          auth_status: "active",
-          capabilities: "capabilities" in grant ? (grant.capabilities ?? ["deploy"]) : ["deploy"],
-          operations: ["attach_runtime_env", "deploy", "verify"],
-          provider_scopes: [],
-          resource_constraints: defaultIntegrationResourceConstraints(),
-          policy_revision: "integration-catalog.v2",
-          consent_revision: "consent.test",
-          grant_expires_at: null,
-          grant_generation_status: "active",
-          selected_auth_generation: 1,
-          selected_grant_generation: 1,
-          selected_connection_id: `connection_${index}`,
-          selected_grant_id: `grant_${index}`,
-        }));
-        return { rows, rowCount: rows.length };
-      }
-      const rows = grantsSource.map((grant, index) => ({
-        connection_id: `connection_${index}`,
-        grant_id: `grant_${index}`,
-        org_id: ORG_ID,
-        provider_kind: grant.provider_kind,
-        provider_principal_id: `account_${index}`,
-        principal_kind: "team",
-        display_name: `account_${index}`,
-        health: "healthy",
-        connection_status: "active",
-        current_auth_generation: 1,
-        grant_generation: 1,
-        grant_status: "active",
-        auth_expires_at: null,
-        provider_scopes: [],
-        operation_id: null,
-        operation_stage: null,
-        operation_status: null,
-        selected_for_project: false,
-      }));
-      return { rows, rowCount: rows.length };
-    }
-    if (/FROM project_app_env[\s\S]*WHERE org_id/u.test(sql)) {
-      const rows = (state.appEnv ?? []).map((row, index) => ({
-        id: `env_${index}`,
-        org_id: ORG_ID,
-        project_id: PROJECT_ID,
-        environment: "production",
-        binding_id: null,
-        binding_generation: null,
-        secret_generation: row["value_ref"] === null ? null : 1,
-        description: "",
-        ...row,
-      }));
-      return { rows, rowCount: rows.length };
-    }
-    return { rows: [], rowCount: 0 };
-  };
-  const client = { query, release: () => {} };
-  return { query, connect: async () => client } as unknown as pg.Pool;
-}
-class RecordingEventStore implements EventStore {
-  readonly appends: Array<{ eventType: EventName; payload: unknown; ambientOrgId?: string }> = [];
-  async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
-    this.appends.push({ eventType: input.eventType, payload: input.payload, ambientOrgId: getJobOrgId() });
-  }
-}
-function secrets(): InMemorySecretStore {
-  const store = new InMemorySecretStore();
-  void store.put({ ref: "secret://org/deploy-token", value: "deploy_token" });
-  void store.put({ ref: "secret://org/deploy-token/g/1", value: "deploy_token" });
-  void store.put({ ref: "secret://proj/resend", value: "re_live_secret" });
-  return store;
-}
-const VERCEL_APP_ID = "vercel_app_1";
-const VERCEL_TARGET = { version: 1, deployProvider: "deploy.vercel", deployAppId: VERCEL_APP_ID };
-const VERCEL_GRANT = {
-  provider_kind: "deploy.vercel",
-  credential_ref: "secret://org/deploy-token",
-  metadata: { teamId: "team_abc", slug: "acme" },
-  status: "linked",
-};
+import {
+  deployOnMergePool as fakePool,
+  deploySecrets as secrets,
+  MERGE_SHA,
+  ORG_ID,
+  PRIOR_DEPLOYMENT_ID,
+  RecordingDeployEventStore as RecordingEventStore,
+  RUN_ID,
+  runDeployOnMerge as run,
+  VERCEL_APP_ID,
+  VERCEL_GRANT,
+  VERCEL_TARGET,
+} from "./helpers/deployOnMergeHarness.js";
 function githubGitSource(org: string, repo: string, sha: string): Record<string, string> {
   return { type: "github", org, repo, ref: sha, sha };
 }
@@ -175,17 +25,6 @@ function expectSkipped(events: RecordingEventStore, reason: string, detailSubstr
   const sPayload = skipped!.payload as Record<string, unknown>;
   expect(sPayload["reason"]).toBe(reason);
   expect(sPayload["detail"]).toContain(detailSubstr);
-}
-async function run(state: PoolState, transport: ScriptedDeployTransport, events: RecordingEventStore): Promise<void> {
-  const watcher = new DeployOnMergeWatcher({
-    pool: fakePool(state),
-    secrets: secrets(),
-    transport,
-    eventStore: events,
-    urlProbe: scriptedUrlProbe(),
-    verifyPoll: instantVerifyPollPolicy(),
-  });
-  await watcher.check(RUN_ID);
 }
 describe("DeployOnMergeWatcher (a deploy happened)", () => {
   it("triggers a real deploy of the merged ref + attaches runtime env + records deploy.triggered", async () => {
@@ -389,6 +228,17 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     const transport = scriptedDeployTransport("vercel");
     const events = new RecordingEventStore();
     await run({ merged: true, config: {}, linkedGrants: [] }, transport, events);
+    expect(transport.deploysTriggered()).toEqual([]);
+    expect(events.appends).toEqual([]);
+  });
+
+  it.each([
+    { provider_kind: "sentry", capabilities: ["errors"] },
+    { provider_kind: "slack", capabilities: ["notifications"] },
+  ])("treats an active $provider_kind non-deploy grant as a clean no-op", async (linkedGrant) => {
+    const transport = scriptedDeployTransport("vercel");
+    const events = new RecordingEventStore();
+    await run({ merged: true, config: { version: 1 }, linkedGrants: [linkedGrant] }, transport, events);
     expect(transport.deploysTriggered()).toEqual([]);
     expect(events.appends).toEqual([]);
   });

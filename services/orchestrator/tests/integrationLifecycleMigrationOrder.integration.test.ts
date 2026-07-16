@@ -30,6 +30,10 @@ const DIGEST = `sha256:${"b".repeat(64)}`;
 const REQUIRED_UNIQUE_INDEXES = [
   "projects_org_project_unique",
   "specs_org_spec_unique",
+  "runs_org_run_unique",
+  "runs_org_spec_run_unique",
+  "runs_org_project_run_unique",
+  "runs_org_project_spec_run_unique",
   "org_integration_connections_provider_id_unique",
   "org_integration_grants_connection_id_unique",
 ] as const;
@@ -42,6 +46,14 @@ const REQUIRED_COMPOSITE_FKS = [
   "project_integration_grant_selections_connection_fk",
   "project_integration_grant_selections_grant_fk",
   "project_app_env_project_fk",
+  "specs_project_lineage_fk",
+  "runs_project_lineage_fk",
+  "runs_spec_lineage_fk",
+  "events_run_tenant_lineage_fk",
+  "events_run_project_lineage_fk",
+  "events_run_lineage_fk",
+  "merge_queue_run_lineage_fk",
+  "post_merge_issue_claims_run_lineage_fk",
 ] as const;
 
 function dbName(): string {

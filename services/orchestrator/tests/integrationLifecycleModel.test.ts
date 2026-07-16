@@ -18,6 +18,10 @@ const schemaPaths = [
   "db/src/schemaIntegrationEnvironment.ts",
   "db/src/schemaIntegrationSelection.ts",
   "db/src/schemaProjectDerivations.ts",
+  "db/src/schemaCore.ts",
+  "db/src/schema.ts",
+  "db/src/schemaEvents.ts",
+  "db/src/schemaIntegrationNodes.ts",
 ].map((path) => fileURLToPath(new URL(path, root)));
 
 const TABLES = [
@@ -158,11 +162,27 @@ describe("IN-1 P1 integration lifecycle schema contract", () => {
     const requiredBefore = [
       {
         uniqueIndex: 'CREATE UNIQUE INDEX "projects_org_project_unique"',
-        firstFk: 'CONSTRAINT "capability_nodes_project_fk" FOREIGN KEY',
+        firstFk: 'CONSTRAINT "events_project_lineage_fk" FOREIGN KEY',
       },
       {
         uniqueIndex: 'CREATE UNIQUE INDEX "specs_org_spec_unique"',
-        firstFk: 'CONSTRAINT "spec_capability_dependencies_spec_fk" FOREIGN KEY',
+        firstFk: 'CONSTRAINT "events_spec_tenant_lineage_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "runs_org_run_unique"',
+        firstFk: 'CONSTRAINT "events_run_tenant_lineage_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "runs_org_spec_run_unique"',
+        firstFk: 'CONSTRAINT "events_run_spec_lineage_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "runs_org_project_run_unique"',
+        firstFk: 'CONSTRAINT "events_run_project_lineage_fk" FOREIGN KEY',
+      },
+      {
+        uniqueIndex: 'CREATE UNIQUE INDEX "runs_org_project_spec_run_unique"',
+        firstFk: 'CONSTRAINT "events_run_lineage_fk" FOREIGN KEY',
       },
       {
         uniqueIndex: 'CREATE UNIQUE INDEX "org_integration_connections_provider_id_unique"',
@@ -188,6 +208,42 @@ describe("IN-1 P1 integration lifecycle schema contract", () => {
       expect(fkAt, `${firstFk} missing`).toBeGreaterThanOrEqual(0);
       expect(indexAt).toBeLessThan(fkAt);
     }
+  });
+
+  it("pins the complete run/event/queue/claim ownership lineage in snapshot metadata", () => {
+    const expected = {
+      "public.specs": ["specs_project_lineage_fk"],
+      "public.runs": ["runs_project_lineage_fk", "runs_spec_lineage_fk"],
+      "public.merge_queue": [
+        "merge_queue_project_lineage_fk",
+        "merge_queue_spec_lineage_fk",
+        "merge_queue_run_lineage_fk",
+      ],
+      "public.events": [
+        "events_run_tenant_lineage_fk",
+        "events_spec_tenant_lineage_fk",
+        "events_project_lineage_fk",
+        "events_run_spec_lineage_fk",
+        "events_run_project_lineage_fk",
+        "events_spec_lineage_fk",
+        "events_run_lineage_fk",
+      ],
+      "public.post_merge_issue_claims": [
+        "post_merge_issue_claims_project_lineage_fk",
+        "post_merge_issue_claims_spec_lineage_fk",
+        "post_merge_issue_claims_run_lineage_fk",
+      ],
+    } as const;
+    for (const [tableName, constraints] of Object.entries(expected)) {
+      const table = tables[tableName];
+      if (table === undefined) throw new Error(`snapshot missing lineage table ${tableName}`);
+      expect(Object.keys(table.foreignKeys)).toEqual(expect.arrayContaining([...constraints]));
+    }
+    expect(tables["public.events"]?.columns).toMatchObject({
+      run_id: { notNull: false },
+      spec_id: { notNull: false },
+      project_id: { notNull: false },
+    });
   });
 
   it("pins principal/generation authority and no fake dev provisioned bypass", () => {

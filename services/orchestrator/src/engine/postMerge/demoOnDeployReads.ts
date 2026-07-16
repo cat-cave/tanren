@@ -4,11 +4,14 @@
 // tables); they are read-only and carry no secret material.
 
 import type pg from "pg";
+import { z } from "zod";
 import { BehaviorStore } from "../entities/behaviors.js";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { DemoBehavior } from "../demo/demoEngine.js";
+import { loadValidatedRunEvent } from "./runLineage.js";
 
 type ReadClient = Pick<pg.Pool | pg.PoolClient, "query">;
+const DeployVerifiedPayload = z.object({ provider: z.string(), appId: z.string(), deploymentId: z.string() });
 
 /**
  * A run's VERIFIED deploy + the coordinates a demo records under. Resolved from the
@@ -37,14 +40,6 @@ export interface VerifiedDeploy {
   alreadyTerminalDemo: boolean;
 }
 
-interface DeployVerifiedRow {
-  payload: { provider?: unknown; appId?: unknown; deploymentId?: unknown } | null;
-  spec_id: string | null;
-  project_id: string | null;
-  org_id: string | null;
-  demoed: boolean;
-}
-
 /**
  * Read a run's verified-deploy coordinates, or `undefined` when the run has no
  * `deploy.verified` (no deploy target, or not yet verified) — the clean no-op gate.
@@ -54,40 +49,28 @@ interface DeployVerifiedRow {
  * from self-looping through the run-activity NOTIFY wake.
  */
 export async function loadVerifiedDeploy(client: ReadClient, runId: string): Promise<VerifiedDeploy | undefined> {
-  const result = await client.query<DeployVerifiedRow>(
-    `SELECT v.payload,
-            r.spec_id,
-            r.project_id,
-            p.org_id,
-            EXISTS (
-              SELECT 1 FROM events d
-              WHERE d.run_id = $1
-                AND d.event_type IN ('demo.completed', 'demo.failed')
-            ) AS demoed
-       FROM events v
-       JOIN runs r ON r.run_id = v.run_id
-       JOIN projects p ON p.project_id = r.project_id
-      WHERE v.run_id = $1 AND v.event_type = 'deploy.verified'
-      ORDER BY v.ts DESC, v.id DESC
-      LIMIT 1`,
-    [runId],
-  );
-  const row = result.rows[0];
-  if (row === undefined || row.payload === null) return undefined;
-  if (row.spec_id === null || row.project_id === null || row.org_id === null) return undefined;
-  const provider = row.payload.provider;
-  const appId = row.payload.appId;
-  const deploymentId = row.payload.deploymentId;
-  if (typeof provider !== "string" || typeof appId !== "string" || typeof deploymentId !== "string") return undefined;
-  return {
+  const verified = await loadValidatedRunEvent(client, {
     runId,
-    specId: row.spec_id,
-    projectId: row.project_id,
-    orgId: row.org_id,
-    provider,
-    appId,
-    deploymentId,
-    alreadyTerminalDemo: row.demoed,
+    eventType: "deploy.verified",
+    requireEventSpec: false,
+  });
+  if (verified === undefined) return undefined;
+  const payload = DeployVerifiedPayload.safeParse(verified.payload);
+  if (!payload.success) return undefined;
+  const terminal = await client.query<{ demoed: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM events d
+        WHERE d.run_id = $1 AND d.org_id = $2 AND d.project_id = $3
+          AND d.event_type IN ('demo.completed', 'demo.failed')
+     ) AS demoed`,
+    [runId, verified.lineage.orgId, verified.lineage.projectId],
+  );
+  return {
+    ...verified.lineage,
+    provider: payload.data.provider,
+    appId: payload.data.appId,
+    deploymentId: payload.data.deploymentId,
+    alreadyTerminalDemo: terminal.rows[0]?.demoed ?? false,
   };
 }
 

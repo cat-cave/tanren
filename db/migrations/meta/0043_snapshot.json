@@ -1,5 +1,5 @@
 {
-  "id": "51921e63-7721-4251-901b-b0bf96947ac1",
+  "id": "811bc5d2-e6d0-47f3-b8cb-435f438a5f41",
   "prevId": "7157c6ec-46c9-4bb3-8af7-debf90ee9d9d",
   "version": "7",
   "dialect": "postgresql",
@@ -1964,6 +1964,121 @@
           ],
           "columnsTo": [
             "name"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_run_tenant_lineage_fk": {
+          "name": "events_run_tenant_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "org_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "run_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_spec_tenant_lineage_fk": {
+          "name": "events_spec_tenant_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "specs",
+          "columnsFrom": [
+            "org_id",
+            "spec_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "spec_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_project_lineage_fk": {
+          "name": "events_project_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_run_spec_lineage_fk": {
+          "name": "events_run_spec_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "org_id",
+            "spec_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "spec_id",
+            "run_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_run_project_lineage_fk": {
+          "name": "events_run_project_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "run_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_spec_lineage_fk": {
+          "name": "events_spec_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "specs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "events_run_lineage_fk": {
+          "name": "events_run_lineage_fk",
+          "tableFrom": "events",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id",
+            "run_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -4129,6 +4244,57 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "merge_queue_project_lineage_fk": {
+          "name": "merge_queue_project_lineage_fk",
+          "tableFrom": "merge_queue",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_spec_lineage_fk": {
+          "name": "merge_queue_spec_lineage_fk",
+          "tableFrom": "merge_queue",
+          "tableTo": "specs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "merge_queue_run_lineage_fk": {
+          "name": "merge_queue_run_lineage_fk",
+          "tableFrom": "merge_queue",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id",
+            "run_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -5284,6 +5450,57 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "post_merge_issue_claims_project_lineage_fk": {
+          "name": "post_merge_issue_claims_project_lineage_fk",
+          "tableFrom": "post_merge_issue_claims",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "post_merge_issue_claims_spec_lineage_fk": {
+          "name": "post_merge_issue_claims_spec_lineage_fk",
+          "tableFrom": "post_merge_issue_claims",
+          "tableTo": "specs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "post_merge_issue_claims_run_lineage_fk": {
+          "name": "post_merge_issue_claims_run_lineage_fk",
+          "tableFrom": "post_merge_issue_claims",
+          "tableTo": "runs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id",
+            "run_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id",
+            "run_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -6044,8 +6261,8 @@
           "method": "btree",
           "with": {}
         },
-        "runs_org_run": {
-          "name": "runs_org_run",
+        "runs_org_run_unique": {
+          "name": "runs_org_run_unique",
           "columns": [
             {
               "expression": "org_id",
@@ -6060,7 +6277,94 @@
               "nulls": "last"
             }
           ],
-          "isUnique": false,
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "runs_org_spec_run_unique": {
+          "name": "runs_org_spec_run_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "spec_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "runs_org_project_run_unique": {
+          "name": "runs_org_project_run_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "runs_org_project_spec_run_unique": {
+          "name": "runs_org_project_spec_run_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "spec_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "run_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -6144,6 +6448,38 @@
           ],
           "columnsTo": [
             "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "runs_project_lineage_fk": {
+          "name": "runs_project_lineage_fk",
+          "tableFrom": "runs",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "runs_spec_lineage_fk": {
+          "name": "runs_spec_lineage_fk",
+          "tableFrom": "runs",
+          "tableTo": "specs",
+          "columnsFrom": [
+            "org_id",
+            "project_id",
+            "spec_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id",
+            "spec_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
@@ -6785,6 +7121,21 @@
           ],
           "columnsTo": [
             "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "specs_project_lineage_fk": {
+          "name": "specs_project_lineage_fk",
+          "tableFrom": "specs",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
           ],
           "onDelete": "no action",
           "onUpdate": "no action"

@@ -4,6 +4,7 @@ import { integrationCatalogRevision } from "../../src/engine/contracts/integrati
 import { GenerationAddressedIntegrationSecretStore } from "../../src/engine/integrations/integrationSecretStoreImpl.js";
 import { IntegrationConnectionsStore } from "../../src/engine/repositories/integrationConnections.js";
 import { testOrgGrant } from "../helpers/orgGrant.js";
+import type { IntegrationQueryClient } from "../../src/engine/repositories/integrationQuery.js";
 
 describe("integration connections P1 authority surface", () => {
   it("orgGrantFromLease rejects naked objects without brand", async () => {
@@ -43,5 +44,40 @@ describe("integration connections P1 authority surface", () => {
     const grant = IntegrationConnectionsStore.orgGrantFromLease(issued.eligibleOperation);
     expect(grant.connectionId).toBe("c");
     expect(grant.providerPrincipalId).toBe("T1");
+  });
+
+  it("org-level inventory decodes an absent project selection as false", async () => {
+    const client: IntegrationQueryClient = {
+      async query(sql) {
+        const selectedForProject = /COALESCE\(s\.connection_id/u.test(sql) ? false : null;
+        return {
+          rows: [
+            {
+              connection_id: "c",
+              grant_id: "g",
+              org_id: "o",
+              provider_kind: "sentry",
+              provider_principal_id: "principal",
+              principal_kind: "organization",
+              display_name: "Sentry",
+              health: "healthy",
+              connection_status: "active",
+              current_auth_generation: 1,
+              grant_generation: 1,
+              grant_status: "active",
+              auth_expires_at: null,
+              provider_scopes: ["project:read"],
+              operation_id: null,
+              operation_stage: null,
+              operation_status: null,
+              selected_for_project: selectedForProject,
+            },
+          ],
+          rowCount: 1,
+        };
+      },
+    };
+    const inventory = await IntegrationConnectionsStore.listInventory(client, "o");
+    expect(inventory[0]?.selectedForProject).toBe(false);
   });
 });

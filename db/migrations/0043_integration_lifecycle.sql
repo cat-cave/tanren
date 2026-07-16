@@ -557,6 +557,16 @@ CREATE UNIQUE INDEX "projects_org_project_unique" ON "projects" USING btree ("or
 --> statement-breakpoint
 CREATE UNIQUE INDEX "specs_org_spec_unique" ON "specs" USING btree ("org_id","spec_id");
 --> statement-breakpoint
+DROP INDEX "runs_org_run";
+--> statement-breakpoint
+CREATE UNIQUE INDEX "runs_org_run_unique" ON "runs" USING btree ("org_id","run_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "runs_org_spec_run_unique" ON "runs" USING btree ("org_id","spec_id","run_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "runs_org_project_run_unique" ON "runs" USING btree ("org_id","project_id","run_id");
+--> statement-breakpoint
+CREATE UNIQUE INDEX "runs_org_project_spec_run_unique" ON "runs" USING btree ("org_id","project_id","spec_id","run_id");
+--> statement-breakpoint
 CREATE UNIQUE INDEX "behavior_revisions_org_project_id_unique" ON "behavior_revisions" USING btree ("org_id","project_id","id");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "behavior_verdicts_org_project_id_unique" ON "behavior_verdicts" USING btree ("org_id","project_id","id");
@@ -564,6 +574,38 @@ CREATE UNIQUE INDEX "behavior_verdicts_org_project_id_unique" ON "behavior_verdi
 CREATE UNIQUE INDEX "proof_units_org_project_digest_unique" ON "proof_units" USING btree ("org_id","project_id","proof_unit_digest");
 --> statement-breakpoint
 CREATE UNIQUE INDEX "authority_decisions_org_project_id_unique" ON "authority_decisions" USING btree ("org_id","project_id","id");
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_run_tenant_lineage_fk" FOREIGN KEY ("org_id","run_id") REFERENCES "public"."runs"("org_id","run_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_spec_tenant_lineage_fk" FOREIGN KEY ("org_id","spec_id") REFERENCES "public"."specs"("org_id","spec_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_project_lineage_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_run_spec_lineage_fk" FOREIGN KEY ("org_id","spec_id","run_id") REFERENCES "public"."runs"("org_id","spec_id","run_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_run_project_lineage_fk" FOREIGN KEY ("org_id","project_id","run_id") REFERENCES "public"."runs"("org_id","project_id","run_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_spec_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id") REFERENCES "public"."specs"("org_id","project_id","spec_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "events" ADD CONSTRAINT "events_run_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id","run_id") REFERENCES "public"."runs"("org_id","project_id","spec_id","run_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_project_lineage_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_spec_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id") REFERENCES "public"."specs"("org_id","project_id","spec_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "merge_queue" ADD CONSTRAINT "merge_queue_run_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id","run_id") REFERENCES "public"."runs"("org_id","project_id","spec_id","run_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "post_merge_issue_claims" ADD CONSTRAINT "post_merge_issue_claims_project_lineage_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "post_merge_issue_claims" ADD CONSTRAINT "post_merge_issue_claims_spec_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id") REFERENCES "public"."specs"("org_id","project_id","spec_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "post_merge_issue_claims" ADD CONSTRAINT "post_merge_issue_claims_run_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id","run_id") REFERENCES "public"."runs"("org_id","project_id","spec_id","run_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "runs" ADD CONSTRAINT "runs_project_lineage_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "runs" ADD CONSTRAINT "runs_spec_lineage_fk" FOREIGN KEY ("org_id","project_id","spec_id") REFERENCES "public"."specs"("org_id","project_id","spec_id") ON DELETE no action ON UPDATE no action;
+--> statement-breakpoint
+ALTER TABLE "specs" ADD CONSTRAINT "specs_project_lineage_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint
 ALTER TABLE "org_integration_connection_auth_generations" ADD CONSTRAINT "org_integration_connection_auth_generations_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;
 --> statement-breakpoint

@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   loadReviewMergeRunContext,
+  ReviewMergeRunLineageMismatchError,
   ReviewMergeRunNotFoundError,
   type RunStateClient,
 } from "../src/engine/workflow/reviewMerge/context.js";
@@ -15,6 +16,9 @@ import {
 interface RowOverrides {
   config?: unknown;
   orgConfig?: unknown;
+  projectOrgId?: string;
+  specOrgId?: string;
+  specProjectId?: string;
 }
 
 /** A minimal pool that returns one runs-join row for the context query. */
@@ -29,6 +33,9 @@ function poolReturning(overrides: RowOverrides = {}): RunStateClient {
               spec_id: "spec_1",
               project_id: "project_1",
               org_id: "org_1",
+              project_org_id: overrides.projectOrgId ?? "org_1",
+              spec_org_id: overrides.specOrgId ?? "org_1",
+              spec_project_id: overrides.specProjectId ?? "project_1",
               pr_url: "https://github.com/cat-cave/fix/pull/7",
               branch: "feat/x",
               config: overrides.config ?? { version: 1 },
@@ -104,6 +111,11 @@ describe("loadReviewMergeRunContext credential resolution", () => {
       },
     } as unknown as RunStateClient;
     await expect(loadReviewMergeRunContext(empty, "run_missing")).rejects.toBeInstanceOf(ReviewMergeRunNotFoundError);
+  });
+
+  it("rejects a run whose project owner disagrees before config is resolved", async () => {
+    const pool = poolReturning({ projectOrgId: "org_foreign" });
+    await expect(loadReviewMergeRunContext(pool, "run_1")).rejects.toBeInstanceOf(ReviewMergeRunLineageMismatchError);
   });
 });
 
