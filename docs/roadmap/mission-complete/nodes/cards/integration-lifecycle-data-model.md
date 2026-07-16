@@ -53,6 +53,24 @@ Leased redrive paths (all already present in the exhaustive final-fold manifest)
 - `services/dashboard/tests/integrations.linkOutcomes.render.test.ts` (new)
 - this card
 
+The final publication audit found two still-open P1s in that candidate: the
+select-principal dashboard POST drops durable continuation state, and the sole
+principal-verification authority accepts a schema-impossible `staged` spelling.
+This second bounded redrive leases only the following already-manifested paths:
+
+- `services/dashboard/src/routes/integrations/index.tsx`
+- `services/dashboard/tests/integrations.linkOutcomes.render.test.ts`
+- `services/orchestrator/src/engine/integrations/integrationAuthorityImpl.ts`
+- `services/orchestrator/tests/helpers/integrationMemoryOperations.ts`
+- `services/orchestrator/tests/helpers/orgGrant.ts`
+- `services/orchestrator/tests/integrationAuthority.exactOperation.test.ts`
+- `services/orchestrator/tests/integrationAuthorityRaces.test.ts`
+- this card
+
+No publication or node-completion claim is permitted until matching-operation
+selection continuations, hostile/mismatched responses, exact `0043` stage
+vocabulary, and persisted restart behavior pass the bounded and canonical gates.
+
 The correction removes every data-conversion `UPDATE` from `0043` and makes the
 migration-model proof mutation-sensitive to any future backfill. On the visible
 surface, only a durable `completed` operation may render as linked. Every pending,
