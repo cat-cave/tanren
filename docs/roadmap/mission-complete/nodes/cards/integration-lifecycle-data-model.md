@@ -59,7 +59,7 @@ Owned proof paths: `integrationLifecycleModel.test.ts`,
 `deployOnMergeCrossTenantSeam.test.ts`, `helpers/deployOnMergeHarness.ts`, and
 `issueClaimStore.test.ts` if split. Full-cohort query-double corrections are
 leased in `demoOnDeployAdapterDispatch.test.ts`, `reviewMerge.fixtures.ts`,
-`helpers/workerPool.ts`, `coordinatorBuildDriveScope.test.ts`, and
+`helpers/workerPool.ts`, `helpers/plannerRunPool.ts`, `coordinatorBuildDriveScope.test.ts`, and
 `driveMergePercolationYield.test.ts`.
 
 Required negatives use real `tanren_app` PostgreSQL constraints/RLS and a
