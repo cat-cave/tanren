@@ -2,12 +2,13 @@
 
 **Bucket**: runtime verification
 **Phase**: MVP / Wave 2 consumer
-**State**: retained-core P1s corrected locally; serialized tail blocked by IN-1;
-no node credit until merged
+**State**: production-authority P1 correction redrive active on the retained core;
+serialized tail remains blocked by IN-1; no node credit until merged
 **Base**: `origin/main` / `8c7d9ff80dfb6f5310c2d2d3a35dd0fc42658897`
 **Exclusive core**: `63000a1a70ce2e276af51f0143b0d82a7f1ec1f1`
 **Binary delta**: `f569e4c96aefa1bc70b54d5d1e87956b98d2ff1c37734a5dbc410d9eac44bf57`
 **Gate proof**: `RV4-AFFECTED-SELECTION-FAIL-CLOSED`
+**Production-author parent**: `ca91e85fc1d3d41171a7c151502ff48c1c65a8e7`
 
 ## Outcome
 
@@ -85,6 +86,22 @@ Only these paths may be edited before the serialized tail is granted:
 - `services/dashboard/src/routes/behaviorCoverage/index.tsx`
 - `services/dashboard/tests/behaviorCoverageClient.test.ts`
 - `services/dashboard/tests/behaviorCoverage.render.test.ts`
+- `services/orchestrator/src/engine/runtimeVerification/coverageAuthorityMaterializer.ts`
+- `services/orchestrator/src/engine/dag/integrationNodesPg.ts`
+- `services/orchestrator/src/engine/dag/jjLocalIntegration.ts`
+- `services/orchestrator/src/engine/dag/jjLocalBootstrap.ts`
+- `services/orchestrator/src/engine/merge/batchIntegrationNodeDrive.ts`
+- `services/orchestrator/src/engine/merge/batchChecker.ts`
+- `services/orchestrator/src/engine/workflow/plannerRunJjLocalBootstrap.ts`
+- `services/orchestrator/src/engine/workflow/plannerRunEagerBaseNode.ts`
+- `services/orchestrator/tests/coverageAuthorityMaterializer.test.ts`
+- `services/orchestrator/tests/behaviorCoverageProduction.integration.test.ts`
+- `services/orchestrator/tests/batchIntegrationNodeDrive.test.ts`
+- `services/orchestrator/tests/eagerBaseNodeBootstrap.test.ts`
+- `services/orchestrator/tests/helpers/jjLocalBootstrapFixtures.ts`
+- `services/orchestrator/tests/jjLocalIntegration.realjj.test.ts`
+- `services/orchestrator/tests/conformance/ancestorStackAssembly.conformance.test.ts`
+- `services/orchestrator/tests/integrationNodes.persistence.test.ts`
 
 No wildcard ownership. Amend this card before any additional exclusive path.
 
