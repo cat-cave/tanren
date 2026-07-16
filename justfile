@@ -830,7 +830,7 @@ smoke-plane-split-p3:
 # recovery suites additionally prove exact atomic park and tenant-bound successor
 # evidence. DATABASE_URL is the owner.
 smoke-plane-split-p3b:
-  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --maxWorkers=1 services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/recoveryParkAtomic.rls.integration.test.ts services/orchestrator/tests/recoveryEvidencePg.rls.integration.test.ts
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --maxWorkers=1 services/orchestrator/tests/planeSplitP3bDeprivilege.integration.test.ts services/orchestrator/tests/recoveryParkAtomic.rls.integration.test.ts services/orchestrator/tests/recoveryEvidencePg.rls.integration.test.ts services/orchestrator/tests/recoveryPreparationAtomic.rls.integration.test.ts services/orchestrator/tests/terminalInfrastructureRecovery.rls.integration.test.ts
 
 # Plane-split P3c (real PG): the run/spec/task LIFECYCLE de-privilege proof.
 # Migrates a fresh DB (0035 drops the data plane's runs/specs/tasks WRITE grants),
