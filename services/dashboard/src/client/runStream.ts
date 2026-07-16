@@ -74,7 +74,7 @@ const COST_SOURCE_LABEL: Record<CostRecordFrame["billingMode"], string> = {
  * `RunStreamReducer`). Centralized so the SSE client and its reducer cannot
  * drift on what "terminal" means.
  */
-const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "halted", "cancelled", "done"]);
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "halted", "cancelled"]);
 
 function formatTokens(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
@@ -273,6 +273,82 @@ export class RunStreamReducer {
   }
 }
 
+interface RunStreamView {
+  paint(): void;
+  applyStatus(status: string, outcome: string | null): void;
+  applyTask(task: TaskFrame): void;
+}
+
+/**
+ * Register the production EventSource listeners. Kept as one coordinator so the
+ * snapshot/status/error close contract is exercised through the same wiring that
+ * `initRunStream` installs in the browser.
+ */
+export function wireRunStreamListeners(source: EventSource, reducer: RunStreamReducer, view: RunStreamView): void {
+  source.addEventListener("snapshot", (event) => {
+    try {
+      const data: {
+        costs?: CostRecordFrame[];
+        run?: { status: string; outcome: string | null };
+      } = JSON.parse(event.data);
+      reducer.ingestSnapshotCosts(data.costs);
+      view.paint();
+      if (data.run !== undefined) {
+        view.applyStatus(data.run.status, data.run.outcome);
+        // The snapshot is authoritative run state too. A terminal run may emit no
+        // later changed `status` frame before EOF, so feed the exact painted status
+        // through the reducer's close gate.
+        reducer.ingestStatus(data.run.status);
+      }
+    } catch {
+      /* ignore malformed frame */
+    }
+  });
+
+  source.addEventListener("costs", (event) => {
+    try {
+      const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
+      reducer.ingestCosts(data.costs);
+      view.paint();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  source.addEventListener("status", (event) => {
+    try {
+      const data: {
+        status: string;
+        outcome: string | null;
+      } = JSON.parse(event.data);
+      view.applyStatus(data.status, data.outcome);
+      // Mark terminal but do not close yet — final tasks/events/costs may still
+      // arrive if the server reorders poorly; server EOF is authoritative.
+      reducer.ingestStatus(data.status);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  source.addEventListener("task", (event) => {
+    try {
+      const frame: TaskFrame = JSON.parse(event.data);
+      view.applyTask(frame);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  source.addEventListener("error", () => {
+    // After a terminal status, treat stream error/EOF as authoritative close
+    // (prevents infinite reconnect on a finished run without aborting
+    // mid-delivery of final cost reconciliations).
+    if (reducer.isTerminal) {
+      source.close();
+    }
+  });
+}
+
 export function initRunStream(): void {
   const root = document.querySelector<HTMLElement>('[data-island="run-stream"]');
   if (root === null) return;
@@ -291,61 +367,14 @@ export function initRunStream(): void {
     renderCostBar(root, reducer.totals);
   };
 
-  source.addEventListener("snapshot", (event) => {
-    try {
-      const data: {
-        costs?: CostRecordFrame[];
-        run?: { status: string; outcome: string | null };
-      } = JSON.parse(event.data);
-      reducer.ingestSnapshotCosts(data.costs);
-      paint();
-      if (data.run !== undefined) applyStatus(root, data.run.status, data.run.outcome);
-    } catch {
-      /* ignore malformed frame */
-    }
-  });
-
-  source.addEventListener("costs", (event) => {
-    try {
-      const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
-      reducer.ingestCosts(data.costs);
-      paint();
-    } catch {
-      /* ignore */
-    }
-  });
-
-  source.addEventListener("status", (event) => {
-    try {
-      const data: {
-        status: string;
-        outcome: string | null;
-      } = JSON.parse(event.data);
-      applyStatus(root, data.status, data.outcome);
-      // Mark terminal but do not close yet — final tasks/events/costs may still
-      // arrive if the server reorders poorly; server EOF is authoritative.
-      reducer.ingestStatus(data.status);
-    } catch {
-      /* ignore */
-    }
-  });
-
-  source.addEventListener("task", (event) => {
-    try {
-      const frame: TaskFrame = JSON.parse(event.data);
-      applyTask(root, frame);
-    } catch {
-      /* ignore */
-    }
-  });
-
-  source.addEventListener("error", () => {
-    // After a terminal status, treat stream error/EOF as authoritative close
-    // (prevents infinite reconnect on a finished run without aborting
-    // mid-delivery of final cost reconciliations).
-    if (reducer.isTerminal) {
-      source.close();
-    }
+  wireRunStreamListeners(source, reducer, {
+    paint,
+    applyStatus: (status, outcome) => {
+      applyStatus(root, status, outcome);
+    },
+    applyTask: (task) => {
+      applyTask(root, task);
+    },
   });
 
   root.addEventListener("click", (clickEvent) => {
