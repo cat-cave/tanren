@@ -57,7 +57,10 @@ Owned proof paths: `integrationLifecycleModel.test.ts`,
 `conformance/integrationConnections.conformance.test.ts`, plus new
 `runLineageTenantAuthority.rls.integration.test.ts`,
 `deployOnMergeCrossTenantSeam.test.ts`, `helpers/deployOnMergeHarness.ts`, and
-`issueClaimStore.test.ts` if split.
+`issueClaimStore.test.ts` if split. Full-cohort query-double corrections are
+leased in `demoOnDeployAdapterDispatch.test.ts`, `reviewMerge.fixtures.ts`,
+`helpers/workerPool.ts`, `coordinatorBuildDriveScope.test.ts`, and
+`driveMergePercolationYield.test.ts`.
 
 Required negatives use real `tanren_app` PostgreSQL constraints/RLS and a
 production post-merge seam. Removing either composite FK/equality defense must
