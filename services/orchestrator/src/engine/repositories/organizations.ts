@@ -1,18 +1,14 @@
-// The `organizations` repository — the small set of org-row reads other
-// engine sites need, pulled onto the `Repositories` seam (mirrors the
-// `ProjectStore` / `OrgIntegrationsStore` shape). Today this exposes the
-// `getLogin(orgId)` slug lookup the deploy provisioners need to namespace
-// every deploy-app name with the org's slug (see `flyDeployProvisioner.ts` +
-// `vercelDeployProvisioner.ts` — the global-namespace collision fix). Other
-// org reads (config, display name) remain inline at their use sites until
-// they too move onto the seam.
-//
-// SECRET DISCIPLINE: this store never reads or returns the org's `config`
-// jsonb (which carries managed-credential pointers) — only the non-secret
-// identity columns. The org slug (the lowercase, hostname-safe `login`) is
-// itself non-secret — it already surfaces in operator-visible org URLs.
+// The `organizations` repository — org-row reads plus the sole org-config CAS
+// surface. getLogin remains non-secret identity only; config snapshot/CAS are
+// explicit config-write methods (not secret export APIs).
 
 import type pg from "pg";
+import {
+  type ConfigCasOutcome,
+  type ConfigSnapshot,
+  configCasImpossibleMiss,
+  revisionText,
+} from "../config/configRevision.js";
 import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
@@ -30,16 +26,12 @@ export class OrganizationNotFoundError extends Error {
   }
 }
 
+export type OrgConfigSnapshot = ConfigSnapshot;
+
 export const OrganizationsStore = {
   /**
-   * Resolve the org's HOSTNAME-SAFE slug (the `login` column — already
-   * lowercase, dash-friendly, and unique per (kind, external_id) via the
-   * identity-store upsert path). The deploy provisioners use this as the
-   * MANDATORY PREFIX on every created Fly/Vercel app — Fly app names live in
-   * a GLOBAL namespace across all Fly customers, so a bare project name like
-   * `linkly` collides on common words; prefixing with the org's slug makes
-   * collisions within an org structurally impossible. FAIL-LOUD on a missing
-   * org (never a silent un-namespaced fallback).
+   * Resolve the org's HOSTNAME-SAFE slug (the `login` column). Deploy provisioners
+   * use this as the mandatory prefix on every created Fly/Vercel app.
    */
   async getLogin(client: QueryClient, orgId: string, _actor: ActorRef): Promise<string> {
     const result = await client.query<{ login: string }>("SELECT login FROM organizations WHERE id = $1", [orgId]);
@@ -48,5 +40,76 @@ export const OrganizationsStore = {
       throw new OrganizationNotFoundError(orgId);
     }
     return row.login;
+  },
+
+  /**
+   * Snapshot of org config + application generation. `undefined` when the row is
+   * absent or invisible under the client's org RLS scope (foreign ≡ missing).
+   */
+  async getConfigSnapshot(
+    client: QueryClient,
+    orgId: string,
+    _actor: ActorRef,
+  ): Promise<OrgConfigSnapshot | undefined> {
+    const result = await client.query<{ config: unknown; revision: unknown }>(
+      "SELECT config, config_revision::text AS revision FROM organizations WHERE id = $1",
+      [orgId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) {
+      return undefined;
+    }
+    return { config: row.config, revision: revisionText(row.revision) };
+  },
+
+  /**
+   * Sole write authority for organizations.config after create INSERT.
+   * One revision-predicated UPDATE: bumps only when config is JSONB-distinct.
+   * Zero rows → authoritative re-read (not_found / conflict / same-rev no-op ok).
+   * Serialization point is the UPDATE; never an unlocked pre-read short-circuit.
+   */
+  async compareAndSwapConfig(
+    client: QueryClient,
+    orgId: string,
+    expectedRevision: string,
+    nextConfig: unknown,
+    _actor: ActorRef,
+  ): Promise<ConfigCasOutcome> {
+    // Fail closed before $n::bigint — reject overflow/non-canonical tokens loudly.
+    const expected = revisionText(expectedRevision);
+    const nextJson = JSON.stringify(nextConfig);
+    const result = await client.query<{ config: unknown; revision: unknown }>(
+      `UPDATE organizations
+          SET config = $1::jsonb,
+              config_revision = config_revision + 1,
+              updated_at = now()
+        WHERE id = $2
+          AND config_revision = $3::bigint
+          AND config IS DISTINCT FROM $1::jsonb
+        RETURNING config, config_revision::text AS revision`,
+      [nextJson, orgId, expected],
+    );
+    const row = result.rows[0];
+    if (row !== undefined) {
+      return { status: "ok", config: row.config, revision: revisionText(row.revision) };
+    }
+    const probe = await client.query<{ config: unknown; revision: unknown; config_equal: boolean }>(
+      `SELECT config, config_revision::text AS revision,
+              (config IS NOT DISTINCT FROM $2::jsonb) AS config_equal
+         FROM organizations WHERE id = $1`,
+      [orgId, nextJson],
+    );
+    const after = probe.rows[0];
+    if (after === undefined) {
+      return { status: "not_found" };
+    }
+    const rev = revisionText(after.revision);
+    if (rev !== expected) {
+      return { status: "conflict", current: { config: after.config, revision: rev } };
+    }
+    if (after.config_equal) {
+      return { status: "ok", config: after.config, revision: rev };
+    }
+    return configCasImpossibleMiss("organization", orgId, expected);
   },
 } as const;

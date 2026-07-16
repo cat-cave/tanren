@@ -32,7 +32,7 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
-import { migrateOrgConfig, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
+import { migrateOrgConfig, mutateOrgConfig, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
 import { ProviderMode } from "../../engine/config/managedProvider.js";
 import type { RoutingChainEntry } from "../../engine/config/shared.js";
 import { PgEventStore, type EventStore } from "../../engine/eventStore.js";
@@ -210,17 +210,21 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
     // connects without changing routing.
     let isDefault = false;
     if (makeDefault && defaultCli !== undefined) {
-      const loaded = await loadOrgConfig(options.pool, orgId);
-      if (loaded === undefined) {
+      const exists = await loadOrgConfig(options.pool, orgId);
+      if (exists === undefined) {
         return c.json({ error: "org_not_found" }, 404);
       }
       const defaultLlm: RoutingChainEntry = { cli: defaultCli, model: "default", authRef: ref };
-      const nextConfig = migrateOrgConfig({
-        ...loaded,
-        providerMode: "byok",
-        defaultCredentials: { ...loaded.defaultCredentials, defaultLlm },
+      // Progress-based mutate: re-merge after a lost race so concurrent org-config
+      // field writes are not clobbered by a precomputed full-document overwrite.
+      await mutateOrgConfigFor(options.pool, orgId, (raw) => {
+        const loaded = migrateOrgConfig(raw);
+        return migrateOrgConfig({
+          ...loaded,
+          providerMode: "byok",
+          defaultCredentials: { ...loaded.defaultCredentials, defaultLlm },
+        });
       });
-      await writeOrgConfig(options.pool, orgId, nextConfig);
       isDefault = true;
     }
     await emitCredentialConfiguredForOrgProjects(options.pool, events, orgId, {
@@ -278,13 +282,14 @@ export function createAiProviderRoutes(options: AiProviderRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_billing_mode", issues: parsed.error.issues }, 400);
     }
-    const loaded = await loadOrgConfig(options.pool, orgId);
-    if (loaded === undefined) {
+    const exists = await loadOrgConfig(options.pool, orgId);
+    if (exists === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    const nextConfig = migrateOrgConfig({ ...loaded, providerMode: parsed.data.mode });
-    await writeOrgConfig(options.pool, orgId, nextConfig);
-    return c.json({ mode: nextConfig.providerMode });
+    const written = await mutateOrgConfigFor(options.pool, orgId, (raw) => {
+      return migrateOrgConfig({ ...migrateOrgConfig(raw), providerMode: parsed.data.mode });
+    });
+    return c.json({ mode: migrateOrgConfig(written.config).providerMode });
   });
 
   return app;
@@ -313,19 +318,23 @@ function providerRefPrefix(provider: AiProvider): string {
 }
 
 async function loadOrgConfig(pool: pg.Pool, orgId: string): Promise<OrgConfigV1 | undefined> {
-  const result = await pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [orgId]);
-  const row = result.rows[0];
-  if (row === undefined) {
+  // Lazy import keeps this route under the max-dependencies lint cap.
+  const { OrganizationsStore } = await import("../../engine/repositories/organizations.js");
+  const { systemActor } = await import("../../engine/state/actor.js");
+  const snapshot = await OrganizationsStore.getConfigSnapshot(pool, orgId, systemActor);
+  if (snapshot === undefined) {
     return undefined;
   }
-  return migrateOrgConfig(row.config);
+  return migrateOrgConfig(snapshot.config);
 }
 
-async function writeOrgConfig(pool: pg.Pool, orgId: string, config: OrgConfigV1): Promise<void> {
-  await pool.query("UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2", [
-    JSON.stringify(config),
-    orgId,
-  ]);
+async function mutateOrgConfigFor(
+  pool: pg.Pool,
+  orgId: string,
+  mutate: (current: unknown) => OrgConfigV1,
+): Promise<{ config: unknown }> {
+  const { systemActor } = await import("../../engine/state/actor.js");
+  return mutateOrgConfig(pool, orgId, systemActor, mutate);
 }
 
 async function emitCredentialConfiguredForOrgProjects(

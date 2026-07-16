@@ -36,9 +36,9 @@
 
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
+import { mutateProjectConfig } from "../config/projectConfigMutate.js";
 import { OrgIntegrationsStore } from "../repositories/orgIntegrations.js";
 import { OrganizationsStore } from "../repositories/organizations.js";
-import { ProjectStore } from "../repositories/projects.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { EventStore } from "../eventStore.js";
 import type { SecretStore } from "../contracts/secretStore.js";
@@ -321,9 +321,10 @@ async function persistArtifact(
   const result: PersistedSurfaces = { projectConfigKeys: [] };
 
   if (artifact.projectConfig !== undefined && Object.keys(artifact.projectConfig).length > 0) {
-    const current = asRecord(await ProjectStore.getConfig(deps.client, request.projectId, deps.actor));
-    const next = { ...current, ...artifact.projectConfig };
-    await ProjectStore.updateConfig(deps.client, request.projectId, next, deps.actor);
+    await mutateProjectConfig(deps.client, request.projectId, deps.actor, (raw) => {
+      const current = asRecord(raw);
+      return { ...current, ...artifact.projectConfig };
+    });
     result.projectConfigKeys = Object.keys(artifact.projectConfig);
   }
 

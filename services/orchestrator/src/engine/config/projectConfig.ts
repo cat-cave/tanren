@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { ProviderMode } from "./managedProvider.js";
+
+// Re-export the progress mutate helper so route files can share one config import.
+export { mutateProjectConfig, ProjectConfigMissingError } from "./projectConfigMutate.js";
 import {
   AuditPostureConfig,
   ConvergencePolicyConfig,

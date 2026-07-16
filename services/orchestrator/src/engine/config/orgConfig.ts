@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { ProviderMode } from "./managedProvider.js";
+
+// Re-export progress mutate so routes can share one org-config import surface.
+export { mutateOrgConfig, OrgConfigMissingError } from "./orgConfigMutate.js";
 import {
   AllocatorConfig,
   CreditRates,

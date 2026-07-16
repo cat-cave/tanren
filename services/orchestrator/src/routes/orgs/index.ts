@@ -8,10 +8,14 @@ import { Hono } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import { ConfigRevisionSchema } from "../../engine/config/configRevision.js";
 import { DEFAULT_BUDGET_PERIOD } from "../../engine/config/index.js";
 import { migrateOrgConfig, type OrgAuditGateTarget, type OrgConfigV1 } from "../../engine/config/orgConfig.js";
 import { gatedConfigWrite, type ConfigGateGitHub } from "../../engine/config/tanrenConfigGate.js";
+import { OrganizationsStore } from "../../engine/repositories/organizations.js";
+import { systemActor } from "../../engine/state/actor.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
+import { orgConfigConflict } from "../projects/configConflict.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "./access.js";
 
 // Wave-2 "Connect GitHub" + onboarding-status routes live in the sibling
@@ -38,6 +42,7 @@ interface OrgRoutesOptions {
 
 const OrgConfigPatchSchema = z.object({
   config: z.record(z.string(), z.unknown()),
+  revision: ConfigRevisionSchema,
 });
 
 // `ceilingUsd: null` clears the org's default budget; a number (+ optional period)
@@ -46,6 +51,7 @@ const OrgBudgetPutSchema = z
   .object({
     ceilingUsd: z.number().nonnegative().nullable(),
     period: z.enum(["monthly", "total"]).optional(),
+    revision: ConfigRevisionSchema,
   })
   .strict();
 
@@ -102,12 +108,17 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     if (row === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
+    const snapshot = await OrganizationsStore.getConfigSnapshot(options.pool, orgId, systemActor);
+    if (snapshot === undefined) {
+      return c.json({ error: "org_not_found" }, 404);
+    }
     return c.json({
       id: row.id,
       kind: row.kind,
       login: row.login,
       displayName: row.display_name,
       config: migrateOrgConfig(row.config),
+      revision: snapshot.revision,
     });
   });
 
@@ -128,14 +139,16 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
       return c.json({ error: "invalid_org_config", message: messageOf(error) }, 400);
     }
 
-    // Load the current config so the audit gate can detect a Bucket-B change.
-    const current = await options.pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
-      orgId,
-    ]);
-    if (current.rows[0] === undefined) {
+    // Load the current snapshot so the audit gate can detect a Bucket-B change
+    // and so the one-shot CAS can bind to the client's expected revision.
+    const snapshot = await OrganizationsStore.getConfigSnapshot(options.pool, orgId, systemActor);
+    if (snapshot === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    const prevConfig = migrateOrgConfig(current.rows[0].config);
+    if (snapshot.revision !== parsed.data.revision) {
+      return c.json(orgConfigConflict(orgId, snapshot.revision), 409);
+    }
+    const prevConfig = migrateOrgConfig(snapshot.config);
 
     // when the gate is ON and this is a Bucket-B write, do NOT apply —
     // open a PR in the tanren-config repo and report the gated outcome instead.
@@ -156,17 +169,23 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
 
     if (gated.kind === "gated") {
       // The DB stays the source of truth; the write applies on PR merge.
-      return c.json({ id: orgId, gated: true, pr: gated.pr, diff: gated.diff }, 202);
+      return c.json({ id: orgId, gated: true, pr: gated.pr, diff: gated.diff, revision: snapshot.revision }, 202);
     }
 
-    const updated = await options.pool.query<{ id: string }>(
-      "UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2 RETURNING id",
-      [JSON.stringify(gated.config), orgId],
+    const outcome = await OrganizationsStore.compareAndSwapConfig(
+      options.pool,
+      orgId,
+      parsed.data.revision,
+      gated.config,
+      systemActor,
     );
-    if (updated.rowCount === 0) {
+    if (outcome.status === "not_found") {
       return c.json({ error: "org_not_found" }, 404);
     }
-    return c.json({ id: orgId, config: gated.config });
+    if (outcome.status === "conflict") {
+      return c.json(orgConfigConflict(orgId, outcome.current.revision), 409);
+    }
+    return c.json({ id: orgId, config: gated.config, revision: outcome.revision });
   });
 
   // The org-level DEFAULT dollar budget (autonomy-engine.md §3 proof 6): the
@@ -180,16 +199,15 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     if (!actorCanAccessOrg(actor, orgId)) {
       return c.json({ error: "org_access_denied" }, 403);
     }
-    const result = await options.pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
-      orgId,
-    ]);
-    if (result.rows[0] === undefined) {
+    const snapshot = await OrganizationsStore.getConfigSnapshot(options.pool, orgId, systemActor);
+    if (snapshot === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    const budget = migrateOrgConfig(result.rows[0].config).defaultBudget;
+    const budget = migrateOrgConfig(snapshot.config).defaultBudget;
     return c.json({
       ceilingUsd: budget?.ceilingUsd ?? null,
       period: budget?.period ?? DEFAULT_BUDGET_PERIOD,
+      revision: snapshot.revision,
     });
   });
 
@@ -203,13 +221,14 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
     if (!parsed.success) {
       return c.json({ error: "invalid_budget", issues: parsed.error.issues }, 400);
     }
-    const current = await options.pool.query<{ config: unknown }>("SELECT config FROM organizations WHERE id = $1", [
-      orgId,
-    ]);
-    if (current.rows[0] === undefined) {
+    const snapshot = await OrganizationsStore.getConfigSnapshot(options.pool, orgId, systemActor);
+    if (snapshot === undefined) {
       return c.json({ error: "org_not_found" }, 404);
     }
-    const prev = migrateOrgConfig(current.rows[0].config);
+    if (snapshot.revision !== parsed.data.revision) {
+      return c.json(orgConfigConflict(orgId, snapshot.revision), 409);
+    }
+    const prev = migrateOrgConfig(snapshot.config);
     const nextConfig = migrateOrgConfig({
       ...prev,
       defaultBudget:
@@ -217,13 +236,23 @@ export function createOrgRoutes(options: OrgRoutesOptions) {
           ? undefined
           : { ceilingUsd: parsed.data.ceilingUsd, period: parsed.data.period ?? DEFAULT_BUDGET_PERIOD },
     });
-    await options.pool.query("UPDATE organizations SET config = $1::jsonb, updated_at = now() WHERE id = $2", [
-      JSON.stringify(nextConfig),
+    const outcome = await OrganizationsStore.compareAndSwapConfig(
+      options.pool,
       orgId,
-    ]);
+      parsed.data.revision,
+      nextConfig,
+      systemActor,
+    );
+    if (outcome.status === "not_found") {
+      return c.json({ error: "org_not_found" }, 404);
+    }
+    if (outcome.status === "conflict") {
+      return c.json(orgConfigConflict(orgId, outcome.current.revision), 409);
+    }
     return c.json({
       ceilingUsd: nextConfig.defaultBudget?.ceilingUsd ?? null,
       period: nextConfig.defaultBudget?.period ?? DEFAULT_BUDGET_PERIOD,
+      revision: outcome.revision,
     });
   });
 

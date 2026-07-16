@@ -82,11 +82,12 @@ describe("org routes", () => {
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: { version: 1, auditGateEnabled: true } }),
+      body: JSON.stringify({ config: { version: 1, auditGateEnabled: true }, revision: "1" }),
     });
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { id: string; config: { auditGateEnabled: boolean } };
+    const body = (await response.json()) as { id: string; config: { auditGateEnabled: boolean }; revision: string };
     expect(body.config.auditGateEnabled).toBe(true);
+    expect(body.revision).toBe("2");
   });
 
   it("rejects org config patch from a non-admin actor", async () => {
@@ -102,7 +103,7 @@ describe("org routes", () => {
     const response = await app.request("/orgs/org_acme", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config: { version: 1 } }),
+      body: JSON.stringify({ config: { version: 1 }, revision: "1" }),
     });
     expect(response.status).toBe(403);
   });

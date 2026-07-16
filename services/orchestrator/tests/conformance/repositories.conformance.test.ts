@@ -55,11 +55,30 @@ class ScopedClient {
     const specDeps = (): SpecDependencyRecord[] => this.db.specDependencies.filter((d) => d.org_id === this.orgId);
 
     // --- projects ---
-    if (/UPDATE projects SET config/u.test(sql)) {
-      const [config, projectId] = params as [string, string];
+    if (/UPDATE projects\s+SET config = \$1::jsonb,\s*config_revision = config_revision \+ 1/u.test(sql)) {
+      const [config, projectId, expected] = params as [string, string, string];
       const row = projects().find((p) => p.project_id === projectId);
-      if (row !== undefined) row.config = JSON.parse(config);
-      return { rows: [], rowCount: row ? 1 : 0 };
+      if (row === undefined || row.config_revision !== Number(expected)) {
+        return { rows: [], rowCount: 0 };
+      }
+      const next = JSON.parse(config) as unknown;
+      if (JSON.stringify(row.config) === JSON.stringify(next)) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (row.config_revision >= Number.MAX_SAFE_INTEGER) {
+        throw new Error(
+          `config_revision overflow: project=${projectId} current=${row.config_revision} cannot increment past ${Number.MAX_SAFE_INTEGER}`,
+        );
+      }
+      row.config = next;
+      row.config_revision += 1;
+      return {
+        rows: [{ config: row.config, revision: String(row.config_revision) }],
+        rowCount: 1,
+      };
+    }
+    if (/UPDATE projects SET config/u.test(sql)) {
+      throw new Error("LWW UPDATE projects SET config is deleted — use revision CAS");
     }
     if (/UPDATE projects SET repo_url/u.test(sql)) {
       const [repoUrl, projectId] = params as [string, string];
@@ -78,6 +97,33 @@ class ScopedClient {
       const [projectId] = params as [string];
       const row = projects().find((p) => p.project_id === projectId);
       return row === undefined ? { rows: [], rowCount: 0 } : { rows: [{ org_id: row.org_id }], rowCount: 1 };
+    }
+    if (
+      /SELECT config, config_revision::text AS revision,/u.test(sql) &&
+      /config IS NOT DISTINCT FROM/u.test(sql) &&
+      /FROM projects WHERE project_id/u.test(sql)
+    ) {
+      const [projectId, nextJson] = params as [string, string];
+      const row = projects().find((p) => p.project_id === projectId);
+      if (row === undefined) return { rows: [], rowCount: 0 };
+      const next = JSON.parse(nextJson) as unknown;
+      return {
+        rows: [
+          {
+            config: row.config,
+            revision: String(row.config_revision),
+            config_equal: JSON.stringify(row.config) === JSON.stringify(next),
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (/SELECT config, config_revision::text AS revision FROM projects/u.test(sql)) {
+      const [projectId] = params as [string];
+      const row = projects().find((p) => p.project_id === projectId);
+      return row === undefined
+        ? { rows: [], rowCount: 0 }
+        : { rows: [{ config: row.config, revision: String(row.config_revision) }], rowCount: 1 };
     }
     if (/SELECT config FROM projects/u.test(sql)) {
       const [projectId] = params as [string];

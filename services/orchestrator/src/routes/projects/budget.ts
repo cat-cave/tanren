@@ -25,6 +25,7 @@ import { notifyDagChanged } from "@tanren/db";
 import type { Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
+import { ConfigRevisionSchema } from "../../engine/config/configRevision.js";
 import { DEFAULT_BUDGET_PERIOD, migrateProjectConfig } from "../../engine/config/index.js";
 import { type ProjectBudgetState, shouldPauseOnBudget } from "../../engine/contracts/dagWalker.js";
 import { PgBudgetGate } from "../../engine/dag/budgetGate.js";
@@ -35,6 +36,9 @@ import {
 import { ProjectStore } from "../../engine/repositories/index.js";
 import { systemActor } from "../../engine/state/actor.js";
 import { createLogger } from "../../engine/observability/logger.js";
+import { projectConfigConflict } from "./configConflict.js";
+// Re-export so routes/projects/index.ts can share the helper without exceeding max-dependencies.
+export { projectConfigConflict };
 
 const log = createLogger("budget");
 
@@ -42,12 +46,21 @@ const log = createLogger("budget");
 // period) sets it. `period` defaults to the same default the config schema uses. The
 // ceiling ALWAYS gates REAL spend (`cost_records.cost_usd`) — that is the doctrine, so
 // there is no "which figure" knob; the notional figure is surfaced but never gated.
+// `revision` is the one-shot CAS token from the last budget/project GET.
 export const BudgetPutSchema = z
   .object({
     ceilingUsd: z.number().nonnegative().nullable(),
     period: z.enum(["monthly", "quarterly", "annual", "total"]).optional(),
+    revision: ConfigRevisionSchema,
   })
   .strict();
+
+/** Full-document project config PATCH — revision uses the shared closed range. */
+export const ProjectPatchSchema = z.object({
+  config: z.record(z.string(), z.unknown()),
+  /** Expected config_revision from the last GET — one-shot CAS token. */
+  revision: ConfigRevisionSchema,
+});
 
 /**
  * The read-shape both GET and PUT return — the apex-proof + operator surface.
@@ -76,9 +89,15 @@ export interface BudgetView {
    * Surfaced so the operator UI can avoid painting placeholder/partial zeros as real spend.
    */
   failClosed: "unpriced_spend" | "unparseable_config" | "unresolvable_project_org" | null;
+  /** Application config generation for one-shot CAS on PUT. */
+  revision: string;
 }
 
-function toView(state: ProjectBudgetState, pauseObservation: BudgetPauseObservation | null): BudgetView {
+function toView(
+  state: ProjectBudgetState,
+  pauseObservation: BudgetPauseObservation | null,
+  revision: string,
+): BudgetView {
   const ceilingUsd = state.ceilingUsd ?? null;
   return {
     ceilingUsd,
@@ -92,6 +111,7 @@ function toView(state: ProjectBudgetState, pauseObservation: BudgetPauseObservat
     paused: shouldPauseOnBudget(state),
     pauseObservation,
     failClosed: state.failClosed ?? null,
+    revision,
   };
 }
 
@@ -114,15 +134,20 @@ export async function handleBudgetGet(c: Context, pool: pg.Pool, orgId: string, 
   if (ownership === undefined || (ownership.orgId !== null && ownership.orgId !== orgId)) {
     return c.json({ error: "project_not_found" }, 404);
   }
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined) {
+    return c.json({ error: "project_not_found" }, 404);
+  }
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
   const pauseObservation = await pauseObservationFor(pool, orgId, projectId, state);
-  return c.json(toView(state, pauseObservation));
+  return c.json(toView(state, pauseObservation, snapshot.revision));
 }
 
 /**
- * PUT handler: set (or clear) the project's OWN budget by read-modify-writing
- * `projects.config.budget`, then re-read + return the resolved view. `ceilingUsd:
- * null` removes the project budget (the org default / unlimited then applies).
+ * PUT handler: one-shot revision CAS over `projects.config.budget`. Merges
+ * budget fields once against the snapshot that matches `body.revision`; never
+ * silently auto-retries a stale human write. `ceilingUsd: null` clears the
+ * project budget (org default / unlimited then applies).
  */
 export async function handleBudgetPut(
   c: Context,
@@ -140,8 +165,14 @@ export async function handleBudgetPut(
   // project can fire the re-walk wake below (audit §3.7e).
   const before = await new PgBudgetGate(pool).resolveBudget(projectId);
 
-  const rawConfig = await ProjectStore.getConfig(pool, projectId, systemActor);
-  const current = migrateProjectConfig(rawConfig);
+  const snapshot = await ProjectStore.getConfigSnapshot(pool, projectId, systemActor);
+  if (snapshot === undefined) {
+    return c.json({ error: "project_not_found" }, 404);
+  }
+  if (snapshot.revision !== body.revision) {
+    return c.json(projectConfigConflict(orgId, projectId, snapshot.revision), 409);
+  }
+  const current = migrateProjectConfig(snapshot.config);
   const nextConfig = {
     ...current,
     budget:
@@ -154,7 +185,14 @@ export async function handleBudgetPut(
   };
   // Round-trip through the versioned parser so the persisted blob is always a valid
   // ProjectConfigV1 (drops the `budget` key entirely when cleared — `.strict()`).
-  await ProjectStore.updateConfig(pool, projectId, migrateProjectConfig(nextConfig), systemActor);
+  const validated = migrateProjectConfig(nextConfig);
+  const outcome = await ProjectStore.compareAndSwapConfig(pool, projectId, body.revision, validated, systemActor);
+  if (outcome.status === "not_found") {
+    return c.json({ error: "project_not_found" }, 404);
+  }
+  if (outcome.status === "conflict") {
+    return c.json(projectConfigConflict(orgId, projectId, outcome.current.revision), 409);
+  }
 
   const state = await new PgBudgetGate(pool).resolveBudget(projectId);
   const pauseObservation = await pauseObservationFor(pool, orgId, projectId, state);
@@ -175,5 +213,5 @@ export async function handleBudgetPut(
     }
   }
 
-  return c.json(toView(state, pauseObservation));
+  return c.json(toView(state, pauseObservation, outcome.revision));
 }
