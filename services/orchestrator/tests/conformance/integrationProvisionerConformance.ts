@@ -15,6 +15,10 @@ import type {
   OrgGrant,
   ProjectContext,
 } from "../../src/engine/contracts/integrationProvisioner.js";
+import type {
+  IntegrationOperationTarget,
+  IntegrationPrivilegedOperation,
+} from "../../src/engine/contracts/integrationAuthority.js";
 
 /**
  * What a per-implementation test file hands the suite. `make()` returns a FRESH
@@ -25,7 +29,11 @@ import type {
  */
 export interface IntegrationProvisionerHarness {
   make(): IntegrationProvisioner;
-  grant(): OrgGrant;
+  grant(
+    operation: IntegrationPrivilegedOperation,
+    projectCtx: ProjectContext,
+    target: IntegrationOperationTarget,
+  ): Promise<OrgGrant>;
   projectCtx(projectId: string): ProjectContext;
   /** The id of a resource the made provisioner already has (for the bind spec). */
   seededResourceId: string;
@@ -54,7 +62,8 @@ export function describeIntegrationProvisionerConformance(label: string, harness
     });
 
     it("discover() returns an array of well-formed ExistingResource", async () => {
-      const resources = await harness.make().discover(harness.grant());
+      const ctx = harness.projectCtx("proj_conf_discover");
+      const resources = await harness.make().discover(await harness.grant("discover", ctx, {}), ctx);
       expect(Array.isArray(resources)).toBe(true);
       resources.forEach((resource: ExistingResource) => {
         expect(typeof resource.id).toBe("string");
@@ -65,7 +74,9 @@ export function describeIntegrationProvisionerConformance(label: string, harness
 
     it("provision() returns a well-formed ProvisionedArtifact carrying only secret refs", async () => {
       const provisioner = harness.make();
-      const artifact = await provisioner.provision(harness.grant(), harness.projectCtx("proj_conf_1"));
+      const ctx = harness.projectCtx("proj_conf_1");
+      const target = { projectName: ctx.name ?? ctx.projectId, orgSlug: ctx.orgSlug, stack: ctx.stack };
+      const artifact = await provisioner.provision(await harness.grant("provision", ctx, target), ctx);
       expect(typeof artifact).toBe("object");
       expectArtifactNeverLeaksSecretValue(artifact.secretRefs);
     });
@@ -73,10 +84,11 @@ export function describeIntegrationProvisionerConformance(label: string, harness
     it("provision() is idempotent — re-running yields the SAME resource, never a duplicate", async () => {
       const provisioner = harness.make();
       const ctx = harness.projectCtx("proj_conf_idem");
-      const first = await provisioner.provision(harness.grant(), ctx);
-      const before = (await provisioner.discover(harness.grant())).length;
-      const second = await provisioner.provision(harness.grant(), ctx);
-      const after = (await provisioner.discover(harness.grant())).length;
+      const target = { projectName: ctx.name ?? ctx.projectId, orgSlug: ctx.orgSlug, stack: ctx.stack };
+      const first = await provisioner.provision(await harness.grant("provision", ctx, target), ctx);
+      const before = (await provisioner.discover(await harness.grant("discover", ctx, {}), ctx)).length;
+      const second = await provisioner.provision(await harness.grant("provision", ctx, target), ctx);
+      const after = (await provisioner.discover(await harness.grant("discover", ctx, {}), ctx)).length;
       // No new resource created on the second provision (find-or-create).
       expect(after).toBe(before);
       // The artifact identity is stable across re-provision.
@@ -85,27 +97,42 @@ export function describeIntegrationProvisionerConformance(label: string, harness
 
     it("provision() then discover() surfaces the created resource (brownfield can find it)", async () => {
       const provisioner = harness.make();
-      const before = (await provisioner.discover(harness.grant())).length;
-      await provisioner.provision(harness.grant(), harness.projectCtx("proj_conf_disc"));
-      const after = await provisioner.discover(harness.grant());
+      const ctx = harness.projectCtx("proj_conf_disc");
+      const before = (await provisioner.discover(await harness.grant("discover", ctx, {}), ctx)).length;
+      const target = { projectName: ctx.name ?? ctx.projectId, orgSlug: ctx.orgSlug, stack: ctx.stack };
+      await provisioner.provision(await harness.grant("provision", ctx, target), ctx);
+      const after = await provisioner.discover(await harness.grant("discover", ctx, {}), ctx);
       expect(after.length).toBe(before + 1);
     });
 
     it("bind() links an already-discovered resource and returns its artifact", async () => {
       const provisioner = harness.make();
-      const artifact = await provisioner.bind(
-        harness.grant(),
-        harness.seededResourceId,
-        harness.projectCtx("proj_conf_bind"),
-      );
+      const ctx = harness.projectCtx("proj_conf_bind");
+      const target = {
+        resourceId: harness.seededResourceId,
+        projectName: ctx.name ?? ctx.projectId,
+        orgSlug: ctx.orgSlug,
+        stack: ctx.stack,
+      };
+      const artifact = await provisioner.bind(await harness.grant("bind", ctx, target), harness.seededResourceId, ctx);
       expect(typeof artifact).toBe("object");
       expectArtifactNeverLeaksSecretValue(artifact.secretRefs);
     });
 
     it("bind() of an unknown resource id rejects (no silent success)", async () => {
       const provisioner = harness.make();
+      const ctx = harness.projectCtx("proj_conf_bind_miss");
       await expect(
-        provisioner.bind(harness.grant(), "does_not_exist", harness.projectCtx("proj_conf_bind_miss")),
+        provisioner.bind(
+          await harness.grant("bind", ctx, {
+            resourceId: "does_not_exist",
+            projectName: ctx.name ?? ctx.projectId,
+            orgSlug: ctx.orgSlug,
+            stack: ctx.stack,
+          }),
+          "does_not_exist",
+          ctx,
+        ),
       ).rejects.toThrow(Error);
     });
   });

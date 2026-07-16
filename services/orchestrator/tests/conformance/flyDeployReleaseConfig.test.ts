@@ -18,6 +18,7 @@ import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import { FlyDeployProvisioner, flyMachineConfig } from "../../src/engine/provisioners/flyDeployProvisioner.js";
 import { scriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
+import { projectIntegrationOperationTarget } from "../../src/engine/contracts/integrationAuthority.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
@@ -30,13 +31,6 @@ function secrets(): InMemorySecretStore {
   return store;
 }
 
-const flyGrant = testOrgGrant({
-  providerKind: "deploy.flyio",
-  credentialRef: `${TOKEN_REF}/g/1`,
-  metadata: { orgSlug: "acme" },
-  capability: "deploy",
-});
-
 // `orgSlug: "tanren"` is the test-org slug; task #27 prefixes the created app with it, so
 // projectName "acme-web" becomes the real app name "tanren-acme-web".
 const ctx = (name: string): ProjectContext => ({
@@ -46,6 +40,37 @@ const ctx = (name: string): ProjectContext => ({
   stack: "node",
   name,
 });
+const projectCtx = ctx("acme-web");
+const source = { repo: "acme/acme-web", ref: "main" };
+const metadata = { orgSlug: "acme", image: "registry.fly.io/tanren-acme-web:deadbeefcafe" };
+
+const provisionGrant = () =>
+  testOrgGrant({
+    providerKind: "deploy.flyio",
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata,
+    capability: "deploy",
+    operation: "provision",
+    target: projectIntegrationOperationTarget(projectCtx),
+    orgId: projectCtx.orgId,
+    projectId: projectCtx.projectId,
+  });
+
+const deployGrant = () =>
+  testOrgGrant({
+    providerKind: "deploy.flyio",
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata,
+    capability: "deploy",
+    operation: "deploy",
+    target: { resourceId: "fly_app_1", sourceRepo: source.repo, sourceRef: source.ref },
+    orgId: projectCtx.orgId,
+    projectId: projectCtx.projectId,
+  });
+
+async function provisionApp(prov: FlyDeployProvisioner): Promise<void> {
+  await prov.provision(await provisionGrant(), projectCtx);
+}
 
 describe("flyMachineConfig (release config shape)", () => {
   it("carries the image + guest + port-mapped services (80/443 → 3000) + an HTTP check", () => {
@@ -76,29 +101,20 @@ describe("flyMachineConfig (release config shape)", () => {
   });
 });
 
-// grant carrying a release image + a provisioner with the static-deploy opt-in ON, so the
-// deploy path reaches `triggerDeploy` (where allocation now lives).
-const flyGrantWithImage = testOrgGrant({
-  providerKind: flyGrant.providerKind,
-  credentialRef: flyGrant.eligibleOperation.credentialRef,
-  metadata: { ...flyGrant.metadata, image: "registry.fly.io/tanren-acme-web:deadbeefcafe" },
-  capability: "deploy",
-});
 function staticProv(transport: ReturnType<typeof scriptedDeployTransport>): FlyDeployProvisioner {
   return new FlyDeployProvisioner({ transport, secrets: secrets(), allowFlyStaticDeploy: true });
 }
-const source = { repo: "acme/acme-web", ref: "main" };
 
 describe("FlyDeployProvisioner — shared-IPv4 allocation (triggerDeploy)", () => {
   it("allocates a shared IPv4 on the DEPLOY path (not createApp), so brownfield/bind apps route too", async () => {
     const transport = scriptedDeployTransport("fly");
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     // createApp must NOT allocate — allocation on createApp would orphan the app on failure
     // and skip reused/`bind()` apps. It happens on triggerDeploy (every deploy path).
     expect(transport.allocateIpRequests()).toHaveLength(0);
 
-    await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    await prov.deploy(await deployGrant(), "fly_app_1", source);
     const requests = transport.allocateIpRequests();
     expect(requests).toHaveLength(1);
     expect(requests[0]!.url).toBe("https://api.fly.io/graphql");
@@ -118,10 +134,10 @@ describe("FlyDeployProvisioner — shared-IPv4 allocation (triggerDeploy)", () =
       json: { errors: [{ message: "Validation failed: App already has a shared IPv4 address" }] },
     });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     // shared_v4 is one-per-app: a duplicate-allocation error is the desired end state, so
     // triggerDeploy swallows it and the release proceeds (never a throw).
-    await expect(prov.deploy(flyGrantWithImage, "fly_app_1", source)).resolves.toBeDefined();
+    await expect(prov.deploy(await deployGrant(), "fly_app_1", source)).resolves.toBeDefined();
     expect(transport.allocateIpRequests()).toHaveLength(1);
   });
 
@@ -135,8 +151,10 @@ describe("FlyDeployProvisioner — shared-IPv4 allocation (triggerDeploy)", () =
       json: { errors: [{ message: "You have already reached your IP allocation limit for this organization" }] },
     });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
-    await expect(prov.deploy(flyGrantWithImage, "fly_app_1", source)).rejects.toThrow(/fly allocate shared IPv4 for/u);
+    await provisionApp(prov);
+    await expect(prov.deploy(await deployGrant(), "fly_app_1", source)).rejects.toThrow(
+      /fly allocate shared IPv4 for/u,
+    );
   });
 
   it("a MIXED error batch (one duplicate + one real error) throws — every-not-some", async () => {
@@ -151,25 +169,29 @@ describe("FlyDeployProvisioner — shared-IPv4 allocation (triggerDeploy)", () =
       },
     });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     // A batch where only SOME errors are duplicates means the allocation did NOT succeed.
-    await expect(prov.deploy(flyGrantWithImage, "fly_app_1", source)).rejects.toThrow(/fly allocate shared IPv4 for/u);
+    await expect(prov.deploy(await deployGrant(), "fly_app_1", source)).rejects.toThrow(
+      /fly allocate shared IPv4 for/u,
+    );
   });
 
   it("a malformed 2xx (no allocateIpAddress, no errors) throws — never an assumed-allocated", async () => {
     const transport = scriptedDeployTransport("fly");
     transport.scriptAllocateIpResponse({ status: 200, json: {} });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
-    await expect(prov.deploy(flyGrantWithImage, "fly_app_1", source)).rejects.toThrow(/malformed GraphQL 2xx/u);
+    await provisionApp(prov);
+    await expect(prov.deploy(await deployGrant(), "fly_app_1", source)).rejects.toThrow(/malformed GraphQL 2xx/u);
   });
 
   it("a non-2xx from the GraphQL endpoint throws LOUD", async () => {
     const transport = scriptedDeployTransport("fly");
     transport.scriptAllocateIpResponse({ status: 503, json: {}, text: "upstream unavailable" });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
-    await expect(prov.deploy(flyGrantWithImage, "fly_app_1", source)).rejects.toThrow(/fly allocate shared IPv4 for/u);
+    await provisionApp(prov);
+    await expect(prov.deploy(await deployGrant(), "fly_app_1", source)).rejects.toThrow(
+      /fly allocate shared IPv4 for/u,
+    );
   });
 
   it("the deploy token VALUE is never interpolated into an allocate error message", async () => {
@@ -181,10 +203,10 @@ describe("FlyDeployProvisioner — shared-IPv4 allocation (triggerDeploy)", () =
       json: { errors: [{ message: "forbidden: scope ip:write missing" }] },
     });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     let message = "";
     try {
-      await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+      await prov.deploy(await deployGrant(), "fly_app_1", source);
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
@@ -204,11 +226,11 @@ describe("FlyDeployProvisioner — machine reap (single-instance convergence, tr
   it("reaps every PRIOR machine (force=true) and keeps ONLY the newly-created one", async () => {
     const transport = scriptedDeployTransport("fly");
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     // Two prior releases each left their own machine behind (Fly never retires them).
     transport.seedMachines("tanren-acme-web", ["m_prior_1", "m_prior_2"]);
 
-    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    const result = await prov.deploy(await deployGrant(), "fly_app_1", source);
     // The new release created + returned machine `fly_deploy_1` — the one the reap must KEEP.
     expect(result.deploymentId).toBe("fly_deploy_1");
 
@@ -225,9 +247,9 @@ describe("FlyDeployProvisioner — machine reap (single-instance convergence, tr
   it("issues NO reap DELETE when the app has only the newly-created machine (nothing prior)", async () => {
     const transport = scriptedDeployTransport("fly");
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     // No seeded priors: the only machine after the release is the new one → nothing to reap.
-    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    const result = await prov.deploy(await deployGrant(), "fly_app_1", source);
     expect(result.deploymentId).toBe("fly_deploy_1");
     expect(transport.machinesDeleted()).toHaveLength(0);
     expect(transport.machineIdsFor("tanren-acme-web")).toEqual(["fly_deploy_1"]);
@@ -240,9 +262,9 @@ describe("FlyDeployProvisioner — machine reap (single-instance convergence, tr
     // new release is already live, so the deploy STILL succeeds and no machine is deleted.
     transport.scriptMachinesListResponse({ status: 500, json: {}, text: "machines list unavailable" });
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
 
-    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    const result = await prov.deploy(await deployGrant(), "fly_app_1", source);
     expect(result.deploymentId).toBe("fly_deploy_1");
     expect(transport.machinesDeleted()).toHaveLength(0);
   });
@@ -250,13 +272,13 @@ describe("FlyDeployProvisioner — machine reap (single-instance convergence, tr
   it("a single reap DELETE rejecting does NOT fail the deploy and does NOT stop the other reaps", async () => {
     const transport = scriptedDeployTransport("fly");
     const prov = staticProv(transport);
-    await prov.provision(flyGrantWithImage, ctx("acme-web"));
+    await provisionApp(prov);
     transport.seedMachines("tanren-acme-web", ["m_prior_1", "m_prior_2"]);
     // The DELETE of one prior machine rejects at the transport — best-effort per DELETE, so the
     // deploy still succeeds AND the other prior machine is still reaped.
     transport.throwOnMachineDelete("m_prior_1");
 
-    const result = await prov.deploy(flyGrantWithImage, "fly_app_1", source);
+    const result = await prov.deploy(await deployGrant(), "fly_app_1", source);
     expect(result.deploymentId).toBe("fly_deploy_1");
     // The surviving-attempt DELETE (m_prior_2) was still recorded; the rejected one was not.
     expect(transport.machinesDeleted().map((d) => d.machineId)).toEqual(["m_prior_2"]);

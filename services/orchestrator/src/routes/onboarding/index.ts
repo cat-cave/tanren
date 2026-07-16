@@ -78,7 +78,6 @@ import {
 } from "../projects/greenfield.js";
 import { deleteGreenfieldRepository } from "../projects/greenfieldRepoDelete.js";
 import { probeGreenfieldRepositoryBareAutoInit } from "../projects/greenfieldRepoProbe.js";
-import { destroyGreenfieldDeployApp } from "../projects/greenfieldDeployDestroy.js";
 import { persistGreenfieldDeploySelection } from "../projects/greenfieldDeployAuthority.js";
 
 export interface OnboardingRoutesOptions {
@@ -231,19 +230,6 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
             options.persistDeploySelection ??
             (async (selection) => {
               await persistGreenfieldDeploySelection(options.pool, selection, actor.userId);
-            }),
-          // TASK #78 — derive transactional rollback. Threads the deploy-DESTROY
-          // compensation through the same org grant + provisioner registry the
-          // prepareDeploy uses, so a derive that provisions a deploy app + then
-          // fails later in the call destroys it before re-raising.
-          destroyDeployApp: (target) =>
-            destroyGreenfieldDeployApp({
-              pool: options.pool,
-              secrets: options.secrets,
-              orgId,
-              projectId: target.projectId,
-              actorId: actor.userId,
-              target,
             }),
           // WS-D3: resolve the design agent for THIS org so the derive's design phase
           // elaborates the captured intent into the designed HEAD `DesignContract`.

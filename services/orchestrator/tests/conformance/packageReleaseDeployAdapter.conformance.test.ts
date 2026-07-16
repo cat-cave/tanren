@@ -7,8 +7,13 @@ import { testOrgGrant } from "../helpers/orgGrant.js";
 
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
+import {
+  projectIntegrationOperationTarget,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../../src/engine/contracts/integrationAuthority.js";
 import {
   PackageReleaseDeployAdapter,
   PACKAGE_RELEASE_PROVIDER_KIND,
@@ -27,12 +32,7 @@ function secrets(): InMemorySecretStore {
   return store;
 }
 
-const grant = testOrgGrant({
-  providerKind: PACKAGE_RELEASE_PROVIDER_KIND,
-  credentialRef: `${TOKEN_REF}/g/1`,
-  metadata: { packageRegistry: "npm", packageName: "@acme/web" },
-  capability: "deploy",
-});
+const METADATA = { packageRegistry: "npm", packageName: "@acme/web" };
 
 const ctx = (name: string): ProjectContext => ({
   projectId: `proj_${name}`,
@@ -40,6 +40,24 @@ const ctx = (name: string): ProjectContext => ({
   orgSlug: "tanren",
   name,
 });
+const authorityCtx = ctx("authority");
+
+const operationGrant = (
+  operation: IntegrationPrivilegedOperation,
+  target: IntegrationOperationTarget,
+  metadata: Record<string, unknown> = METADATA,
+  owner: ProjectContext = authorityCtx,
+) =>
+  testOrgGrant({
+    providerKind: PACKAGE_RELEASE_PROVIDER_KIND,
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata,
+    capability: "deploy",
+    operation,
+    target,
+    orgId: owner.orgId,
+    projectId: owner.projectId,
+  });
 
 function adapter(registry = scriptedPackageRegistry()) {
   const instance = new PackageReleaseDeployAdapter({
@@ -53,7 +71,12 @@ function adapter(registry = scriptedPackageRegistry()) {
 describe("PackageReleaseDeployAdapter — lifecycle", () => {
   it("provisionOrBind(provision) binds the grant-declared package coordinate", async () => {
     const { instance } = adapter();
-    const artifact = await instance.provisionOrBind(grant, ctx("acme-web"), { mode: "provision" });
+    const projectCtx = ctx("acme-web");
+    const artifact = await instance.provisionOrBind(
+      await operationGrant("provision", projectIntegrationOperationTarget(projectCtx), METADATA, projectCtx),
+      projectCtx,
+      { mode: "provision" },
+    );
     expect(artifact.deployRef?.provider).toBe(PACKAGE_RELEASE_PROVIDER_KIND);
     expect(artifact.deployRef?.appId).toBe("@acme/web");
     expect(artifact.projectConfig?.["packageRegistry"]).toBe("npm");
@@ -62,14 +85,24 @@ describe("PackageReleaseDeployAdapter — lifecycle", () => {
 
   it("provisionOrBind(bind) links an already-discovered package name", async () => {
     const { instance } = adapter();
-    const artifact = await instance.provisionOrBind(grant, ctx("x"), { mode: "bind", existingResourceId: "@acme/cli" });
+    const projectCtx = ctx("x");
+    const artifact = await instance.provisionOrBind(
+      await operationGrant("bind", projectIntegrationOperationTarget(projectCtx, "@acme/cli"), METADATA, projectCtx),
+      projectCtx,
+      { mode: "bind", existingResourceId: "@acme/cli" },
+    );
     expect(artifact.deployRef?.appId).toBe("@acme/cli");
   });
 
   it("deploy publishes to the registry and returns the installable coordinate", async () => {
     const { instance } = adapter();
     const ref: DeployRef = { provider: PACKAGE_RELEASE_PROVIDER_KIND, appId: "@acme/web" };
-    const result = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "deadbeef0000" });
+    const source = { repo: "acme/acme-web", ref: "deadbeef0000" };
+    const result = await instance.deploy(
+      await operationGrant("deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref }),
+      ref,
+      source,
+    );
     expect(result.deploymentId).toBe("@acme/web@0.0.0-deadbee");
     expect(result.url).toBe("@acme/web@0.0.0-deadbee");
     expect(result.state).toBe("published");
@@ -78,13 +111,22 @@ describe("PackageReleaseDeployAdapter — lifecycle", () => {
 
 describe("PackageReleaseDeployAdapter — verify + surface", () => {
   const ref: DeployRef = { provider: PACKAGE_RELEASE_PROVIDER_KIND, appId: "@acme/web" };
+  const source = { repo: "acme/acme-web", ref: "deadbeef0000" };
 
   it("polls until the registry resolves the version then proves the release", async () => {
     const registry = scriptedPackageRegistry();
     const { instance } = adapter(registry);
-    const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "deadbeef0000" });
+    const { deploymentId } = await instance.deploy(
+      await operationGrant("deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref }),
+      ref,
+      source,
+    );
     registry.scriptResolvable("0.0.0-deadbee", [false, false, true]);
-    const verification = await instance.verify(grant, ref, deploymentId);
+    const verification = await instance.verify(
+      await operationGrant("verify", { resourceId: ref.appId, deploymentId }),
+      ref,
+      deploymentId,
+    );
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("resolvable");
     expect(verification.url).toBe("@acme/web@0.0.0-deadbee");
@@ -94,17 +136,31 @@ describe("PackageReleaseDeployAdapter — verify + surface", () => {
   it("escalates LOUD as STUCK (not on a count) when the version never resolves", async () => {
     const registry = scriptedPackageRegistry();
     const { instance } = adapter(registry);
-    const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "deadbeef0000" });
+    const { deploymentId } = await instance.deploy(
+      await operationGrant("deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref }),
+      ref,
+      source,
+    );
     registry.scriptResolvable("0.0.0-deadbee", [false]);
-    await expect(instance.verify(grant, ref, deploymentId)).rejects.toThrow(/is STUCK unresolvable on the registry/u);
+    await expect(
+      instance.verify(await operationGrant("verify", { resourceId: ref.appId, deploymentId }), ref, deploymentId),
+    ).rejects.toThrow(/is STUCK unresolvable on the registry/u);
   });
 
   it("resolves a package demo surface (registry + coordinate)", async () => {
     const registry = scriptedPackageRegistry();
     const { instance } = adapter(registry);
-    const { deploymentId } = await instance.deploy(grant, ref, { repo: "acme/acme-web", ref: "deadbeef0000" });
+    const { deploymentId } = await instance.deploy(
+      await operationGrant("deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref }),
+      ref,
+      source,
+    );
     registry.scriptResolvable("0.0.0-deadbee", [true]);
-    const surface = await instance.demoSurface(grant, ref, deploymentId);
+    const surface = await instance.demoSurface(
+      await operationGrant("resolve_demo_surface", { resourceId: ref.appId, deploymentId }),
+      ref,
+      deploymentId,
+    );
     expect(surface).toEqual({ kind: "package", registry: "npm", coordinate: "@acme/web@0.0.0-deadbee" });
   });
 });
@@ -115,7 +171,11 @@ describe("PackageReleaseDeployAdapter — loud fail on missing config", () => {
 
   it("throws when the registry is absent", async () => {
     const { instance } = adapter();
-    const noRegistry: OrgGrant = { ...grant, metadata: { packageName: "@acme/web" } };
+    const noRegistry = await operationGrant(
+      "deploy",
+      { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref },
+      { packageName: "@acme/web" },
+    );
     await expect(instance.deploy(noRegistry, ref, source)).rejects.toThrow(
       /required config 'packageRegistry' is not set/u,
     );
@@ -123,8 +183,14 @@ describe("PackageReleaseDeployAdapter — loud fail on missing config", () => {
 
   it("throws when the package name is absent (on provision)", async () => {
     const { instance } = adapter();
-    const noName: OrgGrant = { ...grant, metadata: { packageRegistry: "npm" } };
-    await expect(instance.provisionOrBind(noName, ctx("x"), { mode: "provision" })).rejects.toThrow(
+    const projectCtx = ctx("x");
+    const noName = await operationGrant(
+      "provision",
+      projectIntegrationOperationTarget(projectCtx),
+      { packageRegistry: "npm" },
+      projectCtx,
+    );
+    await expect(instance.provisionOrBind(noName, projectCtx, { mode: "provision" })).rejects.toThrow(
       /required config 'packageName' is not set/u,
     );
   });
@@ -135,6 +201,12 @@ describe("PackageReleaseDeployAdapter — loud fail on missing config", () => {
       secrets: new InMemorySecretStore(),
       poll: instantVerifyPollPolicy(),
     });
-    await expect(instance.deploy(grant, ref, source)).rejects.toThrow(/missing integration secret for generation/u);
+    await expect(
+      instance.deploy(
+        await operationGrant("deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref }),
+        ref,
+        source,
+      ),
+    ).rejects.toThrow(/missing integration secret for generation/u);
   });
 });

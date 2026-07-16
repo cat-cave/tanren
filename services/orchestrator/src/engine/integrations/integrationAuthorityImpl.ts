@@ -1,106 +1,135 @@
 import { randomUUID } from "node:crypto";
 import { catalogOperation, integrationCatalogRevision, isKnownProviderKind } from "../contracts/integrationCatalog.js";
 import {
-  issueEligibleOperationLease,
-  issuePrincipalVerificationPermit,
   type AuthorizeOperationInput,
   type AuthorizeOperationResult,
   type AuthorizePrincipalVerificationInput,
+  type EligibleOperationExpectation,
+  type EligibleOperationLease,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+  type IntegrationResourceConstraints,
   IntegrationIdempotencyConflictError,
   type IntegrationAuthority,
+  type PrincipalVerificationPermit,
+  type ResumePrincipalVerificationInput,
   type SanitizedConnectionCandidate,
 } from "../contracts/integrationAuthority.js";
 import { integrationStagedSecretRef } from "../contracts/integrationSecretStore.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
+import {
+  integrationOperationTargetsEqual,
+  normalizeIntegrationOperationTarget,
+  parseIntegrationResourceConstraints,
+} from "./integrationAuthorityValidation.js";
+import {
+  INTEGRATION_ELIGIBILITY_SQL,
+  type IntegrationEligibilityRow as EligibilityRow,
+} from "./integrationAuthorityEligibility.js";
 
 function actorId(actor: { id?: string; label?: string; kind: string }): string {
   return actor.id ?? actor.label ?? actor.kind;
 }
 
-const ELIGIBILITY_SQL = `
-SELECT
-  c.id AS connection_id,
-  c.provider_kind,
-  c.provider_principal_id,
-  c.display_name,
-  c.principal_metadata,
-  c.health AS connection_health,
-  c.status AS connection_status,
-  c.current_auth_generation,
-  g.id AS grant_id,
-  g.current_generation AS grant_current_generation,
-  g.status AS grant_status,
-  g.plane,
-  g.environment,
-  ag.credential_ref,
-  ag.expires_at AS auth_expires_at,
-  ag.status AS auth_status,
-  gg.capabilities,
-  gg.operations,
-  gg.provider_scopes,
-  gg.resource_constraints,
-  gg.policy_revision,
-  gg.consent_revision,
-  gg.expires_at AS grant_expires_at,
-  gg.status AS grant_generation_status,
-  s.auth_generation AS selected_auth_generation,
-  s.grant_generation AS selected_grant_generation,
-  s.connection_id AS selected_connection_id,
-  s.grant_id AS selected_grant_id
-FROM org_integration_connections c
-JOIN org_integration_grants g
-  ON g.org_id = c.org_id AND g.provider_kind = c.provider_kind AND g.connection_id = c.id
-LEFT JOIN org_integration_connection_auth_generations ag
-  ON ag.org_id = c.org_id AND ag.provider_kind = c.provider_kind
- AND ag.connection_id = c.id AND ag.generation = c.current_auth_generation
-LEFT JOIN org_integration_grant_generations gg
-  ON gg.org_id = g.org_id AND gg.provider_kind = g.provider_kind
- AND gg.connection_id = g.connection_id AND gg.grant_id = g.id
- AND gg.generation = g.current_generation
-LEFT JOIN project_integration_grant_selections s
-  ON s.org_id = c.org_id AND s.project_id = $2 AND s.provider_kind = c.provider_kind
-WHERE c.org_id = $1 AND c.provider_kind = $3
-  AND g.plane = 'control' AND g.environment = 'control'
-ORDER BY c.provider_principal_id, g.id
-`;
+const authenticPrincipalPermits = new WeakSet();
+const authenticOperationLeases = new WeakSet();
+const OPERATION_LEASE_TTL_MS = 30_000;
 
-type EligibilityRow = {
-  connection_id: string;
-  provider_kind: string;
-  provider_principal_id: string;
-  display_name: string;
-  principal_metadata: Record<string, unknown>;
-  connection_health: string;
-  connection_status: string;
-  current_auth_generation: number | null;
-  grant_id: string;
-  grant_current_generation: number | null;
-  grant_status: string;
-  plane: string;
-  environment: string;
-  credential_ref: string | null;
-  auth_expires_at: Date | string | null;
-  auth_status: string | null;
-  capabilities: string[] | null;
-  operations: string[] | null;
-  provider_scopes: string[] | null;
-  resource_constraints: Record<string, unknown> | null;
-  policy_revision: string | null;
-  consent_revision: string | null;
-  grant_expires_at: Date | string | null;
-  grant_generation_status: string | null;
-  selected_auth_generation: number | null;
-  selected_grant_generation: number | null;
-  selected_connection_id: string | null;
-  selected_grant_id: string | null;
-};
+function issuePrincipalVerificationPermit(fields: {
+  orgId: string;
+  providerKind: string;
+  operationId: string;
+  actorId: string;
+  stagedSecretHandle: string;
+}): PrincipalVerificationPermit {
+  const permit = Object.freeze({ ...fields }) as PrincipalVerificationPermit;
+  authenticPrincipalPermits.add(permit);
+  return permit;
+}
+
+function issueEligibleOperationLease(fields: {
+  orgId: string;
+  projectId: string;
+  providerKind: string;
+  connectionId: string;
+  grantId: string;
+  authGeneration: number;
+  grantGeneration: number;
+  credentialRef: string;
+  capability: string;
+  operation: IntegrationPrivilegedOperation;
+  target: IntegrationOperationTarget;
+  resourceConstraints: IntegrationResourceConstraints;
+  authorizedAt: string;
+  expiresAt: string;
+  providerPrincipalId: string;
+  principalMetadata: Record<string, unknown>;
+  policyRevision: string;
+  consentRevision: string;
+}): EligibleOperationLease {
+  const constraints = Object.freeze({
+    ...fields.resourceConstraints,
+    resourceIds:
+      fields.resourceConstraints.resourceIds === "*" ? "*" : Object.freeze([...fields.resourceConstraints.resourceIds]),
+    environments:
+      fields.resourceConstraints.environments === "*"
+        ? "*"
+        : Object.freeze([...fields.resourceConstraints.environments]),
+  });
+  const lease = Object.freeze({
+    ...fields,
+    target: Object.freeze({ ...fields.target }),
+    resourceConstraints: constraints,
+    principalMetadata: Object.freeze({ ...fields.principalMetadata }),
+  }) as unknown as EligibleOperationLease;
+  authenticOperationLeases.add(lease);
+  return lease;
+}
+
+export function assertPrincipalVerificationPermit(
+  value: PrincipalVerificationPermit,
+): asserts value is PrincipalVerificationPermit {
+  if (typeof value !== "object" || value === null || !authenticPrincipalPermits.has(value)) {
+    throw new Error("invalid principal verification permit");
+  }
+}
+
+/** Validate authenticity, freshness, and every exact operation binding before I/O. */
+export function assertEligibleOperationLease(
+  value: EligibleOperationLease,
+  expected: EligibleOperationExpectation,
+  now = new Date(),
+): asserts value is EligibleOperationLease {
+  if (typeof value !== "object" || value === null || !authenticOperationLeases.has(value)) {
+    throw new Error("invalid eligible operation lease");
+  }
+  if (new Date(value.expiresAt).getTime() <= now.getTime()) {
+    throw new Error("eligible operation lease expired");
+  }
+  if (
+    value.orgId !== expected.orgId ||
+    value.projectId !== expected.projectId ||
+    value.providerKind !== expected.providerKind ||
+    value.capability !== expected.capability ||
+    value.operation !== expected.operation ||
+    !integrationOperationTargetsEqual(value.target, expected.target)
+  ) {
+    throw new Error("eligible operation lease binding mismatch");
+  }
+}
 
 function asDate(value: Date | string | null | undefined): Date | undefined {
   if (value === null || value === undefined) return undefined;
   return value instanceof Date ? value : new Date(value);
 }
 
-function ineligibilityReasons(row: EligibilityRow, capability: string, operation: string, now: Date): string[] {
+function ineligibilityReasons(
+  row: EligibilityRow,
+  capability: string,
+  operation: string,
+  target: IntegrationOperationTarget,
+  now: Date,
+): { reasons: string[]; constraints?: IntegrationResourceConstraints } {
   const reasons: string[] = [];
   if (row.connection_status !== "active") reasons.push("connection_not_active");
   if (row.connection_health === "invalid" || row.connection_health === "degraded") {
@@ -141,7 +170,26 @@ function ineligibilityReasons(row: EligibilityRow, capability: string, operation
   if (row.credential_ref === null || row.credential_ref === "") {
     reasons.push("credential_ref_missing");
   }
-  return reasons;
+  const constraints = parseIntegrationResourceConstraints(row.resource_constraints);
+  if (constraints === undefined) {
+    reasons.push("unsupported_resource_constraints");
+  } else {
+    if (
+      target.resourceId !== undefined &&
+      constraints.resourceIds !== "*" &&
+      !constraints.resourceIds.includes(target.resourceId)
+    ) {
+      reasons.push("resource_not_allowed");
+    }
+    if (
+      target.environment !== undefined &&
+      constraints.environments !== "*" &&
+      !constraints.environments.includes(target.environment)
+    ) {
+      reasons.push("environment_not_allowed");
+    }
+  }
+  return { reasons, ...(constraints === undefined ? {} : { constraints }) };
 }
 
 function isSelectionTarget(row: EligibilityRow): boolean {
@@ -243,6 +291,47 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     });
   }
 
+  async resumePrincipalVerification(
+    client: IntegrationQueryClient,
+    input: ResumePrincipalVerificationInput,
+  ): Promise<PrincipalVerificationPermit> {
+    const result = await client.query(
+      `SELECT id, provider_kind, actor_id, staged_secret_handle, stage, status
+       FROM org_integration_connection_operations
+       WHERE org_id = $1 AND id = $2`,
+      [input.orgId, input.operationId],
+    );
+    const row = result.rows[0] as
+      | {
+          id: string;
+          provider_kind: string;
+          actor_id: string;
+          staged_secret_handle: string | null;
+          stage: string;
+          status: string;
+        }
+      | undefined;
+    if (row === undefined) throw new Error("integration operation not found");
+    if (!isKnownProviderKind(row.provider_kind)) throw new Error("integration operation provider is unknown");
+    if (["failed", "compensated"].includes(row.status)) {
+      throw new Error("integration operation is terminal and cannot resume verification");
+    }
+    if (
+      !["staged", "verifying", "awaiting_principal_selection", "finalizing", "activate_pending", "completed"].includes(
+        row.stage,
+      )
+    ) {
+      throw new Error("integration operation stage cannot resume verification");
+    }
+    return issuePrincipalVerificationPermit({
+      orgId: input.orgId,
+      providerKind: row.provider_kind,
+      operationId: row.id,
+      actorId: row.actor_id,
+      stagedSecretHandle: row.staged_secret_handle ?? integrationStagedSecretRef(row.id),
+    });
+  }
+
   async authorizeOperation(
     client: IntegrationQueryClient,
     input: AuthorizeOperationInput,
@@ -253,14 +342,24 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
     if (catalogOperation(input.providerKind, input.capability, input.operation) === undefined) {
       return { status: "ineligible", reasons: ["unknown_catalog_operation"] };
     }
-    const result = await client.query(ELIGIBILITY_SQL, [input.orgId, input.projectId, input.providerKind]);
+    const target = normalizeIntegrationOperationTarget(input.operation, input.target);
+    if (target === undefined) {
+      return { status: "ineligible", reasons: ["invalid_operation_target"] };
+    }
+    const result = await client.query(INTEGRATION_ELIGIBILITY_SQL, [input.orgId, input.projectId, input.providerKind]);
     const rows = result.rows as EligibilityRow[];
     if (rows.length === 0) return { status: "not_linked" };
 
     const now = new Date();
     const evaluated = rows.map((row) => {
-      const reasons = ineligibilityReasons(row, input.capability, input.operation, now);
-      return { row, reasons, selected: isSelectionTarget(row), eligible: reasons.length === 0 };
+      const evaluation = ineligibilityReasons(row, input.capability, input.operation, target, now);
+      return {
+        row,
+        reasons: evaluation.reasons,
+        constraints: evaluation.constraints,
+        selected: isSelectionTarget(row),
+        eligible: evaluation.reasons.length === 0,
+      };
     });
 
     const selected = evaluated.find((item) => item.selected);
@@ -299,6 +398,10 @@ export class PgIntegrationAuthority implements IntegrationAuthority {
           credentialRef: selected.row.credential_ref!,
           capability: input.capability,
           operation: input.operation,
+          target,
+          resourceConstraints: selected.constraints!,
+          authorizedAt: now.toISOString(),
+          expiresAt: new Date(now.getTime() + OPERATION_LEASE_TTL_MS).toISOString(),
           providerPrincipalId: selected.row.provider_principal_id,
           principalMetadata: selected.row.principal_metadata ?? {},
           policyRevision: selected.row.policy_revision!,

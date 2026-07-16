@@ -1,3 +1,4 @@
+import type { IntegrationResourceConstraints } from "../contracts/integrationAuthority.js";
 import type { IntegrationQueryClient } from "./integrationQuery.js";
 
 function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
@@ -11,6 +12,26 @@ function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
 function instantsEqual(left: Date | string | null, right: string | undefined): boolean {
   if (left === null || right === undefined) return left === null && right === undefined;
   return new Date(left).getTime() === new Date(right).getTime();
+}
+
+function constraintSetEqual(actual: unknown, expected: "*" | readonly string[]): boolean {
+  return expected === "*"
+    ? actual === "*"
+    : Array.isArray(actual) &&
+        actual.length === expected.length &&
+        actual.every((item, index) => item === expected[index]);
+}
+
+function resourceConstraintsEqual(actual: unknown, expected: IntegrationResourceConstraints): boolean {
+  if (typeof actual !== "object" || actual === null || Array.isArray(actual)) return false;
+  const row = actual as Record<string, unknown>;
+  return (
+    Object.keys(row).length === 4 &&
+    row["version"] === expected.version &&
+    row["projectBinding"] === expected.projectBinding &&
+    constraintSetEqual(row["resourceIds"], expected.resourceIds) &&
+    constraintSetEqual(row["environments"], expected.environments)
+  );
 }
 
 export async function assertIdenticalAuthGeneration(
@@ -58,6 +79,7 @@ export async function assertIdenticalGrantGeneration(
     capabilities: string[];
     operations: string[];
     scopes: string[];
+    resourceConstraints: IntegrationResourceConstraints;
     policyRevision: string;
     consentRevision: string;
     consentActorId: string;
@@ -93,7 +115,7 @@ export async function assertIdenticalGrantGeneration(
     row.policy_revision !== expected.policyRevision ||
     row.consent_revision !== expected.consentRevision ||
     row.consent_actor_id !== expected.consentActorId ||
-    Object.keys(row.resource_constraints).length > 0 ||
+    !resourceConstraintsEqual(row.resource_constraints, expected.resourceConstraints) ||
     !instantsEqual(row.consented_at, expected.consentedAt) ||
     !instantsEqual(row.expires_at, expected.expiresAt) ||
     !arraysEqual(row.capabilities, expected.capabilities) ||

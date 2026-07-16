@@ -24,6 +24,7 @@ import {
   type ProvisioningEngineDeps,
 } from "../src/engine/integrations/provisioningEngine.js";
 import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
+import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
 
 const ORG = "org_int_1";
 const PROJECT = "proj_int_1";
@@ -82,9 +83,9 @@ function stubClient(state: StubState): IntegrationQueryClient {
           auth_expires_at: null,
           auth_status: "active",
           capabilities: ["errors", "notify", "deploy"],
-          operations: ["discover", "provision", "bind", "teardown"],
+          operations: ["discover", "provision", "bind"],
           provider_scopes: ["project:read", "project:write"],
-          resource_constraints: {},
+          resource_constraints: defaultIntegrationResourceConstraints(),
           policy_revision: "integration-catalog.v1",
           consent_revision: "consent.test",
           grant_expires_at: null,

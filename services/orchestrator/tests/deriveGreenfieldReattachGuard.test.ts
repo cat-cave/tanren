@@ -122,7 +122,6 @@ describe("derive — GREENFIELD RE-ATTACH GUARD (apex v84)", () => {
         materializeTemplate: materialize,
         createRepository: createRepositoryAlreadyExists,
         deleteRepository: async () => {},
-        destroyDeployApp: async () => {},
         // BARE: the repo is the stranded, empty auto_init seed → re-attach is safe.
         probeRepoBareAutoInit: async () => true,
       },
@@ -153,7 +152,6 @@ describe("derive — GREENFIELD RE-ATTACH GUARD (apex v84)", () => {
           materializeTemplate: materialize,
           createRepository: createRepositoryAlreadyExists,
           deleteRepository: async () => {},
-          destroyDeployApp: async () => {},
           // CONTAMINATED: the repo already carries a prior run's compose history → reject.
           probeRepoBareAutoInit: async () => false,
         },
@@ -184,7 +182,6 @@ describe("derive — GREENFIELD RE-ATTACH GUARD (apex v84)", () => {
           materializeTemplate: materialize,
           createRepository: createRepositoryAlreadyExists,
           deleteRepository: async () => {},
-          destroyDeployApp: async () => {},
           // No probeRepoBareAutoInit wired.
         },
       ),

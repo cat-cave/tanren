@@ -30,7 +30,7 @@ import type {
   PersistDeploySelectionCallback,
   PrepareDeployCallback,
 } from "./deployDependency.js";
-import type { DeleteRepositoryCallback, DestroyDeployAppCallback } from "./deriveCompensation.js";
+import type { DeleteRepositoryCallback } from "./deriveCompensation.js";
 import type { FragmentAuthoring, FragmentLibrary, MaterializeTemplate } from "../../templates/fragments/index.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
@@ -167,11 +167,6 @@ export interface DeriveFromCaptureInput {
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
   persistDeploySelection?: PersistDeploySelectionCallback;
-  // COMPENSATION (task #78 — derive atomic rollback). Threaded into
-  // `deriveProductGraph` so the derive registers a rollback for the provisioned
-  // deploy app + destroys it if a later step throws. Required in production
-  // whenever `prepareDeploy` is wired.
-  destroyDeployApp?: DestroyDeployAppCallback;
   // The COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md). Every
   // greenfield derive composes a fragment-based template from the captured
   // lifecycle and materializes it into a fresh seed repo via this seam.
@@ -207,7 +202,6 @@ export async function deriveFromCapture(
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
     ...(input.persistDeploySelection === undefined ? {} : { persistDeploySelection: input.persistDeploySelection }),
-    ...(input.destroyDeployApp === undefined ? {} : { destroyDeployApp: input.destroyDeployApp }),
     ...(input.materializeTemplate === undefined ? {} : { materializeTemplate: input.materializeTemplate }),
     ...(input.fragmentLibrary === undefined ? {} : { fragmentLibrary: input.fragmentLibrary }),
     ...(input.runFragmentAuthoring === undefined ? {} : { runFragmentAuthoring: input.runFragmentAuthoring }),

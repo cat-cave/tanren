@@ -6,10 +6,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { InMemorySecretStore } from "../src/engine/contracts/secretStore.js";
-import {
-  issueEligibleOperationLease,
-  issuePrincipalVerificationPermit,
-} from "../src/engine/contracts/integrationAuthority.js";
 import { integrationCatalogRevision } from "../src/engine/contracts/integrationCatalog.js";
 import { GenerationAddressedIntegrationSecretStore } from "../src/engine/integrations/integrationSecretStoreImpl.js";
 import {
@@ -20,6 +16,7 @@ import {
 import { PgIntegrationAuthority } from "../src/engine/integrations/integrationAuthorityImpl.js";
 import { IntegrationMemoryDb } from "./helpers/integrationMemoryDb.js";
 import { secretValueForLease } from "../src/engine/repositories/integrationConnectionResolve.js";
+import { testOrgGrant, testPrincipalVerificationPermit } from "./helpers/orgGrant.js";
 
 const SRC_ROOT = resolve(import.meta.dirname, "../src");
 
@@ -63,9 +60,9 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     expect(greenfieldAuth).toContain("authorizeGreenfieldDeploy");
     expect(greenfieldAuth).not.toMatch(/candidates\[0\]/u);
 
-    const destroy = readSrc("routes/projects/greenfieldDeployDestroy.ts");
-    expect(destroy).toContain("authorizeGreenfieldDeploy");
-    expect(destroy).not.toContain("resolveExactControlGrant");
+    // Durable derivation receipts own provisioned apps after the project shell
+    // exists. A late compensation destroy path would violate replay ownership.
+    expect(() => readSrc("routes/projects/greenfieldDeployDestroy.ts")).toThrow(/ENOENT/u);
 
     // Integration provisioner token paths must use secretValueForLease / getExact.
     for (const rel of [
@@ -74,7 +71,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       "engine/provisioners/deployProvisioner.ts",
     ]) {
       const text = readSrc(rel);
-      expect(text).toContain("secretValueForLease");
+      expect(text).toMatch(/secretValueFor(?:Lease|DeployOperation)/u);
       expect(text).not.toMatch(/secrets\.get\(\s*grant\.eligibleOperation\.credentialRef/u);
     }
   });
@@ -138,6 +135,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       providerKind: "slack",
       capability: "notify",
       operation: "provision",
+      target: { projectName: "proj-1", orgSlug: "org-1" },
       actor: { kind: "operator", id: "admin" },
     });
     expect(result.status).toBe("selection_required");
@@ -203,6 +201,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
       providerKind: "slack",
       capability: "notify",
       operation: "provision",
+      target: { projectName: "proj-1", orgSlug: "org-1" },
       actor: { kind: "operator" as const, id: "admin" },
     };
     const unselected = await authority.authorizeOperation(db.clientForOrg("org-1"), input);
@@ -239,13 +238,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
   it("Slack verified scopes make notify operations eligible; empty scopes fail", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-slack", "xoxb-token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "slack",
-      operationId: "op-slack",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "slack", operationId: "op-slack" });
     const fetchWithScopes = vi.fn<typeof fetch>(
       async () =>
         new Response(JSON.stringify({ ok: true, team_id: "T1", team: "Acme", user_id: "U1" }), {
@@ -271,13 +264,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
         }),
     );
     const staged2 = await secrets.stage("op-slack-2", "xoxb-token");
-    const permit2 = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "slack",
-      operationId: "op-slack-2",
-      actorId: "admin",
-      stagedSecretHandle: staged2.handle,
-    });
+    const permit2 = await testPrincipalVerificationPermit({ providerKind: "slack", operationId: "op-slack-2" });
     const bad = await new SlackPrincipalVerifier(fetchNoScopes as unknown as typeof fetch).verify(
       permit2,
       staged2,
@@ -289,13 +276,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
   it("Sentry multi-principal never guesses or borrows scopes before selection", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-sentry", "token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "sentry",
-      operationId: "op-sentry",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "sentry", operationId: "op-sentry" });
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.match(/\/organizations\/[^/?]+\/$/u) || url.match(/\/organizations\/[^/?]+\?$/u)) {
@@ -387,13 +368,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
   it("Fly multi-org paginates via pageInfo and never sole-principal collapses", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-fly", "token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "deploy.flyio",
-      operationId: "op-fly",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "deploy.flyio", operationId: "op-fly" });
     let page = 0;
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { variables?: { after?: string | null } };
@@ -431,13 +406,7 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
   it("Vercel team fetch non-OK fails loud (never silent user-only downgrade)", async () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(new InMemorySecretStore());
     const staged = await secrets.stage("op-vercel", "token");
-    const permit = issuePrincipalVerificationPermit({
-      orgId: "org-1",
-      providerKind: "deploy.vercel",
-      operationId: "op-vercel",
-      actorId: "admin",
-      stagedSecretHandle: staged.handle,
-    });
+    const permit = await testPrincipalVerificationPermit({ providerKind: "deploy.vercel", operationId: "op-vercel" });
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.includes("/v2/user")) {
@@ -458,27 +427,44 @@ describe("IN-1 P0 convergence — former-bug proofs", () => {
     const secrets = new GenerationAddressedIntegrationSecretStore(base);
     await base.put({ ref: "secret://org/o/integration/slack/connection/c/token/g/1", value: "gen1" });
     await base.put({ ref: "secret://org/o/integration/slack/connection/c/token/g/2", value: "gen2" });
-    const lease = issueEligibleOperationLease({
+    const target = { projectName: "p", orgSlug: "o" } as const;
+    const first = await testOrgGrant({
       orgId: "o",
       projectId: "p",
       providerKind: "slack",
       connectionId: "c",
       grantId: "g",
       authGeneration: 1,
-      grantGeneration: 1,
       credentialRef: "secret://org/o/integration/slack/connection/c/token/g/1",
       capability: "notify",
       operation: "provision",
       providerPrincipalId: "T1",
-      principalMetadata: {},
-      policyRevision: integrationCatalogRevision(),
-      consentRevision: "consent.test",
+      target,
     });
-    expect(await secretValueForLease(secrets, lease)).toBe("gen1");
-    const swapped = issueEligibleOperationLease({ ...lease, authGeneration: 2, credentialRef: lease.credentialRef });
-    // Swapped generation reads g/2 path from generationSecretRef, not g/1 value via latest.
-    expect(await secretValueForLease(secrets, swapped)).toBe("gen2");
-    expect(await secrets.getExact({ ref: lease.credentialRef, generation: 99 })).toBeUndefined();
+    const expected = {
+      orgId: "o",
+      projectId: "p",
+      providerKind: "slack",
+      capability: "notify",
+      operation: "provision" as const,
+      target,
+    };
+    expect(await secretValueForLease(secrets, first.eligibleOperation, expected)).toBe("gen1");
+    const second = await testOrgGrant({
+      orgId: "o",
+      projectId: "p",
+      providerKind: "slack",
+      connectionId: "c",
+      grantId: "g",
+      authGeneration: 2,
+      credentialRef: "secret://org/o/integration/slack/connection/c/token/g/1",
+      capability: "notify",
+      operation: "provision",
+      providerPrincipalId: "T1",
+      target,
+    });
+    expect(await secretValueForLease(secrets, second.eligibleOperation, expected)).toBe("gen2");
+    expect(await secrets.getExact({ ref: first.eligibleOperation.credentialRef, generation: 99 })).toBeUndefined();
   });
 
   it("create-only finalize refuses overwrite of a different value at the same generation", async () => {

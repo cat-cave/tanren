@@ -36,8 +36,7 @@ export {
 } from "./deployDependency.js";
 export { DeployIneligibleError } from "./deployIneligibleError.js";
 
-// TRANSACTIONAL ROLLBACK (task #78) — the compensation primitives the derive uses
-// to atomically delete every external resource it created when a later step fails.
+// Transactional repository rollback primitives used by greenfield derive.
 export {
   DeriveRollbackError,
   newDeriveCompensation,
@@ -46,7 +45,6 @@ export {
   type DeleteRepositoryCallback,
   type DeriveCompensation,
   type DeriveCompensationStep,
-  type DestroyDeployAppCallback,
 } from "./deriveCompensation.js";
 
 // Native design subsystem (WS-D1) — the LOUD guards for a required design contract +

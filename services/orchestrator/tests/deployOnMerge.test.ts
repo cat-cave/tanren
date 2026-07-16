@@ -7,6 +7,7 @@ import type { EventStore, AppendEventInput } from "../src/engine/eventStore.js";
 import type { EventName } from "../src/engine/events/index.js";
 import { scriptedDeployTransport, type ScriptedDeployTransport } from "./conformance/fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./conformance/fakes/scriptedUrlProbe.js";
+import { defaultIntegrationResourceConstraints } from "../src/engine/contracts/integrationAuthority.js";
 const RUN_ID = "run_dep";
 const PROJECT_ID = "project_dep";
 const ORG_ID = "org_dep";
@@ -79,7 +80,7 @@ function fakePool(state: PoolState): pg.Pool {
           current_auth_generation: 1,
           grant_id: `grant_${index}`,
           grant_current_generation: 1,
-          grant_status: "active",
+          grant_status: "status" in grant && grant.status === "revoked" ? "revoked" : "active",
           plane: "control",
           environment: "control",
           credential_ref: (grant.credential_ref ?? "secret://org/x").includes("/g/")
@@ -88,9 +89,9 @@ function fakePool(state: PoolState): pg.Pool {
           auth_expires_at: null,
           auth_status: "active",
           capabilities: "capabilities" in grant ? (grant.capabilities ?? ["deploy"]) : ["deploy"],
-          operations: ["discover", "provision", "bind", "teardown", "deploy"],
+          operations: ["attach_runtime_env", "deploy", "verify"],
           provider_scopes: [],
-          resource_constraints: {},
+          resource_constraints: defaultIntegrationResourceConstraints(),
           policy_revision: "integration-catalog.v1",
           consent_revision: "consent.test",
           grant_expires_at: null,

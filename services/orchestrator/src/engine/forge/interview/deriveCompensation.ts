@@ -1,23 +1,18 @@
 // DERIVE TRANSACTIONAL ROLLBACK — Option A from task #78. The greenfield derive
-// creates several external resources (the template seed repo + the project repo +
-// the deploy app) before persisting the durable project DB row that anchors a
-// resume. If ANY step after a successful external create fails, the resources
-// it produced are stranded as operator-visible orphans that the next retry then
-// collides on (apex v62 — the operator hand-deleted `cat-cave/linkly` to get
-// past a 422 on the template repo create).
+// creates an external project repo before persisting the durable project DB row
+// that anchors a resume. If a later step fails, that repository can be stranded
+// as an operator-visible orphan that the next retry collides on.
 //
-// THE FIX: derive runs ATOMICALLY across its external resources. Each successful
-// create REGISTERS a compensation (a typed rollback function) on a LIFO stack;
-// if the derive throws anywhere after that, the stack is WALKED in reverse and
-// every compensation fires before the original error is re-raised. The operator
-// sees the original failure verbatim — but the side effects are gone, so a clean
-// retry succeeds without manual cleanup.
+// THE FIX: the repository create REGISTERS a typed compensation on a LIFO stack.
+// If derive throws afterward, the stack is walked before the original error is
+// re-raised. This module deliberately makes no claim about provider-resource
+// teardown; the removed legacy deploy-app destroy callback is not emulated here.
 //
 // DOCTRINE:
-//   1. Every external create that happens in derive MUST register a compensation
-//      synchronously after success. Forgetting to register is a wiring bug.
-//   2. A compensation is IDEMPOTENT — the underlying `deleteRepo` / `destroyApp`
-//      primitives treat a 404 as success — so the walker may safely run twice if
+//   1. The repository create MUST register its compensation synchronously after
+//      success. Forgetting to register is a wiring bug.
+//   2. A compensation is IDEMPOTENT — the underlying `deleteRepo` primitive
+//      treats a 404 as success — so the walker may safely run twice if
 //      something exotic happens (a finally-in-finally pattern).
 //   3. The walker NEVER hides the original failure. The original `Error` re-raises
 //      verbatim; rollback gaps (a compensation that ALSO failed) ride on the
@@ -26,8 +21,8 @@
 //      completion anchor; the resources it carries are no longer "tentative."
 //
 // SCOPE: this module is the pure data-structure + walker. The compensation
-// functions themselves (the `deleteRepo` / `destroyApp` callbacks) are wired by
-// the route layer where the GitHub HTTP client + the deploy provisioner live.
+// function itself (`deleteRepo`) is wired by the route layer where the GitHub
+// client lives.
 
 import { createLogger } from "../../observability/logger.js";
 import { GreenfieldRepoNotEmptyError, type CreatedRepository } from "../../contracts/codeHostTypes.js";
@@ -39,9 +34,8 @@ const log = createLogger("derive-compensation");
  * + the rollback-gap error message so a failing compensation names what it
  * tried to roll back ("the project repo at cat-cave/linkly").
  */
-// `github.repo` — a forge repo (project repo or template seed repo).
-// `deploy.app` — a deploy provider app (Fly / Vercel).
-export type CompensationKind = "github.repo" | "deploy.app";
+// `github.repo` — the forge project repo.
+export type CompensationKind = "github.repo";
 
 /**
  * The COMPENSATION CALLBACK for a github repo create. The route layer wires this
@@ -50,30 +44,6 @@ export type CompensationKind = "github.repo" | "deploy.app";
  * a target that no longer exists is a successful no-op (404 → success).
  */
 export type DeleteRepositoryCallback = (target: { owner: string; name: string }) => Promise<void>;
-
-/**
- * The COMPENSATION CALLBACK for a deploy app provision. The route layer wires
- * this against `DeployProvisioner.destroyApp` (which delegates to Fly / Vercel
- * delete primitives); tests inject a fake. IDEMPOTENT per the contract — a
- * target that no longer exists is a successful no-op.
- *
- * Carries BOTH `appId` and `appName` because the two providers key on
- * different attributes: Vercel's DELETE goes to `/v9/projects/{id}` (id), Fly's
- * to `/v1/apps/{name}` (name). Fly's `listApps` returns `appId: app.id ?? app.name`,
- * which is typically the distinct internal id (e.g. `fly_app_1`), so a synthesis
- * that filled `name` from `appId` would route the DELETE at the wrong path —
- * Fly would 404 and the per-provider arm would swallow it as "already-gone
- * success" (audit finding D4, the regression PR #711 reintroduced once it
- * dropped the listApps gate).
- */
-export type DestroyDeployAppCallback = (target: {
-  providerKind: "deploy.vercel" | "deploy.flyio";
-  appId: string;
-  appName: string;
-  connectionId: string;
-  grantId: string;
-  projectId: string;
-}) => Promise<void>;
 
 /**
  * One registered rollback step. The compensation closure captures whatever it
@@ -99,9 +69,8 @@ export interface CompensationFailure {
 }
 
 /**
- * The compensation stack the derive registers steps onto. LIFO walk — the last
- * resource created is the first one undone (which matches the natural ordering
- * for cleanup: e.g. destroy the deploy app before deleting the project repo).
+ * The compensation stack the derive registers steps onto. It remains a LIFO
+ * primitive even though the current clean-replaced derive registers one repo.
  */
 export interface DeriveCompensation {
   /**

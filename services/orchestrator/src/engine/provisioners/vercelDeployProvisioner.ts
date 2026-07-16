@@ -315,23 +315,6 @@ class VercelDeployApi implements DeployProviderApi {
     return { deploymentId: body.id, url, state: body.readyState ?? body.status ?? "QUEUED" };
   }
 
-  async destroyApp(grant: OrgGrant, token: string, app: DeployApp): Promise<void> {
-    // DELETE /v9/projects/{id} — Vercel's project-destroy. IDEMPOTENT per the task
-    // #78 compensation contract: 404 ⇒ the project is already gone (success).
-    // Other failures propagate LOUD so the compensation walker records the
-    // rollback gap. Vercel keys a project by its STABLE id (not name) in the path;
-    // the team scope is threaded as the `teamId` query param via `scoped`.
-    const response = await this.transport.request({
-      method: "DELETE",
-      url: scoped(grant, `/v9/projects/${encodeURIComponent(app.appId)}`),
-      headers: { authorization: `Bearer ${token}` },
-    });
-    if (response.ok || response.status === 404) {
-      return;
-    }
-    throw new Error(`vercel destroy project '${app.appId}' failed: ${response.status} ${response.text}`);
-  }
-
   async resolveArtifactIdentity(
     grant: OrgGrant,
     token: string,

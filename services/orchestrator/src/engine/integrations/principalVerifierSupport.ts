@@ -1,7 +1,5 @@
-import {
-  assertPrincipalVerificationPermit,
-  type PrincipalVerificationPermit,
-} from "../contracts/integrationAuthority.js";
+import type { PrincipalVerificationPermit } from "../contracts/integrationAuthority.js";
+import { assertPrincipalVerificationPermit } from "./integrationAuthorityImpl.js";
 import type { IntegrationSecretStore, StagedSecretHandle } from "../contracts/integrationSecretStore.js";
 
 export type FetchImpl = typeof fetch;

@@ -248,7 +248,8 @@ export class DemoOnDeployWatcher {
         projectId: verified.projectId,
         providerKind: verified.provider,
         capability: "deploy",
-        operation: "provision",
+        operation: "resolve_demo_surface",
+        target: { resourceId: verified.appId, deploymentId: verified.deploymentId },
         actor: systemActor,
       });
       if (resolution.status === "not_linked") {

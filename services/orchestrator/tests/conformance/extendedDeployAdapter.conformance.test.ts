@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { parseDigest } from "../../src/engine/contracts/cas.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
+import type {
+  IntegrationOperationTarget,
+  IntegrationPrivilegedOperation,
+} from "../../src/engine/contracts/integrationAuthority.js";
 
 import { DirectApiDeployAdapter } from "../../src/engine/deploy/directApiDeployAdapter.js";
 import {
@@ -49,6 +53,23 @@ const previewInput = {
   behaviorRevisionIds: [],
 };
 
+const stageGrant = (
+  providerKind: string,
+  metadata: Record<string, unknown>,
+  operation: IntegrationPrivilegedOperation,
+  target: IntegrationOperationTarget,
+) =>
+  testOrgGrant({
+    orgId: "org_1",
+    projectId: "project_1",
+    providerKind,
+    credentialRef: `${TOKEN_REF}/g/1`,
+    metadata,
+    capability: "deploy",
+    operation,
+    target,
+  });
+
 describe("Extended DeployAdapter lifecycle", () => {
   it("builds, previews, promotes, rolls back, and idempotently tears down a direct_api release", async () => {
     const transport = scriptedDeployTransport("vercel", ["acme-web"]);
@@ -57,33 +78,72 @@ describe("Extended DeployAdapter lifecycle", () => {
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
     });
-    const grant = testOrgGrant({
-      providerKind: "deploy.vercel",
-      credentialRef: `${TOKEN_REF}/g/1`,
-      metadata: { teamId: "team_1" },
-      capability: "deploy",
-    });
+    const metadata = { teamId: "team_1" };
     const ref: DeployRef = { provider: "deploy.vercel", appId: "vercel_app_1" };
 
-    const built = await adapter.buildArtifact(grant, ref, SOURCE);
+    const built = await adapter.buildArtifact(
+      await stageGrant("deploy.vercel", metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: SOURCE.repo,
+        sourceRef: SOURCE.ref,
+      }),
+      ref,
+      SOURCE,
+    );
     expect(built).toMatchObject({ state: "built", artifactDigest: expect.stringMatching(/^sha256:/u) });
     expect(built.providerChecksum).toMatch(/^sha512:/u);
 
-    const preview = await adapter.applyPreview(grant, ref, previewInput);
+    const preview = await adapter.applyPreview(
+      await stageGrant("deploy.vercel", metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: previewInput.source.repo,
+        sourceRef: previewInput.source.ref,
+      }),
+      ref,
+      previewInput,
+    );
     expect(preview).toMatchObject({ environment: "preview", state: "preview", artifactDigest: ARTIFACT_DIGEST });
-    const promoted = await adapter.promote(grant, ref, {
-      deploymentId: preview.deploymentId,
-      artifactDigest: ARTIFACT_DIGEST,
-      previousReleaseInstanceId: null,
-    });
+    const promoted = await adapter.promote(
+      await stageGrant("deploy.vercel", metadata, "promote", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      {
+        deploymentId: preview.deploymentId,
+        artifactDigest: ARTIFACT_DIGEST,
+        previousReleaseInstanceId: null,
+      },
+    );
     expect(promoted).toMatchObject({ environment: "production", state: "live" });
-    const rolledBack = await adapter.rollback(grant, ref, {
-      targetArtifactDigest: built.artifactDigest,
-      targetReleaseInstanceId: built.deploymentId,
-    });
+    const rolledBack = await adapter.rollback(
+      await stageGrant("deploy.vercel", metadata, "rollback", {
+        resourceId: ref.appId,
+        deploymentId: built.deploymentId,
+      }),
+      ref,
+      {
+        targetArtifactDigest: built.artifactDigest,
+        targetReleaseInstanceId: built.deploymentId,
+      },
+    );
     expect(rolledBack).toMatchObject({ environment: "production", state: "rolled_back" });
-    await adapter.teardownPreview(grant, ref, preview.deploymentId);
-    await adapter.teardownPreview(grant, ref, preview.deploymentId);
+    await adapter.teardownPreview(
+      await stageGrant("deploy.vercel", metadata, "teardown_deployment", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      preview.deploymentId,
+    );
+    await adapter.teardownPreview(
+      await stageGrant("deploy.vercel", metadata, "teardown_deployment", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      preview.deploymentId,
+    );
     expect(JSON.stringify({ built, preview, promoted, rolledBack })).not.toContain(TOKEN_VALUE);
   });
 
@@ -94,28 +154,60 @@ describe("Extended DeployAdapter lifecycle", () => {
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
     });
-    const grant = testOrgGrant({
-      providerKind: "deploy.flyio",
-      credentialRef: `${TOKEN_REF}/g/1`,
-      metadata: { orgSlug: "acme", image: "registry.fly.io/acme-fly:latest" },
-      capability: "deploy",
-    });
+    const metadata = { orgSlug: "acme", image: "registry.fly.io/acme-fly:latest" };
     const ref: DeployRef = { provider: "deploy.flyio", appId: "fly_app_1" };
 
-    const built = await adapter.buildArtifact(grant, ref, SOURCE);
+    const built = await adapter.buildArtifact(
+      await stageGrant("deploy.flyio", metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: SOURCE.repo,
+        sourceRef: SOURCE.ref,
+      }),
+      ref,
+      SOURCE,
+    );
     expect(built).toMatchObject({ state: "built", providerChecksum: null });
     expect(built.artifactDigest).toMatch(/^sha256:/u);
-    const preview = await adapter.applyPreview(grant, ref, previewInput);
-    const promoted = await adapter.promote(grant, ref, {
-      deploymentId: preview.deploymentId,
-      artifactDigest: built.artifactDigest,
-      previousReleaseInstanceId: null,
-    });
-    const rolledBack = await adapter.rollback(grant, ref, {
-      targetArtifactDigest: built.artifactDigest,
-      targetReleaseInstanceId: built.deploymentId,
-    });
-    await adapter.teardownPreview(grant, ref, preview.deploymentId);
+    const preview = await adapter.applyPreview(
+      await stageGrant("deploy.flyio", metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: previewInput.source.repo,
+        sourceRef: previewInput.source.ref,
+      }),
+      ref,
+      previewInput,
+    );
+    const promoted = await adapter.promote(
+      await stageGrant("deploy.flyio", metadata, "promote", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      {
+        deploymentId: preview.deploymentId,
+        artifactDigest: built.artifactDigest,
+        previousReleaseInstanceId: null,
+      },
+    );
+    const rolledBack = await adapter.rollback(
+      await stageGrant("deploy.flyio", metadata, "rollback", {
+        resourceId: ref.appId,
+        deploymentId: built.deploymentId,
+      }),
+      ref,
+      {
+        targetArtifactDigest: built.artifactDigest,
+        targetReleaseInstanceId: built.deploymentId,
+      },
+    );
+    await adapter.teardownPreview(
+      await stageGrant("deploy.flyio", metadata, "teardown_deployment", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      preview.deploymentId,
+    );
 
     expect(promoted).toMatchObject({ state: "live", url: "https://acme-fly.fly.dev" });
     expect(rolledBack).toMatchObject({ state: "rolled_back", artifactDigest: built.artifactDigest });
@@ -128,26 +220,58 @@ describe("Extended DeployAdapter lifecycle", () => {
       urlProbe: scriptedUrlProbe(),
       poll: instantVerifyPollPolicy(),
     });
-    const grant = testOrgGrant({
-      providerKind: PULUMI_PROVIDER_KIND,
-      credentialRef: `${TOKEN_REF}/g/1`,
-      metadata: { pulumiBackend: "https://api.pulumi.com", pulumiProject: "acme" },
-      capability: "deploy",
-    });
+    const metadata = { pulumiBackend: "https://api.pulumi.com", pulumiProject: "acme" };
     const ref: DeployRef = { provider: PULUMI_PROVIDER_KIND, appId: "web" };
 
-    const built = await adapter.buildArtifact(grant, ref, SOURCE);
-    const preview = await adapter.applyPreview(grant, ref, previewInput);
-    const promoted = await adapter.promote(grant, ref, {
-      deploymentId: preview.deploymentId,
-      artifactDigest: built.artifactDigest,
-      previousReleaseInstanceId: null,
-    });
-    const rolledBack = await adapter.rollback(grant, ref, {
-      targetArtifactDigest: built.artifactDigest,
-      targetReleaseInstanceId: "release_1",
-    });
-    await adapter.teardownPreview(grant, ref, preview.deploymentId);
+    const built = await adapter.buildArtifact(
+      await stageGrant(PULUMI_PROVIDER_KIND, metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: SOURCE.repo,
+        sourceRef: SOURCE.ref,
+      }),
+      ref,
+      SOURCE,
+    );
+    const preview = await adapter.applyPreview(
+      await stageGrant(PULUMI_PROVIDER_KIND, metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: previewInput.source.repo,
+        sourceRef: previewInput.source.ref,
+      }),
+      ref,
+      previewInput,
+    );
+    const promoted = await adapter.promote(
+      await stageGrant(PULUMI_PROVIDER_KIND, metadata, "promote", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      {
+        deploymentId: preview.deploymentId,
+        artifactDigest: built.artifactDigest,
+        previousReleaseInstanceId: null,
+      },
+    );
+    const rolledBack = await adapter.rollback(
+      await stageGrant(PULUMI_PROVIDER_KIND, metadata, "rollback", {
+        resourceId: ref.appId,
+        deploymentId: "release_1",
+      }),
+      ref,
+      {
+        targetArtifactDigest: built.artifactDigest,
+        targetReleaseInstanceId: "release_1",
+      },
+    );
+    await adapter.teardownPreview(
+      await stageGrant(PULUMI_PROVIDER_KIND, metadata, "teardown_deployment", {
+        resourceId: ref.appId,
+        deploymentId: preview.deploymentId,
+      }),
+      ref,
+      preview.deploymentId,
+    );
 
     expect(built.state).toBe("built");
     expect(preview.state).toBe("preview");
@@ -161,38 +285,61 @@ describe("Extended DeployAdapter lifecycle", () => {
       secrets: secrets(),
       poll: instantVerifyPollPolicy(),
     });
-    const packageGrant = testOrgGrant({
-      providerKind: PACKAGE_RELEASE_PROVIDER_KIND,
-      credentialRef: `${TOKEN_REF}/g/1`,
-      metadata: { packageRegistry: "npm", packageName: "@acme/web" },
-      capability: "deploy",
-    });
+    const packageMetadata = { packageRegistry: "npm", packageName: "@acme/web" };
     const packageRef: DeployRef = { provider: PACKAGE_RELEASE_PROVIDER_KIND, appId: "@acme/web" };
-    const packageBuild = await packageAdapter.buildArtifact(packageGrant, packageRef, SOURCE);
+    const packageBuild = await packageAdapter.buildArtifact(
+      await stageGrant(PACKAGE_RELEASE_PROVIDER_KIND, packageMetadata, "deploy", {
+        resourceId: packageRef.appId,
+        sourceRepo: SOURCE.repo,
+        sourceRef: SOURCE.ref,
+      }),
+      packageRef,
+      SOURCE,
+    );
     expect(packageBuild.providerChecksum).toMatch(/^sha512:/u);
-    await expect(packageAdapter.applyPreview(packageGrant, packageRef, previewInput)).rejects.toMatchObject({
-      name: "DeployAdapterOperationError",
-      kind: "package_release",
-    });
+    await expect(
+      packageAdapter.applyPreview(
+        await stageGrant(PACKAGE_RELEASE_PROVIDER_KIND, packageMetadata, "deploy", {
+          resourceId: packageRef.appId,
+          sourceRepo: previewInput.source.repo,
+          sourceRef: previewInput.source.ref,
+        }),
+        packageRef,
+        previewInput,
+      ),
+    ).rejects.toMatchObject({ name: "DeployAdapterOperationError", kind: "package_release" });
 
     const mobileAdapter = new MobileReleaseDeployAdapter({
       distribution: scriptedMobileDistribution(),
       secrets: secrets(),
       poll: instantVerifyPollPolicy(),
     });
-    const mobileGrant = testOrgGrant({
-      providerKind: MOBILE_RELEASE_PROVIDER_KIND,
-      credentialRef: `${TOKEN_REF}/g/1`,
-      metadata: { mobilePlatform: "ios", mobileTrack: "testflight", mobileBundleId: "com.acme.web" },
-      capability: "deploy",
-    });
+    const mobileMetadata = {
+      mobilePlatform: "ios",
+      mobileTrack: "testflight",
+      mobileBundleId: "com.acme.web",
+    };
     const mobileRef: DeployRef = { provider: MOBILE_RELEASE_PROVIDER_KIND, appId: "com.acme.web" };
-    const mobileBuild = await mobileAdapter.buildArtifact(mobileGrant, mobileRef, SOURCE);
+    const mobileBuild = await mobileAdapter.buildArtifact(
+      await stageGrant(MOBILE_RELEASE_PROVIDER_KIND, mobileMetadata, "deploy", {
+        resourceId: mobileRef.appId,
+        sourceRepo: SOURCE.repo,
+        sourceRef: SOURCE.ref,
+      }),
+      mobileRef,
+      SOURCE,
+    );
     expect(mobileBuild.artifactDigest).toMatch(/^sha256:/u);
-    await expect(mobileAdapter.teardownPreview(mobileGrant, mobileRef, "build_1")).rejects.toMatchObject({
-      name: "DeployAdapterOperationError",
-      kind: "mobile_release",
-    });
+    await expect(
+      mobileAdapter.teardownPreview(
+        await stageGrant(MOBILE_RELEASE_PROVIDER_KIND, mobileMetadata, "teardown_deployment", {
+          resourceId: mobileRef.appId,
+          deploymentId: "build_1",
+        }),
+        mobileRef,
+        "build_1",
+      ),
+    ).rejects.toMatchObject({ name: "DeployAdapterOperationError", kind: "mobile_release" });
   });
 
   it("validates the operator-declared manual artifact identity, and fails loudly when it is absent", async () => {
@@ -204,42 +351,59 @@ describe("Extended DeployAdapter lifecycle", () => {
       ownerScope: { orgId: "org_1", projectId: "project_1" },
     });
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "manual-app" };
-    const grant = testOrgGrant({
-      providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
-      credentialRef: `${TOKEN_REF}/g/1`,
-      metadata: {
-        manualExternalUrl: "https://example.com/download",
-        manualExternalArtifactDigest: RAW_DIGEST,
-        manualExternalProviderChecksum: RAW_CHECKSUM,
-      },
-      capability: "deploy",
-    });
+    const metadata = {
+      manualExternalUrl: "https://example.com/download",
+      manualExternalArtifactDigest: RAW_DIGEST,
+      manualExternalProviderChecksum: RAW_CHECKSUM,
+    };
 
-    const built = await adapter.buildArtifact(grant, ref, SOURCE);
-    expect(await adapter.resolveArtifactDigest(grant, ref, built.deploymentId)).toEqual({
-      artifactDigest: RAW_DIGEST,
-      providerChecksum: RAW_CHECKSUM,
-    });
+    const built = await adapter.buildArtifact(
+      await stageGrant(MANUAL_EXTERNAL_PROVIDER_KIND, metadata, "deploy", {
+        resourceId: ref.appId,
+        sourceRepo: SOURCE.repo,
+        sourceRef: SOURCE.ref,
+      }),
+      ref,
+      SOURCE,
+    );
+    expect(
+      await adapter.resolveArtifactDigest(
+        await stageGrant(MANUAL_EXTERNAL_PROVIDER_KIND, metadata, "resolve_artifact_identity", {
+          resourceId: ref.appId,
+          deploymentId: built.deploymentId,
+        }),
+        ref,
+        built.deploymentId,
+      ),
+    ).toEqual({ artifactDigest: RAW_DIGEST, providerChecksum: RAW_CHECKSUM });
     // The artifact identity is OPERATOR-DECLARED on the grant metadata (not persisted on
     // the attestation row) — the durable manual_deploy_attestations table (migration 0031)
     // is unchanged, keeping SP-6's sole schema owner as migration 0036.
 
-    const missing = testOrgGrant({
-      providerKind: grant.providerKind,
-      credentialRef: grant.eligibleOperation.credentialRef,
-      metadata: { manualExternalUrl: "https://example.com/download" },
-      capability: "deploy",
-    });
-    await expect(adapter.buildArtifact(missing, ref, { ...SOURCE, ref: "missing" })).rejects.toMatchObject({
+    const missingSource = { ...SOURCE, ref: "missing" };
+    const missing = await stageGrant(
+      MANUAL_EXTERNAL_PROVIDER_KIND,
+      { manualExternalUrl: "https://example.com/download" },
+      "deploy",
+      { resourceId: ref.appId, sourceRepo: missingSource.repo, sourceRef: missingSource.ref },
+    );
+    await expect(adapter.buildArtifact(missing, ref, missingSource)).rejects.toMatchObject({
       name: "DeployAdapterOperationError",
       kind: "manual_external",
     });
     await expect(
-      adapter.promote(grant, ref, {
-        deploymentId: built.deploymentId,
-        artifactDigest: built.artifactDigest,
-        previousReleaseInstanceId: null,
-      }),
+      adapter.promote(
+        await stageGrant(MANUAL_EXTERNAL_PROVIDER_KIND, metadata, "promote", {
+          resourceId: ref.appId,
+          deploymentId: built.deploymentId,
+        }),
+        ref,
+        {
+          deploymentId: built.deploymentId,
+          artifactDigest: built.artifactDigest,
+          previousReleaseInstanceId: null,
+        },
+      ),
     ).rejects.toMatchObject({ name: "DeployAdapterOperationError", kind: "manual_external" });
   });
 });

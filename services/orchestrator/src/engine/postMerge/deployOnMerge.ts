@@ -19,7 +19,6 @@ import {
   verifyDeployUntilConverged,
 } from "./deployOnMergeReads.js";
 import type { SecretStore } from "../contracts/secretStore.js";
-import type { OrgGrant } from "../contracts/integrationProvisioner.js";
 import {
   type DeployTargetResolution,
   grantsSignalDeployIntent,
@@ -33,6 +32,7 @@ import { attachRuntimeAppEnv } from "../workflow/attachRuntimeAppEnv.js";
 import { deployProvisionerFor } from "../workflow/deployProvisionerFor.js";
 import type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
 import { createLogger } from "../observability/logger.js";
+import { loadDeployOperationGrant, missingDeployGrantError } from "./deployOnMergeAuthority.js";
 const log = createLogger("deploy-on-merge");
 
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
@@ -226,20 +226,12 @@ export class DeployOnMergeWatcher {
       );
     }
 
-    const grant = await this.loadGrant(merged.projectId, target);
-    if (grant === undefined) {
-      throw new Error(
-        `deployOnMerge: project '${merged.projectId}' configures deploy '${target.provider}' but org ` +
-          `'${target.orgId}' has no matching grant in the active connection authority`,
-      );
-    }
-
     // RESUME: a prior trigger that never reached `deploy.verified` (transient verify
     // failure / a crash between trigger and verify) re-runs VERIFICATION ONLY against the
     // already-released deployment — it does NOT re-trigger.
     const priorDeploymentId = await this.priorTriggeredDeploymentId(runId);
     if (priorDeploymentId !== undefined) {
-      await this.verifyWithRetry(runId, merged.projectId, target, grant, priorDeploymentId, recorded);
+      await this.verifyWithRetry(runId, merged.projectId, target, priorDeploymentId, recorded);
       return;
     }
 
@@ -257,6 +249,11 @@ export class DeployOnMergeWatcher {
     // deployment WITHOUT its runtime env (e.g. the merge introducing the Slack token would
     // ship a deploy that can't reach Slack until a later re-deploy). System-scoped read;
     // the values flow only into the provider set-env request. A failure throws LOUD.
+    const attachGrant = await loadDeployOperationGrant(this.deps.pool, merged.projectId, target, "attach_runtime_env", {
+      resourceId: target.appId,
+      environment: "production",
+    });
+    if (attachGrant === undefined) throw missingDeployGrantError(merged.projectId, target, "attach_runtime_env");
     await runWithSystemScope(this.deps.pool, async (client) => {
       await attachRuntimeAppEnv({
         client,
@@ -266,7 +263,7 @@ export class DeployOnMergeWatcher {
         projectId: merged.projectId,
         orgId: target.orgId,
         deployRef: { provider: target.provider, appId: target.appId },
-        grant,
+        grant: attachGrant,
         actor: systemActor,
       });
     });
@@ -274,7 +271,13 @@ export class DeployOnMergeWatcher {
     // Trigger the real build + release of the merged ref onto the app (now that the
     // runtime env is attached). A configured deploy that fails to release throws here
     // (LOUD) — never a silent no-op.
-    const result = await provisioner.deploy(grant, target.appId, { repo: merged.repoSlug, ref: merged.ref });
+    const deployGrant = await loadDeployOperationGrant(this.deps.pool, merged.projectId, target, "deploy", {
+      resourceId: target.appId,
+      sourceRepo: merged.repoSlug,
+      sourceRef: merged.ref,
+    });
+    if (deployGrant === undefined) throw missingDeployGrantError(merged.projectId, target, "deploy");
+    const result = await provisioner.deploy(deployGrant, target.appId, { repo: merged.repoSlug, ref: merged.ref });
 
     // Record the deploy — the deploy target + resolved live URL + deployment id, all
     // non-secret. Under the run's org scope so the tenant `events` write is allowed.
@@ -307,7 +310,7 @@ export class DeployOnMergeWatcher {
     // A configured deploy that never becomes ready (or whose URL never serves) throws
     // LOUD here — `deploy.triggered` is no longer the end; `deploy.verified` is the
     // proof. On success emit `deploy.verified` (provider + url + state, non-secret).
-    await this.verifyWithRetry(runId, merged.projectId, target, grant, result.deploymentId, recorded);
+    await this.verifyWithRetry(runId, merged.projectId, target, result.deploymentId, recorded);
   }
 
   /**
@@ -324,14 +327,17 @@ export class DeployOnMergeWatcher {
     runId: string,
     projectId: string,
     target: ProjectDeployTarget,
-    grant: OrgGrant,
     deploymentId: string,
     recorded: { verifyPhase: boolean },
   ): Promise<void> {
     await verifyDeployUntilConverged(
       this.verifyCtx,
-      { runId, projectId, target, providerKind: grant.providerKind, deploymentId, recorded },
-      () => Promise.resolve(grant),
+      { runId, projectId, target, providerKind: target.provider, deploymentId, recorded },
+      () =>
+        loadDeployOperationGrant(this.deps.pool, projectId, target, "verify", {
+          resourceId: target.appId,
+          deploymentId,
+        }),
     );
   }
 
@@ -441,32 +447,6 @@ export class DeployOnMergeWatcher {
       if (typeof payload !== "object" || payload === null) return undefined;
       const deploymentId = (payload as Record<string, unknown>)["deploymentId"];
       return typeof deploymentId === "string" && deploymentId.trim() !== "" ? deploymentId : undefined;
-    });
-  }
-  private async loadGrant(projectId: string, target: ProjectDeployTarget) {
-    return runWithSystemScope(this.deps.pool, async (client) => {
-      const authority = new (await import("../integrations/integrationAuthorityImpl.js")).PgIntegrationAuthority();
-      const resolution = await authority.authorizeOperation(client, {
-        orgId: target.orgId,
-        projectId,
-        providerKind: target.provider,
-        capability: "deploy",
-        operation: "provision",
-        actor: systemActor,
-      });
-      if (resolution.status === "selection_required") {
-        throw new Error(
-          `deployOnMerge: project '${projectId}' requires an explicit active '${target.provider}' account selection (${resolution.reason})`,
-        );
-      }
-      if (resolution.status === "ineligible") {
-        throw new Error(
-          `deployOnMerge: project '${projectId}' deploy grant ineligible (${resolution.reasons.join(",")})`,
-        );
-      }
-      return resolution.status === "eligible"
-        ? IntegrationConnectionsStore.orgGrantFromLease(resolution.lease)
-        : undefined;
     });
   }
 }

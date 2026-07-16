@@ -84,6 +84,8 @@ export type ProvisionMode = "greenfield" | "brownfield";
  * lease through IntegrationSecretStore.getExact.
  */
 export interface OrgGrant {
+  orgId: string;
+  projectId: string;
   connectionId: string;
   grantId: string;
   providerKind: string;
@@ -157,23 +159,20 @@ export interface ProvisionedArtifact {
 /**
  * The port every integration provider implements. `discover` (brownfield) lists
  * what the org already has; `provision` is the idempotent find-or-create
- * (greenfield / create-if-absent); `bind` links an already-discovered resource;
- * `teardown` is best-effort cleanup. Idempotency of `provision` is MANDATORY:
- * re-running onboarding must never create a second leaf resource — it finds the
- * stable-named one and returns the SAME artifact (mirrors the merge-queue /
- * post-merge-claim atomic-claim pattern).
+ * (greenfield / create-if-absent); `bind` links an already-discovered resource.
+ * Idempotency of `provision` is MANDATORY: re-running onboarding must never create
+ * a second leaf resource — it finds the stable-named one and returns the SAME
+ * artifact (mirrors the merge-queue / post-merge-claim atomic-claim pattern).
  */
 export interface IntegrationProvisioner {
   /** The capability id(s) this provisioner satisfies (e.g. ["errors"]). */
   capability(): CapabilityId[];
   /** Brownfield: list the org's existing resources of this kind. */
-  discover(grant: OrgGrant): Promise<ExistingResource[]>;
+  discover(grant: OrgGrant, projectCtx: ProjectContext): Promise<ExistingResource[]>;
   /** Greenfield / create-if-absent: idempotent find-or-create of the leaf resource. */
   provision(grant: OrgGrant, projectCtx: ProjectContext): Promise<ProvisionedArtifact>;
   /** Brownfield link: bind an already-discovered resource to the Tanren project. */
   bind(grant: OrgGrant, existingResourceId: string, projectCtx: ProjectContext): Promise<ProvisionedArtifact>;
-  /** Best-effort cleanup (project delete / unlink). Optional — not every provider supports it. */
-  teardown?(artifact: ProvisionedArtifact): Promise<void>;
 }
 
 /**
@@ -239,7 +238,7 @@ export class UnconfiguredIntegrationProvisioner implements IntegrationProvisione
   capability(): CapabilityId[] {
     return this.fail();
   }
-  async discover(_grant: OrgGrant): Promise<ExistingResource[]> {
+  async discover(_grant: OrgGrant, _projectCtx: ProjectContext): Promise<ExistingResource[]> {
     return this.fail();
   }
   async provision(_grant: OrgGrant, _projectCtx: ProjectContext): Promise<ProvisionedArtifact> {

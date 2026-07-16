@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
-import { issueEligibleOperationLease } from "../../src/engine/contracts/integrationAuthority.js";
 import { integrationCatalogRevision } from "../../src/engine/contracts/integrationCatalog.js";
 import { GenerationAddressedIntegrationSecretStore } from "../../src/engine/integrations/integrationSecretStoreImpl.js";
 import { IntegrationConnectionsStore } from "../../src/engine/repositories/integrationConnections.js";
 import { testOrgGrant } from "../helpers/orgGrant.js";
 
 describe("integration connections P1 authority surface", () => {
-  it("orgGrantFromLease rejects naked objects without brand", () => {
-    const grant = testOrgGrant({ providerKind: "sentry", capability: "errors" });
+  it("orgGrantFromLease rejects naked objects without brand", async () => {
+    const grant = await testOrgGrant({ providerKind: "sentry", capability: "errors" });
     expect(grant.providerPrincipalId).toBeTruthy();
     expect(grant.eligibleOperation.policyRevision).toBe(integrationCatalogRevision());
     expect("credentialRef" in grant).toBe(false);
+    expect(() => IntegrationConnectionsStore.orgGrantFromLease({} as never)).toThrow(/invalid eligible/u);
   });
 
   it("generation secret store is create-only per generation", async () => {
@@ -25,8 +25,8 @@ describe("integration connections P1 authority surface", () => {
     );
   });
 
-  it("issueEligibleOperationLease is required for provider construction coordinates", () => {
-    const lease = issueEligibleOperationLease({
+  it("authority issuance is required for provider construction coordinates", async () => {
+    const issued = await testOrgGrant({
       orgId: "o",
       projectId: "p",
       providerKind: "slack",
@@ -37,12 +37,10 @@ describe("integration connections P1 authority surface", () => {
       credentialRef: "secret://x/g/1",
       capability: "notify",
       operation: "discover",
+      target: {},
       providerPrincipalId: "T1",
-      principalMetadata: {},
-      policyRevision: integrationCatalogRevision(),
-      consentRevision: "c1",
     });
-    const grant = IntegrationConnectionsStore.orgGrantFromLease(lease);
+    const grant = IntegrationConnectionsStore.orgGrantFromLease(issued.eligibleOperation);
     expect(grant.connectionId).toBe("c");
     expect(grant.providerPrincipalId).toBe("T1");
   });

@@ -1,28 +1,23 @@
 // DERIVE TRANSACTIONAL ROLLBACK — task #78. Proves the greenfield derive is
-// ATOMIC across its external-resource creates (the project repo + the
-// provisioned deploy app). When a step LATER in the derive throws, every
-// external resource created so far in the same call is rolled back BEFORE the
-// original error re-raises — so the operator's next retry never collides on
-// an orphan.
+// ATOMIC for the project repository it creates. When a later derive step throws,
+// the repository is rolled back BEFORE the original error re-raises.
 //
 // PR-G (task #77) collapsed the intermediate `tanren-tmpl-<slug>` template
 // seed repo: the composed VFS is pushed DIRECTLY into the project repo as its
-// initial content. So there are now TWO external resources to rollback (the
-// project repo + the deploy app), not three (no separate seed repo).
+// initial content. There is one repository resource to roll back (no separate
+// seed repo and no legacy deploy-app destroy callback).
 //
 // The doctrine:
 //   1. resolveOrCreateGreenfieldRepo succeeds → project repo created → register.
 //   2. Compose+materialize pushes the VFS into the project repo (no separate
 //      compensation — a failure here is covered by the project-repo rollback).
-//   3. prepareDeploy succeeds → deploy app provisioned → register.
-//   4. If ANYTHING after a successful compensation registration throws (deploy
-//      provisioning fails, createProject DB constraint, etc.), the compensation
-//      stack walks LIFO + every resource is deleted before re-raising.
+//   3. If ANYTHING after repository compensation registration throws (deploy
+//      provisioning fails, entity graph write, etc.), the compensation runs
+//      before re-raising.
 //
 // We assert at the BOUNDARY: the test injects fake `createRepository`/
-// `deleteRepository`/`prepareDeploy`/`destroyDeployApp` callbacks that record
-// every invocation; after a forced failure the recorded delete/destroy calls
-// must MATCH the recorded create/provision calls one-for-one.
+// `deleteRepository`/`prepareDeploy` callbacks that record every invocation;
+// after a forced failure the repository delete must match its create.
 
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
@@ -85,14 +80,6 @@ interface RecordedCreates {
   reposDeleted: Array<{ owner: string; name: string }>;
   pushedRepos: string[];
   deploysProvisioned: Array<{ providerKind: string; appId: string; appName: string }>;
-  deploysDestroyed: Array<{
-    providerKind: string;
-    appId: string;
-    appName: string;
-    connectionId: string;
-    grantId: string;
-    projectId?: string;
-  }>;
 }
 
 function newRecorder(): RecordedCreates {
@@ -101,15 +88,8 @@ function newRecorder(): RecordedCreates {
     reposDeleted: [],
     pushedRepos: [],
     deploysProvisioned: [],
-    deploysDestroyed: [],
   };
 }
-
-// PRODUCTION SHAPE (audit finding D4): Fly's `listApps` returns
-// `appId: app.id ?? app.name` — typically the DISTINCT internal id (e.g.
-// `fly_app_42`), while the user-visible globally-unique name is the destroy-path
-// key. The prior fixture set `deployAppId === deployAppName`, masking the
-// regression entirely. Distinct values here reproduce the live shape.
 function preparedFlyDeploy(): PreparedGreenfieldDeploy {
   return {
     outcome: {
@@ -149,7 +129,7 @@ function recordingMaterialize(recorder: RecordedCreates): MaterializeTemplate {
   };
 }
 
-describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78, PR-G)", () => {
+describe("derive — transactional project-repository rollback (task #78, PR-G)", () => {
   it("NO INTERMEDIATE TEMPLATE REPO: the materializer pushes into the just-created project repo", async () => {
     const { pool, state } = stubPool();
     const rec = newRecorder();
@@ -183,9 +163,6 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         deleteRepository: async (target) => {
           rec.reposDeleted.push(target);
         },
-        destroyDeployApp: async (target) => {
-          rec.deploysDestroyed.push(target);
-        },
       },
     );
     // EXACTLY ONE repo was created — the project repo itself. No `tanren-tmpl-*`
@@ -198,7 +175,6 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     expect(rec.pushedRepos).toEqual(["cat-cave/linkly"]);
     // Success path — no rollbacks fired.
     expect(rec.reposDeleted).toEqual([]);
-    expect(rec.deploysDestroyed).toEqual([]);
     expect(state.projects.size).toBe(1);
   });
 
@@ -233,9 +209,6 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           deleteRepository: async (target) => {
             rec.reposDeleted.push(target);
           },
-          destroyDeployApp: async (target) => {
-            rec.deploysDestroyed.push(target);
-          },
         },
       ),
     ).rejects.toThrow(/deploy provision quota exceeded/iu);
@@ -244,12 +217,11 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(rec.pushedRepos).toEqual(["cat-cave/linkly"]);
     expect(rec.deploysProvisioned).toEqual([]);
-    expect(rec.deploysDestroyed).toEqual([]);
   });
 
-  it("ROLLBACK ON POST-DEPLOY FAILURE: both external resources walked back (project repo + deploy)", async () => {
+  it("ROLLBACK ON POST-DEPLOY FAILURE: the project repository compensation still runs", async () => {
     // SCENARIO: project shell + deploy provision succeed, then entity-graph INSERT
-    // throws. Compensation destroys deploy app then project repo.
+    // throws. The remaining repository compensation still deletes the repo.
     const { pool } = stubPool();
     const originalQuery = pool.query.bind(pool) as (
       text: string,
@@ -300,9 +272,6 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           deleteRepository: async (target) => {
             rec.reposDeleted.push(target);
           },
-          destroyDeployApp: async (target) => {
-            rec.deploysDestroyed.push(target);
-          },
         },
       ),
     ).rejects.toThrow(/entity graph materialization failed/iu);
@@ -310,16 +279,6 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
     expect(rec.reposCreated).toEqual([{ owner: "cat-cave", name: "linkly" }]);
     expect(rec.deploysProvisioned).toEqual([
       { providerKind: "deploy.flyio", appId: "fly_app_42", appName: "org_a-linkly" },
-    ]);
-    expect(rec.deploysDestroyed).toEqual([
-      {
-        providerKind: "deploy.flyio",
-        appId: "fly_app_42",
-        appName: "org_a-linkly",
-        connectionId: "connection_1",
-        grantId: "grant_1",
-        projectId: expect.any(String),
-      },
     ]);
     expect(rec.reposDeleted).toEqual([{ owner: "cat-cave", name: "linkly" }]);
   });
@@ -359,7 +318,6 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
           deleteRepository: async () => {
             throw new Error("simulated: delete forbidden — credential lacks administration:write");
           },
-          destroyDeployApp: async () => {},
         },
       );
     } catch (error) {
@@ -414,15 +372,11 @@ describe("derive — TRANSACTIONAL ROLLBACK across external resources (task #78,
         deleteRepository: async (target) => {
           rec.reposDeleted.push(target);
         },
-        destroyDeployApp: async (target) => {
-          rec.deploysDestroyed.push(target);
-        },
       },
     );
     expect(result.projectName).toBe("linkly");
     expect(state.projects.size).toBe(1);
     // NO rollback fired — the resources stand.
     expect(rec.reposDeleted).toEqual([]);
-    expect(rec.deploysDestroyed).toEqual([]);
   });
 });

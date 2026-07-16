@@ -42,7 +42,6 @@ import {
   newDeriveCompensation,
   resolveGreenfieldReattach,
   type DeleteRepositoryCallback,
-  type DestroyDeployAppCallback,
   type DeriveCompensation,
 } from "./deriveCompensation.js";
 import { MissingLifecycleError, scaffoldSpecsFor } from "./deriveScaffoldSpecs.js";
@@ -134,14 +133,6 @@ export interface DeriveInput {
    * re-attach branch. See `resolveGreenfieldReattach`. REQUIRED with `createRepository`.
    */
   probeRepoBareAutoInit?: (target: { owner: string; name: string }) => Promise<boolean>;
-  /**
-   * COMPENSATION (task #78 — derive atomic rollback). The route layer wires this
-   * against `DeployProvisioner.destroyApp` so the provisioned deploy app can be
-   * undone if a LATER step in the derive throws. REQUIRED whenever
-   * `prepareDeploy` is wired (i.e. the production path) — an absent
-   * `destroyDeployApp` while `prepareDeploy` is wired is a wiring bug.
-   */
-  destroyDeployApp?: DestroyDeployAppCallback;
 }
 
 // `autonomousConfig` (task #79) is re-exported from `./deriveBehaviorSpec.js` —
@@ -432,33 +423,6 @@ export async function deriveProductGraph(pool: pg.Pool, input: DeriveInput): Pro
       if (preparedDeploy.status === "not_linked") throw new DeployNotLinkedError(preparedDeploy);
       if (preparedDeploy.status === "selection_required") throw new DeploySelectionRequiredError(preparedDeploy);
       throw new DeployIneligibleError(preparedDeploy);
-    }
-    // TRANSACTIONAL ROLLBACK (task #78): register the deploy app compensation
-    // IMMEDIATELY after a successful provision.
-    const appId = preparedDeploy.projectConfig["deployAppId"];
-    const appName = preparedDeploy.projectConfig["deployAppName"];
-    if (
-      input.destroyDeployApp !== undefined &&
-      typeof appId === "string" &&
-      appId !== "" &&
-      typeof appName === "string" &&
-      appName !== ""
-    ) {
-      const destroyDeployApp = input.destroyDeployApp;
-      const providerKind = deploy.providerKind;
-      compensation.register({
-        kind: "deploy.app",
-        label: `${providerKind}:${appName}`,
-        rollback: () =>
-          destroyDeployApp({
-            providerKind,
-            appId,
-            appName,
-            connectionId: preparedDeploy.outcome.authority.connectionId,
-            grantId: preparedDeploy.outcome.authority.grantId,
-            projectId,
-          }),
-      });
     }
     // Merge deploy target into project config after authorized provision.
     // Run through migrateProjectConfig so zod defaults (reviewPolicy, mergeIntegration,

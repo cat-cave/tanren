@@ -196,16 +196,22 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
     } catch (error) {
       return c.json({ error: "unresolvable_capability", message: messageOf(error) }, 400);
     }
-    const resolution = await database.withOrgScope(orgId, (client) =>
-      authority.authorizeOperation(client, {
+    const authorized = await database.withOrgScope(orgId, async (client) => {
+      const organization = await client.query("SELECT login FROM organizations WHERE id = $1", [orgId]);
+      const orgSlug = (organization.rows[0] as { login?: unknown } | undefined)?.login;
+      if (typeof orgSlug !== "string" || orgSlug === "") throw new Error("organization login missing");
+      const resolution = await authority.authorizeOperation(client, {
         orgId,
         projectId,
         providerKind,
         capability,
         operation: "discover",
+        target: {},
         actor: { kind: "operator", id: actor.userId },
-      }),
-    );
+      });
+      return { resolution, orgSlug };
+    });
+    const { resolution } = authorized;
     if (resolution.status === "not_linked") {
       return c.json(
         {
@@ -226,7 +232,12 @@ export function createIntegrationRoutes(options: IntegrationRoutesOptions) {
       const provisioner =
         options.buildProvisioner?.(providerKind) ??
         buildIntegrationProvisioner(providerKind, productionProvisionerDeps(options.secrets));
-      const resources = await provisioner.discover(grant);
+      const resources = await provisioner.discover(grant, {
+        orgId,
+        projectId,
+        orgSlug: authorized.orgSlug,
+        name: projectId,
+      });
       return c.json(
         {
           status: "discovered",

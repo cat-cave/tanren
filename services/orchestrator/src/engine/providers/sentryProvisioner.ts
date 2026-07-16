@@ -37,6 +37,12 @@ import type {
   ProjectContext,
   ProvisionedArtifact,
 } from "../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type EligibleOperationExpectation,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../contracts/integrationAuthority.js";
 
 /**
  * The injectable Sentry transport for provisioning. Mirrors the runtime
@@ -212,9 +218,9 @@ export class SentryProvisioner implements IntegrationProvisioner {
     return [CAPABILITY_ERRORS];
   }
 
-  async discover(grant: OrgGrant): Promise<ExistingResource[]> {
+  async discover(grant: OrgGrant, projectCtx: ProjectContext): Promise<ExistingResource[]> {
     const meta = readGrantMetadata(grant);
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveToken(grant, projectCtx, "discover", {});
     const projects = await this.listOrgProjects(meta, token);
     return projects.map((project) => {
       const slug = asString(project.slug) ?? "";
@@ -228,7 +234,12 @@ export class SentryProvisioner implements IntegrationProvisioner {
 
   async provision(grant: OrgGrant, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
     const meta = readGrantMetadata(grant);
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveToken(
+      grant,
+      projectCtx,
+      "provision",
+      projectIntegrationOperationTarget(projectCtx),
+    );
     const desiredSlug = stableProjectSlug(projectCtx);
 
     // Find-or-create keyed on the stable slug (idempotency): a second provision
@@ -241,7 +252,12 @@ export class SentryProvisioner implements IntegrationProvisioner {
 
   async bind(grant: OrgGrant, existingResourceId: string, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
     const meta = readGrantMetadata(grant);
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveToken(
+      grant,
+      projectCtx,
+      "bind",
+      projectIntegrationOperationTarget(projectCtx, existingResourceId),
+    );
     // Verify the resource exists before binding — never bind a phantom (the
     // contract requires bind of an unknown id to reject, no silent success).
     const found = await this.findProjectBySlug(meta, token, existingResourceId);
@@ -256,11 +272,30 @@ export class SentryProvisioner implements IntegrationProvisioner {
    * read here and passed down to the transport per request; it is NEVER returned
    * in the artifact, logged, or persisted to DB config.
    */
-  private async resolveToken(grant: OrgGrant): Promise<string> {
+  private async resolveToken(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): Promise<string> {
     // Exact generation only — never naked SecretStore.get of a non-generation ref.
     const { GenerationAddressedIntegrationSecretStore } = await import("../integrations/integrationSecretStoreImpl.js");
-    const { secretValueForLease } = await import("../repositories/integrationConnectionResolve.js");
-    return secretValueForLease(new GenerationAddressedIntegrationSecretStore(this.secrets), grant.eligibleOperation);
+    const { assertOrgGrantMatchesLease, secretValueForLease } =
+      await import("../repositories/integrationConnectionResolve.js");
+    assertOrgGrantMatchesLease(grant);
+    const expected: EligibleOperationExpectation = {
+      orgId: projectCtx.orgId,
+      projectId: projectCtx.projectId,
+      providerKind: "sentry",
+      capability: CAPABILITY_ERRORS,
+      operation,
+      target,
+    };
+    return secretValueForLease(
+      new GenerationAddressedIntegrationSecretStore(this.secrets),
+      grant.eligibleOperation,
+      expected,
+    );
   }
 
   private async listOrgProjects(meta: SentryGrantMetadata, token: string): Promise<RawSentryProject[]> {
