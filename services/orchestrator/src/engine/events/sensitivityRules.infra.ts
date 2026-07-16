@@ -3,6 +3,16 @@ import { costSensitivityRules } from "./sensitivityRules.cost.js";
 import { integrationProvisioningSensitivityRules } from "./sensitivityRules.integrations.js";
 import { auditBaselineSensitivityRules, auditEnvelopeRulesFor } from "./sensitivityRules.audit.js";
 
+const reviewTerminalRules: ReadonlyArray<[string, SensitivityRule["tag"]]> = [
+  ["prUrl", "public"],
+  ["prNumber", "public"],
+  ["reviewer", "public"],
+  ["forgeReviewId", "public"],
+  ["forgeReviewState", "public"],
+  ["forgeReviewUrl", "public"],
+  ["headSha", "public"],
+];
+
 // Infrastructure-and-integration sensitivity rules, split out of sensitivityRules.ts for the 500-line
 // cap (role rules stay there). Runtime substrate + cost/usage telemetry + the integration surface.
 export const infraSensitivityRules: SensitivityRule[] = [
@@ -199,21 +209,12 @@ export const infraSensitivityRules: SensitivityRule[] = [
     ["reviewers", "public"],
     ["reviewers[]", "public"],
   ]),
-  ...rulesFor("review.approved", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["reviewer", "public"],
-  ]),
+  ...rulesFor("review.approved", reviewTerminalRules),
   ...rulesFor("review.auto_approved", [
     ["prUrl", "public"],
     ["prNumber", "public"],
   ]),
-  ...rulesFor("review.changes_requested", [
-    ["prUrl", "public"],
-    ["prNumber", "public"],
-    ["reviewer", "public"],
-    ["message", "public"],
-  ]),
+  ...rulesFor("review.changes_requested", [...reviewTerminalRules, ["message", "public"]]),
   // merge stage — PR identifiers + integration mode + prose, all public. `merge.scheduled` (v67/v69) shares the merge.queued shape.
   ...["merge.scheduled", "merge.queued"].flatMap((n) =>
     rulesFor(n, [

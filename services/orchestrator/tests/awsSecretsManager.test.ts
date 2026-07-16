@@ -107,6 +107,21 @@ describe("awsSecretNameFromRef", () => {
 });
 
 describe("AwsSecretsManagerStore wire contract", () => {
+  it("uses atomic CreateSecret so concurrent immutable writes never overwrite", async () => {
+    const { fetchImpl } = recordingAwsFetch();
+    const store = new AwsSecretsManagerStore({ ...baseOptions, fetchImpl });
+    const results = await Promise.all([
+      store.putCreateOnly({ ref: "immutable/g/1", value: "same" }),
+      store.putCreateOnly({ ref: "immutable/g/1", value: "same" }),
+    ]);
+    expect(results.map((result) => result.status).sort()).toEqual(["already_exists_identical", "created"]);
+    await expect(store.putCreateOnly({ ref: "immutable/g/1", value: "different" })).resolves.toEqual({
+      status: "conflict_different_value",
+    });
+    await expect(store.get("immutable/g/1")).resolves.toEqual({ ref: "immutable/g/1", value: "same" });
+    expect(store.createOnlyAtomicity).toBe("atomic");
+  });
+
   it("signs PutSecretValue with the correct SigV4 target, headers and signature", async () => {
     const { fetchImpl, calls } = recordingAwsFetch();
     const store = new AwsSecretsManagerStore({ ...baseOptions, fetchImpl });

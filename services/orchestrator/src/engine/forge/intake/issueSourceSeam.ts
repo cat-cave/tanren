@@ -14,11 +14,11 @@
 //     cannot be resolved (App not installed AND no org-default static token) → a
 //     LOUD fail-closed error naming the missing credential, never a silent skip.
 //
-// Non-GitHub issue sources (linear/jira) and error sources (sentry) carry their
-// OWN per-source token ref in their config, so they do not depend on the org's
-// GitHub credential; only a GitHub-provider `issues` source needs this resolution.
+// Sentry error sources resolve an exact integration grant, so they do not depend
+// on the org's GitHub credential; only a GitHub `issues` source needs this path.
 
 import type pg from "pg";
+import { z } from "zod";
 import type { SecretStore } from "../../contracts/secretStore.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import type { GithubAppTokenMinter } from "../../providers/githubAppTokenMinter.js";
@@ -27,8 +27,22 @@ import {
   MissingGithubCredentialRefError,
   NoGithubCredentialConfiguredError,
 } from "../../credentials/githubTokenResolver.js";
-import { IntakeSourceAuthError } from "../inbox/connectorErrors.js";
-import { buildInboxConnectorMap, type InboxSource, type SourceConnector } from "../inbox/index.js";
+import { CredentialRefOwnershipError } from "../../credentials/refNamespace.js";
+import {
+  IntakeSourceAuthError,
+  IntakeSourceAuthorityError,
+  IntakeSourceResourceError,
+  UnsupportedInboxProviderError,
+  assertSupportedIssuesProvider,
+} from "../inbox/connectorErrors.js";
+import {
+  ActiveGitHubIssuesConfig,
+  buildInboxConnectorMap,
+  buildPgSentryIntakeAuthority,
+  type SentryHttpClient,
+  type InboxSource,
+  type SourceConnector,
+} from "../inbox/index.js";
 
 /**
  * Thrown when a project/org HAS a GitHub `issues` intake source configured but no
@@ -56,34 +70,70 @@ export class IntakeGithubCredentialMissingError extends Error {
 }
 
 /**
- * Whether `error` is a credential-RESOLUTION failure — a configured source whose
- * GitHub credential cannot be resolved, on EITHER path:
+ * Classify a typed permanent source failure into the sanitized state persisted
+ * by the poller. Raw exception messages are deliberately not retained: they may
+ * contain a tenant credential coordinate.
  *   • the EAGER org-default path — {@link IntakeGithubCredentialMissingError}
  *     (no App installed AND no org-default static token), AND
- *   • the LAZY source-owned `config.staticRef` path — resolved later, inside the
- *     connector's `fetch`, where `resolveGithubToken` raises
- *     {@link NoGithubCredentialConfiguredError} (no ref at all) or
- *     {@link MissingGithubCredentialRefError} (the ref points at nothing), AND
+ *   • resolver errors for the organization-bound credential, AND
  *   • the LIVE auth-rejected path — a connector's HTTP fetch comes back 401/403
  *     ({@link IntakeSourceAuthError}): the token resolved but the source denied it
  *     (expired/revoked/insufficient scope). Same class of misconfiguration — a
- *     LOUD fail-closed re-throw, not a swallowed "this source never ingests".
+ *     LOUD fail-closed re-throw, not a swallowed "this source never ingests", AND
+ *   • a deleted provider/raw-token shape ({@link UnsupportedInboxProviderError}):
+ *     the source cannot become valid through retry and must be recreated against
+ *     the supported GitHub provider rather than quietly retried forever.
  *
- * The intake poller's `tick()` uses this single predicate so a configured GitHub
- * source whose credential cannot be resolved — by ANY path — is a LOUD
- * fail-closed re-throw, never swallowed as an ordinary per-source transient. A
- * shared predicate (not a per-type check) keeps a future credential-error type
- * from silently slipping back into the swallowed path: add it here once and both
- * the eager and lazy paths stay loud. Genuinely transient errors (network, 5xx,
- * rate-limit) are NOT in this class and remain per-source transients.
+ * Genuinely transient errors (network, 5xx, rate-limit) return undefined.
  */
-export function isCredentialResolutionError(error: unknown): boolean {
-  return (
+export interface PermanentInboxSourceFailure {
+  code:
+    | "unsupported_provider"
+    | "invalid_config"
+    | "credential_unavailable"
+    | "authority_unavailable"
+    | "resource_unavailable";
+  message: string;
+}
+
+export function classifyPermanentInboxSourceError(error: unknown): PermanentInboxSourceFailure | undefined {
+  if (error instanceof UnsupportedInboxProviderError) {
+    return {
+      code: "unsupported_provider",
+      message: "This source uses an unsupported provider or caller-owned credential reference. Recreate it.",
+    };
+  }
+  if (error instanceof z.ZodError) {
+    return {
+      code: "invalid_config",
+      message: "This source configuration is invalid. Recreate it with required fields.",
+    };
+  }
+  if (
     error instanceof IntakeGithubCredentialMissingError ||
     error instanceof NoGithubCredentialConfiguredError ||
     error instanceof MissingGithubCredentialRefError ||
+    error instanceof CredentialRefOwnershipError ||
     error instanceof IntakeSourceAuthError
-  );
+  ) {
+    return {
+      code: "credential_unavailable",
+      message: "The organization-bound credential is missing, expired, or denied. Repair it in integration settings.",
+    };
+  }
+  if (error instanceof IntakeSourceAuthorityError) {
+    return {
+      code: "authority_unavailable",
+      message: "The selected integration grant is unavailable. Repair the project selection or grant.",
+    };
+  }
+  if (error instanceof IntakeSourceResourceError) {
+    return {
+      code: "resource_unavailable",
+      message: "The configured provider resource is missing or rejected. Repair the source coordinates.",
+    };
+  }
+  return undefined;
 }
 
 export interface BuildIntakeConnectorMapDeps {
@@ -94,25 +144,23 @@ export interface BuildIntakeConnectorMapDeps {
   // GitHub issues connector for the App-installation path; absent is FINE for an
   // org on the static-token path (it does not silently disable intake).
   githubAppMinter?: GithubAppTokenMinter;
+  sentryHttp?: SentryHttpClient;
 }
 
 /**
  * Whether a source is a GitHub-provider `issues` source — the only source whose
  * polling depends on the org's GitHub credential. A GitHub source carries kind
- * `issues` with either no `provider` (github is the default) or `provider:
- * "github"`; linear/jira issues sources and sentry error sources carry their own
- * per-source token ref. A source that already pins its OWN `config.staticRef`
- * supplies its credential directly and so does not require the org-default.
+ * `issues` with the one canonical GitHub config. Invalid/deleted-provider rows
+ * do not trigger credential resolution; the connector classifies them before I/O.
  */
 function isGithubIssuesSourceNeedingOrgCredential(source: InboxSource): boolean {
   if (source.kind !== "issues") return false;
-  const config = source.config as { provider?: unknown; staticRef?: unknown };
-  const provider = config.provider;
-  const isGithub = provider === undefined || provider === "github";
-  if (!isGithub) return false;
-  // A source pinning its own static ref supplies its credential — no org-default needed.
-  if (typeof config.staticRef === "string" && config.staticRef.length > 0) return false;
-  return true;
+  try {
+    assertSupportedIssuesProvider(source.config);
+  } catch {
+    return false;
+  }
+  return ActiveGitHubIssuesConfig.safeParse(source.config).success;
 }
 
 /**
@@ -123,8 +171,8 @@ function isGithubIssuesSourceNeedingOrgCredential(source: InboxSource): boolean 
  *   • `githubSource` names the org's configured GitHub `issues` source (when one
  *     exists) so a missing credential raises {@link IntakeGithubCredentialMissingError}
  *     against that source — a LOUD failure, never a silent no-connector.
- *   • when NO GitHub source needs the org credential (only linear/jira/sentry, or
- *     a source pinning its own ref, or no intake configured at all), the map is
+ *   • when NO valid GitHub source needs the org credential (only Sentry, an
+ *     invalid source awaiting a terminal state transition, or no intake configured), the map is
  *     built without an org-default github ref — the legitimate "no GitHub intake"
  *     case, no error.
  */
@@ -134,8 +182,14 @@ export async function buildIntakeConnectorMapForOrg(
   sources: ReadonlyArray<InboxSource>,
 ): Promise<ReadonlyMap<string, SourceConnector>> {
   const githubSource = sources.find((source) => isGithubIssuesSourceNeedingOrgCredential(source));
-  const installation = await loadOrgGithubAppInstallation(deps.pool, orgId);
-  const staticRef = installation === undefined ? await loadOrgDefaultGithubCredentialRef(deps.pool, orgId) : undefined;
+  // Resolve GitHub authority only for a fully-valid GitHub source. A poisoned
+  // row must hit the connector's config boundary before any credential lookup;
+  // malformed source JSON cannot select or trigger authority work.
+  const installation = githubSource === undefined ? undefined : await loadOrgGithubAppInstallation(deps.pool, orgId);
+  const staticRef =
+    githubSource !== undefined && installation === undefined
+      ? await loadOrgDefaultGithubCredentialRef(deps.pool, orgId)
+      : undefined;
 
   // Configured-but-missing → LOUD fail-closed. A GitHub issues source exists for
   // this org, yet neither an App installation nor an org-default static token
@@ -148,6 +202,8 @@ export async function buildIntakeConnectorMapForOrg(
   return buildInboxConnectorMap({
     secrets: deps.secrets,
     githubHttp: deps.githubHttp,
+    sentryAuthority: buildPgSentryIntakeAuthority(deps.pool),
+    ...(deps.sentryHttp === undefined ? {} : { sentryHttp: deps.sentryHttp }),
     ...(installation === undefined ? {} : { installation }),
     ...(staticRef === undefined ? {} : { defaultGithubStaticRef: staticRef }),
     ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),

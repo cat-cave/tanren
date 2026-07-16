@@ -23,6 +23,7 @@ interface ProjectRow {
   runner_image: string;
   allocator: string;
   config: unknown;
+  lifecycle: string;
   org_id: string | null;
 }
 
@@ -89,6 +90,7 @@ export class ProgressRoutesPool {
       runner_image: input.runner_image ?? "ghcr.io/example/runner:v0",
       allocator: input.allocator ?? "local-docker",
       config: input.config ?? { version: 1 },
+      lifecycle: input.lifecycle ?? "active",
       org_id: input.org_id,
     });
   }

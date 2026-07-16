@@ -23,9 +23,14 @@ import type { ActorContext } from "../../../auth/schemas.js";
 import { mergeCapture, resolveLifecycle } from "./capture.js";
 import type { CreatedRepository, CreateRepositoryInput } from "../../contracts/codeHostTypes.js";
 import type { DesignAgent } from "../../design/designAgent.js";
-import { deriveProductGraph, type DeriveResult } from "./derive.js";
-import type { DeployPreflightCallback, GreenfieldDeployDependency, PrepareDeployCallback } from "./deployDependency.js";
-import type { DeleteRepositoryCallback, DestroyDeployAppCallback } from "./deriveCompensation.js";
+import { deriveProductGraph, type DeriveInput, type DeriveResult } from "./derive.js";
+import type {
+  DeployPreflightCallback,
+  GreenfieldDeployDependency,
+  PersistDeploySelectionCallback,
+  PrepareDeployCallback,
+} from "./deployDependency.js";
+import type { DeleteRepositoryCallback } from "./deriveCompensation.js";
 import type { FragmentAuthoring, FragmentLibrary, MaterializeTemplate } from "../../templates/fragments/index.js";
 import {
   DEFAULT_TOTAL_ROUNDS,
@@ -161,11 +166,7 @@ export interface DeriveFromCaptureInput {
   // or `human` keeps the schema's safe defaults. Threaded into `deriveProductGraph`.
   autonomy?: "auto" | "simulated" | "human";
   deploy?: GreenfieldDeployDependency;
-  // COMPENSATION (task #78 — derive atomic rollback). Threaded into
-  // `deriveProductGraph` so the derive registers a rollback for the provisioned
-  // deploy app + destroys it if a later step throws. Required in production
-  // whenever `prepareDeploy` is wired.
-  destroyDeployApp?: DestroyDeployAppCallback;
+  persistDeploySelection?: PersistDeploySelectionCallback;
   // The COMPOSE+MATERIALIZE seam (docs/roadmap/templating-system.md). Every
   // greenfield derive composes a fragment-based template from the captured
   // lifecycle and materializes it into a fresh seed repo via this seam.
@@ -179,6 +180,7 @@ export interface DeriveFromCaptureInput {
   // WS-D3 (native-design-subsystem.md): the DESIGN AGENT that elaborates the captured
   // design intent into the designed HEAD `DesignContract`.
   designAgent?: DesignAgent;
+  bootstrapProject?: DeriveInput["bootstrapProject"];
 }
 
 export async function deriveFromCapture(
@@ -200,13 +202,14 @@ export async function deriveFromCapture(
     ...(input.probeRepoBareAutoInit === undefined ? {} : { probeRepoBareAutoInit: input.probeRepoBareAutoInit }),
     ...(input.autonomy === undefined ? {} : { autonomy: input.autonomy }),
     ...(input.deploy === undefined ? {} : { deploy: input.deploy }),
-    ...(input.destroyDeployApp === undefined ? {} : { destroyDeployApp: input.destroyDeployApp }),
+    ...(input.persistDeploySelection === undefined ? {} : { persistDeploySelection: input.persistDeploySelection }),
     ...(input.materializeTemplate === undefined ? {} : { materializeTemplate: input.materializeTemplate }),
     ...(input.fragmentLibrary === undefined ? {} : { fragmentLibrary: input.fragmentLibrary }),
     ...(input.runFragmentAuthoring === undefined ? {} : { runFragmentAuthoring: input.runFragmentAuthoring }),
     ...(deps.preflightDeploy === undefined ? {} : { preflightDeploy: deps.preflightDeploy }),
     ...(deps.prepareDeploy === undefined ? {} : { prepareDeploy: deps.prepareDeploy }),
     ...(input.designAgent === undefined ? {} : { designAgent: input.designAgent }),
+    ...(input.bootstrapProject === undefined ? {} : { bootstrapProject: input.bootstrapProject }),
   });
 }
 

@@ -27,6 +27,7 @@ import {
 } from "./shared.js";
 import { InsightThresholdsConfig } from "../insights/thresholds.js";
 import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
+import { canonicalOrgGithubCredentialRef } from "../credentials/refNamespace.js";
 
 // Top-level versioned Zod schema for project-level config. Persisted as a
 // JSONB column on `projects.config`. Most fields are partial overrides on
@@ -45,6 +46,21 @@ export const ProjectCredentialRefs = z
   })
   .strict();
 export type ProjectCredentialRefs = z.infer<typeof ProjectCredentialRefs>;
+
+/** Rebind a persisted project GitHub ref to the project's authenticated org. */
+export function bindProjectGithubCredentialRefs(config: ProjectConfigV1, orgId: string): ProjectConfigV1 {
+  const supplied = config.credentials?.githubCredentialRef;
+  if (supplied === undefined) {
+    return config;
+  }
+  return {
+    ...config,
+    credentials: {
+      ...config.credentials,
+      githubCredentialRef: canonicalOrgGithubCredentialRef({ orgId, supplied, kind: "github_token" }),
+    },
+  };
+}
 
 // The captured product identity / design-DNA from the greenfield vision
 // interview. The interview capture (`forge/interview/types.ts`) is otherwise

@@ -25,37 +25,30 @@ import type {
   ProjectContext,
   ProvisionedArtifact,
 } from "../contracts/integrationProvisioner.js";
+import {
+  projectIntegrationOperationTarget,
+  type IntegrationOperationTarget,
+  type IntegrationPrivilegedOperation,
+} from "../contracts/integrationAuthority.js";
 import type { DeployHttpTransport } from "./deployTransport.js";
 import { deployAppName } from "./deployAppName.js";
-import type { FlyImageBuilder } from "./flyImageBuilder.js";
+import { secretValueForDeployOperation } from "./deployOperationAuthority.js";
+import type {
+  DeployArtifactIdentity,
+  DeployEnvVar,
+  DeployProvisionerDeps,
+  DeployResult,
+  DeploySource,
+} from "./deployProvisionerTypes.js";
 
 export { DEPLOY_APP_NAME_MAX_LEN, deployAppName } from "./deployAppName.js";
-
-/** Dependencies every deploy provisioner runs over (injectable for unit tests). */
-export interface DeployProvisionerDeps {
-  /** The HTTP transport against the provider API (scripted fake in tests). */
-  transport: DeployHttpTransport;
-  /**
-   * Secret store the deploy-scoped token alias is written into. The org grant's
-   * `credentialRef` is resolved from here; the per-app alias points back at it.
-   */
-  secrets: SecretStore;
-  /**
-   * Fly-only: opt into the NON-merge-reflecting static-image deploy (env knob
-   * TANREN_ALLOW_FLY_STATIC_DEPLOY, parsed once by envSchema.ts; injected so the
-   * use-site never re-reads a mutable global). Ignored by Vercel. This is the
-   * escape hatch used only when NO `flyImageBuilder` is configured.
-   */
-  allowFlyStaticDeploy?: boolean;
-  /**
-   * Fly-only: injected image-build seam (`FlyImageBuilder`) that turns the merged commit
-   * into a per-commit image so `triggerDeploy` releases a MERGE-REFLECTING image. When
-   * present this is the DEFAULT path (no flag); `allowFlyStaticDeploy` is the escape
-   * hatch for when the builder is absent. Ignored by Vercel. Mirrors
-   * `EnvImageBuildDriver`'s doctrine (live = `docker buildx --push`). See `flyImageBuilder.ts`.
-   */
-  flyImageBuilder?: FlyImageBuilder;
-}
+export type {
+  DeployArtifactIdentity,
+  DeployEnvVar,
+  DeployProvisionerDeps,
+  DeployResult,
+  DeploySource,
+} from "./deployProvisionerTypes.js";
 
 /**
  * A provider-side deploy app/project: the stable handle (`appId`), the human
@@ -75,46 +68,6 @@ export interface DeployApp {
 }
 
 /**
- * A single runtime env var to set onto a deployed app. `key` is the env name the
- * built product reads; `value` is the resolved secret/plain VALUE (from the
- * App-Environment store). The value flows ONLY into the provider's set-env request
- * — it is never logged, placed in an event, returned, or held beyond the request.
- */
-export interface DeployEnvVar {
-  key: string;
-  value: string;
-}
-
-/**
- * The source the deploy is built FROM: the merged repo (`owner/name`) + the git
- * `ref` (branch/sha) the provider builds + releases. Captured post-merge so the
- * live product reflects the merged commit. NON-SECRET — only the repo coordinates +
- * a git ref; the deploy token is resolved separately (never carried here).
- */
-export interface DeploySource {
-  /** The merged repo, `owner/name` (the GitHub slug the run merged onto). */
-  repo: string;
-  /** The git ref the provider builds + releases (the run's branch / the default branch). */
-  ref: string;
-}
-
-/**
- * The live result of TRIGGERING a deploy: the provider-side deployment handle
- * (`deploymentId`), the resolved live URL the release is reachable at, and the
- * deployment `state` the provider reported. NON-SECRET — a URL + ids; surfaced into
- * `deploy.triggered` + the project config. `url` is the concrete, resolved URL (no
- * `{branch}`/`*` placeholder), so the rendered link resolves directly.
- */
-export interface DeployResult {
-  /** The provider's stable deployment handle (Vercel deployment id, Fly machine/release id). */
-  deploymentId: string;
-  /** The resolved live URL the deployment is reachable at (concrete, no placeholder). */
-  url: string;
-  /** The deployment state the provider reported (e.g. "BUILDING" | "READY" | "started"). */
-  state: string;
-}
-
-/**
  * The provider-reported live status of a TRIGGERED deployment, read back by polling
  * (the verify step). `state` is the provider's own string; `terminalReady` /
  * `terminalFailed` collapse the provider's vocabulary into the two outcomes verify
@@ -131,12 +84,6 @@ export interface DeploymentStatus {
   terminalFailed: boolean;
   /** The resolved live URL the deployment is reachable at (concrete, no placeholder). */
   url: string;
-}
-
-/** Provider-reported, unbranded artifact identity; the DeployAdapter validates it. */
-export interface DeployArtifactIdentity {
-  artifactDigest: string;
-  providerChecksum: string | null;
 }
 
 /**
@@ -193,19 +140,6 @@ export interface DeployProviderApi {
   ): Promise<DeployResult>;
   /** Remove a preview deployment. Idempotent when the deployment is already absent. */
   teardownDeployment(grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void>;
-  /**
-   * DESTROY a deploy app on the provider (task #78 — derive atomic rollback). The
-   * COMPENSATION primitive every deploy provider MUST expose: the greenfield derive
-   * registers a rollback for each newly-provisioned deploy app so a partial-create
-   * failure later in the derive walks back every external resource it produced.
-   * IDEMPOTENT — an app that no longer exists (404) is a successful no-op (the
-   * rollback semantic is "ensure this is gone"); other failures propagate LOUD so
-   * the compensation walker records + surfaces the rollback gap. Vercel:
-   * `DELETE /v9/projects/{id}`; Fly: `DELETE /v1/apps/{name}`. NEVER call from the
-   * regular run path — deploy-app destruction is irreversible and exists only to
-   * compensate a partially-failed derive.
-   */
-  destroyApp(grant: OrgGrant, token: string, app: DeployApp): Promise<void>;
 }
 
 /**
@@ -231,7 +165,6 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     return ["deploy"];
   }
 
-  /** The provider kind this provisioner speaks for — so the attach flow can assert the deployRef matches. */
   get providerKind(): string {
     return this.api.providerKind;
   }
@@ -247,7 +180,10 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     if (vars.length === 0) {
       return;
     }
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveToken(grant, "attach_runtime_env", {
+      resourceId: appId,
+      environment: "production",
+    });
     await this.api.setEnvVars(grant, token, appId, vars);
   }
 
@@ -259,7 +195,11 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
    * provider failure throws LOUD — a configured deploy never silently no-ops.
    */
   async deploy(grant: OrgGrant, appId: string, source: DeploySource): Promise<DeployResult> {
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveToken(grant, "deploy", {
+      resourceId: appId,
+      sourceRepo: source.repo,
+      sourceRef: source.ref,
+    });
     const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
     if (app === undefined) {
       throw new Error(`${this.api.providerKind}: cannot deploy unknown app '${appId}' (not found under the org grant)`);
@@ -268,58 +208,18 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
   }
 
   /**
-   * DESTROY a deploy app (task #78 — derive atomic rollback). The high-level
-   * COMPENSATION primitive: resolves the org grant token, hands the appId
-   * directly to the provider's {@link DeployProviderApi.destroyApp} as a
-   * synthesized {@link DeployApp}.
-   *
-   * AUDIT FINDING #8 — listApps GATE DROPPED. The prior shape `listApps + find +
-   * skip-if-absent` looked like idempotency but hid THREE real failure classes
-   * behind a silent compensation-success: (1) a paginated listing where the
-   * target id isn't on page 1, (2) a token whose org scope diverged between
-   * provision and rollback, (3) a transient empty list. Each yielded
-   * `destroyApp → return` with the app still alive — the exact "compensation
-   * contract" PR #695 promised to make load-bearing. The per-provider DELETEs
-   * ALREADY 404-idempotently (`flyDeployProvisioner.ts:232`,
-   * `vercelDeployProvisioner.ts:268`), so the gate added zero safety on top.
-   * Now we call the provider DELETE directly; an already-gone app is a 404 the
-   * per-provider arm swallows (the genuine idempotency primitive), while a
-   * non-404 failure propagates LOUD so the compensation walker records + surfaces
-   * the rollback gap. NEVER call from the regular run path.
-   *
-   * The synthesized DeployApp carries the REAL `name` (captured at provision time
-   * and persisted alongside the `appId` on the project config — see
-   * {@link artifactFor}) and an empty `previewUrlPattern` (the destroy path reads
-   * neither beyond the path construction above).
-   *
-   * AUDIT FINDING D4: BOTH `appId` AND `appName` are required because the two
-   * providers key on different attributes — Vercel's DELETE goes to
-   * `/v9/projects/{id}`, Fly's to `/v1/apps/{name}`. Fly's `listApps` returns
-   * `appId: app.id ?? app.name`, typically the distinct internal id (e.g.
-   * `fly_app_1`), so the prior `{ appId, name: appId }` synthesis fed Fly's
-   * destroy the WRONG path component — the DELETE 404'd and was swallowed as
-   * "already-gone success", exactly the silent compensation pattern audit #8 was
-   * meant to kill. The caller (the derive's compensation register) reads both
-   * `deployAppId` + `deployAppName` off the persisted project config and passes
-   * them through verbatim.
-   */
-  async destroyApp(grant: OrgGrant, target: { appId: string; appName: string }): Promise<void> {
-    const token = await this.resolveToken(grant);
-    await this.api.destroyApp(grant, token, {
-      appId: target.appId,
-      name: target.appName,
-      previewUrlPattern: "",
-    });
-  }
-
-  /**
    * Read the live status of a previously-triggered deployment on `appId` (the verify
    * poll primitive). Resolves the org token, finds the app under the grant, and hands
    * it to the provider's {@link DeployProviderApi.getDeployment}. A missing app or a
    * provider read failure throws LOUD — never an assumed-ready degrade.
    */
-  async deploymentStatus(grant: OrgGrant, appId: string, deploymentId: string): Promise<DeploymentStatus> {
-    const token = await this.resolveToken(grant);
+  async deploymentStatus(
+    grant: OrgGrant,
+    appId: string,
+    deploymentId: string,
+    operation: "verify" | "resolve_demo_surface" = "verify",
+  ): Promise<DeploymentStatus> {
+    const token = await this.resolveToken(grant, operation, { resourceId: appId, deploymentId });
     const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
     if (app === undefined) {
       throw new Error(
@@ -331,30 +231,48 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
 
   /** Resolve an existing deployment's provider-reported artifact identity. */
   async resolveArtifactIdentity(grant: OrgGrant, appId: string, deploymentId: string): Promise<DeployArtifactIdentity> {
-    const { token, app } = await this.appAccess(grant, appId, "resolve artifact identity for");
+    const { token, app } = await this.appAccess(
+      grant,
+      appId,
+      deploymentId,
+      "resolve_artifact_identity",
+      "resolve artifact identity for",
+    );
     return this.api.resolveArtifactIdentity(grant, token, app, deploymentId);
   }
 
   /** Promote the selected deployment to the app's production traffic surface. */
   async promoteToProduction(grant: OrgGrant, appId: string, deploymentId: string): Promise<DeployResult> {
-    const { token, app } = await this.appAccess(grant, appId, "promote a deployment on");
+    const { token, app } = await this.appAccess(grant, appId, deploymentId, "promote", "promote a deployment on");
     return this.api.promoteToProduction(grant, token, app, deploymentId);
   }
 
   /** Restore a previously verified deployment to the production traffic surface. */
   async rollbackToDeployment(grant: OrgGrant, appId: string, targetDeploymentId: string): Promise<DeployResult> {
-    const { token, app } = await this.appAccess(grant, appId, "roll back a deployment on");
+    const { token, app } = await this.appAccess(
+      grant,
+      appId,
+      targetDeploymentId,
+      "rollback",
+      "roll back a deployment on",
+    );
     return this.api.rollbackToDeployment(grant, token, app, targetDeploymentId);
   }
 
   /** Tear down a preview deployment; providers make an already-gone target a success. */
   async teardownDeployment(grant: OrgGrant, appId: string, deploymentId: string): Promise<void> {
-    const { token, app } = await this.appAccess(grant, appId, "tear down a deployment on");
+    const { token, app } = await this.appAccess(
+      grant,
+      appId,
+      deploymentId,
+      "teardown_deployment",
+      "tear down a deployment on",
+    );
     await this.api.teardownDeployment(grant, token, app, deploymentId);
   }
 
-  async discover(grant: OrgGrant): Promise<ExistingResource[]> {
-    const token = await this.resolveToken(grant);
+  async discover(grant: OrgGrant, projectCtx: ProjectContext): Promise<ExistingResource[]> {
+    const token = await this.resolveTokenForProject(grant, projectCtx, "discover", {});
     const apps = await this.api.listApps(grant, token);
     return apps.map((app) => ({
       id: app.appId,
@@ -364,7 +282,12 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
   }
 
   async provision(grant: OrgGrant, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveTokenForProject(
+      grant,
+      projectCtx,
+      "provision",
+      projectIntegrationOperationTarget(projectCtx),
+    );
     const name = deployAppName(projectCtx);
     // Find-or-create: re-running onboarding must NEVER create a second app. We
     // list first and reuse the stable-named match rather than blindly creating.
@@ -373,8 +296,13 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     return this.artifactFor(grant, app);
   }
 
-  async bind(grant: OrgGrant, existingResourceId: string, _projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
-    const token = await this.resolveToken(grant);
+  async bind(grant: OrgGrant, existingResourceId: string, projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
+    const token = await this.resolveTokenForProject(
+      grant,
+      projectCtx,
+      "bind",
+      projectIntegrationOperationTarget(projectCtx, existingResourceId),
+    );
     const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === existingResourceId);
     if (app === undefined) {
       throw new Error(
@@ -384,32 +312,38 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     return this.artifactFor(grant, app);
   }
 
-  /**
-   * Resolve the org grant's deploy token from the SecretStore. The VALUE never
-   * leaves this method (it is handed straight to the transport as a bearer); it is
-   * never placed in an artifact, logged, or returned.
-   */
-  private async resolveToken(grant: OrgGrant): Promise<string> {
-    const secret = await this.secrets.get(grant.credentialRef);
-    if (secret === undefined) {
-      throw new Error(
-        `${this.api.providerKind}: org grant credentialRef '${grant.credentialRef}' is not present in the secret store`,
-      );
-    }
-    return secret.value;
+  private async resolveToken(
+    grant: OrgGrant,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): Promise<string> {
+    return secretValueForDeployOperation(this.secrets, this.api.providerKind, grant, operation, target);
   }
 
-  /** Resolve the token and stable app exactly as the deploy path does. */
+  private resolveTokenForProject(
+    grant: OrgGrant,
+    projectCtx: ProjectContext,
+    operation: IntegrationPrivilegedOperation,
+    target: IntegrationOperationTarget,
+  ): Promise<string> {
+    if (grant.orgId !== projectCtx.orgId || grant.projectId !== projectCtx.projectId) {
+      throw new Error("eligible operation lease project binding mismatch");
+    }
+    return this.resolveToken(grant, operation, target);
+  }
+
   private async appAccess(
     grant: OrgGrant,
     appId: string,
-    operation: string,
+    deploymentId: string,
+    authorityOperation: "resolve_artifact_identity" | "promote" | "rollback" | "teardown_deployment",
+    description: string,
   ): Promise<{ token: string; app: DeployApp }> {
-    const token = await this.resolveToken(grant);
+    const token = await this.resolveToken(grant, authorityOperation, { resourceId: appId, deploymentId });
     const app = (await this.api.listApps(grant, token)).find((candidate) => candidate.appId === appId);
     if (app === undefined) {
       throw new Error(
-        `${this.api.providerKind}: cannot ${operation} unknown app '${appId}' (not found under the org grant)`,
+        `${this.api.providerKind}: cannot ${description} unknown app '${appId}' (not found under the org grant)`,
       );
     }
     return { token, app };
@@ -427,7 +361,7 @@ export abstract class DeployProvisioner implements IntegrationProvisioner {
     const tokenAliasRef = `secret://deploy/${this.api.providerKind}/${app.appId}/token`;
     // The alias points at the org credential ref (a POINTER string), never the
     // token value — same write-only model the Slack/Sentry artifacts use.
-    await this.secrets.put({ ref: tokenAliasRef, value: grant.credentialRef });
+    await this.secrets.put({ ref: tokenAliasRef, value: grant.eligibleOperation.credentialRef });
     return {
       deployRef: {
         provider: this.api.providerKind,

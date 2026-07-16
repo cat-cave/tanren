@@ -48,7 +48,7 @@ function readyReadModel(): DagReadModel {
       return {
         projectId,
         nodes: [{ specId: SPEC, phase: "pending", dependsOn: [], priority: "tbd", orderKey: 1 }],
-        archived: false,
+        projectLifecycle: "active",
       };
     },
   };
@@ -76,6 +76,7 @@ function twoReadySpecsReadModel(): DagReadModel {
           { specId: SPEC, phase: "pending", dependsOn: [], priority: "tbd", orderKey: 1 },
           { specId: OTHER_SPEC, phase: "pending", dependsOn: [], priority: "tbd", orderKey: 2 },
         ],
+        projectLifecycle: "active",
       };
     },
   };

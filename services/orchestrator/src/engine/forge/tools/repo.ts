@@ -6,6 +6,8 @@
 import type pg from "pg";
 import type { ActorContext } from "../../../auth/schemas.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
+import { bindProjectGithubCredentialRefs, migrateProjectConfig } from "../../config/projectConfig.js";
+import { resolveGithubToken } from "../../credentials/githubTokenResolver.js";
 import { resolveQueryClient } from "../../data/orgScopedDb.js";
 import type { GitHubHttpClient } from "../../providers/github.js";
 import { parseGitHubRepository } from "../../providers/github.js";
@@ -28,24 +30,19 @@ async function loadProjectRepo(
   // RLS R3a: the projects read carries org context when the forge-tool dispatch
   // has an ambient scope open; falls back to the pool otherwise (inert in R1).
   const db = resolveQueryClient(pool);
-  await assertProjectAccess(db, projectId, actor);
+  const { orgId } = await assertProjectAccess(db, projectId, actor);
   const row = await ForgeToolsStore.getProjectRepoAndConfig(db, projectId, systemActor);
   if (row === undefined) {
     throw new ToolAccessDeniedError(`project not found: ${projectId}`);
   }
   const repo = parseGitHubRepository(row.repoUrl);
-  const credentialRef =
-    typeof row.config === "object" && row.config !== null && typeof row.config["githubCredentialRef"] === "string"
-      ? row.config["githubCredentialRef"]
-      : undefined;
+  const credentialRef = bindProjectGithubCredentialRefs(migrateProjectConfig(row.config), orgId).credentials
+    ?.githubCredentialRef;
   if (credentialRef === undefined || credentialRef === "") {
     throw new ToolAccessDeniedError(`project ${projectId} has no GitHub credential ref`);
   }
-  const value = await secrets.get(credentialRef);
-  if (value === undefined || value.value === "") {
-    throw new ToolAccessDeniedError(`project ${projectId} GitHub credential is missing`);
-  }
-  return { repo, token: value.value };
+  const resolved = await resolveGithubToken({ secrets, orgId, staticRef: credentialRef });
+  return { repo, token: resolved.token };
 }
 
 function encodeRepoPath(path: string): string {

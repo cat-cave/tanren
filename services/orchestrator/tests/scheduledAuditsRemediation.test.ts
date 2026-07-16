@@ -12,6 +12,7 @@ import { AuditsStore, runAuditJob, type AuditPassRunner } from "../src/engine/fo
 import { intakeAutoRouteDeps } from "../src/engine/forge/intake/index.js";
 import { AUTONOMOUS_AUDIT_POSTURE } from "../src/engine/config/index.js";
 import { createDeterministicTriageAnswerer } from "./fixtures/forge/deterministicTriageAnswerer.js";
+import { inboxSourceRow } from "./helpers/inboxSourceRow.js";
 
 // A SQL-substring stub tracking inbox_sources + candidates + spec INSERTs, and serving
 // the project `config` blob `resolveAuditPosture` reads (the AUTONOMOUS posture here).
@@ -69,17 +70,24 @@ function stubPool(projectConfig: unknown): {
     }
     if (sql.startsWith("INSERT INTO inbox_sources")) {
       const [id, orgId, projectId, kind, name, detail, , enabled, autoRoute] = params as (string | null)[];
-      sources.set(String(id), {
-        id,
-        org_id: orgId,
-        project_id: projectId,
-        kind,
-        name,
-        detail,
-        config: {},
-        enabled,
-        auto_route: autoRoute,
-      });
+      sources.set(
+        String(id),
+        inboxSourceRow({
+          id: String(id),
+          orgId: String(orgId),
+          projectId: projectId === null ? null : String(projectId),
+          kind: kind as "scheduled_audit",
+          name: String(name),
+          detail: String(detail),
+          config: {},
+          enabled: enabled === "true",
+          autoRoute: autoRoute === "true",
+          state: "active",
+          attention: null,
+          retryNotBefore: null,
+          webhookConfigured: false,
+        }),
+      );
       return { rows: [{ ...sources.get(String(id))! }], rowCount: 1 };
     }
 

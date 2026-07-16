@@ -28,6 +28,27 @@ export type { QueryResult } from "./forgeRecoveryRecords.js";
 
 const NOW = new Date("2026-03-01T00:00:00.000Z");
 
+function inboxSourceRow(source: InboxSourceRec, includeProjectValidity = false) {
+  return {
+    id: source.id,
+    org_id: source.org_id,
+    project_id: source.project_id,
+    kind: source.kind,
+    name: source.name,
+    detail: source.detail,
+    config: source.config,
+    enabled: source.enabled,
+    auto_route: source.auto_route,
+    state: "active",
+    attention_code: null,
+    attention_message: null,
+    attention_observed_at: null,
+    webhook_configured: false,
+    retry_not_before: null,
+    ...(includeProjectValidity ? { project_valid: true } : {}),
+  };
+}
+
 // A `pg`-shaped client bound to one org scope; reads filter rows whose org_id is
 // not this scope (and the project-less projects rows stay visible only to their
 // own org). Writes mutate the shared store but only for rows visible to this
@@ -305,27 +326,25 @@ export class ForgeRecoveryScopedClient {
         created_at: NOW,
       };
       this.db.inboxSources.push(rec);
-      return { rows: [{ ...rec }], rowCount: 1 };
+      return { rows: [inboxSourceRow(rec)], rowCount: 1 };
     }
     if (
-      /^SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route FROM inbox_sources WHERE org_id = \$1 ORDER BY created_at$/u.test(
-        sql,
-      )
+      sql.startsWith("SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route,") &&
+      sql.includes("FROM inbox_sources WHERE org_id = $1 ORDER BY created_at")
     ) {
       const rows = visible()
         .filter((s) => s.org_id === params[0])
-        .map((s) => ({ ...s }));
+        .map((s) => inboxSourceRow(s, true));
       return { rows, rowCount: rows.length };
     }
     if (
-      /^SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route FROM inbox_sources WHERE id = \$1$/u.test(
-        sql,
-      )
+      sql.startsWith("SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route,") &&
+      sql.includes("FROM inbox_sources WHERE id = $1")
     ) {
       const s = visible().find((x) => x.id === params[0]);
-      return s === undefined ? { rows: [], rowCount: 0 } : { rows: [{ ...s }], rowCount: 1 };
+      return s === undefined ? { rows: [], rowCount: 0 } : { rows: [inboxSourceRow(s, true)], rowCount: 1 };
     }
-    if (sql === "SELECT DISTINCT org_id FROM inbox_sources WHERE enabled = 'true'") {
+    if (sql === "SELECT DISTINCT org_id FROM inbox_sources WHERE enabled = 'true' AND state = 'active'") {
       const rows = [
         ...new Set(
           visible()

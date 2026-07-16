@@ -17,7 +17,7 @@ async function publishedTitle(options: {
   spec?: RunPoolSpecOverrides;
 }): Promise<string | undefined> {
   const secrets = new FakeSecretStore();
-  await secrets.put({ ref: "credential/github/dev", value: "ghp_secretToken" });
+  await secrets.put({ ref: "credential/github/org/org_fake/dev", value: "ghp_secretToken" });
   const http = new ScriptedGitHubHttp([
     { status: 200, body: [] },
     {

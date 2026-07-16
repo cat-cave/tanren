@@ -5,10 +5,19 @@
 
 import type pg from "pg";
 import { z } from "zod";
-import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../../config/orgConfig.js";
-import { migrateProjectConfig } from "../../config/projectConfig.js";
+import {
+  bindOrgGithubCredentialRefs,
+  migrateOrgConfig,
+  type OrgGithubAppInstallation,
+} from "../../config/orgConfig.js";
+import {
+  bindProjectGithubCredentialRefs,
+  migrateProjectConfig,
+  type ProjectConfigV1,
+} from "../../config/projectConfig.js";
 import type { GovernancePosture, MergeIntegration, ReviewPolicy } from "../../config/shared.js";
-import { normalizeStaticGithubRef, validateGithubCredentialRef } from "../../credentials/githubToken.js";
+import { normalizeStaticGithubRef } from "../../credentials/githubToken.js";
+import { canonicalOrgGithubCredentialRef } from "../../credentials/refNamespace.js";
 
 export type RunStateClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -97,6 +106,12 @@ export class ReviewMergePullRequestNotFoundError extends Error {
   }
 }
 
+export class ReviewMergeRunLineageMismatchError extends Error {
+  constructor(runId: string) {
+    super(`run ownership lineage does not match for review/merge: ${runId}`);
+  }
+}
+
 /**
  * Options for {@link loadReviewMergeRunContext}.
  *
@@ -133,10 +148,14 @@ export async function loadReviewMergeRunContext(
   const result = await pool.query(
     // org_id is the run's tenant key (NOT NULL on `runs`); surfaced on the context so
     // every downstream tenant write (event-store append) stamps it directly (v68 fix).
-    `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url, r.branch, p.config, p.default_branch, o.config AS org_config
+    `SELECT r.run_id, r.spec_id, r.project_id, r.org_id, r.pr_url, r.branch,
+            p.config, p.default_branch, p.org_id AS project_org_id,
+            s.org_id AS spec_org_id, s.project_id AS spec_project_id,
+            o.config AS org_config
      FROM runs r
-     JOIN projects p ON p.project_id = r.project_id
-     LEFT JOIN organizations o ON o.id = p.org_id
+     LEFT JOIN projects p ON p.project_id = r.project_id
+     LEFT JOIN specs s ON s.spec_id = r.spec_id
+     LEFT JOIN organizations o ON o.id = r.org_id
      WHERE r.run_id = $1`,
     [runId],
   );
@@ -145,12 +164,22 @@ export async function loadReviewMergeRunContext(
     throw new ReviewMergeRunNotFoundError(runId);
   }
   const row = ReviewMergeRunRow.parse(rawRow);
+  if (row.project_org_id !== row.org_id || row.spec_org_id !== row.org_id || row.spec_project_id !== row.project_id) {
+    throw new ReviewMergeRunLineageMismatchError(runId);
+  }
   if (row.pr_url === null) {
     throw new ReviewMergePullRequestNotFoundError(runId);
   }
-  const projectConfig = migrateProjectConfig(row.config);
-  const installation = installationFromOrgConfig(row.org_config);
-  const staticCredentialRef = resolvedStaticCredentialRef(options.resolvedGithubCredentialRef, row.config);
+  const projectConfig = bindProjectGithubCredentialRefs(migrateProjectConfig(row.config), row.org_id);
+  const installation =
+    row.org_config === null || row.org_config === undefined
+      ? undefined
+      : bindOrgGithubCredentialRefs(migrateOrgConfig(row.org_config), row.org_id).github_app;
+  const staticCredentialRef = resolvedStaticCredentialRef(
+    options.resolvedGithubCredentialRef,
+    projectConfig,
+    row.org_id,
+  );
   return {
     runId: row.run_id,
     specId: row.spec_id,
@@ -176,11 +205,15 @@ export async function loadReviewMergeRunContext(
  * used) wins; otherwise fall back to the project-config-JSONB ref for out-of-band
  * callers that did not pre-resolve.
  */
-function resolvedStaticCredentialRef(resolvedRef: string | undefined, config: unknown): string | undefined {
+function resolvedStaticCredentialRef(
+  resolvedRef: string | undefined,
+  config: ProjectConfigV1,
+  orgId: string,
+): string | undefined {
   if (typeof resolvedRef === "string" && resolvedRef.trim() !== "") {
-    return validateGithubCredentialRef(resolvedRef);
+    return canonicalOrgGithubCredentialRef({ orgId, supplied: resolvedRef, kind: "github_token" });
   }
-  return credentialRefFromConfig(config);
+  return normalizeStaticGithubRef(config.credentials?.githubCredentialRef);
 }
 
 /**
@@ -197,20 +230,6 @@ function tanrenLoginsFor(configured: ReadonlyArray<string> | undefined): Readonl
   return [DEFAULT_TANREN_LOGIN, ...(configured ?? [])];
 }
 
-function credentialRefFromConfig(config: unknown): string | undefined {
-  const record =
-    typeof config === "object" && config !== null && !Array.isArray(config) ? (config as Record<string, unknown>) : {};
-  const credentials =
-    typeof record["credentials"] === "object" && record["credentials"] !== null
-      ? (record["credentials"] as Record<string, unknown>)
-      : {};
-  const ref = credentials["githubCredentialRef"] ?? record["githubCredentialRef"];
-  // App-FIRST: an EMPTY-STRING ref (the App sentinel) or whitespace collapses to
-  // "no static ref" → mint the App token, never `validateGithubCredentialRef("")`
-  // (the apex v30 empty-ref crash). A non-empty ref is grammar-validated as before.
-  return normalizeStaticGithubRef(typeof ref === "string" ? ref : undefined);
-}
-
 // Typed row decode (no raw `as` cast — the architecture check forbids those in
 // workflow code; we parse the SQL row through a Zod schema instead).
 const ReviewMergeRunRow = z.object({
@@ -219,6 +238,9 @@ const ReviewMergeRunRow = z.object({
   project_id: z.string(),
   // runs.org_id is NOT NULL on the table — every loaded run resolves a real org.
   org_id: z.string(),
+  project_org_id: z.string().nullable(),
+  spec_org_id: z.string().nullable(),
+  spec_project_id: z.string().nullable(),
   pr_url: z.string().nullable(),
   branch: z.string().nullish(),
   config: z.unknown(),

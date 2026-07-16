@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   bigint,
   check,
+  foreignKey,
   index,
   jsonb,
   pgTable,
@@ -38,7 +39,9 @@ export const projects = pgTable(
       .default(sql`'{"version":1}'::jsonb`),
     // App CAS gen (never xmin). mode number + CHECK ≤ MAX_SAFE_INTEGER; HTTP uses ::text.
     configRevision: bigint("config_revision", { mode: "number" }).notNull().default(1),
-    // Operator lifecycle: active (walker drives) or archived (paused). Archive surface only.
+    // Operator lifecycle: 'deriving' (greenfield graph incomplete), 'active'
+    // (the autonomous walker drives it), or 'archived' (walker + strand
+    // reconciler skip it; in-flight runs/specs are cancelled on archive).
     lifecycle: text("lifecycle").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     orgId: text("org_id")
@@ -50,7 +53,9 @@ export const projects = pgTable(
       "projects_config_revision_range_check",
       sql`${table.configRevision} >= 1 AND ${table.configRevision} <= 9007199254740991`,
     ),
+    uniqueIndex("projects_org_project_unique").on(table.orgId, table.projectId),
     index("projects_org_id").on(table.orgId),
+    check("projects_lifecycle_check", sql`${table.lifecycle} IN ('deriving','active','archived')`),
   ],
 );
 
@@ -91,6 +96,13 @@ export const specs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "specs_project_lineage_fk",
+    }),
+    uniqueIndex("specs_org_spec_unique").on(table.orgId, table.specId),
+    uniqueIndex("specs_org_project_spec_unique").on(table.orgId, table.projectId, table.specId),
     enumCheck("specs_status_check", table.status, stateEnumLists.specs_status),
     enumCheck("specs_priority_check", table.priority, ["P0", "P1", "P2", "tbd"]),
     enumCheck("specs_mode_check", table.mode, ["specialize_seed", "from_scratch"]),
@@ -195,6 +207,16 @@ export const runs = pgTable(
     ancestorStack: jsonb("ancestor_stack"),
   },
   (table) => [
+    foreignKey({
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "runs_project_lineage_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.specId],
+      foreignColumns: [specs.orgId, specs.projectId, specs.specId],
+      name: "runs_spec_lineage_fk",
+    }),
     enumCheck("runs_status_check", table.status, stateEnumLists.runs_status),
     check(
       "runs_outcome_check",
@@ -203,7 +225,10 @@ export const runs = pgTable(
       )})`,
     ),
     index("runs_org_id").on(table.orgId),
-    index("runs_org_run").on(table.orgId, table.runId),
+    uniqueIndex("runs_org_run_unique").on(table.orgId, table.runId),
+    uniqueIndex("runs_org_spec_run_unique").on(table.orgId, table.specId, table.runId),
+    uniqueIndex("runs_org_project_run_unique").on(table.orgId, table.projectId, table.runId),
+    uniqueIndex("runs_org_project_spec_run_unique").on(table.orgId, table.projectId, table.specId, table.runId),
     index("runs_org_project").on(table.orgId, table.projectId),
     // The §3.7f concurrency query: count the ACTIVE runs sharing one credential
     // (auth_ref) during a drawdown measurement → org-scoped, by auth_ref + status.
@@ -271,6 +296,21 @@ export const mergeQueue = pgTable(
     settledAt: timestamp("settled_at", { withTimezone: true }),
   },
   (table) => [
+    foreignKey({
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "merge_queue_project_lineage_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.specId],
+      foreignColumns: [specs.orgId, specs.projectId, specs.specId],
+      name: "merge_queue_spec_lineage_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.specId, table.runId],
+      foreignColumns: [runs.orgId, runs.projectId, runs.specId, runs.runId],
+      name: "merge_queue_run_lineage_fk",
+    }),
     enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued"]),
     check(
       "merge_queue_dequeue_reason_check",
@@ -363,127 +403,23 @@ export const postMergeIssueClaims = pgTable(
     filedAt: timestamp("filed_at", { withTimezone: true }),
   },
   (table) => [
+    foreignKey({
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "post_merge_issue_claims_project_lineage_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.specId],
+      foreignColumns: [specs.orgId, specs.projectId, specs.specId],
+      name: "post_merge_issue_claims_spec_lineage_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.projectId, table.specId, table.runId],
+      foreignColumns: [runs.orgId, runs.projectId, runs.specId, runs.runId],
+      name: "post_merge_issue_claims_run_lineage_fk",
+    }),
     enumCheck("post_merge_issue_claims_status_check", table.status, ["claimed", "filed"]),
     index("post_merge_issue_claims_org_id").on(table.orgId),
     index("post_merge_issue_claims_org_project").on(table.orgId, table.projectId),
-  ],
-);
-
-// tanren-owns-the-engine.md §3: the ONE unified run model — `integration_nodes`.
-// A node IS work on a base branch that may shift: `main + an ordered set of
-// not-yet-landed ancestor branches`. The SAME object is an eager dependent build,
-// a merge-queue batch, and a stacked/chain PR — the speculative-vs-real and
-// eager-vs-unrelated divergence collapsed into one row.
-//
-// Wave 2 / Slice S0 is OBSERVE-ONLY: this table is WRITTEN ALONGSIDE the jj-native
-// `runs.ancestor_stack` + percolation columns (additive, try/catch-wrapped), and
-// drives NO control flow. The §8 guardrail — migrate the speculative/percolation
-// state through an EXPLICIT compatibility read-model, never silent abandonment —
-// lives in `engine/dag/integrationNodesPg.ts` (the read-model projects existing run
-// rows into this shape). The columns mirror the FROZEN `IntegrationNode` typed
-// shape (engine/contracts/integrationNodes.ts).
-//
-// `member_key` = hash(base_sha + ordered member shas) — the identity of the
-// integrated CONTENT (the proof-reuse cache's primary key). The pure `memberKey`
-// computes it; a unique index on (org_id, member_key) is the idempotency boundary
-// (the same integrated content is one node per org — observe-only UPSERTs onto it).
-//
-// org_id is the tenant root (RLS deny-by-default, 3a-style direct org match like
-// merge_queue / post_merge_issue_claims): a query off the org-scoped client sees
-// ZERO rows. NO empty-on-missing-org fallback (the fail-closed RLS doctrine).
-export const integrationNodes = pgTable(
-  "integration_nodes",
-  {
-    nodeId: text("node_id").primaryKey(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.projectId),
-    orgId: text("org_id")
-      .notNull()
-      .references(() => organizations.id),
-    /** The real base branch the node is built ON (`main` / the project default). */
-    baseBranch: text("base_branch").notNull(),
-    /** The base branch's SHA the node bases on (the `memberKey` base component). */
-    baseSha: text("base_sha").notNull(),
-    /** The ephemeral git ref the node materializes as (the integration branch). */
-    ref: text("ref").notNull(),
-    /** The intent label — NEVER branches control flow (all four are one object). */
-    purpose: text("purpose").notNull(),
-    /** The ordered members merged into the base (`IntegrationNodeMember[]`, jsonb). */
-    members: jsonb("members")
-      .notNull()
-      .default(sql`'[]'::jsonb`),
-    /** `hash(base_sha + ordered member shas)` — identity of the integrated content. */
-    memberKey: text("member_key").notNull(),
-    /** The gate config the proof a node carries was produced under. */
-    gateConfigHash: text("gate_config_hash").notNull().default(""),
-    /** The posture/policy version the proof was produced under. */
-    policyVersion: text("policy_version").notNull().default(""),
-    /** The affected-tier fingerprint (Wave-3 affected-tier gate skipping). */
-    affectedFingerprint: text("affected_fingerprint").notNull().default(""),
-    /** The materialized node's head SHA (when built); NULL while `building`. */
-    headSha: text("head_sha"),
-    /** The materialized node's tree hash (when built); NULL while `building`. */
-    treeHash: text("tree_hash"),
-    /** The node lifecycle: building → ready → landed → stale. */
-    status: text("status").notNull().default("building"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    check(
-      "integration_nodes_purpose_check",
-      sql`${table.purpose} IN ('eager_base','merge_batch','stack_head','bisect_prefix')`,
-    ),
-    check("integration_nodes_status_check", sql`${table.status} IN ('building','ready','landed','stale')`),
-    index("integration_nodes_org_id").on(table.orgId),
-    index("integration_nodes_org_project").on(table.orgId, table.projectId),
-    // The idempotency boundary: one node per (org, integrated content). The
-    // observe-only hook UPSERTs onto this key so a re-walk of the same base +
-    // ordered members refreshes the existing node rather than duplicating it.
-    uniqueIndex("integration_nodes_org_member_key_unique").on(table.orgId, table.memberKey),
-  ],
-);
-
-// tanren-owns-the-engine.md §3 proof reuse: a gate/CI verdict on a node is reused
-// ONLY when EVERY component of the `proofReuseKey` matches (member_key +
-// gate_config_hash + policy_version + runner image + app-env + quarantine). This
-// table records the proof keyed by that full key — so a batch proof carries into
-// the real merge, a bisection reads a prefix node's proof, and a no-op rebase skips
-// unaffected gate tiers (all Wave-3 leverage; OBSERVE-ONLY now). `proof_reuse_key`
-// is the natural identity (the same six inputs → one proof per org).
-//
-// org_id is the tenant root (RLS deny-by-default, 3a-style direct org match).
-export const integrationProofs = pgTable(
-  "integration_proofs",
-  {
-    proofId: text("proof_id").primaryKey(),
-    projectId: text("project_id")
-      .notNull()
-      .references(() => projects.projectId),
-    orgId: text("org_id")
-      .notNull()
-      .references(() => organizations.id),
-    /** The node the proof was produced on (FK → integration_nodes). */
-    nodeId: text("node_id")
-      .notNull()
-      .references(() => integrationNodes.nodeId),
-    /** The full proof-reuse key (the six inputs hashed) — the reuse-cache identity. */
-    proofReuseKey: text("proof_reuse_key").notNull(),
-    /** The verdict the proof carries (the gate/CI outcome). */
-    verdict: text("verdict").notNull(),
-    /** Free-form evidence (tier results, CI run ref, …) — jsonb. */
-    evidence: jsonb("evidence")
-      .notNull()
-      .default(sql`'{}'::jsonb`),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index("integration_proofs_org_id").on(table.orgId),
-    index("integration_proofs_org_project").on(table.orgId, table.projectId),
-    index("integration_proofs_node_id").on(table.nodeId),
-    // The reuse boundary: one proof per (org, full reuse key). A reuse lookup keys
-    // on this; any drift in the six inputs yields a different key → a recompute.
-    uniqueIndex("integration_proofs_org_reuse_key_unique").on(table.orgId, table.proofReuseKey),
   ],
 );

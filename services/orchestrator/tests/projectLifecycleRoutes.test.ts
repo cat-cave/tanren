@@ -12,6 +12,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
+import { ProjectStore } from "../src/engine/repositories/projects.js";
 import { createAuthMiddleware, type ActorContextEnv } from "../src/middleware/auth.js";
 import { createProjectRoutes } from "../src/routes/projects/index.js";
 import { RoutesPool } from "./helpers/routesPool.js";
@@ -67,6 +68,32 @@ async function get(app: Hono<ActorContextEnv>, path: string): Promise<{ status: 
 }
 
 describe("project lifecycle routes", () => {
+  it("fails closed when a project row omits lifecycle instead of defaulting active", async () => {
+    const client = {
+      async query() {
+        return {
+          rows: [
+            {
+              project_id: "project_incomplete",
+              name: "Incomplete",
+              repo_url: "https://github.com/cat-cave/incomplete",
+              default_branch: "main",
+              runner_image: "runner:test",
+              allocator: "local-docker",
+              config: { version: 1 },
+              org_id: "org_acme",
+            },
+          ],
+          rowCount: 1,
+        };
+      },
+    };
+
+    await expect(ProjectStore.get(client as never, "project_incomplete", { kind: "operator" })).rejects.toThrow(
+      /lifecycle/iu,
+    );
+  });
+
   it("archives a project, cancels its in-flight runs, and the read reflects it", async () => {
     const { app, pool } = buildHarness();
     pool.seedRun({ run_id: "run_q", project_id: "proj_1", status: "queued" });
@@ -102,6 +129,30 @@ describe("project lifecycle routes", () => {
     const { app } = buildHarness();
     const read = await get(app, "/orgs/org_acme/projects/proj_1");
     expect(read.body.lifecycle).toBe("active");
+  });
+
+  it("does not let archive/unarchive bypass an in-progress deriving shell", async () => {
+    const { app, pool } = buildHarness();
+    const project = pool.projects.get("proj_1");
+    if (project === undefined) throw new Error("project fixture missing");
+    project.lifecycle = "deriving";
+
+    const archive = await post(app, "/orgs/org_acme/projects/proj_1/archive");
+    expect(archive.status).toBe(409);
+    expect(archive.body).toMatchObject({
+      error: "project_lifecycle_conflict",
+      currentLifecycle: "deriving",
+      expectedLifecycle: "active",
+    });
+
+    const unarchive = await post(app, "/orgs/org_acme/projects/proj_1/unarchive");
+    expect(unarchive.status).toBe(409);
+    expect(unarchive.body).toMatchObject({
+      error: "project_lifecycle_conflict",
+      currentLifecycle: "deriving",
+      expectedLifecycle: "archived",
+    });
+    expect(pool.projects.get("proj_1")?.lifecycle).toBe("deriving");
   });
 
   it("rejects an archive from a non-admin actor with 403", async () => {

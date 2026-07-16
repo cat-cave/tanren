@@ -25,7 +25,7 @@ import {
 } from "./helpers/workerExec.js";
 import { WorkerPool } from "./helpers/workerPool.js";
 
-const ORG = "org_worker_test";
+const ORG = SEEDED_ORG_ID;
 
 // A plan run ALWAYS carries an org (the worker fails closed on a null-org plan job),
 // so the enqueue defaults to the seeded run's org (which `setupSeededRun` makes the

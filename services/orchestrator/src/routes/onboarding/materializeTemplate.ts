@@ -59,40 +59,54 @@ export function buildLiveMaterializeTemplate(
       }
       const creds = {
         secrets,
+        orgId,
         ...(installation !== undefined && { installation }),
         ...(staticRef !== undefined && { staticRef }),
         ...(githubAppMinter === undefined ? {} : { minter: githubAppMinter }),
       };
       const resolved = await resolveVcsToken(githubHttp, creds);
-      const repo = parseGitHubRepository(input.repoUrl);
-      // GET the existing blob SHA (if any) so an idempotent overwrite carries the
-      // expected `sha` (GitHub's contents API requires it to update a file —
-      // auto-init seeded a README.md; subsequent re-pushes target existing files).
-      const existing = await githubHttp.request({
-        method: "GET",
-        path: contentsPath(repo, input.path, input.defaultBranch),
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-      });
-      const sha = existing.status === 200 ? readContentSha(existing.body) : undefined;
-      const put = await githubHttp.request({
-        method: "PUT",
-        path: contentsPath(repo, input.path),
-        token: resolved.token,
-        refreshToken: resolved.refresh,
-        body: {
-          message: input.message,
-          branch: input.defaultBranch,
-          content: Buffer.from(input.content, "utf8").toString("base64"),
-          ...(sha === undefined ? {} : { sha }),
-        },
-      });
-      if (put.status !== 200 && put.status !== 201) {
-        throw new Error(`materialize push for ${input.path} failed: HTTP ${put.status}`);
-      }
-      return { commitSha: readCommitSha(put.body) };
+      return reconcileMaterializedFile(githubHttp, resolved, input);
     },
   });
+}
+
+/**
+ * Reconcile one composed file by exact content. A retry after the provider
+ * accepted the PUT but before Tanren stored the template receipt observes the
+ * same bytes and performs no second commit.
+ */
+export async function reconcileMaterializedFile(
+  githubHttp: GitHubHttpClient,
+  token: { token: string; refresh?: () => Promise<string> },
+  input: { repoUrl: string; defaultBranch: string; path: string; content: string; message: string },
+): Promise<{ commitSha: string }> {
+  const repo = parseGitHubRepository(input.repoUrl);
+  const existing = await githubHttp.request({
+    method: "GET",
+    path: contentsPath(repo, input.path, input.defaultBranch),
+    token: token.token,
+    refreshToken: token.refresh,
+  });
+  const file = existing.status === 200 ? readExistingFile(existing.body) : undefined;
+  if (file?.sha !== undefined && file.content === input.content) {
+    return { commitSha: file.sha };
+  }
+  const put = await githubHttp.request({
+    method: "PUT",
+    path: contentsPath(repo, input.path),
+    token: token.token,
+    refreshToken: token.refresh,
+    body: {
+      message: input.message,
+      branch: input.defaultBranch,
+      content: Buffer.from(input.content, "utf8").toString("base64"),
+      ...(file?.sha === undefined ? {} : { sha: file.sha }),
+    },
+  });
+  if (put.status !== 200 && put.status !== 201) {
+    throw new Error(`materialize push for ${input.path} failed: HTTP ${put.status}`);
+  }
+  return { commitSha: readCommitSha(put.body) };
 }
 
 function repoApi(repo: GitHubRepository, suffix: string): string {
@@ -111,12 +125,17 @@ function contentsPath(repo: GitHubRepository, path: string, ref?: string): strin
   return ref === undefined ? base : `${base}?ref=${encodeURIComponent(ref)}`;
 }
 
-function readContentSha(body: unknown): string | undefined {
+function readExistingFile(body: unknown): { sha?: string; content?: string } {
   if (typeof body === "object" && body !== null) {
-    const sha = (body as Record<string, unknown>)["sha"];
-    if (typeof sha === "string" && sha !== "") return sha;
+    const record = body as Record<string, unknown>;
+    const sha = typeof record["sha"] === "string" && record["sha"] !== "" ? record["sha"] : undefined;
+    const content =
+      record["encoding"] === "base64" && typeof record["content"] === "string"
+        ? Buffer.from(record["content"].replaceAll(/\s/gu, ""), "base64").toString("utf8")
+        : undefined;
+    return { ...(sha === undefined ? {} : { sha }), ...(content === undefined ? {} : { content }) };
   }
-  return undefined;
+  return {};
 }
 
 function readCommitSha(body: unknown): string {

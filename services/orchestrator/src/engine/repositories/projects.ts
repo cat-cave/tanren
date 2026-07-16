@@ -11,8 +11,8 @@ import type { ActorRef } from "../state/actor.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
-/** A project's operator lifecycle: the autonomous-walker-driven default, or paused. */
-const ProjectLifecycleEnum = z.enum(["active", "archived"]);
+/** A project's lifecycle: deriving, autonomous-walker-driven, or operator-paused. */
+export const ProjectLifecycleEnum = z.enum(["deriving", "active", "archived"]);
 export type ProjectLifecycle = z.infer<typeof ProjectLifecycleEnum>;
 
 // The project row as the HTTP project/brownfield routes read it. `config` is an
@@ -28,9 +28,9 @@ export const ProjectRow = z.object({
   config: z.unknown(),
   /** Decimal string of config_revision — present when the SELECT includes it. */
   configRevision: z.string().optional(),
-  // Operator lifecycle: `active` (default) or `archived` (paused). Defaults to
-  // `active` when the column is absent on a row (e.g. a test fake that predates it).
-  lifecycle: ProjectLifecycleEnum.default("active"),
+  // Mandatory at the repository boundary. An omitted/unknown lifecycle must not
+  // silently turn a partial greenfield shell into an active autonomous project.
+  lifecycle: ProjectLifecycleEnum,
   // Present only on the single-project read (which selects it for the tenant
   // check); null when the column is absent/unset.
   orgId: z.string().nullable().optional(),
@@ -48,7 +48,7 @@ interface RawProjectRow {
   allocator: unknown;
   config: unknown;
   config_revision?: unknown;
-  lifecycle?: unknown;
+  lifecycle: unknown;
   org_id?: unknown;
 }
 
@@ -66,8 +66,7 @@ function decodeProjectRow(raw: RawProjectRow): ProjectRow {
     allocator: raw.allocator,
     config: raw.config,
     configRevision: raw.config_revision === undefined ? undefined : revisionText(raw.config_revision),
-    // Absent on a fake/legacy row ⇒ the schema default ("active") applies.
-    lifecycle: raw.lifecycle ?? undefined,
+    lifecycle: raw.lifecycle,
     orgId: raw.org_id === undefined ? undefined : nullableText(raw.org_id),
   });
 }
@@ -87,21 +86,46 @@ export const ProjectStore = {
 
   /**
    * A single project by its REPO URL — the natural idempotency key for a greenfield
-   * create (one project per greenfield repo). The org-scoping client bounds the row
-   * to the caller's org under RLS. `undefined` when no row exists.
+   * create (one project per greenfield repo). The explicit org predicate and RLS
+   * both bound the row to the caller's org, so a retry only ever re-attaches to a
+   * project the SAME org already created. `undefined` when no row exists. Used by the idempotent
+   * greenfield create to resume a stranded provisioning instead of double-provisioning
+   * + 409-ing on the already-created repo (audit §3.10).
    */
-  async findByRepoUrl(client: QueryClient, repoUrl: string, _actor: ActorRef): Promise<ProjectRow | undefined> {
+  async findByRepoUrl(
+    client: QueryClient,
+    orgId: string,
+    repoUrl: string,
+    _actor: ActorRef,
+  ): Promise<ProjectRow | undefined> {
+    // Match on the CANONICAL repo URL ignoring a trailing `.git` on either side: the
+    // forge `html_url` the project row stores has no `.git`, while the deterministic
+    // clone remote (`githubHttpsRemote`) does. A retry must re-attach regardless of
+    // which form the caller passes — so both stored and queried URLs are `.git`-trimmed.
     const canonical = repoUrl.replace(/\.git$/u, "");
     const result = await client.query<RawProjectRow>(
       `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
          FROM projects
-        WHERE regexp_replace(repo_url, '\\.git$', '') = $1
+        WHERE regexp_replace(repo_url, '\\.git$', '') = $1 AND org_id = $2
         LIMIT 1`,
-      [canonical],
+      [canonical, orgId],
     );
     const row = result.rows[0];
     if (row === undefined) return undefined;
     return decodeProjectRow(row);
+  },
+
+  /** All canonical repo matches. Derivation resume requires exactly one matching operation-owned shell. */
+  async listByRepoUrl(client: QueryClient, orgId: string, repoUrl: string, _actor: ActorRef): Promise<ProjectRow[]> {
+    const canonical = repoUrl.replace(/\.git$/u, "");
+    const result = await client.query<RawProjectRow>(
+      `SELECT ${SELECT_PROJECT_COLUMNS}, org_id, lifecycle
+         FROM projects
+        WHERE regexp_replace(repo_url, '\\.git$', '') = $1 AND org_id = $2
+        ORDER BY project_id`,
+      [canonical, orgId],
+    );
+    return result.rows.map((row) => decodeProjectRow(row));
   },
 
   /**
@@ -245,3 +269,22 @@ export const ProjectStore = {
     await client.query("UPDATE projects SET repo_url = $1 WHERE project_id = $2", [repoUrl, projectId]);
   },
 } as const;
+
+export {
+  ProjectDerivationConflictError,
+  ProjectDerivationRow,
+  ProjectDerivationStore,
+  buildDerivationOwnership,
+  explicitRepositoryMarker,
+  projectDerivationFingerprint,
+  repositoryOwnershipMarker,
+  withProjectDerivationLock,
+} from "./projectDerivations.js";
+export type {
+  CompleteDirectDerivation,
+  CompleteInterviewDerivation,
+  DerivationKind,
+  DerivationOwnershipReceipt,
+  DerivationPhase,
+  DerivationStatus,
+} from "./projectDerivations.js";

@@ -113,10 +113,16 @@ export class PgPostMergeIssueClaimStore implements PostMergeIssueClaimStore {
     return runWithSystemScope(this.pool, async (client) => {
       const result = await client.query<{ exists: boolean }>(
         `SELECT EXISTS (
-           SELECT 1 FROM post_merge_issue_claims
-            WHERE run_id = $1
-              AND (status = 'filed'
-                   OR claimed_at >= now() - ($2::bigint * interval '1 millisecond'))
+           SELECT 1
+             FROM post_merge_issue_claims c
+             JOIN runs r
+               ON r.run_id = c.run_id AND r.org_id = c.org_id
+              AND r.project_id = c.project_id AND r.spec_id = c.spec_id
+             JOIN projects p ON p.project_id = r.project_id AND p.org_id = r.org_id
+             JOIN specs s ON s.spec_id = r.spec_id AND s.project_id = r.project_id AND s.org_id = r.org_id
+            WHERE c.run_id = $1
+              AND (c.status = 'filed'
+                   OR c.claimed_at >= now() - ($2::bigint * interval '1 millisecond'))
          ) AS exists`,
         [runId, POST_MERGE_CLAIM_LEASE_MS],
       );
@@ -127,11 +133,43 @@ export class PgPostMergeIssueClaimStore implements PostMergeIssueClaimStore {
   /** Resolve the claim row's org (the claim INSERT already stamped it), system-scoped. */
   private async resolveRunOrg(runId: string): Promise<string | null> {
     return runWithSystemScope(this.pool, async (client) => {
-      const result = await client.query<{ org_id: string }>(
-        "SELECT org_id FROM post_merge_issue_claims WHERE run_id = $1",
+      const result = await client.query<{
+        claim_org_id: string;
+        claim_project_id: string;
+        claim_spec_id: string;
+        run_org_id: string | null;
+        run_project_id: string | null;
+        run_spec_id: string | null;
+        project_org_id: string | null;
+        spec_org_id: string | null;
+        spec_project_id: string | null;
+      }>(
+        `SELECT c.org_id AS claim_org_id, c.project_id AS claim_project_id, c.spec_id AS claim_spec_id,
+                r.org_id AS run_org_id, r.project_id AS run_project_id, r.spec_id AS run_spec_id,
+                p.org_id AS project_org_id, s.org_id AS spec_org_id, s.project_id AS spec_project_id
+           FROM post_merge_issue_claims c
+           LEFT JOIN runs r ON r.run_id = c.run_id
+           LEFT JOIN projects p ON p.project_id = r.project_id
+           LEFT JOIN specs s ON s.spec_id = r.spec_id
+          WHERE c.run_id = $1`,
         [runId],
       );
-      return result.rows[0]?.org_id ?? null;
+      const row = result.rows[0];
+      if (row === undefined) return null;
+      if (
+        row.run_org_id === null ||
+        row.run_project_id === null ||
+        row.run_spec_id === null ||
+        row.project_org_id !== row.run_org_id ||
+        row.spec_org_id !== row.run_org_id ||
+        row.spec_project_id !== row.run_project_id ||
+        row.claim_org_id !== row.run_org_id ||
+        row.claim_project_id !== row.run_project_id ||
+        row.claim_spec_id !== row.run_spec_id
+      ) {
+        throw new Error(`post-merge issue claim lineage mismatch for run '${runId}'`);
+      }
+      return row.run_org_id;
     });
   }
 }

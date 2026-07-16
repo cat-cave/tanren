@@ -27,6 +27,7 @@ export interface ProjectRecord {
   allocator: string;
   config: unknown;
   config_revision: number;
+  lifecycle: string;
   org_id: string | null;
 }
 
@@ -182,6 +183,7 @@ export class MemoryDb {
       allocator: p.allocator,
       config: p.config,
       config_revision: 1,
+      lifecycle: "active",
       org_id: p.orgId,
     });
   }

@@ -15,6 +15,7 @@ import {
   readObservedVersion,
 } from "./shared.js";
 import { DefaultLlmEntry } from "../credentials/defaultLlmEntry.js";
+import { canonicalOrgGithubCredentialRef } from "../credentials/refNamespace.js";
 
 // Top-level versioned Zod schema for org-level config. Persisted as a JSONB
 // column on `organizations.config`. Projects inherit these values unless they
@@ -142,6 +143,46 @@ export function migrateOrgConfig(raw: unknown): OrgConfigV1 {
 // organization is created.
 export function defaultOrgConfigV1(): OrgConfigV1 {
   return OrgConfigV1.parse({ version: 1 });
+}
+
+/**
+ * Bind every GitHub credential coordinate in an org config to that org before
+ * it can be persisted or used. Bare names are canonicalized server-side; a
+ * full ref for any other tenant fails closed.
+ */
+export function bindOrgGithubCredentialRefs(config: OrgConfigV1, orgId: string): OrgConfigV1 {
+  const tokenRef = config.defaultCredentials?.github_token;
+  return OrgConfigV1.parse({
+    ...config,
+    ...(config.defaultCredentials === undefined
+      ? {}
+      : {
+          defaultCredentials: {
+            ...config.defaultCredentials,
+            ...(tokenRef === undefined
+              ? {}
+              : {
+                  github_token: canonicalOrgGithubCredentialRef({
+                    orgId,
+                    supplied: tokenRef,
+                    kind: "github_token",
+                  }),
+                }),
+          },
+        }),
+    ...(config.github_app === undefined
+      ? {}
+      : {
+          github_app: {
+            ...config.github_app,
+            credentialRef: canonicalOrgGithubCredentialRef({
+              orgId,
+              supplied: config.github_app.credentialRef,
+              kind: "github_app",
+            }),
+          },
+        }),
+  });
 }
 
 /**

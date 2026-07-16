@@ -10,7 +10,14 @@
  * error). Read failure → "unavailable", never a fabricated empty grant list.
  */
 
-import { LINKABLE_PROVIDER_KINDS, PROJECT_CAPABILITIES, type OrgIntegrationSummary } from "../../api/integrations.js";
+import {
+  LINKABLE_PROVIDER_KINDS,
+  PROJECT_CAPABILITIES,
+  type IntegrationLifecycleInventory,
+  type OrgIntegrationSummary,
+  type PrincipalSelectionCandidate,
+  type PublicLinkOpStatus,
+} from "../../api/integrations.js";
 import { CsrfField } from "../shell/CsrfField.js";
 import { capabilitiesLabel, isProviderLinked, providerLabel, statusLabel } from "./format.js";
 import { INTEGRATIONS_SCREEN_CSS } from "./styles.js";
@@ -20,10 +27,14 @@ export interface IntegrationsBodyProps {
   integrations: OrgIntegrationSummary[] | undefined;
   /** Active project id for Plane-B enable forms (empty when no project). */
   projectId: string;
+  /** Foundation lifecycle read model; undefined means unavailable, never zero. */
+  lifecycle: IntegrationLifecycleInventory | undefined;
   /** Project name for the eyebrow scope line. */
   projectName: string;
   /** Whether the operator has a visible project at all. */
   noProject: boolean;
+  /** Project collection read failed; distinct from a legitimate empty list. */
+  projectsUnavailable: boolean;
   /** Whether the operator is an org admin (link form write). */
   isOrgAdmin: boolean;
   /** Optional flash from a prior link/enable redirect. */
@@ -33,12 +44,39 @@ export interface IntegrationsBodyProps {
    * 200 path, not an error. Rendered as a link-first affordance.
    */
   notLinked?: { providerKind: string; message?: string };
+  /** A provider is linked, but this project must choose one exact account. */
+  selectionRequired?: { providerKind: string; message?: string };
+  /**
+   * Multi-principal link awaiting explicit principal selection — CSRF form
+   * over sanitized durable candidates + operation id.
+   */
+  principalSelection?: {
+    providerKind: string;
+    operationId: string;
+    candidates: PrincipalSelectionCandidate[];
+    status?: PublicLinkOpStatus | "invalidated" | "unavailable";
+    failureClassification?: string;
+    retryAfter?: string;
+  };
   /** Session CSRF for pure HTML form posts. */
   csrfToken?: string;
 }
 
 export function IntegrationsBody(props: IntegrationsBodyProps) {
-  const { integrations, projectId, projectName, noProject, isOrgAdmin, notice, notLinked, csrfToken } = props;
+  const {
+    integrations,
+    projectId,
+    lifecycle,
+    projectName,
+    noProject,
+    projectsUnavailable,
+    isOrgAdmin,
+    notice,
+    notLinked,
+    selectionRequired,
+    principalSelection,
+    csrfToken,
+  } = props;
   const unavailable = integrations === undefined;
   const grants = integrations ?? [];
 
@@ -47,7 +85,10 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
       <style data-screen="integrations" dangerouslySetInnerHTML={{ __html: INTEGRATIONS_SCREEN_CSS }} />
       <div class="page-head">
         <div>
-          <div class="eyebrow">▮ org · integrations · two-plane · {projectName || "no project"}</div>
+          <div class="eyebrow">
+            ▮ org · integrations · two-plane ·{" "}
+            {projectsUnavailable ? "projects unavailable" : projectName || "no project"}
+          </div>
           <div class="page-title">link once, enable per project</div>
         </div>
       </div>
@@ -61,6 +102,17 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                 ? ". link the provider at the org level first."
                 : `: ${notLinked.message}`}
             </div>
+          )}
+          {selectionRequired === undefined ? null : (
+            <div class="notice warn" data-selection-required={selectionRequired.providerKind}>
+              account selection required — {providerLabel(selectionRequired.providerKind)}
+              {selectionRequired.message === undefined || selectionRequired.message === ""
+                ? ". choose an account below before enabling this capability."
+                : `: ${selectionRequired.message}`}
+            </div>
+          )}
+          {principalSelection === undefined ? null : (
+            <PrincipalSelectionPanel panel={principalSelection} csrfToken={csrfToken} />
           )}
 
           {/* ── Plane A: org grants ─────────────────────────────────────── */}
@@ -81,7 +133,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
               ) : (
                 <div class="int-grid">
                   {grants.map((row) => (
-                    <GrantCard row={row} />
+                    <GrantCard row={row} projectId={projectId} csrfToken={csrfToken} />
                   ))}
                 </div>
               )}
@@ -98,7 +150,7 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                     </select>
                   </div>
                   <div class="field">
-                    <label for="token">token (write-only)</label>
+                    <label for="token">token (write-only · never echoed)</label>
                     <input
                       id="token"
                       name="token"
@@ -108,8 +160,9 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                       placeholder="provider API token"
                     />
                   </div>
+                  <input type="hidden" name="idempotencyKey" value={`link-${Date.now()}`} />
                   <button class="btn primary" type="submit">
-                    link
+                    link &amp; verify principal
                   </button>
                 </form>
               ) : null}
@@ -120,85 +173,267 @@ export function IntegrationsBody(props: IntegrationsBodyProps) {
                 </div>
               ) : (
                 <div class="note">
-                  <b>↑ plane a.</b> The token is stored under a secret REF and never echoed. Metadata values stay
-                  server-side; only keys surface on the grant card. Hetzner is out of scope here.
+                  <b>↑ plane a.</b> The provider verifies the principal; the token is staged and generation-addressed
+                  and never echoed. Multi-principal credentials require explicit selection.
                 </div>
               )}
             </div>
           </section>
 
-          {/* ── Plane B: project capabilities ───────────────────────────── */}
-          <section class="panel">
+          {/* ── in-1: durable lifecycle foundation ─────────────────────── */}
+          <section class="panel" data-lifecycle-inventory>
             <div class="panel-pad">
               <div class="mini-eyebrow">
-                plane b · project enable <span class="window-tag">(sentry · slack · deploy.vercel / deploy.flyio)</span>
+                integration lifecycle <span class="window-tag">(project · durable state)</span>
               </div>
-              {noProject ? (
-                <div class="empty">
-                  No project visible yet. Onboard one to enable capabilities against an org grant.
+              {projectsUnavailable ? (
+                <div class="empty" data-projects-unavailable>
+                  Projects unavailable — lifecycle state cannot be scoped safely.
                 </div>
-              ) : unavailable ? (
-                <div class="empty">Capability enable is paused while the org grant list is unavailable.</div>
+              ) : noProject ? (
+                <div class="empty">No project visible; lifecycle state is not applicable.</div>
+              ) : unavailable || lifecycle === undefined ? (
+                <div class="empty" data-lifecycle-unavailable>
+                  Lifecycle inventory unavailable — no zero counts are fabricated.
+                </div>
               ) : (
-                <>
-                  {PROJECT_CAPABILITIES.map((cap) => {
-                    const linked = isProviderLinked(grants, cap.providerKind);
-                    return (
-                      <div class="cap-row" data-capability={cap.capability} data-provider={cap.providerKind}>
-                        <span class="glyph">{cap.glyph}</span>
-                        <div class="meta">
-                          <div class="name">{cap.label}</div>
-                          <div class="desc">
-                            {cap.capability} → {cap.providerKind}
-                          </div>
-                        </div>
-                        <span class={`state ${linked ? "ready" : "need-link"}`}>
-                          {linked ? "linked" : "not linked"}
-                        </span>
-                        {linked ? (
-                          <form method="post" action="/integrations/enable">
-                            <CsrfField token={csrfToken} />
-                            <input type="hidden" name="projectId" value={projectId} />
-                            <input type="hidden" name="capability" value={cap.capability} />
-                            <input type="hidden" name="providerKind" value={cap.providerKind} />
-                            <button class="btn" type="submit">
-                              enable
-                            </button>
-                          </form>
-                        ) : (
-                          <button class="btn" type="button" disabled title="link provider at org first">
-                            enable
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                  <div class="note">
-                    <b>↑ plane b.</b> Enabling a capability provisions or binds a project artifact from the org grant.
-                    If the provider is not linked, the orchestrator returns <b>status: not_linked</b> as a <b>200</b> —
-                    link first, do not treat it as an error.
-                  </div>
-                </>
+                <div class="int-grid">
+                  <LifecycleCard
+                    label="requirements"
+                    value={lifecycle.requirements.total}
+                    detail={`${lifecycle.requirements.needsAttention} need attention`}
+                  />
+                  <LifecycleCard
+                    label="capability nodes"
+                    value={lifecycle.capabilityNodes.total}
+                    detail={`${lifecycle.capabilityNodes.ready} ready · ${lifecycle.capabilityNodes.awaitingGrant} awaiting grant`}
+                  />
+                  <LifecycleCard
+                    label="bindings"
+                    value={lifecycle.bindings.total}
+                    detail={`${lifecycle.bindings.ready} ready · ${lifecycle.bindings.drifted} drifted`}
+                  />
+                  <LifecycleCard
+                    label="deliveries"
+                    value={lifecycle.deliveries.total}
+                    detail={`${lifecycle.deliveries.completed} complete · ${lifecycle.deliveries.degraded} degraded`}
+                  />
+                </div>
               )}
             </div>
           </section>
+
+          <ProjectCapabilities
+            grants={grants}
+            projectId={projectId}
+            noProject={noProject}
+            projectsUnavailable={projectsUnavailable}
+            unavailable={unavailable}
+            csrfToken={csrfToken}
+          />
         </div>
       </div>
     </>
   );
 }
 
-function GrantCard(props: { row: OrgIntegrationSummary }) {
-  const { row } = props;
+function ProjectCapabilities(props: {
+  grants: OrgIntegrationSummary[];
+  projectId: string;
+  noProject: boolean;
+  projectsUnavailable: boolean;
+  unavailable: boolean;
+  csrfToken?: string;
+}) {
   return (
-    <div class={`int-card${row.status === "linked" ? " linked" : ""}`} data-provider={row.providerKind}>
+    <section class="panel">
+      <div class="panel-pad">
+        <div class="mini-eyebrow">
+          plane b · project enable <span class="window-tag">(sentry · slack · deploy.vercel / deploy.flyio)</span>
+        </div>
+        {props.projectsUnavailable ? (
+          <div class="empty">Capability enable is paused while projects are unavailable.</div>
+        ) : props.noProject ? (
+          <div class="empty">No project visible yet. Onboard one to enable capabilities against an org grant.</div>
+        ) : props.unavailable ? (
+          <div class="empty">Capability enable is paused while the org grant list is unavailable.</div>
+        ) : (
+          <>
+            {PROJECT_CAPABILITIES.map((cap) => {
+              const linked = isProviderLinked(props.grants, cap.providerKind);
+              const selected = props.grants.some(
+                (grant) => grant.providerKind === cap.providerKind && grant.selectedForProject,
+              );
+              return (
+                <div class="cap-row" data-capability={cap.capability} data-provider={cap.providerKind}>
+                  <span class="glyph">{cap.glyph}</span>
+                  <div class="meta">
+                    <div class="name">{cap.label}</div>
+                    <div class="desc">
+                      {cap.capability} → {cap.providerKind}
+                    </div>
+                  </div>
+                  <span class={`state ${selected ? "ready" : "need-link"}`}>
+                    {selected ? "account selected" : linked ? "choose account" : "not linked"}
+                  </span>
+                  {selected ? (
+                    <form method="post" action="/integrations/enable">
+                      <CsrfField token={props.csrfToken} />
+                      <input type="hidden" name="projectId" value={props.projectId} />
+                      <input type="hidden" name="capability" value={cap.capability} />
+                      <input type="hidden" name="providerKind" value={cap.providerKind} />
+                      <button class="btn" type="submit">
+                        enable
+                      </button>
+                    </form>
+                  ) : (
+                    <button
+                      class="btn"
+                      type="button"
+                      disabled
+                      title={linked ? "choose an account above first" : "link provider at org first"}
+                    >
+                      enable
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+            <div class="note">
+              <b>↑ plane b.</b> Enabling a capability provisions or binds a project artifact from the selected org
+              grant. A missing link is a structured <b>status: not_linked</b> response, not a fake success.
+            </div>
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function GrantCard(props: { row: OrgIntegrationSummary; projectId: string; csrfToken?: string }) {
+  const { row, projectId, csrfToken } = props;
+  const active = row.connectionStatus === "active" && row.grantStatus === "active";
+  return (
+    <div class={`int-card${active ? " linked" : ""}`} data-provider={row.providerKind}>
       <span class="label">{providerLabel(row.providerKind)}</span>
-      <span class={`value${row.status === "linked" ? "" : " empty"}`}>{statusLabel(row.status)}</span>
-      <span class="sub">capabilities · {capabilitiesLabel(row.capabilities)}</span>
-      <span class="ref" title="credential ref name only">
-        {row.credentialRef}
+      <span class={`value${active ? "" : " empty"}`}>{statusLabel(row.grantStatus ?? row.connectionStatus)}</span>
+      <span class="ref">
+        verified principal · {row.displayName} ({row.principalKind})
       </span>
-      {row.metadataKeys.length > 0 ? <span class="sub">metadata keys · {row.metadataKeys.join(", ")}</span> : null}
+      <span class="sub">health · {statusLabel(row.health)}</span>
+      {row.authExpiresAt === undefined ? null : <span class="sub">expires · {row.authExpiresAt}</span>}
+      {row.providerScopes.length === 0 ? null : (
+        <span class="sub">scopes · {capabilitiesLabel(row.providerScopes)}</span>
+      )}
+      {row.pendingOperation === undefined ? null : (
+        <span class="state need-link" data-pending-operation={row.pendingOperation.status}>
+          pending · {row.pendingOperation.stage} ({row.pendingOperation.status})
+        </span>
+      )}
+      {row.selectedForProject ? <span class="state ready">selected for project</span> : null}
+      {active &&
+      projectId !== "" &&
+      !row.selectedForProject &&
+      row.grantId !== undefined &&
+      row.currentAuthGeneration !== undefined &&
+      row.grantGeneration !== undefined ? (
+        <form method="post" action="/integrations/select">
+          <CsrfField token={csrfToken} />
+          <input type="hidden" name="projectId" value={projectId} />
+          <input type="hidden" name="providerKind" value={row.providerKind} />
+          <input type="hidden" name="connectionId" value={row.connectionId} />
+          <input type="hidden" name="grantId" value={row.grantId} />
+          <input type="hidden" name="authGeneration" value={String(row.currentAuthGeneration)} />
+          <input type="hidden" name="grantGeneration" value={String(row.grantGeneration)} />
+          <button class="btn" type="submit">
+            use this principal
+          </button>
+        </form>
+      ) : null}
     </div>
+  );
+}
+
+function LifecycleCard(props: { label: string; value: number; detail: string }) {
+  return (
+    <div class="int-card" data-lifecycle-kind={props.label}>
+      <span class="label">{props.label}</span>
+      <span class="value">{props.value}</span>
+      <span class="sub">{props.detail}</span>
+    </div>
+  );
+}
+
+function PrincipalSelectionPanel(props: {
+  panel: NonNullable<IntegrationsBodyProps["principalSelection"]>;
+  csrfToken?: string;
+}) {
+  const { panel, csrfToken } = props;
+  const status = panel.status ?? "unknown";
+  return (
+    <section class="panel" data-principal-selection={panel.operationId} data-principal-status={status}>
+      <div class="panel-pad">
+        <div class="mini-eyebrow">
+          integration operation · {providerLabel(panel.providerKind)}{" "}
+          <span class="window-tag">({status} · never guesses)</span>
+        </div>
+        {status === "failed" ? (
+          <div class="notice warn">link operation failed — re-link the provider with a valid credential.</div>
+        ) : null}
+        {status === "invalidated" ? (
+          <div class="notice warn">candidates were invalidated — re-link to refresh verified principals.</div>
+        ) : null}
+        {status === "unavailable" ? (
+          <div class="notice warn">operation unavailable — refresh or re-link to continue.</div>
+        ) : null}
+        {status === "completed" ? (
+          <div class="notice">operation completed for {providerLabel(panel.providerKind)}.</div>
+        ) : null}
+        {status === "provider_unavailable" ? (
+          <div class="notice warn">
+            provider verification unavailable
+            {panel.failureClassification === undefined ? null : ` · ${panel.failureClassification}`}
+            {panel.retryAfter === undefined ? " — retry pending." : ` — retry after ${panel.retryAfter}.`}
+          </div>
+        ) : null}
+        {status === "verification_in_progress" ? (
+          <div class="notice warn">provider verification is still in progress.</div>
+        ) : null}
+        {status === "finalize_pending" ? (
+          <div class="notice warn">secret finalization is pending; no connection is active yet.</div>
+        ) : null}
+        {status === "activate_pending" ? (
+          <div class="notice warn">connection activation is pending; no success is reported yet.</div>
+        ) : null}
+        {status === "malformed" || status === "unknown" ? (
+          <div class="notice warn">link response state is unusable; retry or inspect the durable operation.</div>
+        ) : null}
+        {status === "awaiting_principal_selection" ? (
+          <div class="int-grid">
+            {panel.candidates.map((candidate) => (
+              <form
+                class="int-card linked"
+                method="post"
+                action="/integrations/select-principal"
+                data-principal-kind={candidate.principalKind}
+              >
+                <CsrfField token={csrfToken} />
+                <input type="hidden" name="operationId" value={panel.operationId} />
+                {/* Hidden exact ID for CSRF form submission only — never visible chrome. */}
+                <input type="hidden" name="providerPrincipalId" value={candidate.providerPrincipalId} />
+                <span class="label">{candidate.displayName}</span>
+                <span class="sub">{candidate.principalKind}</span>
+                <button class="btn primary" type="submit">
+                  use this principal
+                </button>
+              </form>
+            ))}
+          </div>
+        ) : null}
+        <div class="note">
+          <b>↑ multi-principal.</b> Sanitized durable candidates only — no secret refs or generation numbers.
+        </div>
+      </div>
+    </section>
   );
 }

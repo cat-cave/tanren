@@ -1,3 +1,4 @@
+import { testOrgGrant } from "../helpers/orgGrant.js";
 // ManualExternalDeployAdapter conformance: the OPERATOR-CONFIRMATION lifecycle
 // (Codex H3 Surface 7 #20 / #21). `deploy()` records a
 // `pending_manual_confirmation` attestation in the DURABLE store + emits
@@ -11,7 +12,11 @@
 // a scripted probe.
 
 import { describe, expect, it, vi } from "vitest";
-import type { OrgGrant, ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type { ProjectContext } from "../../src/engine/contracts/integrationProvisioner.js";
+import type {
+  IntegrationOperationTarget,
+  IntegrationPrivilegedOperation,
+} from "../../src/engine/contracts/integrationAuthority.js";
 import type { DeployRef } from "../../src/engine/contracts/deployAdapter.js";
 import type { AppendEventInput, EventStore } from "../../src/engine/eventStore.js";
 import type { EventName } from "../../src/engine/events/index.js";
@@ -23,12 +28,34 @@ import {
 import { scriptedUrlProbe, sequencedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
 
 const OWNER_SCOPE = { orgId: "org_1", projectId: "proj_1" };
+const SOURCE = { repo: "acme/acme-web", ref: "main" };
+const DEFAULT_METADATA = { manualExternalUrl: "https://acme-web.example.com" };
 
-const grant = (extra: Record<string, unknown> = {}): OrgGrant => ({
-  providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
-  credentialRef: "secret://none",
-  metadata: { manualExternalUrl: "https://acme-web.example.com", ...extra },
-});
+const grant = (
+  operation: IntegrationPrivilegedOperation,
+  target: IntegrationOperationTarget,
+  extra: Record<string, unknown> = {},
+) =>
+  testOrgGrant({
+    orgId: OWNER_SCOPE.orgId,
+    projectId: OWNER_SCOPE.projectId,
+    providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
+    credentialRef: "secret://none/g/1",
+    metadata: { ...DEFAULT_METADATA, ...extra },
+    capability: "deploy",
+    operation,
+    target,
+  });
+
+const deployGrant = (ref: DeployRef, source = SOURCE, extra: Record<string, unknown> = {}) =>
+  grant("deploy", { resourceId: ref.appId, sourceRepo: source.repo, sourceRef: source.ref }, extra);
+
+const deploymentGrant = (
+  operation: "verify" | "resolve_demo_surface" | "resolve_artifact_identity",
+  ref: DeployRef,
+  deploymentId: string,
+  extra: Record<string, unknown> = {},
+) => grant(operation, { resourceId: ref.appId, deploymentId }, extra);
 
 const ctx = (id: string): ProjectContext => ({ projectId: id, orgId: "org_1", orgSlug: "org-1" });
 
@@ -68,7 +95,11 @@ function adapter(urlStatus = 200) {
 describe("ManualExternalDeployAdapter — attestation lifecycle", () => {
   it("provisionOrBind records the operator's declared target + kind", async () => {
     const { instance } = adapter();
-    const artifact = await instance.provisionOrBind(grant(), ctx("proj_1"), { mode: "provision" });
+    const artifact = await instance.provisionOrBind(
+      await grant("provision", { projectName: "proj_1", orgSlug: "org-1" }),
+      ctx("proj_1"),
+      { mode: "provision" },
+    );
     expect(artifact.deployRef?.provider).toBe(MANUAL_EXTERNAL_PROVIDER_KIND);
     expect(artifact.projectConfig?.["manualExternalUrl"]).toBe("https://acme-web.example.com");
     expect(artifact.projectConfig?.["manualExternalKind"]).toBe("web_url");
@@ -77,7 +108,8 @@ describe("ManualExternalDeployAdapter — attestation lifecycle", () => {
   it("deploy records a PENDING-CONFIRMATION attestation (not a rubber-stamped `attested`, Codex H3 #21)", async () => {
     const { instance, store } = adapter();
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "proj_1" };
-    const result = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "deadbeef" });
+    const source = { ...SOURCE, ref: "deadbeef" };
+    const result = await instance.deploy(await deployGrant(ref, source), ref, source);
     expect(result.deploymentId).toBe("manual:proj_1@deadbeef");
     expect(result.url).toBe("https://acme-web.example.com");
     expect(result.state).toBe("pending_manual_confirmation");
@@ -93,7 +125,8 @@ describe("ManualExternalDeployAdapter — attestation lifecycle", () => {
   it("deploy emits `deploy.pending_manual` with the confirmation-route link", async () => {
     const { instance, events } = adapter();
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "proj_1" };
-    await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "deadbeef" });
+    const source = { ...SOURCE, ref: "deadbeef" };
+    await instance.deploy(await deployGrant(ref, source), ref, source);
     const pending = events.appended.find((e) => e.eventType === "deploy.pending_manual");
     expect(pending).toBeDefined();
     const payload = pending?.payload as Record<string, unknown>;
@@ -108,8 +141,8 @@ describe("ManualExternalDeployAdapter — attestation lifecycle", () => {
   it("status reads the persisted lifecycle (pending until an operator confirms)", async () => {
     const { instance, store, probe } = adapter();
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "proj_1" };
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
-    const status = await instance.status(grant(), ref, deploymentId);
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
+    const status = await instance.status(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(status.state).toBe("pending_manual_confirmation");
     expect(status.ready).toBe(false);
     expect(status.url).toBe("https://acme-web.example.com");
@@ -117,7 +150,7 @@ describe("ManualExternalDeployAdapter — attestation lifecycle", () => {
     expect(probe.probed).toEqual([]);
     // After a confirm(), status reflects the confirmed lifecycle.
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
-    const confirmed = await instance.status(grant(), ref, deploymentId);
+    const confirmed = await instance.status(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(confirmed.state).toBe("confirmed");
     expect(confirmed.ready).toBe(false);
   });
@@ -128,24 +161,24 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
 
   it("FAILS LOUD when the operator has NOT confirmed (never a silent verified — Codex H3 #21)", async () => {
     const { instance } = adapter();
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     // No confirm() ⇒ verify's confirmation-phase poll finds the SAME
     // `pending_manual_confirmation` state repeating (a proven fixed point) →
     // escalates LOUD via pollUntilTerminal's stuck detection.
-    await expect(instance.verify(grant(), ref, deploymentId)).rejects.toThrow(
-      /is STUCK 'pending_manual_confirmation' — no operator confirmation received/u,
-    );
+    await expect(
+      instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/is STUCK 'pending_manual_confirmation' — no operator confirmation received/u);
   });
 
   it("confirms + smoke-probes once the operator confirms", async () => {
     const { instance, store, probe } = adapter(200);
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     // The operator confirms out-of-band (the confirmation route drives this).
     const flip = await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
     expect(flip?.freshlyConfirmed).toBe(true);
     expect(flip?.record.confirmedBy).toBe("user_ops");
     // verify NOW sees `confirmed` and smoke-probes the URL.
-    const verification = await instance.verify(grant(), ref, deploymentId);
+    const verification = await instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("verified");
     expect(verification.url).toBe("https://acme-web.example.com");
@@ -155,9 +188,9 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
 
   it("treats a 401/403 attested target as reachable (a gated-but-live deploy)", async () => {
     const { instance, store } = adapter(403);
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
-    const verification = await instance.verify(grant(), ref, deploymentId);
+    const verification = await instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.smokeStatus).toBe(403);
   });
@@ -174,9 +207,9 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
-    const verification = await instance.verify(grant(), ref, deploymentId);
+    const verification = await instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.smokeStatus).toBe(200);
     expect(verification.pollCount).toBe(16);
@@ -184,14 +217,19 @@ describe("ManualExternalDeployAdapter — verify (confirms operator + smoke-prob
 
   it("escalates LOUD as STUCK (not on a count) when the confirmed target stays unreachable", async () => {
     const { instance, store } = adapter(503);
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
-    await expect(instance.verify(grant(), ref, deploymentId)).rejects.toThrow(/is STUCK unreachable \(HTTP 503\)/u);
+    await expect(
+      instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/is STUCK unreachable \(HTTP 503\)/u);
   });
 
   it("fails LOUD when verify is called for an unrecorded deployment (deploy not run)", async () => {
     const { instance } = adapter();
-    await expect(instance.verify(grant(), ref, "manual:proj_1@never")).rejects.toThrow(/no recorded attestation/u);
+    const deploymentId = "manual:proj_1@never";
+    await expect(
+      instance.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/no recorded attestation/u);
   });
 });
 
@@ -206,7 +244,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const { deploymentId } = await adapterA.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await adapterA.deploy(await deployGrant(ref), ref, SOURCE);
 
     // "RESTART": a brand-new adapter B over the SAME store — the persisted row
     // must be re-readable and verify() must STILL treat it as pending (never a
@@ -218,12 +256,12 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const status = await adapterB.status(grant(), ref, deploymentId);
+    const status = await adapterB.status(await deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(status.state).toBe("pending_manual_confirmation");
     // verify still fails LOUD (no operator confirmation across the restart).
-    await expect(adapterB.verify(grant(), ref, deploymentId)).rejects.toThrow(
-      /is STUCK 'pending_manual_confirmation'/u,
-    );
+    await expect(
+      adapterB.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId),
+    ).rejects.toThrow(/is STUCK 'pending_manual_confirmation'/u);
   });
 
   it("survives a restart: a persisted CONFIRMATION carries verify() → verified on a fresh adapter", async () => {
@@ -235,7 +273,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const { deploymentId } = await adapterA.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await adapterA.deploy(await deployGrant(ref), ref, SOURCE);
     // Operator confirms (via the route → the store's confirm()) before the restart.
     const first = await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
     expect(first?.freshlyConfirmed).toBe(true);
@@ -248,7 +286,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const verification = await adapterB.verify(grant(), ref, deploymentId);
+    const verification = await adapterB.verify(() => deploymentGrant("verify", ref, deploymentId), ref, deploymentId);
     expect(verification.ready).toBe(true);
     expect(verification.state).toBe("verified");
     expect(verification.smokeStatus).toBe(200);
@@ -263,7 +301,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     const first = await store.confirm({ deploymentId, orgId: OWNER_SCOPE.orgId, confirmedBy: "user_ops" });
     expect(first?.freshlyConfirmed).toBe(true);
     const initialConfirmedAt = first?.record.confirmedAt;
@@ -284,7 +322,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       poll: instantVerifyPollPolicy(),
       ownerScope: OWNER_SCOPE,
     });
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
     // A different org tries to confirm — the store denies (undefined).
     const cross = await store.confirm({ deploymentId, orgId: "org_evil", confirmedBy: "user_evil" });
     expect(cross).toBeUndefined();
@@ -308,9 +346,7 @@ describe("ManualExternalDeployAdapter — restart durability (Codex H3 #20)", ()
       events,
     });
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "proj_1" };
-    await expect(instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" })).rejects.toThrow(
-      /events unavailable/u,
-    );
+    await expect(instance.deploy(await deployGrant(ref), ref, SOURCE)).rejects.toThrow(/events unavailable/u);
     const row = await store.read("manual:proj_1@main");
     expect(row?.state).toBe("pending_manual_confirmation");
   });
@@ -321,16 +357,24 @@ describe("ManualExternalDeployAdapter — demo surface", () => {
 
   it("resolves a web_url surface by default", async () => {
     const { instance } = adapter();
-    const { deploymentId } = await instance.deploy(grant(), ref, { repo: "acme/acme-web", ref: "main" });
-    const surface = await instance.demoSurface(grant(), ref, deploymentId);
+    const { deploymentId } = await instance.deploy(await deployGrant(ref), ref, SOURCE);
+    const surface = await instance.demoSurface(
+      await deploymentGrant("resolve_demo_surface", ref, deploymentId),
+      ref,
+      deploymentId,
+    );
     expect(surface).toEqual({ kind: "web_url", url: "https://acme-web.example.com" });
   });
 
   it("resolves a download surface when the operator declared kind 'download'", async () => {
     const { instance } = adapter();
-    const g = grant({ manualExternalKind: "download", manualExternalUrl: "https://acme.example.com/app.zip" });
-    const { deploymentId } = await instance.deploy(g, ref, { repo: "acme/acme-web", ref: "main" });
-    const surface = await instance.demoSurface(g, ref, deploymentId);
+    const metadata = { manualExternalKind: "download", manualExternalUrl: "https://acme.example.com/app.zip" };
+    const { deploymentId } = await instance.deploy(await deployGrant(ref, SOURCE, metadata), ref, SOURCE);
+    const surface = await instance.demoSurface(
+      await deploymentGrant("resolve_demo_surface", ref, deploymentId, metadata),
+      ref,
+      deploymentId,
+    );
     expect(surface).toEqual({ kind: "download", artifactUrl: "https://acme.example.com/app.zip" });
   });
 });
@@ -338,11 +382,16 @@ describe("ManualExternalDeployAdapter — demo surface", () => {
 describe("ManualExternalDeployAdapter — loud fail on missing config", () => {
   it("throws a typed config error when no target URL is declared", async () => {
     const { instance } = adapter();
-    const noUrl: OrgGrant = {
+    const noUrl = await testOrgGrant({
+      orgId: OWNER_SCOPE.orgId,
+      projectId: OWNER_SCOPE.projectId,
       providerKind: MANUAL_EXTERNAL_PROVIDER_KIND,
-      credentialRef: "secret://none",
+      credentialRef: "secret://none/g/1",
       metadata: {},
-    };
+      capability: "deploy",
+      operation: "provision",
+      target: { projectName: "proj_1", orgSlug: "org-1" },
+    });
     await expect(instance.provisionOrBind(noUrl, ctx("proj_1"), { mode: "provision" })).rejects.toThrow(
       /required config 'manualExternalUrl' is not set/u,
     );
@@ -351,9 +400,7 @@ describe("ManualExternalDeployAdapter — loud fail on missing config", () => {
   it("throws when the declared surface kind is invalid", async () => {
     const { instance } = adapter();
     const ref: DeployRef = { provider: MANUAL_EXTERNAL_PROVIDER_KIND, appId: "proj_1" };
-    const bad = grant({ manualExternalKind: "ftp" });
-    await expect(instance.deploy(bad, ref, { repo: "acme/acme-web", ref: "main" })).rejects.toThrow(
-      /required config 'manualExternalKind'/u,
-    );
+    const bad = await deployGrant(ref, SOURCE, { manualExternalKind: "ftp" });
+    await expect(instance.deploy(bad, ref, SOURCE)).rejects.toThrow(/required config 'manualExternalKind'/u);
   });
 });

@@ -7,33 +7,22 @@
 // so no `SourceKind` enum value — and therefore no DB CHECK migration — is
 // added; see the connector factory in engine.ts.
 //
-// Everything the connector needs to hit Sentry is injected: an auth token is
-// read from the SAME secret store the GitHub connector uses (via the config's
-// `tokenRef`), and the HTTP transport is an injectable `SentryHttpClient`, so
-// tests drive it with a fake (no live token / no network) — see
-// candidateInbox.test.ts.
+// Each fetch obtains exact `intake` authority from the persisted project
+// selection, resolves that lease's generation-addressed secret, and only then
+// calls the injectable HTTP transport. Reusable credential coordinates never
+// enter source config.
 
-import { z } from "zod";
+import { runWithSystemScope } from "@tanren/db";
+import type pg from "pg";
+import type { OrgGrant } from "../../contracts/integrationProvisioner.js";
 import type { SecretStore } from "../../contracts/secretStore.js";
-import { assertIntakeResponseOk, IntakeSourceFetchError } from "./connectorErrors.js";
-import type { IngestedItem, InboxSource, SourceConnector } from "./types.js";
-
-// The `config` shape a Sentry source carries. `org`/`project` are the Sentry
-// slugs; `tokenRef` is the secret-store ref for the auth token (a Sentry
-// internal-integration / personal auth token). `baseUrl` defaults to Sentry
-// SaaS but is overridable for self-hosted. `query` overrides the default issue
-// search; `level` (optional) narrows to a single Sentry level.
-export const SentryConfig = z
-  .object({
-    org: z.string().min(1),
-    project: z.string().min(1),
-    tokenRef: z.string().min(1),
-    baseUrl: z.string().url().default("https://sentry.io"),
-    query: z.string().min(1).optional(),
-    level: z.enum(["debug", "info", "warning", "error", "fatal", "sample"]).optional(),
-  })
-  .strict();
-export type SentryConfig = z.infer<typeof SentryConfig>;
+import { PgIntegrationAuthority } from "../../integrations/integrationAuthorityImpl.js";
+import { GenerationAddressedIntegrationSecretStore } from "../../integrations/integrationSecretStoreImpl.js";
+import { IntegrationConnectionsStore } from "../../repositories/integrationConnections.js";
+import { assertOrgGrantMatchesLease, secretValueForLease } from "../../repositories/integrationConnectionResolve.js";
+import { systemActor } from "../../state/actor.js";
+import { assertIntakeResponseOk, IntakeSourceAuthorityError, IntakeSourceFetchError } from "./connectorErrors.js";
+import { ActiveSentryConfig, type IngestedItem, type InboxSource, type SourceConnector } from "./types.js";
 
 // The injectable Sentry transport. A `path` is org/project-scoped; `token` is
 // the resolved auth token. Mirrors the shape of `GitHubHttpClient` so the same
@@ -48,6 +37,7 @@ export interface SentryHttpRequest {
 export interface SentryHttpResponse {
   status: number;
   body: unknown;
+  headers?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface SentryHttpClient {
@@ -73,13 +63,64 @@ export class FetchSentryHttpClient implements SentryHttpClient {
       },
     });
     const text = await response.text();
-    return { status: response.status, body: text === "" ? undefined : JSON.parse(text) };
+    let body: unknown;
+    try {
+      body = text === "" ? undefined : JSON.parse(text);
+    } catch {
+      body = text;
+    }
+    return {
+      status: response.status,
+      body,
+      headers: { "retry-after": response.headers.get("retry-after") ?? undefined },
+    };
   }
+}
+
+function retryAfterMs(value: string | undefined, now = Date.now()): number | undefined {
+  if (value === undefined) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const deadline = Date.parse(value);
+  return Number.isNaN(deadline) ? undefined : Math.max(0, deadline - now);
 }
 
 export interface SentryConnectorDeps {
   secrets: SecretStore;
   sentryHttp: SentryHttpClient;
+  authority: SentryIntakeAuthority;
+}
+
+export type SentryIntakeAuthority = (input: {
+  orgId: string;
+  projectId: string;
+  resourceId: string;
+}) => Promise<OrgGrant>;
+
+/** Build the production intake authority over the current project selection. */
+export function buildPgSentryIntakeAuthority(pool: pg.Pool): SentryIntakeAuthority {
+  return async (input) =>
+    runWithSystemScope(pool, async (client) => {
+      const result = await new PgIntegrationAuthority().authorizeOperation(client, {
+        orgId: input.orgId,
+        projectId: input.projectId,
+        providerKind: "sentry",
+        capability: "errors",
+        operation: "intake",
+        target: { resourceId: input.resourceId },
+        actor: systemActor,
+      });
+      if (result.status !== "eligible") {
+        const reason =
+          result.status === "ineligible"
+            ? result.reasons.join(",")
+            : result.status === "selection_required"
+              ? result.reason
+              : "not_linked";
+        throw new IntakeSourceAuthorityError("sentry", reason);
+      }
+      return IntegrationConnectionsStore.orgGrantFromLease(result.lease);
+    });
 }
 
 // A Sentry issue as the Issues API returns it (the fields we map). All optional
@@ -145,7 +186,7 @@ function bodyFor(issue: RawSentryIssue): string {
   return lines.join("\n").slice(0, 8000);
 }
 
-function buildPath(config: SentryConfig): string {
+function buildPath(config: ActiveSentryConfig): string {
   const query = config.query ?? "is:unresolved";
   const levelClause = config.level === undefined ? "" : ` level:${config.level}`;
   const search = new URLSearchParams({ query: `${query}${levelClause}`, statsPeriod: "14d" });
@@ -161,23 +202,43 @@ export function createSentryConnector(deps: SentryConnectorDeps): SourceConnecto
     // reuses the existing enum value (no migration); see the factory.
     kind: "errors",
     async fetch(source: InboxSource): Promise<IngestedItem[]> {
-      const config = SentryConfig.parse(source.config);
-      const secret = await deps.secrets.get(config.tokenRef);
-      if (secret === undefined) {
-        throw new Error(`sentry connector: no secret at ref ${config.tokenRef}`);
-      }
+      const config = ActiveSentryConfig.parse(source.config);
+      if (source.projectId === null) throw new Error("sentry connector: intake source must name a project");
+      const grant = await deps.authority({
+        orgId: source.orgId,
+        projectId: source.projectId,
+        resourceId: config.project,
+      });
+      assertOrgGrantMatchesLease(grant);
+      const token = await secretValueForLease(
+        new GenerationAddressedIntegrationSecretStore(deps.secrets),
+        grant.eligibleOperation,
+        {
+          orgId: source.orgId,
+          projectId: source.projectId,
+          providerKind: "sentry",
+          capability: "errors",
+          operation: "intake",
+          target: { resourceId: config.project },
+        },
+      );
 
       const response = await deps.sentryHttp.request({
         method: "GET",
         path: buildPath(config),
-        token: secret.value,
+        token,
         baseUrl: config.baseUrl,
       });
       // No-silent-fallbacks: a non-200 is a LOUD throw (401/403 ⇒ auth, else ⇒
       // transient), NEVER an empty list. Only a genuine 200-with-an-array is "no
       // unresolved issues". A 200 whose body is not the expected array is a failed
       // read (shape changed / error envelope) — also LOUD.
-      assertIntakeResponseOk("sentry", response.status);
+      assertIntakeResponseOk(
+        "sentry",
+        response.status,
+        "provider response",
+        retryAfterMs(response.headers?.["retry-after"]),
+      );
       if (!Array.isArray(response.body)) {
         throw new IntakeSourceFetchError("sentry", response.status, "200 body was not an issues array");
       }

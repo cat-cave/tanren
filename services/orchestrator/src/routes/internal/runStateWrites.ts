@@ -49,6 +49,12 @@ const appendEventSchema = z.object({
   payload: z.unknown(),
 });
 
+const appendPriorEventSchema = appendEventSchema.extend({
+  runId: z.string().min(1),
+  projectId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+});
+
 const recordCostSchema = z.object({
   context: z
     .object({
@@ -169,6 +175,35 @@ export function createInternalRunStateWriteRoutes(deps: RunStateWriteRouteDeps):
       throw error;
     }
     return c.body(null, 204);
+  });
+
+  app.post("/internal/append-prior-event", async (c) => {
+    if (!authnPeer(c)) return c.json({ error: "untrusted_peer" }, 401);
+    const parsed = appendPriorEventSchema.safeParse(await c.req.json().catch(() => {}));
+    if (!parsed.success) {
+      return c.json({ error: "invalid_append_prior_event", issues: parsed.error.issues }, 400);
+    }
+    const { orgId, runId, taskId, specId, projectId, idempotencyKey, ...event } = parsed.data;
+    try {
+      const inserted = await runWithOrgScope(deps.pool, orgId, (client) =>
+        new PgEventStore(client).appendPriorIfAbsent({
+          runId,
+          ...(taskId === undefined ? {} : { taskId }),
+          ...(specId === undefined ? {} : { specId }),
+          projectId,
+          orgId,
+          eventType: event.eventType as never,
+          payload: event.payload as never,
+          idempotencyKey,
+        }),
+      );
+      return c.json({ inserted });
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return c.json({ error: "invalid_event_payload", issues: error.issues }, 422);
+      }
+      throw error;
+    }
   });
 
   app.post("/internal/record-cost", async (c) => {

@@ -56,6 +56,8 @@ export type WorkerBootMode = "standalone" | "in-process";
 export interface BootedRunWorker {
   worker: RunWorker;
   reaper: JobReaper;
+  /** Worker-owned reconciliation of terminal integration staged-secret cleanup. */
+  integrationSecretCleanupReaper: { readonly isRunning: boolean; stop(): Promise<void> };
   /** The runtime (`tanren_app`) pool the worker claims + writes through. */
   pool: pg.Pool;
   secrets: SecretStore;
@@ -237,6 +239,9 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
   // `resolveBootedAllocatorKind` the workspace reaper reads, so a typo'd kind
   // fails LOUD there rather than silently disabling the sweeper.
   const runnerRowOrphanSweeper = startRunnerRowOrphanSweeper({ pool });
+  const { IntegrationSecretCleanupReaper } = await import("../integrations/integrationSecretCleanupReaper.js");
+  const integrationSecretCleanupReaper = new IntegrationSecretCleanupReaper({ pool, secrets });
+  integrationSecretCleanupReaper.start();
   const stop = async (): Promise<void> => {
     // Kick off every drain in PARALLEL (Codex RA1): the notify subscribers now
     // await their internal `subscribeWithReconnect` loops (Bug 2 fix), which
@@ -251,9 +256,20 @@ export async function bootRunWorker(mode: WorkerBootMode = "in-process"): Promis
       autonomy.stop(),
       runWorkspaceReaper?.stop(),
       runnerRowOrphanSweeper?.stop(),
+      integrationSecretCleanupReaper.stop(),
       worker.stop(),
       reaper.stop(),
     ]);
   };
-  return { worker, reaper, pool, secrets, autonomy, runWorkspaceReaper, runnerRowOrphanSweeper, stop };
+  return {
+    worker,
+    reaper,
+    pool,
+    secrets,
+    autonomy,
+    runWorkspaceReaper,
+    runnerRowOrphanSweeper,
+    integrationSecretCleanupReaper,
+    stop,
+  };
 }

@@ -312,6 +312,7 @@ async function resolveTokenFor(options: BrownfieldFullTrackOptions, orgId: strin
     installation === undefined ? await loadOrgDefaultGithubCredentialRef(options.pool, orgId) : undefined;
   return resolveGithubToken({
     secrets: options.secrets,
+    orgId,
     ...(installation === undefined ? {} : { installation }),
     ...(staticRef === undefined ? {} : { staticRef }),
     ...(options.githubAppMinter === undefined ? {} : { minter: options.githubAppMinter }),
@@ -327,9 +328,8 @@ async function fetchIssuesFor(
   if (options.fetchIssues !== undefined) return options.fetchIssues(repoUrl, projectId);
   const repo = parseGitHubRepository(repoUrl);
   const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
-  // No App installation ⇒ the connector resolves its static token from the org's
-  // default GitHub credential ref (carried on the source config; no hardcoded
-  // default ref).
+  // No App installation ⇒ the connector resolves the organization-bound default
+  // GitHub credential. The ephemeral source config never carries a credential ref.
   const staticRef =
     installation === undefined ? await loadOrgDefaultGithubCredentialRef(options.pool, orgId) : undefined;
   const connector = createGitHubIssuesConnector({
@@ -337,6 +337,7 @@ async function fetchIssuesFor(
     githubHttp: options.githubHttp,
     ...(installation === undefined ? {} : { installation }),
     ...(options.githubAppMinter === undefined ? {} : { minter: options.githubAppMinter }),
+    ...(staticRef === undefined ? {} : { defaultStaticRef: staticRef }),
   });
   return connector.fetch({
     id: "brownfield-recon",
@@ -345,9 +346,13 @@ async function fetchIssuesFor(
     kind: "issues",
     name: "brownfield recon issues",
     detail: "",
-    config: { owner: repo.owner, repo: repo.name, labels: [], ...(staticRef === undefined ? {} : { staticRef }) },
+    config: { owner: repo.owner, repo: repo.name, labels: [] },
     enabled: true,
     autoRoute: false,
+    state: "active",
+    attention: null,
+    retryNotBefore: null,
+    webhookConfigured: false,
   });
 }
 

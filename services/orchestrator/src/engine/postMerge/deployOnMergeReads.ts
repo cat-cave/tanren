@@ -18,6 +18,9 @@ import { retryUntilConverged } from "../workflow/retryUntilConverged.js";
 import { fixedPointRuleJudgment } from "../workflow/convergenceDetector.js";
 import { createLogger } from "../observability/logger.js";
 
+export type { UrlReachabilityProbe, VerifyPollPolicy } from "../contracts/deployAdapter.js";
+export { loadValidatedRunEvent, type ValidatedRunLineage } from "./runLineage.js";
+
 // Structured logger for the deploy-verify convergence loop's per-iteration `*.retrying`
 // observability (Codex critic #13). The wrapping helper's own failures + successes fire
 // their own events (`deploy.failed`, `deploy.verified`); the retry observability is a
@@ -125,20 +128,25 @@ export async function verifyDeploy(
     target: ProjectDeployTarget;
     providerKind: string;
     deploymentId: string;
-    grant: OrgGrant | undefined;
+    loadGrant: () => Promise<OrgGrant | undefined>;
   },
 ): Promise<void> {
-  const { target, grant } = args;
-  if (grant === undefined) {
-    throw new Error(`deployOnMerge: verify lost the org grant for '${target.provider}' on project '${args.projectId}'`);
-  }
+  const { target } = args;
   const adapter = buildDeployAdapter(DIRECT_API_ADAPTER_KIND, {
     provisioner: { transport: ctx.transport, secrets: ctx.secrets },
     ...(ctx.urlProbe !== undefined && { urlProbe: ctx.urlProbe }),
     ...(ctx.verifyPoll !== undefined && { poll: ctx.verifyPoll }),
   });
   const verification = await adapter.verify(
-    grant,
+    async () => {
+      const grant = await args.loadGrant();
+      if (grant === undefined) {
+        throw new Error(
+          `deployOnMerge: verify lost the org grant for '${target.provider}' on project '${args.projectId}'`,
+        );
+      }
+      return grant;
+    },
     { provider: args.providerKind, appId: target.appId },
     args.deploymentId,
   );
@@ -193,8 +201,7 @@ export async function verifyDeployUntilConverged(
     attempt: async () => {
       attempts += 1;
       try {
-        const grant = await loadGrant();
-        await verifyDeploy(ctx, { runId, projectId, target, providerKind, deploymentId, grant });
+        await verifyDeploy(ctx, { runId, projectId, target, providerKind, deploymentId, loadGrant });
         return { result: true, signature: { failureSignature: "verified" }, done: true };
       } catch (error) {
         lastError = error;

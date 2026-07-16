@@ -8,13 +8,13 @@
 //   2. mint a fresh HMAC secret + store it in the secret store at a stable ref,
 //   3. create the GitHub `issues` webhook on the repo via the org's App token,
 //      pointing at `/github/webhooks/issues/:sourceId` with that secret,
-//   4. persist the `webhookSecretRef` onto the source `config` (jsonb — NO migration),
+//   4. persist the webhook secret ref in the internal source metadata column,
 //      which flips the source to webhook-driven (the poller then skips it; push is
 //      authoritative).
 //
 // The webhook is created via the org's GitHub App token (App-first, static fallback —
-// the same policy brownfield/greenfield use). The secret ref lives in the existing
-// `inbox_sources.config` jsonb, so this adds NO DB migration.
+// the same policy brownfield/greenfield use). The reusable ref never enters source
+// config or an HTTP response.
 
 import { randomBytes } from "node:crypto";
 import type { Context } from "hono";
@@ -52,8 +52,6 @@ export const ProvisionWebhookBody = z
   .object({
     projectId: z.string().min(1),
     repoUrl: z.string().min(1),
-    // Optional explicit GitHub credential ref (else the org default / App).
-    githubCredentialRef: z.string().min(1).optional(),
     // Optional callback base URL override (else `deps.publicBaseUrl`).
     callbackBaseUrl: z.string().url().optional(),
   })
@@ -71,7 +69,11 @@ export async function handleProvisionWebhook(
 ): Promise<Response> {
   const parsed = ProvisionWebhookBody.safeParse(await c.req.json().catch(() => {}));
   if (!parsed.success) return c.json({ error: "invalid_provision", issues: parsed.error.issues }, 400);
-  void actor;
+  const projectOrgId = await pgRepositories.projects.getOrgId(deps.pool, parsed.data.projectId, {
+    kind: "operator",
+    id: actor.userId,
+  });
+  if (projectOrgId !== orgId) return c.json({ error: "project_not_found" }, 404);
 
   const repo = parseGitHubRepository(parsed.data.repoUrl);
 
@@ -87,9 +89,10 @@ export async function handleProvisionWebhook(
   let token;
   try {
     const installation = await loadOrgGithubAppInstallation(deps.pool, orgId);
-    const staticRef = parsed.data.githubCredentialRef ?? (await loadOrgDefaultGithubCredentialRef(deps.pool, orgId));
+    const staticRef = await loadOrgDefaultGithubCredentialRef(deps.pool, orgId);
     token = await resolveGithubToken({
       secrets: deps.secrets,
+      orgId,
       ...(installation === undefined ? {} : { installation }),
       ...(staticRef === undefined ? {} : { staticRef }),
       ...(deps.githubAppMinter === undefined ? {} : { minter: deps.githubAppMinter }),
@@ -138,14 +141,13 @@ export async function handleProvisionWebhook(
   // stored secret to match. The live hook + the store agree on the new value.
   await deps.secrets.put({ ref: secretRef, value: secretValue });
 
-  // 5. Persist the secret ref onto the source config (jsonb — no migration). This
-  // flips the source webhook-driven (the poller now skips it; push is authoritative).
+  // 5. Persist the ref through the internal-only metadata seam. This flips the
+  // source webhook-driven without exposing a credential coordinate in config.
   await persistWebhookSecretRef(deps.pool, orgId, source.id, secretRef);
 
   return c.json(
     {
       sourceId: source.id,
-      webhookSecretRef: secretRef,
       callbackUrl,
       hookId,
     },
@@ -153,7 +155,7 @@ export async function handleProvisionWebhook(
   );
 }
 
-/** Read-modify-write the source config to add `webhookSecretRef` (org-scoped under RLS). */
+/** Store the secret coordinate without returning or merging it into provider config. */
 async function persistWebhookSecretRef(
   pool: pg.Pool,
   orgId: string,
@@ -161,9 +163,8 @@ async function persistWebhookSecretRef(
   webhookSecretRef: string,
 ): Promise<void> {
   await runWithOrgScope(pool, orgId, async (client) => {
-    const source = await pgRepositories.inbox.getSource(client, sourceId);
-    if (source === undefined) return;
-    await pgRepositories.inbox.updateSourceConfig(client, sourceId, { ...source.config, webhookSecretRef });
+    const updated = await pgRepositories.inbox.setWebhookSecretRef(client, sourceId, orgId, webhookSecretRef);
+    if (!updated) throw new Error("inbox source changed before webhook metadata could be committed");
   });
 }
 

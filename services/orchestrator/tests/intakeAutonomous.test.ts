@@ -35,9 +35,13 @@ const issuesSource: InboxSource = {
   kind: "issues",
   name: "github · cat-cave",
   detail: "",
-  config: { owner: "cat-cave", repo: "app" },
+  config: { owner: "cat-cave", repo: "app", labels: [] },
   enabled: true,
   autoRoute: false,
+  state: "active",
+  attention: null,
+  webhookConfigured: false,
+  retryNotBefore: null,
 };
 
 // A triage answerer that returns a fixed verdict — the model stand-in (tests
@@ -61,6 +65,7 @@ function fixedTriage(verdict: CandidateTriage["verdict"], routableSpec: TriageRo
 
 // Map a source object to its persisted row shape (the poller reads sources back).
 function sourceRow(s: InboxSource): Record<string, unknown> {
+  const attention = s.attention ?? null;
   return {
     id: s.id,
     org_id: s.orgId,
@@ -71,6 +76,13 @@ function sourceRow(s: InboxSource): Record<string, unknown> {
     config: s.config,
     enabled: s.enabled ? "true" : "false",
     auto_route: s.autoRoute ? "true" : "false",
+    state: s.state ?? "active",
+    attention_code: attention?.code ?? null,
+    attention_message: attention?.message ?? null,
+    attention_observed_at: attention?.observedAt ?? null,
+    webhook_configured: s.webhookConfigured ?? false,
+    retry_not_before: s.retryNotBefore ?? null,
+    project_valid: true,
   };
 }
 
@@ -96,6 +108,11 @@ function stubPool(opts: { existingSpecIds?: string[] } = {}): {
     }
     if (sql.includes("FROM inbox_sources WHERE org_id = $1")) {
       return { rows: [sourceRow(issuesSource)], rowCount: 1 };
+    }
+    if (sql.includes("FROM inbox_sources WHERE id = $1")) {
+      return params[0] === issuesSource.id && params[1] === issuesSource.orgId
+        ? { rows: [sourceRow(issuesSource)], rowCount: 1 }
+        : { rows: [], rowCount: 0 };
     }
     if (sql.startsWith("SELECT spec_id, title, status FROM specs")) {
       return {
@@ -363,7 +380,7 @@ describe("poll fallback", () => {
     const connectors = new Map<string, SourceConnector>([["issues", oneIssueConnector]]);
     const webhookDriven: InboxSource = {
       ...issuesSource,
-      config: { ...issuesSource.config, webhookSecretRef: "wh/src_gh" },
+      webhookConfigured: true,
     };
     expect(isPollableSource(issuesSource, connectors)).toBe(true);
     expect(isPollableSource(webhookDriven, connectors)).toBe(false);

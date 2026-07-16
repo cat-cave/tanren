@@ -15,9 +15,10 @@ export {
 } from "./poller.js";
 export {
   buildIntakeConnectorMapForOrg,
-  isCredentialResolutionError,
+  classifyPermanentInboxSourceError,
   IntakeGithubCredentialMissingError,
   type BuildIntakeConnectorMapDeps,
+  type PermanentInboxSourceFailure,
 } from "./issueSourceSeam.js";
 // The durable `webhook_events` store lives on the `Repositories` seam
 // (engine/repositories/webhookEvents.ts); re-exported here so the intake-internal
@@ -34,3 +35,10 @@ export {
   sweepStuckCandidates,
   type WebhookProcessorDeps,
 } from "./webhookProcessor.js";
+export { terminalizeInboxSource, deferInboxSourceRetry, type PermanentSourceFailure } from "./sourceTerminalization.js";
+export {
+  loadRunnableInboxSource,
+  isInboxSourceBoundaryError,
+  InboxSourceNotFoundError,
+  InboxSourceDecodeError,
+} from "./sourceValidation.js";

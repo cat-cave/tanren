@@ -92,6 +92,7 @@ export async function assembleBaseShiftStackWorkspace(input: {
     handle: assembled.workspace,
     newBaseSha: assembled.assembledHeadSha,
     pushFacts: {
+      orgId: ctx.orgId,
       target: assembled.live.target,
       workspacePath: assembled.live.workspacePath,
       repoUrl: ctx.repoUrl,

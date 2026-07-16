@@ -1,4 +1,4 @@
-import type { SecretStore, SecretValue } from "./secretStore.js";
+import { SecretStoreWriteError, type PutCreateOnlyResult, type SecretStore, type SecretValue } from "./secretStore.js";
 
 /**
  * Backend-agnostic credential refs (`credential/<kind>/<scope>/<owner>/<name>`,
@@ -54,6 +54,7 @@ interface OpItem {
  * credentials.
  */
 export class OnePasswordStore implements SecretStore {
+  readonly createOnlyAtomicity = "unsupported" as const;
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;
   private readonly fieldLabel: string;
@@ -82,6 +83,13 @@ export class OnePasswordStore implements SecretStore {
       body: JSON.stringify(body),
     });
     await assertOk(response, `store secret ${secret.ref}`);
+  }
+
+  async putCreateOnly(secret: SecretValue): Promise<PutCreateOnlyResult> {
+    throw new SecretStoreWriteError(
+      `1Password Connect cannot atomically create immutable coordinate ${secret.ref}`,
+      "definitely_unwritten",
+    );
   }
 
   async get(ref: string): Promise<SecretValue | undefined> {

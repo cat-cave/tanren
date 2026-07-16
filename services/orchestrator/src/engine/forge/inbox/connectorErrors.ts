@@ -1,6 +1,7 @@
+/* eslint-disable max-classes-per-file -- one cohesive exported intake error taxonomy */
 // Intake source-connector fetch errors (no-silent-fallbacks doctrine).
 //
-// A source connector (`github`/`linear`/`jira`/`sentry`) pulls open issues over
+// A source connector (`github`/`sentry`) pulls open issues over
 // HTTP. The binding doctrine: a credential/auth or transport/HTTP failure is a
 // LOUD hard failure, NEVER a quiet degrade to "no issues" (an empty list). Only a
 // genuine 200-with-an-empty-list is an empty result.
@@ -19,7 +20,81 @@
 //     transient), but the connector never swallows it as an empty list.
 
 /** The connectors that pull from an external issue/error source. */
-export type IntakeSourceProvider = "github" | "linear" | "jira" | "sentry";
+export type IntakeSourceProvider = "github" | "sentry";
+
+/**
+ * An `issues` source asked for a provider/credential shape that Tanren does not
+ * support. Linear/Jira bare-token intake was deleted rather than adapted onto
+ * the integration-grant plane; this error keeps a persisted stale config from
+ * being mistaken for a transient GitHub failure.
+ */
+export class UnsupportedInboxProviderError extends Error {
+  readonly retriable = false as const;
+  readonly requestedProvider: string | null;
+
+  constructor(requestedProvider: string | null, detail: string) {
+    super(`unsupported inbox provider configuration: ${detail}`);
+    this.name = "UnsupportedInboxProviderError";
+    this.requestedProvider = requestedProvider;
+  }
+}
+
+/**
+ * Reject caller/source-owned reusable credential coordinates before any secret
+ * or provider I/O. Credential selection belongs to the source's organization,
+ * never to JSON stored on an inbox source.
+ */
+export function assertNoSourceCredentialOverride(config: unknown): void {
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    for (const [key, child] of Object.entries(value)) {
+      if (["tokenRef", "staticRef", "credentialRef", "githubCredentialRef"].includes(key)) {
+        throw new UnsupportedInboxProviderError(
+          null,
+          `source-owned ${key} authority is not supported; use the organization-bound credential`,
+        );
+      }
+      visit(child);
+    }
+  };
+  visit(config);
+}
+
+/**
+ * Reject deleted providers and the former optional GitHub discriminator. The
+ * source kind is now the sole provider discriminator; keeping both forms would
+ * preserve a second compatibility authority.
+ */
+export function assertSupportedIssuesProvider(config: unknown): void {
+  assertNoSourceCredentialOverride(config);
+  if (typeof config !== "object" || config === null || Array.isArray(config)) return;
+  const record = config as Record<string, unknown>;
+  if (Object.hasOwn(record, "provider")) {
+    const provider = record["provider"];
+    throw new UnsupportedInboxProviderError(
+      typeof provider === "string" ? provider : null,
+      provider === "github"
+        ? "the provider discriminator was removed; kind 'issues' is the sole GitHub authority"
+        : `issues sources support only GitHub through kind 'issues' (received ${typeof provider === "string" ? `'${provider}'` : "a non-string provider"})`,
+    );
+  }
+}
+
+/** A selected integration authority is permanently unavailable for this source. */
+export class IntakeSourceAuthorityError extends Error {
+  readonly retriable = false as const;
+  readonly provider: IntakeSourceProvider;
+
+  constructor(provider: IntakeSourceProvider, detail: string) {
+    super(`${provider} intake source authority unavailable: ${detail}`);
+    this.name = "IntakeSourceAuthorityError";
+    this.provider = provider;
+  }
+}
 
 /**
  * A 401/403 from an intake source: the credential is missing, expired, or denied.
@@ -68,6 +143,34 @@ export class IntakeSourceFetchError extends Error {
   }
 }
 
+/** A provider-directed transient delay. Pollers persist the deadline and move on. */
+export class IntakeSourceRateLimitError extends Error {
+  readonly retriable = true as const;
+  readonly status = 429 as const;
+
+  constructor(
+    readonly provider: IntakeSourceProvider,
+    readonly retryAfterMs: number,
+  ) {
+    super(`${provider} intake source is rate limited; retry after ${retryAfterMs}ms`);
+    this.name = "IntakeSourceRateLimitError";
+  }
+}
+
+/** A stable provider resource/configuration 4xx that cannot self-heal by retry. */
+export class IntakeSourceResourceError extends Error {
+  readonly retriable = false as const;
+
+  constructor(
+    readonly provider: IntakeSourceProvider,
+    readonly status: number,
+    detail: string,
+  ) {
+    super(`${provider} intake resource unavailable (HTTP ${status}) — ${detail}`);
+    this.name = "IntakeSourceResourceError";
+  }
+}
+
 /**
  * Classify an intake-source HTTP response. A 200 with an array (or, for the
  * GraphQL/REST shapes, a parseable body) is the caller's to map. A 401/403 is a
@@ -75,10 +178,21 @@ export class IntakeSourceFetchError extends Error {
  * {@link IntakeSourceFetchError}. The caller checks the body shape AFTER this for
  * the 200 case and throws {@link IntakeSourceFetchError} on an unparseable 200.
  */
-export function assertIntakeResponseOk(provider: IntakeSourceProvider, status: number, detail = ""): void {
+export function assertIntakeResponseOk(
+  provider: IntakeSourceProvider,
+  status: number,
+  detail = "",
+  retryAfterMs?: number,
+): void {
   if (status === 200) return;
   if (status === 401 || status === 403) {
     throw new IntakeSourceAuthError(provider, status, detail === "" ? "credential rejected" : detail);
+  }
+  if (status === 429) {
+    throw new IntakeSourceRateLimitError(provider, retryAfterMs ?? 60_000);
+  }
+  if (status >= 400 && status < 500 && ![408, 409, 425].includes(status)) {
+    throw new IntakeSourceResourceError(provider, status, detail === "" ? "resource rejected" : detail);
   }
   throw new IntakeSourceFetchError(provider, status, detail === "" ? "unexpected response" : detail);
 }

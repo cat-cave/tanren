@@ -205,7 +205,7 @@ export class FetchSlackApiTransport implements SlackApiTransport {
   private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(
-    private readonly botToken: string,
+    private readonly tokenForAttempt: () => Promise<string>,
     fetchImpl?: typeof fetch,
     sleep?: (ms: number) => Promise<void>,
   ) {
@@ -268,11 +268,12 @@ export class FetchSlackApiTransport implements SlackApiTransport {
   private async call<T extends SlackApiEnvelope>(method: string, params: Record<string, string>): Promise<T> {
     return await withSlack429Retry(
       async () => {
+        const botToken = await this.tokenForAttempt();
         const response = await this.fetchImpl(`${SLACK_API_BASE}/${method}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
-            Authorization: `Bearer ${this.botToken}`,
+            Authorization: `Bearer ${botToken}`,
           },
           body: new URLSearchParams(params).toString(),
         });

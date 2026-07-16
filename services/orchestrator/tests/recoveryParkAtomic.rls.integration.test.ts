@@ -177,29 +177,20 @@ describeDb("atomic recovery park — real PG and enforced RLS", () => {
        VALUES ($1, $2, $3, 'cross', 'cross', 'in_flight')`,
       [otherSpec, PROJECT, ORG],
     );
-    // Independent FKs permit this corrupt shape: the queue points at otherSpec,
-    // while its run still points at SPEC. The ownership join must reject it.
-    await owner().query(
-      `INSERT INTO merge_queue
-         (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number, claimed_at)
-       VALUES ($1, $2, $3, $4, $5, 'merging', $6, '17', now())`,
-      [queueId, runId, otherSpec, PROJECT, ORG, `https://github.example/pulls/${queueId}`],
-    );
-
     await expect(
-      new DirectRunStateWriter(runtime()).parkRecoveryAndDequeue({
-        ...inputFor(runId, queueId),
-        specId: otherSpec,
-      }),
-    ).resolves.toMatchObject({ kind: "parking_failed", reason: "ownership_missing", queueDisposition: "unknown" });
+      owner().query(
+        `INSERT INTO merge_queue
+           (queue_id, run_id, spec_id, project_id, org_id, status, pr_url, pr_number, claimed_at)
+         VALUES ($1, $2, $3, $4, $5, 'merging', $6, '17', now())`,
+        [queueId, runId, otherSpec, PROJECT, ORG, `https://github.example/pulls/${queueId}`],
+      ),
+    ).rejects.toMatchObject({ code: "23503", constraint: "merge_queue_run_lineage_fk" });
     const spec = await owner().query<{ status: string }>("SELECT status FROM specs WHERE spec_id = $1", [otherSpec]);
-    const queue = await owner().query<{ status: string }>("SELECT status FROM merge_queue WHERE queue_id = $1", [
-      queueId,
-    ]);
+    const queue = await owner().query("SELECT queue_id FROM merge_queue WHERE queue_id = $1", [queueId]);
     const events = await owner().query("SELECT id FROM events WHERE run_id = $1", [runId]);
-    expect({ spec: spec.rows[0]?.status, queue: queue.rows[0]?.status, events: events.rowCount }).toEqual({
+    expect({ spec: spec.rows[0]?.status, queues: queue.rowCount, events: events.rowCount }).toEqual({
       spec: "in_flight",
-      queue: "merging",
+      queues: 0,
       events: 0,
     });
   });

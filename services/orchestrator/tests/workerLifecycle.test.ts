@@ -20,7 +20,7 @@ import type { GitHubHttpClient } from "../src/engine/providers/github.js";
 import { createProject, createQueuedRunFromSpec, createSpec } from "../src/engine/workflow/projectSpec.js";
 import { startRunWorker } from "../src/engine/worker/index.js";
 import type { ExecuteJobResult } from "../src/engine/worker/runExecutor.js";
-import { githubCredentialRef, WorkerPool } from "./helpers/workerPool.js";
+import { WorkerPool } from "./helpers/workerPool.js";
 
 // An always-empty pool: every `PgJobQueue.claim` returns no row, so every slot
 // goes straight to its idle `sleep` — letting us count the live slots.
@@ -127,19 +127,33 @@ class OneJobClaimClient implements JobClaimClient {
 
 const codexCredentialRef = "credential/codex/dev";
 const ORG = "org_lifecycle_test";
+const githubCredentialRef = "credential/github/org/org_lifecycle_test/dev";
 
 async function seedRunWithOrg(pool: WorkerPool) {
   const secrets = new FakeSecretStore();
   await storeGithubToken(secrets, { ref: githubCredentialRef, token: "ghp_secretToken" });
-  const project = await createProject(pool.asPgPool(), {
-    name: "lifecycle-test",
-    repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
-    defaultBranch: "main",
-    config: {
-      version: 1,
-      credentials: { defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef }, githubCredentialRef },
+  const project = await createProject(
+    pool.asPgPool(),
+    {
+      name: "lifecycle-test",
+      repoUrl: "https://github.com/cat-cave/tanren-fixture-easy",
+      defaultBranch: "main",
+      config: {
+        version: 1,
+        credentials: {
+          defaultLlm: { cli: "codex", model: "default", authRef: codexCredentialRef },
+          githubCredentialRef,
+        },
+      },
     },
-  });
+    {
+      userId: "user_lifecycle_fixture",
+      orgId: ORG,
+      projectId: null,
+      scopes: ["org:admin"],
+      source: "session",
+    },
+  );
   const spec = await createSpec(pool.asPgPool(), {
     projectId: project.projectId,
     title: "Add a marker file",

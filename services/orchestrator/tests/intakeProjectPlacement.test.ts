@@ -86,6 +86,7 @@ function stubPool(opts: { projects: string[] }): {
         runner_image: "img",
         allocator: "static",
         config: {},
+        lifecycle: "active",
       }));
       return { rows, rowCount: rows.length };
     }

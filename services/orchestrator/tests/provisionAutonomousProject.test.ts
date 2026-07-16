@@ -10,8 +10,11 @@
 import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { provisionAutonomousProject } from "../src/engine/workflow/provisionAutonomousProject.js";
-import { AUDIT_BOOTSTRAP_CATALOG } from "../src/engine/forge/audits/index.js";
-import { DEFAULT_ROUTE_EVENTS } from "../src/engine/notifications/index.js";
+import {
+  AUDIT_BOOTSTRAP_CATALOG,
+  AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES,
+} from "../src/engine/forge/audits/seedCatalog.js";
+import { DEFAULT_ROUTE_EVENTS, DEFAULT_ROUTE_MIN_SEVERITY } from "../src/engine/notifications/seedDefaultRoute.js";
 import { NotificationMemoryClient } from "./helpers/notificationMemoryClient.js";
 
 function stubPool(failOn?: (sql: string) => boolean): {
@@ -71,6 +74,12 @@ function stubPool(failOn?: (sql: string) => boolean): {
         config: typeof config === "string" ? JSON.parse(config) : config,
         enabled,
         auto_route: autoRoute,
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       };
       inboxSources.set(String(id), row);
       return { rows: [row], rowCount: 1 };
@@ -105,13 +114,15 @@ describe("provisionAutonomousProject (shared bootstrap seam)", () => {
     expect(result.errors).toEqual([]);
 
     // 1. Audit catalog seeded.
-    expect(result.auditCatalog?.jobs).toBe(AUDIT_BOOTSTRAP_CATALOG.length);
+    expect(result.auditCatalog?.requiredCategories).toEqual(AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES);
     expect(result.auditCatalog?.created.sort()).toEqual(["deps", "mutation", "security", "stale_specs"]);
     expect(auditJobs.size).toBe(AUDIT_BOOTSTRAP_CATALOG.length);
 
     // 2. Default notification route seeded (every milestone event has a route).
     expect(result.notificationRoute?.created).toBe(true);
-    expect(result.notificationRoute?.events).toBe(DEFAULT_ROUTE_EVENTS.length);
+    expect(result.notificationRoute?.requiredEvents).toEqual(
+      DEFAULT_ROUTE_EVENTS.map((eventName) => ({ eventName, minSeverity: DEFAULT_ROUTE_MIN_SEVERITY })),
+    );
     expect(notify.targets.size).toBe(1);
     expect(notify.routes.size).toBe(DEFAULT_ROUTE_EVENTS.length);
 

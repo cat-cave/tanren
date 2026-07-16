@@ -21,6 +21,7 @@ describe("resolveGithubToken", () => {
     await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_static" });
     const resolved = await resolveGithubToken({
       secrets,
+      orgId: "o1",
       staticRef: "credential/github/org/o1/default",
     });
     expect(resolved.source).toBe("static");
@@ -28,12 +29,31 @@ describe("resolveGithubToken", () => {
     expect(await resolved.refresh()).toBe("ghp_static");
   });
 
+  it("rejects a cross-org static ref immediately before SecretStore access", async () => {
+    let secretReads = 0;
+    const secrets = {
+      get: async () => {
+        secretReads += 1;
+      },
+    } as never;
+    await expect(
+      resolveGithubToken({
+        secrets,
+        orgId: "org_a",
+        staticRef: "credential/github/org/org_b/default",
+      }),
+    ).rejects.toThrow("credential ref does not belong to the authenticated owner");
+    expect(secretReads).toBe(0);
+  });
+
   it("throws a descriptive error when the configured static ref is missing", async () => {
     const secrets = new InMemorySecretStore();
-    await expect(resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/absent" })).rejects.toThrow(
-      "missing GitHub credential ref: credential/github/org/o1/absent",
-    );
-    await expect(resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/absent" })).rejects.toMatchObject({
+    await expect(
+      resolveGithubToken({ secrets, orgId: "o1", staticRef: "credential/github/org/o1/absent" }),
+    ).rejects.toThrow("missing GitHub credential ref: credential/github/org/o1/absent");
+    await expect(
+      resolveGithubToken({ secrets, orgId: "o1", staticRef: "credential/github/org/o1/absent" }),
+    ).rejects.toMatchObject({
       name: "MissingGithubCredentialRefError",
       retriable: false,
     });
@@ -48,7 +68,9 @@ describe("resolveGithubToken", () => {
     try {
       // No staticRef + no installation ⇒ hard config error, even though the env
       // ref points at a real secret. The github credential is userland config only.
-      await expect(resolveGithubToken({ secrets })).rejects.toBeInstanceOf(NoGithubCredentialConfiguredError);
+      await expect(resolveGithubToken({ secrets, orgId: "o1" })).rejects.toBeInstanceOf(
+        NoGithubCredentialConfiguredError,
+      );
     } finally {
       if (prior === undefined) {
         delete process.env["TANREN_GITHUB_APP_TOKEN_REF"];
@@ -65,8 +87,10 @@ describe("resolveGithubToken", () => {
     try {
       // No hardcoded default ref: an unconfigured run is a hard config error,
       // NOT a silent fall-through to `credential/github/default`.
-      await expect(resolveGithubToken({ secrets })).rejects.toThrow(/No GitHub credential configured for this run/u);
-      await expect(resolveGithubToken({ secrets })).rejects.toMatchObject({
+      await expect(resolveGithubToken({ secrets, orgId: "o1" })).rejects.toThrow(
+        /No GitHub credential configured for this run/u,
+      );
+      await expect(resolveGithubToken({ secrets, orgId: "o1" })).rejects.toMatchObject({
         name: "NoGithubCredentialConfiguredError",
         retriable: false,
       });
@@ -81,7 +105,11 @@ describe("resolveGithubToken", () => {
   it("re-reads the static secret on refresh, observing a rotated value", async () => {
     const secrets = new InMemorySecretStore();
     await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_v1" });
-    const resolved = await resolveGithubToken({ secrets, staticRef: "credential/github/org/o1/default" });
+    const resolved = await resolveGithubToken({
+      secrets,
+      orgId: "o1",
+      staticRef: "credential/github/org/o1/default",
+    });
     expect(resolved.token).toBe("ghp_v1");
     await secrets.put({ ref: "credential/github/org/o1/default", value: "ghp_v2" });
     expect(await resolved.refresh()).toBe("ghp_v2");
@@ -111,6 +139,7 @@ describe("resolveGithubToken", () => {
     const minter = new GithubAppTokenMinter({ secrets, fetchImpl });
     const resolved = await resolveGithubToken({
       secrets,
+      orgId: "o1",
       installation: {
         installationId: "42",
         appId: "1",

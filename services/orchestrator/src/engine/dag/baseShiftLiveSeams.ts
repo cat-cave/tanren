@@ -199,6 +199,7 @@ export class LiveBaseShiftWorkspaceProvider implements BaseShiftWorkspaceOpener 
       target: live.pushFacts.target,
       workspacePath: live.pushFacts.workspacePath,
       secrets: this.deps.secrets,
+      orgId: live.pushFacts.orgId,
       githubHttp: this.deps.githubHttp,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       repoUrl: live.pushFacts.repoUrl,

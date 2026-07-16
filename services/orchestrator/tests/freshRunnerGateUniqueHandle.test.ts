@@ -129,7 +129,7 @@ const CTX = {
   ref: "tanren/batch/spec_a",
   runnerImage: "ghcr.io/tanren/runner:test",
   governancePosture: "strict" as const,
-  githubCredentialRef: "credential/github/project",
+  githubCredentialRef: "credential/github/org/org_1/project",
   orgId: "org_1",
   projectId: "project_1",
   runId: RUN_ID,

@@ -260,26 +260,19 @@ describeDb("org costs route — real PostgreSQL, auth, RLS, and dual cursor", ()
     await expectConnectionReset(appPool);
   });
 
-  it("fails closed and rolls back a same-org cross-project run/spec decode miss", async () => {
-    await ownerPool.query(
-      `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, outcome, started_at)
-       VALUES ('run_cost_route_bad_binding', $1, $2, $3, 'cli', 'main', 'completed', 'ok', '2026-07-15T04:00:00Z')`,
-      [SPEC_B, PROJECT_A, ORG],
-    );
-    trace.splice(0);
-    const response = await app.request(`/orgs/${ORG}/costs`, { headers: authHeaders() });
-    expect(response.status).toBe(500);
-    const body = await response.text();
-    expect(body).not.toContain("run_cost_route_bad_binding");
-    expect(body).not.toContain("Spec B");
-    expect(body).not.toContain("(spec missing)");
-
-    const transaction = routeTransaction(trace);
-    expect(transaction).toContain(SNAPSHOT_SQL);
-    expect(transaction.filter((sql) => isOrgCostDataRead(sql))).toHaveLength(2);
-    expect(transaction.at(-1)).toBe("ROLLBACK");
-    expect(transaction).not.toContain("COMMIT");
-    await expectConnectionReset(appPool);
+  it("fails closed: the DB lineage FK structurally forbids a same-org cross-project run/spec binding", async () => {
+    // in-1 (migration 0043) adds the composite runs_spec_lineage_fk
+    // (org_id, project_id, spec_id) -> specs, so a run that claims SPEC_B (which
+    // belongs to PROJECT_B) under PROJECT_A can no longer be inserted at all. The
+    // prior app-layer "decode miss" fail-closed path guarded a state that is now
+    // unrepresentable; the guarantee is enforced one layer deeper and stronger.
+    await expect(
+      ownerPool.query(
+        `INSERT INTO runs (run_id, spec_id, project_id, org_id, trigger, branch, status, outcome, started_at)
+         VALUES ('run_cost_route_bad_binding', $1, $2, $3, 'cli', 'main', 'completed', 'ok', '2026-07-15T04:00:00Z')`,
+        [SPEC_B, PROJECT_A, ORG],
+      ),
+    ).rejects.toThrow(/runs_spec_lineage_fk/u);
   });
 });
 

@@ -59,7 +59,7 @@ import type {
 } from "../contracts/recoveryPreparation.js";
 import { CostRecorder, type RecordedCost } from "../costs/recorder.js";
 import type { EventName } from "../events/index.js";
-import { PgEventStore, type AppendEventInput } from "../eventStore.js";
+import { PgEventStore, type AppendEventInput, type PriorEventInput } from "../eventStore.js";
 import {
   createQueuedRunFromSpec,
   createSpec as createSpecImpl,
@@ -129,6 +129,10 @@ export class DirectRunStateWriter
 
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
     await this.eventStore.append(input);
+  }
+
+  async appendPriorIfAbsent<N extends EventName>(input: PriorEventInput<N>): Promise<boolean> {
+    return this.eventStore.appendPriorIfAbsent(input);
   }
 
   async recordCost(input: RecordCostInput): Promise<RecordedCost> {

@@ -9,28 +9,143 @@
 
 import { z } from "zod";
 import { SpecPriority } from "../../state/spec.js";
+import { assertNoSourceCredentialOverride } from "./connectorErrors.js";
 
 // The connector kinds — mirror the hi-fi `INBOX_SOURCES` glyph keys. `system`
 // and `scheduled_audit` are the auto-routing system sources.
 export const SourceKind = z.enum(["issues", "errors", "system", "manual", "scheduled_audit"]);
 export type SourceKind = z.infer<typeof SourceKind>;
 
-// A configured source. `config` is connector-specific (repo/labels for issues,
-// query for errors, etc.) and validated by each connector, not here.
-export const InboxSource = z
+export const InboxSourceState = z.enum(["active", "needs_attention"]);
+export type InboxSourceState = z.infer<typeof InboxSourceState>;
+
+/** Durable, sanitized reason an external source requires operator repair. */
+export const InboxSourceAttention = z
+  .object({
+    code: z.enum([
+      "unsupported_provider",
+      "invalid_config",
+      "credential_unavailable",
+      "authority_unavailable",
+      "resource_unavailable",
+    ]),
+    message: z.string().min(1).max(300),
+    observedAt: z.string().datetime(),
+  })
+  .strict();
+export type InboxSourceAttention = z.infer<typeof InboxSourceAttention>;
+
+/** The sole active persisted shape for a GitHub issues source. */
+export const ActiveGitHubIssuesConfig = z
+  .object({
+    owner: z.string().trim().min(1),
+    repo: z.string().trim().min(1),
+    labels: z.array(z.string().trim().min(1)),
+    pollIntervalMs: z.number().int().positive().optional(),
+  })
+  .strict();
+export type ActiveGitHubIssuesConfig = z.infer<typeof ActiveGitHubIssuesConfig>;
+
+/** The sole active persisted shape for a Sentry error source. */
+export const ActiveSentryConfig = z
+  .object({
+    org: z.string().trim().min(1),
+    project: z.string().trim().min(1),
+    baseUrl: z.string().url(),
+    query: z.string().min(1).optional(),
+    level: z.enum(["debug", "info", "warning", "error", "fatal", "sample"]).optional(),
+    pollIntervalMs: z.number().int().positive().optional(),
+    managedBy: z.literal("integration-provisioner").optional(),
+  })
+  .strict();
+export type ActiveSentryConfig = z.infer<typeof ActiveSentryConfig>;
+
+export const ManualSourceConfig = z.object({}).strict();
+export const ScheduledAuditSourceConfig = z.object({}).strict();
+export const SystemSourceConfig = z.object({ ciInsights: z.literal(true) }).strict();
+
+const CreateGitHubIssuesConfig = ActiveGitHubIssuesConfig.extend({
+  labels: z.array(z.string().trim().min(1)).default([]),
+});
+const CreateSentryConfig = ActiveSentryConfig.omit({ managedBy: true }).extend({
+  baseUrl: z.string().url().default("https://sentry.io"),
+});
+
+function schemaForSourceKind(kind: SourceKind, trusted: boolean): z.ZodType<Record<string, unknown>> {
+  if (kind === "issues") return trusted ? ActiveGitHubIssuesConfig : CreateGitHubIssuesConfig;
+  if (kind === "errors") return trusted ? ActiveSentryConfig : CreateSentryConfig;
+  if (kind === "system") return SystemSourceConfig;
+  if (kind === "scheduled_audit") return ScheduledAuditSourceConfig;
+  return ManualSourceConfig;
+}
+
+/**
+ * Decode an external source request into its one canonical active persisted
+ * shape. Internal lifecycle/secret metadata cannot be caller-authored.
+ */
+export function parseInboxSourceCreateConfig(kind: SourceKind, config: unknown): Record<string, unknown> {
+  assertNoSourceCredentialOverride(config);
+  return schemaForSourceKind(kind, false).parse(config);
+}
+
+/** Normalize a trusted internal write to the canonical persisted shape. */
+export function parsePersistedInboxSourceConfig(kind: SourceKind, config: unknown): Record<string, unknown> {
+  assertNoSourceCredentialOverride(config);
+  return schemaForSourceKind(kind, true).parse(config);
+}
+
+const InboxSourceBase = z
   .object({
     id: z.string().min(1),
     orgId: z.string().min(1),
     projectId: z.string().min(1).nullable(),
-    kind: SourceKind,
     name: z.string().min(1).max(120),
     detail: z.string().max(200).default(""),
-    config: z.record(z.string(), z.unknown()).default({}),
     enabled: z.boolean().default(true),
     // System sources whose findings skip manual triage (verdict auto-routable).
     autoRoute: z.boolean().default(false),
+    state: InboxSourceState.default("active"),
+    attention: InboxSourceAttention.nullable().default(null),
+    retryNotBefore: z.string().datetime().nullable().default(null),
+    // Public/engine-safe projection only. The reusable secret coordinate remains
+    // in an internal DB column and is fetched through a dedicated repository seam.
+    webhookConfigured: z.boolean().default(false),
   })
   .strict();
+
+// A configured source. Every kind owns one strict provider-only config. Lifecycle,
+// retry timing, and secret metadata are independent first-class columns.
+export const InboxSource = z
+  .discriminatedUnion("kind", [
+    InboxSourceBase.extend({ kind: z.literal("issues"), config: ActiveGitHubIssuesConfig.nullable() }),
+    InboxSourceBase.extend({ kind: z.literal("errors"), config: ActiveSentryConfig.nullable() }),
+    InboxSourceBase.extend({ kind: z.literal("system"), config: SystemSourceConfig.nullable() }),
+    InboxSourceBase.extend({ kind: z.literal("manual"), config: ManualSourceConfig.nullable() }),
+    InboxSourceBase.extend({ kind: z.literal("scheduled_audit"), config: ScheduledAuditSourceConfig.nullable() }),
+  ])
+  .superRefine((source, ctx) => {
+    if ((source.state === "needs_attention") !== (source.attention !== null)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["attention"],
+        message: "needs-attention state and attention details must change together",
+      });
+    }
+    if (source.state === "needs_attention" && source.enabled) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["enabled"],
+        message: "a source needing attention must be disabled",
+      });
+    }
+    if (source.state === "active" && source.config === null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["config"],
+        message: "an active source must have a canonical provider config",
+      });
+    }
+  });
 export type InboxSource = z.infer<typeof InboxSource>;
 
 // The Forge triage read-out (the hi-fi `TriageReadout`): three reasoning rows

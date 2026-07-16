@@ -1,11 +1,8 @@
-// Tiny in-memory pg substitute that covers the SQL shapes used by the
-// route layer (orgs, projects, specs, doctor, brownfield link) plus the
-// per-project budget surface (ownership + config read-modify-write + cost sum).
-// Deliberately scoped: only the SQL fragments the routes emit are handled.
-
 import type pg from "pg";
 import { handleConfigCasSql } from "./routesPoolConfigCas.js";
 import { isEventStoreAppend, recordRouteEvent } from "./routesPoolEvents.js";
+import { handleProjectDerivationQuery, type ProjectDerivationFakeRow } from "./routesPoolProjectDerivations.js";
+import { RoutesPoolDerivationEvidence } from "./routesPoolDerivationEvidence.js";
 
 interface QueryResult {
   rows: unknown[];
@@ -58,23 +55,23 @@ export class RoutesPool {
   readonly projects = new Map<string, ProjectRow>();
   readonly projectMembers = new Map<string, { project_id: string; user_id: string; role: string }>();
   readonly specs = new Map<string, SpecRow>();
+  readonly projectDerivations = new Map<string, ProjectDerivationFakeRow>();
   readonly events: Array<Record<string, unknown>> = [];
   readonly tasks: Array<Record<string, unknown>> = [];
   readonly jobs: Array<Record<string, unknown>> = [];
   readonly runs: Array<Record<string, unknown>> = [];
-  /** Inbox sources (the repo-link auto-provisioned `issues` source lands here). */
   readonly inboxSources: Array<Record<string, unknown>> = [];
-  /**
-   * Per-project cost-record rows the budget-sum query reads. `cost_usd` is REAL
-   * spend; `notional_cost_usd` is the API-equivalent value (defaults to the real
-   * figure for a per-token row, where real == notional).
-   */
+  readonly derivationEvidence = new RoutesPoolDerivationEvidence();
   readonly costRecords: Array<{ project_id: string; cost_usd: number; notional_cost_usd: number }> = [];
   /** Captured NOTIFY statements (channel + payload) so a test can assert a re-walk wake. */
   readonly notifies: Array<{ channel: string; payload: string }> = [];
 
   seedCostRecord(projectId: string, costUsd: number, notionalCostUsd: number = costUsd): void {
     this.costRecords.push({ project_id: projectId, cost_usd: costUsd, notional_cost_usd: notionalCostUsd });
+  }
+
+  seedDerivationBootstrap(orgId: string, projectId: string) {
+    return this.derivationEvidence.seedBootstrap(orgId, projectId, this.inboxSources);
   }
 
   seedBudgetPause(input: {
@@ -177,6 +174,9 @@ export class RoutesPool {
     if (["BEGIN", "COMMIT", "ROLLBACK"].includes(trimmed)) {
       return { rows: [], rowCount: 0 };
     }
+    if (trimmed.startsWith("SELECT pg_advisory_")) return { rows: [{}], rowCount: 1 };
+    const derivationEvidence = this.derivationEvidence.handle(trimmed, params, this);
+    if (derivationEvidence !== undefined) return derivationEvidence;
     // NOTIFY <channel>[, '<payload>'] — capture the re-walk wake (audit §3.7e) so a test
     // can assert raising a paused project's ceiling fires a `tanren_dag` notification.
     const notify = /^NOTIFY\s+(\w+)(?:\s*,\s*'([^']*)')?/u.exec(trimmed);
@@ -236,12 +236,12 @@ export class RoutesPool {
         const row = this.projects.get(String(params[0]));
         return single(row);
       }
-      // ProjectStore.findByRepoUrl (the idempotent greenfield-create probe). Matches on
-      // the canonical repo URL ignoring a trailing `.git` on either side.
       if (sql.includes("regexp_replace(repo_url")) {
         const canonical = String(params[0]).replace(/\.git$/u, "");
-        const row = [...this.projects.values()].find((p) => p.repo_url.replace(/\.git$/u, "") === canonical);
-        return single(row);
+        const rows = [...this.projects.values()].filter(
+          (p) => p.repo_url.replace(/\.git$/u, "") === canonical && p.org_id === String(params[1]),
+        );
+        return sql.includes("LIMIT 1") ? single(rows[0]) : { rows, rowCount: rows.length };
       }
     }
     if (trimmed.startsWith("SELECT org_id FROM projects WHERE project_id = $1")) {
@@ -305,9 +305,31 @@ export class RoutesPool {
         allocator: String(params[5]),
         config: JSON.parse(String(params[6])) as unknown,
         config_revision: 1,
-        org_id: params[7] === null ? null : String(params[7]),
+        lifecycle: String(params[7]),
+        org_id: params[8] === null ? null : String(params[8]),
       });
       return { rows: [], rowCount: 1 };
+    }
+    if (trimmed.startsWith("UPDATE projects") && trimmed.includes("lifecycle = 'active'")) {
+      const project = this.projects.get(String(params[1]));
+      if (project === undefined || project.org_id !== String(params[0]) || project.lifecycle !== "deriving") {
+        return { rows: [], rowCount: 0 };
+      }
+      project.lifecycle = "active";
+      return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    if (trimmed.startsWith("SELECT lifecycle") && trimmed.includes("FROM projects") && sql.includes("org_id = $1")) {
+      const project = this.projects.get(String(params[1]));
+      return single(
+        project === undefined || project.org_id !== String(params[0])
+          ? undefined
+          : {
+              lifecycle: project.lifecycle,
+              name: project.name,
+              repo_url: project.repo_url,
+              default_branch: project.default_branch,
+            },
+      );
     }
     if (trimmed.startsWith("UPDATE projects SET repo_url")) {
       const project = this.projects.get(String(params[1]));
@@ -319,8 +341,13 @@ export class RoutesPool {
     if (trimmed.startsWith("UPDATE projects SET lifecycle")) {
       const project = this.projects.get(String(params[1]));
       if (project === undefined) return { rows: [], rowCount: 0 };
+      if (params[2] !== undefined && project.lifecycle !== String(params[2])) return { rows: [], rowCount: 0 };
       project.lifecycle = String(params[0]);
       return { rows: [{ project_id: project.project_id }], rowCount: 1 };
+    }
+    if (trimmed.startsWith("SELECT lifecycle FROM projects WHERE project_id = $1")) {
+      const project = this.projects.get(String(params[0]));
+      return single(project === undefined ? undefined : { lifecycle: project.lifecycle });
     }
     // The archive cascade: cancel a project's in-flight (queued|running) runs
     // ($1 = project id). Flips matching rows to `cancelled` and returns their ids.
@@ -358,6 +385,9 @@ export class RoutesPool {
       const project = this.projects.get(String(params[0]));
       return single(project === undefined ? undefined : { project_id: project.project_id });
     }
+
+    const derivation = handleProjectDerivationQuery(this.projectDerivations, trimmed, params);
+    if (derivation !== undefined) return derivation;
 
     // specs
     if (trimmed.startsWith("SELECT spec_id, project_id, title, description, acceptance_criteria, depends_on, status")) {
@@ -402,48 +432,8 @@ export class RoutesPool {
       return { rows: [{ spec_id: spec.spec_id }], rowCount: 1 };
     }
 
-    if (trimmed.startsWith("INSERT INTO milestones")) {
-      return {
-        rows: [
-          {
-            id: params[0],
-            project_id: params[1],
-            label: params[2],
-            name: params[3],
-            description: params[4],
-            order_index: params[5],
-            eta: params[6],
-            status: params[7],
-            created_at: new Date(),
-            updated_at: new Date(),
-          },
-        ],
-        rowCount: 1,
-      };
-    }
     if (trimmed.startsWith("DELETE FROM spec_milestones")) return { rows: [], rowCount: 0 };
     if (trimmed.startsWith("INSERT INTO spec_milestones")) return { rows: [], rowCount: 1 };
-
-    // design_contracts (native design subsystem, WS-D1) — the derive persists the
-    // captured design contract as a first-class version-1 row. Post-H2-unify
-    // (migration 0028) params: [id, org_id, project_id, domain, contract_json].
-    // The version is COALESCE'd in the real SQL; the stub returns version 1
-    // (the first per-project contract).
-    if (trimmed.startsWith("INSERT INTO design_contracts")) {
-      return {
-        rows: [
-          {
-            id: String(params[0]),
-            org_id: String(params[1]),
-            project_id: String(params[2]),
-            version: 1,
-            domain: String(params[3]),
-            contract: JSON.parse(String(params[4])) as unknown,
-          },
-        ],
-        rowCount: 1,
-      };
-    }
 
     // inbox_sources (the repo-link auto-provisioned `issues` source).
     if (trimmed.includes("FROM inbox_sources WHERE org_id = $1")) {

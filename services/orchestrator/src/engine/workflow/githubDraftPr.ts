@@ -1,16 +1,15 @@
+/* eslint-disable import/max-dependencies -- draft PR publication composes the canonical tenant, event, runner, and GitHub seams */
 import type pg from "pg";
 import { z } from "zod";
-import { installationFromOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { bindOrgGithubCredentialRefs, migrateOrgConfig, type OrgGithubAppInstallation } from "../config/orgConfig.js";
+import { bindProjectGithubCredentialRefs, migrateProjectConfig } from "../config/projectConfig.js";
 import type { RunnerHandle } from "../contracts/allocator.js";
 import { sshRunnerHandle } from "../contracts/allocator.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
 import type { SecretStore } from "../contracts/secretStore.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
-import {
-  normalizeStaticGithubRef,
-  redactedGithubTokenResult,
-  validateGithubCredentialRef,
-} from "../credentials/githubToken.js";
+import { normalizeStaticGithubRef, redactedGithubTokenResult } from "../credentials/githubToken.js";
+import { canonicalOrgGithubCredentialRef } from "../credentials/refNamespace.js";
 import { type EventStore, PgEventStore } from "../eventStore.js";
 import type { GitHubHttpClient } from "../providers/github.js";
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
@@ -49,14 +48,7 @@ type DraftPrRunRow = z.infer<typeof DraftPrRunRow>;
 export interface PublishDraftPullRequestInput {
   pool: RunStateClient;
   eventStore?: EventStore;
-  /**
-   * The `UPDATE runs SET pr_url` routes through the writer when wired (the autonomy
-   * worker / merge-stage path, where the de-privileged data plane can't UPDATE `runs`);
-   * the in-process pool fallback is retained ONLY for the orchestrator HTTP API draft-PR
-   * endpoint (`publishDraftPullRequestForRun` in `mountRootApiRoutes`), which runs on the
-   * privileged orchestrator pool and has no writer wired through. Every merge-stage
-   * caller passes the writer (audit D-R3.2 sweep).
-   */
+  /** Merge-stage callers write `pr_url` through the de-privileged state writer. */
   runStateWriter?: RunStateWriter;
   orgId?: string | null;
   secrets: SecretStore;
@@ -67,19 +59,12 @@ export interface PublishDraftPullRequestInput {
   runId: string;
   specId: string;
   projectId: string;
-  /** v68 fix: the run's tenant key (NOT NULL on runs.org_id). Stamped on every
-   *  appended event (`credential.requested`, `github.pr.created`, etc) — events.org_id
-   *  is NOT NULL + AppendEventInput now requires it explicitly. */
+  /** Required tenant key stamped on every appended event. */
   appendEventOrgId: string;
   workspacePath: string;
   repoUrl: string;
   targetBranch: string;
-  /**
-   * walker-jj-local-integration-design.md §3.1: the ordered ancestor stack this dependent
-   * speculative run is stacked on. A NON-EMPTY stack ⇒ the draft PR bases on the IMMEDIATE
-   * ancestor's PR-head branch (the LAST stack entry) — a true stacked PR showing only this
-   * run's delta over its ancestor. Empty/absent (a non-speculative run) ⇒ `default_branch`.
-   */
+  /** A non-empty stack bases the PR on its immediate ancestor's PR-head branch. */
   ancestorStack?: AncestorStack;
   runBranch?: string;
   title: string;
@@ -145,7 +130,6 @@ export interface PublishDraftPullRequestForRunInput {
   githubHttp: GitHubHttpClient;
   ssh: CommandSubstrate;
   runId: string;
-  githubCredentialRef?: string;
   identitySecretRef: string;
   workspacePath?: string;
   title?: string;
@@ -193,9 +177,28 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
   const baseBranch = resolveDraftPrBaseBranch(input.targetBranch, input.ancestorStack);
   // With an App installation the static ref is optional; the ledger label is
   // the App credential ref in that case.
-  const staticRef =
+  const suppliedStaticRef =
     input.installation === undefined ? githubCredentialRefFromInput(input) : credentialRefOrUndefined(input);
-  const ledgerRef = input.installation?.credentialRef ?? staticRef ?? "github_app";
+  const staticRef =
+    suppliedStaticRef === undefined
+      ? undefined
+      : canonicalOrgGithubCredentialRef({
+          orgId: input.appendEventOrgId,
+          supplied: suppliedStaticRef,
+          kind: "github_token",
+        });
+  const installation =
+    input.installation === undefined
+      ? undefined
+      : {
+          ...input.installation,
+          credentialRef: canonicalOrgGithubCredentialRef({
+            orgId: input.appendEventOrgId,
+            supplied: input.installation.credentialRef,
+            kind: "github_app",
+          }),
+        };
+  const ledgerRef = installation?.credentialRef ?? staticRef ?? "github_app";
 
   // §5a/PR-2: token resolution is credential PLUMBING, not a forge op — resolve through
   // the standalone `resolveVcsToken(http, creds)` over the provider's existing client,
@@ -218,7 +221,8 @@ export async function publishDraftPullRequest(input: PublishDraftPullRequestInpu
     });
     const resolved = await resolveVcsToken(http, {
       secrets: input.secrets,
-      installation: input.installation,
+      orgId: input.appendEventOrgId,
+      installation,
       staticRef,
       minter: input.githubAppMinter,
     });
@@ -346,11 +350,9 @@ export async function publishDraftPullRequestForRun(
       (input.title?.trim() ? input.title.trim() : undefined) ??
       (context.specTitle?.trim() ? `Tanren: ${context.specTitle.trim()}` : `Tanren change ${context.specId}`),
     body: input.body ?? context.specDescription,
-    // The operator route accepts `githubCredentialRef` in the request body but it's
-    // OPTIONAL — when the operator omits it, fall back to the project-config cred
-    // resolved here (the operator-route seam owns this resolve, not the low-level
-    // `publishDraftPullRequest`, which insists callers pass the ref directly).
-    githubCredentialRef: input.githubCredentialRef ?? context.configuredGithubCredentialRef,
+    // The credential coordinate is derived only from stored project/org authority;
+    // the operator body cannot override it.
+    githubCredentialRef: context.configuredGithubCredentialRef,
     installation: context.installation,
     githubAppMinter: input.githubAppMinter,
   });
@@ -408,8 +410,8 @@ async function loadDraftPrRunContext(pool: RunStateClient, runId: string): Promi
     ...(ancestorStack.length > 0 && { ancestorStack }),
     repoUrl: row.repo_url,
     defaultBranch: row.default_branch,
-    configuredGithubCredentialRef: readGithubCredentialRef(row.config ?? null),
-    installation: installationFromOrgConfig(row.org_config),
+    configuredGithubCredentialRef: readGithubCredentialRef(row.config, row.org_id),
+    installation: readGithubInstallation(row.org_config, row.org_id),
     specTitle: row.spec_title,
     specDescription: row.spec_description,
     runner:
@@ -431,7 +433,7 @@ function githubCredentialRefFromInput(input: PublishDraftPullRequestInput): stri
   if (typeof input.githubCredentialRef !== "string") {
     throw new TypeError("GitHub credential ref is required");
   }
-  return validateGithubCredentialRef(input.githubCredentialRef);
+  return input.githubCredentialRef;
 }
 
 function credentialRefOrUndefined(input: PublishDraftPullRequestInput): string | undefined {
@@ -475,10 +477,13 @@ interface DraftPrRunContext {
   };
 }
 
-function readGithubCredentialRef(config: unknown): string | undefined {
-  if (typeof config !== "object" || config === null || Array.isArray(config)) return undefined;
-  const value = (config as Record<string, unknown>)["githubCredentialRef"];
-  return typeof value === "string" ? value : undefined;
+function readGithubCredentialRef(config: unknown, orgId: string): string | undefined {
+  return bindProjectGithubCredentialRefs(migrateProjectConfig(config), orgId).credentials?.githubCredentialRef;
+}
+
+function readGithubInstallation(config: unknown, orgId: string): OrgGithubAppInstallation | undefined {
+  if (config === null || config === undefined) return undefined;
+  return bindOrgGithubCredentialRefs(migrateOrgConfig(config), orgId).github_app;
 }
 
 function messageFromError(error: unknown): string {

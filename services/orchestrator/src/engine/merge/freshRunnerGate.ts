@@ -177,6 +177,7 @@ async function cloneRefForGate(
       : (
           await resolveVcsToken(deps.githubHttp, {
             secrets: deps.secrets,
+            orgId: ctx.orgId,
             ...(ctx.installation !== undefined && { installation: ctx.installation }),
             ...(staticRef.trim() !== "" && { staticRef }),
             ...(deps.githubAppMinter !== undefined && { minter: deps.githubAppMinter }),

@@ -77,6 +77,51 @@ function seedGateOn(pool: RoutesPool): void {
 }
 
 describe("audit-gate org-config PATCH route", () => {
+  it("rejects a cross-org GitHub ref before persistence or audit-gate provider I/O", async () => {
+    const github = fakeGithub();
+    const { app, pool, openConfigPr } = buildHarness(github);
+    seedGateOn(pool);
+
+    const response = await app.request("/orgs/org_acme", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: {
+          version: 1,
+          auditGateEnabled: true,
+          auditGate: { repo: "cat-cave/tanren-config" },
+          defaultCredentials: { github_token: "credential/github/org/org_other/default" },
+        },
+        revision: "1",
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(openConfigPr).not.toHaveBeenCalled();
+    expect(migrateOrgConfig(pool.orgs.get("org_acme")?.config).defaultCredentials).toBeUndefined();
+  });
+
+  it("derives a bare GitHub credential name into the addressed org namespace", async () => {
+    const github = fakeGithub();
+    const { app, pool, openConfigPr } = buildHarness(github);
+    pool.seedOrg({ id: "org_acme", login: "acme", config: { version: 1 } });
+
+    const response = await app.request("/orgs/org_acme", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        config: { version: 1, defaultCredentials: { github_token: "default" } },
+        revision: "1",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(openConfigPr).not.toHaveBeenCalled();
+    expect(migrateOrgConfig(pool.orgs.get("org_acme")?.config).defaultCredentials?.github_token).toBe(
+      "credential/github/org/org_acme/default",
+    );
+  });
+
   it("gate ON + Bucket-B write → 202, opens a PR, does NOT mutate the DB", async () => {
     const github = fakeGithub();
     const { app, pool, openConfigPr } = buildHarness(github);

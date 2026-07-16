@@ -38,10 +38,11 @@ interface BrownfieldRoutesOptions {
   githubAppMinter?: GithubAppTokenMinter;
 }
 
-const BrownfieldLinkSchema = z.object({
-  repoUrl: z.string().min(1),
-  githubCredentialRef: z.string().min(1).optional(),
-});
+const BrownfieldLinkSchema = z
+  .object({
+    repoUrl: z.string().min(1),
+  })
+  .strict();
 
 const DETECTED_FILES = [
   ".github/workflows/tanren-ci.yml",
@@ -85,14 +86,12 @@ export function createBrownfieldRoutes(options: BrownfieldRoutesOptions) {
     let resolved: ResolvedGithubToken;
     try {
       const installation = await loadOrgGithubAppInstallation(options.pool, orgId);
-      // Static ref: the request body's explicit ref wins; otherwise fall back to
-      // the org's default GitHub credential ref. No hardcoded default — when
-      // neither is set and no App is installed, the resolver throws and we map
-      // it to `github_credential_missing`.
-      const staticRef =
-        parsed.data.githubCredentialRef ?? (await loadOrgDefaultGithubCredentialRef(options.pool, orgId));
+      // Repository credentials are server-derived from org authority. The body
+      // cannot select a secret coordinate.
+      const staticRef = await loadOrgDefaultGithubCredentialRef(options.pool, orgId);
       resolved = await resolveGithubToken({
         secrets: options.secrets,
+        orgId,
         installation,
         ...(staticRef === undefined ? {} : { staticRef }),
         minter: options.githubAppMinter,

@@ -58,7 +58,7 @@ async function publishWithSeam(input: {
   mergeIntegration?: "native_queue" | "direct_merge" | "external_reviewer" | "not_configured";
 }): Promise<{ events: FakeEventStore }> {
   const secrets = new FakeSecretStore();
-  await secrets.put({ ref: "credential/github/dev", value: "ghp_test" });
+  await secrets.put({ ref: "credential/github/org/org_42/dev", value: "ghp_test" });
   const http = new ScriptedGitHubHttp([
     { status: 200, body: [] },
     {
@@ -89,7 +89,7 @@ async function publishWithSeam(input: {
     acceptanceCriteria: [],
     runnerImage: "ghcr.io/example/runner:latest",
     identitySecretRef: "runner/test/identity",
-    githubCredentialRef: "credential/github/dev",
+    githubCredentialRef: "credential/github/org/org_42/dev",
     ...(input.mergeIntegration !== undefined && { mergeIntegration: input.mergeIntegration }),
   };
   // The same shape the worker passes — only the slots the seam reads are populated.
@@ -117,7 +117,7 @@ async function publishWithSeam(input: {
     targetBranch: context.targetBranch,
     runBranch: context.runBranch,
     title: "Tanren: Add fixture",
-    githubCredentialRef: "credential/github/dev",
+    githubCredentialRef: "credential/github/org/org_42/dev",
     ...seam,
   });
 

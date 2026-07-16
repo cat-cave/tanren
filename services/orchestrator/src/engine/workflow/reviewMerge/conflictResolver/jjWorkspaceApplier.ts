@@ -49,6 +49,8 @@ import { pushJjHead } from "./jjAuthedPush.js";
 
 /** The repo + branch facts the jj applier rebases the PR head onto the merge-time base. */
 export interface JjConflictApplierFacts {
+  /** Authenticated tenant owner for clone/push credential coordinates. */
+  orgId: string;
   /** The clone URL the live workspace opened against (also the push remote). */
   repoUrl: string;
   /** The merge-time base branch (the speculative base when set, else the default). */
@@ -281,6 +283,7 @@ export class JjWorkspaceConflictApplier implements WorkspaceConflictApplier {
       target: this.deps.target,
       workspacePath: this.deps.workspacePath,
       secrets: this.deps.secrets,
+      orgId: facts.orgId,
       githubHttp: this.deps.githubHttp,
       ...(this.deps.githubAppMinter !== undefined && { githubAppMinter: this.deps.githubAppMinter }),
       repoUrl: facts.repoUrl,

@@ -30,6 +30,8 @@ export interface CreateHostRepoInput {
   description?: string;
   /** Seed an initial commit so the repo is immediately cloneable + has a default branch. */
   autoInit: boolean;
+  /** Opaque non-secret derivation marker persisted atomically with host creation. */
+  ownershipMarker?: string;
 }
 
 /** The just-created repository (provider-neutral). No credential ever appears here. */

@@ -6,8 +6,8 @@
 // later provider waves.
 //
 // SCOPE — what this port IS and IS NOT:
-//   - IS: project-INTEGRATION providers (sentry | slack | linear | jira |
-//     deploy.vercel | deploy.flyio | pagerduty | …) that yield a
+//   - IS: catalogued project-integration providers (Sentry, Slack, and deploy
+//     providers) that yield a
 //     `ProvisionedArtifact` over the EXISTING project surfaces — `projectConfig`
 //     (→ projects.config), `secretRefs` (→ secret manager), `inboxSource`
 //     (→ inbox_sources), `notificationTarget` (→ notification targets),
@@ -55,6 +55,7 @@
 
 import { SentryProvisioner, type SentryProvisionerDeps } from "../providers/sentryProvisioner.js";
 
+import type { EligibleOperationLease } from "./integrationAuthority.js";
 import type { SecretStore } from "./secretStore.js";
 import { DeployProvisioner } from "../provisioners/deployProvisioner.js";
 import { FlyDeployProvisioner, FLY_PROVIDER_KIND } from "../provisioners/flyDeployProvisioner.js";
@@ -78,17 +79,24 @@ export type CapabilityId = string;
 export type ProvisionMode = "greenfield" | "brownfield";
 
 /**
- * The org-level grant resolved from the `org_integrations` registry: the managed
- * credential REF (resolved against the SecretStore by the provider — never the
- * secret value) plus the NON-SECRET org metadata (sentry org slug, slack
- * workspace id, …). This is what every provisioner method runs under.
+ * The org-level active control grant resolved ONLY from IntegrationAuthority.
+ * No naked credential ref — secret reads require the opaque eligible operation
+ * lease through IntegrationSecretStore.getExact.
  */
 export interface OrgGrant {
+  orgId: string;
+  projectId: string;
+  connectionId: string;
+  grantId: string;
   providerKind: string;
-  /** Secret-manager ref for the org credential. NEVER the secret value itself. */
-  credentialRef: string;
-  /** Non-secret org metadata (sentry org slug, slack workspace id, hetzner project, …). */
+  /** Provider-verified principal id (Slack team_id, Sentry org id, …). */
+  providerPrincipalId: string;
+  authGeneration: number;
+  grantGeneration: number;
+  /** Non-secret principal metadata (display names, slugs). Never tokens. */
   metadata: Record<string, unknown>;
+  /** Opaque lease — sole credential coordinate for secret/provider construction. */
+  eligibleOperation: EligibleOperationLease;
 }
 
 /**
@@ -140,7 +148,7 @@ export interface ProvisionedArtifact {
   projectConfig?: Record<string, unknown>;
   /** Secret-manager refs the provisioner stored (DSN, webhook secret, …). Never values. */
   secretRefs?: Record<string, string>;
-  /** The inbox source to create for this project (Sentry/Linear intake). */
+  /** The inbox source to create for this project (currently Sentry intake). */
   inboxSource?: { kind: string; config: Record<string, unknown> };
   /** The notification target to create (Slack channel/webhook, PagerDuty service). */
   notificationTarget?: { kind: string; config: Record<string, unknown> };
@@ -151,23 +159,20 @@ export interface ProvisionedArtifact {
 /**
  * The port every integration provider implements. `discover` (brownfield) lists
  * what the org already has; `provision` is the idempotent find-or-create
- * (greenfield / create-if-absent); `bind` links an already-discovered resource;
- * `teardown` is best-effort cleanup. Idempotency of `provision` is MANDATORY:
- * re-running onboarding must never create a second leaf resource — it finds the
- * stable-named one and returns the SAME artifact (mirrors the merge-queue /
- * post-merge-claim atomic-claim pattern).
+ * (greenfield / create-if-absent); `bind` links an already-discovered resource.
+ * Idempotency of `provision` is MANDATORY: re-running onboarding must never create
+ * a second leaf resource — it finds the stable-named one and returns the SAME
+ * artifact (mirrors the merge-queue / post-merge-claim atomic-claim pattern).
  */
 export interface IntegrationProvisioner {
   /** The capability id(s) this provisioner satisfies (e.g. ["errors"]). */
   capability(): CapabilityId[];
   /** Brownfield: list the org's existing resources of this kind. */
-  discover(grant: OrgGrant): Promise<ExistingResource[]>;
+  discover(grant: OrgGrant, projectCtx: ProjectContext): Promise<ExistingResource[]>;
   /** Greenfield / create-if-absent: idempotent find-or-create of the leaf resource. */
   provision(grant: OrgGrant, projectCtx: ProjectContext): Promise<ProvisionedArtifact>;
   /** Brownfield link: bind an already-discovered resource to the Tanren project. */
   bind(grant: OrgGrant, existingResourceId: string, projectCtx: ProjectContext): Promise<ProvisionedArtifact>;
-  /** Best-effort cleanup (project delete / unlink). Optional — not every provider supports it. */
-  teardown?(artifact: ProvisionedArtifact): Promise<void>;
 }
 
 /**
@@ -233,7 +238,7 @@ export class UnconfiguredIntegrationProvisioner implements IntegrationProvisione
   capability(): CapabilityId[] {
     return this.fail();
   }
-  async discover(_grant: OrgGrant): Promise<ExistingResource[]> {
+  async discover(_grant: OrgGrant, _projectCtx: ProjectContext): Promise<ExistingResource[]> {
     return this.fail();
   }
   async provision(_grant: OrgGrant, _projectCtx: ProjectContext): Promise<ProvisionedArtifact> {
@@ -245,12 +250,9 @@ export class UnconfiguredIntegrationProvisioner implements IntegrationProvisione
 }
 
 /**
- * Selectable project-INTEGRATION provisioner backends (sentry | slack | linear |
- * jira | deploy.vercel | deploy.flyio | pagerduty | …). EMPTY in this wave — no
- * provider is registered yet — so every kind resolves to
- * {@link UnconfiguredIntegrationProvisioner}. A provider lands as a NEW case here
- * (+ its impl + a conformance entry), not a refactor, exactly like
- * `buildAllocator` / `buildVcsProvider`. Cloud-ALLOCATOR kinds (`allocator.*`,
+ * Selectable catalogued integration provisioner backends. Unknown kinds resolve
+ * to {@link UnconfiguredIntegrationProvisioner}; there is no permissive fallback
+ * or secret-ref adapter. Cloud-allocator kinds (`allocator.*`,
  *) do NOT belong here — see the SCOPE note in the module header: their
  * SSH/host-key automation extends the `Allocator` seam, not this port.
  */
@@ -260,7 +262,6 @@ export type IntegrationProviderKind = string;
  * Per-call wiring a real provisioner needs (the injected transports/stores its
  * impl composes). Optional + additive — each provider draws ONLY the deps it
  * uses, so a new provider extends this interface without disturbing the others.
- * Foundation (unconfigured) kinds ignore it.
  */
 export interface IntegrationProvisionerDeps {
   /** Sentry's injected `{ http: SentryProvisionHttpClient; secrets: SecretStore }`. */
@@ -413,7 +414,7 @@ function registeredDeployProviderKinds(): readonly string[] {
  * provisioner either).
  *
  * SHARED FACTORY, NARROW SEAM: returns the `DeployProvisioner` base type so callers
- * get `attachRuntimeEnv` / `deploy` / `destroyApp` / `deploymentStatus` without an
+ * get `attachRuntimeEnv` / `deploy` / `deploymentStatus` without an
  * extra cast. The `deployProvisionerFor` selector in `workflow/` now delegates here.
  */
 export function buildDeployProvisioner(kind: string, deps: IntegrationProvisionerDeps): DeployProvisioner {
@@ -450,7 +451,7 @@ function buildSlackProvisioner(): IntegrationProvisioner {
   const secrets = buildSecretStore();
   const transportFactory = secretStoreSlackTransportFactory(
     secrets,
-    (botToken: string): SlackApiTransport => new FetchSlackApiTransport(botToken),
+    (tokenForAttempt): SlackApiTransport => new FetchSlackApiTransport(tokenForAttempt),
   );
   return new SlackProvisioner({ transportFactory });
 }

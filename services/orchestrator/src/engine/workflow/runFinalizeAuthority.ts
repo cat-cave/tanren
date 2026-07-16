@@ -1,28 +1,12 @@
 // THE ONE RUN-FINALIZE AUTHORITY (apex v35 — unified run-finalize lifecycle).
 //
-// Every run attempt has exactly ONE terminal outcome, and that outcome maps to
-// exactly ONE of THREE buckets — the product owner's binding model:
-//
-//   1. RE-DRIVE (retry) — any RANDOM / TRANSIENT / internal / flaky / writer-mistake /
-//      codex-hiccup / merge-conflict-resolvable / crashed-run / orphaned-slot fault.
-//      The spec returns to a runnable state (`open`) and the walker enqueues a
-//      successor run. Random failures are NEVER tolerable as terminal. UNBOUNDED while
-//      it is making PROGRESS — there is NO attempt cap, NO `K`, NO wall-clock deadline.
-//      A re-drive escalates ONLY at an intelligently-detected FIXED POINT (the SAME
-//      classified failure recurring with no new information — the shared
-//      `convergenceDetector`); ANY progress / a DIFFERENT failure keeps it re-driving,
-//      forever, while it converges. Backoff (grows with the stuck streak) prevents a
-//      hot-loop WITHOUT a counter.
-//
-//   2. GENUINE-HALT — ONLY: budget exhaustion · misconfiguration (missing/unscoped
-//      credential, provider-mode unresolved) · mis-spec (a spec structurally
-//      unsatisfiable) · a genuine human-decision (a real product/architecture decision
-//      a human must MAKE — e.g. a HITL hold or changes-requested-at-land-time, or a
-//      genuinely-irreconcilable merge conflict). These → `needs_attention` with a
-//      SPECIFIC, actionable reason (or the budget halt). `needs_attention` is RESERVED
-//      for these.
-//
-//   3. CONVERGE — success (merged / done).
+// Every attempt maps to exactly one bucket:
+//   1. RE-DRIVE — transient/internal/flaky/recoverable faults. Retry without an
+//      attempt or time cap while new information appears; only a detected fixed
+//      point escalates. Growing bounded backoff prevents hot loops.
+//   2. GENUINE-HALT — budget exhaustion, structural misconfiguration/mis-spec,
+//      or a real human decision. These alone enter actionable `needs_attention`.
+//   3. CONVERGE — merged/done.
 //
 // THE FRAGMENTATION THIS REPLACES (the whack-a-mole): the disposition decision used to
 // live in SIX scattered sites, each hard-coding its own spec disposition —
@@ -35,15 +19,15 @@
 //   • the review-verdict stall/changes-requested-exhausted halt (`applyReviewVerdict`),
 //   • the merge-stage outcome mapping (`finalizeMergeOutcome`),
 //   • and the worker orphan reconciler (`runFinalize.ts`).
-// Three of those (writer-non-pass, merge-gate halt, review-stall) PARKED transient
-// faults at `needs_attention` instead of re-driving — and three different strand
-// reasons (`halted_reexec`, `no_live_run`, `persistent_failure`) surfaced the SAME
-// class of transient failure run-to-run. This module is the SINGLE decision: it takes a
-// terminal outcome + the consecutive-same-failure count and returns ONE bucket, applied
-// identically whether the outcome arrives via the workflow path, the worker path, or the
-// orphan reconciler. The per-path strand logic collapses into routing this verdict.
+// This module takes a normalized terminal outcome plus fixed-point evidence and
+// returns one bucket identically for workflow, worker, and orphan paths.
 
-import { classifyRunFailure, type RunFailureCode, type RunFailureStage } from "../worker/runFailureClassifier.js";
+import {
+  classifyRunFailure,
+  explicitRunFailureRetryability,
+  type RunFailureCode,
+  type RunFailureStage,
+} from "../worker/runFailureClassifier.js";
 import type { WanderingHaltVerdict } from "./wanderingHaltDetector.js";
 
 // The base backoff (seconds) between re-drives + the per-attempt growth, so the
@@ -309,6 +293,26 @@ export function decideRunDisposition(outcome: TerminalOutcome, facts: Convergenc
   // a usage-limit pauses for capacity; everything else re-drives while
   // progressing, escalating only at a fixed point).
   const classified = classifyRunFailure(outcome.error);
+  const publicationRetryability = explicitRunFailureRetryability(outcome.error);
+  if (publicationRetryability === "retriable") {
+    return {
+      bucket: "re_drive",
+      failure: classified,
+      runOutcome: "halted",
+      subReason: "simulated_review_publication_retriable",
+      backoffSeconds: redriveBackoffSeconds(facts.priorSameFixedPoint),
+      consecutiveSameFailure: facts.priorSameFixedPoint + 1,
+    };
+  }
+  if (publicationRetryability === "non_retriable") {
+    return {
+      bucket: "genuine_halt",
+      reason: "persistent_failure",
+      failure: classified,
+      message: `${classified.summary} (${classified.code} @ ${classified.stage}) — correct the publication configuration or proof before requeueing`,
+      consecutiveSameFailure: facts.priorSameFixedPoint + 1,
+    };
+  }
   if (classified.code === "usage_limit") {
     // task #82: the answerer-path's `CodexUsageLimitError` (planner / checker /
     // auditor hit the provider window). Routes to the SAME pause bucket as the

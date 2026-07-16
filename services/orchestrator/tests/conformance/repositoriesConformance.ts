@@ -75,6 +75,7 @@ export function describeRepositoriesConformance(
       expect(outcome).toMatchObject({ status: "ok", revision: "2" });
       const config = await h.repositories.projects.getConfig(client, "project_a", systemActor);
       expect(config).toMatchObject({ governancePosture: "x" });
+      expect(config).not.toHaveProperty("budget");
     });
 
     it("returns conflict (not success) when two writers race the same revision", async () => {

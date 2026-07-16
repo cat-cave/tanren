@@ -57,6 +57,13 @@ export interface BuildMergeAuthorityBundleInput {
   /** The sha the latest `pre_merge` gate verdict was FOR (the TOCTOU commit-binding). */
   gatedHeadSha: string | undefined;
   /**
+   * The sha the latest terminal review forge receipt was FOR (gv-2). `undefined`
+   * when the event is absent or has no forge receipt.
+   */
+  reviewedHeadSha: string | undefined;
+  /** True only for reviewPolicy=simulated; missing receipt must block land. */
+  requiresExactReviewReceipt: boolean;
+  /**
    * The REAL audit findings the auditor emitted on the run's latest `auditor.verdict`
    * (read fresh at land time; §4). `decideFromFindings(findings, auditPosture)` in the
    * authority is the LIVE audit gate. A MISSING/unreadable audit record is passed as a
@@ -128,6 +135,8 @@ export function buildMergeAuthorityBundle(input: BuildMergeAuthorityBundleInput)
     policyVersion: String(input.policyVersion),
     gateOutcome: input.gateOutcome,
     gatedHeadSha: input.gatedHeadSha,
+    reviewedHeadSha: input.reviewedHeadSha,
+    requiresExactReviewReceipt: input.requiresExactReviewReceipt,
     findings: input.findings,
     auditPosture: resolveAuditPosture(input.projectConfigRaw),
     reviewVerdict: input.reviewVerdict,
@@ -195,6 +204,7 @@ export async function buildBundleForMergeStage(
     resolveToken: () =>
       resolveVcsToken(input.githubHttp, {
         secrets: input.secrets,
+        orgId: row.org_id,
         installation: context.installation,
         staticRef: context.staticCredentialRef,
         minter: input.githubAppMinter,
@@ -204,6 +214,8 @@ export async function buildBundleForMergeStage(
     policyVersion: context.policyVersion,
     gateOutcome: landSignals.gateOutcome,
     gatedHeadSha: landSignals.gatedHeadSha,
+    reviewedHeadSha: landSignals.reviewedHeadSha,
+    requiresExactReviewReceipt: migrateProjectConfig(row.project_config).reviewPolicy === "simulated",
     findings,
     reviewVerdict: landSignals.reviewVerdict,
     budgetState,

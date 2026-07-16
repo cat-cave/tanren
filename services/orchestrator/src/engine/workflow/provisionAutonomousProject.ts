@@ -33,9 +33,20 @@
 
 import type pg from "pg";
 import { runWithOrgScope } from "@tanren/db";
+import type { EventName } from "../events/index.js";
+import {
+  AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES,
+  seedAuditCatalog,
+  type AuditBootstrapCategory,
+} from "../forge/audits/seedCatalog.js";
+import type { AuditKind } from "../forge/audits/types.js";
 import { ensureIssuesInboxSource } from "../forge/inbox/index.js";
-import { seedAuditCatalog, type AuditKind } from "../forge/audits/index.js";
-import { ensureDefaultNotificationRoute } from "../notifications/index.js";
+import {
+  DEFAULT_ROUTE_EVENTS,
+  DEFAULT_ROUTE_MIN_SEVERITY,
+  ensureDefaultNotificationRoute,
+} from "../notifications/seedDefaultRoute.js";
+import type { Severity } from "../notifications/schemas.js";
 
 export interface ProvisionAutonomousProjectInput {
   pool: pg.Pool;
@@ -51,8 +62,12 @@ export interface ProvisionAutonomousProjectInput {
 
 export interface ProvisionAutonomousProjectResult {
   inboxSource?: { id: string; created: boolean };
-  notificationRoute?: { targetId: string; created: boolean; events: number };
-  auditCatalog?: { jobs: number; created: AuditKind[] };
+  notificationRoute?: {
+    targetId: string;
+    created: boolean;
+    requiredEvents: Array<{ eventName: EventName; minSeverity: Severity }>;
+  };
+  auditCatalog?: { requiredCategories: AuditBootstrapCategory[]; created: AuditKind[] };
   // The seeds that FAILED, surfaced LOUD so the caller never silently under-provisions.
   // Empty ⇒ a fully-provisioned project. Non-empty ⇒ a LOUD partial the caller acts on.
   errors: Array<{ seed: "auditCatalog" | "notificationRoute" | "inbox"; message: string }>;
@@ -81,7 +96,10 @@ export async function provisionAutonomousProject(
     const auditCatalog = await runWithOrgScope(input.pool, input.orgId, (client) =>
       seedAuditCatalog({ client, orgId: input.orgId, projectId: input.projectId }),
     );
-    result.auditCatalog = { jobs: auditCatalog.jobs.length, created: auditCatalog.created };
+    result.auditCatalog = {
+      requiredCategories: [...AUDIT_BOOTSTRAP_REQUIRED_CATEGORIES],
+      created: auditCatalog.created,
+    };
   } catch (error) {
     console.error(`[provision] audit-catalog seed failed for project ${input.projectId}:`, messageOf(error));
     errors.push({ seed: "auditCatalog", message: messageOf(error) });
@@ -94,7 +112,14 @@ export async function provisionAutonomousProject(
       orgId: input.orgId,
       ntfyTopic: input.ntfyTopic ?? `tanren-org-${input.orgId}`,
     });
-    result.notificationRoute = { targetId: notify.target.id, created: notify.created, events: notify.routes.length };
+    result.notificationRoute = {
+      targetId: notify.target.id,
+      created: notify.created,
+      requiredEvents: DEFAULT_ROUTE_EVENTS.map((eventName) => ({
+        eventName,
+        minSeverity: DEFAULT_ROUTE_MIN_SEVERITY,
+      })),
+    };
   } catch (error) {
     console.error(`[provision] notification-route seed failed for org ${input.orgId}:`, messageOf(error));
     errors.push({ seed: "notificationRoute", message: messageOf(error) });

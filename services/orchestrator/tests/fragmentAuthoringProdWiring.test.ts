@@ -24,7 +24,9 @@
 //      helper `buildLiveRunFragmentAuthoring` delegates to) threads the
 //      runtime-validity smoke into the `FragmentAuthoringDeps` shape so
 //      `buildFragmentAuthoring` actually runs the runtime step.
-//   3. Removing any of the five invokers from the assembly fails the test
+//   3. The production event emitter records genuinely org-scoped lifecycle
+//      events with no invented run/spec/project lineage.
+//   4. Removing any of the five invokers from the assembly fails the test
 //      loud — a future refactor that deletes the wiring reproduces the
 //      PR #789 / PR #795 dead-code bug in code review, not in an apex-run
 //      halt.
@@ -32,7 +34,7 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
 import type { EventStore } from "../src/engine/eventStore.js";
-import type { FragmentAuthorer } from "../src/engine/templates/index.js";
+import type { FragmentAuthorer, FragmentSpec } from "../src/engine/templates/index.js";
 import {
   buildLiveFragmentAuthoringDeps,
   buildLiveRuntimeValiditySmokeDeps,
@@ -47,10 +49,10 @@ function poolShim(): pg.Pool {
 }
 
 /** A recording event-store shim satisfying the required-eventStore guard. */
-function eventStoreShim(): EventStore {
+function eventStoreShim(appends?: unknown[]): EventStore {
   return {
-    async append() {
-      /* no-op */
+    async append(input) {
+      appends?.push(input);
     },
   };
 }
@@ -132,6 +134,86 @@ describe("F2 prod wiring — runtime-validity smoke reaches buildFragmentAuthori
     expect(deps.events.emit).toBeInstanceOf(Function);
     expect(deps.priorFragmentsLookup).toBeInstanceOf(Function);
     expect(deps.runtimeValiditySmoke).toBeDefined();
+  });
+
+  it("the live event emitter records org-scoped lifecycle events without invented lineage", async () => {
+    const appends: unknown[] = [];
+    const deps = buildLiveFragmentAuthoringDeps(
+      { ...flowDeps(), eventStore: eventStoreShim(appends) },
+      { orgId: "test-org" },
+    );
+    const spec: FragmentSpec = {
+      kind: "runtime",
+      label: "node-pnpm",
+      id: "runtime-node-pnpm",
+      requiredContract: {},
+    };
+
+    await deps.events.emit({
+      kind: "fragment.authoring.started",
+      orgId: "test-org",
+      fragmentId: spec.id,
+      spec,
+    });
+    await deps.events.emit({
+      kind: "fragment.authoring.attempt",
+      orgId: "test-org",
+      fragmentId: spec.id,
+      attempt: 2,
+      bodyPreview: "export default {}",
+      canonicalSignature: "sha256:attempt",
+      rejection: "missing contract",
+      decision: "continue",
+    });
+    await deps.events.emit({
+      kind: "fragment.authoring.succeeded",
+      orgId: "test-org",
+      fragmentId: spec.id,
+      attempts: 2,
+    });
+    await deps.events.emit({
+      kind: "fragment.authoring.failed",
+      orgId: "test-org",
+      fragmentId: spec.id,
+      reason: "fixed point",
+      attempts: 3,
+    });
+
+    expect(appends).toEqual([
+      {
+        orgId: "test-org",
+        eventType: "fragment.authoring.started",
+        payload: { orgId: "test-org", fragmentId: spec.id, kind: "runtime", label: "node-pnpm" },
+      },
+      {
+        orgId: "test-org",
+        eventType: "fragment.authoring.attempt",
+        payload: {
+          orgId: "test-org",
+          fragmentId: spec.id,
+          attempt: 2,
+          bodyPreview: "export default {}",
+          canonicalSignature: "sha256:attempt",
+          rejection: "missing contract",
+          decision: "continue",
+        },
+      },
+      {
+        orgId: "test-org",
+        eventType: "fragment.authoring.succeeded",
+        payload: { orgId: "test-org", fragmentId: spec.id, attempts: 2 },
+      },
+      {
+        orgId: "test-org",
+        eventType: "fragment.authoring.failed",
+        payload: { orgId: "test-org", fragmentId: spec.id, reason: "fixed point", attempts: 3 },
+      },
+    ]);
+    for (const append of appends) {
+      expect(append).not.toHaveProperty("runId");
+      expect(append).not.toHaveProperty("specId");
+      expect(append).not.toHaveProperty("projectId");
+    }
   });
 
   it("buildLiveFragmentAuthoringDeps throws loud on a missing eventStore (silent-degradation banned)", () => {

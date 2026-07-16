@@ -31,6 +31,7 @@ import { resolveVcsActorIdentity, resolveVcsToken } from "../credentials/vcsCred
 /** The App-first / static credential context a bot-identity resolution reads from. */
 export interface BotPushIdentityContext {
   secrets: SecretStore;
+  orgId: string;
   /** The shared (timed) GitHub HTTP client the token + identity reads go through. */
   githubHttp: GitHubHttpClient;
   installation?: OrgGithubAppInstallation;
@@ -58,6 +59,7 @@ export async function resolveBotPushIdentity(ctx: BotPushIdentityContext): Promi
   // helpers over the shared GitHub client, never a forge op on a host seam.
   const resolved = await resolveVcsToken(ctx.githubHttp, {
     secrets: ctx.secrets,
+    orgId: ctx.orgId,
     ...(ctx.installation !== undefined && { installation: ctx.installation }),
     ...(staticRef !== "" && { staticRef }),
     ...(ctx.githubAppMinter !== undefined && { minter: ctx.githubAppMinter }),

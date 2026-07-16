@@ -3,9 +3,8 @@
 // the provider's payload into the SAME `IngestedItem` the pull connectors emit,
 // so the downstream triage → auto-route/inbox path is identical for push + pull.
 //
-// GitHub issues are wired; Sentry + Linear carry the SHAPE (the receiver dispatch
-// + the mapper signature) so adding their real receivers is a payload mapper, not
-// a new pipeline.
+// GitHub issues are wired. Additional providers must supply both a payload mapper
+// and exact integration authority; a mapper is never credential authority.
 
 import { z } from "zod";
 import type { IngestedItem } from "../inbox/types.js";

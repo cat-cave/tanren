@@ -124,6 +124,12 @@ function stubPool(testRows: TestRowSeed[]): {
         config: JSON.parse(String(config)),
         enabled,
         auto_route: autoRoute,
+        state: "active",
+        attention_code: null,
+        attention_message: null,
+        attention_observed_at: null,
+        webhook_configured: false,
+        retry_not_before: null,
       });
       return { rows: [{ ...sources.get(String(id))! }], rowCount: 1 };
     }

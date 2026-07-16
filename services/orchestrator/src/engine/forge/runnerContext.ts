@@ -18,7 +18,11 @@ import type pg from "pg";
 import { runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { AllocatorConfig, migrateProjectConfig } from "../config/index.js";
 import type { ProjectConfigV1 } from "../config/index.js";
-import { type TenantScope, orgScopeFromRunOrgId, resolveCredentialsForRun } from "../credentials/resolveCredentials.js";
+import {
+  type TenantScope,
+  orgScopeFromRunOrgId,
+  resolveLlmCredentialsForForge,
+} from "../credentials/resolveCredentials.js";
 import { ForgeToolsStore } from "../repositories/forgeTools.js";
 import { systemActor } from "../state/actor.js";
 import type { RoutingChainEntry } from "../config/shared.js";
@@ -95,24 +99,15 @@ export async function loadOrgRunnerContext(pool: QueryClient, orgId: string): Pr
   return resolveForgeRunnerContext(pool, emptyProjectConfig, orgScopeFromRunOrgId(orgId), DEFAULT_FORGE_RUNNER_IMAGE);
 }
 
-// A Forge answerer never publishes a PR or polls CI, so it needs no GitHub
-// credential — only the LLM credential + (managed) endpoint. We satisfy the
-// shared run-credential resolver's GitHub requirement with this sentinel
-// override; it is never materialized (no GitHub call is made on a Forge path).
-// Passing only the GitHub override does NOT force BYOK (only a codex override
-// would), so managed/BYOK LLM resolution is unchanged.
-const FORGE_UNUSED_GITHUB_REF = "forge/unused-github-credential";
-
 async function resolveForgeRunnerContext(
   pool: QueryClient,
   projectConfig: ProjectConfigV1,
   orgScope: TenantScope,
   runnerImage: string,
 ): Promise<ForgeRunnerContext> {
-  const resolved = await resolveCredentialsForRun(pool, {
+  const resolved = await resolveLlmCredentialsForForge(pool, {
     projectConfig,
     orgScope,
-    override: { githubCredentialRef: FORGE_UNUSED_GITHUB_REF },
   });
   // The `forge` routing chain head, when pinned (e.g. a cheaper model for
   // ideation). Empty (the default) ⇒ fall back to the resolved default LLM entry

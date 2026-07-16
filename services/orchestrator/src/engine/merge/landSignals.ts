@@ -20,6 +20,13 @@
 // landed. The land authorizes ONLY when a PASSED `pre_merge` gate exists FOR EXACTLY the
 // commit being landed; a head-advance forces a fresh re-gate on the new head.
 //
+// REVIEW COMMIT-BOUND (gv-2): the same reader returns `reviewedHeadSha` from the
+// latest terminal `review.approved` / `review.changes_requested` forge receipt
+// (`payload.headSha`) when present. Strict simulated review always binds that
+// field; human/auto paths omit it. Land authorization must NOT merely trust
+// event existence — when a receipt head is present it must equal the head being
+// landed, or the land fails closed (re-review / re-gate the advanced head).
+//
 // The read is ORG-SCOPED (RLS) — the caller passes the org the run belongs to. The
 // `gate.verdict` roll-up is the headSha-anchored native gate verdict
 // (`workflow/gate/runGateForWhen.ts`); the review verdict is the latest
@@ -47,6 +54,59 @@ export interface LandTimeSignals {
   gatedHeadSha: string | undefined;
   /** The latest review verdict, or `undefined` (no recorded verdict) — which blocks. */
   reviewVerdict: ReviewVerdict | undefined;
+  /**
+   * The sha the latest terminal `review.approved` / `review.changes_requested`
+   * forge receipt was FOR (`payload.headSha`), or `undefined` when the event is
+   * absent / has no forge receipt (human/auto paths). When present, the land
+   * authority requires this EQUALS the head being landed — the review↔land
+   * TOCTOU guard (gv-2). Event existence alone never authorizes a drifted head.
+   */
+  reviewedHeadSha: string | undefined;
+}
+
+export type ExactReviewReceiptHeadGuard =
+  | { kind: "matched" }
+  | { kind: "not_required" }
+  | {
+      kind: "blocked";
+      reasonCode: "receipt_missing" | "receipt_head_invalid" | "receipt_head_mismatch";
+      reason: string;
+    };
+
+/** Shared sequential/MQ-2 guard: simulated approval requires one complete exact-head receipt. */
+export function evaluateExactReviewReceiptHead(input: {
+  reviewVerdict: ReviewVerdict | undefined;
+  reviewedHeadSha: string | undefined;
+  landingHeadSha: string;
+  receiptRequired: boolean;
+}): ExactReviewReceiptHeadGuard {
+  if (input.reviewVerdict !== "approved") return { kind: "not_required" };
+  if (input.reviewedHeadSha === undefined) {
+    return input.receiptRequired
+      ? {
+          kind: "blocked",
+          reasonCode: "receipt_missing",
+          reason: "simulated review approval has no complete provider forge receipt",
+        }
+      : { kind: "not_required" };
+  }
+  if (!/^[0-9a-f]{40}$/iu.test(input.reviewedHeadSha)) {
+    return {
+      kind: "blocked",
+      reasonCode: "receipt_head_invalid",
+      reason: `forge review receipt head '${input.reviewedHeadSha}' is not an exact 40-hex commit sha`,
+    };
+  }
+  if (input.reviewedHeadSha.toLowerCase() !== input.landingHeadSha.toLowerCase()) {
+    return {
+      kind: "blocked",
+      reasonCode: "receipt_head_mismatch",
+      reason:
+        `forge review receipt is for a different commit than the one being landed ` +
+        `(reviewed '${input.reviewedHeadSha}' != landing '${input.landingHeadSha}')`,
+    };
+  }
+  return { kind: "matched" };
 }
 
 /**
@@ -68,13 +128,14 @@ export async function resolveLandTimeSignals(pool: pg.Pool, orgId: string, runId
     );
     const gatePassed = gate.rows[0]?.payload?.passed;
     const gatedHeadShaRaw = gate.rows[0]?.payload?.headSha;
-    const review = await client.query<{ event_type: string }>(
-      `SELECT event_type FROM events
+    const review = await client.query<{ event_type: string; payload: Record<string, unknown> }>(
+      `SELECT event_type, payload FROM events
         WHERE run_id = $1 AND event_type IN ('review.approved','review.auto_approved','review.changes_requested')
         ORDER BY ts DESC, id DESC LIMIT 1`,
       [runId],
     );
     const reviewType = review.rows[0]?.event_type;
+    const reviewPayload = review.rows[0]?.payload;
     const reviewVerdict: ReviewVerdict | undefined =
       reviewType === "review.approved" || reviewType === "review.auto_approved"
         ? "approved"
@@ -87,8 +148,26 @@ export async function resolveLandTimeSignals(pool: pg.Pool, orgId: string, runId
     const gateOutcome: GateOutcome | undefined = gatePassed === true ? { passed: true, results: [] } : undefined;
     // The sha the verdict was for (anchors the verdict to a commit — the TOCTOU guard).
     const gatedHeadSha = typeof gatedHeadShaRaw === "string" && gatedHeadShaRaw !== "" ? gatedHeadShaRaw : undefined;
-    return { gateOutcome, gatedHeadSha, reviewVerdict };
+    // Forge receipt head from the same terminal review event (gv-2 exact-head bind).
+    // `review.auto_approved` has no forge receipt → undefined (human/auto paths).
+    const reviewedHeadSha = completeForgeReceiptHead(reviewType, reviewPayload);
+    return { gateOutcome, gatedHeadSha, reviewVerdict, reviewedHeadSha };
   });
+}
+
+function completeForgeReceiptHead(
+  eventType: string | undefined,
+  payload: Record<string, unknown> | undefined,
+): string | undefined {
+  if (payload === undefined || (eventType !== "review.approved" && eventType !== "review.changes_requested")) {
+    return undefined;
+  }
+  const expectedState = eventType === "review.approved" ? "approved" : "changes_requested";
+  const required = [payload["forgeReviewId"], payload["forgeReviewUrl"], payload["reviewer"]];
+  if (required.some((value) => typeof value !== "string" || value.trim() === "")) return undefined;
+  if (payload["forgeReviewState"] !== expectedState) return undefined;
+  const headSha = payload["headSha"];
+  return typeof headSha === "string" && headSha !== "" ? headSha : undefined;
 }
 
 // ---- The LAND-TIME audit findings (the live audit gate, tanren-owns-the-engine.md §4) ----

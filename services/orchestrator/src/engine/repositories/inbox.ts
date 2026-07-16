@@ -14,76 +14,30 @@
 import type pg from "pg";
 import { randomUUID } from "node:crypto";
 import {
-  Candidate,
-  CandidateTriage,
-  InboxSource,
-  SourceKind,
+  parsePersistedInboxSourceConfig,
+  type Candidate,
   type CandidateStatus,
+  type CandidateTriage,
   type IngestedItem,
+  type InboxSource,
+  type SourceKind,
 } from "../forge/inbox/types.js";
+import {
+  InboxSourceDecodeError,
+  InboxSourceProjectScopeError,
+  SourceRowSchema,
+  mapCandidate,
+  mapSource,
+  type CandidateRow,
+  type InboxSourceReadFailure,
+  type SourceRow,
+} from "./inboxRows.js";
+
+export { InboxSourceDecodeError, InboxSourceProjectScopeError, type InboxSourceReadFailure } from "./inboxRows.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
-
-interface SourceRow {
-  id: string;
-  org_id: string;
-  project_id: string | null;
-  kind: string;
-  name: string;
-  detail: string;
-  config: Record<string, unknown> | null;
-  enabled: string;
-  auto_route: string;
-}
-
-interface CandidateRow {
-  id: string;
-  source_id: string;
-  org_id: string;
-  project_id: string | null;
-  external_id: string;
-  title: string;
-  body: string;
-  severity: string;
-  status: string;
-  triage: unknown;
-  resolved_spec_id: string | null;
-  source_name: string | null;
-  source_kind: string | null;
-}
-
-function mapSource(row: SourceRow): InboxSource {
-  return InboxSource.parse({
-    id: row.id,
-    orgId: row.org_id,
-    projectId: row.project_id,
-    kind: row.kind,
-    name: row.name,
-    detail: row.detail,
-    config: row.config ?? {},
-    enabled: row.enabled === "true",
-    autoRoute: row.auto_route === "true",
-  });
-}
-
-function mapCandidate(row: CandidateRow): Candidate {
-  const triageRaw = row.triage;
-  const hasTriage = triageRaw !== null && typeof triageRaw === "object" && Object.keys(triageRaw).length > 0;
-  return Candidate.parse({
-    id: row.id,
-    sourceId: row.source_id,
-    orgId: row.org_id,
-    projectId: row.project_id,
-    externalId: row.external_id,
-    title: row.title,
-    body: row.body,
-    severity: row.severity,
-    status: row.status,
-    triage: hasTriage ? CandidateTriage.parse(triageRaw) : null,
-    resolvedSpecId: row.resolved_spec_id,
-    sourceName: row.source_name ?? "",
-    sourceKind: SourceKind.parse(row.source_kind ?? "manual"),
-  });
+interface ManagedSourceQueryClient {
+  query(sql: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number | null }>;
 }
 
 export interface CreateSourceInput {
@@ -97,6 +51,24 @@ export interface CreateSourceInput {
   autoRoute?: boolean;
 }
 
+export class InboxSourceUnavailableError extends Error {
+  constructor() {
+    super("inbox source is disabled or needs attention");
+    this.name = "InboxSourceUnavailableError";
+  }
+}
+
+export class InboxCandidateLineageError extends Error {
+  constructor() {
+    super("candidate org/project lineage does not match its inbox source");
+    this.name = "InboxCandidateLineageError";
+  }
+}
+
+const SOURCE_COLUMNS = `id, org_id, project_id, kind, name, detail, config, enabled, auto_route,
+  state, attention_code, attention_message, attention_observed_at,
+  (webhook_secret_ref IS NOT NULL) AS webhook_configured, retry_not_before`;
+
 // The candidate-inbox data-access seam: the `inbox_sources` + `candidates`
 // reads/writes behind a value object for the `Repositories` registry. Methods
 // take the caller's `QueryClient` (a pool OR a `runWithOrgScope`/
@@ -105,10 +77,13 @@ export interface CreateSourceInput {
 export const InboxStore = {
   async createSource(client: QueryClient, input: CreateSourceInput): Promise<InboxSource> {
     const id = `src_${randomUUID()}`;
+    const config = parsePersistedInboxSourceConfig(input.kind, input.config ?? {});
     const result = await client.query<SourceRow>(
       `INSERT INTO inbox_sources (id, org_id, project_id, kind, name, detail, config, enabled, auto_route)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
-       RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
+       SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
+        WHERE $3::text IS NULL
+           OR EXISTS (SELECT 1 FROM projects WHERE project_id = $3 AND org_id = $2)
+       RETURNING ${SOURCE_COLUMNS}`,
       [
         id,
         input.orgId,
@@ -116,26 +91,96 @@ export const InboxStore = {
         input.kind,
         input.name,
         input.detail ?? "",
-        JSON.stringify(input.config ?? {}),
+        JSON.stringify(config),
         input.enabled === false ? "false" : "true",
         input.autoRoute === true ? "true" : "false",
       ],
     );
-    return mapSource(result.rows[0]!);
+    const row = result.rows[0];
+    if (row === undefined) throw new InboxSourceProjectScopeError();
+    return mapSource(row);
+  },
+
+  /** Idempotent provisioner-owned source write through the same config/project authority. */
+  async upsertManagedSource(
+    client: ManagedSourceQueryClient,
+    input: Omit<CreateSourceInput, "projectId"> & { projectId: string },
+  ): Promise<InboxSource> {
+    const id = `src_${randomUUID()}`;
+    const config = parsePersistedInboxSourceConfig(input.kind, input.config ?? {});
+    const result = await client.query(
+      `INSERT INTO inbox_sources (id, org_id, project_id, kind, name, detail, config, enabled, auto_route)
+       SELECT $1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
+         FROM projects
+        WHERE project_id = $3 AND org_id = $2
+       ON CONFLICT (org_id, project_id, kind) WHERE (config->>'managedBy') = 'integration-provisioner'
+       DO UPDATE SET name = EXCLUDED.name, config = EXCLUDED.config, enabled = EXCLUDED.enabled,
+                     updated_at = now()
+       RETURNING ${SOURCE_COLUMNS}`,
+      [
+        id,
+        input.orgId,
+        input.projectId,
+        input.kind,
+        input.name,
+        input.detail ?? "",
+        JSON.stringify(config),
+        input.enabled === false ? "false" : "true",
+        input.autoRoute === true ? "true" : "false",
+      ],
+    );
+    const row = result.rows[0];
+    if (row === undefined) throw new InboxSourceProjectScopeError();
+    return mapSource(SourceRowSchema.parse(row));
   },
 
   async listSources(client: QueryClient, orgId: string): Promise<InboxSource[]> {
     const result = await client.query<SourceRow>(
-      `SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route
+      `SELECT ${SOURCE_COLUMNS},
+              (project_id IS NULL OR EXISTS (
+                SELECT 1 FROM projects p WHERE p.project_id = inbox_sources.project_id AND p.org_id = inbox_sources.org_id
+              )) AS project_valid
        FROM inbox_sources WHERE org_id = $1 ORDER BY created_at`,
       [orgId],
     );
     return result.rows.map(mapSource);
   },
 
+  /** Row-isolated decode so one hostile legacy config cannot starve peer sources. */
+  async listSourcesForIntake(
+    client: QueryClient,
+    orgId: string,
+  ): Promise<{ sources: InboxSource[]; invalid: InboxSourceReadFailure[] }> {
+    const result = await client.query<SourceRow>(
+      `SELECT ${SOURCE_COLUMNS},
+              (project_id IS NULL OR EXISTS (
+                SELECT 1 FROM projects p WHERE p.project_id = inbox_sources.project_id AND p.org_id = inbox_sources.org_id
+              )) AS project_valid
+       FROM inbox_sources WHERE org_id = $1 AND enabled = 'true' AND state = 'active' ORDER BY created_at`,
+      [orgId],
+    );
+    const sources: InboxSource[] = [];
+    const invalid: InboxSourceReadFailure[] = [];
+    for (const row of result.rows) {
+      try {
+        sources.push(mapSource(row));
+      } catch {
+        invalid.push({
+          id: row.id,
+          orgId: row.org_id,
+          projectId: row.project_valid === false ? null : row.project_id,
+        });
+      }
+    }
+    return { sources, invalid };
+  },
+
   async getSource(client: QueryClient, sourceId: string): Promise<InboxSource | undefined> {
     const result = await client.query<SourceRow>(
-      `SELECT id, org_id, project_id, kind, name, detail, config, enabled, auto_route
+      `SELECT ${SOURCE_COLUMNS},
+              (project_id IS NULL OR EXISTS (
+                SELECT 1 FROM projects p WHERE p.project_id = inbox_sources.project_id AND p.org_id = inbox_sources.org_id
+              )) AS project_valid
        FROM inbox_sources WHERE id = $1`,
       [sourceId],
     );
@@ -143,20 +188,56 @@ export const InboxStore = {
     return row === undefined ? undefined : mapSource(row);
   },
 
-  // Replace a source's `config` jsonb (the webhook-provision path stamps a
-  // `webhookSecretRef` here — no migration; the secret REF lives in the config blob).
-  async updateSourceConfig(
-    client: QueryClient,
-    sourceId: string,
-    config: Record<string, unknown>,
-  ): Promise<InboxSource | undefined> {
+  /** Fresh, exact-tenant validation immediately before intake side effects. */
+  async getSourceForIntake(client: QueryClient, sourceId: string, orgId: string): Promise<InboxSource | undefined> {
     const result = await client.query<SourceRow>(
-      `UPDATE inbox_sources SET config = $2::jsonb, updated_at = now() WHERE id = $1
-       RETURNING id, org_id, project_id, kind, name, detail, config, enabled, auto_route`,
-      [sourceId, JSON.stringify(config)],
+      `SELECT ${SOURCE_COLUMNS},
+              (project_id IS NULL OR EXISTS (
+                SELECT 1 FROM projects p WHERE p.project_id = inbox_sources.project_id AND p.org_id = inbox_sources.org_id
+              )) AS project_valid
+       FROM inbox_sources WHERE id = $1 AND org_id = $2`,
+      [sourceId, orgId],
     );
     const row = result.rows[0];
-    return row === undefined ? undefined : mapSource(row);
+    if (row === undefined) return undefined;
+    let source: InboxSource;
+    try {
+      source = mapSource(row);
+    } catch {
+      throw new InboxSourceDecodeError(row);
+    }
+    if (!source.enabled || source.state !== "active") throw new InboxSourceUnavailableError();
+    return source;
+  },
+
+  /** Internal webhook coordinate write; never mutates or returns provider config. */
+  async setWebhookSecretRef(
+    client: QueryClient,
+    sourceId: string,
+    orgId: string,
+    webhookSecretRef: string,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `UPDATE inbox_sources SET webhook_secret_ref = $3, updated_at = now()
+        WHERE id = $1 AND org_id = $2 AND kind = 'issues' AND state = 'active'
+          AND enabled = 'true'`,
+      [sourceId, orgId, webhookSecretRef],
+    );
+    return result.rowCount === 1;
+  },
+
+  /** Internal webhook coordinate read immediately before SecretStore access. */
+  async getWebhookSecretRef(client: QueryClient, sourceId: string, orgId: string): Promise<string | undefined> {
+    const result = await client.query<{ webhook_secret_ref: string }>(
+      `SELECT webhook_secret_ref FROM inbox_sources
+        WHERE id = $1 AND org_id = $2 AND kind = 'issues' AND state = 'active'
+          AND enabled = 'true' AND webhook_secret_ref IS NOT NULL
+          AND (project_id IS NULL OR EXISTS (
+            SELECT 1 FROM projects p WHERE p.project_id = inbox_sources.project_id AND p.org_id = inbox_sources.org_id
+          ))`,
+      [sourceId, orgId],
+    );
+    return result.rows[0]?.webhook_secret_ref;
   },
 
   // Idempotent upsert keyed by (source_id, external_id): re-polling the same
@@ -174,8 +255,14 @@ export const InboxStore = {
     const result = await client.query<CandidateRow>(
       `INSERT INTO candidates
          (id, source_id, org_id, project_id, external_id, title, body, severity, status, triage)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-       ON CONFLICT (source_id, external_id) DO UPDATE SET
+       SELECT $1, s.id, s.org_id, $4, $5, $6, $7, $8, $9, $10::jsonb
+         FROM inbox_sources s
+        WHERE s.id = $2 AND s.org_id = $3 AND s.enabled = 'true' AND s.state = 'active'
+          AND (s.project_id IS NULL OR s.project_id = $4)
+          AND ($4::text IS NULL OR EXISTS (
+            SELECT 1 FROM projects p WHERE p.project_id = $4 AND p.org_id = s.org_id
+          ))
+       ON CONFLICT (org_id, source_id, external_id) DO UPDATE SET
          title = EXCLUDED.title,
          body = EXCLUDED.body,
          severity = EXCLUDED.severity,
@@ -183,6 +270,7 @@ export const InboxStore = {
          status = CASE WHEN candidates.status IN ('new','triaged','auto_routed')
                        THEN EXCLUDED.status ELSE candidates.status END,
          updated_at = now()
+       WHERE candidates.org_id = EXCLUDED.org_id
        RETURNING id, source_id, org_id, project_id, external_id, title, body, severity, status,
                  triage, resolved_spec_id,
                  $11::text AS source_name, $12::text AS source_kind`,
@@ -201,7 +289,9 @@ export const InboxStore = {
         source.kind,
       ],
     );
-    return mapCandidate(result.rows[0]!);
+    const row = result.rows[0];
+    if (row === undefined) throw new InboxCandidateLineageError();
+    return mapCandidate(row);
   },
 
   async listCandidates(client: QueryClient, orgId: string): Promise<Candidate[]> {
@@ -209,7 +299,7 @@ export const InboxStore = {
       `SELECT c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
               c.severity, c.status, c.triage, c.resolved_spec_id,
               s.name AS source_name, s.kind AS source_kind
-       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id
+       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id AND s.org_id = c.org_id
        WHERE c.org_id = $1 ORDER BY c.created_at DESC`,
       [orgId],
     );
@@ -221,7 +311,7 @@ export const InboxStore = {
       `SELECT c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
               c.severity, c.status, c.triage, c.resolved_spec_id,
               s.name AS source_name, s.kind AS source_kind
-       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id
+       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id AND s.org_id = c.org_id
        WHERE c.id = $1`,
       [candidateId],
     );
@@ -241,7 +331,10 @@ export const InboxStore = {
   ): Promise<Candidate | undefined> {
     const result = await client.query<CandidateRow>(
       `UPDATE candidates c SET project_id = $2, updated_at = now()
-       FROM inbox_sources s WHERE c.id = $1 AND s.id = c.source_id
+       FROM inbox_sources s, projects p
+       WHERE c.id = $1 AND s.id = c.source_id AND s.org_id = c.org_id
+         AND p.project_id = $2 AND p.org_id = c.org_id
+         AND (s.project_id IS NULL OR s.project_id = $2)
        RETURNING c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
                  c.severity, c.status, c.triage, c.resolved_spec_id,
                  s.name AS source_name, s.kind AS source_kind`,
@@ -260,7 +353,10 @@ export const InboxStore = {
   ): Promise<Candidate | undefined> {
     const result = await client.query<CandidateRow>(
       `UPDATE candidates c SET status = $2, resolved_spec_id = $3, updated_at = now()
-       FROM inbox_sources s WHERE c.id = $1 AND s.id = c.source_id
+       FROM inbox_sources s WHERE c.id = $1 AND s.id = c.source_id AND s.org_id = c.org_id
+         AND ($3::text IS NULL OR EXISTS (
+           SELECT 1 FROM specs sp WHERE sp.spec_id = $3 AND sp.org_id = c.org_id
+         ))
        RETURNING c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
                  c.severity, c.status, c.triage, c.resolved_spec_id,
                  s.name AS source_name, s.kind AS source_kind`,
@@ -280,7 +376,7 @@ export const InboxStore = {
       `SELECT c.id, c.source_id, c.org_id, c.project_id, c.external_id, c.title, c.body,
               c.severity, c.status, c.triage, c.resolved_spec_id,
               s.name AS source_name, s.kind AS source_kind
-       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id
+       FROM candidates c JOIN inbox_sources s ON s.id = c.source_id AND s.org_id = c.org_id
        WHERE c.status = 'auto_routed' AND c.resolved_spec_id IS NULL
        ORDER BY c.updated_at ASC LIMIT $1`,
       [limit],
@@ -293,7 +389,7 @@ export const InboxStore = {
   // `enabled = 'true'` predicate are byte-identical to the inline poller read.
   async listDistinctEnabledSourceOrgIds(client: QueryClient): Promise<string[]> {
     const result = await client.query<{ org_id: string }>(
-      "SELECT DISTINCT org_id FROM inbox_sources WHERE enabled = 'true'",
+      "SELECT DISTINCT org_id FROM inbox_sources WHERE enabled = 'true' AND state = 'active'",
     );
     return result.rows.map((r) => r.org_id);
   },

@@ -32,7 +32,7 @@ import { DispatchingSsh, makeContext, STACK, target, WORKSPACE_PATH } from "./he
 const BOT_LOGIN = "tanren-cat-cave-validation[bot]";
 const BOT_ID = "290060348";
 const BOT_NOREPLY = `${BOT_ID}+${BOT_LOGIN}@users.noreply.github.com`;
-const CRED_REF = "github/cat-cave/token";
+const CRED_REF = "credential/github/org/org_dep/token";
 
 /** A GitHub HTTP stub answering the static-credential identity read (`GET /user`) with the bot. */
 function botUserHttp(): GitHubHttpClient {

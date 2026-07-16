@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { getSystemPool, notifyDagChanged, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
+import { notifyDagChanged, notifyJobEnqueued, runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
-import { type ProjectConfigV1, defaultProjectConfigV1 } from "../config/index.js";
 import { PgEventStore } from "../eventStore.js";
 import { DEFAULT_SPEC_MODE, DEFAULT_SPEC_PRIORITY, type SpecMode, type SpecPriority } from "../state/spec.js";
-import { assertProjectCreateConfigAllowed, type ProjectConfigWriteProof } from "./projectConfigWriteGuards.js";
+import type { ProjectContract } from "./projectCreate.js";
 import {
   ProjectAccessDeniedError,
   ProjectNotFoundError,
@@ -16,47 +15,15 @@ import {
 import { loadProjectOrgId, loadSpecWithProject } from "./projectSpecRowSchema.js";
 import { observeRunAsIntegrationNode } from "../dag/integrationNodesPg.js";
 import type { AncestorStack } from "../dag/ancestorStack.js";
+export { createProject, createProjectOnClient } from "./projectCreate.js";
+export type { CreateProjectInput, CreateProjectOptions, ProjectContract } from "./projectCreate.js";
 
 /** The pool or a checked-out client — anything that can run a query. */
-type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+export type ProjectSpecQueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
+type QueryClient = ProjectSpecQueryClient;
 
-const defaultBranch = "main";
-const defaultRunnerImage = "ghcr.io/cat-cave/tanren-runner:v0";
-const defaultAllocator = "local-docker";
 const initialPlannerModel = "fake-planner";
 
-export interface CreateProjectInput {
-  name: string;
-  repoUrl: string;
-  defaultBranch?: string;
-  runnerImage?: string;
-  allocator?: string;
-  // Optional jsonb blob, parsed via `migrateProjectConfig` (fail-hard on missing/unknown
-  // `version`). Omitted ⇒ a defaulted V1; supplied ⇒ MUST be an explicit `version: 1` blob.
-  config?: unknown;
-}
-
-export interface CreateProjectOptions {
-  configWriteProof?: ProjectConfigWriteProof;
-}
-
-export interface ProjectContract {
-  projectId: string;
-  // v68 fix: projects.org_id (NOT NULL); see {@link AppendEventInput.orgId}.
-  orgId: string;
-  name: string;
-  repoUrl: string;
-  defaultBranch: string;
-  runnerImage: string;
-  allocator: string;
-  config: ProjectConfigV1;
-}
-
-/**
- * Triage-routing PROVENANCE (Claude RA2 — schemaCore.ts specs' new columns). A triage
- * decision that routes an out-of-scope finding into a new spec stamps these on the
- * created spec so the routing trail is queryable; operator/discovery/seed specs omit.
- */
 export interface SpecTriageProvenance {
   parentSpecId: string;
   sourceFindingIds: ReadonlyArray<string>;
@@ -81,7 +48,6 @@ export interface CreateSpecInput {
 export interface SpecContract {
   specId: string;
   projectId: string;
-  // v68 fix: specs.org_id (NOT NULL).
   orgId: string;
   title: string;
   description: string;
@@ -89,9 +55,7 @@ export interface SpecContract {
   dependsOn: string[];
   status: string;
   priority: SpecPriority;
-  /** Writer-prompt MODE (task #86). */
   mode: SpecMode;
-  /** Triage routing provenance (Claude RA2); undefined for a non-routed spec. */
   triageProvenance?: SpecTriageProvenance;
 }
 
@@ -140,60 +104,6 @@ export {
 export { requeueAttentionSpec, SpecNotInAttentionError } from "./requeueAttentionSpec.js";
 export type { RequeueAttentionResult } from "./requeueAttentionSpec.js";
 
-export async function createProject(
-  pool: pg.Pool,
-  input: CreateProjectInput,
-  _actor?: ActorContext,
-  options: CreateProjectOptions = {},
-): Promise<ProjectContract> {
-  const projectId = `project_${randomUUID()}`;
-  const project: ProjectContract = {
-    projectId,
-    // null-org system seeding widens to "" (non-production path).
-    orgId: _actor?.orgId ?? "",
-    name: input.name,
-    repoUrl: input.repoUrl,
-    defaultBranch: input.defaultBranch ?? defaultBranch,
-    runnerImage: input.runnerImage ?? defaultRunnerImage,
-    allocator: input.allocator ?? defaultAllocator,
-    // No config ⇒ defaulted V1; a supplied config must be an explicit `version: 1`
-    // blob (an unversioned blob / unknown keys are rejected — fail-hard).
-    config:
-      input.config === undefined
-        ? defaultProjectConfigV1()
-        : assertProjectCreateConfigAllowed(input.config, options.configWriteProof),
-  };
-
-  // RLS R3b: an org-carrying operator persists under `runWithOrgScope`; a null-org
-  // caller is cross-org system seeding → the BYPASSRLS `tanren_system` pool.
-  const orgId = _actor?.orgId ?? null;
-  const persist = async (client: QueryClient): Promise<void> => {
-    await client.query(
-      `INSERT INTO projects (project_id, name, repo_url, default_branch, runner_image, allocator, config, org_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-      [
-        project.projectId,
-        project.name,
-        project.repoUrl,
-        project.defaultBranch,
-        project.runnerImage,
-        project.allocator,
-        JSON.stringify(project.config),
-        orgId,
-      ],
-    );
-    if (_actor !== undefined) {
-      await client.query(
-        `INSERT INTO project_members (project_id, user_id, role) VALUES ($1, $2, 'admin')
-         ON CONFLICT (project_id, user_id) DO NOTHING`,
-        [project.projectId, _actor.userId],
-      );
-    }
-  };
-  await (orgId === null ? persist(getSystemPool() ?? pool) : runWithOrgScope(pool, orgId, persist));
-  return project;
-}
-
 export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: ActorContext): Promise<SpecContract> {
   // RLS (specs write): org-carrying actor → org-scoped client; null-org → pool path.
   const orgId = actor?.orgId ?? null;
@@ -203,7 +113,7 @@ export async function createSpec(pool: pg.Pool, input: CreateSpecInput, actor?: 
   return createSpecOnClient(pool, input, actor);
 }
 
-async function createSpecOnClient(
+export async function createSpecOnClient(
   client: QueryClient,
   input: CreateSpecInput,
   actor?: ActorContext,

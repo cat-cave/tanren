@@ -22,6 +22,7 @@ export interface JjAuthedPushInput {
   target: RunnerHandle;
   workspacePath: string;
   secrets: SecretStore;
+  orgId: string;
   /** The shared (timed) GitHub HTTP client the push-token resolution reads through. */
   githubHttp: GitHubHttpClient;
   githubAppMinter?: GithubAppTokenMinter;
@@ -51,6 +52,7 @@ export async function pushJjHead(input: JjAuthedPushInput): Promise<void> {
       : (
           await resolveVcsToken(input.githubHttp, {
             secrets: input.secrets,
+            orgId: input.orgId,
             ...(input.installation !== undefined && { installation: input.installation }),
             ...(staticRef !== "" && { staticRef }),
             ...(input.githubAppMinter !== undefined && { minter: input.githubAppMinter }),
