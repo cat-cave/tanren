@@ -12,8 +12,7 @@ import {
 import { specLoopStageSensitivityRules } from "./sensitivityRules.loop.js";
 import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
-import { benchmarkSensitivityRules, eventVocabularyW0SensitivityRules } from "./sensitivityRules.eventVocabularyW0.js";
-import { eventVocabularyW1aIntegrationAuthorSensitivityRules } from "./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js";
+import { benchmarkSensitivityRules, eventVocabularySensitivityRules } from "./sensitivityRules.eventVocabulary.js";
 
 // Sensitivity rule table. Every payload field reachable from an event must have a registered tag (the eventRegistryFieldCoverage test enforces this as a hard CI failure). Tag taxonomy: `public` = any project member; `redacted` = project:admin to view raw; `secret` = platform:admin to view raw. Heuristics: identifiers (runIds/taskIds/sha/paths) + human-authored prose are public; host fingerprints / credential refs / SSH host:port are redacted; secrets / raw tokens / command stdout/stderr are secret. A "[]" path suffix applies to every array element.
 
@@ -454,10 +453,8 @@ export const sensitivityRules: SensitivityRule[] = [
   // task #82 window-pause auto-resume (run.paused/resumed/window.refreshed) + Codex critic #18 (usage.accounting_failed).
   ...windowPauseSensitivityRules,
   ...usageAccountingFailedSensitivityRules,
-  // Mission-complete W0 event vocabulary; every frozen payload path is public.
-  ...eventVocabularyW0SensitivityRules,
-  // Mission-complete W1-A integration.author.*; all 16 frozen leaves are public.
-  ...eventVocabularyW1aIntegrationAuthorSensitivityRules,
+  // Mission-complete event vocabulary (W0 + W1-A + future Wn); every frozen payload path is public.
+  ...eventVocabularySensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

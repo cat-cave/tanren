@@ -414,6 +414,10 @@ describe("IN-7 event observability cannot become product authority", () => {
       new URL("../../src/engine/events/sensitivityRules.eventVocabularyW1aIntegrationAuthor.ts", import.meta.url),
       "utf8",
     );
+    const eventVocabularyAggregatorSource = readFileSync(
+      new URL("../../src/engine/events/sensitivityRules.eventVocabulary.ts", import.meta.url),
+      "utf8",
+    );
     const productionSources = [registrySource, sensitivitySource, severitySource, seedSource, schemaSource];
 
     // PREP remains non-authority: only kernel + sibling draft + zod (and type-only
@@ -442,7 +446,13 @@ describe("IN-7 event observability cannot become product authority", () => {
       expect(source).not.toContain("contracts/prep/");
     }
     expect(registrySource).toContain("w1aEventRegistry");
-    expect(sensitivitySource).toContain("eventVocabularyW1aIntegrationAuthorSensitivityRules");
+    // Vocabulary waves fan in through the wave-neutral aggregator (import-slot
+    // ceiling repair): the root spreads the combined vocabulary and never imports
+    // the W1-A leaf directly; the aggregator owns the W0 + W1-A import-slot.
+    expect(sensitivitySource).toContain("./sensitivityRules.eventVocabulary.js");
+    expect(sensitivitySource).toContain("...eventVocabularySensitivityRules");
+    expect(sensitivitySource).not.toContain("./sensitivityRules.eventVocabularyW1aIntegrationAuthor.js");
+    expect(eventVocabularyAggregatorSource).toContain("eventVocabularyW1aIntegrationAuthorSensitivityRules");
     for (const name of PROSPECTIVE_INTEGRATION_AUTHOR_EVENT_NAMES) {
       expect(schemaSource).toContain(`"${name}"`);
       expect(w1aSensitivitySource).toContain(`"${name}"`);
