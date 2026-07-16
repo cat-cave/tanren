@@ -260,6 +260,7 @@ downstream binding activation and remaining cutover slices land.
 - `services/dashboard/src/api/inboxTypes.ts`
 - `services/dashboard/src/components/inbox/InboxBody.tsx`
 - `services/dashboard/src/components/onboarding/new/ArrivalStep.tsx`
+- `services/dashboard/src/routes/inbox/index.tsx`
 - `services/dashboard/tests/greenfieldOnboarding.render.test.ts`
 - `services/dashboard/tests/inbox.render.test.ts`
 - `services/orchestrator/src/engine/config/orgConfig.ts`
