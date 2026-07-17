@@ -249,6 +249,15 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "merge.signal.classified": "info",
   "merge.member.policy_blocked": "warn",
 
+  // Wave-3 barrier vocabulary. `fail` is Tanren's terminal error severity.
+  "symptom.contract.authored": "info",
+  "symptom.contract.validated": "info",
+  "symptom.contract.superseded": "info",
+  "symptom.contract.authoring_failed": "fail",
+  "merge.member.isolated": "warn",
+  "merge.partition.leased": "info",
+  "merge.partition.released": "info",
+
   // Notification meta — opted off by default; severity floor will mask them
   // even on routes that accidentally enable them, since the dispatcher does
   // not re-emit notification.* into its own pipeline.

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authorTaskId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "baselineRequired": {
+      "type": "boolean"
+    },
+    "canonicalHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contractId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "issueLoopId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "projectId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schemaVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "sourceRevision": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "contractId",
+    "schemaVersion",
+    "canonicalHash",
+    "baselineRequired"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.symptom.contract.authored"
+}

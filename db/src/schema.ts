@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   bigserial,
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -19,6 +20,7 @@ import {
   enumCheck,
   mergeQueue,
   mergeQueueHolds,
+  mergeQueuePartitions,
   organizations,
   postMergeIssueClaims,
   projects,
@@ -28,6 +30,7 @@ import {
 } from "./schemaCore.js";
 import { integrationNodes, integrationProofs } from "./schemaIntegrationNodes.js";
 import { events } from "./schemaEvents.js";
+import { issueLoopEdges, issueLoops, sourceFindings } from "./schemaIssueLoops.js";
 
 // Core identity + project/spec/run tables live in schemaCore.ts (cycle-avoidance
 // — sub-schemas can reference them without importing schema.ts); re-exported so
@@ -38,6 +41,7 @@ export {
   integrationProofs,
   mergeQueue,
   mergeQueueHolds,
+  mergeQueuePartitions,
   organizations,
   postMergeIssueClaims,
   projects,
@@ -51,9 +55,8 @@ export const tasks = pgTable(
   "tasks",
   {
     taskId: text("task_id").primaryKey(),
-    runId: text("run_id")
-      .notNull()
-      .references(() => runs.runId),
+    runId: text("run_id").references(() => runs.runId),
+    issueLoopId: text("issue_loop_id"),
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
@@ -72,6 +75,11 @@ export const tasks = pgTable(
     userId: text("user_id"),
   },
   (table) => [
+    foreignKey({
+      columns: [table.orgId, table.issueLoopId],
+      foreignColumns: [issueLoops.orgId, issueLoops.id],
+      name: "tasks_issue_loop_fk",
+    }),
     enumCheck("tasks_kind_check", table.kind, stateEnumLists.tasks_kind),
     enumCheck("tasks_status_check", table.status, stateEnumLists.tasks_status),
     enumCheck("tasks_agent_kind_check", table.agentKind, stateEnumLists.tasks_agent_kind),
@@ -83,6 +91,7 @@ export const tasks = pgTable(
     ),
     index("tasks_org_id").on(table.orgId),
     index("tasks_org_run").on(table.orgId, table.runId),
+    check("tasks_run_or_issue_loop_check", sql`(${table.runId} IS NOT NULL) <> (${table.issueLoopId} IS NOT NULL)`),
   ],
 );
 
@@ -93,7 +102,8 @@ export const costRecords = pgTable(
     taskId: text("task_id")
       .notNull()
       .references(() => tasks.taskId),
-    runId: text("run_id").notNull(),
+    runId: text("run_id"),
+    issueLoopId: text("issue_loop_id"),
     projectId: text("project_id").notNull(),
     orgId: text("org_id")
       .notNull()
@@ -128,6 +138,11 @@ export const costRecords = pgTable(
     userId: text("user_id"),
   },
   (table) => [
+    foreignKey({
+      columns: [table.orgId, table.issueLoopId],
+      foreignColumns: [issueLoops.orgId, issueLoops.id],
+      name: "cost_records_issue_loop_fk",
+    }),
     check(
       "cost_records_billing_mode_check",
       sql`${table.billingMode} IN ('per_token','subscription','self_hosted','unattributed')`,
@@ -138,6 +153,10 @@ export const costRecords = pgTable(
     ),
     index("cost_records_org_id").on(table.orgId),
     index("cost_records_org_run").on(table.orgId, table.runId),
+    check(
+      "cost_records_run_or_issue_loop_check",
+      sql`(${table.runId} IS NOT NULL) <> (${table.issueLoopId} IS NOT NULL)`,
+    ),
   ],
 );
 
@@ -459,7 +478,9 @@ export * from "./schemaIntegrationOperations.js";
 export * from "./schemaIntegrationEnvironment.js";
 export * from "./schemaIntegrationSelection.js";
 export * from "./schemaProjectDerivations.js";
-export { issueLoops, sourceFindings, issueLoopEdges } from "./schemaIssueLoops.js";
+export { issueLoops, sourceFindings, issueLoopEdges };
+export { specOrigins, specOriginFindings } from "./schemaSpecOrigins.js";
+export { symptomContracts, symptomContractFragments } from "./schemaSymptomContracts.js";
 export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";

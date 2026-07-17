@@ -5,12 +5,16 @@ import {
   check,
   foreignKey,
   index,
+  integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { issueLoopsReference } from "./schemaIssueLoopReferences.js";
+import { integrationOrgIsolationPolicy } from "./schemaIntegrationPolicy.js";
 import { stateEnumLists } from "./stateEnums.js";
 
 // Core identity + project/spec/run tables live here so sub-schemas can reference
@@ -93,6 +97,7 @@ export const specs = pgTable(
     sourceFindingIds: text("source_finding_ids").array(),
     originTriageTaskId: text("origin_triage_task_id"),
     originRunId: text("origin_run_id"),
+    originIssueLoopId: text("origin_issue_loop_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -100,6 +105,11 @@ export const specs = pgTable(
       columns: [table.orgId, table.projectId],
       foreignColumns: [projects.orgId, projects.projectId],
       name: "specs_project_lineage_fk",
+    }),
+    foreignKey({
+      columns: [table.orgId, table.originIssueLoopId],
+      foreignColumns: [issueLoopsReference.orgId, issueLoopsReference.id],
+      name: "specs_origin_issue_loop_fk",
     }),
     uniqueIndex("specs_org_spec_unique").on(table.orgId, table.specId),
     uniqueIndex("specs_org_project_spec_unique").on(table.orgId, table.projectId, table.specId),
@@ -236,6 +246,42 @@ export const runs = pgTable(
   ],
 );
 
+export const mergeQueuePartitions = pgTable(
+  "merge_queue_partitions",
+  {
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    projectId: text("project_id").notNull(),
+    id: text("id").notNull(),
+    targetBranch: text("target_branch").notNull(),
+    scopeKey: text("scope_key").notNull(),
+    mode: text("mode").notNull(),
+    capacity: integer("capacity").notNull(),
+    state: text("state").notNull(),
+    generation: integer("generation").notNull().default(0),
+    pauseReason: text("pause_reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.orgId, table.id] }),
+    foreignKey({
+      columns: [table.orgId, table.projectId],
+      foreignColumns: [projects.orgId, projects.projectId],
+      name: "merge_queue_partitions_project_fk",
+    }),
+    uniqueIndex("merge_queue_partitions_project_target_scope_unique").on(
+      table.orgId,
+      table.projectId,
+      table.targetBranch,
+      table.scopeKey,
+    ),
+    index("merge_queue_partitions_org_id").on(table.orgId),
+    check("merge_queue_partitions_mode_check", sql`${table.mode} IN ('serial','scoped','isolated')`),
+    integrationOrgIsolationPolicy(table.orgId),
+  ],
+).enableRLS();
+
 // P2d (autonomy-engine.md §2d): the native intelligent merge queue. One row per
 // ready-to-merge run under `native_queue` — the persisted, RLS-scoped queue state
 // the MergeCoordinator orders + serializes. DAG state is the source of truth
@@ -274,6 +320,10 @@ export const mergeQueue = pgTable(
     orgId: text("org_id")
       .notNull()
       .references(() => organizations.id),
+    partitionId: text("partition_id"),
+    leaseOwner: text("lease_owner"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    scopeFingerprint: text("scope_fingerprint"),
     status: text("status").notNull().default("queued"),
     /** The dequeue reason when status = 'dequeued' (conflict | blocked | failed | superseded | needs_attention). */
     dequeueReason: text("dequeue_reason"),
@@ -311,10 +361,19 @@ export const mergeQueue = pgTable(
       foreignColumns: [runs.orgId, runs.projectId, runs.specId, runs.runId],
       name: "merge_queue_run_lineage_fk",
     }),
+    foreignKey({
+      columns: [table.orgId, table.partitionId],
+      foreignColumns: [mergeQueuePartitions.orgId, mergeQueuePartitions.id],
+      name: "merge_queue_partition_fk",
+    }),
     enumCheck("merge_queue_status_check", table.status, ["queued", "merging", "merged", "dequeued"]),
     check(
       "merge_queue_dequeue_reason_check",
       sql`${table.dequeueReason} IS NULL OR ${table.dequeueReason} IN ('conflict','blocked','failed','superseded','needs_attention')`,
+    ),
+    check(
+      "merge_queue_lease_check",
+      sql`(${table.leaseOwner} IS NULL AND ${table.leaseExpiresAt} IS NULL) OR (${table.leaseOwner} IS NOT NULL AND ${table.leaseExpiresAt} IS NOT NULL)`,
     ),
     index("merge_queue_org_id").on(table.orgId),
     index("merge_queue_org_project").on(table.orgId, table.projectId),

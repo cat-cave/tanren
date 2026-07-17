@@ -275,3 +275,40 @@ export const MergeReGateGateReworkRoutedPayload = z
     priorReworks: z.number().int().nonnegative(),
   })
   .strict();
+
+export const MergeMemberIsolatedPayload = z
+  .object({
+    projectId: z.string().min(1),
+    partitionId: z.string().min(1),
+    groupId: z.string().min(1),
+    memberId: z.string().min(1),
+    reason: z.enum(["audit_policy", "member_gate", "behavior_proof", "design_proof"]),
+    findingIds: z.array(z.string().min(1)),
+  })
+  .strict();
+
+export const MergePartitionLeasedPayload = z
+  .object({
+    projectId: z.string().min(1),
+    partitionId: z.string().min(1),
+    leaseOwner: z.string().min(1),
+    leaseExpiresAt: z.string().datetime({ offset: true }),
+    generation: z.number().int().nonnegative(),
+    scopeFingerprint: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const MergePartitionReleasedPayload = z
+  .object({
+    projectId: z.string().min(1),
+    partitionId: z.string().min(1),
+    leaseOwner: z.string().min(1),
+    generation: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const mergeQueueWave3EventRegistry = {
+  "merge.member.isolated": MergeMemberIsolatedPayload,
+  "merge.partition.leased": MergePartitionLeasedPayload,
+  "merge.partition.released": MergePartitionReleasedPayload,
+} as const;

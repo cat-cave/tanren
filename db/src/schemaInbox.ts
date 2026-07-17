@@ -177,6 +177,9 @@ export const webhookEvents = pgTable(
     eventType: text("event_type").notNull(),
     // GitHub's `x-github-delivery` id when present — diagnostics + dedupe aid.
     deliveryId: text("delivery_id"),
+    // Provider identity is part of a delivery's durable idempotency key. Existing
+    // historical rows remain nullable until their source adapter is upgraded.
+    provider: text("provider"),
     // The RAW (verified) request body, stored as jsonb. The signature was already
     // checked at receive time, so the persisted payload is authentic.
     payload: jsonb("payload")
@@ -188,15 +191,32 @@ export const webhookEvents = pgTable(
     status: text("status").notNull().default("received"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
+    claimOwner: text("claim_owner"),
+    claimExpiresAt: timestamp("claim_expires_at", { withTimezone: true }),
+    canonicalPayloadHash: text("canonical_payload_hash"),
+    signatureAlgo: text("signature_algo"),
+    signatureKeyVersion: text("signature_key_version"),
+    deliverySignedAt: timestamp("delivery_signed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     check("webhook_events_status_check", sql`${table.status} IN ('received','processed','failed','dead_lettered')`),
+    check(
+      "webhook_events_claim_check",
+      sql`(${table.claimOwner} IS NULL AND ${table.claimExpiresAt} IS NULL) OR (${table.claimOwner} IS NOT NULL AND ${table.claimExpiresAt} IS NOT NULL)`,
+    ),
+    check(
+      "webhook_events_canonical_payload_hash_check",
+      sql`${table.canonicalPayloadHash} IS NULL OR ${table.canonicalPayloadHash} ~ '^sha256:[0-9a-f]{64}$'`,
+    ),
     index("webhook_events_org_id").on(table.orgId),
     index("webhook_events_source_id").on(table.sourceId),
     // The sweeper's hot read: pull undriven (`received`/`failed`) rows oldest-first.
     index("webhook_events_status").on(table.status),
+    uniqueIndex("webhook_events_provider_delivery_unique")
+      .on(table.orgId, table.sourceId, table.provider, table.deliveryId)
+      .where(sql`${table.deliveryId} IS NOT NULL`),
     foreignKey({
       name: "webhook_events_source_org_fk",
       columns: [table.orgId, table.sourceId],
