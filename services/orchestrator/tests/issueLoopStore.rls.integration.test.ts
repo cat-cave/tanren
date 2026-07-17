@@ -85,7 +85,7 @@ describeDb("issue_loops / source_findings DAL — immutable, org-scoped", () => 
     ]) {
       await ownerPool.query(
         `INSERT INTO inbox_sources (id, org_id, project_id, kind, name)
-         VALUES ($1, $2, $3, 'github_issues', 'src')`,
+         VALUES ($1, $2, $3, 'issues', 'src')`,
         [source, org, project],
       );
     }
