@@ -278,9 +278,16 @@ export interface MaybePersistRequirementInput {
 }
 
 /**
- * The additive Forge hook: compile the behavior, and — only when it genuinely
- * invokes an integration — persist the requirement. `no_integration` is a silent
+ * The additive Forge hook: compile the behavior and, only when it genuinely
+ * invokes an integration, persist the requirement. `no_integration` is a silent
  * skip; `ambiguous` is a LOUD typed throw (never a vacuous row).
+ *
+ * A requirement is persisted ONLY when a REAL `behaviorRevisionId` is supplied —
+ * because the row is sourced as `behavior_revision` and its `source_revision_id`
+ * must be a genuine `behavior_revisions.id`. The greenfield derive has no
+ * revision yet (in-6 materializes it), so there the compiled requirement is
+ * surfaced (and ambiguity still throws) but nothing is written under a fabricated
+ * source id.
  */
 export async function maybePersistIntegrationRequirement(
   client: RequirementStoreClient,
@@ -294,19 +301,17 @@ export async function maybePersistIntegrationRequirement(
       compiled.issues,
     );
   }
-  const sourceRevisionId = input.behaviorRevisionId ?? compiled.behaviorKey;
-  const behaviorLinks: BehaviorRequirementLink[] =
-    input.behaviorRevisionId !== undefined
-      ? [{ behaviorRevisionId: input.behaviorRevisionId, relationRole: "requires" }]
-      : [];
+  // No genuine behavior_revision id ⇒ do not persist a behavior_revision-sourced
+  // row under a fabricated source. in-6 supplies the real id and persists then.
+  if (input.behaviorRevisionId === undefined) return undefined;
   return RequirementStore.persistDerived(client, {
     orgId: input.orgId,
     projectId: input.projectId,
     requirement: compiled.requirement,
     desiredStateHash: compiled.desiredStateHash,
     sourceKind: "behavior_revision",
-    sourceRevisionId,
-    behaviorLinks,
+    sourceRevisionId: input.behaviorRevisionId,
+    behaviorLinks: [{ behaviorRevisionId: input.behaviorRevisionId, relationRole: "requires" }],
     ...(input.eventStore !== undefined ? { eventStore: input.eventStore } : {}),
   });
 }

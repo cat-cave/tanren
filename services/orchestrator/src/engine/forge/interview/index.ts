@@ -48,6 +48,9 @@ export { DeriveRollbackError, type CompensationFailure, type DeleteRepositoryCal
 // Native design subsystem (WS-D1) — the LOUD guards for a required design contract +
 // dangling moat refs (mirroring `MissingLifecycleError`).
 export { DanglingDesignRefError, MissingDesignContractError } from "./deriveDesignContract.js";
+// in-5: the requirement compiler's loud typed failure (ambiguous/unobservable
+// integration behavior), surfaced by the derive hook and mapped by onboarding.
+export { AmbiguousIntegrationRequirementError } from "./compileIntegrationRequirement.js";
 
 // Environment management (env-management.md §2.2 halt-loud, H1 #4) — re-exported so
 // the greenfield onboarding route dispatches the typed error to a 400 body without

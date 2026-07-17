@@ -1,5 +1,7 @@
-// in-5: the deterministic requirement compiler — determinism, hash-match, and the
-// negative controls (ambiguous/unobservable → typed failure, never a guessed row).
+// in-5: the deterministic requirement compiler — evidence-based classification,
+// determinism/hash-match, and the fail-closed negative controls (no provider ⇒
+// no_integration; unsupported provider / unevidenced trigger ⇒ ambiguous). The
+// compiler NEVER fabricates a field or a provider's scopes.
 
 import { describe, expect, it } from "vitest";
 import { integrationRequirementDigest, parseIntegrationRequirement } from "../src/engine/contracts/integrationRequirement.js";
@@ -28,7 +30,7 @@ const slackCelebrate = behavior({
   then: "a celebratory message is posted to our Slack channel",
 });
 
-describe("compileIntegrationRequirement — positive (messaging.send / slack)", () => {
+describe("compileIntegrationRequirement — positive (verified providers)", () => {
   it("compiles a Slack celebration behavior to a product messaging.send requirement", () => {
     const result = compileIntegrationRequirement(slackCelebrate, null);
     expect(result.kind).toBe("requirement");
@@ -43,21 +45,20 @@ describe("compileIntegrationRequirement — positive (messaging.send / slack)", 
     expect(req.expectedEffect.provider).toBe("slack");
     expect(req.expectedEffect.observation).toBe("message_in_channel");
     expect(req.expectedEffect.independent).toBe(true);
-    expect(req.trigger.kind).toBe("threshold");
+    // Real Slack scopes/ops — not a generic default.
+    expect(req.requiredScopes).toEqual(["chat:write", "channels:history"]);
+    expect(req.requiredOperations).toEqual(["chat.postMessage", "conversations.history"]);
+    expect(req.trigger.kind).toBe("threshold"); // "100th" ordinal — evidenced
     expect(req.trigger.behaviorKey).toBe("operator::celebrate 100 clicks");
     expect(req.criticality).toBe("release_required");
 
-    // A compiled requirement is always a valid in-2 document.
     expect(parseIntegrationRequirement(req).ok).toBe(true);
-    // The digest is the in-2 requirement digest of the produced document.
     expect(result.desiredStateHash).toMatch(/^sha256:[0-9a-f]{64}$/u);
     expect(result.desiredStateHash).toBe(integrationRequirementDigest(req));
   });
 
   it("is DETERMINISTIC — recompiling identical inputs yields the same doc + hash", () => {
     const a = compileIntegrationRequirement(slackCelebrate, null);
-    // A separately-constructed but content-identical behavior (models the
-    // provisional-vs-materialized second compilation, which carries no row ids).
     const b = compileIntegrationRequirement(
       behavior({
         persona: "operator",
@@ -75,7 +76,7 @@ describe("compileIntegrationRequirement — positive (messaging.send / slack)", 
     expect(b.desiredStateHash).toBe(a.desiredStateHash);
   });
 
-  it("compiles an error-capture behavior naming Sentry to errors.capture", () => {
+  it("compiles an error-capture behavior naming Sentry to errors.capture with real Sentry scopes", () => {
     const result = compileIntegrationRequirement(
       behavior({
         persona: "developer",
@@ -89,12 +90,15 @@ describe("compileIntegrationRequirement — positive (messaging.send / slack)", 
     if (result.kind !== "requirement") return;
     expect(result.requirement.capability).toBe("errors.capture");
     expect(result.requirement.expectedEffect.provider).toBe("sentry");
+    expect(result.requirement.requiredScopes).toEqual(["event:write"]);
+    expect(result.requirement.requiredOperations).toEqual(["store.event"]);
+    expect(result.requirement.trigger.kind).toBe("event"); // "throws" — evidenced
     expect(result.requirement.criticality).toBe("best_effort");
     expect(parseIntegrationRequirement(result.requirement).ok).toBe(true);
   });
 });
 
-describe("compileIntegrationRequirement — no integration", () => {
+describe("compileIntegrationRequirement — no integration (biases toward no-op)", () => {
   it("returns no_integration for an ordinary product behavior", () => {
     const result = compileIntegrationRequirement(
       behavior({
@@ -108,30 +112,72 @@ describe("compileIntegrationRequirement — no integration", () => {
     );
     expect(result.kind).toBe("no_integration");
   });
+
+  it("returns no_integration for a plain-UI success message (no external provider)", () => {
+    const result = compileIntegrationRequirement(
+      behavior({
+        persona: "member",
+        title: "show a success message",
+        when: "the form is submitted",
+        then: "a success message is shown to the user",
+      }),
+      null,
+    );
+    expect(result.kind).toBe("no_integration");
+  });
+
+  it("returns no_integration for an in-app notify with no external provider named", () => {
+    const result = compileIntegrationRequirement(
+      behavior({
+        persona: "member",
+        title: "surface validation errors",
+        when: "the form has invalid fields",
+        then: "notify the user of the validation errors",
+      }),
+      null,
+    );
+    expect(result.kind).toBe("no_integration");
+  });
 });
 
 describe("compileIntegrationRequirement — NEGATIVE CONTROLS (ambiguous ⇒ no row)", () => {
-  it("fails typed when an integration is invoked with no resolvable provider", () => {
+  it("fails typed (unsupported) for a Discord behavior — never Slack scopes", () => {
     const result = compileIntegrationRequirement(
       behavior({
         persona: "operator",
-        title: "notify the team",
-        when: "an important event occurs",
-        then: "the team is notified somehow",
+        title: "celebrate 100 clicks",
+        given: "a short link has 99 clicks",
+        when: "the 100th click is recorded",
+        then: "a celebratory message is posted to our Discord channel",
       }),
       null,
     );
     expect(result.kind).toBe("ambiguous");
     if (result.kind !== "ambiguous") return;
-    expect(result.issues.some((i) => i.code === "provider_unresolved")).toBe(true);
+    expect(result.issues.some((i) => i.code === "provider_unsupported")).toBe(true);
   });
 
-  it("fails typed when a behavior invokes multiple integration families", () => {
+  it("fails typed when the trigger stimulus is unevidenced (no defaulting)", () => {
+    const result = compileIntegrationRequirement(
+      behavior({
+        persona: "operator",
+        title: "post to slack",
+        when: "stuff changes",
+        then: "a message shows up in our Slack channel",
+      }),
+      null,
+    );
+    expect(result.kind).toBe("ambiguous");
+    if (result.kind !== "ambiguous") return;
+    expect(result.issues.some((i) => i.code === "trigger_stimulus_unevidenced")).toBe(true);
+  });
+
+  it("fails typed when a behavior names providers across multiple families", () => {
     const result = compileIntegrationRequirement(
       behavior({
         persona: "operator",
         title: "notify and record",
-        when: "an event occurs",
+        when: "the 100th click is recorded",
         then: "post to Slack and also report the exception to Sentry",
       }),
       null,
@@ -141,7 +187,7 @@ describe("compileIntegrationRequirement — NEGATIVE CONTROLS (ambiguous ⇒ no 
     expect(result.issues.some((i) => i.code === "multiple_integration_families")).toBe(true);
   });
 
-  it("fails typed when the design contract forbids the only resolvable provider", () => {
+  it("fails typed when the design contract forbids the only named provider", () => {
     const design: CaptureDesignContract = {
       domain: "saas-web",
       identity: "a link shortener",

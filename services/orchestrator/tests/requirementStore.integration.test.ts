@@ -41,12 +41,14 @@ const slackCelebrate: CaptureBehavior = {
   when: "the 100th click is recorded",
   then: "a celebratory message is posted to our Slack channel",
 };
-const ambiguousNotify: CaptureBehavior = {
+// Names Slack (a real integration) but the trigger stimulus is unevidenced — the
+// compiler fails closed (ambiguous), so the hook throws and writes nothing.
+const ambiguousUnevidenced: CaptureBehavior = {
   persona: "operator",
-  title: "notify the team",
+  title: "post to slack",
   given: "",
-  when: "an important event occurs",
-  then: "the team is notified somehow",
+  when: "stuff changes",
+  then: "a message shows up in our Slack channel",
 };
 /* eslint-enable unicorn/no-thenable */
 
@@ -176,16 +178,16 @@ describeDb("in-5 requirement store — real Postgres persistence + supersede + e
   });
 
   it("supersedes the prior row when the document changes for the same source", async () => {
-    // A different compiled document (discord instead of slack) under the SAME
-    // source revision ⇒ the prior active row is superseded.
+    // A different compiled document (a different threshold ⇒ different digest)
+    // under the SAME source revision ⇒ the prior active row is superseded.
     const changed = compileIntegrationRequirement(
       /* eslint-disable unicorn/no-thenable */
       {
         persona: "operator",
-        title: "celebrate 100 clicks",
-        given: "a short link has 99 clicks",
-        when: "the 100th click is recorded",
-        then: "a celebratory message is posted to our Discord channel",
+        title: "celebrate 500 clicks",
+        given: "a short link has 499 clicks",
+        when: "the 500th click is recorded",
+        then: "a celebratory message is posted to our Slack channel",
       },
       /* eslint-enable unicorn/no-thenable */
       null,
@@ -233,13 +235,34 @@ describeDb("in-5 requirement store — real Postgres persistence + supersede + e
         maybePersistIntegrationRequirement(client, {
           orgId: ORG,
           projectId: PROJECT,
-          behavior: ambiguousNotify,
+          behavior: ambiguousUnevidenced,
           designContract: null,
           behaviorRevisionId: BEHAVIOR_REVISION,
         }),
       ),
     ).rejects.toBeInstanceOf(AmbiguousIntegrationRequirementError);
 
+    const after = await runWithOrgScope(runtimePool, ORG, (client) =>
+      RequirementStore.listForProject(client, ORG, PROJECT),
+    );
+    expect(after).toHaveLength(before.length);
+  });
+
+  it("HONEST SOURCE — a valid requirement without a real revision id persists nothing", async () => {
+    const before = await runWithOrgScope(runtimePool, ORG, (client) =>
+      RequirementStore.listForProject(client, ORG, PROJECT),
+    );
+    const result = await runWithOrgScope(runtimePool, ORG, (client) =>
+      maybePersistIntegrationRequirement(client, {
+        orgId: ORG,
+        projectId: PROJECT,
+        behavior: slackCelebrate,
+        designContract: null,
+        // No behaviorRevisionId ⇒ refuse to write a behavior_revision-sourced row
+        // under a fabricated source id.
+      }),
+    );
+    expect(result).toBeUndefined();
     const after = await runWithOrgScope(runtimePool, ORG, (client) =>
       RequirementStore.listForProject(client, ORG, PROJECT),
     );

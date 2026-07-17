@@ -28,6 +28,7 @@ import type { SecretStore } from "../../engine/contracts/secretStore.js";
 import type { CreateRepositoryInput } from "../../engine/contracts/codeHostTypes.js";
 import type { GitHubHttpClient } from "../../engine/providers/github.js";
 import {
+  AmbiguousIntegrationRequirementError,
   DeployNotLinkedError,
   DeploySelectionRequiredError,
   DeployProviderInvalidError,
@@ -329,6 +330,16 @@ export function createOnboardingRoutes(options: OnboardingRoutesOptions) {
       // shared default repo name.
       if (error instanceof MissingProjectSlugError) {
         return respond({ error: "project_slug_missing", message: error.message }, 400);
+      }
+      // in-5: a behavior invokes an integration but is ambiguous/unobservable (no
+      // resolvable/verified provider, an unevidenced trigger, a design-forbidden
+      // provider). The compiler fails closed rather than fabricate a requirement —
+      // surface it as a typed 422 with the compiler issues, not an opaque 500.
+      if (error instanceof AmbiguousIntegrationRequirementError) {
+        return respond(
+          { error: "integration_requirement_ambiguous", issues: error.issues, message: error.message },
+          422,
+        );
       }
       if (error instanceof DeployProviderMissingError) {
         return respond(
