@@ -7,6 +7,7 @@ import {
   integer,
   jsonb,
   numeric,
+  pgPolicy,
   pgTable,
   primaryKey,
   text,
@@ -179,19 +180,35 @@ export const rateLimitObservations = pgTable("rate_limit_observations", {
   userId: text("user_id"),
 });
 
-export const notifications = pgTable("notifications", {
-  id: bigserial("id", { mode: "number" }).primaryKey(),
-  channel: text("channel").notNull(),
-  payload: jsonb("payload")
-    .notNull()
-    .default(sql`'{}'::jsonb`),
-  status: text("status").notNull(),
-  enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
-  sentAt: timestamp("sent_at", { withTimezone: true }),
-  attempts: integer("attempts").notNull().default(0),
-  tenantId: text("tenant_id"),
-  userId: text("user_id"),
-});
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    // WAVE-1 gv-6: the delivery ledger is now org-scoped + RLS-forced (migration
+    // 0045). `org_id` is the direct tenant key every RLS policy compares; it
+    // replaced the pre-org `tenant_id`.
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organizations.id),
+    channel: text("channel").notNull(),
+    payload: jsonb("payload")
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    status: text("status").notNull(),
+    enqueuedAt: timestamp("enqueued_at", { withTimezone: true }).notNull().defaultNow(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    userId: text("user_id"),
+  },
+  (table) => [
+    index("notifications_org_id").on(table.orgId),
+    pgPolicy("rls_org_isolation", {
+      for: "all",
+      using: sql`${table.orgId} = current_setting('app.current_org_id', true)`,
+      withCheck: sql`${table.orgId} = current_setting('app.current_org_id', true)`,
+    }),
+  ],
+).enableRLS();
 
 export const jobQueue = pgTable(
   "job_queue",

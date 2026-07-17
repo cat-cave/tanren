@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "reason": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "behaviorRevisionId",
+    "reason"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.respec.requested"
+}

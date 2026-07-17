@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "driftState": {
+      "const": "drifted",
+      "type": "string"
+    },
+    "environment": {
+      "enum": [
+        "test",
+        "preview",
+        "production"
+      ],
+      "type": "string"
+    },
+    "generation": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "bindingId",
+    "environment",
+    "generation",
+    "driftState"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.binding.drifted"
+}

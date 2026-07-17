@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "bindingId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "externalResourceId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "failureClassification": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "bindingId",
+    "externalResourceId",
+    "failureClassification"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.teardown.failed"
+}

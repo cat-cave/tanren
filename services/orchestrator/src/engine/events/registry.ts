@@ -94,6 +94,7 @@ import {
   MergeRetargetedPayload,
   MergeSpeculativeHeldPayload,
   IntegrationProvisionedPayload,
+  wave1EventRegistry,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -185,6 +186,8 @@ import {
 // sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
   ...w0EventRegistry,
+  // Mission-complete WAVE-1 vocab freeze (in-3 integration + rv-25 runtime).
+  ...wave1EventRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,

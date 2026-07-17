@@ -101,7 +101,7 @@ export class NotificationMemoryClient {
         attempts: params[3],
         enqueued_at: this.now,
         sent_at: params[4],
-        tenant_id: params[5],
+        org_id: params[5],
       });
       return { rowCount: 1, rows: [] };
     }
@@ -174,7 +174,9 @@ export class NotificationMemoryClient {
     for (const dispatch of this.dispatches) {
       const payload = dispatch.payload as Record<string, unknown>;
       const target = this.targets.get(String(payload.targetId));
-      const orgMatches = dispatch.tenant_id === orgId || (dispatch.tenant_id === null && target?.org_id === orgId);
+      // notifications.org_id is NOT NULL (0045): the ledger row's own org is the
+      // sole scope — no legacy tenant_id NULL-fallback via the target join.
+      const orgMatches = dispatch.org_id === orgId;
       if (!orgMatches) continue;
       const hasStatusFilter =
         filterValues.includes("sent") ||
@@ -189,7 +191,7 @@ export class NotificationMemoryClient {
       if (eventFilter !== undefined && payload.eventName !== eventFilter) continue;
       rows.push({
         id: dispatch.id,
-        org_id: dispatch.tenant_id ?? target?.org_id ?? null,
+        org_id: dispatch.org_id,
         channel: dispatch.channel,
         status: dispatch.status,
         attempts: dispatch.attempts,

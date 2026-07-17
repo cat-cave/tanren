@@ -178,10 +178,14 @@ describeDb("RLS wave R1 — restricted role + org session context", () => {
   it("(d) the restricted role can SELECT/INSERT/UPDATE/DELETE under its scope", async () => {
     await runWithOrgScope(runtimePool, ORG_A, async (client) => {
       // INSERT into a bigserial table, exercising the sequence grant. Uses
-      // `notifications` (a cross-org system table OUTSIDE RLS) so this proof never
-      // writes `events` outside the event store (single-event-writer rule).
+      // `notifications` (a dispatch ledger) so this proof never writes `events`
+      // outside the event store (single-event-writer rule). Since migration 0045
+      // the ledger is org-scoped + RLS-FORCED, so the write must carry the scoped
+      // `org_id` (ORG_A) to satisfy the WITH CHECK policy — it is still a fine
+      // bigserial CRUD example, just tenant-scoped like every other table.
       const inserted = await client.query<{ id: string }>(
-        "INSERT INTO notifications (channel, payload, status) VALUES ('ntfy', '{}'::jsonb, 'queued') RETURNING id",
+        "INSERT INTO notifications (channel, payload, status, org_id) VALUES ('ntfy', '{}'::jsonb, 'queued', $1) RETURNING id",
+        [ORG_A],
       );
       const id = inserted.rows[0]?.id;
       expect(id).toBeDefined();

@@ -310,7 +310,7 @@ export const NotificationDispatchLog = {
       throw new Error("notification dispatch log requires an orgId");
     }
     await client.query(
-      `INSERT INTO notifications (channel, payload, status, attempts, sent_at, tenant_id)
+      `INSERT INTO notifications (channel, payload, status, attempts, sent_at, org_id)
        VALUES ($1, $2::jsonb, $3, $4, $5, $6)`,
       [input.channel, JSON.stringify(input.payload), input.status, input.attempts, input.sentAt, input.orgId],
     );
@@ -318,7 +318,11 @@ export const NotificationDispatchLog = {
 
   async listForOrg(client: QueryClient, filters: NotificationDeliveryListFilters): Promise<NotificationDeliveryRow[]> {
     const params: unknown[] = [filters.orgId];
-    const where = ["(n.tenant_id = $1 OR (n.tenant_id IS NULL AND t.id IS NOT NULL))"];
+    // `notifications.org_id` is NOT NULL (migration 0045), so the ledger row's
+    // own org is the authoritative scope — no legacy tenant_id NULL-fallback via
+    // the target join. The `t` LEFT JOIN below stays only for the target
+    // channel-kind/label projection.
+    const where = ["n.org_id = $1"];
 
     if (filters.eventName !== undefined) {
       params.push(filters.eventName);
@@ -333,7 +337,7 @@ export const NotificationDispatchLog = {
     const result = await client.query<RawDeliveryRow>(
       `SELECT
           n.id,
-          COALESCE(n.tenant_id, t.org_id) AS org_id,
+          n.org_id AS org_id,
           n.channel,
           n.status,
           n.attempts,

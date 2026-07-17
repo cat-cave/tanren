@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "gateProofBundleDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "integrationNodeId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "planSetHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "requiredBehaviorRevisionCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "integrationNodeId",
+    "gateProofBundleDigest",
+    "requiredBehaviorRevisionCount",
+    "planSetHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.gate.behavior_proof.bound"
+}

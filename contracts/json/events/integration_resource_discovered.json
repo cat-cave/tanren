@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "providerKind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "requirementId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "resourceCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "requirementId",
+    "providerKind",
+    "resourceCount"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.resource.discovered"
+}

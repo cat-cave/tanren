@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assertionCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "behaviorRevisionHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "planHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "surfaceKinds": {
+      "items": {
+        "enum": [
+          "browser",
+          "api",
+          "cli",
+          "package",
+          "app_channel",
+          "external_integration",
+          "mobile"
+        ],
+        "type": "string"
+      },
+      "maxItems": 16,
+      "type": "array"
+    }
+  },
+  "required": [
+    "behaviorRevisionId",
+    "behaviorRevisionHash",
+    "planHash",
+    "assertionCount",
+    "surfaceKinds"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.contract.compiled"
+}

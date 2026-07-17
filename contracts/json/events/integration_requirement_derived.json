@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capability": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "criticality": {
+      "enum": [
+        "merge_required",
+        "release_required",
+        "best_effort"
+      ],
+      "type": "string"
+    },
+    "desiredStateHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "direction": {
+      "enum": [
+        "inbound",
+        "outbound",
+        "bidirectional"
+      ],
+      "type": "string"
+    },
+    "plane": {
+      "enum": [
+        "control",
+        "product"
+      ],
+      "type": "string"
+    },
+    "requirementId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "sourceKind": {
+      "enum": [
+        "behavior_revision",
+        "design_contract"
+      ],
+      "type": "string"
+    },
+    "sourceRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "requirementId",
+    "capability",
+    "plane",
+    "direction",
+    "criticality",
+    "sourceKind",
+    "sourceRevisionId",
+    "desiredStateHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.requirement.derived"
+}

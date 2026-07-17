@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "checkpointId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "theme": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "viewport": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "behaviorRevisionId",
+    "checkpointId",
+    "viewport",
+    "theme"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.design.render.captured"
+}

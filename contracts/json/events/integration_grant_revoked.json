@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "grantId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "providerKind": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "grantId",
+    "providerKind"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.integration.grant.revoked"
+}

@@ -288,6 +288,71 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "fragment.authoring.attempt": "info",
   "fragment.authoring.succeeded": "ok",
   "fragment.authoring.failed": "fail",
+
+  // Mission-complete WAVE-1 integration lifecycle vocabulary (in-3). Routine
+  // durable lifecycle facts are `info`; the operator-actionable arms — a
+  // converged-but-unresolved reconcile, a provider/DB state divergence, a
+  // detected drift, a consent request awaiting a human, a revocation affecting
+  // dependents, a failed A3 validation, and a failed destructive teardown — are
+  // `warn` so they clear the matrix floor and reach the operator.
+  "integration.requirement.derived": "info",
+  "integration.requirement.superseded": "info",
+  "integration.reconcile.started": "info",
+  "integration.reconcile.retry_scheduled": "info",
+  "integration.reconcile.fixed_point": "warn",
+  "integration.reconcile.state_unknown": "warn",
+  "integration.resource.discovered": "info",
+  "integration.resource.selected": "info",
+  "integration.resource.provisioned": "info",
+  "integration.resource.adopted": "info",
+  "integration.binding.committed": "info",
+  "integration.binding.materialized": "info",
+  "integration.binding.drifted": "warn",
+  "integration.grant.requested": "warn",
+  "integration.grant.linked": "info",
+  "integration.grant.validated": "info",
+  "integration.grant.rotated": "info",
+  "integration.grant.revoked": "warn",
+  "integration.runtime.attached": "info",
+  "integration.validation.started": "info",
+  "integration.stimulus.emitted": "info",
+  "integration.effect.observed": "info",
+  "integration.validation.passed": "info",
+  "integration.validation.failed": "warn",
+  "integration.recovery.enqueued": "info",
+  "integration.teardown.completed": "info",
+  "integration.teardown.failed": "warn",
+
+  // Mission-complete WAVE-1 runtime behavior-proof vocabulary (rv-25). Routine
+  // compilation / verification / capture lifecycle is `info`; the arms a human
+  // acts on — a rejected (needs-respec) contract, a batch behavior failure and
+  // its identified culprit set, an intent respec request, a failed production
+  // re-proof, and a rollback — are `warn`.
+  "behavior.contract.compilation_started": "info",
+  "behavior.contract.compiled": "info",
+  "behavior.contract.rejected": "warn",
+  "behavior.fragment.missing": "info",
+  "behavior.fragment.authoring_started": "info",
+  "behavior.fragment.validated": "info",
+  "behavior.verification.started": "info",
+  "behavior.shard.started": "info",
+  "behavior.attempt.started": "info",
+  "behavior.action.observed": "info",
+  "behavior.assertion.observed": "info",
+  "behavior.effect.observed": "info",
+  "design.render.captured": "info",
+  "design.render.verdict_recorded": "info",
+  "behavior.verdict.recorded": "info",
+  "behavior.verification.completed": "info",
+  "gate.behavior_proof.bound": "info",
+  "integration.proof.recorded": "info",
+  "merge.batch.behavior_failed": "warn",
+  "merge.batch.culprit_set_identified": "warn",
+  "behavior.respec.requested": "warn",
+  "post_merge.behavior.verified": "info",
+  "post_merge.behavior.failed": "warn",
+  "deployment.promoted": "info",
+  "deployment.rolled_back": "warn",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would

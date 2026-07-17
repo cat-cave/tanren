@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "behaviorRevisionId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "capability": {
+      "enum": [
+        "fixture",
+        "driver",
+        "action",
+        "assertion",
+        "observer",
+        "visual_checkpoint",
+        "cleanup",
+        "artifact_capture"
+      ],
+      "type": "string"
+    },
+    "fragmentId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "fragmentVersion": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "negativeControlPassed": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "behaviorRevisionId",
+    "capability",
+    "fragmentId",
+    "fragmentVersion",
+    "negativeControlPassed"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.behavior.fragment.validated"
+}
