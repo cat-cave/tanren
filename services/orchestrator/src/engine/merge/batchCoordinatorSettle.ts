@@ -24,6 +24,7 @@ import {
 import { isClassifiedMemberPolicyMessage } from "./authoritySignalClassification.js";
 import { settleFromParkOutcome } from "./parkSettle.js";
 import { settleOwnedRecoveryOrPark, type OwnedQueueSettle } from "./recoveryOwnedQueueSettlement.js";
+import { MergeClaimActivityLease } from "./mergeClaimActivityLease.js";
 import { createLogger } from "../observability/logger.js";
 
 const log = createLogger("batch-coordinator");
@@ -372,7 +373,7 @@ export async function driveConflictCulprit(
   }
   await deps.events.emitAdvanced({ projectId, entry: culprit, queueDepth });
 
-  const outcome = await driveOneEntry(deps, projectId, culprit);
+  const outcome = await driveClaimedMerge(deps, projectId, culprit);
   if (outcome.kind === "infra_hold" || outcome.kind === "infra_terminal") {
     return outcome;
   }
@@ -442,16 +443,24 @@ export async function settleFailedDrive(
   return "dequeued";
 }
 
-async function driveOneEntry(
+export async function driveClaimedMerge(
   deps: BatchBaseConflictDeps,
   projectId: string,
   entry: MergeQueueEntry,
 ): Promise<MergeDriveOutcome | BatchDriveInfraHold> {
+  const lease = new MergeClaimActivityLease(deps.queue, entry.queueId);
+  await lease.start();
   try {
-    return await deps.runner.driveMerge({ runId: entry.runId, projectId });
+    return await deps.runner.driveMerge({
+      runId: entry.runId,
+      projectId,
+      onWatchdogProgress: () => lease.onWatchdogProgress(),
+    });
   } catch (error) {
     const hold = await holdOnRetriableDriveThrow(deps, projectId, entry, error);
     if (hold !== undefined) return hold;
     return { kind: "blocked", message: `merge drive threw: ${String(error)}` };
+  } finally {
+    await lease.drain();
   }
 }

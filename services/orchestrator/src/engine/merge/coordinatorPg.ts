@@ -14,6 +14,7 @@ import {
   type MergeQueueSnapshot,
   type MergeRunner,
 } from "../contracts/mergeCoordinator.js";
+import type { WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
 import { type DriveMergeForQueuedRun, type MergeQueueEventEmitter } from "./coordinator.js";
 import { PgMergeQueuePartitionStore } from "./mergeQueuePartitionStore.js";
 import { parseSerializedRetryAfterMs } from "./mergeSerializedRetry.js";
@@ -323,7 +324,11 @@ export class PgMergeQueueModel implements MergeQueueModel {
 export class PgMergeRunner implements MergeRunner {
   constructor(private readonly drive: DriveMergeForQueuedRun) {}
 
-  async driveMerge(input: { runId: string; projectId: string }): Promise<MergeDriveOutcome> {
+  async driveMerge(input: {
+    runId: string;
+    projectId: string;
+    onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+  }): Promise<MergeDriveOutcome> {
     return this.drive(input);
   }
 }

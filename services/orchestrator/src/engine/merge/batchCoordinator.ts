@@ -15,7 +15,6 @@ import {
 import {
   type CoordinateResult,
   type MergeCoordinator,
-  type MergeDriveOutcome,
   type MergeQueueEntry,
   type MergeQueueModel,
   type MergeRunner,
@@ -28,8 +27,8 @@ import type { RecoveryOwnedSettlementWriter } from "../contracts/runStateWriter.
 import {
   driveBaseConflict,
   driveConflictCulprit,
+  driveClaimedMerge,
   type BatchDriveInfraHold,
-  holdOnRetriableDriveThrow,
   settleBisectCulprit,
   settleDriveOutcome,
 } from "./batchCoordinatorSettle.js";
@@ -421,10 +420,9 @@ export class BatchMergeCoordinator implements MergeCoordinator {
         leaseContended = true;
         continue;
       }
-      await this.deps.queue.renewClaim?.(entry.queueId);
       await this.deps.events.emitAdvanced({ projectId, entry, queueDepth });
 
-      const outcome = await this.driveOne(projectId, entry);
+      const outcome = await driveClaimedMerge(this.deps, projectId, entry);
       if (outcome.kind === "infra_hold") {
         return this.infraHold(projectId, batch, outcome.message, queueDepth);
       }
@@ -460,16 +458,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       ...(mergedSpecId !== undefined && { mergedSpecId }),
       ...(dequeuedSpecId !== undefined && { dequeuedSpecId }),
     };
-  }
-
-  private async driveOne(projectId: string, entry: MergeQueueEntry): Promise<MergeDriveOutcome | BatchDriveInfraHold> {
-    try {
-      return await this.deps.runner.driveMerge({ runId: entry.runId, projectId });
-    } catch (error) {
-      const hold = await holdOnRetriableDriveThrow(this.deps, projectId, entry, error);
-      if (hold !== undefined) return hold;
-      return { kind: "blocked", message: `merge drive threw: ${String(error)}` };
-    }
   }
 
   private async terminalInfraBlock(

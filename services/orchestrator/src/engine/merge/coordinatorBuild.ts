@@ -153,32 +153,37 @@ async function resolveRunFacts(pool: pg.Pool, runId: string): Promise<RunFacts> 
  * batch-coordinator assembly (batchCoordinatorBuild.ts) reuses the SAME drive path.
  */
 export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQueuedRun {
-  // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
-  // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (the live jj seams;
-  // the allocator/ssh/identity are the SAME the drive resolver uses) — never a second
-  // server-side update-branch. A scripted test override is an alternate hook, so do not
-  // construct the production recovery-capable coordinator when that hook was supplied.
-  const baseShiftRebase =
-    deps.baseShiftRebaseOverride ??
-    buildBaseShiftRebaseHook({
-      pool: deps.pool,
-      coordinator: buildBaseShiftCoordinator(
-        {
-          pool: deps.pool,
-          githubHttp: deps.githubHttp,
-          secrets: deps.secrets,
-          ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
-          runStateWriter: deps.runStateWriter,
-          allocator: deps.allocator,
-          ssh: deps.ssh,
-          identitySecretRef: deps.identitySecretRef,
-        },
-        // The merge-queue `behind` rebase is synchronous: suppress its percolation
-        // marker so the poller cannot pick up and mis-settle the same run.
-        { suppressInFlightMarker: true },
-      ),
-    });
-  return async ({ runId }): Promise<MergeDriveOutcome> => {
+  return async ({ runId, onWatchdogProgress }): Promise<MergeDriveOutcome> => {
+    // A queued merge may run indefinitely while its ActivityWatchdogs keep finding
+    // real work. Their progress events renew this entry's claim; a fixed-point drive
+    // emits none and remains recoverable after the ordinary lease window.
+    const ssh =
+      onWatchdogProgress === undefined ? deps.ssh : withMergeDriveWatchdogProgress(deps.ssh, onWatchdogProgress);
+    // THE ONE BASE-SHIFT HANDLER (§7): the merge-path `behind` rebase routes through the
+    // SAME `BaseShiftCoordinator` the change-percolation kick-off uses (the live jj seams;
+    // the allocator/ssh/identity are the SAME the drive resolver uses) — never a second
+    // server-side update-branch. Build it per drive so it receives that drive's activity
+    // bridge rather than another claim's callback.
+    const baseShiftRebase =
+      deps.baseShiftRebaseOverride ??
+      buildBaseShiftRebaseHook({
+        pool: deps.pool,
+        coordinator: buildBaseShiftCoordinator(
+          {
+            pool: deps.pool,
+            githubHttp: deps.githubHttp,
+            secrets: deps.secrets,
+            ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
+            runStateWriter: deps.runStateWriter,
+            allocator: deps.allocator,
+            ssh,
+            identitySecretRef: deps.identitySecretRef,
+          },
+          // The merge-queue `behind` rebase is synchronous: suppress its percolation
+          // marker so the poller cannot pick up and mis-settle the same run.
+          { suppressInFlightMarker: true },
+        ),
+      });
     const facts = await resolveRunFacts(deps.pool, runId);
     // RLS scope for the merge drive's TENANT-TABLE READS. The coordinator subscriber
     // wakes on the run-activity bus with NO ambient org scope (not a per-org request),
@@ -250,7 +255,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             scopedPool,
             facts,
             allocator: deps.allocator,
-            ssh: deps.ssh,
+            ssh,
             secrets: deps.secrets,
             githubHttp: deps.githubHttp,
             ...(deps.githubAppMinter !== undefined && { githubAppMinter: deps.githubAppMinter }),
@@ -271,7 +276,7 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
             secrets: deps.secrets,
             githubHttp: deps.githubHttp,
             allocator: deps.allocator,
-            ssh: deps.ssh,
+            ssh,
             identitySecretRef: deps.identitySecretRef,
             orgId: facts.orgId,
             projectId: facts.projectId,
@@ -368,6 +373,36 @@ export function buildDriveMerge(deps: BuildMergeCoordinatorDeps): DriveMergeForQ
       default:
         return { kind: "failed", message: merge.message ?? `merge ${merge.outcome}` };
     }
+  };
+}
+
+/**
+ * Forward only ActivityWatchdog-proven work advancement to this drive's lease
+ * heartbeat. Plain SSH calls without a watchdog deliberately do not count as
+ * progress, so elapsed time and side-effect-free transport traffic cannot refresh it.
+ */
+function withMergeDriveWatchdogProgress(
+  substrate: CommandSubstrate,
+  onProgress: NonNullable<Parameters<DriveMergeForQueuedRun>[0]["onWatchdogProgress"]>,
+): CommandSubstrate {
+  return {
+    async run(target, command) {
+      const prior = command.watchdog?.onProgress;
+      if (command.watchdog === undefined) return substrate.run(target, command);
+      return substrate.run(target, {
+        ...command,
+        watchdog: {
+          ...command.watchdog,
+          onProgress: (signal) => {
+            try {
+              prior?.(signal);
+            } finally {
+              onProgress(signal);
+            }
+          },
+        },
+      });
+    },
   };
 }
 

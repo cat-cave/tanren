@@ -3,13 +3,18 @@
 
 import type { DequeueReason, MergeQueueEntry, MergeQueueModel } from "../contracts/mergeCoordinator.js";
 import type { MergeDriveOutcome } from "../contracts/mergeCoordinator.js";
+import type { WatchdogProgressSignal } from "../contracts/commandSubstrate.js";
 
 /**
  * Drives ONE queued run's merge through the existing per-run merge path. The
  * worker boot supplies this as a closure over `mergeForRun` in `native_queue`
  * DRIVE mode so this module does not import the heavy run-loop seam graph.
  */
-export type DriveMergeForQueuedRun = (input: { runId: string; projectId: string }) => Promise<MergeDriveOutcome>;
+export type DriveMergeForQueuedRun = (input: {
+  runId: string;
+  projectId: string;
+  onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+}) => Promise<MergeDriveOutcome>;
 
 /** What the coordinator needs to emit the queue events (org-scoped, eventStore). */
 export interface MergeQueueEventEmitter {
