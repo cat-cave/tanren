@@ -3,7 +3,9 @@ import { z } from "zod";
 const Sha256 = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
 const ResolutionStage = z.enum(["baseline", "production", "counterfactual", "soak"]);
 const VerificationOutcome = z.enum(["passed", "failed", "inconclusive"]);
-const VerificationClassification = z.enum(["product_failure", "infra_failure", "stale_contract", "inconclusive"]);
+const ResolvedClassification = z.literal("product_resolved");
+const FailedClassification = z.literal("product_failure");
+const InconclusiveClassification = z.enum(["infra_failure", "stale_contract", "inconclusive"]);
 
 // Back-half self-healing cluster vocabulary. Payloads retain only stable ids,
 // closed classifications, counts, and SHA-256 digests; source/provider bodies,
@@ -79,7 +81,7 @@ export const resolutionClusterEventRegistry = {
       issueLoopId: z.string(),
       resolutionJobId: z.string(),
       verificationRunId: z.string(),
-      classification: VerificationClassification,
+      classification: ResolvedClassification,
       assertionIds: z.array(z.string()),
       evidenceRefs: z.array(z.string()),
     })
@@ -91,7 +93,7 @@ export const resolutionClusterEventRegistry = {
       resolutionJobId: z.string(),
       verificationRunId: z.string(),
       outcome: VerificationOutcome.extract(["failed"]),
-      classification: VerificationClassification,
+      classification: FailedClassification,
       assertionIds: z.array(z.string()),
       evidenceRefs: z.array(z.string()),
     })
@@ -103,7 +105,7 @@ export const resolutionClusterEventRegistry = {
       resolutionJobId: z.string(),
       verificationRunId: z.string(),
       outcome: VerificationOutcome.extract(["inconclusive"]),
-      classification: VerificationClassification,
+      classification: InconclusiveClassification,
       assertionIds: z.array(z.string()),
       evidenceRefs: z.array(z.string()),
     })

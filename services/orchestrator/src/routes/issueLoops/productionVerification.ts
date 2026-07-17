@@ -4,9 +4,15 @@ import { Hono, type Context } from "hono";
 import type pg from "pg";
 import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
+import type {
+  ResolutionStage,
+  ResolutionStageKind,
+  ResolutionStageResult,
+} from "../../engine/contracts/resolutionStage.js";
 import { ReleaseInstancesStore } from "../../engine/repositories/releaseInstances.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
+import { createResolutionStageRegistry } from "../../engine/verification/resolutionStages/index.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -24,6 +30,8 @@ export interface ProductionVerificationRoutesOptions {
   readonly pool: pg.Pool;
   readonly contracts?: Pick<SymptomContractStore, "get">;
   readonly enqueue?: Pick<ResolutionJobStore, "enqueue">;
+  readonly jobs?: Pick<ResolutionJobStore, "claimById" | "complete" | "release">;
+  readonly stages?: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly releaseById?: (
     orgId: string,
     releaseInstanceId: string,
@@ -36,6 +44,7 @@ export interface ProductionVerificationRoutesOptions {
     | undefined
   >;
   readonly jobId?: () => string;
+  readonly executionLeaseOwner?: () => string;
 }
 
 function actor(c: RouteContext): ActorContext {
@@ -50,11 +59,15 @@ function param(c: RouteContext, name: string): string {
   return value;
 }
 
-/** Queue a locked production replay; bh-6b owns durable worker-stage execution. */
+/** Execute a locked production replay now while retaining its durable job receipt. */
 export function createProductionVerificationRoutes(options: ProductionVerificationRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
   const contracts = options.contracts ?? new SymptomContractStore(options.pool);
   const enqueue = options.enqueue ?? new ResolutionJobStore(options.pool);
+  const jobs = options.jobs ?? new ResolutionJobStore(options.pool);
+  const stages = options.stages ?? createResolutionStageRegistry({ pool: options.pool });
+  const stage = stages.get("production");
+  if (stage === undefined) throw new Error("production resolution stage is not registered");
   const releaseById =
     options.releaseById ??
     ((orgId, releaseInstanceId) =>
@@ -62,6 +75,7 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
         ReleaseInstancesStore.getById(client, orgId, releaseInstanceId),
       ));
   const jobId = options.jobId ?? (() => `rjob_manual_production_${randomUUID()}`);
+  const executionLeaseOwner = options.executionLeaseOwner ?? (() => `route-production-${randomUUID()}`);
 
   app.post("/:orgId/projects/:projectId/issue-loops/:loopId/retry-verification", async (c) => {
     const requestActor = actor(c);
@@ -97,9 +111,31 @@ export function createProductionVerificationRoutes(options: ProductionVerificati
       stage: "production",
       idempotencyKey: parsed.data.idempotencyKey,
     });
+    const job = await jobs.claimById({ orgId, id: queued.id, leaseOwner: executionLeaseOwner() });
+    if (job === undefined) {
+      return c.json({ error: "production_verification_not_claimable", resolutionJobId: queued.id }, 409);
+    }
+    let verdict: ResolutionStageResult;
+    try {
+      verdict = await stage.run(job, { source: "operator_retry" });
+    } catch (error) {
+      await jobs.release({ orgId, id: job.id, leaseOwner: job.leaseOwner, state: "retryable" });
+      throw error;
+    }
+    if (!(await jobs.complete({ orgId, id: job.id, leaseOwner: job.leaseOwner }))) {
+      throw new Error(`production verification job ${job.id} lost its lease before completion`);
+    }
     return c.json(
-      { version: "v1" as const, orgId, projectId, issueLoopId, resolutionJobId: queued.id, queued: queued.created },
-      202,
+      {
+        version: "v1" as const,
+        orgId,
+        projectId,
+        issueLoopId,
+        resolutionJobId: queued.id,
+        queued: queued.created,
+        verdict,
+      },
+      200,
     );
   });
 

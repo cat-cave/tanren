@@ -25,7 +25,7 @@ import { createProductionVerificationRoutes } from "./productionVerification.js"
 export function mountProjectWorkSurfaces(app: Hono<ActorContextEnv>, scopedPool: pg.Pool): void {
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createIssueLoopRoutes({ pool: scopedPool }));
-  // This command is deliberately on the documented public v1 path. It queues
-  // a locked production-stage job; bh-6b executes it under the durable lease.
+  // This command is deliberately on the documented public v1 path. It leases
+  // and executes the registered locked production stage synchronously.
   app.route("/v1/orgs", createProductionVerificationRoutes({ pool: scopedPool }));
 }

@@ -2,7 +2,7 @@ import { runWithOrgScope } from "@tanren/db";
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import type { ResolutionJob, ResolutionStage, ResolutionStageResult } from "../../contracts/resolutionStage.js";
-import { symptomContractHash } from "../../contracts/symptomContract.js";
+import { symptomContractHash, type SymptomContractV1 } from "../../contracts/symptomContract.js";
 import { PgEventStore, type EventStore } from "../../eventStore.js";
 import { HttpSymptomProbe } from "../../probes/httpSymptomProbe.js";
 import { SymptomProbeAdapter } from "../../probes/symptomProbeAdapter.js";
@@ -55,6 +55,7 @@ export class ProductionSymptomStage implements ResolutionStage {
     }
     const contract = await this.requireContract(job);
     const { release, binding } = await this.requireLiveBinding(job);
+    const productionContract = contractAtProductionRelease(contract.contract, release.url);
     const verificationRunId = `vrun_resolution_${job.id}_${job.attempt}`;
     const contractHash = symptomContractHash(contract.contract);
     const contextHash = runtimeContextHash({
@@ -62,6 +63,7 @@ export class ProductionSymptomStage implements ResolutionStage {
       artifactDigest: release.artifactDigest,
       environmentId: binding.environmentId,
       releaseInstanceId: release.releaseInstanceId,
+      productionUrl: productionContract.target["url"] as string,
     });
 
     await runWithOrgScope(this.deps.pool, job.orgId, async (client) => {
@@ -82,6 +84,7 @@ export class ProductionSymptomStage implements ResolutionStage {
           proofPolicy: contract.proofPolicy,
           releaseInstanceId: release.releaseInstanceId,
           artifactDigest: release.artifactDigest,
+          productionUrl: productionContract.target["url"],
         },
         stage: this.kind,
         resolutionJobId: job.id,
@@ -119,7 +122,7 @@ export class ProductionSymptomStage implements ResolutionStage {
       orgId: job.orgId,
       projectId: job.projectId,
       contractId: contract.id,
-      contract: contract.contract,
+      contract: productionContract,
       verificationRunId,
       expectedObservation: contract.contract.expectedCorrectedObservation,
     });
@@ -165,6 +168,9 @@ export class ProductionSymptomStage implements ResolutionStage {
           "production verification requires the named live production release",
         );
       }
+      if (release.url.length === 0) {
+        throw new ProductionSymptomStageBindingError("production verification requires the live release URL");
+      }
       const binding = await runtimeBinding(client, job, release.artifactDigest, release.integrationNodeId);
       return { release, binding };
     });
@@ -176,7 +182,6 @@ export class ProductionSymptomStage implements ResolutionStage {
       issueLoopId: job.issueLoopId,
       resolutionJobId: job.id,
       verificationRunId: result.verificationRunId,
-      classification: result.classification,
       assertionIds: result.assertionIds,
       evidenceRefs: result.evidenceRefs,
     };
@@ -185,7 +190,7 @@ export class ProductionSymptomStage implements ResolutionStage {
         orgId: job.orgId,
         projectId: job.projectId,
         eventType: "symptom.verification.passed",
-        payload,
+        payload: { ...payload, classification: result.classification },
       });
       return;
     }
@@ -194,7 +199,7 @@ export class ProductionSymptomStage implements ResolutionStage {
         orgId: job.orgId,
         projectId: job.projectId,
         eventType: "symptom.verification.failed",
-        payload: { ...payload, outcome: "failed" },
+        payload: { ...payload, outcome: "failed", classification: result.classification },
       });
       return;
     }
@@ -202,7 +207,7 @@ export class ProductionSymptomStage implements ResolutionStage {
       orgId: job.orgId,
       projectId: job.projectId,
       eventType: "symptom.verification.inconclusive",
-      payload: { ...payload, outcome: "inconclusive" },
+      payload: { ...payload, outcome: "inconclusive", classification: result.classification },
     });
   }
 }
@@ -222,6 +227,7 @@ async function runtimeBinding(
         AND environment.project_id = $2
         AND environment.integration_node_id = $3
         AND environment.artifact_digest = $4
+        AND environment.deployment_target = 'production'
         AND environment.lifecycle_status = 'ready'
       ORDER BY environment.created_at DESC, environment.id DESC
       LIMIT 1`,
@@ -241,15 +247,52 @@ function resultForProbe(
   contract: SymptomContractRow,
   probe: Awaited<ReturnType<SymptomProbeAdapter["runVerification"]>>,
 ): ResolutionStageResult {
-  const outcome = probe.outcome;
-  return {
-    outcome,
-    classification: outcome === "inconclusive" ? "infra_failure" : "product_failure",
+  const shared = {
     proofGrade: contract.proofPolicy,
     verificationRunId: probe.verificationRunId,
     assertionIds: [probe.assertionId],
     evidenceRefs: probe.evidence.map((item) => item.id),
   };
+  switch (probe.outcome) {
+    case "passed":
+      return { ...shared, outcome: "passed", classification: "product_resolved" };
+    case "failed":
+      return { ...shared, outcome: "failed", classification: "product_failure" };
+    case "inconclusive":
+      return { ...shared, outcome: "inconclusive", classification: "inconclusive" };
+  }
+  throw new Error(`unsupported symptom probe outcome: ${String(probe.outcome)}`);
+}
+
+/**
+ * The stored symptom contract identifies the behavior, not the deployment to
+ * probe. Production verification keeps its request shape but replaces its host
+ * with the URL of the exact release row whose digest was bound above.
+ */
+function contractAtProductionRelease(contract: SymptomContractV1, releaseUrl: string): SymptomContractV1 {
+  let productionUrl: URL;
+  try {
+    productionUrl = new URL(releaseUrl);
+  } catch {
+    throw new ProductionSymptomStageBindingError("live production release URL is invalid");
+  }
+  const configuredPath = pathFromTarget(contract.target);
+  const target = {
+    ...contract.target,
+    url: new URL(configuredPath, productionUrl).toString(),
+  };
+  return { ...contract, target };
+}
+
+function pathFromTarget(target: SymptomContractV1["target"]): string {
+  if (typeof target["path"] === "string") return target["path"];
+  if (typeof target["url"] !== "string") return "";
+  try {
+    const configuredUrl = new URL(target["url"]);
+    return `${configuredUrl.pathname}${configuredUrl.search}`;
+  } catch {
+    throw new ProductionSymptomStageBindingError("HTTP symptom target URL is invalid");
+  }
 }
 
 function runtimeContextHash(input: Readonly<Record<string, string>>): string {

@@ -24,10 +24,12 @@ export type ResolutionStage = {
 };
 
 export type ResolutionStageResult = {
-  outcome: "passed" | "failed" | "inconclusive";
-  classification: "product_failure" | "infra_failure" | "stale_contract" | "inconclusive";
   proofGrade: "active_causal" | "active_plus_soak" | "observational" | "attested";
   verificationRunId: string;
   assertionIds: string[];
   evidenceRefs: string[];
-};
+} & (
+  | { outcome: "passed"; classification: "product_resolved" }
+  | { outcome: "failed"; classification: "product_failure" }
+  | { outcome: "inconclusive"; classification: "infra_failure" | "stale_contract" | "inconclusive" }
+);

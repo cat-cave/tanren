@@ -10,7 +10,6 @@
     },
     "classification": {
       "enum": [
-        "product_failure",
         "infra_failure",
         "stale_contract",
         "inconclusive"
