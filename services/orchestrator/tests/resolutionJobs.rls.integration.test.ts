@@ -5,6 +5,7 @@
 import { migrate, runWithOrgScope } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -104,8 +105,8 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     await admin.end();
   }, 30_000);
 
-  it("leases one job once, renews it, recovers its expired lease exactly once, and denies the other org", async () => {
-    await expect(
+  it("durably enqueues one job under concurrent duplicate requests, then leases and recovers it once", async () => {
+    const [firstEnqueue, duplicateEnqueue] = await Promise.all([
       store.enqueue({
         orgId: ORG_A,
         projectId: PROJECT_A,
@@ -115,8 +116,6 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
         stage: "baseline",
         idempotencyKey: "iloop-a:baseline",
       }),
-    ).resolves.toEqual({ id: "rjob_a", created: true });
-    await expect(
       store.enqueue({
         orgId: ORG_A,
         projectId: PROJECT_A,
@@ -126,7 +125,17 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
         stage: "baseline",
         idempotencyKey: "iloop-a:baseline",
       }),
-    ).resolves.toEqual({ id: "rjob_a", created: false });
+    ]);
+    expect(new Set([firstEnqueue.id, duplicateEnqueue.id]).size).toBe(1);
+    expect([firstEnqueue, duplicateEnqueue].filter((result) => result.created)).toHaveLength(1);
+    const enqueuedId = firstEnqueue.id;
+    const rows = await runWithOrgScope(app, ORG_A, (client) =>
+      client.query("SELECT id FROM resolution_jobs WHERE org_id = $1 AND idempotency_key = $2", [
+        ORG_A,
+        "iloop-a:baseline",
+      ]),
+    );
+    expect(rows.rows).toEqual([{ id: enqueuedId }]);
 
     const [one, two] = await Promise.all([
       store.claimNext({ orgId: ORG_A, leaseOwner: "worker_one", leaseMs: 60_000 }),
@@ -134,17 +143,17 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     ]);
     const claimed = [one, two].filter((job) => job !== undefined);
     expect(claimed).toHaveLength(1);
-    expect(claimed[0]).toMatchObject({ id: "rjob_a", state: "running", attempt: 2 });
+    expect(claimed[0]).toMatchObject({ id: enqueuedId, state: "running", attempt: 2 });
     expect(claimed[0]?.leaseOwner).toMatch(/^worker_(one|two)$/u);
     expect(claimed[0]?.leaseExpiry).toEqual(expect.any(String));
 
     const leaseOwner = claimed[0]?.leaseOwner;
     if (leaseOwner === undefined) throw new Error("expected a claimed resolution job");
-    await expect(store.heartbeat({ orgId: ORG_A, id: "rjob_a", leaseOwner, leaseMs: 60_000 })).resolves.toBe(true);
+    await expect(store.heartbeat({ orgId: ORG_A, id: enqueuedId, leaseOwner, leaseMs: 60_000 })).resolves.toBe(true);
     await runWithOrgScope(app, ORG_A, (client) =>
       client.query(
         "UPDATE resolution_jobs SET lease_expiry = now() - interval '1 second' WHERE org_id = $1 AND id = $2",
-        [ORG_A, "rjob_a"],
+        [ORG_A, enqueuedId],
       ),
     );
 
@@ -154,7 +163,7 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     ]);
     const recovered = [...recoveryOne, ...recoveryTwo];
     expect(recovered).toHaveLength(1);
-    expect(recovered[0]).toMatchObject({ id: "rjob_a", state: "running", attempt: 3 });
+    expect(recovered[0]).toMatchObject({ id: enqueuedId, state: "running", attempt: 3 });
     expect(recovered[0]?.leaseOwner).toMatch(/^recovery_(one|two)$/u);
 
     const foreignRows = await runWithOrgScope(app, ORG_B, (client) =>
@@ -162,5 +171,74 @@ describeDb("BH-6a resolution jobs — claim lease and RLS", () => {
     );
     expect(foreignRows.rowCount).toBe(0);
     await expect(store.claimNext({ orgId: ORG_B, leaseOwner: "foreign_worker" })).resolves.toBeUndefined();
+  });
+
+  it("applies the idempotency index and lease and lineage checks on the fresh migration chain", async () => {
+    const index = await owner.query<{ index_name: string | null }>(
+      "SELECT to_regclass('public.resolution_jobs_org_idempotency_key_unique') AS index_name",
+    );
+    expect(index.rows[0]?.index_name).toBe("resolution_jobs_org_idempotency_key_unique");
+
+    const constraints = await owner.query<{ conname: string }>(
+      `SELECT conname
+         FROM pg_constraint
+        WHERE conname = ANY($1::text[])
+        ORDER BY conname`,
+      [
+        [
+          "resolution_jobs_running_lease_check",
+          "behavior_verification_runs_resolution_stage_check",
+          "behavior_verification_runs_resolution_classification_check",
+        ],
+      ],
+    );
+    expect(constraints.rows.map((row) => row.conname)).toEqual([
+      "behavior_verification_runs_resolution_classification_check",
+      "behavior_verification_runs_resolution_stage_check",
+      "resolution_jobs_running_lease_check",
+    ]);
+  });
+
+  it("walks a crashed lease through recovery and makes the job re-claimable exactly once", async () => {
+    await store.enqueue({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      id: "rjob_crash",
+      issueLoopId: a.loopId,
+      contractId: a.contractId,
+      stage: "baseline",
+      idempotencyKey: "iloop-a:crash",
+    });
+    await expect(
+      store.claimNext({ orgId: ORG_A, leaseOwner: "crashed_worker", leaseMs: 60_000 }),
+    ).resolves.toMatchObject({
+      id: "rjob_crash",
+      state: "running",
+      attempt: 2,
+    });
+    await runWithOrgScope(app, ORG_A, (client) =>
+      client.query(
+        "UPDATE resolution_jobs SET lease_expiry = now() - interval '1 second' WHERE org_id = $1 AND id = $2",
+        [ORG_A, "rjob_crash"],
+      ),
+    );
+
+    const walker = new ResolutionDagWalker({
+      store,
+      orgIds: async () => [ORG_A],
+      leaseOwner: "recovery_walker",
+      leaseMs: 60_000,
+    });
+    await expect(walker.tick()).resolves.toEqual([
+      { orgId: ORG_A, recoveredJobIds: ["rjob_crash"], claimedJobIds: [] },
+    ]);
+
+    const [one, two] = await Promise.all([
+      store.claimNext({ orgId: ORG_A, leaseOwner: "post_crash_one", leaseMs: 60_000 }),
+      store.claimNext({ orgId: ORG_A, leaseOwner: "post_crash_two", leaseMs: 60_000 }),
+    ]);
+    const claimed = [one, two].filter((job) => job !== undefined);
+    expect(claimed).toHaveLength(1);
+    expect(claimed[0]).toMatchObject({ id: "rjob_crash", state: "running", attempt: 4 });
   });
 });

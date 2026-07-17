@@ -1,0 +1,4 @@
+CREATE UNIQUE INDEX "resolution_jobs_org_idempotency_key_unique" ON "resolution_jobs" USING btree ("org_id","idempotency_key");--> statement-breakpoint
+ALTER TABLE "resolution_jobs" ADD CONSTRAINT "resolution_jobs_running_lease_check" CHECK ("resolution_jobs"."state" <> 'running' OR ("resolution_jobs"."lease_owner" IS NOT NULL AND "resolution_jobs"."lease_expiry" IS NOT NULL));--> statement-breakpoint
+ALTER TABLE "behavior_verification_runs" ADD CONSTRAINT "behavior_verification_runs_resolution_stage_check" CHECK ("stage" IS NULL OR "stage" IN ('baseline','production','counterfactual','soak'));--> statement-breakpoint
+ALTER TABLE "behavior_verification_runs" ADD CONSTRAINT "behavior_verification_runs_resolution_classification_check" CHECK ("classification" IS NULL OR "classification" IN ('product_failure','infra_failure','stale_contract','inconclusive'));

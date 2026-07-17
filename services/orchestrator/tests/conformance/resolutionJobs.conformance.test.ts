@@ -10,9 +10,10 @@ const NOW = new Date("2026-01-01T00:00:00.000Z");
 describe("ResolutionJobStore postgres SQL conformance", () => {
   it("idempotently enqueues, leases once, heartbeats, recovers once, and preserves org isolation", async () => {
     const db = new MemoryDb();
-    const store = new ResolutionJobStore({} as never, () => NOW);
-    const orgA = new ResolutionJobScopedClient(db, ORG_A);
-    const orgB = new ResolutionJobScopedClient(db, ORG_B);
+    let observedAt = NOW;
+    const store = new ResolutionJobStore({} as never);
+    const orgA = new ResolutionJobScopedClient(db, ORG_A, () => observedAt);
+    const orgB = new ResolutionJobScopedClient(db, ORG_B, () => observedAt);
     const input = {
       orgId: ORG_A,
       projectId: "project_resolution_a",
@@ -42,18 +43,17 @@ describe("ResolutionJobStore postgres SQL conformance", () => {
       store.heartbeatOnClient(orgA as never, { orgId: ORG_A, id: "rjob_a", leaseOwner: "worker-a", leaseMs: 60_000 }),
     ).resolves.toBe(true);
 
+    observedAt = new Date("2026-01-01T00:01:01.000Z");
     const recovered = await store.recoverExpiredLeasesOnClient(orgA as never, {
       orgId: ORG_A,
       leaseOwner: "recovery-worker",
       leaseMs: 30_000,
-      now: new Date("2026-01-01T00:01:01.000Z"),
     });
     expect(recovered).toMatchObject([{ id: "rjob_a", leaseOwner: "recovery-worker", attempt: 3 }]);
     await expect(
       store.recoverExpiredLeasesOnClient(orgA as never, {
         orgId: ORG_A,
         leaseOwner: "second-recovery-worker",
-        now: new Date("2026-01-01T00:01:01.000Z"),
       }),
     ).resolves.toEqual([]);
     await expect(

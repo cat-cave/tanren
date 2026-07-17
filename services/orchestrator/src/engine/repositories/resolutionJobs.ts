@@ -76,9 +76,7 @@ export interface ReleaseResolutionJobInput {
   readonly state?: (typeof CLAIMABLE_STATES)[number];
 }
 
-export interface RecoverExpiredResolutionJobsInput extends ClaimResolutionJobInput {
-  readonly now?: Date;
-}
+export type RecoverExpiredResolutionJobsInput = ClaimResolutionJobInput;
 
 /** One minute is long enough for a periodic heartbeat to survive a transient delay. */
 export const DEFAULT_RESOLUTION_JOB_LEASE_MS = 60_000;
@@ -89,10 +87,7 @@ export const DEFAULT_RESOLUTION_JOB_LEASE_MS = 60_000;
  * an existing scoped transaction when it needs an atomic companion write.
  */
 export class ResolutionJobStore {
-  public constructor(
-    private readonly pool: pg.Pool,
-    private readonly now: () => Date = () => new Date(),
-  ) {}
+  public constructor(private readonly pool: pg.Pool) {}
 
   public async enqueue(input: EnqueueResolutionJobInput): Promise<EnqueueResolutionJobResult> {
     return runWithOrgScope(this.pool, input.orgId, (client) => this.enqueueOnClient(client, input));
@@ -102,29 +97,12 @@ export class ResolutionJobStore {
     client: QueryClient,
     input: EnqueueResolutionJobInput,
   ): Promise<EnqueueResolutionJobResult> {
-    // The barrier table deliberately has no unique idempotency index. Serialize
-    // the miss path so two concurrent enqueues cannot insert the same logical job.
-    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-      `${input.orgId}:${input.idempotencyKey}`,
-    ]);
-    const existing = await client.query<{ id: unknown }>(
-      `SELECT id
-         FROM resolution_jobs
-        WHERE org_id = $1 AND idempotency_key = $2
-        ORDER BY id
-        LIMIT 1`,
-      [input.orgId, input.idempotencyKey],
-    );
-    const existingRow = existing.rows[0];
-    if (existingRow !== undefined) {
-      return { id: scalarText(existingRow.id), created: false };
-    }
-
     const inserted = await client.query<{ id: unknown }>(
       `INSERT INTO resolution_jobs
          (org_id, project_id, id, issue_loop_id, contract_id, release_instance_id,
           stage, state, idempotency_key, attempt, prior_attempt_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, 1, $9)
+       ON CONFLICT (org_id, idempotency_key) DO NOTHING
        RETURNING id`,
       [
         input.orgId,
@@ -139,8 +117,17 @@ export class ResolutionJobStore {
       ],
     );
     const row = inserted.rows[0];
-    if (row === undefined) throw new Error("resolution job enqueue returned no row");
-    return { id: scalarText(row.id), created: true };
+    if (row !== undefined) return { id: scalarText(row.id), created: true };
+
+    const existing = await client.query<{ id: unknown }>(
+      `SELECT id
+         FROM resolution_jobs
+        WHERE org_id = $1 AND idempotency_key = $2`,
+      [input.orgId, input.idempotencyKey],
+    );
+    const existingRow = existing.rows[0];
+    if (existingRow === undefined) throw new Error("resolution job enqueue conflict returned no row");
+    return { id: scalarText(existingRow.id), created: false };
   }
 
   /** Atomically lease one queued/retryable job. Concurrent callers skip each other's row locks. */
@@ -152,7 +139,6 @@ export class ResolutionJobStore {
     client: QueryClient,
     input: ClaimResolutionJobInput,
   ): Promise<ResolutionJob | undefined> {
-    const expiry = leaseExpiry(this.now(), input.leaseMs);
     const result = await client.query<RawResolutionJobRow>(
       `WITH candidate AS (
          SELECT org_id, id
@@ -166,12 +152,12 @@ export class ResolutionJobStore {
        UPDATE resolution_jobs AS job
           SET state = 'running',
               lease_owner = $2,
-              lease_expiry = $3,
+              lease_expiry = now() + ($3::bigint * interval '1 millisecond'),
               attempt = job.attempt + 1
          FROM candidate
         WHERE job.org_id = candidate.org_id AND job.id = candidate.id
        RETURNING ${JOB_COLUMNS}`,
-      [input.orgId, input.leaseOwner, expiry],
+      [input.orgId, input.leaseOwner, leaseDuration(input.leaseMs)],
     );
     const row = result.rows[0];
     return row === undefined ? undefined : decodeLeasedJob(row);
@@ -185,12 +171,13 @@ export class ResolutionJobStore {
   public async heartbeatOnClient(client: QueryClient, input: RenewResolutionJobLeaseInput): Promise<boolean> {
     const result = await client.query(
       `UPDATE resolution_jobs
-          SET lease_expiry = $4
+          SET lease_expiry = now() + ($4::bigint * interval '1 millisecond')
         WHERE org_id = $1
           AND id = $2
           AND state = 'running'
-          AND lease_owner = $3`,
-      [input.orgId, input.id, input.leaseOwner, leaseExpiry(this.now(), input.leaseMs)],
+          AND lease_owner = $3
+          AND lease_expiry > now()`,
+      [input.orgId, input.id, input.leaseOwner, leaseDuration(input.leaseMs)],
     );
     return result.rowCount === 1;
   }
@@ -251,37 +238,35 @@ export class ResolutionJobStore {
     client: QueryClient,
     input: RecoverExpiredResolutionJobsInput,
   ): Promise<ResolutionJob[]> {
-    const observedAt = input.now ?? this.now();
-    const expiry = leaseExpiry(observedAt, input.leaseMs);
     const result = await client.query<RawResolutionJobRow>(
       `WITH expired AS (
          SELECT org_id, id
-           FROM resolution_jobs
+          FROM resolution_jobs
           WHERE org_id = $1
             AND state = 'running'
-            AND lease_expiry <= $2
+            AND lease_expiry <= now()
           ORDER BY lease_expiry ASC, id ASC
           FOR UPDATE SKIP LOCKED
        )
        UPDATE resolution_jobs AS job
-          SET lease_owner = $3,
-              lease_expiry = $4,
+          SET lease_owner = $2,
+              lease_expiry = now() + ($3::bigint * interval '1 millisecond'),
               attempt = job.attempt + 1
          FROM expired
         WHERE job.org_id = expired.org_id AND job.id = expired.id
        RETURNING ${JOB_COLUMNS}`,
-      [input.orgId, observedAt, input.leaseOwner, expiry],
+      [input.orgId, input.leaseOwner, leaseDuration(input.leaseMs)],
     );
     return result.rows.map(decodeLeasedJob);
   }
 }
 
-function leaseExpiry(now: Date, leaseMs: number | undefined): Date {
+function leaseDuration(leaseMs: number | undefined): number {
   const duration = leaseMs ?? DEFAULT_RESOLUTION_JOB_LEASE_MS;
   if (!Number.isSafeInteger(duration) || duration <= 0) {
     throw new RangeError(`resolution job leaseMs must be a positive safe integer, got ${duration}`);
   }
-  return new Date(now.getTime() + duration);
+  return duration;
 }
 
 function decodeLeasedJob(row: RawResolutionJobRow): ResolutionJob {

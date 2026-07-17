@@ -12,6 +12,7 @@ export class ResolutionJobScopedClient {
   public constructor(
     private readonly db: MemoryDb,
     private readonly orgId: string,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -23,9 +24,6 @@ export class ResolutionJobScopedClient {
   }
 
   private resolutionJobSql(sql: string, params: readonly unknown[]): QueryResult | undefined {
-    if (sql.startsWith("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")) {
-      return { rows: [], rowCount: 1 };
-    }
     if (sql.startsWith("SELECT id FROM resolution_jobs") && sql.includes("idempotency_key = $2")) {
       const [orgId, idempotencyKey] = params as [string, string];
       const row = this.visible().find((job) => job.org_id === orgId && job.idempotency_key === idempotencyKey);
@@ -34,7 +32,7 @@ export class ResolutionJobScopedClient {
     if (sql.startsWith("INSERT INTO resolution_jobs")) return this.enqueue(params);
     if (sql.startsWith("WITH candidate AS")) return this.claim(params);
     if (sql.startsWith("WITH expired AS")) return this.recover(params);
-    if (sql.startsWith("UPDATE resolution_jobs SET lease_expiry = $4")) return this.heartbeat(params);
+    if (sql.startsWith("UPDATE resolution_jobs SET lease_expiry = now()")) return this.heartbeat(params);
     if (sql.startsWith("UPDATE resolution_jobs SET state = $4")) return this.release(params);
     if (sql.startsWith("UPDATE resolution_jobs SET state = 'completed'")) return this.complete(params);
     if (sql.startsWith("SELECT id FROM resolution_jobs") && sql.includes("ORDER BY id")) {
@@ -52,6 +50,9 @@ export class ResolutionJobScopedClient {
     const [orgId, projectId, id, issueLoopId, contractId, releaseInstanceId, stage, idempotencyKey, priorAttemptId] =
       params as [string, string, string, string, string, string | null, string, string, string | null];
     if (orgId !== this.orgId) return { rows: [], rowCount: 0 };
+    if (this.visible().some((job) => job.org_id === orgId && job.idempotency_key === idempotencyKey)) {
+      return { rows: [], rowCount: 0 };
+    }
     const row: ResolutionJobRecord = {
       org_id: orgId,
       project_id: projectId,
@@ -72,20 +73,21 @@ export class ResolutionJobScopedClient {
   }
 
   private claim(params: readonly unknown[]): QueryResult {
-    const [orgId, leaseOwner, expiry] = params as [string, string, Date];
+    const [orgId, leaseOwner, leaseMs] = params as [string, string, number];
     const row = this.visible()
       .filter((job) => job.org_id === orgId && (job.state === "queued" || job.state === "retryable"))
       .sort((left, right) => left.attempt - right.attempt || left.id.localeCompare(right.id))[0];
     if (row === undefined) return { rows: [], rowCount: 0 };
     row.state = "running";
     row.lease_owner = leaseOwner;
-    row.lease_expiry = new Date(expiry);
+    row.lease_expiry = leaseExpiry(this.now(), leaseMs);
     row.attempt += 1;
     return { rows: [copy(row)], rowCount: 1 };
   }
 
   private recover(params: readonly unknown[]): QueryResult {
-    const [orgId, observedAt, leaseOwner, expiry] = params as [string, Date, string, Date];
+    const [orgId, leaseOwner, leaseMs] = params as [string, string, number];
+    const observedAt = this.now();
     const rows = this.visible()
       .filter(
         (job) =>
@@ -100,19 +102,26 @@ export class ResolutionJobScopedClient {
       );
     rows.forEach((row) => {
       row.lease_owner = leaseOwner;
-      row.lease_expiry = new Date(expiry);
+      row.lease_expiry = leaseExpiry(observedAt, leaseMs);
       row.attempt += 1;
     });
     return { rows: rows.map((row) => copy(row)), rowCount: rows.length };
   }
 
   private heartbeat(params: readonly unknown[]): QueryResult {
-    const [orgId, id, leaseOwner, expiry] = params as [string, string, string, Date];
+    const [orgId, id, leaseOwner, leaseMs] = params as [string, string, string, number];
+    const observedAt = this.now();
     const row = this.visible().find(
-      (job) => job.org_id === orgId && job.id === id && job.state === "running" && job.lease_owner === leaseOwner,
+      (job) =>
+        job.org_id === orgId &&
+        job.id === id &&
+        job.state === "running" &&
+        job.lease_owner === leaseOwner &&
+        job.lease_expiry !== null &&
+        job.lease_expiry > observedAt,
     );
     if (row === undefined) return { rows: [], rowCount: 0 };
-    row.lease_expiry = new Date(expiry);
+    row.lease_expiry = leaseExpiry(observedAt, leaseMs);
     return { rows: [], rowCount: 1 };
   }
 
@@ -143,4 +152,8 @@ export class ResolutionJobScopedClient {
   private visible(): ResolutionJobRecord[] {
     return this.db.resolutionJobs.filter((job) => job.org_id === this.orgId);
   }
+}
+
+function leaseExpiry(now: Date, leaseMs: number): Date {
+  return new Date(now.getTime() + leaseMs);
 }
