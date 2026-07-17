@@ -38,6 +38,7 @@ import { BehaviorStore } from "../entities/behaviors.js";
 import { PersonaStore } from "../entities/personas.js";
 import { DesignContractStore, type DesignContractRecord } from "../repositories/designContracts.js";
 import type { DesignContractV1, DesignDimension } from "./designContract.js";
+import { renderWebDesignSystemBlock, type WebDesignWriterContext } from "./system/webWriterContext.js";
 
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
@@ -299,6 +300,12 @@ export async function loadDesignContextBlock(input: {
   client: QueryClient;
   orgScope: TenantScope;
   projectId: string;
+  /**
+   * An explicitly resolved ds-2 web artifact. ds-5 owns project bindings, so
+   * this loader never guesses a system from an org/project; callers thread the
+   * selected release here and the Writer receives it beside the intent contract.
+   */
+  webDesignSystem?: WebDesignWriterContext;
 }): Promise<string | undefined> {
   const actor = designResolverActor(input.orgScope.orgId, input.projectId);
   // Use the TYPED-STATE lookup so a CORRUPT persisted row throws loud (Codex
@@ -309,7 +316,11 @@ export async function loadDesignContextBlock(input: {
     kind: "operator",
   });
   if (lookup.kind === "corrupt") throw lookup.error;
-  if (lookup.kind === "absent") return undefined;
-  const context = await resolveDesignContext(input.client, lookup.record, actor);
-  return renderDesignContractBlock(context);
+  const blocks: string[] = [];
+  if (lookup.kind === "found") {
+    const context = await resolveDesignContext(input.client, lookup.record, actor);
+    blocks.push(renderDesignContractBlock(context));
+  }
+  if (input.webDesignSystem !== undefined) blocks.push(renderWebDesignSystemBlock(input.webDesignSystem));
+  return blocks.length === 0 ? undefined : blocks.join("\n\n");
 }
