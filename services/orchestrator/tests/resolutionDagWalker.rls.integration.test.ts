@@ -347,10 +347,15 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
     expect(run).toEqual({ count: "1", classification: "infra_failure", status: "failed" });
   });
 
-  it("refuses a baseline transition from a verified-closed loop through the real IssueLoopStore", async () => {
+  it("settles a baseline non-retryably when a verified-closed loop refuses regression", async () => {
     await owner.query("UPDATE issue_loops SET state = 'verified_closed' WHERE org_id = $1 AND id = $2", [
       ORG_ID,
       LOOP_ID,
+    ]);
+    // Keep the preceding retry fixture from being the walker's next claim.
+    await owner.query("UPDATE resolution_jobs SET state = 'paused' WHERE org_id = $1 AND id = $2", [
+      ORG_ID,
+      "rjob_resolution_infra_retry",
     ]);
     await jobs.enqueue({
       orgId: ORG_ID,
@@ -361,15 +366,36 @@ describeDb("ResolutionDagWalker — real registry, RLS, and periodic recovery", 
       stage: "baseline",
       idempotencyKey: "resolution-terminal-loop",
     });
-    const claimed = await jobs.claimNext({ orgId: ORG_ID, leaseOwner: "terminal-loop-worker", leaseMs: 30_000 });
-    if (claimed === undefined) throw new Error("expected terminal-loop fixture job to claim");
+    const walker = new ResolutionDagWalker({
+      store: jobs,
+      orgIds: async () => [ORG_ID],
+      stages: new Map([["baseline", new BaselineReproductionStage({ pool: app })]]),
+      leaseOwner: "terminal-loop-worker",
+      leaseMs: 30_000,
+    });
 
-    await expect(new BaselineReproductionStage({ pool: app }).run(claimed, {})).rejects.toThrow(
-      /refused reproduced transition/u,
-    );
-    const loop = await runWithOrgScope(app, ORG_ID, (client) =>
-      client.query<{ state: string }>("SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2", [ORG_ID, LOOP_ID]),
-    );
-    expect(loop.rows).toEqual([{ state: "verified_closed" }]);
+    await expect(walker.tick()).resolves.toEqual([
+      { orgId: ORG_ID, recoveredJobIds: [], claimedJobIds: ["rjob_resolution_terminal_loop"] },
+    ]);
+    const [job, loop, run] = await runWithOrgScope(app, ORG_ID, async (client) => {
+      const rows = await Promise.all([
+        client.query<{ state: string }>("SELECT state FROM resolution_jobs WHERE org_id = $1 AND id = $2", [
+          ORG_ID,
+          "rjob_resolution_terminal_loop",
+        ]),
+        client.query<{ state: string }>("SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2", [
+          ORG_ID,
+          LOOP_ID,
+        ]),
+        client.query<{ classification: string; status: string }>(
+          "SELECT classification, status FROM behavior_verification_runs WHERE resolution_job_id = $1",
+          ["rjob_resolution_terminal_loop"],
+        ),
+      ]);
+      return rows.map((row) => row.rows[0]);
+    });
+    expect(job).toEqual({ state: "completed" });
+    expect(loop).toEqual({ state: "verified_closed" });
+    expect(run).toEqual({ classification: "product_failure", status: "completed" });
   });
 });

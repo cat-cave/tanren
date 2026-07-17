@@ -5,8 +5,6 @@ import { migrate, runWithOrgScope } from "@tanren/db";
 import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
-import type { ResolutionJob } from "../src/engine/contracts/resolutionStage.js";
 import {
   symptomObservationHash,
   type SymptomProbeDriver,
@@ -18,6 +16,7 @@ import { SymptomEvidenceStore } from "../src/engine/repositories/symptomEvidence
 import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { SymptomProbeAdapter } from "../src/engine/probes/symptomProbeAdapter.js";
+import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { BaselineReproductionStage } from "../src/engine/verification/resolutionStages/baselineReproductionStage.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
@@ -321,7 +320,13 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
 
     expect(await evidence.listAssertions(ORG_A, foreignRun)).toEqual([]);
     expect(await evidence.listArtifacts(ORG_A, PROJECT_B)).toEqual([]);
-    expect(await new PgCasByteStore(app).has(ORG_A, foreign.evidence[0]!.digest)).toBe(false);
+    const foreignArtifactVisibleToA = await runWithOrgScope(app, ORG_A, (client) =>
+      client.query("SELECT 1 FROM cas_artifacts WHERE org_id = $1 AND digest = $2", [
+        ORG_A,
+        foreign.evidence[0]!.digest,
+      ]),
+    );
+    expect(foreignArtifactVisibleToA.rowCount).toBe(0);
     const foreignEventsVisibleToA = await runWithOrgScope(app, ORG_A, (client) =>
       client.query("SELECT 1 FROM events WHERE org_id = $1 AND project_id = $2", [ORG_B, PROJECT_B]),
     );
@@ -336,30 +341,30 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
     expect(storedArtifacts.rows.every((row) => typeof row.cas_digest === "string")).toBe(true);
   });
 
-  it("runs the ResolutionStage through the real event store and keeps infra failure awaiting reproduction", async () => {
+  it("does not regress a reproduced loop when a later baseline is inconclusive", async () => {
     const stagedContract = await contracts.create({
       orgId: ORG_A,
       projectId: PROJECT_A,
       contract: contract(LOOP_A, "http://a/staged"),
     });
     const jobs = new ResolutionJobStore(app);
-    const productJob: ResolutionJob = {
-      id: "rjob_baseline_product",
+    const productJob = {
+      id: "rjob_baseline_1_product",
       orgId: ORG_A,
       projectId: PROJECT_A,
       issueLoopId: LOOP_A,
       contractId: stagedContract.id,
       releaseInstanceId: productReleaseId,
-      stage: "baseline",
+      stage: "baseline" as const,
       state: "running",
       leaseOwner: "worker_baseline",
       leaseExpiry: "2026-01-01T00:01:00.000Z",
       idempotencyKey: "iloop_symptom_probe_a:baseline:product",
       attempt: 2,
     };
-    const infraJob: ResolutionJob = {
+    const infraJob = {
       ...productJob,
-      id: "rjob_baseline_infra",
+      id: "rjob_baseline_2_infra",
       releaseInstanceId: infraReleaseId,
       idempotencyKey: "iloop_symptom_probe_a:baseline:infra",
     };
@@ -384,31 +389,41 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
       idempotencyKey: infraJob.idempotencyKey,
     });
 
-    const product = await new BaselineReproductionStage({
+    let probeCall = 0;
+    const stage = new BaselineReproductionStage({
       pool: app,
-      probe: new SymptomProbeAdapter(app, new FixedProbe(EXPECTED, "stage-product")),
-      verificationRunId: () => "vrun_baseline_product",
-    }).run(productJob, {});
-
-    expect(product).toMatchObject({
-      outcome: "passed",
-      classification: "product_failure",
-      verificationRunId: "vrun_baseline_product",
+      probe: new SymptomProbeAdapter(app, {
+        async execute(): Promise<SymptomProbeExecution> {
+          const outcome = probeCall++ === 0 ? undefined : "inconclusive";
+          return {
+            observedObservation: EXPECTED,
+            evidence: [
+              {
+                kind: "fixed_probe_receipt",
+                mediaType: "application/json",
+                bytes: new TextEncoder().encode(JSON.stringify({ probeCall })),
+                redactionClass: "none",
+              },
+            ],
+            timingMs: 7,
+            ...(outcome === undefined ? {} : { outcome }),
+          };
+        },
+      }),
+      verificationRunId: () => (probeCall === 0 ? "vrun_baseline_product" : "vrun_baseline_infra"),
     });
-    expect(product.assertionIds).toHaveLength(1);
-    expect(product.evidenceRefs).toHaveLength(2);
-
-    const infra = await new BaselineReproductionStage({
-      pool: app,
-      probe: new SymptomProbeAdapter(app, new FixedProbe(EXPECTED, "stage-infra", "inconclusive")),
-      verificationRunId: () => "vrun_baseline_infra",
-    }).run(infraJob, {});
-
-    expect(infra).toMatchObject({
-      outcome: "inconclusive",
-      classification: "infra_failure",
-      verificationRunId: "vrun_baseline_infra",
+    const walker = new ResolutionDagWalker({
+      store: jobs,
+      orgIds: async () => [ORG_A],
+      stages: new Map([["baseline", stage]]),
+      leaseOwner: "baseline-symptom-walker",
+      leaseMs: 30_000,
     });
+
+    await expect(walker.tick()).resolves.toEqual([
+      { orgId: ORG_A, recoveredJobIds: [], claimedJobIds: [productJob.id] },
+    ]);
+    await expect(walker.tick()).resolves.toEqual([{ orgId: ORG_A, recoveredJobIds: [], claimedJobIds: [infraJob.id] }]);
 
     const observed = await runWithOrgScope(app, ORG_A, async (client) => {
       const runs = await client.query<{ id: string; stage: string; classification: string; status: string }>(
@@ -422,6 +437,13 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
         "SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2",
         [ORG_A, LOOP_A],
       );
+      const resolutionJobs = await client.query<{ id: string; state: string }>(
+        `SELECT id, state
+           FROM resolution_jobs
+          WHERE org_id = $1 AND id = ANY($2::text[])
+          ORDER BY id`,
+        [ORG_A, [productJob.id, infraJob.id]],
+      );
       const events = await client.query<{ event_type: string; outcome: string }>(
         `SELECT event_type, payload->>'outcome' AS outcome
            FROM events
@@ -431,13 +453,17 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
           ORDER BY id`,
         [ORG_A, PROJECT_A, ["vrun_baseline_product", "vrun_baseline_infra"]],
       );
-      return { runs: runs.rows, loop: loop.rows[0], events: events.rows };
+      return { runs: runs.rows, loop: loop.rows[0], resolutionJobs: resolutionJobs.rows, events: events.rows };
     });
     expect(observed.runs).toEqual([
       { id: "vrun_baseline_infra", stage: "baseline", classification: "infra_failure", status: "failed" },
       { id: "vrun_baseline_product", stage: "baseline", classification: "product_failure", status: "completed" },
     ]);
-    expect(observed.loop).toEqual({ state: "awaiting_reproduction" });
+    expect(observed.loop).toEqual({ state: "reproduced" });
+    expect(observed.resolutionJobs).toEqual([
+      { id: "rjob_baseline_1_product", state: "completed" },
+      { id: "rjob_baseline_2_infra", state: "retryable" },
+    ]);
     expect(observed.events).toEqual([
       { event_type: "symptom.baseline.started", outcome: null },
       { event_type: "symptom.baseline.observed", outcome: "reproduced" },

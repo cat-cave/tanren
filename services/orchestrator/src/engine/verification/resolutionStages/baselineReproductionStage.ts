@@ -295,9 +295,9 @@ export class BaselineReproductionStage implements ResolutionStage {
         fromStates: ["open", "awaiting_reproduction"],
       });
       if (transitioned === undefined) throw new Error(`baseline issue loop ${input.issueLoopId} was not found`);
-      if (!transitioned.changed && transitioned.loop.state !== input.state) {
-        throw new Error(`baseline issue loop ${input.issueLoopId} refused ${input.state} transition`);
-      }
+      // A guarded transition can lose to later resolution work. The baseline
+      // result remains valid, but it must not regress an advanced loop or turn
+      // that harmless no-op into a retryable stage failure.
     });
   }
 }

@@ -93,6 +93,7 @@
     "buildpacks",
     "buildx",
     "bursty",
+    "retryably",
     "bytea",
     "byok",
     "bypassable",
