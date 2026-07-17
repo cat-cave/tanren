@@ -93,6 +93,7 @@ const RunSpecProjectRowSchema = z.object({
   title: z.string(),
   description: z.string(),
   acceptance_criteria: z.unknown(),
+  origin_issue_loop_id: z.string().nullish(),
   // Task #86: the spec's writer-prompt MODE (`specialize_seed` for the greenfield scaffold
   // spec; `from_scratch` otherwise). The `specs.mode` column is NOT NULL with default
   // `from_scratch` (migrated in PR #756), so a real row always carries a value.
@@ -144,7 +145,8 @@ export async function loadRunExecutionContext(
        s.title,
        s.description,
        s.acceptance_criteria,
-       s.mode
+       s.mode,
+       s.origin_issue_loop_id
      FROM runs r
      JOIN specs s ON s.spec_id = r.spec_id
      JOIN projects p ON p.project_id = r.project_id
@@ -234,6 +236,9 @@ export async function loadRunExecutionContext(
     runId: decoded.run_id,
     specId: decoded.spec_id,
     projectId: decoded.project_id,
+    ...(decoded.origin_issue_loop_id !== null && decoded.origin_issue_loop_id !== undefined
+      ? { issueLoopId: decoded.origin_issue_loop_id }
+      : {}),
     // A run is ALWAYS tenant-scoped: `orgScopeFromRunOrgId` above threw
     // `UnscopedOrgError` on an empty/absent value, so `orgScope.orgId` is a real
     // non-empty string. This is the SINGLE production hydration site — the

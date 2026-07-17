@@ -36,7 +36,7 @@ export async function loadSpecWithProject(
     `SELECT p.project_id, p.org_id AS project_org_id, p.name, p.repo_url, p.default_branch, p.runner_image,
             p.allocator, p.config, p.lifecycle, s.spec_id, s.org_id AS spec_org_id, s.title, s.description,
             s.acceptance_criteria, s.depends_on, s.status, s.priority, s.mode,
-            s.parent_spec_id, s.source_finding_ids, s.origin_triage_task_id, s.origin_run_id
+            s.parent_spec_id, s.source_finding_ids, s.origin_triage_task_id, s.origin_run_id, s.origin_issue_loop_id
        FROM specs s JOIN projects p ON p.project_id = s.project_id WHERE s.spec_id = $1`,
     [specId],
   );
@@ -80,6 +80,9 @@ export async function loadSpecWithProject(
             sourceFindingIds: decoded.source_finding_ids ?? [],
             originTriageTaskId: decoded.origin_triage_task_id ?? "",
             originRunId: decoded.origin_run_id ?? "",
+            ...(decoded.origin_issue_loop_id === null || decoded.origin_issue_loop_id === undefined
+              ? {}
+              : { originIssueLoopId: decoded.origin_issue_loop_id }),
           },
         }),
     },
@@ -158,4 +161,5 @@ export const SpecProjectRowSchema = z.object({
   source_finding_ids: NullableStringArray,
   origin_triage_task_id: z.string().nullish(),
   origin_run_id: z.string().nullish(),
+  origin_issue_loop_id: z.string().nullish(),
 });

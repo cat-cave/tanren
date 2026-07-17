@@ -236,6 +236,8 @@ export function routedToNewSpec(
     };
   },
   originTriageTaskId?: string,
+  originOrdinal?: number,
+  originIssueLoopId?: string,
 ): NewSpecRequest {
   return {
     id: r.item.id,
@@ -244,6 +246,8 @@ export function routedToNewSpec(
     severity: r.item.severity,
     findingIds: [...r.item.findingIds],
     ...(originTriageTaskId !== undefined && { originTriageTaskId }),
+    ...(originOrdinal !== undefined && { originOrdinal }),
+    ...(originIssueLoopId !== undefined && { originIssueLoopId }),
   };
 }
 

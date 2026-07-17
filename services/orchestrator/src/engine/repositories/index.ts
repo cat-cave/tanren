@@ -7,6 +7,14 @@ export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
 export { ProjectRow, ProjectStore, type ProjectConfigSnapshot, type ProjectLifecycle } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
+export {
+  SpecOriginStore,
+  SpecOriginRow,
+  SPEC_ORIGIN_ROLES,
+  type SpecOriginRole,
+  type SpecOriginWithFindings,
+  type RecordSpecOriginInput,
+} from "./specOrigins.js";
 // bh-1 back-half self-healing foundation: the durable IssueLoop aggregate + its
 // immutable, append-only source findings and causal edges.
 export {

@@ -37,6 +37,7 @@ export {
   appTokenSeam,
   baseShiftRebaseSeam,
   designOracleSeam,
+  issueLoopProvenanceSeam,
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
@@ -50,7 +51,6 @@ import { buildLiveJjWorkspace } from "../providers/liveJjWorkspace.js";
 import type { WorkspaceConflictApplier } from "../contracts/conflictResolution.js";
 import type { ConflictResolverHook } from "./reviewMerge/index.js";
 import { type EntityMapProduction, produceEntityChangeMap } from "../oracle/index.js";
-
 // Builds the run's four role adapters (plan/write/check/audit) by resolving the
 // project's effective routing table through the shared adapter selector. The
 // routing is per-role provider DATA: the writer runs whatever the `write`

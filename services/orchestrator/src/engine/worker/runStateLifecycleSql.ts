@@ -1,11 +1,5 @@
-// the ONE source of truth for the run/spec/task LIFECYCLE write
-// SQL. Both the in-process `DirectRunStateWriter` and the control-plane
-// `/internal/*` endpoints execute these SAME fixed, parameterized statements, so
-// the persisted rows are byte-for-byte identical whichever plane runs them — and
-// the endpoint never runs caller-supplied SQL (it maps a structured op to a
-// fixed statement here). The strings are byte-identical to the inline `.query`
-// the workflow drove before, so the direct path + its mutation suite are
-// unchanged.
+// Single source of truth for parameterized run/spec/task lifecycle SQL used by
+// both the direct writer and control-plane endpoints.
 
 import type pg from "pg";
 import { z } from "zod";
@@ -159,6 +153,33 @@ export async function applySupersedeQueuedPlannerTask(client: QueryClient, runId
 
 /** Insert one `tasks` row — org from the row's run (`(SELECT org_id FROM runs …)`). */
 export async function applyInsertTask(client: QueryClient, input: InsertTaskInput): Promise<void> {
+  if ((input.runId === undefined) === (input.issueLoopId === undefined)) {
+    throw new Error("a task must have exactly one execution scope");
+  }
+  if (input.issueLoopId !== undefined) {
+    const started = input.setStartedAt ? "now()" : "NULL";
+    const cols = ["task_id", "issue_loop_id", "org_id", "kind", "title"];
+    const vals = ["$1", "$2", "COALESCE($3, (SELECT org_id FROM issue_loops WHERE id = $2))", "$4", "$5"];
+    const params: unknown[] = [input.taskId, input.issueLoopId, input.orgId ?? null, input.kind, input.title];
+    let next = 6;
+    if (input.parentTaskId !== undefined) {
+      cols.push("parent_task_id");
+      vals.push(`$${next}`);
+      params.push(input.parentTaskId);
+      next += 1;
+    }
+    cols.push("status", "started_at", "agent_kind", "cli", "model");
+    vals.push(`$${next}`, started, `$${next + 1}`, `$${next + 2}`, `$${next + 3}`);
+    params.push(input.status, input.agentKind, input.cli, input.model);
+    next += 4;
+    if (input.attempt !== undefined) {
+      cols.push("attempt");
+      vals.push(`$${next}`);
+      params.push(input.attempt);
+    }
+    await client.query(`INSERT INTO tasks (${cols.join(", ")}) VALUES (${vals.join(", ")})`, params);
+    return;
+  }
   const started = input.setStartedAt ? "now()" : "NULL";
   const cols = ["task_id", "run_id", "org_id", "kind", "title"];
   const vals = ["$1", "$2", "(SELECT org_id FROM runs WHERE run_id = $2)", "$3", "$4"];

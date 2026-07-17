@@ -40,6 +40,7 @@ import {
   buildDefaultGate,
   buildEntityRiskProducer,
   designOracleSeam,
+  issueLoopProvenanceSeam,
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
@@ -103,14 +104,9 @@ export interface PlannerRunContext {
   runId: string;
   specId: string;
   projectId: string;
-  // The run's tenant scope, threaded to allocator for `runners` RLS scope + every
-  // downstream event append (`events.org_id` is NOT NULL). A run is ALWAYS
-  // tenant-scoped; the invariant is enforced at the hydration boundary
-  // ({@link loadRunExecutionContext} routes `runs.org_id` through
-  // {@link orgScopeFromRunOrgId}, which throws `UnscopedOrgError` on a
-  // missing/empty value), so this field is a REQUIRED non-empty string — never
-  // null/undefined — and downstream consumers can read it directly without a
-  // defensive `?? ""` / `typeof …` narrow.
+  /** IssueLoop lineage of the spec, when this run is executing an issue-origin fix. */
+  issueLoopId?: string;
+  // Tenant scope for allocator, RLS, and every event append.
   orgId: string;
   repoUrl: string;
   targetBranch: string;
@@ -359,6 +355,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           specId: context.specId,
           projectId: context.projectId,
           orgId,
+          ...issueLoopProvenanceSeam(context),
           workspacePath,
           baseSha,
           ...(context.designContextBlock !== undefined && { designContextBlock: context.designContextBlock }),
@@ -395,6 +392,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         parentSpecId: context.specId,
         projectId: context.projectId,
         orgId,
+        ...issueLoopProvenanceSeam(context),
       });
 
       // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate

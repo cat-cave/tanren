@@ -29,6 +29,7 @@ export interface SpecTriageProvenance {
   sourceFindingIds: ReadonlyArray<string>;
   originTriageTaskId: string;
   originRunId: string;
+  originIssueLoopId?: string;
 }
 
 export interface CreateSpecInput {
@@ -143,8 +144,9 @@ export async function createSpecOnClient(
   await client.query(
     `INSERT INTO specs (spec_id, project_id, org_id, title, description, acceptance_criteria, depends_on,
                          status, priority, mode,
-                         parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id)
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::text[], $8, $9, $10, $11, $12::text[], $13, $14)`,
+                         parent_spec_id, source_finding_ids, origin_triage_task_id, origin_run_id,
+                         origin_issue_loop_id)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::text[], $8, $9, $10, $11, $12::text[], $13, $14, $15)`,
     [
       spec.specId,
       spec.projectId,
@@ -160,6 +162,7 @@ export async function createSpecOnClient(
       canonical === undefined ? null : [...canonical.sourceFindingIds],
       canonical?.originTriageTaskId ?? null,
       canonical?.originRunId ?? null,
+      canonical?.originIssueLoopId ?? null,
     ],
   );
   // Wake the DagWalker (notifyDagChanged): a fresh DAG's run channel never fires on its own.

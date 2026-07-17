@@ -25,6 +25,7 @@ import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import type { ActorContext } from "../../auth/schemas.js";
 import type { RunStateWriter } from "../contracts/runStateWriter.js";
+import { SpecOriginStore } from "../repositories/specOrigins.js";
 import { acceptProposals, type DiscoveryInsight, type ProposedSpec } from "../forge/discovery/index.js";
 import type { NewSpecRequest } from "./subtaskLoop.js";
 
@@ -33,6 +34,10 @@ export interface TriageNewSpecsMaterializerInput {
   parentSpecId: string;
   projectId: string;
   orgId: string;
+  /** IssueLoop lineage of the parent spec, present for issue-origin fixes. */
+  issueLoopId?: string;
+  /** Current IssueLoop attempt. The bh-2 foundation starts at attempt one. */
+  attemptNumber?: number;
   newSpecs: ReadonlyArray<NewSpecRequest>;
 }
 
@@ -59,8 +64,18 @@ export function buildTriageNewSpecsMaterializer(deps: {
   /** Resolve a system actor carrying the run's org so the spec write is RLS-scoped. */
   resolveActor: (orgId: string) => ActorContext;
 }): TriageNewSpecsMaterializer {
-  return async ({ runId, parentSpecId, projectId, orgId, newSpecs }) => {
-    for (const req of newSpecs) {
+  return async ({ runId, parentSpecId, projectId, orgId, issueLoopId, attemptNumber = 1, newSpecs }) => {
+    for (const [index, req] of newSpecs.entries()) {
+      const originIssueLoopId = req.originIssueLoopId ?? issueLoopId;
+      const originTriageTaskId = req.originTriageTaskId;
+      const ordinal = req.originOrdinal ?? index;
+      if (originIssueLoopId !== undefined && originTriageTaskId === undefined) {
+        throw new Error(`issue-loop triage spec ${req.id} is missing its triage task id`);
+      }
+      // Legacy run-bound materializers predate the real triage task seam. Keep
+      // their old provenance shape for compatibility; issue-loop materialization
+      // is fail-closed above and can never persist an empty task id.
+      const persistedTriageTaskId = originTriageTaskId ?? "";
       // Codex round-3 #4 — CROSS-RUN dedupe. Sort the `findingIds` (canonical
       // form; the write side sorts too) and query for an already-materialized
       // spec with the same `(project_id, parent_spec_id, source_finding_ids)`
@@ -69,12 +84,21 @@ export function buildTriageNewSpecsMaterializer(deps: {
       // unique index `specs_triage_provenance_unique` (migration 0027); the
       // insert would fail LOUD (not silently duplicate).
       const canonicalFindingIds = [...req.findingIds].sort();
-      const existing = await findRoutedSpecByProvenance(deps.pool, {
-        orgId,
-        projectId,
-        parentSpecId,
-        canonicalFindingIds,
-      });
+      const existing =
+        originIssueLoopId === undefined
+          ? await findRoutedSpecByProvenance(deps.pool, {
+              orgId,
+              projectId,
+              parentSpecId,
+              canonicalFindingIds,
+            })
+          : await findSpecOriginByKey(deps.pool, {
+              orgId,
+              projectId,
+              issueLoopId: originIssueLoopId,
+              attemptNumber,
+              ordinal,
+            });
       if (existing !== undefined) continue;
 
       const insight: DiscoveryInsight = {
@@ -95,7 +119,7 @@ export function buildTriageNewSpecsMaterializer(deps: {
         priority: "tbd",
         estLabel: "",
       };
-      await acceptProposals(
+      const accepted = await acceptProposals(
         {
           pool: deps.pool,
           ...(deps.runStateWriter !== undefined && { runStateWriter: deps.runStateWriter }),
@@ -107,27 +131,59 @@ export function buildTriageNewSpecsMaterializer(deps: {
           placementKind: "slot_after",
           placementLabel: `auto-routed from triage in ${parentSpecId}`,
           actor: deps.resolveActor(orgId),
-          // Claude RA2 — first-class routing PROVENANCE persisted onto the created
-          // spec's columns so an operator (or a dedupe pass) can trace the routed
-          // spec back to its origin without parsing the discovery jsonb.
-          // `originTriageTaskId` is threaded through the NewSpecRequest from the
-          // triage stage that emitted the item (`runSubtaskIteration.ts`); an
-          // upstream that skipped triage yields the empty string here (a
-          // diagnostic breadcrumb, not a silent success) so the parent/finding
-          // trail still stamps and a re-drive dedupe query keying off
-          // `parent_spec_id` + `source_finding_ids` still identifies the routed
-          // spec.
+          // First-class routing provenance is persisted on the spec and normalized
+          // below. Issue-loop origins require a real triage task id.
           triageProvenance: {
             parentSpecId,
             // Canonical (sorted) — the write side re-canonicalizes for defence in depth.
             sourceFindingIds: canonicalFindingIds,
-            originTriageTaskId: req.originTriageTaskId ?? "",
+            originTriageTaskId: persistedTriageTaskId,
             originRunId: runId,
+            ...(originIssueLoopId === undefined ? {} : { originIssueLoopId }),
           },
         },
       );
+      const created = accepted.accepted[0]?.spec;
+      if (created !== undefined && originIssueLoopId !== undefined && originTriageTaskId !== undefined) {
+        await runWithOrgScope(deps.pool, orgId, (client) =>
+          SpecOriginStore.record(client, {
+            orgId,
+            projectId,
+            specId: created.specId,
+            issueLoopId: originIssueLoopId,
+            triageTaskId: originTriageTaskId,
+            attemptNumber,
+            role: "primary_fix",
+            ordinal,
+            sourceFindingIds: canonicalFindingIds,
+          }),
+        );
+      }
     }
   };
+}
+
+/** Read the normalized key used to make issue-loop materialization replay-safe. */
+export async function findSpecOriginByKey(
+  pool: pg.Pool,
+  input: {
+    orgId: string;
+    projectId: string;
+    issueLoopId: string;
+    attemptNumber: number;
+    ordinal: number;
+  },
+): Promise<string | undefined> {
+  return runWithOrgScope(pool, input.orgId, async (client) => {
+    const result = await client.query<{ spec_id: string }>(
+      `SELECT spec_id FROM spec_origins
+        WHERE org_id = $1 AND project_id = $2 AND issue_loop_id = $3
+          AND attempt_number = $4 AND role = 'primary_fix' AND ordinal = $5
+        LIMIT 1`,
+      [input.orgId, input.projectId, input.issueLoopId, input.attemptNumber, input.ordinal],
+    );
+    return result.rows[0]?.spec_id;
+  });
 }
 
 /**
@@ -181,7 +237,7 @@ export async function materializeFreshTriageNewSpecs(
   materializer: TriageNewSpecsMaterializer | undefined,
   outcome: { newSpecs: ReadonlyArray<NewSpecRequest> },
   tracked: Set<string>,
-  ctx: { runId: string; parentSpecId: string; projectId: string; orgId: string },
+  ctx: { runId: string; parentSpecId: string; projectId: string; orgId: string; issueLoopId?: string },
 ): Promise<void> {
   if (materializer === undefined || outcome.newSpecs.length === 0) return;
   const fresh = outcome.newSpecs.filter((s) => !tracked.has(s.id));
