@@ -40,6 +40,7 @@ export const resolutionJobs = pgTable(
   (table) => [
     primaryKey({ columns: [table.orgId, table.id] }),
     uniqueIndex("resolution_jobs_org_project_id_unique").on(table.orgId, table.projectId, table.id),
+    uniqueIndex("resolution_jobs_org_idempotency_key_unique").on(table.orgId, table.idempotencyKey),
     index("resolution_jobs_org_id").on(table.orgId),
     foreignKey({
       columns: [table.orgId, table.projectId],
@@ -67,6 +68,10 @@ export const resolutionJobs = pgTable(
       sql`${table.state} IN ('queued','running','retryable','authorized','blocked','needs_attention','waived','completed')`,
     ),
     check("resolution_jobs_attempt_check", sql`${table.attempt} >= 1`),
+    check(
+      "resolution_jobs_running_lease_check",
+      sql`${table.state} <> 'running' OR (${table.leaseOwner} IS NOT NULL AND ${table.leaseExpiry} IS NOT NULL)`,
+    ),
     integrationOrgIsolationPolicy(table.orgId),
   ],
 ).enableRLS();

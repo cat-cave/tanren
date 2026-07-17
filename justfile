@@ -971,7 +971,7 @@ smoke-rls-repo-visibility:
 # Back-half self-healing cluster barrier claims the serialized node-owned RLS
 # smoke names. Each owner replaces only its no-op body when its live proof lands.
 smoke-rls-resolution-jobs:
-  echo "bh-cluster barrier stub — owning node replaces body"
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/resolutionJobs.rls.integration.test.ts
 
 smoke-rls-resolution-decisions:
   echo "bh-cluster barrier stub — owning node replaces body"

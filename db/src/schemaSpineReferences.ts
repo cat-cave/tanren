@@ -1,4 +1,5 @@
-import { pgTable, text } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, pgTable, text } from "drizzle-orm/pg-core";
 
 // Reference-only declarations for spine tables created by migrations 0034-0039.
 // They are deliberately not exported from schema.ts, so drizzle-kit does not try
@@ -45,13 +46,26 @@ export const behaviorVerdictsReference = pgTable("behavior_verdicts", {
 });
 
 /** Reference-only runtime-verification run identity (migration 0037). */
-export const behaviorVerificationRunsReference = pgTable("behavior_verification_runs", {
-  orgId: text("org_id").notNull(),
-  id: text("id").notNull(),
-  stage: text("stage"),
-  resolutionJobId: text("resolution_job_id"),
-  classification: text("classification"),
-});
+export const behaviorVerificationRunsReference = pgTable(
+  "behavior_verification_runs",
+  {
+    orgId: text("org_id").notNull(),
+    id: text("id").notNull(),
+    stage: text("stage"),
+    resolutionJobId: text("resolution_job_id"),
+    classification: text("classification"),
+  },
+  (table) => [
+    check(
+      "behavior_verification_runs_resolution_stage_check",
+      sql`${table.stage} IS NULL OR ${table.stage} IN ('baseline','production','counterfactual','soak')`,
+    ),
+    check(
+      "behavior_verification_runs_resolution_classification_check",
+      sql`${table.classification} IS NULL OR ${table.classification} IN ('product_failure','infra_failure','stale_contract','inconclusive')`,
+    ),
+  ],
+);
 
 /** Reference-only deployed release identity (migration 0036). */
 export const releaseInstancesReference = pgTable("release_instances", {
