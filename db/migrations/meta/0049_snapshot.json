@@ -1,6 +1,6 @@
 {
   "id": "8b7c553d-3f40-42c7-ad77-bf362e8ce7c9",
-  "prevId": "935bbed0-ab2b-4212-9e60-9c79581410d1",
+  "prevId": "445c8efb-fb5e-4c62-bdba-44a841b6df24",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -14270,6 +14270,236 @@
         "project_derivations_completed_check": {
           "name": "project_derivations_completed_check",
           "value": "(\"project_derivations\".\"status\" IN ('succeeded','failed','compensated') AND \"project_derivations\".\"completed_at\" IS NOT NULL) OR (\"project_derivations\".\"status\" IN ('pending','in_progress') AND \"project_derivations\".\"completed_at\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": true
+    },
+    "public.governance_policy_revisions": {
+      "name": "governance_policy_revisions",
+      "schema": "",
+      "columns": {
+        "org_id": {
+          "name": "org_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revision_number": {
+          "name": "revision_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "schema_version": {
+          "name": "schema_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_document": {
+          "name": "source_document",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "compiled_ast": {
+          "name": "compiled_ast",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "policy_hash": {
+          "name": "policy_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parent_revision_id": {
+          "name": "parent_revision_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "governance_policy_revisions_project_revision_unique": {
+          "name": "governance_policy_revisions_project_revision_unique",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "revision_number",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "governance_policy_revisions_org_id": {
+          "name": "governance_policy_revisions_org_id",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "governance_policy_revisions_org_project_hash": {
+          "name": "governance_policy_revisions_org_project_hash",
+          "columns": [
+            {
+              "expression": "org_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "policy_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "governance_policy_revisions_org_id_organizations_id_fk": {
+          "name": "governance_policy_revisions_org_id_organizations_id_fk",
+          "tableFrom": "governance_policy_revisions",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "org_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "governance_policy_revisions_project_fk": {
+          "name": "governance_policy_revisions_project_fk",
+          "tableFrom": "governance_policy_revisions",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "org_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "project_id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "governance_policy_revisions_parent_fk": {
+          "name": "governance_policy_revisions_parent_fk",
+          "tableFrom": "governance_policy_revisions",
+          "tableTo": "governance_policy_revisions",
+          "columnsFrom": [
+            "org_id",
+            "parent_revision_id"
+          ],
+          "columnsTo": [
+            "org_id",
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "governance_policy_revisions_org_id_id_pk": {
+          "name": "governance_policy_revisions_org_id_id_pk",
+          "columns": [
+            "org_id",
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {
+        "rls_org_isolation": {
+          "name": "rls_org_isolation",
+          "as": "PERMISSIVE",
+          "for": "ALL",
+          "to": [
+            "public"
+          ],
+          "using": "\"governance_policy_revisions\".\"org_id\" = current_setting('app.current_org_id', true)",
+          "withCheck": "\"governance_policy_revisions\".\"org_id\" = current_setting('app.current_org_id', true)"
+        }
+      },
+      "checkConstraints": {
+        "governance_policy_revisions_revision_number_check": {
+          "name": "governance_policy_revisions_revision_number_check",
+          "value": "\"governance_policy_revisions\".\"revision_number\" >= 1"
+        },
+        "governance_policy_revisions_schema_version_check": {
+          "name": "governance_policy_revisions_schema_version_check",
+          "value": "\"governance_policy_revisions\".\"schema_version\" >= 1"
+        },
+        "governance_policy_revisions_policy_hash_check": {
+          "name": "governance_policy_revisions_policy_hash_check",
+          "value": "\"governance_policy_revisions\".\"policy_hash\" ~ '^sha256:[0-9a-f]{64}$'"
+        },
+        "governance_policy_revisions_no_self_parent_check": {
+          "name": "governance_policy_revisions_no_self_parent_check",
+          "value": "\"governance_policy_revisions\".\"parent_revision_id\" IS NULL OR \"governance_policy_revisions\".\"parent_revision_id\" <> \"governance_policy_revisions\".\"id\""
         }
       },
       "isRLSEnabled": true
