@@ -46,7 +46,7 @@ import { createPersonaRoutes } from "./routes/personas/index.js";
 import { createProjectRoutes } from "./routes/projects/index.js";
 import { createRecoveryRoutes } from "./routes/recovery/index.js";
 import { createRunRoutes } from "./routes/runs/index.js";
-import { createSpecRoutes } from "./routes/specs/index.js";
+import { mountProjectWorkSurfaces } from "./routes/issueLoops/mount.js";
 import type { ActorContextEnv } from "./middleware/auth.js";
 
 /** The benchmark scheduler's live infra (the route supplies the pool itself). */
@@ -154,7 +154,11 @@ export function mountFeatureRoutes(app: Hono<ActorContextEnv>, deps: FeatureRout
   // runs the project's tests over SSH with the app env materialized in-process, and the
   // per-test JUnit grain is ingested in-process from the runner — no Actions secrets,
   // no JUnit-upload webhook (the no-Actions delivery model).
-  app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
+  // Project work-intake surfaces (spec CRUD + the bh-1 back-half IssueLoop
+  // aggregate read surface) on the org-scoping pool, folded into one sub-mount —
+  // see routes/issueLoops/mount.ts. Specs mount first (same path/order as the
+  // prior inline call); the issue-loop read surface follows.
+  mountProjectWorkSurfaces(app, scopedPool);
   app.route("/orgs", createPersonaRoutes({ pool: scopedPool }));
   // Runtime-verification behavior surfaces (persona/behavior-revision API + the
   // rv-4 behavior-coverage selection authority) on the org-scoping pool, folded
