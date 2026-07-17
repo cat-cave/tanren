@@ -72,6 +72,8 @@
     "unicorn/no-immediate-mutation": "error",
     "unicorn/no-object-as-default-parameter": "error",
     "unicorn/prefer-regexp-test": "error",
+    "unicorn/prefer-string-slice": "error",
+    "unicorn/prefer-array-find": "error",
     "unicorn/no-lonely-if": "error",
     "unicorn/prefer-math-min-max": "error",
     "unicorn/prefer-dom-node-dataset": "error",

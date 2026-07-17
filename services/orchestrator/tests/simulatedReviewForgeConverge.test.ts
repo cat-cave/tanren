@@ -288,7 +288,7 @@ describe("publishSimulatedReviewConvergent via GitHubReviewMergeService", () => 
     expect(receipt.forgeReviewId).toBe("11");
     expect(http.requests.filter(isPost)).toHaveLength(1);
     expect(http.requests.filter(isList)).toHaveLength(1);
-    expect(http.requests.filter(isPost)[0]?.retryTransient).toBe(false);
+    expect(http.requests.find(isPost)?.retryTransient).toBe(false);
   });
 
   it("opposite state conflict fails loud with no POST", async () => {
