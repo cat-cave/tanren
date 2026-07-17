@@ -58,6 +58,25 @@ export async function applyFinalizeLand(client: LandQueryClient, input: Finalize
     status: "merged",
     notFromStatuses: ["merged"],
   });
+  // in-16 — TRANSACTIONAL DELIVERY OUTBOX. On this authorized land, enqueue a durable
+  // `delivery_runs` outbox row on the SAME in-transaction client as `merge.completed` +
+  // the spec `merged` flip: all-or-nothing with the land record, so there is never a
+  // "merged but nobody scheduled delivery" gap (integrations.md §F). NO external provider
+  // call happens here — only the durable row; in-17's delivery DAG consumes it later.
+  //
+  // Keyed to the merge SHA + the authorizing decision (which pins the requirement/binding
+  // generation via its proof). The id is DETERMINISTIC (`delivery-<authorityDecisionId>`),
+  // and both the PK `(org_id, id)` and the `(org_id, project_id, authority_decision_id)`
+  // unique index make the INSERT idempotent: a `merge_state_unknown` reconcile retry
+  // re-runs this applier with the same key and `ON CONFLICT DO NOTHING` writes exactly
+  // ONE row, never a duplicate. A throw here (e.g. the decision FK is absent) ROLLS BACK
+  // the whole land record — never a half-written outbox row.
+  await client.query(
+    `INSERT INTO delivery_runs (org_id, id, project_id, authority_decision_id, merge_sha, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending')
+     ON CONFLICT DO NOTHING`,
+    [input.orgId, `delivery-${input.authorityDecisionId}`, input.projectId, input.authorityDecisionId, input.mergeSha],
+  );
 }
 
 /**
@@ -79,8 +98,18 @@ export interface LandFinalizeContext {
   auditEnvelope: AuditEnvelope;
 }
 
-/** Project the land context + the resolved main sha onto the writer's `finalizeLand` op. */
-function finalizeLandInputFrom(context: LandFinalizeContext, mainSha: string): FinalizeLandInput {
+/**
+ * Project the land context + the resolved main sha + the authorizing decision id onto
+ * the writer's `finalizeLand` op. The `authorityDecisionId` is what the in-16
+ * transactional delivery outbox row is FK-bound to (see {@link applyFinalizeLand}); the
+ * caller derives it from the authorization so it matches the decision row persisted in
+ * step 1 (`persistDecisionRows`).
+ */
+function finalizeLandInputFrom(
+  context: LandFinalizeContext,
+  mainSha: string,
+  authorityDecisionId: string,
+): FinalizeLandInput {
   return {
     orgId: context.orgId,
     runId: context.runId,
@@ -91,8 +120,18 @@ function finalizeLandInputFrom(context: LandFinalizeContext, mainSha: string): F
     prNumber: context.prNumber,
     integration: context.integration,
     mergeSha: mainSha,
+    authorityDecisionId,
     auditEnvelope: context.auditEnvelope,
   };
+}
+
+/**
+ * The deterministic `authority_decisions.id` for an authorization — IDENTICAL to the id
+ * `persistDecisionRows` (step 1) inserts, so the in-16 delivery-outbox FK resolves the
+ * decision row that authorized this exact land.
+ */
+function authorityDecisionIdFor(auth: LandAuthorization): string {
+  return `decision-${auth.subject.id}-${auth.envelope.headSha}`;
 }
 
 /** Insert the authority_decisions + idempotent authority_effect_intents rows (step 1). */
@@ -103,7 +142,7 @@ async function persistDecisionRows(
   effectIntentId: string,
 ): Promise<void> {
   const e = auth.envelope;
-  const decisionId = `decision-${auth.subject.id}-${e.headSha}`;
+  const decisionId = authorityDecisionIdFor(auth);
   await runWithOrgScope(pool, context.orgId, async (client) => {
     await client.query(
       `INSERT INTO authority_decisions
@@ -203,7 +242,11 @@ export function buildAuthorityLandStore(
       // Audit D-R3.2: the writer is REQUIRED — the in-process `runWithOrgScope +
       // applyFinalizeLand` fallback was an unreachable half-measure once PR #714's
       // `runStateWriterFromEnv` always returned a writer.
-      const { auditId } = await writer.finalizeLand(finalizeLandInputFrom(context, input.mainSha));
+      // in-16: the authorizing decision id (matching step 1's `persistDecisionRows`) rides
+      // the finalize input so the delivery-outbox row it inserts is FK-bound to the decision.
+      const { auditId } = await writer.finalizeLand(
+        finalizeLandInputFrom(context, input.mainSha, authorityDecisionIdFor(input.authorization)),
+      );
       await persistReceiptRow(pool, context, input.effectIntentId, input.mainSha, auditId);
       return { auditId };
     },
