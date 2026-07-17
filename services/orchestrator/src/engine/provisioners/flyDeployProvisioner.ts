@@ -42,10 +42,10 @@
 //
 // Deploy trigger: `triggerDeploy` POSTs `/v1/apps/{app}/machines` to create + run a
 // machine from the app's image — the Machines-API release equivalent of `fly deploy`
-// — and returns the machine id + the app's stable URL + its reported state. It then
-// REAPS every other machine of the app (`reapOtherMachines`) so a single-instance,
-// file-backed app converges to exactly one machine per release instead of accumulating
-// one per deploy (which fragments a local store across machines — apex v96 root cause).
+// — and returns the machine id + the app's stable URL + its reported state. The
+// post-verification hook then reaps every other machine only after the direct-api
+// adapter has health-verified and marked the new release live, preserving the prior
+// serving machine when a new image fails to boot.
 //
 // MERGE-REFLECTING PRECEDENCE (PR2): `triggerDeploy` now has TWO image sources,
 // tried in this order:
@@ -347,17 +347,17 @@ class FlyDeployApi implements DeployProviderApi {
     if (body.id === undefined) {
       throw new Error(`fly trigger deploy for '${app.name}' returned no machine id: ${response.text}`);
     }
-    // Reap every OTHER machine of this app so a single-instance app converges to exactly ONE
-    // machine per release. Fly's `POST /v1/apps/{app}/machines` CREATES a NEW machine on every
-    // deploy and never retires the prior one, so over N deploys an app accumulates N machines.
-    // For a single-instance, file-backed app that is fatal: each machine has its OWN local store,
-    // so a write that lands on one machine and a later read that hits another reads the record as
-    // "missing" — the data FRAGMENTS across machines (confirmed live on apex v96: ~30 machines →
-    // persistence appears broken; reaping to 1 → persistence works). Runs AFTER the new machine is
-    // created (`body.id` is now serving), so there is NO serving gap. Best-effort by contract — the
-    // new release is already live, so a listing/transport failure here must NEVER fail the deploy.
-    await this.reapOtherMachines(app.name, token, body.id);
     return { deploymentId: body.id, url: previewUrlPattern(app.name), state: body.state ?? "started" };
+  }
+
+  /**
+   * Converge a Fly app back to one machine only after `DirectApiDeployAdapter.verify`
+   * proved this machine healthy and persisted it as live. This preserves the prior
+   * production machine if the new image reaches a failure terminal or its URL fails
+   * the smoke check.
+   */
+  async afterVerifiedDeployment(_grant: OrgGrant, token: string, app: DeployApp, deploymentId: string): Promise<void> {
+    await this.reapOtherMachines(app.name, token, deploymentId);
   }
 
   // Destroy every machine of `appName` except `keepId`, so a single-instance app

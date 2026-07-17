@@ -269,6 +269,11 @@ export class DirectApiDeployAdapter implements DeployAdapter {
       deploymentId,
       url: verification.url,
     });
+    // Fly's single-instance convergence reaps old machines through this hook. It
+    // deliberately runs only after the ready poll, smoke check, and durable live
+    // transition above. Cleanup is best-effort: it must not turn a verified, marked
+    // live release into a failed deployment when the provider's reap call flakes.
+    await provisioner.afterVerifiedDeployment(verifiedGrant, ref.appId, deploymentId).catch(() => {});
     return verification;
   }
 

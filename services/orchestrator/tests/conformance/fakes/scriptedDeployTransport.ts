@@ -123,7 +123,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
     text: "",
   };
   // Fly-only: the machines an app currently has (appName → machine ids). A deploy TRIGGER
-  // (`POST /machines`) appends its new machine; the reap (`GET /machines` then `DELETE
+  // (`POST /machines`) appends its new machine; post-verify reap (`GET /machines` then `DELETE
   // /machines/{id}?force=true`) lists + removes them. `machineDeletes` records every reap
   // DELETE (with the `force` flag) so a test can prove the priors were reaped and the new
   // machine kept.
@@ -265,7 +265,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
                 image_ref: { digest: SCRIPTED_ARTIFACT_DIGEST },
               });
         }
-        // Machines LIST (the reap's discover step): Fly `GET /v1/apps/{name}/machines` — no
+        // Machines LIST (the post-verify reap's discover step): Fly `GET /v1/apps/{name}/machines` — no
         // trailing id, so `parseStatusRead` returned undefined. The live API returns a TOP-LEVEL
         // JSON ARRAY of machines, so serve `[{ id }, …]` (what `reapOtherMachines` reads). A
         // scripted override drives the best-effort non-2xx list path.
@@ -304,7 +304,7 @@ export function scriptedDeployTransport(flavor: DeployFlavor, seedNames: string[
         const id = `${flavor}_deploy_${deployCounter}`;
         if (flavor === "fly") {
           // A Fly release CREATES a new machine (never retires the prior); model that so the
-          // reap sees the new machine alongside any seeded priors. `deploy.appId` is the app
+          // post-verify reap sees the new machine alongside any seeded priors. `deploy.appId` is the app
           // NAME (from the `/v1/apps/{name}/machines` path).
           machinesByApp.set(deploy.appId, [...(machinesByApp.get(deploy.appId) ?? []), id]);
         }
