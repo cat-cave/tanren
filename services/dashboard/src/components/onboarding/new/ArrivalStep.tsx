@@ -35,6 +35,7 @@ export interface ArrivalStepProps {
   projectName: string;
   specCount: number;
   readyCount: number;
+  unavailable?: boolean;
 }
 
 export function ArrivalStep(props: ArrivalStepProps) {
@@ -111,21 +112,39 @@ export function ArrivalStep(props: ArrivalStepProps) {
           </div>
 
           <div class="gf-arrival" data-arrival-card>
-            <div class="eyebrow">your smithy is ready</div>
+            <div class="eyebrow">{props.unavailable === true ? "dag unavailable" : "your smithy is ready"}</div>
             <div class="display">
-              {props.specCount} specs.
-              <br />
-              <em>{props.readyCount} ready</em>.
+              {props.unavailable === true ? (
+                <>
+                  graph read
+                  <br />
+                  <em>unavailable</em>.
+                </>
+              ) : (
+                <>
+                  {props.specCount} specs.
+                  <br />
+                  <em>{props.readyCount} ready</em>.
+                </>
+              )}
             </div>
             <div class="sub">
-              {props.projectName} is live · tanren will pick a ready leaf spec and start when you light the fire.
+              {props.unavailable === true
+                ? `${props.projectName} exists, but the live DAG read failed. Reload before starting work; this is not an empty project.`
+                : `${props.projectName} is live · tanren will pick a ready leaf spec and start when you light the fire.`}
             </div>
-            <div class="actions">
-              <a class="btn primary" href={`/projects/${props.projectId}?mode=dag`}>
-                open the smithy ↗
-              </a>
+            {props.unavailable === true ? null : (
+              <div class="actions">
+                <a class="btn primary" href={`/projects/${props.projectId}?mode=dag`}>
+                  open the smithy ↗
+                </a>
+              </div>
+            )}
+            <div class="footnote">
+              {props.unavailable === true
+                ? "↑ arrival paused until the live graph loads"
+                : "↑ engine paused until you click"}
             </div>
-            <div class="footnote">↑ engine paused until you click</div>
           </div>
         </div>
       </div>

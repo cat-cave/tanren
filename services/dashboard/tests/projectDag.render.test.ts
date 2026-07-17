@@ -269,6 +269,36 @@ describe("DAG-primary project view (?mode=dag)", () => {
     expect(html).toContain("/projects/project_easy?mode=chat");
   });
 
+  it("renders DAG unavailable instead of throwing when required DAG reads fail", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/auth/me"))
+        return new Response(JSON.stringify({ userId: "u1", csrfToken: "c", expiresAt: "2030-01-01" }), {
+          status: 200,
+        });
+      if (url.endsWith("/orgs")) return new Response(JSON.stringify({ orgs: [ORG] }), { status: 200 });
+      if (/\/orgs\/[^/]+\/projects$/u.test(url))
+        return new Response(JSON.stringify({ projects: [PROJECT] }), { status: 200 });
+      if (url.includes("/runs")) return new Response(JSON.stringify({ items: RUNS }), { status: 200 });
+      if (url.includes("/insights")) return new Response(JSON.stringify({ insights: [] }), { status: 200 });
+      if (url.includes("/milestones")) return new Response(JSON.stringify({ milestones: MILESTONES }), { status: 200 });
+      if (url.includes("/feed")) return new Response(JSON.stringify({ items: FEED }), { status: 200 });
+      if (url.endsWith("/specs") && method === "GET")
+        return new Response(JSON.stringify({ error: "specs_unavailable" }), { status: 503 });
+      if (url.includes("/personas")) return new Response(JSON.stringify({ personas: PERSONAS }), { status: 200 });
+      if (url.includes("/behaviors")) return new Response(JSON.stringify({ behaviors: BEHAVIORS }), { status: 200 });
+      if (url.endsWith("/healthz")) return new Response("ok", { status: 200 });
+      return new Response("not found", { status: 404 });
+    });
+    const app = await build();
+    const res = await app.request("/projects/project_easy?mode=dag");
+    const html = await res.text();
+    expect(res.status).toBe(200);
+    expect(html).toContain("data-project-dag-unavailable");
+    expect(html).toContain("This is not an empty graph");
+  });
+
   it("defaults to chat-primary and honours the persisted mode cookie", async () => {
     const app = await build();
     const def = await (await app.request("/projects/project_easy")).text();

@@ -64,6 +64,9 @@ function wire(source: FakeEventSource, reducer: RunStreamReducer): void {
     paint() {},
     applyStatus() {},
     applyTask() {},
+    setStreamLive() {},
+    setStreamStale() {},
+    markStreamUnavailableUnlessFinal() {},
   });
 }
 

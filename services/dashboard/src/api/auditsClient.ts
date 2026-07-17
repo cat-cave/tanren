@@ -28,7 +28,7 @@ export class AuditsClient extends OrchestratorHttpClient {
 
   /** Create an audit job (the composer / a recommended-gap one-click schedule). */
   async create(orgId: string, input: CreateAuditJobInput): Promise<{ ok: boolean; job?: AuditJob }> {
-    const r = await this.sendJson<{ job?: AuditJob }>("POST", this.base(orgId), input);
+    const r = await this.sendJson<{ job?: AuditJob }>("POST", this.base(orgId), input, { expectBody: true });
     return { ok: r.ok, ...(r.body?.job === undefined ? {} : { job: r.body.job }) };
   }
 
@@ -38,6 +38,8 @@ export class AuditsClient extends OrchestratorHttpClient {
     const r = await this.sendJson<{ job?: AuditJob }>(
       "POST",
       `${this.base(orgId)}/${encodeURIComponent(jobId)}/${verb}`,
+      undefined,
+      { expectBody: true },
     );
     return { ok: r.ok, ...(r.body?.job === undefined ? {} : { job: r.body.job }) };
   }

@@ -36,7 +36,7 @@ export interface GreenfieldBodyProps {
   derived?: {
     projectId: string;
     projectName: string;
-    dag: ProjectDag;
+    dag?: ProjectDag;
   };
   error?: string;
   /** Session CSRF for pure HTML form posts (cookie-authenticated writes). */
@@ -104,8 +104,9 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
           <ArrivalStep
             projectId={props.derived.projectId}
             projectName={props.derived.projectName}
-            specCount={props.derived.dag.counts.total}
+            specCount={props.derived.dag?.counts.total ?? 0}
             readyCount={readyLeafCount(props.derived.dag)}
+            unavailable={props.derived.dag === undefined}
           />
         )}
       </div>
@@ -116,7 +117,8 @@ export function GreenfieldBody(props: GreenfieldBodyProps) {
 // A leaf spec is "ready" when nothing it depends on is unmet and it has no
 // downstream dependents pending it — approximated here as queued nodes not on
 // the critical path (mirrors the hi-fi "1 ready" arrival count).
-function readyLeafCount(dag: ProjectDag): number {
+function readyLeafCount(dag: ProjectDag | undefined): number {
+  if (dag === undefined) return 0;
   const ready = dag.nodes.filter((n) => n.status === "queued" && !n.onCriticalPath).length;
   return Math.max(1, ready);
 }

@@ -202,6 +202,28 @@ function applyStatus(root: HTMLElement, status: string, outcome: string | null):
   }
 }
 
+export function isFinalStreamState(root: HTMLElement): boolean {
+  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+  return flag?.textContent === "● final";
+}
+
+export function markStreamUnavailableUnlessFinal(root: HTMLElement, reason: string): void {
+  if (isFinalStreamState(root)) return;
+  setStreamState(root, "unavailable", reason);
+}
+
+export function setStreamState(root: HTMLElement, state: "live" | "stale" | "unavailable", reason?: string): void {
+  const flag = root.querySelector<HTMLElement>('[data-rd="live-flag"]');
+  if (flag === null) return;
+  if (state === "live") {
+    flag.textContent = "↻ live";
+    flag.removeAttribute("title");
+    return;
+  }
+  flag.textContent = state === "stale" ? "⚠ stream stale" : "⚠ stream unavailable";
+  if (reason !== undefined) flag.title = reason;
+}
+
 function applyTask(root: HTMLElement, task: TaskFrame): void {
   const row = root.querySelector<HTMLElement>(`[data-rd-moment="${task.taskId}"]`);
   if (row === null) return;
@@ -277,6 +299,12 @@ interface RunStreamView {
   paint(): void;
   applyStatus(status: string, outcome: string | null): void;
   applyTask(task: TaskFrame): void;
+  /** Mark the live-flag healthy on a well-formed frame. */
+  setStreamLive(): void;
+  /** Mark the live-flag stale (a malformed frame) with an operator-facing reason. */
+  setStreamStale(reason: string): void;
+  /** Mark the stream unavailable on a transport error, unless the run already finished. */
+  markStreamUnavailableUnlessFinal(reason: string): void;
 }
 
 /**
@@ -291,6 +319,7 @@ export function wireRunStreamListeners(source: EventSource, reducer: RunStreamRe
         costs?: CostRecordFrame[];
         run?: { status: string; outcome: string | null };
       } = JSON.parse(event.data);
+      view.setStreamLive();
       reducer.ingestSnapshotCosts(data.costs);
       view.paint();
       if (data.run !== undefined) {
@@ -301,17 +330,18 @@ export function wireRunStreamListeners(source: EventSource, reducer: RunStreamRe
         reducer.ingestStatus(data.run.status);
       }
     } catch {
-      /* ignore malformed frame */
+      view.setStreamStale("Malformed snapshot frame from the live stream.");
     }
   });
 
   source.addEventListener("costs", (event) => {
     try {
       const data: { costs?: CostRecordFrame[] } = JSON.parse(event.data);
+      view.setStreamLive();
       reducer.ingestCosts(data.costs);
       view.paint();
     } catch {
-      /* ignore */
+      view.setStreamStale("Malformed costs frame from the live stream.");
     }
   });
 
@@ -321,21 +351,23 @@ export function wireRunStreamListeners(source: EventSource, reducer: RunStreamRe
         status: string;
         outcome: string | null;
       } = JSON.parse(event.data);
+      view.setStreamLive();
       view.applyStatus(data.status, data.outcome);
       // Mark terminal but do not close yet — final tasks/events/costs may still
       // arrive if the server reorders poorly; server EOF is authoritative.
       reducer.ingestStatus(data.status);
     } catch {
-      /* ignore */
+      view.setStreamStale("Malformed status frame from the live stream.");
     }
   });
 
   source.addEventListener("task", (event) => {
     try {
       const frame: TaskFrame = JSON.parse(event.data);
+      view.setStreamLive();
       view.applyTask(frame);
     } catch {
-      /* ignore */
+      view.setStreamStale("Malformed task frame from the live stream.");
     }
   });
 
@@ -345,7 +377,11 @@ export function wireRunStreamListeners(source: EventSource, reducer: RunStreamRe
     // mid-delivery of final cost reconciliations).
     if (reducer.isTerminal) {
       source.close();
+      return;
     }
+    // A live run lost its transport — surface it (EventSource keeps reconnecting)
+    // rather than leaving the flag looking healthy.
+    view.markStreamUnavailableUnlessFinal("The browser lost the run event stream; EventSource will keep reconnecting.");
   });
 }
 
@@ -374,6 +410,15 @@ export function initRunStream(): void {
     },
     applyTask: (task) => {
       applyTask(root, task);
+    },
+    setStreamLive: () => {
+      setStreamState(root, "live");
+    },
+    setStreamStale: (reason) => {
+      setStreamState(root, "stale", reason);
+    },
+    markStreamUnavailableUnlessFinal: (reason) => {
+      markStreamUnavailableUnlessFinal(root, reason);
     },
   });
 
