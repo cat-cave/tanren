@@ -10,6 +10,8 @@ import {
   type SymptomBaselineResult,
   type SymptomProbeDriver,
   type SymptomProbeEvidence,
+  type SymptomVerificationInput,
+  type SymptomVerificationResult,
 } from "../contracts/symptomProbe.js";
 import type { AppendEventInput, EventStore } from "../eventStore.js";
 import { PgEventStore } from "../eventStore.js";
@@ -47,26 +49,48 @@ export class SymptomProbeAdapter {
   public async runBaseline(input: SymptomBaselineInput): Promise<SymptomBaselineResult> {
     const contract = parseSymptomContract(input.contract);
     await this.emitBaselineStarted(input, contract.issueLoopId);
+    const result = await this.runVerification({
+      ...input,
+      contract,
+      expectedObservation: contract.expectedFailingObservation,
+    });
+    const baselineOutcome =
+      result.outcome === "inconclusive"
+        ? "inconclusive"
+        : result.outcome === "passed"
+          ? "reproduced"
+          : "not_reproduced";
+    await this.emitBaselineObserved(
+      input,
+      contract.issueLoopId,
+      baselineOutcome,
+      result.evidence.map((item) => item.id),
+    );
+    return { ...result, baselineOutcome };
+  }
+
+  /**
+   * Execute the SP·5 probe against a caller-supplied assertion target.
+   *
+   * Baseline reproduction passes the original failing observation; production
+   * verification passes the corrected observation. Stages own their frozen
+   * lifecycle events, while this shared path owns observations, CAS evidence,
+   * and `symptom.assertion.recorded`.
+   */
+  public async runVerification(input: SymptomVerificationInput): Promise<SymptomVerificationResult> {
+    const contract = parseSymptomContract(input.contract);
     const execution = await this.driver.execute({
       orgId: input.orgId,
       projectId: input.projectId,
       contract,
       verificationRunId: input.verificationRunId,
     });
-    const expectedHash = symptomObservationHash(contract.expectedFailingObservation);
+    const expectedHash = symptomObservationHash(input.expectedObservation);
     const observedHash = symptomObservationHash(execution.observedObservation);
     const timingMs = nonnegativeTiming(execution.timingMs);
     const outcome =
       execution.outcome === "inconclusive" ? "inconclusive" : expectedHash === observedHash ? "passed" : "failed";
-    const baselineOutcome =
-      outcome === "inconclusive" ? "inconclusive" : outcome === "passed" ? "reproduced" : "not_reproduced";
     const evidence = await this.captureEvidence(input, execution.observedObservation, execution.evidence);
-    await this.emitBaselineObserved(
-      input,
-      contract.issueLoopId,
-      baselineOutcome,
-      evidence.map((item) => item.id),
-    );
     const assertion = await this.evidence.recordAssertion({
       orgId: input.orgId,
       projectId: input.projectId,
@@ -77,7 +101,7 @@ export class SymptomProbeAdapter {
       outcome,
       timingMs,
       sampleData: {
-        expectedObservation: contract.expectedFailingObservation,
+        expectedObservation: input.expectedObservation,
         observedObservation: execution.observedObservation,
         evidenceArtifactIds: evidence.map((item) => item.id),
       },
@@ -91,7 +115,6 @@ export class SymptomProbeAdapter {
       expectedHash,
       observedHash,
       outcome,
-      baselineOutcome,
       timingMs,
       evidence,
       assertionId: assertion.id,

@@ -3,18 +3,20 @@ import type pg from "pg";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { createSpecRoutes } from "../specs/index.js";
 import { createIssueLoopRoutes } from "./index.js";
+import { createProductionVerificationRoutes } from "./productionVerification.js";
 
 /**
  * Mount the project work-intake surfaces on the org-scoping pool:
  *
  * 1. the spec CRUD API (`createSpecRoutes`), and
- * 2. the bh-1 back-half IssueLoop aggregate read surface
+ * 2. the bh-1 back-half IssueLoop aggregate read surface, and
+ * 3. the bh-10 production-verification retry command
  *    (`createIssueLoopRoutes`) at
  *    `/orgs/:orgId/projects/:projectId/issue-loops` (+ `/:loopId`,
  *    `/:loopId/findings`).
  *
- * Both are the project's org/project-scoped work surfaces — a triaged issue loop
- * becomes a spec — so they share one sub-mount. Extracted from
+ * These are the project's org/project-scoped work surfaces — a triaged issue loop
+ * becomes a spec and later receives its production replay — so they share one sub-mount. Extracted from
  * `mountFeatureRoutes` to keep that aggregator under the
  * `import/max-dependencies` cap (same pattern as `mountBehaviorSurfaces`): the
  * spec route mounts first, exactly as before, then the new issue-loop surface —
@@ -23,4 +25,7 @@ import { createIssueLoopRoutes } from "./index.js";
 export function mountProjectWorkSurfaces(app: Hono<ActorContextEnv>, scopedPool: pg.Pool): void {
   app.route("/orgs", createSpecRoutes({ pool: scopedPool }));
   app.route("/orgs", createIssueLoopRoutes({ pool: scopedPool }));
+  // This command is deliberately on the documented public v1 path. It queues
+  // a locked production-stage job; bh-6b executes it under the durable lease.
+  app.route("/v1/orgs", createProductionVerificationRoutes({ pool: scopedPool }));
 }
