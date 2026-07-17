@@ -224,6 +224,14 @@ export class InMemoryMergeQueueModel implements MergeQueueModel {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
+  async renewClaim(queueId: string): Promise<boolean> {
+    const row = this.rows.get(queueId);
+    if (row === undefined || row.status !== "merging") return false;
+    row.claimedAt = this.now();
+    return true;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
   async markMerged(queueId: string): Promise<void> {
     const row = this.rows.get(queueId);
     if (row !== undefined) {

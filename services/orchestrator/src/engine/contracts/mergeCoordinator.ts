@@ -22,6 +22,7 @@
 
 import { priorityRank, type SpecPriority } from "../state/spec.js";
 import type { ConflictRecoveryReceipt, TerminalParkNoopStatus } from "./conflictResolution.js";
+import type { WatchdogProgressSignal } from "./commandSubstrate.js";
 
 // ---- Queue snapshot (the ordering input) ----------------------------------
 
@@ -300,7 +301,12 @@ export interface MergeQueueModel {
  * outcome the coordinator maps to a queue-state transition + event.
  */
 export interface MergeRunner {
-  driveMerge(input: { runId: string; projectId: string }): Promise<MergeDriveOutcome>;
+  driveMerge(input: {
+    runId: string;
+    projectId: string;
+    /** Fires only when the merge drive's ActivityWatchdog observes real work advancement. */
+    onWatchdogProgress?: (signal: WatchdogProgressSignal) => void;
+  }): Promise<MergeDriveOutcome>;
 }
 
 /**
