@@ -69,13 +69,21 @@ export async function runProvisioningLifecycle<T>(
   } catch (error) {
     // A provider might have completed just before a persistence failure. Do not
     // replay that effect blindly: record the frozen state_unknown transition via
-    // the writer and let a reconciler inspect the provider idempotency key.
-    await input.writer.stateUnknown({
+    // the writer and let a reconciler inspect the provider idempotency key. A
+    // normal transition is fenced to this worker's live lease. If that lease
+    // lapsed or was stolen, use the writer's still-claimed fallback so this
+    // ambiguity remains observable without exposing lifecycle SQL to the data
+    // plane.
+    const stateUnknown = {
       orgId: input.claim.orgId,
       reconciliationId: input.claim.reconciliationId,
       claimOwner: input.claim.claimOwner,
       ...input.stateUnknown,
-    });
+    };
+    const marked = await input.writer.stateUnknown(stateUnknown);
+    if (!marked) {
+      await input.writer.stateUnknownAfterClaimLost(stateUnknown);
+    }
     throw error;
   }
 }

@@ -16,26 +16,68 @@ import { InMemoryIntegrationProvisioner } from "./fakes/inMemoryIntegrationProvi
 
 class RecordingIntegrationStateWriter implements IntegrationStateWriter {
   readonly calls: string[] = [];
+  readonly stateUnknownResults: boolean[] = [];
+  readonly transitions: string[] = [];
   completeResult = true;
+  private status: "pending" | "claimed" | "completed" | "state_unknown" = "pending";
+  private claimOwner: string | undefined;
+  private claimExpiresAt = 0;
 
   async claim(input: ClaimIntegrationReconciliationInput): Promise<ClaimedIntegrationReconciliation | undefined> {
     this.calls.push(`claim:${input.reconciliationId}`);
+    if (this.status !== "pending") return undefined;
+    this.status = "claimed";
+    this.claimOwner = input.claimOwner;
+    this.claimExpiresAt = Date.now() + input.leaseMs;
     return { projectId: "project_writer", requirementId: "requirement_writer", phase: "provision", attempt: 1 };
   }
 
   async heartbeat(input: HeartbeatIntegrationReconciliationInput): Promise<boolean> {
     this.calls.push(`heartbeat:${input.reconciliationId}`);
+    if (!this.holdsLiveClaim(input)) return false;
+    this.claimExpiresAt = Date.now() + input.leaseMs;
     return true;
   }
 
   async complete(input: CompleteIntegrationReconciliationInput): Promise<boolean> {
     this.calls.push(`complete:${input.reconciliationId}:${input.status}`);
-    return this.completeResult;
+    if (!this.holdsLiveClaim(input)) return false;
+    // In production a false result is a claim-owner/expiry fence miss, never a
+    // still-live claimant declining to complete. Model that here so a test
+    // cannot accidentally combine complete=false with stateUnknown=true.
+    if (!this.completeResult) {
+      this.claimExpiresAt = Date.now() - 1;
+      return false;
+    }
+    this.status = "completed";
+    this.claimOwner = undefined;
+    return true;
   }
 
   async stateUnknown(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean> {
     this.calls.push(`state_unknown:${input.reconciliationId}`);
-    return true;
+    const marked = this.holdsLiveClaim(input);
+    this.stateUnknownResults.push(marked);
+    if (marked) this.transitionToStateUnknown();
+    return marked;
+  }
+
+  async stateUnknownAfterClaimLost(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean> {
+    this.calls.push(`state_unknown_after_claim_lost:${input.reconciliationId}`);
+    const marked = this.status === "claimed" && !this.holdsLiveClaim(input);
+    this.stateUnknownResults.push(marked);
+    if (marked) this.transitionToStateUnknown();
+    return marked;
+  }
+
+  private holdsLiveClaim(input: { claimOwner: string }): boolean {
+    return this.status === "claimed" && this.claimOwner === input.claimOwner && this.claimExpiresAt > Date.now();
+  }
+
+  private transitionToStateUnknown(): void {
+    this.status = "state_unknown";
+    this.claimOwner = undefined;
+    this.transitions.push("integration.reconcile.state_unknown");
   }
 }
 
@@ -69,7 +111,7 @@ describe("IntegrationStateWriter conformance — in-memory provisioner data plan
     expect(Reflect.get(provisioner, "setIntegrationLifecycleState")).toBeUndefined();
   });
 
-  it("records state_unknown through the writer when the lifecycle completion loses its claim", async () => {
+  it("records state_unknown through the lost-claim writer path when lifecycle completion loses its claim", async () => {
     const writer = new RecordingIntegrationStateWriter();
     writer.completeResult = false;
     const provisioner = new InMemoryIntegrationProvisioner();
@@ -96,6 +138,12 @@ describe("IntegrationStateWriter conformance — in-memory provisioner data plan
       "claim:reconciliation_lost",
       "complete:reconciliation_lost:succeeded",
       "state_unknown:reconciliation_lost",
+      "state_unknown_after_claim_lost:reconciliation_lost",
     ]);
+    // The normal stateUnknown fence matches the complete fence: a lost claim
+    // must not silently report a successful owner-scoped state_unknown write.
+    expect(writer.stateUnknownResults).toEqual([false, true]);
+    // The fallback is a real lifecycle transition, not just an ignored false.
+    expect(writer.transitions).toEqual(["integration.reconcile.state_unknown"]);
   });
 });

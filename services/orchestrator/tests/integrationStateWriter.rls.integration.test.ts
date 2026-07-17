@@ -5,7 +5,15 @@
 import { migrate } from "@tanren/db";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { DirectIntegrationStateWriter } from "../src/engine/contracts/integrationStateWriter.js";
+import {
+  DirectIntegrationStateWriter,
+  type ClaimedIntegrationReconciliation,
+  type ClaimIntegrationReconciliationInput,
+  type CompleteIntegrationReconciliationInput,
+  type HeartbeatIntegrationReconciliationInput,
+  type IntegrationStateWriter,
+  type MarkIntegrationReconciliationStateUnknownInput,
+} from "../src/engine/contracts/integrationStateWriter.js";
 import { InMemoryIntegrationProvisioner } from "./conformance/fakes/inMemoryIntegrationProvisioner.js";
 import { testOrgGrant } from "./helpers/orgGrant.js";
 
@@ -37,6 +45,38 @@ function appUrl(url: string, database: string): string {
   return parsed.toString();
 }
 
+/** Forces the production writer's completion predicate to observe an expired lease. */
+class ExpiringCompleteWriter implements IntegrationStateWriter {
+  constructor(
+    private readonly writer: DirectIntegrationStateWriter,
+    private readonly ownerPool: Pool,
+  ) {}
+
+  claim(input: ClaimIntegrationReconciliationInput): Promise<ClaimedIntegrationReconciliation | undefined> {
+    return this.writer.claim(input);
+  }
+
+  heartbeat(input: HeartbeatIntegrationReconciliationInput): Promise<boolean> {
+    return this.writer.heartbeat(input);
+  }
+
+  async complete(input: CompleteIntegrationReconciliationInput): Promise<boolean> {
+    await this.ownerPool.query(
+      "UPDATE integration_reconciliations SET claim_expires_at = now() - interval '1 second' WHERE org_id = $1 AND id = $2",
+      [input.orgId, input.reconciliationId],
+    );
+    return this.writer.complete(input);
+  }
+
+  stateUnknown(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean> {
+    return this.writer.stateUnknown(input);
+  }
+
+  stateUnknownAfterClaimLost(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean> {
+    return this.writer.stateUnknownAfterClaimLost(input);
+  }
+}
+
 describeDb("IntegrationStateWriter — tenant-scoped control-plane lifecycle writes", () => {
   const database = dbName();
   let ownerPool: Pool;
@@ -55,6 +95,7 @@ describeDb("IntegrationStateWriter — tenant-scoped control-plane lifecycle wri
     await seedReconciliation(ownerPool, ORG_A, PROJECT_A, "requirement_a", "reconciliation_retry");
     await seedReconciliation(ownerPool, ORG_A, PROJECT_A, "requirement_a", "reconciliation_fixed");
     await seedReconciliation(ownerPool, ORG_A, PROJECT_A, "requirement_a", "reconciliation_unknown");
+    await seedReconciliation(ownerPool, ORG_A, PROJECT_A, "requirement_a", "reconciliation_lost_claim");
     await seedReconciliation(ownerPool, ORG_B, PROJECT_B, "requirement_b", "reconciliation_other_org");
   }, 60_000);
 
@@ -159,6 +200,7 @@ describeDb("IntegrationStateWriter — tenant-scoped control-plane lifecycle wri
     expect(rows.rows).toEqual([
       { id: "reconciliation_data_plane", status: "succeeded", claim_owner: null },
       { id: "reconciliation_fixed", status: "fixed_point", claim_owner: null },
+      { id: "reconciliation_lost_claim", status: "pending", claim_owner: null },
       { id: "reconciliation_retry", status: "retry_scheduled", claim_owner: null },
       { id: "reconciliation_unknown", status: "state_unknown", claim_owner: null },
     ]);
@@ -172,6 +214,44 @@ describeDb("IntegrationStateWriter — tenant-scoped control-plane lifecycle wri
       "integration.reconcile.retry_scheduled",
       "integration.reconcile.started",
       "integration.reconcile.fixed_point",
+      "integration.reconcile.started",
+      "integration.reconcile.state_unknown",
+    ]);
+  });
+
+  it("emits state_unknown when provider work loses its reconciliation claim", async () => {
+    const writer = new ExpiringCompleteWriter(new DirectIntegrationStateWriter(appPool), ownerPool);
+    const provisioner = new InMemoryIntegrationProvisioner();
+    const projectCtx = { orgId: ORG_A, projectId: PROJECT_A, orgSlug: "writer-a", name: "writer-a" };
+    const grant = await testOrgGrant({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      providerKind: "sentry",
+      capability: "errors",
+      operation: "provision",
+    });
+
+    await expect(
+      provisioner.reconcile({
+        writer,
+        reconciliationId: "reconciliation_lost_claim",
+        claimOwner: "data-plane-a",
+        leaseMs: 30_000,
+        grant,
+        projectCtx,
+      }),
+    ).rejects.toThrow(/lost its claim/u);
+
+    const reconciliation = await ownerPool.query<{ status: string; claim_owner: string | null }>(
+      "SELECT status, claim_owner FROM integration_reconciliations WHERE org_id = $1 AND id = $2",
+      [ORG_A, "reconciliation_lost_claim"],
+    );
+    expect(reconciliation.rows).toEqual([{ status: "state_unknown", claim_owner: null }]);
+    const events = await ownerPool.query<{ event_type: string }>(
+      "SELECT event_type FROM events WHERE org_id = $1 AND payload ->> 'reconciliationId' = $2 ORDER BY id",
+      [ORG_A, "reconciliation_lost_claim"],
+    );
+    expect(events.rows.map((event) => event.event_type)).toEqual([
       "integration.reconcile.started",
       "integration.reconcile.state_unknown",
     ]);

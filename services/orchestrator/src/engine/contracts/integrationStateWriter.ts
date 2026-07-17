@@ -66,6 +66,12 @@ export interface IntegrationStateWriter {
   heartbeat(input: HeartbeatIntegrationReconciliationInput): Promise<boolean>;
   complete(input: CompleteIntegrationReconciliationInput): Promise<boolean>;
   stateUnknown(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean>;
+  /**
+   * Record ambiguity after `stateUnknown` proved that this owner no longer has
+   * a live lease. The control plane deliberately fences this to a still-claimed
+   * row, so it cannot overwrite a reconciliation that another worker settled.
+   */
+  stateUnknownAfterClaimLost(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean>;
 }
 
 type TransitionRow = ClaimedIntegrationReconciliation;
@@ -159,6 +165,39 @@ export class DirectIntegrationStateWriter implements IntegrationStateWriter {
              observed_state = COALESCE($6::jsonb, observed_state), updated_at = now()
          WHERE org_id = $1 AND id = $2 AND status = 'claimed' AND claim_owner = $3
            AND claim_expires_at > now()
+         RETURNING project_id AS "projectId", requirement_id AS "requirementId", phase, attempt`,
+        [
+          input.orgId,
+          input.reconciliationId,
+          input.claimOwner,
+          input.failureClassification,
+          input.compensationState === undefined ? null : JSON.stringify(input.compensationState),
+          input.observedState === undefined ? null : JSON.stringify(input.observedState),
+        ],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return false;
+      await this.appendTransition(
+        client,
+        input.orgId,
+        input.reconciliationId,
+        row,
+        "integration.reconcile.state_unknown",
+      );
+      return true;
+    });
+  }
+
+  async stateUnknownAfterClaimLost(input: MarkIntegrationReconciliationStateUnknownInput): Promise<boolean> {
+    return runWithOrgScope(this.pool, input.orgId, async (client) => {
+      const result = await client.query<TransitionRow>(
+        `UPDATE integration_reconciliations
+         SET status = 'state_unknown', claim_owner = NULL, claim_expires_at = NULL,
+             failure_classification = $4,
+             compensation_state = COALESCE($5::jsonb, compensation_state),
+             observed_state = COALESCE($6::jsonb, observed_state), updated_at = now()
+         WHERE org_id = $1 AND id = $2 AND status = 'claimed'
+           AND (claim_owner IS DISTINCT FROM $3 OR claim_expires_at <= now())
          RETURNING project_id AS "projectId", requirement_id AS "requirementId", phase, attempt`,
         [
           input.orgId,
