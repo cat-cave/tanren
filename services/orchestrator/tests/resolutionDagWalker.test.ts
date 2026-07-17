@@ -1,3 +1,4 @@
+// cspell:ignore rdec vassert
 import { describe, expect, it } from "vitest";
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import type { ResolutionJob, ResolutionStage } from "../src/engine/contracts/resolutionStage.js";
@@ -116,5 +117,73 @@ describe("ResolutionDagWalker", () => {
 
     await walker.tick();
     expect(released).toEqual([expect.objectContaining({ id: job.id, state: "retryable" })]);
+  });
+
+  it("drives the real walker production path through ResolutionAuthority before settlement", async () => {
+    const calls: string[] = [];
+    const productionJob = { ...job, id: "rjob_production", stage: "production" as const };
+    const store = {
+      async recoverExpiredLeases() {
+        return [];
+      },
+      async claimNext() {
+        return productionJob;
+      },
+      async verifyActiveLease() {
+        return productionJob;
+      },
+      async heartbeat() {
+        return true;
+      },
+      async complete() {
+        calls.push("complete");
+        return true;
+      },
+      async release() {
+        return true;
+      },
+    } as unknown as ResolutionJobStore;
+    const walker = new ResolutionDagWalker({
+      store,
+      orgIds: async () => [productionJob.orgId],
+      stages: new Map([
+        [
+          "production",
+          {
+            kind: "production" as const,
+            async run() {
+              calls.push("production-stage");
+              return {
+                outcome: "failed" as const,
+                classification: "product_failure" as const,
+                proofGrade: "active_causal" as const,
+                verificationRunId: "vrun_cosmetic",
+                assertionIds: ["vassert_symptom"],
+                evidenceRefs: [],
+              };
+            },
+          },
+        ],
+      ]),
+      authority: {
+        async authorize(input) {
+          calls.push(`authority:${input.resolutionJobId}`);
+          return {
+            id: "rdec_blocked",
+            decision: "blocked",
+            inputSnapshotHash: "sha256:" + "b".repeat(64),
+            reasons: ["production symptom verification did not pass"],
+            created: true,
+          };
+        },
+        async waive() {
+          throw new Error("walker cannot waive a resolution");
+        },
+      },
+      leaseOwner: "walker_a",
+    });
+
+    await walker.tick();
+    expect(calls).toEqual(["production-stage", "authority:rjob_production", "complete"]);
   });
 });

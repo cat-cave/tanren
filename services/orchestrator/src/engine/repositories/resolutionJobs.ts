@@ -88,6 +88,10 @@ export interface ResolutionLoopControlInput {
   readonly issueLoopId: string;
 }
 
+export interface ResolutionJobLoopMembershipInput extends ResolutionLoopControlInput {
+  readonly id: string;
+}
+
 /** One minute is long enough for a periodic heartbeat to survive a transient delay. */
 export const DEFAULT_RESOLUTION_JOB_LEASE_MS = 60_000;
 
@@ -326,6 +330,24 @@ export class ResolutionJobStore {
       [input.orgId, input.leaseOwner, leaseDuration(input.leaseMs)],
     );
     return result.rows.map(decodeLeasedJob);
+  }
+
+  /** Confirm a public command's job identifier belongs to its scoped loop. */
+  public async belongsToIssueLoop(input: ResolutionJobLoopMembershipInput): Promise<boolean> {
+    return runWithOrgScope(this.pool, input.orgId, (client) => this.belongsToIssueLoopOnClient(client, input));
+  }
+
+  public async belongsToIssueLoopOnClient(
+    client: QueryClient,
+    input: ResolutionJobLoopMembershipInput,
+  ): Promise<boolean> {
+    const result = await client.query(
+      `SELECT 1
+         FROM resolution_jobs
+        WHERE org_id = $1 AND project_id = $2 AND issue_loop_id = $3 AND id = $4`,
+      [input.orgId, input.projectId, input.issueLoopId, input.id],
+    );
+    return result.rowCount === 1;
   }
 
   /** System-scoped fan-out for the durable periodic scan. */

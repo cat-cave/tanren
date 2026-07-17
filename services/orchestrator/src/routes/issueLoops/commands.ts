@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { ActorContext } from "../../auth/schemas.js";
 import { ResolutionJobStore } from "../../engine/repositories/resolutionJobs.js";
 import { SymptomContractStore } from "../../engine/repositories/symptomContracts.js";
+import { buildResolutionAuthority } from "../../engine/governance/resolutionAuthority.js";
+import type { ResolutionAuthority } from "../../engine/contracts/resolutionAuthority.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
 
@@ -17,12 +19,21 @@ const steerSchema = z
   })
   .strict();
 
+const waiveSchema = z
+  .object({
+    resolutionJobId: z.string().min(1).max(256),
+    reason: z.string().min(1).max(4_000),
+  })
+  .strict();
+
 type RouteContext = Context<ActorContextEnv>;
 
 export interface IssueLoopCommandRoutesOptions {
   readonly pool: pg.Pool;
-  readonly jobs?: Pick<ResolutionJobStore, "enqueue" | "pauseLoop" | "resumeLoop">;
+  readonly jobs?: Pick<ResolutionJobStore, "enqueue" | "pauseLoop" | "resumeLoop" | "belongsToIssueLoop">;
   readonly contracts?: Pick<SymptomContractStore, "get">;
+  /** The authenticated admin-only waiver is the only public authority action. */
+  readonly authority?: Pick<ResolutionAuthority, "waive">;
   readonly jobId?: () => string;
 }
 
@@ -57,6 +68,7 @@ export function createIssueLoopCommandRoutes(options: IssueLoopCommandRoutesOpti
   const app = new Hono<ActorContextEnv>();
   const jobs = options.jobs ?? new ResolutionJobStore(options.pool);
   const contracts = options.contracts ?? new SymptomContractStore(options.pool);
+  const authority = options.authority ?? buildResolutionAuthority(options.pool);
   const jobId = options.jobId ?? (() => `rjob_steered_${randomUUID()}`);
 
   app.post("/:orgId/projects/:projectId/issue-loops/:loopId/steer", async (c) => {
@@ -86,6 +98,27 @@ export function createIssueLoopCommandRoutes(options: IssueLoopCommandRoutesOpti
     if (isResponse(scope)) return scope;
     const paused = await jobs.pauseLoop({ orgId: scope.orgId, projectId: scope.projectId, issueLoopId: scope.loopId });
     return c.json({ version: "v1" as const, ...scope, paused });
+  });
+
+  app.post("/:orgId/projects/:projectId/issue-loops/:loopId/waive", async (c) => {
+    const scope = authorize(c);
+    if (isResponse(scope)) return scope;
+    const parsed = waiveSchema.safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid_resolution_waiver", issues: parsed.error.issues }, 400);
+    const belongsToLoop = await jobs.belongsToIssueLoop({
+      orgId: scope.orgId,
+      projectId: scope.projectId,
+      issueLoopId: scope.loopId,
+      id: parsed.data.resolutionJobId,
+    });
+    if (!belongsToLoop) return c.json({ error: "resolution_job_not_found" }, 404);
+    const decision = await authority.waive({
+      orgId: scope.orgId,
+      resolutionJobId: parsed.data.resolutionJobId,
+      operatorId: requireActor(c).userId,
+      reason: parsed.data.reason,
+    });
+    return c.json({ version: "v1" as const, ...scope, resolutionDecision: decision });
   });
 
   app.post("/:orgId/projects/:projectId/issue-loops/:loopId/resume", async (c) => {

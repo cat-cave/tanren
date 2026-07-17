@@ -49,6 +49,7 @@ function appFor(
   completed: string[] = [],
   released: unknown[] = [],
   verdict: ResolutionStageResult = VERDICT,
+  authorizations: string[] = [],
 ) {
   const app = new Hono<ActorContextEnv>();
   app.use("*", async (c, next) => {
@@ -73,6 +74,18 @@ function appFor(
       },
       jobId: () => "rjob_manual_1",
       executionLeaseOwner: () => "route_lease_1",
+      authority: {
+        async authorize(input) {
+          authorizations.push(input.resolutionJobId);
+          return {
+            id: "rdec_retry",
+            decision: "authorized",
+            inputSnapshotHash: "sha256:" + "a".repeat(64),
+            reasons: [],
+            created: true,
+          };
+        },
+      },
       jobs: {
         async claimById(input) {
           return {
@@ -137,7 +150,8 @@ describe("production verification retry route", () => {
     const enqueued: unknown[] = [];
     const executed: ResolutionJob[] = [];
     const completed: string[] = [];
-    const response = await appFor(enqueued, executed, completed).request(
+    const authorizations: string[] = [];
+    const response = await appFor(enqueued, executed, completed, [], VERDICT, authorizations).request(
       "/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification",
       {
         method: "POST",
@@ -178,12 +192,14 @@ describe("production verification retry route", () => {
       }),
     ]);
     expect(completed).toEqual(["rjob_manual_1:route_lease_1"]);
+    expect(authorizations).toEqual(["rjob_manual_1"]);
   });
 
   it("returns an inconclusive production verification job to retryable instead of completing it", async () => {
     const completed: string[] = [];
     const released: unknown[] = [];
-    const response = await appFor([], [], completed, released, INCONCLUSIVE_VERDICT).request(
+    const authorizations: string[] = [];
+    const response = await appFor([], [], completed, released, INCONCLUSIVE_VERDICT, authorizations).request(
       "/v1/orgs/org_acme/projects/project_1/issue-loops/loop_1/retry-verification",
       {
         method: "POST",
@@ -200,5 +216,6 @@ describe("production verification retry route", () => {
     await expect(response.json()).resolves.toMatchObject({ verdict: INCONCLUSIVE_VERDICT });
     expect(completed).toEqual([]);
     expect(released).toEqual([expect.objectContaining({ id: "rjob_manual_1", state: "retryable" })]);
+    expect(authorizations).toEqual(["rjob_manual_1"]);
   });
 });

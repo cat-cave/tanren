@@ -1,6 +1,8 @@
 import type { ResolutionJob, ResolutionStage, ResolutionStageKind } from "../contracts/resolutionStage.js";
+import type { ResolutionAuthority } from "../contracts/resolutionAuthority.js";
 import { DEFAULT_RESOLUTION_JOB_LEASE_MS, type ResolutionJobStore } from "../repositories/resolutionJobs.js";
 import { createLogger } from "../observability/logger.js";
+import { authorizeProductionResolution } from "./productionResolutionAuthorization.js";
 import { settleResolutionJob } from "./resolutionJobSettlement.js";
 
 const log = createLogger("resolution-dag-walker");
@@ -19,6 +21,8 @@ export interface ResolutionDagWalkerDeps {
   readonly stages: ReadonlyMap<ResolutionStageKind, ResolutionStage>;
   readonly leaseOwner: string;
   readonly leaseMs?: number;
+  /** Required whenever a production stage is registered; absent authority fails closed. */
+  readonly authority?: ResolutionAuthority;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -149,6 +153,12 @@ export class ResolutionDagWalker {
       clearInterval(timer);
       await heartbeatInFlight;
       if (heartbeatError !== undefined) throw asError(heartbeatError);
+
+      // `ProductionSymptomStage.run` has already durably settled its verification
+      // run + assertions before it returns. Its product_resolved result is still
+      // only evidence: the separate ResolutionAuthority is the sole component
+      // allowed to declare an internal resolution / source-closure eligibility.
+      await authorizeProductionResolution(this.deps.authority, job);
 
       const settled = await settleResolutionJob(this.deps.store, job, result);
       if (!settled) {

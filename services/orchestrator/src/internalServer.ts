@@ -23,6 +23,7 @@ import type { MtlsPeerVerifier } from "./engine/contracts/mtlsChannel.js";
 import { createInternalClaimRoutes } from "./routes/internal/claimJob.js";
 import { createInternalFixtureLeaseRoutes } from "./routes/internal/fixtureLeases.js";
 import { createInternalResolutionJobRoutes } from "./routes/internal/resolutionJobs.js";
+import { createInternalResolutionAuthorityRoutes } from "./routes/internal/resolutionAuthority.js";
 import { createInternalRunStateWriteRoutes } from "./routes/internal/runStateWrites.js";
 import { BaselineReproductionStage, type BaselineProbe } from "./engine/verification/resolutionStages/index.js";
 import type { ResolutionJobStore } from "./engine/repositories/resolutionJobs.js";
@@ -76,6 +77,7 @@ export function buildInternalApp(deps: InternalAppDependencies): Hono {
       }),
     }),
   );
+  app.route("/", createInternalResolutionAuthorityRoutes({ pool: deps.pool, verifier }));
   // The run-state WRITE endpoints (append-event / record-cost /
   // finalize-run) the remote-writes worker posts its tenant writes to.
   app.route("/", createInternalRunStateWriteRoutes({ pool: deps.pool, verifier }));

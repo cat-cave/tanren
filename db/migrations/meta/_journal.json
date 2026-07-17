@@ -512,6 +512,13 @@
       "when": 1784320379904,
       "tag": "0074_cultured_logan",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1784328014274,
+      "tag": "0075_bright_stepford_cuckoos",
+      "breakpoints": true
     }
   ]
 }

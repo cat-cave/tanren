@@ -85,6 +85,14 @@ export class IssueSourceLineageError extends Error {
   }
 }
 
+/** Source closure is downstream of the immutable ResolutionAuthority ledger. */
+export class ResolutionAuthorityRequiredError extends Error {
+  constructor(issueLoopId: string) {
+    super(`issue loop ${issueLoopId} has no authorized resolution decision`);
+    this.name = "ResolutionAuthorityRequiredError";
+  }
+}
+
 function loopSeverity(severity: IssueObservationSeverity): IssueLoopSeverity {
   if (severity === "fail") return "high";
   if (severity === "warn") return "medium";
@@ -225,6 +233,23 @@ export async function enqueueResolutionSync(
   input: ResolutionTransitionInput,
 ): Promise<ResolutionTransitionResult> {
   return runWithOrgScope(pool, input.orgId, async (client) => {
+    // bh-12 consumes this receipt. Do not let a source-sync caller recreate the
+    // authority transition: only ResolutionAuthority can authorize (or record
+    // an operator waiver for) source closure.
+    const authorization = await client.query(
+      `SELECT 1
+         FROM resolution_decisions AS decision
+         JOIN issue_loops AS loop
+           ON loop.org_id = decision.org_id AND loop.id = decision.issue_loop_id
+        WHERE decision.org_id = $1
+          AND decision.project_id = $2
+          AND decision.issue_loop_id = $3
+          AND decision.decision IN ('authorized', 'waived')
+          AND loop.state = 'verified_source_sync_pending'
+        LIMIT 1`,
+      [input.orgId, input.projectId, input.issueLoopId],
+    );
+    if (authorization.rowCount !== 1) throw new ResolutionAuthorityRequiredError(input.issueLoopId);
     const transitioned = await IssueLoopStore.transition(client, {
       orgId: input.orgId,
       projectId: input.projectId,
