@@ -10,7 +10,7 @@ import {
   type NotificationPayload,
   type NotificationTargetRow,
 } from "../src/engine/notifications/index.js";
-import { effectiveSeverityFor } from "../src/engine/notifications/dispatcher.js";
+import { effectiveSeverityFor } from "../src/engine/notifications/messageFormat.js";
 import { NotificationMemoryClient } from "./helpers/notificationMemoryClient.js";
 import type { ChannelRegistryDeps } from "../src/engine/notifications/registry.js";
 import { buildChannelRegistry } from "../src/engine/notifications/registry.js";
