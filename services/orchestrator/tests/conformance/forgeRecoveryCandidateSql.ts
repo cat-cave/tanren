@@ -128,13 +128,30 @@ export function webhookEventSql(
 ): QueryResult | undefined {
   const visible = (): WebhookEventRec[] => db.webhookEvents.filter((e) => e.org_id === orgId);
   if (sql.startsWith("INSERT INTO webhook_events")) {
-    const [id, sourceId, ownOrgId, eventType, deliveryId, payloadJson] = params as [
+    const [
+      id,
+      sourceId,
+      ownOrgId,
+      eventType,
+      deliveryId,
+      provider,
+      payloadJson,
+      canonicalPayloadHash,
+      signatureAlgo,
+      signatureKeyVersion,
+      deliverySignedAt,
+    ] = params as [
       string,
       string,
       string,
       string,
       string | null,
+      string | null,
       string,
+      string | null,
+      string | null,
+      string | null,
+      string | null,
     ];
     const rec: WebhookEventRec = {
       id,
@@ -146,19 +163,34 @@ export function webhookEventSql(
       status: "received",
       attempts: 0,
       last_error: null,
+      provider: provider ?? null,
+      canonical_payload_hash: canonicalPayloadHash ?? null,
+      signature_algo: signatureAlgo ?? null,
+      signature_key_version: signatureKeyVersion ?? null,
+      delivery_signed_at: deliverySignedAt ?? null,
+      claim_owner: null,
+      claim_expires_at: null,
       seq: ++db.seq,
     };
     db.webhookEvents.push(rec);
     return { rows: [webhookEventCols(rec)], rowCount: 1 };
   }
   if (
-    /^SELECT .* FROM webhook_events WHERE status IN \('received','failed'\) ORDER BY created_at ASC LIMIT \$1$/u.test(
+    /^SELECT .* FROM webhook_events WHERE status IN \('received','failed'\)( AND \(claim_owner IS NULL OR claim_expires_at <= now\(\)\))? ORDER BY created_at ASC LIMIT \$1$/u.test(
       sql,
     )
   ) {
     const limit = params[0] as number;
+    const claimFiltered = /claim_owner IS NULL OR claim_expires_at <= now\(\)/u.test(sql);
     const rows = visible()
       .filter((e) => e.status === "received" || e.status === "failed")
+      // bh-3 sweeper: an unclaimed or expired-claim row is undriven; a live claim is skipped.
+      .filter(
+        (e) =>
+          !claimFiltered ||
+          e.claim_owner === null ||
+          (e.claim_expires_at !== null && e.claim_expires_at <= new Date().toISOString()),
+      )
       .sort((a, b) => a.seq - b.seq)
       .slice(0, limit)
       .map((e) => webhookEventCols(e));

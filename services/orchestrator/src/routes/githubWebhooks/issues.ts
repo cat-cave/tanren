@@ -102,33 +102,39 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
     let eventId: string;
     try {
       const persisted = await runWithOrgScope(deps.pool, source.orgId, (client) =>
-        pgRepositories.webhookEvents.persist(client, {
+        pgRepositories.webhookEvents.persistWithOutcome(client, {
           sourceId: source.id,
           orgId: source.orgId,
           eventType: event,
           deliveryId: c.req.header("x-github-delivery") ?? null,
           payload,
+          provider: "github",
+          signatureAlgo: "hmac-sha256",
+          signatureKeyVersion: c.req.header("x-tanren-webhook-key-version") ?? null,
+          deliverySignedAt: new Date(),
         }),
       );
-      eventId = persisted.id;
+      eventId = persisted.event.id;
       // Best-effort immediate processing so the happy path lands quickly — but it
       // runs DETACHED (not awaited) so a slow triage never holds the 202, and any
       // failure is left to the sweeper. The persisted row is the durable guarantee.
-      void processWebhookEvent(processorDeps, persisted).catch((error: unknown) => {
-        log.error(
-          "background processing of webhook event failed (sweeper will re-drive)",
-          {
-            eventId: persisted.id,
-          },
-          error,
-        );
-      });
+      if (persisted.inserted) {
+        void processWebhookEvent(processorDeps, persisted.event).catch((error: unknown) => {
+          log.error(
+            "background processing of webhook event failed (sweeper will re-drive)",
+            {
+              eventId: persisted.event.id,
+            },
+            error,
+          );
+        });
+      }
+      const outcome = persisted.inserted ? "accepted" : "duplicate";
+      return c.json({ event, outcome, eventId }, 202);
     } catch (error) {
       // Persistence failed — nothing durable landed. Return 500 so GitHub re-delivers.
       return c.json({ event, outcome: "persist_failed", message: messageOf(error) }, 500);
     }
-
-    return c.json({ event, outcome: "accepted", eventId }, 202);
   });
 
   return app;

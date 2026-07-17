@@ -24,6 +24,7 @@
 //     NEVER silently lost.
 
 import type pg from "pg";
+import { randomUUID } from "node:crypto";
 import { runWithJobOrgId, runWithOrgScope, runWithSystemScope } from "@tanren/db";
 import { orgScopingPool } from "../../data/orgScopedDb.js";
 import {
@@ -40,8 +41,9 @@ import { WebhookEventStore, type WebhookEvent } from "../../repositories/webhook
 import { loadRunnableInboxSource } from "./sourceValidation.js";
 
 // How many undriven rows / stuck candidates a single sweep tick re-drives per org
-// (bounds the work + the LLM spend per tick; the rest carry to the next tick).
+// (bounds the work per tick; the rest carry to the next tick).
 const SWEEP_BATCH = 20;
+export const DEFAULT_WEBHOOK_CLAIM_LEASE_MS = 5 * 60 * 1000;
 
 export interface WebhookProcessorDeps {
   pool: pg.Pool;
@@ -49,6 +51,11 @@ export interface WebhookProcessorDeps {
   answererFactory: (target: { orgId: string; projectId?: string }) => TriageAnswerer;
   // The autonomous DAG-insert deps (system actor) — identical to the receiver/poller.
   autoRoute: AutoRouteDeps;
+  // Stable identity for one processor instance. Tests and multiple pollers can
+  // inject distinct identities to prove the lease CAS; omitted calls get a
+  // process-attempt identity and still cannot settle another live claim.
+  workerId?: string;
+  claimLeaseMs?: number;
 }
 
 // Map a persisted webhook event's payload to an ingest item. Only `issues` is
@@ -69,6 +76,17 @@ function mapEvent(event: WebhookEvent, source: InboxSource) {
  * row `failed`/`dead_lettered` and DO NOT throw (the sweeper continues to others).
  */
 export async function processWebhookEvent(deps: WebhookProcessorDeps, event: WebhookEvent): Promise<boolean> {
+  const workerId = deps.workerId ?? `webhook-worker-${randomUUID()}`;
+  const claimed = await runWithOrgScope(deps.pool, event.orgId, (client) =>
+    WebhookEventStore.claim(client, {
+      id: event.id,
+      workerId,
+      leaseMs: deps.claimLeaseMs ?? DEFAULT_WEBHOOK_CLAIM_LEASE_MS,
+    }),
+  );
+  if (claimed === undefined) return false;
+  event = claimed;
+
   let source: InboxSource;
   try {
     // Event org is authority: an old hostile (org B, source A) tuple must fail
@@ -77,14 +95,14 @@ export async function processWebhookEvent(deps: WebhookProcessorDeps, event: Web
       loadRunnableInboxSource(client, { sourceId: event.sourceId, orgId: event.orgId }),
     );
   } catch {
-    await markFailure(deps, event, "source_lineage_or_state_invalid", true);
+    await markFailure(deps, event, "source_lineage_or_state_invalid", true, workerId);
     return false;
   }
 
   const mapped = mapEvent(event, source);
   if (mapped.kind === "skip") {
     // A non-ingest action (closed/deleted/PR) is a real terminal — mark processed.
-    await runWithOrgScope(deps.pool, event.orgId, (client) => WebhookEventStore.markProcessed(client, event.id));
+    await runWithOrgScope(deps.pool, event.orgId, (client) => WebhookEventStore.complete(client, event.id, workerId));
     return true;
   }
 
@@ -109,11 +127,11 @@ export async function processWebhookEvent(deps: WebhookProcessorDeps, event: Web
     // would be an infinite LLM-cost loop. POISON: dead-letter it immediately (loud
     // terminal). Everything else is transient — stays `failed`, re-driven UNBOUNDED.
     const poison = error instanceof PersistentlyInvalidSpecError;
-    await markFailure(deps, event, messageOf(error), poison);
+    await markFailure(deps, event, messageOf(error), poison, workerId);
     return false;
   }
 
-  await runWithOrgScope(deps.pool, event.orgId, (client) => WebhookEventStore.markProcessed(client, event.id));
+  await runWithOrgScope(deps.pool, event.orgId, (client) => WebhookEventStore.complete(client, event.id, workerId));
   return true;
 }
 
@@ -125,9 +143,10 @@ async function markFailure(
   event: WebhookEvent,
   error: string,
   poison: boolean,
+  workerId: string,
 ): Promise<void> {
   await runWithOrgScope(deps.pool, event.orgId, (client) =>
-    WebhookEventStore.recordFailure(client, event.id, error, poison),
+    WebhookEventStore.recordFailure(client, event.id, error, poison, workerId),
   );
 }
 
