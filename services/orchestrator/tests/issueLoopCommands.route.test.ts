@@ -1,3 +1,4 @@
+// cspell:ignore rdec
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { ActorContext } from "../src/auth/schemas.js";
@@ -42,6 +43,18 @@ function appFor(calls: string[]) {
         },
       },
       jobId: () => "rjob_steered",
+      authority: {
+        async waive(input) {
+          calls.push(`waive:${input.operatorId}`);
+          return {
+            id: "rdec_waived",
+            decision: "waived",
+            inputSnapshotHash: "sha256:" + "a".repeat(64),
+            reasons: ["operator waiver recorded"],
+            created: true,
+          };
+        },
+      },
     }),
   );
   return app;
@@ -66,5 +79,22 @@ describe("issue-loop control commands", () => {
     await expect(pause.json()).resolves.toMatchObject({ paused: 2 });
     await expect(resume.json()).resolves.toMatchObject({ resumed: 2 });
     expect(calls).toEqual(["steer:baseline", "pause", "resume"]);
+  });
+
+  it("offers waiver to an authenticated org admin without exposing mark-authorized", async () => {
+    const calls: string[] = [];
+    const app = appFor(calls);
+    const base = "/v1/orgs/org_a/projects/project_a/issue-loops/loop_a";
+    const waived = await app.request(`${base}/waive`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ resolutionJobId: "rjob_a", reason: "operator accepts attested external evidence" }),
+    });
+    const publicAuthorize = await app.request(`${base}/authorize`, { method: "POST" });
+
+    expect(waived.status).toBe(200);
+    await expect(waived.json()).resolves.toMatchObject({ resolutionDecision: { decision: "waived" } });
+    expect(publicAuthorize.status).toBe(404);
+    expect(calls).toEqual(["waive:user_admin"]);
   });
 });
