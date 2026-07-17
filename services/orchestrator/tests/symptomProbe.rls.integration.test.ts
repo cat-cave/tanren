@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PgCasByteStore } from "../src/engine/cas/pgCasByteStore.js";
+import type { ResolutionJob } from "../src/engine/contracts/resolutionStage.js";
 import {
   symptomObservationHash,
   type SymptomProbeDriver,
@@ -15,7 +16,9 @@ import type { SymptomContractV1 } from "../src/engine/contracts/symptomContract.
 import { HttpSymptomProbe } from "../src/engine/probes/httpSymptomProbe.js";
 import { SymptomEvidenceStore } from "../src/engine/repositories/symptomEvidence.js";
 import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
+import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
 import { SymptomProbeAdapter } from "../src/engine/probes/symptomProbeAdapter.js";
+import { BaselineReproductionStage } from "../src/engine/verification/resolutionStages/baselineReproductionStage.js";
 
 const enabled = process.env["TANREN_RLS_DB_TEST"] === "1";
 const describeDb = enabled ? describe : describe.skip;
@@ -114,6 +117,28 @@ async function seedVerificationRun(owner: Pool, orgId: string, projectId: string
   return runId;
 }
 
+async function seedLiveRelease(owner: Pool, orgId: string, projectId: string, tag: string): Promise<string> {
+  const releaseInstanceId = `release_symptom_probe_${tag}`;
+  const artifactDigest = `sha256:${createHash("sha256").update(tag).digest("hex")}`;
+  await owner.query(
+    `INSERT INTO release_instances
+       (org_id, id, project_id, provider, app_id, environment, deployment_id,
+        source_ref, artifact_digest, provider_checksum, integration_node_id, url, state)
+     VALUES ($1, $2, $3, 'manual', $4, 'production', $5, 'main', $6, NULL, $7, $8, 'live')`,
+    [
+      orgId,
+      releaseInstanceId,
+      projectId,
+      `app-symptom-probe-${tag}`,
+      `deployment-symptom-probe-${tag}`,
+      artifactDigest,
+      `inode_symptom_probe_${tag}`,
+      `https://example.invalid/${tag}`,
+    ],
+  );
+  return releaseInstanceId;
+}
+
 function contract(issueLoopId: string, targetUrl: string): SymptomContractV1 {
   return {
     version: 1,
@@ -131,6 +156,7 @@ class FixedProbe implements SymptomProbeDriver {
   public constructor(
     private readonly observedObservation: Record<string, unknown>,
     private readonly marker: string,
+    private readonly outcome?: "inconclusive",
   ) {}
 
   public async execute(_input: {
@@ -150,6 +176,7 @@ class FixedProbe implements SymptomProbeDriver {
         },
       ],
       timingMs: 7,
+      ...(this.outcome === undefined ? {} : { outcome: this.outcome }),
     };
   }
 }
@@ -175,6 +202,8 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
   let app: Pool;
   let contracts: SymptomContractStore;
   let evidence: SymptomEvidenceStore;
+  let productReleaseId: string;
+  let infraReleaseId: string;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: ADMIN_URL });
@@ -188,6 +217,8 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
     await seedVerificationRun(owner, ORG_A, PROJECT_A, "a-match");
     await seedVerificationRun(owner, ORG_A, PROJECT_A, "a-mismatch");
     await seedVerificationRun(owner, ORG_B, PROJECT_B, "b-match");
+    productReleaseId = await seedLiveRelease(owner, ORG_A, PROJECT_A, "a-match");
+    infraReleaseId = await seedLiveRelease(owner, ORG_A, PROJECT_A, "a-mismatch");
     contracts = new SymptomContractStore(app);
     evidence = new SymptomEvidenceStore(app);
   }, 60_000);
@@ -203,6 +234,16 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
     await admin.query(`DROP DATABASE IF EXISTS ${database}`);
     await admin.end();
   }, 30_000);
+
+  it("connects as the restricted tanren_app non-superuser role", async () => {
+    const identity = await app.query<{ current_user: string; rolsuper: boolean }>(
+      `SELECT current_user, r.rolsuper
+         FROM pg_roles AS r
+        WHERE r.rolname = current_user`,
+    );
+    expect(identity.rows[0]?.current_user).toBe(APP_USER);
+    expect(identity.rows[0]?.rolsuper).toBe(false);
+  });
 
   it("records baseline evidence/assertions, emits frozen events, and isolates orgs", async () => {
     const createdA = await contracts.create({
@@ -293,5 +334,122 @@ describeDb("BH-5 symptom probe evidence — RLS and deterministic assertions", (
     expect(storedArtifacts.rows).toHaveLength(4);
     expect(storedArtifacts.rows.every((row) => row.project_id === PROJECT_A)).toBe(true);
     expect(storedArtifacts.rows.every((row) => typeof row.cas_digest === "string")).toBe(true);
+  });
+
+  it("runs the ResolutionStage through the real event store and keeps infra failure awaiting reproduction", async () => {
+    const stagedContract = await contracts.create({
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      contract: contract(LOOP_A, "http://a/staged"),
+    });
+    const jobs = new ResolutionJobStore(app);
+    const productJob: ResolutionJob = {
+      id: "rjob_baseline_product",
+      orgId: ORG_A,
+      projectId: PROJECT_A,
+      issueLoopId: LOOP_A,
+      contractId: stagedContract.id,
+      releaseInstanceId: productReleaseId,
+      stage: "baseline",
+      state: "running",
+      leaseOwner: "worker_baseline",
+      leaseExpiry: "2026-01-01T00:01:00.000Z",
+      idempotencyKey: "iloop_symptom_probe_a:baseline:product",
+      attempt: 2,
+    };
+    const infraJob: ResolutionJob = {
+      ...productJob,
+      id: "rjob_baseline_infra",
+      releaseInstanceId: infraReleaseId,
+      idempotencyKey: "iloop_symptom_probe_a:baseline:infra",
+    };
+    await jobs.enqueue({
+      orgId: productJob.orgId,
+      projectId: productJob.projectId,
+      id: productJob.id,
+      issueLoopId: productJob.issueLoopId,
+      contractId: productJob.contractId,
+      releaseInstanceId: productJob.releaseInstanceId,
+      stage: productJob.stage,
+      idempotencyKey: productJob.idempotencyKey,
+    });
+    await jobs.enqueue({
+      orgId: infraJob.orgId,
+      projectId: infraJob.projectId,
+      id: infraJob.id,
+      issueLoopId: infraJob.issueLoopId,
+      contractId: infraJob.contractId,
+      releaseInstanceId: infraJob.releaseInstanceId,
+      stage: infraJob.stage,
+      idempotencyKey: infraJob.idempotencyKey,
+    });
+
+    const product = await new BaselineReproductionStage({
+      pool: app,
+      probe: new SymptomProbeAdapter(app, new FixedProbe(EXPECTED, "stage-product")),
+      verificationRunId: () => "vrun_baseline_product",
+    }).run(productJob, {});
+
+    expect(product).toMatchObject({
+      outcome: "passed",
+      classification: "product_failure",
+      verificationRunId: "vrun_baseline_product",
+    });
+    expect(product.assertionIds).toHaveLength(1);
+    expect(product.evidenceRefs).toHaveLength(2);
+
+    const infra = await new BaselineReproductionStage({
+      pool: app,
+      probe: new SymptomProbeAdapter(app, new FixedProbe(EXPECTED, "stage-infra", "inconclusive")),
+      verificationRunId: () => "vrun_baseline_infra",
+    }).run(infraJob, {});
+
+    expect(infra).toMatchObject({
+      outcome: "inconclusive",
+      classification: "infra_failure",
+      verificationRunId: "vrun_baseline_infra",
+    });
+
+    const observed = await runWithOrgScope(app, ORG_A, async (client) => {
+      const runs = await client.query<{ id: string; stage: string; classification: string; status: string }>(
+        `SELECT id, stage, classification, status
+           FROM behavior_verification_runs
+          WHERE org_id = $1 AND id = ANY($2::text[])
+          ORDER BY id`,
+        [ORG_A, ["vrun_baseline_infra", "vrun_baseline_product"]],
+      );
+      const loop = await client.query<{ state: string }>(
+        "SELECT state FROM issue_loops WHERE org_id = $1 AND id = $2",
+        [ORG_A, LOOP_A],
+      );
+      const events = await client.query<{ event_type: string; outcome: string }>(
+        `SELECT event_type, payload->>'outcome' AS outcome
+           FROM events
+          WHERE org_id = $1
+            AND project_id = $2
+            AND payload->>'verificationRunId' = ANY($3::text[])
+          ORDER BY id`,
+        [ORG_A, PROJECT_A, ["vrun_baseline_product", "vrun_baseline_infra"]],
+      );
+      return { runs: runs.rows, loop: loop.rows[0], events: events.rows };
+    });
+    expect(observed.runs).toEqual([
+      { id: "vrun_baseline_infra", stage: "baseline", classification: "infra_failure", status: "failed" },
+      { id: "vrun_baseline_product", stage: "baseline", classification: "product_failure", status: "completed" },
+    ]);
+    expect(observed.loop).toEqual({ state: "awaiting_reproduction" });
+    expect(observed.events).toEqual([
+      { event_type: "symptom.baseline.started", outcome: null },
+      { event_type: "symptom.baseline.observed", outcome: "reproduced" },
+      { event_type: "symptom.assertion.recorded", outcome: "passed" },
+      { event_type: "symptom.baseline.started", outcome: null },
+      { event_type: "symptom.baseline.observed", outcome: "inconclusive" },
+      { event_type: "symptom.assertion.recorded", outcome: "inconclusive" },
+    ]);
+
+    const foreignRuns = await runWithOrgScope(app, ORG_B, (client) =>
+      client.query("SELECT 1 FROM behavior_verification_runs WHERE org_id = $1", [ORG_A]),
+    );
+    expect(foreignRuns.rowCount).toBe(0);
   });
 });
