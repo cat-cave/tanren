@@ -1,3 +1,6 @@
+// cspell:ignore Unpartitioned
+// cspell:ignore unpartitioned
+// cspell:ignore Unpartitioned
 // Durable, org-scoped partition admission and renewable queue leases. The lease
 // lives on the member row (migration 0054); the partition row is the lock boundary.
 
@@ -28,6 +31,15 @@ interface LeaseRow extends PartitionRow {
   pr_number: string;
   lease_owner: string | null;
   lease_expires_at: Date | null;
+  scope_fingerprint: string | null;
+}
+
+/** A pre-partition queue row left by an older enqueue path or direct recovery write. */
+interface UnpartitionedQueueRow {
+  org_id: string;
+  project_id: string;
+  queue_id: string;
+  spec_id: string;
   scope_fingerprint: string | null;
 }
 
@@ -115,6 +127,12 @@ export class PgMergeQueuePartitionStore {
 
   /** CAS acquire under the partition-row lock; a fresh holder exhausts capacity. */
   async acquireOnClient(client: pg.PoolClient, queueId: string): Promise<MergeQueuePartitionLease | null> {
+    // `partition_id` was added after the native queue was already in use, and a few
+    // recovery-owned writers deliberately insert the queue row directly. Adopt an
+    // active unpartitioned row while holding its row lock before trying to claim it.
+    // Without this, the inner join below makes a repair re-drive look like a lease
+    // contention forever, which masks a later terminal infra classification too.
+    await this.assignPartitionToQueuedEntryOnClient(client, queueId);
     const candidate = await client.query<LeaseRow & { capacity: number; state: string }>(
       `SELECT mq.org_id, mq.project_id, mq.queue_id, mq.run_id, mq.spec_id, mq.pr_url, mq.pr_number,
               mq.scope_fingerprint, p.id, p.scope_key, p.mode, p.generation, p.capacity, p.state,
@@ -156,6 +174,37 @@ export class PgMergeQueuePartitionStore {
     };
     await this.events?.emitPartitionLeased({ projectId: row.project_id, entry: entryOf(row), ...lease });
     return lease;
+  }
+
+  /**
+   * Atomically assign the default scoped partition to an active row that predates
+   * partitioned scheduling. This is intentionally claim-time: only a row that is
+   * about to execute is upgraded, and two coordinators cannot assign it twice.
+   */
+  private async assignPartitionToQueuedEntryOnClient(client: pg.PoolClient, queueId: string): Promise<void> {
+    const pending = await client.query<UnpartitionedQueueRow>(
+      `SELECT org_id, project_id, queue_id, spec_id, scope_fingerprint
+         FROM merge_queue
+        WHERE queue_id = $1 AND status = 'queued' AND partition_id IS NULL
+        FOR UPDATE`,
+      [queueId],
+    );
+    const row = pending.rows[0];
+    if (row === undefined) return;
+
+    const scopeFingerprint = row.scope_fingerprint ?? `spec:${row.spec_id}`;
+    const partition = await this.ensureOnClient(client, {
+      orgId: row.org_id,
+      projectId: row.project_id,
+      specId: row.spec_id,
+      scopeFingerprint,
+    });
+    await client.query(
+      `UPDATE merge_queue
+          SET partition_id = $2, scope_fingerprint = $3
+        WHERE queue_id = $1 AND status = 'queued' AND partition_id IS NULL`,
+      [row.queue_id, partition.id, scopeFingerprint],
+    );
   }
 
   /** A live holder renews its own lease; a stale/dead owner cannot revive it. */
