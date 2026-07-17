@@ -16,6 +16,9 @@
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 import { DesignReleaseState, type DesignSystemReleaseV1, parseDesignSystemRelease } from "./designArtifactSchemas.js";
+import { parseWebDesignWriterContext, type WebDesignWriterContext } from "./webWriterContext.js";
+
+type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 
 /** A design-system family row as stored. */
 export interface DesignSystemRow {
@@ -61,6 +64,113 @@ export class DesignSystemNotFoundError extends Error {
     super(`design ${entity} '${id}' not found for org '${orgId}'`);
     this.name = "DesignSystemNotFoundError";
   }
+}
+
+/** The head contract currently resolves to more than one web system. */
+export class AmbiguousProjectWebDesignSystemError extends Error {
+  constructor(
+    readonly orgId: string,
+    readonly projectId: string,
+    readonly designSystemIds: readonly string[],
+  ) {
+    super(
+      `project '${projectId}' in org '${orgId}' resolves to multiple published web design systems: ${designSystemIds.join(", ")}`,
+    );
+    this.name = "AmbiguousProjectWebDesignSystemError";
+  }
+}
+
+/** A release points at an artifact whose persisted Writer projection is malformed. */
+export class PersistedWebDesignWriterContextError extends Error {
+  constructor(
+    readonly orgId: string,
+    readonly projectId: string,
+    readonly artifactId: string,
+    readonly detail: string,
+  ) {
+    super(
+      `web design Writer context for project '${projectId}' in org '${orgId}' artifact '${artifactId}' is invalid: ${detail}`,
+    );
+    this.name = "PersistedWebDesignWriterContextError";
+  }
+}
+
+interface ProjectWebDesignSystemRow {
+  readonly design_system_id: string;
+  readonly release_id: string;
+  readonly artifact_id: string;
+  readonly web_writer_context: unknown;
+}
+
+/**
+ * Resolve the one published web system built from the project's current design
+ * contract. ds-5 will replace this lineage lookup with an explicit project
+ * binding; until then, ambiguity is a loud fault rather than an arbitrary
+ * org-wide default. The caller owns the RLS-scoped client so this composes into
+ * the run hydration transaction without opening a nested connection.
+ */
+export async function resolveProjectWebDesignSystem(
+  client: QueryClient,
+  input: { orgId: string; projectId: string },
+): Promise<WebDesignWriterContext | undefined> {
+  const result = await client.query<ProjectWebDesignSystemRow>(
+    `WITH head_contract AS (
+       SELECT id, org_id, version
+         FROM design_contracts
+        WHERE org_id = $1 AND project_id = $2
+        ORDER BY version DESC
+        LIMIT 1
+     )
+     SELECT DISTINCT ON (release.design_system_id)
+       release.design_system_id,
+       release.id AS release_id,
+       artifact.id AS artifact_id,
+       artifact.web_writer_context
+       FROM head_contract contract
+       JOIN design_system_releases release
+         ON release.org_id = contract.org_id
+        AND release.contract_id = contract.id
+        AND release.contract_version = contract.version
+        AND release.state = 'published'
+       JOIN design_artifacts artifact
+         ON artifact.org_id = release.org_id
+        AND artifact.id = release.canonical_artifact_id
+      ORDER BY release.design_system_id, release.version DESC`,
+    [input.orgId, input.projectId],
+  );
+  if (result.rows.length === 0) return undefined;
+  if (result.rows.length > 1) {
+    throw new AmbiguousProjectWebDesignSystemError(
+      input.orgId,
+      input.projectId,
+      result.rows.map((row) => row.design_system_id),
+    );
+  }
+  const row = result.rows[0]!;
+  let context: WebDesignWriterContext;
+  try {
+    context = parseWebDesignWriterContext(row.web_writer_context);
+  } catch (error: unknown) {
+    throw new PersistedWebDesignWriterContextError(
+      input.orgId,
+      input.projectId,
+      row.artifact_id,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+  if (
+    context.designSystemId !== row.design_system_id ||
+    context.releaseId !== row.release_id ||
+    context.artifactId !== row.artifact_id
+  ) {
+    throw new PersistedWebDesignWriterContextError(
+      input.orgId,
+      input.projectId,
+      row.artifact_id,
+      "persisted identifiers do not match the published release/artifact linkage",
+    );
+  }
+  return context;
 }
 
 /**
