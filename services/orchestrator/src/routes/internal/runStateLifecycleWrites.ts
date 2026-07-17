@@ -74,6 +74,8 @@ const finalizeLandSchema = z.object({
   prNumber: z.number().int(),
   integration: z.enum(["direct_merge", "native_queue"]),
   mergeSha: z.string().min(1),
+  // in-16: the authorizing decision id the transactional delivery-outbox row is FK-bound to.
+  authorityDecisionId: z.string().min(1),
   auditEnvelope: AuditEnvelope,
 });
 
