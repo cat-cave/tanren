@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "contractDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "contractVersion": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "curationId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "expectedBehaviorRefCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "expectedPersonaRefCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "plainBaseReleaseId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "targetProfiles": {
+      "items": {
+        "maxLength": 120,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array"
+    }
+  },
+  "required": [
+    "curationId",
+    "contractVersion",
+    "contractDigest",
+    "targetProfiles",
+    "plainBaseReleaseId",
+    "expectedBehaviorRefCount",
+    "expectedPersonaRefCount"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.designSystem.curation.started"
+}

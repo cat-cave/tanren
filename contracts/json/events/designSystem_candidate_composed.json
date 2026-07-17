@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "candidateArtifactId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "candidateReleaseId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "curationId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "fragmentGraphDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "plainToPolishedDiffDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "curationId",
+    "candidateReleaseId",
+    "candidateArtifactId",
+    "fragmentGraphDigest",
+    "plainToPolishedDiffDigest"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.designSystem.candidate.composed"
+}

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifactDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "behaviorRef": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidenceId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "personaRef": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scenarioKey": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "screenshotDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "themeContext": {
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+    },
+    "validationRunId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "passed",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "viewport": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "validationRunId",
+    "evidenceId",
+    "artifactDigest",
+    "scenarioKey",
+    "personaRef",
+    "behaviorRef",
+    "themeContext",
+    "viewport",
+    "screenshotDigest",
+    "verdict"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.designRender.scenario.recorded"
+}

@@ -96,6 +96,7 @@ import {
   IntegrationProvisionedPayload,
   wave1EventRegistry,
   governanceVocabularyRegistry,
+  designSystemVocabularyRegistry,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -187,8 +188,10 @@ import {
 // sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
 export const EventRegistry = {
   ...w0EventRegistry,
+  // Mission-complete WAVE-1 (in-3 + rv-25) + WAVE-2 governance + ds-0 design-system vocab freezes.
   ...wave1EventRegistry,
   ...governanceVocabularyRegistry,
+  ...designSystemVocabularyRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,
@@ -196,7 +199,6 @@ export const EventRegistry = {
   "run.failed": RunFailedPayload,
   // task #82 — window-pause auto-resume cycle.
   ...windowPauseEventRegistry,
-
   // Task lifecycle
   "task.queued": TaskQueuedPayload,
   "task.started": TaskStartedPayload,

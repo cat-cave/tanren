@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "batchId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "culpritReleaseId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "failingMatrixCell": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "groupId": {
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+    },
+    "testedPrefixCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "groupId",
+    "failingMatrixCell",
+    "batchId",
+    "testedPrefixCount",
+    "culpritReleaseId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.designSystem.regression.bisected"
+}

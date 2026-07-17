@@ -364,6 +364,24 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "governance.policy.compiled": "info",
   "governance.policy.activated": "info",
   "integration.proof.invalidated": "warn",
+  // ds-0 design-system vocabulary (§7). Trajectory/progress + digests are `info`;
+  // the loud operator-actionable failures are `warn` (F2D authoring failure and a
+  // queue regression bisected to a culprit release).
+  "designSystem.curation.started": "info",
+  "designSystem.base.composed": "info",
+  "designSystem.fragment.missing": "info",
+  "designFragment.authoring.started": "info",
+  "designFragment.authoring.attempt": "info",
+  "designFragment.authoring.succeeded": "info",
+  "designFragment.authoring.failed": "warn",
+  "designSystem.candidate.composed": "info",
+  "designSystem.artifact.validated": "info",
+  "designRender.scenario.recorded": "info",
+  "designOracle.verdict": "info",
+  "designSystem.release.published": "info",
+  "designSystem.proof.reused": "info",
+  "designSystem.regression.bisected": "warn",
+  "designSystem.binding.updated": "info",
 };
 
 // Sealed: every EventName must have a default severity. Missing keys would
