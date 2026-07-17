@@ -43,16 +43,7 @@ export class PgSideEffectObserverAdapter implements SideEffectObserverAdapter {
   public async observe(input: ObserveSideEffectInput): Promise<ReadonlyArray<EffectObservation>> {
     return runWithOrgScope(this.pool, input.orgId, async (client) => {
       const triggerIdHash = resolveTriggerIdHash(input);
-      const prior =
-        triggerIdHash === undefined
-          ? []
-          : await this.repository.findByTrigger(client, {
-              orgId: input.orgId,
-              projectId: input.projectId,
-              observer: input.observer,
-              provider: input.provider,
-              triggerIdHash,
-            });
+      const prior = triggerIdHash === undefined ? [] : await this.findPriorObservations(client, input, triggerIdHash);
       const classification = classify(input, prior.length);
       const providerObjectHash = triggerIdHash === undefined ? undefined : providerObjectDigest(input, triggerIdHash);
       const observation = await this.repository.append(client, {
@@ -86,6 +77,22 @@ export class PgSideEffectObserverAdapter implements SideEffectObserverAdapter {
         },
       });
     });
+  }
+
+  private async findPriorObservations(
+    client: QueryClient,
+    input: ObserveSideEffectInput,
+    triggerIdHash: string,
+  ): Promise<ReadonlyArray<EffectObservation>> {
+    const trigger = {
+      orgId: input.orgId,
+      projectId: input.projectId,
+      observer: input.observer,
+      provider: input.provider,
+      triggerIdHash,
+    };
+    await this.repository.lockTrigger(client, trigger);
+    return this.repository.findByTrigger(client, trigger);
   }
 }
 

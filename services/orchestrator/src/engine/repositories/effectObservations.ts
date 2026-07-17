@@ -68,6 +68,17 @@ function mapObservation(row: EffectObservationRow): EffectObservation {
  * of duplicate detection, append, and event publication can be one transaction.
  */
 export class EffectObservationsRepository {
+  /**
+   * Serialize duplicate detection for one observer/provider trigger within
+   * the caller's transaction. The evidence table intentionally has no unique
+   * constraint for this semantic key because every observation is immutable.
+   */
+  public async lockTrigger(client: QueryClient, input: FindEffectObservationsInput): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `${input.orgId}:${input.projectId}:${input.observer}:${input.provider}:${input.triggerIdHash}`,
+    ]);
+  }
+
   public async append(client: QueryClient, input: AppendEffectObservationInput): Promise<EffectObservation> {
     const result = await client.query<EffectObservationRow>(
       `INSERT INTO behavior_effect_observations
