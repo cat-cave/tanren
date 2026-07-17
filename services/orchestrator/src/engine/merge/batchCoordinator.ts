@@ -4,14 +4,9 @@ import {
   type BatchChecker,
   type BatchFormation,
   type BatchGateReworkRouter,
-  bisectCulprit,
   DEFAULT_MAX_BATCH_SIZE,
   formBatch,
 } from "../contracts/batchMergeCoordinator.js";
-import {
-  MissingGithubCredentialRefError,
-  NoGithubCredentialConfiguredError,
-} from "../credentials/githubTokenResolver.js";
 import {
   type CoordinateResult,
   type MergeCoordinator,
@@ -19,7 +14,6 @@ import {
   type MergeQueueModel,
   type MergeRunner,
 } from "../contracts/mergeCoordinator.js";
-import { isRetriableInfraError } from "../providers/githubRefReset.js";
 import { setTimeout as sleepFor } from "node:timers/promises";
 import type { MergeQueueEventEmitter } from "./coordinator.js";
 import type { SpecEscalator } from "./coordinatorEscalate.js";
@@ -40,21 +34,11 @@ import { serializedRetryAfterMs } from "./mergeSerializedRetry.js";
 import { driveMultiMemberPass } from "./multiMemberAuthorityEmbark.js";
 import type { BatchAuthorityEvaluator } from "./multiMemberAuthorityTypes.js";
 import { createLogger } from "../observability/logger.js";
+import { BatchBisector } from "./batchBisector.js";
 export { DEFAULT_MAX_BATCH_SIZE };
 const log = createLogger("batch-coordinator");
 const INFRA_RETRY_BACKOFF_MS = 500;
 const PENDING_RECHECK_MS = 15_000;
-class BatchCheckStillPendingError extends Error {}
-/** Bisect sub-check could not RUN (infra) — abort bisect + HOLD; never blame an innocent PR. */
-class BatchCheckInfraError extends Error {
-  constructor(
-    message: string,
-    readonly retriable: boolean,
-    readonly kind?: "missing_required_credential",
-  ) {
-    super(message);
-  }
-}
 
 export interface BatchMergeEventEmitter {
   emitChecking(input: {
@@ -109,12 +93,14 @@ export interface BatchMergeCoordinatorDeps {
 export class BatchMergeCoordinator implements MergeCoordinator {
   private readonly resolveMaxBatchSize: (projectId: string) => Promise<number>;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly bisector: BatchBisector;
   /** Cross-pass consecutive-infra-hold ceiling (runaway guard). */
   private readonly infraHolds: BatchInfraHoldCeiling;
 
   constructor(private readonly deps: BatchMergeCoordinatorDeps) {
     this.resolveMaxBatchSize = deps.resolveMaxBatchSize ?? (() => Promise.resolve(DEFAULT_MAX_BATCH_SIZE));
     this.sleep = deps.sleep ?? ((ms) => sleepFor(ms));
+    this.bisector = new BatchBisector(deps.checker);
     // Audit RC-7: back both runaway-guard ceilings with the injected durable store (survives a restart).
     this.infraHolds = new BatchInfraHoldCeiling(deps.holdCeilingStore);
     this.deps.recoverableDriveHolds ??= new RecoverableDriveHoldCeiling(deps.holdCeilingStore);
@@ -221,7 +207,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       const failMessage = verdict.result === "conflict" ? `integration conflict: ${verdict.message}` : verdict.message;
       await this.deps.batchEvents.emitBisecting({ projectId, batch: current.batch, message: failMessage });
 
-      const bisect = await this.bisectBatch(projectId, current.batch);
+      const bisect = await this.bisector.bisectBatch(projectId, current.batch);
       if (bisect === "pending") {
         // A sub-batch's CI was still running — HOLD (no entry blamed). Bug B: back off with a
         // `retryAfterMs` so the subscriber re-drives once rather than on every unrelated NOTIFY.
@@ -316,7 +302,7 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     for (;;) {
       if (sawInfra) await this.sleep(INFRA_RETRY_BACKOFF_MS);
       await this.deps.batchEvents.emitChecking({ projectId, batch: formation.batch, formation, maxBatchSize });
-      const verdict = await this.checkEntries(projectId, formation.batch);
+      const verdict = await this.bisector.checkEntries(projectId, formation.batch);
       if (verdict.result !== "infra-error") {
         return { kind: "verdict", verdict };
       }
@@ -356,54 +342,6 @@ export class BatchMergeCoordinator implements MergeCoordinator {
       holds: verdict.holds,
       queueDepth,
     });
-  }
-
-  /** Speculative integrate + CI-check. Thrown checker → infra-error (never blame a PR). */
-  private async checkEntries(projectId: string, entries: ReadonlyArray<MergeQueueEntry>): Promise<BatchCheckVerdict> {
-    try {
-      return await this.deps.checker.checkBatch({ projectId, entries });
-    } catch (error) {
-      return {
-        result: "infra-error",
-        message: `batch check threw: ${String(error)}`,
-        retriable: isRetriableInfraError(error),
-        ...(isMissingGithubCredentialError(error) ? { kind: "missing_required_credential" as const } : {}),
-      };
-    }
-  }
-
-  /** Binary-search failed batch for the single culprit (pending/infra hold without blame). */
-  private async bisectBatch(
-    projectId: string,
-    batch: ReadonlyArray<MergeQueueEntry>,
-  ): Promise<
-    | Awaited<ReturnType<typeof bisectCulprit>>
-    | "pending"
-    | { kind: "infra"; message: string; cause?: "missing_required_credential" }
-  > {
-    try {
-      return await bisectCulprit(batch, async (prefixLength) => {
-        const v = await this.checkEntries(projectId, batch.slice(0, prefixLength));
-        if (v.result === "pending") {
-          throw new BatchCheckStillPendingError(`sub-batch CI still pending (prefix length ${prefixLength})`);
-        }
-        if (v.result === "infra-error") {
-          throw new BatchCheckInfraError(
-            `sub-batch check could not run (prefix length ${prefixLength}): ${v.message}`,
-            v.retriable,
-            v.kind,
-          );
-        }
-        return v.result === "pass" ? "pass" : "fail";
-      });
-    } catch (error) {
-      if (error instanceof BatchCheckStillPendingError) return "pending";
-      if (error instanceof BatchCheckInfraError) {
-        if (error.kind === undefined) return { kind: "infra", message: error.message };
-        return { kind: "infra", message: error.message, cause: error.kind };
-      }
-      throw error;
-    }
   }
 
   private async mergeBatch(
@@ -480,8 +418,4 @@ export class BatchMergeCoordinator implements MergeCoordinator {
     if (kind === undefined) return terminalInfraBlock(input);
     return terminalInfraBlock({ ...input, kind });
   }
-}
-
-function isMissingGithubCredentialError(error: unknown): boolean {
-  return error instanceof MissingGithubCredentialRefError || error instanceof NoGithubCredentialConfiguredError;
 }
