@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { MtlsPeerVerifier } from "../../engine/contracts/mtlsChannel.js";
 import type { ResolutionAuthority } from "../../engine/contracts/resolutionAuthority.js";
 import { buildResolutionAuthority } from "../../engine/governance/resolutionAuthority.js";
+import { PgRepairRouter, type RepairRouter } from "../../engine/workflow/repairRouting.js";
 import { verifyInternalPeer } from "./internalWriteShared.js";
 
 const authorizeSchema = z.object({ orgId: z.string().min(1) }).strict();
@@ -12,6 +13,7 @@ export interface InternalResolutionAuthorityRouteDeps {
   readonly pool: pg.Pool;
   readonly verifier: MtlsPeerVerifier;
   readonly authority?: ResolutionAuthority;
+  readonly repairRouter?: RepairRouter;
 }
 
 /**
@@ -21,6 +23,7 @@ export interface InternalResolutionAuthorityRouteDeps {
  */
 export function createInternalResolutionAuthorityRoutes(deps: InternalResolutionAuthorityRouteDeps): Hono {
   const authority = deps.authority ?? buildResolutionAuthority(deps.pool);
+  const repairRouter = deps.repairRouter ?? new PgRepairRouter(deps.pool);
   const app = new Hono();
   app.post("/internal/resolution-authority/:resolutionJobId/authorize", async (c: Context) => {
     if (!verifyInternalPeer(deps.verifier, c)) return c.json({ error: "untrusted_peer" }, 401);
@@ -30,7 +33,11 @@ export function createInternalResolutionAuthorityRoutes(deps: InternalResolution
     if (resolutionJobId === undefined || resolutionJobId.length === 0) {
       return c.json({ error: "invalid_resolution_job_id" }, 400);
     }
-    return c.json(await authority.authorize({ orgId: parsed.data.orgId, resolutionJobId }));
+    const decision = await authority.authorize({ orgId: parsed.data.orgId, resolutionJobId });
+    if (decision.decision === "blocked") {
+      await repairRouter.route({ orgId: parsed.data.orgId, resolutionDecisionId: decision.id });
+    }
+    return c.json(decision);
   });
   return app;
 }

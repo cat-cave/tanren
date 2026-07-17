@@ -1,5 +1,14 @@
 import type { ResolutionAuthority } from "../contracts/resolutionAuthority.js";
 import type { ResolutionJob } from "../contracts/resolutionStage.js";
+import type pg from "pg";
+import { PgRepairRouter, type RepairRouter } from "../workflow/repairRouting.js";
+
+export type { RepairRouter } from "../workflow/repairRouting.js";
+
+/** Production composition keeps the fail-closed blocked-decision seam together. */
+export function buildProductionRepairRouter(pool: pg.Pool): RepairRouter {
+  return new PgRepairRouter(pool);
+}
 
 /**
  * Record the sole resolution decision after a production stage has durably
@@ -12,10 +21,16 @@ import type { ResolutionJob } from "../contracts/resolutionStage.js";
 export async function authorizeProductionResolution(
   authority: Pick<ResolutionAuthority, "authorize"> | undefined,
   job: Pick<ResolutionJob, "orgId" | "id" | "stage">,
+  repairRouter?: RepairRouter,
 ): Promise<void> {
   if (job.stage !== "production") return;
   if (authority === undefined) {
     throw new Error("production resolution work has no ResolutionAuthority — fail closed");
   }
-  await authority.authorize({ orgId: job.orgId, resolutionJobId: job.id });
+  const decision = await authority.authorize({ orgId: job.orgId, resolutionJobId: job.id });
+  if (decision.decision !== "blocked") return;
+  if (repairRouter === undefined) {
+    throw new Error("blocked production resolution has no repair router — fail closed");
+  }
+  await repairRouter.route({ orgId: job.orgId, resolutionDecisionId: decision.id });
 }

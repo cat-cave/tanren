@@ -1,4 +1,4 @@
-// cspell:ignore adec iloop vassert venv vrun
+// cspell:ignore adec iloop sfind sorigin vassert venv vrun
 // Real-Postgres fail-closed proof for bh-11. It drives the production stage
 // through the LIVE ResolutionDagWalker, then reads its immutable decision row.
 import { migrate, runWithOrgScope } from "@tanren/db";
@@ -8,13 +8,11 @@ import { Hono } from "hono";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Digest } from "../src/engine/contracts/cas.js";
-import type { SymptomVerificationResult } from "../src/engine/contracts/symptomProbe.js";
-import type { SymptomContractV1 } from "../src/engine/contracts/symptomContract.js";
 import { ResolutionDagWalker } from "../src/engine/dag/resolutionDagWalker.js";
 import { buildResolutionAuthority } from "../src/engine/governance/resolutionAuthority.js";
 import { ResolutionJobStore } from "../src/engine/repositories/resolutionJobs.js";
-import { SymptomContractStore } from "../src/engine/repositories/symptomContracts.js";
 import { ProductionSymptomStage } from "../src/engine/verification/resolutionStages/productionSymptomStage.js";
+import { PgRepairRouter } from "../src/engine/workflow/repairRouting.js";
 import { createProductionVerificationRoutes } from "../src/routes/issueLoops/productionVerification.js";
 
 const describeDb = process.env["TANREN_RLS_DB_TEST"] === "1" ? describe : describe.skip;
@@ -59,16 +57,17 @@ function databaseUrl(database: string, appRole = false): string {
   return url.toString();
 }
 
-function contract(): SymptomContractV1 {
+/** The literal's property order is the sorted-key immutable contract representation. */
+function contract() {
   return {
-    version: 1,
+    baselineRequired: true,
+    expectedCorrectedObservation: { body: { status: "fixed" }, status: 200 },
+    expectedFailingObservation: { body: { status: "still_broken" }, status: 200 },
     issueLoopId: LOOP_ID,
-    target: { url: "https://contract.example/symptom" },
-    expectedFailingObservation: { status: 200, body: { status: "still_broken" } },
-    expectedCorrectedObservation: { status: 200, body: { status: "fixed" } },
     proofPolicy: "active_causal",
     sourceRevision: "source-revision-a",
-    baselineRequired: true,
+    target: { url: "https://contract.example/symptom" },
+    version: 1,
   };
 }
 
@@ -81,11 +80,7 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function seed(
-  owner: Pool,
-  app: Pool,
-  releaseUrl: string,
-): Promise<{ artifactDigest: string; contractId: string }> {
+async function seed(owner: Pool, releaseUrl: string): Promise<{ artifactDigest: string; contractId: string }> {
   const artifactDigest = digest("authority-artifact");
   await owner.query(
     `INSERT INTO organizations (id, kind, external_id, login, display_name, config)
@@ -112,11 +107,55 @@ async function seed(
      VALUES ($1, $2, $3, 'source_authority', 'authority-issue', 1, 'authority-fingerprint', 'high', 'verifying', 'active_causal', 1, now())`,
     [ORG_ID, LOOP_ID, PROJECT_ID],
   );
-  const storedContract = await new SymptomContractStore(app).create({
-    orgId: ORG_ID,
-    projectId: PROJECT_ID,
-    contract: contract(),
-  });
+  await owner.query(
+    `INSERT INTO source_findings
+       (org_id, id, project_id, issue_loop_id, source_id, provider_object_id, provider_revision,
+        status, title, fingerprint, observed_at)
+     VALUES ($1, 'sfind_authority', $2, $3, 'source_authority', 'authority-issue', 'rev-1',
+             'open', 'authority symptom', 'authority-fingerprint', now())`,
+    [ORG_ID, PROJECT_ID, LOOP_ID],
+  );
+  await owner.query(
+    `INSERT INTO tasks (task_id, run_id, issue_loop_id, org_id, kind, title, status, agent_kind, cli)
+     VALUES ('task_authority_triage', NULL, $1, $2, 'triage', 'authority triage', 'done', 'answerer', 'fixture')`,
+    [LOOP_ID, ORG_ID],
+  );
+  await owner.query(
+    `INSERT INTO specs
+       (spec_id, project_id, org_id, title, description, status, origin_issue_loop_id, origin_run_id)
+     VALUES ('spec_authority_primary', $1, $2, 'Resolve authority symptom', 'primary fix',
+             'merged', $3, 'run_authority_primary')`,
+    [PROJECT_ID, ORG_ID, LOOP_ID],
+  );
+  await owner.query(
+    `INSERT INTO spec_origins
+       (org_id, project_id, id, spec_id, issue_loop_id, triage_task_id, attempt_number, role, ordinal)
+     VALUES ($1, $2, 'sorigin_authority_primary', 'spec_authority_primary', $3,
+             'task_authority_triage', 1, 'primary_fix', 0)`,
+    [ORG_ID, PROJECT_ID, LOOP_ID],
+  );
+  await owner.query(
+    `INSERT INTO spec_origin_findings (org_id, spec_id, source_finding_id)
+     VALUES ($1, 'spec_authority_primary', 'sfind_authority')`,
+    [ORG_ID],
+  );
+  const contractId = "contract_authority";
+  await owner.query(
+    `INSERT INTO symptom_contracts
+       (org_id, project_id, id, issue_loop_id, schema_version, contract_json, canonical_hash,
+        proof_policy, target, source_revision, state)
+     VALUES ($1, $2, $3, $4, 1, $5::jsonb, $6, 'active_causal', $7::jsonb, $8, 'validated')`,
+    [
+      ORG_ID,
+      PROJECT_ID,
+      contractId,
+      LOOP_ID,
+      JSON.stringify(contract()),
+      digest(JSON.stringify(contract())),
+      JSON.stringify(contract().target),
+      contract().sourceRevision,
+    ],
+  );
   await owner.query(
     `INSERT INTO integration_nodes
        (node_id, project_id, org_id, base_branch, base_sha, ref, purpose, members, member_key, head_sha, tree_hash, status)
@@ -140,8 +179,8 @@ async function seed(
      VALUES ($1, $2, $3, 'deploy.fixture', 'authority-app', 'production', 'authority-deploy', $4, $5, NULL, $6, $7, 'live')`,
     [ORG_ID, RELEASE_ID, PROJECT_ID, MERGE_SHA, artifactDigest, NODE_ID, releaseUrl],
   );
-  await seedEvidence(owner, artifactDigest, storedContract.id);
-  return { artifactDigest, contractId: storedContract.id };
+  await seedEvidence(owner, artifactDigest, contractId);
+  return { artifactDigest, contractId };
 }
 
 async function seedEvidence(owner: Pool, artifactDigest: string, contractId: string): Promise<void> {
@@ -228,7 +267,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     owner = new Pool({ connectionString: databaseUrl(database) });
     await migrate(owner);
     app = new Pool({ connectionString: databaseUrl(database, true) });
-    ({ artifactDigest, contractId } = await seed(owner, app, baseUrl));
+    ({ artifactDigest, contractId } = await seed(owner, baseUrl));
   }, 60_000);
 
   afterAll(async () => {
@@ -261,6 +300,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
       orgIds: async () => [ORG_ID],
       stages: new Map([["production", stage]]),
       authority: buildResolutionAuthority(app),
+      repairRouter: new PgRepairRouter(app),
       leaseOwner: `walker-${id}`,
     });
     await walker.tick();
@@ -350,6 +390,13 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     ]);
     expect(rows.events).toEqual([{ event_type: "resolution.blocked" }, { event_type: "resolution.authorized" }]);
     expect(rows.loop).toEqual({ state: "verified_source_sync_pending" });
+    const repairs = await runWithOrgScope(app, ORG_ID, (client) =>
+      client.query("SELECT spec_id FROM remediation_attempts WHERE org_id = $1 AND issue_loop_id = $2", [
+        ORG_ID,
+        LOOP_ID,
+      ]),
+    );
+    expect(repairs.rows).toEqual([{ spec_id: expect.stringMatching(/^spec_/u) }]);
     expect(artifactDigest).toMatch(/^sha256:/u);
   });
 
@@ -393,7 +440,7 @@ describeDb("ResolutionAuthority — real walker, immutable decisions, and RLS", 
     const stage = new ProductionSymptomStage({
       pool: app,
       probe: {
-        async runVerification(input): Promise<SymptomVerificationResult> {
+        async runVerification(input) {
           return {
             orgId: input.orgId,
             projectId: input.projectId,

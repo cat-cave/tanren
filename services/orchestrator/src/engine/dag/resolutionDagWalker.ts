@@ -1,6 +1,7 @@
 import type { ResolutionJob, ResolutionStage, ResolutionStageKind } from "../contracts/resolutionStage.js";
 import type { ResolutionAuthority } from "../contracts/resolutionAuthority.js";
 import { DEFAULT_RESOLUTION_JOB_LEASE_MS, type ResolutionJobStore } from "../repositories/resolutionJobs.js";
+import type { RepairRouter } from "../workflow/repairRouting.js";
 import { createLogger } from "../observability/logger.js";
 import { authorizeProductionResolution } from "./productionResolutionAuthorization.js";
 import { settleResolutionJob } from "./resolutionJobSettlement.js";
@@ -23,6 +24,8 @@ export interface ResolutionDagWalkerDeps {
   readonly leaseMs?: number;
   /** Required whenever a production stage is registered; absent authority fails closed. */
   readonly authority?: ResolutionAuthority;
+  /** Required for a blocked production decision; absent routing fails closed. */
+  readonly repairRouter?: RepairRouter;
 }
 
 export interface ResolutionDagWalkerOptions {
@@ -158,7 +161,7 @@ export class ResolutionDagWalker {
       // run + assertions before it returns. Its product_resolved result is still
       // only evidence: the separate ResolutionAuthority is the sole component
       // allowed to declare an internal resolution / source-closure eligibility.
-      await authorizeProductionResolution(this.deps.authority, job);
+      await authorizeProductionResolution(this.deps.authority, job, this.deps.repairRouter);
 
       const settled = await settleResolutionJob(this.deps.store, job, result);
       if (!settled) {
