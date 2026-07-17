@@ -270,6 +270,8 @@ export interface ArtifactIdentity {
 export interface BuildArtifactResult extends ArtifactIdentity {
   /** The provider-side build/deployment handle the artifact was produced under. */
   readonly deploymentId: string;
+  /** The provider-resolved reach handle returned when the build/release was triggered. */
+  readonly url: string;
   /** The provider's reported build state at return (e.g. "built" | "READY"). */
   readonly state: string;
 }

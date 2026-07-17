@@ -7,6 +7,14 @@ export { JobRow, JobStore } from "./jobs.js";
 export { ActorStore, TaskActorRow } from "./actors.js";
 export { ProjectRow, ProjectStore, type ProjectConfigSnapshot, type ProjectLifecycle } from "./projects.js";
 export { ProjectSpecStore, type ProjectSpecRow, type SpecPatch } from "./projectSpecs.js";
+export {
+  SpecOriginStore,
+  SpecOriginRow,
+  SPEC_ORIGIN_ROLES,
+  type SpecOriginRole,
+  type SpecOriginWithFindings,
+  type RecordSpecOriginInput,
+} from "./specOrigins.js";
 // bh-1 back-half self-healing foundation: the durable IssueLoop aggregate + its
 // immutable, append-only source findings and causal edges.
 export {
@@ -101,6 +109,23 @@ export { ForgeProposalStore } from "../forge/proposals.js";
 // re-export them so the forge-internal callers keep their by-name imports.
 export { InboxStore, type CreateSourceInput } from "./inbox.js";
 export { AuditsStore, type CreateAuditJobInput } from "./audits.js";
+export {
+  ReleaseInstancesStore,
+  ReleaseInstanceNotFoundError,
+  InvalidReleaseStateTransitionError,
+  RELEASE_STATES,
+  RELEASE_ENVIRONMENTS,
+  type ReleaseInstancesRepository,
+  type CreateReleaseInstanceInput,
+  type TransitionReleaseInstanceInput,
+  type SupersedePriorLiveInput,
+  type GetReleaseInstanceByDeploymentInput,
+  type PromoteReleaseInput,
+  type RollbackReleaseInput,
+  type TeardownPreviewInput,
+  type MarkLiveReleaseInput,
+} from "./releaseInstances.js";
+export { PgReleaseInstancesRepository } from "./pgReleaseInstances.js";
 export {
   WebhookEventStore,
   type WebhookEvent,
