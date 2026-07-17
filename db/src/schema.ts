@@ -486,14 +486,9 @@ export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";
 export { designContracts } from "./schemaDesign.js";
-export {
-  designSystems,
-  designSystemReleases,
-  designReleaseChannels,
-  designArtifacts,
-  designArtifactFiles,
-} from "./schemaDesignSystems.js";
+export * from "./schemaDesignSystems.js";
 export { manualDeployAttestations } from "./schemaDeploy.js";
 export { governancePolicyRevisions } from "./schemaGovernance.js";
 export * from "./schemaEffectivePolicySnapshots.js";
 export * from "./schemaWave6.js";
+export * from "./schemaBhCluster.js";

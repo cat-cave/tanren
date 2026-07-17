@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "issueLoopId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "sourceFindingId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "specId",
+    "sourceFindingId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.spec.origin.linked"
+}

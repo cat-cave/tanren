@@ -38,6 +38,9 @@ export type ScreenMount = (app: Hono, deps: ShellDeps) => void;
  */
 export const SCREEN_MOUNTS: ScreenMount[] = [];
 
+// bh-14b reservation: replace this comment with the Self-Healing route import
+// and its single SCREEN_MOUNTS.push call; the nav row is already reserved.
+
 // chat-primary project view, spec creation, routing & limits.
 import { mountProjectScreens } from "../routes/projects/index.js";
 SCREEN_MOUNTS.push(mountProjectScreens);

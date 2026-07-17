@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "issueLoopId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "sourceFindingId": {
+      "type": "string"
+    },
+    "sourceRevisionHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "sourceFindingId",
+    "sourceRevisionHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.issue_loop.source_revision_observed"
+}

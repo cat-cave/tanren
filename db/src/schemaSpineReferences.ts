@@ -48,4 +48,13 @@ export const behaviorVerdictsReference = pgTable("behavior_verdicts", {
 export const behaviorVerificationRunsReference = pgTable("behavior_verification_runs", {
   orgId: text("org_id").notNull(),
   id: text("id").notNull(),
+  stage: text("stage"),
+  resolutionJobId: text("resolution_job_id"),
+  classification: text("classification"),
+});
+
+/** Reference-only deployed release identity (migration 0036). */
+export const releaseInstancesReference = pgTable("release_instances", {
+  orgId: text("org_id").notNull(),
+  id: text("id").notNull(),
 });

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "issueLoopId": {
+      "type": "string"
+    },
+    "observedRevisionHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "sourceSyncOutboxId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "sourceSyncOutboxId",
+    "observedRevisionHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.source_issue.sync.drifted"
+}

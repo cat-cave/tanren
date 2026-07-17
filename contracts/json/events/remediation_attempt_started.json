@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "issueLoopId": {
+      "type": "string"
+    },
+    "iteration": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "remediationAttemptId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "remediationAttemptId",
+    "iteration"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.remediation.attempt.started"
+}
