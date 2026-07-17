@@ -777,6 +777,14 @@ smoke-rls-environments:
 smoke-rls-design-contracts:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/designContractRegistry.integration.test.ts
 
+# bh-1 back-half foundation (migration 0049_issue_loop, RLS + append-only trigger) — the
+# durable IssueLoop aggregate + immutable source_findings. Proves create+append+read-back
+# under org scope, cross-org isolation (org B sees ZERO of org A; unscoped sees ZERO), the
+# org-scoped WITH CHECK on writes, and the append-only trigger that refuses UPDATE/DELETE of
+# an existing finding. Same TANREN_RLS_DB_TEST gate as the other RLS smokes.
+smoke-rls-issue-loop:
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/issueLoopStore.rls.integration.test.ts
+
 # P8b: the e2e gate's ARTIFACT-READ teeth against a real Postgres. The `just e2e`
 # harness reads the real persisted run / cost_records / DORA rows via
 # `readRunArtifacts`; this proves that SQL actually returns a seeded merged run
