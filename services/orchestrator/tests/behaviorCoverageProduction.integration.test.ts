@@ -9,8 +9,9 @@ import type { BehaviorRevisionId } from "../src/engine/contracts/behaviorRevisio
 import type { CommandResult, CommandSubstrate, RunnerCommand } from "../src/engine/contracts/commandSubstrate.js";
 import { PgIntegrationNodeModel } from "../src/engine/dag/integrationNodesPg.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
-import { PgEventStore } from "../src/engine/eventStore.js";
+import { PgEventStore, type AppendEventInput, type EventStore } from "../src/engine/eventStore.js";
 import { driveBatchThroughNode } from "../src/engine/merge/batchIntegrationNodeDrive.js";
+import { batchProofUnitGraph } from "../src/engine/merge/batchNodeGate.js";
 import { BehaviorCoverageEdgesStore } from "../src/engine/repositories/behaviorCoverageEdges.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 import type { ActorContextEnv } from "../src/middleware/auth.js";
@@ -56,6 +57,14 @@ class DiffSubstrate implements CommandSubstrate {
     this.commands.push(command);
     return { exitCode: 0, stdout: "src/a.ts\0", stderr: "" };
   }
+}
+
+function scopedPgEvents(pool: Pool): EventStore {
+  return {
+    async append(input: AppendEventInput): Promise<void> {
+      await runWithOrgScope(pool, input.orgId, (client) => new PgEventStore(client).append(input));
+    },
+  };
 }
 
 function databaseName(): string {
@@ -262,6 +271,7 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
       treeHash: batchTree,
       memberHeadShas: { spec_rv4_batch: batchMember },
     };
+    const eventStore = scopedPgEvents(appPool);
     const verdict = await driveBatchThroughNode(
       {
         orgId: ORG,
@@ -277,7 +287,8 @@ describeDb("RV4 production authority — diff → PG node → HTTP → CAS/event
       },
       {
         nodes: new PgIntegrationNodeModel(appPool),
-        eventStore: new PgEventStore(appPool),
+        eventStore,
+        proofUnits: batchProofUnitGraph(appPool, eventStore),
         jjWorkspaceDeps: { ssh: diff } as never,
         integrate: async (_deps, _input, continuation) => ({
           outcome: "integrated",

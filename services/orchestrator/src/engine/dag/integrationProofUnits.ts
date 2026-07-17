@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import type { EventStore } from "../eventStore.js";
+import { proofUnitReuseInputHash } from "../repositories/integrationProofUnits.js";
 import type {
   IntegrationProofEdge,
   IntegrationProofUnit,
@@ -39,8 +40,8 @@ export interface ProofUnitEvaluationResult {
 
 /**
  * The granular extension to `integrationProofReuse`: only a matching declared unit
- * input at the same quarantine epoch can avoid its work closure. All rows remain
- * append-only; a later epoch gets fresh rows and a fresh root.
+ * input, proof stamps, and quarantine epoch can avoid its work closure. All rows
+ * remain append-only; a changed identity gets fresh rows and a fresh root.
  */
 export class IntegrationProofUnitGraph {
   constructor(
@@ -51,9 +52,11 @@ export class IntegrationProofUnitGraph {
   async evaluate(input: ProofUnitEvaluationInput): Promise<ProofUnitEvaluationResult> {
     const prior = await this.repository.nodeProofState(input);
     if (
-      prior?.quarantineEpoch !== undefined &&
-      prior.quarantineEpoch !== input.quarantineEpoch &&
-      prior.proofRoot !== undefined
+      prior?.proofRoot !== undefined &&
+      (prior.quarantineEpoch !== input.quarantineEpoch ||
+        prior.toolchainHash !== input.toolchainHash ||
+        prior.designContractVersion !== input.designContractVersion ||
+        prior.behaviorManifestHash !== input.behaviorManifestHash)
     ) {
       await this.events.append({
         orgId: input.orgId,
@@ -66,15 +69,24 @@ export class IntegrationProofUnitGraph {
     const byKey = new Map<string, IntegrationProofUnit & { reused: boolean }>();
     for (const work of input.units) {
       if (byKey.has(work.key)) throw new Error(`duplicate proof-unit work key: ${work.key}`);
+      const reuseIdentity = {
+        inputHash: work.inputHash,
+        quarantineEpoch: input.quarantineEpoch,
+        toolchainHash: input.toolchainHash,
+        designContractVersion: input.designContractVersion,
+        behaviorManifestHash: input.behaviorManifestHash,
+      };
+      const reuseInputHash = proofUnitReuseInputHash(reuseIdentity);
       const found = await this.repository.findReusable({
         orgId: input.orgId,
         projectId: input.projectId,
         kind: work.kind,
         subjectId: work.subjectId,
-        inputHash: work.inputHash,
-        quarantineEpoch: input.quarantineEpoch,
+        ...reuseIdentity,
       });
-      if (found !== undefined) {
+      // A failed observation is immutable evidence but never a shortcut: re-run it to
+      // distinguish a deterministic failure from a transient gate fault.
+      if (found?.verdict === "pass") {
         const reused = { ...found, reused: true };
         byKey.set(work.key, reused);
         await this.events.append({
@@ -97,7 +109,7 @@ export class IntegrationProofUnitGraph {
         projectId: input.projectId,
         kind: work.kind,
         subjectId: work.subjectId,
-        inputHash: work.inputHash,
+        inputHash: reuseInputHash,
         verdict: result.verdict,
         ...(result.artifactHash !== undefined && { artifactHash: result.artifactHash }),
         sourceNodeId: input.nodeId,

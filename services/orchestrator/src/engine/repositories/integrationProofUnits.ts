@@ -1,6 +1,6 @@
 // MQ-6 durable storage for immutable integration proof units and their DAG.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { runWithOrgScope } from "@tanren/db";
 import type pg from "pg";
 
@@ -28,11 +28,43 @@ export interface IntegrationProofEdge {
 export interface IntegrationNodeProofState {
   readonly proofRoot?: string;
   readonly quarantineEpoch?: number;
+  readonly toolchainHash?: string;
+  readonly designContractVersion?: string;
+  readonly behaviorManifestHash?: string;
+}
+
+/**
+ * The complete identity of reusable proof-unit work. The stored `input_hash` is a
+ * digest of this shape, rather than the caller's work-input hash alone: a unit from
+ * a different toolchain, contract, or behavior manifest is a different proof.
+ */
+export interface ProofUnitReuseIdentity {
+  readonly inputHash: string;
+  readonly quarantineEpoch: number;
+  readonly toolchainHash: string;
+  readonly designContractVersion: string;
+  readonly behaviorManifestHash: string;
+}
+
+/** Deterministically compose the declared work input with every node proof stamp. */
+export function proofUnitReuseInputHash(input: ProofUnitReuseIdentity): string {
+  return `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify([
+        "tanren.integration-proof-unit-reuse.v1",
+        input.inputHash,
+        input.quarantineEpoch,
+        input.toolchainHash,
+        input.designContractVersion,
+        input.behaviorManifestHash,
+      ]),
+    )
+    .digest("hex")}`;
 }
 
 export interface IntegrationProofUnitRepository {
   findReusable(
-    input: Pick<IntegrationProofUnit, "orgId" | "projectId" | "kind" | "subjectId" | "inputHash" | "quarantineEpoch">,
+    input: Pick<IntegrationProofUnit, "orgId" | "projectId" | "kind" | "subjectId"> & ProofUnitReuseIdentity,
   ): Promise<IntegrationProofUnit | undefined>;
   record(input: Omit<IntegrationProofUnit, "proofUnitId">): Promise<IntegrationProofUnit>;
   attachEvaluation(input: {
@@ -82,8 +114,9 @@ export class PgIntegrationProofUnitRepository implements IntegrationProofUnitRep
   constructor(private readonly pool: pg.Pool) {}
 
   async findReusable(
-    input: Pick<IntegrationProofUnit, "orgId" | "projectId" | "kind" | "subjectId" | "inputHash" | "quarantineEpoch">,
+    input: Pick<IntegrationProofUnit, "orgId" | "projectId" | "kind" | "subjectId"> & ProofUnitReuseIdentity,
   ): Promise<IntegrationProofUnit | undefined> {
+    const reuseInputHash = proofUnitReuseInputHash(input);
     return runWithOrgScope(this.pool, input.orgId, async (client) => {
       const result = await client.query<ProofUnitRow>(
         `SELECT org_id, project_id, proof_unit_id, kind, subject_id, input_hash, verdict,
@@ -94,7 +127,7 @@ export class PgIntegrationProofUnitRepository implements IntegrationProofUnitRep
             AND (expires_at IS NULL OR expires_at > now())
           ORDER BY created_at DESC, proof_unit_id DESC
           LIMIT 1`,
-        [input.projectId, input.kind, input.subjectId, input.inputHash, input.quarantineEpoch],
+        [input.projectId, input.kind, input.subjectId, reuseInputHash, input.quarantineEpoch],
       );
       const row = result.rows[0];
       return row === undefined ? undefined : rowToUnit(row);
@@ -218,8 +251,15 @@ export class PgIntegrationProofUnitRepository implements IntegrationProofUnitRep
     nodeId: string;
   }): Promise<IntegrationNodeProofState | undefined> {
     return runWithOrgScope(this.pool, input.orgId, async (client) => {
-      const result = await client.query<{ proof_root: string | null; quarantine_epoch: number | null }>(
-        `SELECT proof_root, quarantine_epoch FROM integration_nodes WHERE project_id = $1 AND node_id = $2`,
+      const result = await client.query<{
+        proof_root: string | null;
+        quarantine_epoch: number | null;
+        toolchain_hash: string | null;
+        design_contract_version: string | null;
+        behavior_manifest_hash: string | null;
+      }>(
+        `SELECT proof_root, quarantine_epoch, toolchain_hash, design_contract_version, behavior_manifest_hash
+           FROM integration_nodes WHERE project_id = $1 AND node_id = $2`,
         [input.projectId, input.nodeId],
       );
       const row = result.rows[0];
@@ -229,6 +269,9 @@ export class PgIntegrationProofUnitRepository implements IntegrationProofUnitRep
           : {
               ...(row.proof_root !== null && { proofRoot: row.proof_root }),
               ...(row.quarantine_epoch !== null && { quarantineEpoch: row.quarantine_epoch }),
+              ...(row.toolchain_hash !== null && { toolchainHash: row.toolchain_hash }),
+              ...(row.design_contract_version !== null && { designContractVersion: row.design_contract_version }),
+              ...(row.behavior_manifest_hash !== null && { behaviorManifestHash: row.behavior_manifest_hash }),
             };
       return state;
     });

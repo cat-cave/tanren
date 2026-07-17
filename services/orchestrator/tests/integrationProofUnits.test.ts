@@ -69,6 +69,8 @@ describe("MQ-6 integration proof units", () => {
       proof_root: first.proofRoot,
       quarantine_epoch: 0,
       toolchain_hash: hash("e"),
+      design_contract_version: "design-v1",
+      behavior_manifest_hash: hash("f"),
     });
 
     const reuseTier = vi.fn<TestRun>(async () => ({ verdict: "fail" }));
@@ -128,5 +130,20 @@ describe("MQ-6 integration proof units", () => {
     });
     expect(epochBump).toHaveBeenCalledTimes(1);
     expect(events.events.map((event) => event.type)).toContain("integration.proof.invalidated");
+
+    const changedStamp = vi.fn<TestRun>(async () => ({ verdict: "pass" }));
+    const changedStampResult = await graph.evaluate({
+      orgId: "org_a",
+      projectId: "project_a",
+      nodeId: "inode_b",
+      evaluationId: "eval_e",
+      quarantineEpoch: 1,
+      toolchainHash: hash("z"),
+      designContractVersion: "design-v1",
+      behaviorManifestHash: hash("f"),
+      units: [{ key: "tier", kind: "native_ci_tier", subjectId: "pre_merge", inputHash: hash("c"), run: changedStamp }],
+    });
+    expect(changedStamp).toHaveBeenCalledTimes(1);
+    expect(changedStampResult.units[0]?.reused).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import type {
   IntegrationProofUnit,
   IntegrationProofUnitRepository,
 } from "../../../src/engine/repositories/integrationProofUnits.js";
+import { proofUnitReuseInputHash } from "../../../src/engine/repositories/integrationProofUnits.js";
 import { MemoryDb } from "../conformanceMemoryDb.js";
 
 export function createInMemoryIntegrationProofUnitStore(
@@ -14,16 +15,23 @@ export function createInMemoryIntegrationProofUnitStore(
   return {
     db,
     async findReusable(input) {
-      const row = db.integrationProofUnits.find(
-        (unit) =>
-          unit.org_id === input.orgId &&
-          unit.project_id === input.projectId &&
-          unit.kind === input.kind &&
-          unit.subject_id === input.subjectId &&
-          unit.input_hash === input.inputHash &&
-          unit.quarantine_epoch === input.quarantineEpoch &&
-          (unit.expires_at === null || unit.expires_at > new Date()),
-      );
+      const reuseInputHash = proofUnitReuseInputHash(input);
+      const row = db.integrationProofUnits
+        .filter(
+          (unit) =>
+            unit.org_id === input.orgId &&
+            unit.project_id === input.projectId &&
+            unit.kind === input.kind &&
+            unit.subject_id === input.subjectId &&
+            unit.input_hash === reuseInputHash &&
+            unit.quarantine_epoch === input.quarantineEpoch &&
+            (unit.expires_at === null || unit.expires_at > new Date()),
+        )
+        .sort((left, right) => {
+          const byCreatedAt = right.created_at.getTime() - left.created_at.getTime();
+          if (byCreatedAt !== 0) return byCreatedAt;
+          return right.proof_unit_id < left.proof_unit_id ? -1 : right.proof_unit_id > left.proof_unit_id ? 1 : 0;
+        })[0];
       return row === undefined ? undefined : fromRecord(row);
     },
     async record(input) {
@@ -127,6 +135,9 @@ export function createInMemoryIntegrationProofUnitStore(
         : {
             ...(row.proof_root !== null && { proofRoot: row.proof_root }),
             ...(row.quarantine_epoch !== null && { quarantineEpoch: row.quarantine_epoch }),
+            ...(row.toolchain_hash !== null && { toolchainHash: row.toolchain_hash }),
+            ...(row.design_contract_version !== null && { designContractVersion: row.design_contract_version }),
+            ...(row.behavior_manifest_hash !== null && { behaviorManifestHash: row.behavior_manifest_hash }),
           };
     },
     async stampNodeProof(input) {

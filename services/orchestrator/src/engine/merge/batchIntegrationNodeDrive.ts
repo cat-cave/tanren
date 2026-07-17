@@ -5,18 +5,16 @@
 //        jj workspace (no host ref), materializing the node's headSha/treeHash. The gate
 //        runs on THIS workspace (the integrated head is a local jj bookmark).
 //
-//   (3a) PROOF REUSE — UPSERT the integration node for the prospective merged state (its
-//        `memberKey` is the integrated-content identity), resolve the six LIVE key
-//        components, and decide REUSE vs RECOMPUTE (fail-closed). On a HIT with a PASSING
-//        proof: SKIP the re-gate (`integration.proof.reused`) → a synthetic pass. On a
-//        MISS / non-passing / unknown-key: run the gate (the caller's gate closure) +
-//        `recordProof`.
+//   (3a) PROOF-UNIT REUSE — UPSERT the integration node for the prospective merged state,
+//        resolve the live identity, and evaluate the native pre-merge gate through the
+//        immutable per-unit Merkle graph. A matching unit emits
+//        `integration.proof_unit.reused` and skips the gate closure.
 //
 // This module is the ONE place the batch verdict path consults the node model, so the
-// batch-checker stays a thin caller. CORRECTNESS: the proof-reuse guard is the §3a safety
-// invariant (all six key components match exactly, passing-only) — a reuse can NEVER let
-// unproven code merge.
+// batch-checker stays a thin caller. CORRECTNESS: the proof-unit input includes the exact
+// integrated content and live gate identity, so reuse can never let unproven code merge.
 
+import { createHash, randomUUID } from "node:crypto";
 import type { BatchAuthorityBinding, BatchCheckVerdict } from "../contracts/batchMergeCoordinator.js";
 import type { CiConfigV1 } from "../ci/index.js";
 import type { IntegrationNode, IntegrationNodeMember, ProofReuseKeyInput } from "../contracts/integrationNodes.js";
@@ -31,7 +29,8 @@ import {
   withJjLocalIntegration,
 } from "../dag/jjLocalIntegration.js";
 import { hashGateConfig, resolveLiveKeyComponents } from "../dag/integrationProofKey.js";
-import { decideProofReuse, type LiveProofKeyComponents, recordProofVerdict } from "../dag/integrationProofReuse.js";
+import { decideProofReuse, type LiveProofKeyComponents } from "../dag/integrationProofReuse.js";
+import type { IntegrationProofUnitGraph } from "../dag/integrationProofUnits.js";
 import type { CoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
 import { buildBatchGateProofEvidence } from "./multiMemberAuthorityEvidence.js";
 
@@ -92,6 +91,8 @@ export interface BatchNodeStore extends ProofStorePort {
 
 export interface BatchNodeDriveDeps {
   nodes: BatchNodeStore;
+  /** The durable per-unit proof graph; this is the live gate's reuse authority. */
+  proofUnits: IntegrationProofUnitGraph;
   eventStore: EventStore;
   /** The A1 live-jj-workspace deps (allocator/ssh/secrets/vcsProvider/minter/facts). */
   jjWorkspaceDeps: LiveJjWorkspaceDeps;
@@ -111,10 +112,11 @@ export interface BatchNodeDriveDeps {
  *      build returned (no host ref written).
  *   2. UPSERT the node (the memberKey identity + the materialized head/tree/status).
  *   3. RESOLVE the gate config from the same workspace → the gateConfigHash component.
- *   4. PROOF REUSE (3a): resolve the six live key components + decide. On REUSE: a
- *      synthetic pass (the gate is NOT run). On RECOMPUTE: run the gate on the workspace +
- *      record the proof under the (sound) key. An unreadable config OR an unreadable
- *      node ⇒ RECOMPUTE (never reuse on uncertainty).
+ *   4. PROOF-UNIT REUSE (MQ-6): resolve the six live key components and evaluate the
+ *      native pre-merge gate as a stamped proof unit. A matching unit short-circuits the
+ *      gate; a miss runs the gate inside that unit, records it, and composes the Merkle root.
+ *      The legacy whole-node proof is retained only as merge-authority evidence, never as
+ *      the gate's pre-graph short-circuit. An unreadable config OR node ⇒ RECOMPUTE.
  */
 export async function driveBatchThroughNode(
   facts: BatchNodeDriveFacts,
@@ -190,7 +192,9 @@ async function verdictForIntegrated(
     return (await deps.gate(live)).verdict;
   }
 
-  // 4. PROOF REUSE (3a) — resolve the six live key components + decide (fail-closed).
+  // 4. PROOF-UNIT REUSE (MQ-6) — resolve the live identity before evaluating the
+  // pre-merge gate. A partially-known identity remains fail-closed and runs the gate
+  // directly; it cannot be recorded or reused as a proof unit.
   const components = resolveLiveKeyComponents({
     config,
     runnerImage: facts.runnerImage,
@@ -198,53 +202,120 @@ async function verdictForIntegrated(
     ...(facts.appEnv !== undefined && { appEnv: facts.appEnv }),
     quarantineVersion: facts.quarantineVersion,
   });
-  const decision = await decideProofReuse({
-    orgId: facts.orgId,
-    node,
-    components,
-    store: deps.nodes,
-    emit: async (payload) => {
-      await deps.eventStore.append({
-        projectId: facts.projectId,
-        specId: facts.tailSpecId,
-        orgId: facts.orgId,
-        eventType: "integration.proof.reused",
-        payload: { ...payload, verdict: "passed" },
-      });
-    },
-  });
+  const keyInput = resolvedKeyInput(node.memberKey, components);
+  if (keyInput === undefined) return (await deps.gate(live)).verdict;
 
-  if (decision.kind === "reuse") {
-    // SKIP the re-gate — the recorded passing proof short-circuits the gate. The node is
-    // proven; the batch passes WITHOUT re-running the gate.
-    const keyInput = resolvedKeyInput(node.memberKey, components);
-    return passWithBinding({ result: "pass", integrationBranch: integrated.localRef }, node, integrated, keyInput);
-  }
-
-  // RECOMPUTE — run the real gate on the workspace, then record the proof under the key.
-  const gated = await deps.gate(live);
-  await recordProofVerdict({
-    decision,
-    store: deps.nodes,
+  const stamp = proofUnitStamp(keyInput);
+  let gated: Awaited<ReturnType<GateBatchWorkspace>> | undefined;
+  const evaluation = await deps.proofUnits.evaluate({
     orgId: facts.orgId,
     projectId: facts.projectId,
-    node,
-    passed: gated.passed,
-    ...(decision.keyInput === undefined
-      ? {}
-      : {
-          evidence: buildBatchGateProofEvidence({
-            nodeId: node.nodeId,
-            headSha: integrated.headSha,
-            treeHash: integrated.treeHash,
-            memberSetHash: node.memberKey,
-            keyInput: decision.keyInput,
-            passed: gated.passed,
-            ...(gated.verdict.result === "fail" ? { message: gated.verdict.message } : {}),
-          }),
-        }),
+    nodeId: node.nodeId,
+    evaluationId: `eval_batch_${randomUUID()}`,
+    ...stamp,
+    units: [
+      {
+        key: "pre_merge",
+        kind: "native_ci_tier",
+        subjectId: "pre_merge",
+        inputHash: batchGateUnitInputHash(keyInput),
+        run: async () => {
+          gated = await deps.gate(live);
+          return { verdict: gated.passed ? "pass" : "fail" };
+        },
+      },
+    ],
   });
-  return passWithBinding(gated.verdict, node, integrated, decision.keyInput);
+  const proofUnit = evaluation.units[0];
+  if (proofUnit === undefined) throw new Error("batch gate proof-unit evaluation produced no pre_merge unit");
+
+  if (proofUnit.reused) {
+    // Keep the established whole-node reuse event for existing consumers. Its decision is
+    // deliberately made AFTER the graph evaluation, so it can narrate a hit but can never
+    // bypass the per-unit reuse authority above.
+    await decideProofReuse({
+      orgId: facts.orgId,
+      node,
+      components,
+      store: deps.nodes,
+      emit: async (payload) => {
+        await deps.eventStore.append({
+          projectId: facts.projectId,
+          specId: facts.tailSpecId,
+          orgId: facts.orgId,
+          eventType: "integration.proof.reused",
+          payload: { ...payload, verdict: "passed" },
+        });
+      },
+    });
+  }
+
+  const gateResult = gated ?? reusedGateResult(proofUnit.verdict, integrated.localRef);
+  // Whole-node proofs remain the merge-authority replay record. The proof unit above is
+  // what controls whether work runs; this write binds its resulting verdict to the exact
+  // authority key for later land-time validation.
+  await deps.nodes.recordProof({
+    orgId: facts.orgId,
+    projectId: facts.projectId,
+    nodeId: node.nodeId,
+    keyInput,
+    verdict: gateResult.passed ? "passed" : "failed",
+    evidence: buildBatchGateProofEvidence({
+      nodeId: node.nodeId,
+      headSha: integrated.headSha,
+      treeHash: integrated.treeHash,
+      memberSetHash: node.memberKey,
+      keyInput,
+      passed: gateResult.passed,
+      ...(gateResult.verdict.result === "fail" ? { message: gateResult.verdict.message } : {}),
+    }),
+  });
+  return passWithBinding(gateResult.verdict, node, integrated, keyInput);
+}
+
+function reusedGateResult(
+  verdict: "pass" | "fail" | "skipped",
+  integrationBranch: string,
+): Awaited<ReturnType<GateBatchWorkspace>> {
+  if (verdict === "pass") return { verdict: { result: "pass", integrationBranch }, passed: true };
+  return {
+    verdict: { result: "fail", message: `reused non-passing pre_merge proof unit (${verdict})` },
+    passed: false,
+  };
+}
+
+/** Stamp every persisted proof root with the exact live gate identity. */
+function proofUnitStamp(keyInput: ProofReuseKeyInput): {
+  quarantineEpoch: number;
+  toolchainHash: string;
+  designContractVersion: string;
+  behaviorManifestHash: string;
+} {
+  return {
+    quarantineEpoch: quarantineEpochForVersion(keyInput.quarantineVersion),
+    toolchainHash: digest(["tanren.batch-toolchain.v1", keyInput.runnerImage]),
+    designContractVersion: keyInput.policyVersion,
+    behaviorManifestHash: digest([
+      "tanren.batch-behavior-manifest.v1",
+      keyInput.gateConfigHash,
+      keyInput.appEnvHash,
+      keyInput.quarantineVersion,
+    ]),
+  };
+}
+
+/** The raw work input still includes the full integrated-content + gate identity. */
+function batchGateUnitInputHash(keyInput: ProofReuseKeyInput): string {
+  return digest(["tanren.batch-pre-merge-unit.v1", proofReuseKey(keyInput)]);
+}
+
+/** Active quarantine currently has a content version, so derive its stable integer epoch. */
+function quarantineEpochForVersion(version: string): number {
+  return createHash("sha256").update(version).digest().readUInt32BE(0) & 0x7fff_ffff;
+}
+
+function digest(value: unknown): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
 }
 
 /** Add the exact node/proof identity only to a genuinely passing, fully-keyed verdict. */
