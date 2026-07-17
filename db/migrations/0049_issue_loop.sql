@@ -61,6 +61,9 @@ CREATE TABLE "source_findings" (
 );
 --> statement-breakpoint
 ALTER TABLE "source_findings" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+CREATE UNIQUE INDEX "issue_loops_org_project_id_unique" ON "issue_loops" USING btree ("org_id","project_id","id");--> statement-breakpoint
+CREATE UNIQUE INDEX "issue_loops_source_external_generation_unique" ON "issue_loops" USING btree ("org_id","source_id","external_key","generation");--> statement-breakpoint
+CREATE UNIQUE INDEX "source_findings_provider_revision_unique" ON "source_findings" USING btree ("org_id","source_id","provider_object_id","provider_revision");--> statement-breakpoint
 ALTER TABLE "issue_loop_edges" ADD CONSTRAINT "issue_loop_edges_org_id_organizations_id_fk" FOREIGN KEY ("org_id") REFERENCES "public"."organizations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issue_loop_edges" ADD CONSTRAINT "issue_loop_edges_project_fk" FOREIGN KEY ("org_id","project_id") REFERENCES "public"."projects"("org_id","project_id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issue_loop_edges" ADD CONSTRAINT "issue_loop_edges_loop_fk" FOREIGN KEY ("org_id","project_id","issue_loop_id") REFERENCES "public"."issue_loops"("org_id","project_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -74,12 +77,9 @@ ALTER TABLE "source_findings" ADD CONSTRAINT "source_findings_issue_loop_fk" FOR
 ALTER TABLE "source_findings" ADD CONSTRAINT "source_findings_source_fk" FOREIGN KEY ("org_id","source_id") REFERENCES "public"."inbox_sources"("org_id","id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "issue_loop_edges_org_id" ON "issue_loop_edges" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "issue_loop_edges_org_related" ON "issue_loop_edges" USING btree ("org_id","project_id","related_issue_loop_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "issue_loops_org_project_id_unique" ON "issue_loops" USING btree ("org_id","project_id","id");--> statement-breakpoint
-CREATE UNIQUE INDEX "issue_loops_source_external_generation_unique" ON "issue_loops" USING btree ("org_id","source_id","external_key","generation");--> statement-breakpoint
 CREATE INDEX "issue_loops_org_id" ON "issue_loops" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "issue_loops_org_project" ON "issue_loops" USING btree ("org_id","project_id");--> statement-breakpoint
 CREATE INDEX "issue_loops_org_project_state" ON "issue_loops" USING btree ("org_id","project_id","state");--> statement-breakpoint
-CREATE UNIQUE INDEX "source_findings_provider_revision_unique" ON "source_findings" USING btree ("org_id","source_id","provider_object_id","provider_revision");--> statement-breakpoint
 CREATE INDEX "source_findings_org_id" ON "source_findings" USING btree ("org_id");--> statement-breakpoint
 CREATE INDEX "source_findings_org_loop_observed" ON "source_findings" USING btree ("org_id","issue_loop_id","observed_at");--> statement-breakpoint
 CREATE POLICY "rls_org_isolation" ON "issue_loop_edges" AS PERMISSIVE FOR ALL TO public USING ("issue_loop_edges"."org_id" = current_setting('app.current_org_id', true)) WITH CHECK ("issue_loop_edges"."org_id" = current_setting('app.current_org_id', true));--> statement-breakpoint
