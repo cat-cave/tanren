@@ -157,3 +157,9 @@ export async function handleGovernancePut(
     return c.json(toView(validated, outcome.revision));
   });
 }
+
+export {
+  createRepositoryVisibilityService,
+  mountRepositoryVisibilityRoutes,
+  type RepositoryVisibilityService,
+} from "./repositoryVisibility.js";
