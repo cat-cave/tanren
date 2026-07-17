@@ -40,6 +40,7 @@ import {
   buildDefaultGate,
   buildEntityRiskProducer,
   designOracleSeam,
+  issueLoopProvenanceSeam,
   loopConfigSeam,
   nativeQueueSeam,
   reGateGateReworkSeam,
@@ -354,7 +355,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
           specId: context.specId,
           projectId: context.projectId,
           orgId,
-          ...(context.issueLoopId === undefined ? {} : { issueLoopId: context.issueLoopId }),
+          ...issueLoopProvenanceSeam(context),
           workspacePath,
           baseSha,
           ...(context.designContextBlock !== undefined && { designContextBlock: context.designContextBlock }),
@@ -391,7 +392,7 @@ export async function runPlannerLoopWorkflow(rawInput: RunPlannerLoopInput): Pro
         parentSpecId: context.specId,
         projectId: context.projectId,
         orgId,
-        ...(context.issueLoopId === undefined ? {} : { issueLoopId: context.issueLoopId }),
+        ...issueLoopProvenanceSeam(context),
       });
 
       // Publish the cleaned draft PR + run the merge-authority `pre_merge` gate

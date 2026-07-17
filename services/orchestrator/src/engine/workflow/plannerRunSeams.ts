@@ -25,6 +25,10 @@ export function nativeQueueSeam(input: RunPlannerLoopInput): { enqueueNativeQueu
   return input.nativeQueueEnqueuer === undefined ? {} : { enqueueNativeQueue: input.nativeQueueEnqueuer };
 }
 
+export function issueLoopProvenanceSeam(context: PlannerRunContext): { issueLoopId?: string } {
+  return context.issueLoopId === undefined ? {} : { issueLoopId: context.issueLoopId };
+}
+
 /**
  * apex v67/v69 loop-close fix — the EARLY-PATH merge_queue enqueue seam.
  *
