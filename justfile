@@ -938,16 +938,16 @@ smoke-rls-merge-partitions:
 # WAVE-4 barrier claims these RLS smoke recipe names before their owning lanes
 # supply the tests. Each lane replaces only its PLACEHOLDER path.
 smoke-rls-symptom-evidence:
-  corepack pnpm exec vitest run services/orchestrator/tests/PLACEHOLDER_bh-5.rls.integration.test.ts
+  echo "wave-4 placeholder — the bh-5 lane replaces this with its real smoke-rls test when the node lands"
 
 smoke-rls-issue-source:
-  corepack pnpm exec vitest run services/orchestrator/tests/PLACEHOLDER_bh-7.rls.integration.test.ts
+  echo "wave-4 placeholder — the bh-7 lane replaces this with its real smoke-rls test when the node lands"
 
 smoke-rls-land-groups:
-  corepack pnpm exec vitest run services/orchestrator/tests/PLACEHOLDER_mq-5.rls.integration.test.ts
+  echo "wave-4 placeholder — the mq-5 lane replaces this with its real smoke-rls test when the node lands"
 
 smoke-rls-governance-tiers:
-  corepack pnpm exec vitest run services/orchestrator/tests/PLACEHOLDER_gv-8.rls.integration.test.ts
+  echo "wave-4 placeholder — the gv-8 lane replaces this with its real smoke-rls test when the node lands"
 
 smoke: compose-build compose-up wait-for-stack smoke-connectivity smoke-ssh-integration smoke-plane-split-worker smoke-plane-split-worker-remote-writes smoke-plane-split-p3 smoke-plane-split-p3b smoke-plane-split-p3c smoke-rls-r1 smoke-rls-r2 smoke-rls-r2-cohort2 smoke-rls-r2-cohort3 smoke-rls-r2-cohort4 smoke-rls-r3a smoke-rls-r3a-worker smoke-rls-r3b smoke-rls-early-finalize smoke-rls-org-bootstrap smoke-rls-operator-flow smoke-rls-http-route-scoping smoke-rls-org-costs smoke-rls-run-lifecycle smoke-rls-issue-loop smoke-rls-spec-origins smoke-rls-integration-lifecycle smoke-rls-behavior-coverage smoke-rls-merge-queue-authority smoke-integration-vault-cas smoke-rls-allocator smoke-rls-environments smoke-rls-design-contracts smoke-rls-governance-policy smoke-rls-design-foundation smoke-rls-integration-events smoke-rls-webhook-intake smoke-rls-merge-partitions smoke-e2e-artifacts smoke-budget-gate smoke-merge-authority smoke-rls-symptom-contracts smoke-rls-symptom-evidence smoke-rls-issue-source smoke-rls-land-groups smoke-rls-governance-tiers
 
