@@ -21,15 +21,15 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 ## Rollup
 
-| Bucket               | Total   | MVP     | ✅ done             | 🟡 in-flight | 🚧 spec-debt   |
-| -------------------- | ------- | ------- | ------------------- | ------------ | -------------- |
-| merge-queue          | 16      | 6       | 3 (mq-1,mq-2,mq-3)  | 0            | 0              |
-| runtime-verification | 26      | 15¹     | 1² (rv-4)           | 0            | 0              |
-| integrations         | 22      | 22      | 4 (in-1,2,3,16)     | 0            | 0              |
-| back-half            | 35      | 14      | 1 (bh-1)            | 0            | 21 (bh-15..35) |
-| design-system        | 9       | 6       | 1 (ds-0)            | 0            | 0              |
-| governance           | 34      | 15      | 7 (gv-1..7)         | 0            | 19 (gv-16..34) |
-| **Total**            | **142** | **~78** | **17**              | **0**        | **40**         |
+| Bucket               | Total   | MVP     | ✅ done            | 🟡 in-flight | 🚧 spec-debt   |
+| -------------------- | ------- | ------- | ------------------ | ------------ | -------------- |
+| merge-queue          | 16      | 6       | 3 (mq-1,mq-2,mq-3) | 0            | 0              |
+| runtime-verification | 26      | 15¹     | 1² (rv-4)          | 0            | 0              |
+| integrations         | 22      | 22      | 4 (in-1,2,3,16)    | 0            | 0              |
+| back-half            | 35      | 14      | 1 (bh-1)           | 0            | 21 (bh-15..35) |
+| design-system        | 9       | 6       | 1 (ds-0)           | 0            | 0              |
+| governance           | 34      | 15      | 7 (gv-1..7)        | 0            | 19 (gv-16..34) |
+| **Total**            | **142** | **~78** | **17**             | **0**        | **40**         |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
 ² Strict completion **17/142 = 12%**. Serial chain in-1/gv-2/rv-4/mq-2 (2026-07-16). **Wave-1 parallel fan-out (2026-07-16/17):** barrier pre-flight #971 (notif RLS 0045 + 52-event freeze 0046) → in-16/gv-3/gv-6 merged; **rv-20 deferred** (blocked on the unbuilt runtime-verification attempt-writer / rv-11) and **in-5 deferred** (requirement compiler needs an LLM-intent design, not lexical matching) — both branches preserved on origin. **Wave-2 (2026-07-17):** pre-flight #975 (gov 0047 + wave-2 4-event 0048) → **gv-7** (#977, deterministic policy compiler + append-only revision store), **in-3** (#978, typed integration event emitter + read surface), **mq-3** (#979, ddmin/QuickXPlain safe-subset solver); **bh-1** (#976, IssueLoop aggregate + immutable findings, 0049) and **ds-0** (#981, DesignContractV2 + design foundation, 0050) landed the back-half + design spines. Wave-3 barrier (#983: 0051–0055 + wave-3 event freeze) in CI → unblocks bh-2/bh-3/bh-4/mq-4. Each RLS proof asserts as the non-superuser `tanren_app` role + is wired into a `smoke-rls-*` recipe.
@@ -136,7 +136,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Node      | Phase | Status       | Purpose                                                                                                                                                                                                                                                                                                                                                       | Deps                  |
 | --------- | ----- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| bh-1      | MVP   | ✅ done      | IssueLoop aggregate + immutable source findings (#976)                                                                                                                                                                                                                                                                                                               | SP·1/3                |
+| bh-1      | MVP   | ✅ done      | IssueLoop aggregate + immutable source findings (#976)                                                                                                                                                                                                                                                                                                        | SP·1/3                |
 | bh-2      | MVP   | ⬜ todo      | Provenance correction + triage-as-real-task                                                                                                                                                                                                                                                                                                                   | bh-1                  |
 | bh-3      | MVP   | ⬜ todo      | Webhook intake hardening (idempotent, claim-leased)                                                                                                                                                                                                                                                                                                           | bh-1 · SP·3           |
 | bh-4      | MVP   | ⬜ todo      | SymptomContractV1 immutable store + authoring                                                                                                                                                                                                                                                                                                                 | bh-1 · SP·1/2/3       |
@@ -156,7 +156,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Node | Phase | Status  | Purpose                                                                                        | Deps                 |
 | ---- | ----- | ------- | ---------------------------------------------------------------------------------------------- | -------------------- |
-| ds-0 | MVP   | ✅ done | Design contracts & schema foundation (DesignContractV2, RLS, proof keys) (#981)               | SP·1..8              |
+| ds-0 | MVP   | ✅ done | Design contracts & schema foundation (DesignContractV2, RLS, proof keys) (#981)                | SP·1..8              |
 | ds-1 | MVP   | ⬜ todo | Executable token core (DTCG resolver, base/plain, DesignVfs, CAS, offline validator)           | ds-0 · SP·3/1        |
 | ds-2 | MVP   | ⬜ todo | Web adapter MVP (shadcn/Radix/Tailwind, catalog, exports, Writer injection)                    | ds-0/1 · SP·2        |
 | ds-3 | MVP   | ⬜ todo | F2D — author missing design fragments (selector, checker/auditor loop, atomic persist/retract) | ds-0/1/2 · SP·2/3/5  |
