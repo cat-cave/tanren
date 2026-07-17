@@ -36,6 +36,18 @@ export {
   type AppendSourceFindingInput,
   type LinkIssueLoopEdgeInput,
 } from "./issueLoops.js";
+export {
+  SymptomContractStore,
+  SymptomContractNotFoundError,
+  SYMPTOM_CONTRACT_STATES,
+  type SymptomContractRow,
+  type SymptomContractState,
+  type SymptomContractFragmentRow,
+  type CreateSymptomContractInput,
+  type MarkValidatedInput,
+  type MarkSupersededInput,
+  type BindSymptomContractFragmentInput,
+} from "./symptomContracts.js";
 // Integration lifecycle foundation: a connection owns authentication identity;
 // explicit grants own plane/environment/capability authority.
 export {
@@ -97,6 +109,23 @@ export { ForgeProposalStore } from "../forge/proposals.js";
 // re-export them so the forge-internal callers keep their by-name imports.
 export { InboxStore, type CreateSourceInput } from "./inbox.js";
 export { AuditsStore, type CreateAuditJobInput } from "./audits.js";
+export {
+  ReleaseInstancesStore,
+  ReleaseInstanceNotFoundError,
+  InvalidReleaseStateTransitionError,
+  RELEASE_STATES,
+  RELEASE_ENVIRONMENTS,
+  type ReleaseInstancesRepository,
+  type CreateReleaseInstanceInput,
+  type TransitionReleaseInstanceInput,
+  type SupersedePriorLiveInput,
+  type GetReleaseInstanceByDeploymentInput,
+  type PromoteReleaseInput,
+  type RollbackReleaseInput,
+  type TeardownPreviewInput,
+  type MarkLiveReleaseInput,
+} from "./releaseInstances.js";
+export { PgReleaseInstancesRepository } from "./pgReleaseInstances.js";
 export {
   WebhookEventStore,
   type WebhookEvent,

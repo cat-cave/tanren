@@ -15,6 +15,7 @@ import {
   VERCEL_GRANT,
   VERCEL_TARGET,
 } from "./helpers/deployOnMergeHarness.js";
+import { DeployOnMergeReleaseInstances } from "./helpers/deployOnMergeReleaseInstances.js";
 function githubGitSource(org: string, repo: string, sha: string): Record<string, string> {
   return { type: "github", org, repo, ref: sha, sha };
 }
@@ -36,7 +37,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       body: { name: "acme-widget" },
     });
     const events = new RecordingEventStore();
-    await run(
+    const releaseInstances = await run(
       {
         merged: true,
         config: VERCEL_TARGET,
@@ -85,6 +86,14 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(vPayload["policyVersion"]).toBe(1);
     expect(vPayload["initiatingActor"]).toEqual({ kind: "service", id: "tanren-engine" });
     expect(events.appends.find((a) => a.eventType === "deploy.skipped")).toBeUndefined();
+    await expect(
+      releaseInstances.getByDeployment({
+        orgId: ORG_ID,
+        provider: "deploy.vercel",
+        appId: VERCEL_APP_ID,
+        deploymentId: "vercel_deploy_1",
+      }),
+    ).resolves.toMatchObject({ state: "live", environment: "production" });
   });
   it("fails LOUD on a provider ERROR terminal — escalates on non-convergence, not a count", async () => {
     const transport = scriptedDeployTransport("vercel", []);
@@ -95,6 +104,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       body: { name: "acme-widget" },
     });
     const events = new RecordingEventStore();
+    const releaseInstances = new DeployOnMergeReleaseInstances();
     const watcher = new DeployOnMergeWatcher({
       pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
       secrets: secrets(),
@@ -102,6 +112,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
+      releaseInstances,
     });
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
@@ -115,6 +126,14 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
     expect(fPayload["reason"]).toContain("did not reach a live deployment");
     expect(fPayload["reason"]).not.toMatch(/ERROR/u);
     expect(JSON.stringify(failed)).not.toContain("deploy_token");
+    await expect(
+      releaseInstances.getByDeployment({
+        orgId: ORG_ID,
+        provider: "deploy.vercel",
+        appId: VERCEL_APP_ID,
+        deploymentId: "vercel_deploy_1",
+      }),
+    ).resolves.toMatchObject({ state: "built", environment: "preview" });
   });
   it("records a DURABLE trigger-phase deploy.failed when an EXPECTED deploy throws before any trigger", async () => {
     const transport = scriptedDeployTransport("vercel", []);
@@ -159,6 +178,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       body: { name: "acme-widget" },
     });
     const events = new RecordingEventStore();
+    const releaseInstances = new DeployOnMergeReleaseInstances();
     const watcher = new DeployOnMergeWatcher({
       pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
       secrets: secrets(),
@@ -166,6 +186,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
+      releaseInstances,
     });
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR"]);
     await expect(watcher.check(RUN_ID)).rejects.toThrow(/FAILURE state 'ERROR'/u);
@@ -211,6 +232,7 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       body: { name: "acme-widget" },
     });
     const events = new RecordingEventStore();
+    const releaseInstances = new DeployOnMergeReleaseInstances();
     const watcher = new DeployOnMergeWatcher({
       pool: fakePool({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT }),
       secrets: secrets(),
@@ -218,11 +240,20 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       eventStore: events,
       urlProbe: scriptedUrlProbe(),
       verifyPoll: instantVerifyPollPolicy(),
+      releaseInstances,
     });
     transport.scriptDeploymentStates("vercel_deploy_1", ["ERROR", "READY"]);
     await watcher.check(RUN_ID);
     expect(events.appends.find((a) => a.eventType === "deploy.verified")).toBeDefined();
     expect(events.appends.find((a) => a.eventType === "deploy.failed")).toBeUndefined();
+    await expect(
+      releaseInstances.getByDeployment({
+        orgId: ORG_ID,
+        provider: "deploy.vercel",
+        appId: VERCEL_APP_ID,
+        deploymentId: "vercel_deploy_1",
+      }),
+    ).resolves.toMatchObject({ state: "live", environment: "production" });
   });
   it("is a clean NO-OP for a project with no deploy config AND no deploy intent (no error, no deploy)", async () => {
     const transport = scriptedDeployTransport("vercel");
@@ -299,13 +330,25 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       body: { name: "acme-widget" },
     });
     const events = new RecordingEventStore();
-    await run({ merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyDeployed: true }, transport, events);
+    const releaseInstances = await run(
+      { merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT, alreadyDeployed: true },
+      transport,
+      events,
+    );
     expect(transport.deploysTriggered()).toEqual([]);
     expect(transport.statusPolls(PRIOR_DEPLOYMENT_ID)).toBeGreaterThan(0);
     const verified = events.appends.find((a) => a.eventType === "deploy.verified");
     expect(verified).toBeDefined();
     expect((verified!.payload as Record<string, unknown>)["deploymentId"]).toBe(PRIOR_DEPLOYMENT_ID);
     expect(events.appends.find((a) => a.eventType === "deploy.triggered")).toBeUndefined();
+    await expect(
+      releaseInstances.getByDeployment({
+        orgId: ORG_ID,
+        provider: "deploy.vercel",
+        appId: VERCEL_APP_ID,
+        deploymentId: PRIOR_DEPLOYMENT_ID,
+      }),
+    ).resolves.toMatchObject({ state: "live", environment: "production" });
   });
   it("fails LOUD when merge.completed recorded no mergeSha (cannot determine the merged commit)", async () => {
     const transport = scriptedDeployTransport("vercel", []);

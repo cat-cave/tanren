@@ -45,6 +45,7 @@ import {
   AppEnvironmentStore,
   FragmentsStore,
   EntityClaimStore,
+  ReleaseInstancesStore,
 } from "../repositories/index.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
@@ -105,6 +106,8 @@ export interface Repositories {
   readonly fragments: typeof FragmentsStore;
   /** §3.3 entity-anchored issue CLAIMS: the Tanren-native defect ledger (`entity_claims`). */
   readonly entityClaims: typeof EntityClaimStore;
+  /** Extended deploy lifecycle rows and their behavior-revision bindings. */
+  readonly releaseInstances: typeof ReleaseInstancesStore;
 }
 
 /**
@@ -140,6 +143,7 @@ export const pgRepositories: Repositories = {
   appEnvironment: AppEnvironmentStore,
   fragments: FragmentsStore,
   entityClaims: EntityClaimStore,
+  releaseInstances: ReleaseInstancesStore,
 } as const;
 
 export type { ActorRef };
