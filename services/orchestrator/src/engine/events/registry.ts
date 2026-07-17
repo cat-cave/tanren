@@ -105,6 +105,7 @@ import {
   ReviewChangesRequestedPayload,
   ReviewRequestedPayload,
   w0EventRegistry,
+  wave4EventRegistry,
 } from "./schemas/integrations.js";
 import {
   MergeBatchBisectingPayload,
@@ -189,6 +190,7 @@ export const EventRegistry = {
   ...wave1EventRegistry,
   ...governanceVocabularyRegistry,
   ...designSystemVocabularyRegistry,
+  ...wave4EventRegistry,
   ...eventVocabularyMiscRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,

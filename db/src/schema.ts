@@ -481,6 +481,7 @@ export * from "./schemaProjectDerivations.js";
 export { issueLoops, sourceFindings, issueLoopEdges };
 export { specOrigins, specOriginFindings } from "./schemaSpecOrigins.js";
 export { symptomContracts, symptomContractFragments } from "./schemaSymptomContracts.js";
+export * from "./schemaWave4.js";
 export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";

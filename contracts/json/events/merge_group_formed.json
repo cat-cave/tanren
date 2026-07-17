@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "baseSha": {
+      "type": "string"
+    },
+    "groupId": {
+      "type": "string"
+    },
+    "memberKeys": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "partitionId": {
+      "type": "string"
+    },
+    "policyHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "groupId",
+    "partitionId",
+    "baseSha",
+    "memberKeys",
+    "policyHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.group.formed"
+}

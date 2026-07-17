@@ -363,6 +363,19 @@ const SEVERITY_OVERRIDES: Partial<Record<EventName, Severity>> = {
   "deployment.promoted": "info",
   "deployment.rolled_back": "warn",
 
+  // Mission-complete WAVE-4 shared vocabulary (bh-5/bh-7/mq-5/gv-8).
+  "symptom.baseline.started": "info",
+  "symptom.baseline.observed": "info",
+  "symptom.assertion.recorded": "info",
+  "source.finding.recorded": "info",
+  "source.sync.pending": "info",
+  "source.sync.verified": "info",
+  "source.sync.externally_closed_unverified": "warn",
+  "merge.group.formed": "info",
+  "merge.land_group.completed": "info",
+  "governance.tier.created": "info",
+  "governance.tier.activated": "info",
+
   // Mission-complete WAVE-2 governance policy-revision vocabulary (gv-7). The
   // immutable revision lifecycle (draft persisted, deterministically compiled,
   // activated) is routine durable governance fact → `info`. A proof invalidation

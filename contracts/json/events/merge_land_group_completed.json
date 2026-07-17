@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authorizedSha": {
+      "type": "string"
+    },
+    "decisionId": {
+      "type": "string"
+    },
+    "expectedMainSha": {
+      "type": "string"
+    },
+    "landGroupId": {
+      "type": "string"
+    },
+    "mainSha": {
+      "type": "string"
+    },
+    "memberKeys": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "projectId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "landGroupId",
+    "decisionId",
+    "expectedMainSha",
+    "authorizedSha",
+    "mainSha",
+    "memberKeys"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.merge.land_group.completed"
+}
