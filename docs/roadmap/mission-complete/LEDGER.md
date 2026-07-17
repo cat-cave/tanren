@@ -1,4 +1,4 @@
-<!-- cspell:ignore evsub descoped -->
+<!-- cspell:ignore evsub descoped desynced -->
 
 # Mission-complete node ledger — the single source of truth
 
@@ -7,7 +7,7 @@ counts anywhere else (README, CLAUDE.md) are derived from here. When a node land
 update its row here in the **same PR** that merges it. Node IDs and specs are frozen
 by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _status_.
 
-**Last reconciled:** 2026-07-17 (post #1003 — WAVE-5 COMPLETE: barrier 0061-0062 + mq-11/in-4/ds-2/gv-9 (0063); 31/142).
+**Last reconciled:** 2026-07-17 (post #1010 — WAVE-6 COMPLETE: barrier 0064-0068 + mq-6/rv-7/rv-8/gv-11; 35/142).
 
 ## Status vocabulary
 
@@ -23,16 +23,16 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 | Bucket               | Total   | MVP     | ✅ done           | 🟡 in-flight | 🚧 spec-debt   |
 | -------------------- | ------- | ------- | ----------------- | ------------ | -------------- |
-| merge-queue          | 16      | 6       | 6 (mq-1..5,11)    | 0            | 0              |
-| runtime-verification | 26      | 15¹     | 1² (rv-4)         | 0            | 0              |
+| merge-queue          | 16      | 6       | 7 (mq-1..6,11)    | 0            | 0              |
+| runtime-verification | 26      | 15¹     | 3² (rv-4,7,8)     | 0            | 0              |
 | integrations         | 22      | 22      | 5 (in-1,2,3,4,16) | 0            | 0              |
 | back-half            | 35      | 14      | 7 (bh-1..5,7,9)   | 0            | 21 (bh-15..35) |
 | design-system        | 9       | 6       | 3 (ds-0,1,2)      | 0            | 0              |
-| governance           | 34      | 15      | 9 (gv-1..9)       | 0            | 19 (gv-16..34) |
-| **Total**            | **142** | **~78** | **31**            | **0**        | **40**         |
+| governance           | 34      | 15      | 10 (gv-1..9,11)   | 0            | 19 (gv-16..34) |
+| **Total**            | **142** | **~78** | **35**            | **0**        | **40**         |
 
 ¹ 11 rv nodes (rv-1/2/3/5/6/9/10/11/14/15/21) were built as spine → `spine-built`, not consumer MVP.
-² Strict completion **31/142 = 22%**. Serial chain in-1/gv-2/rv-4/mq-2 (2026-07-16). **Wave-1 parallel fan-out (2026-07-16/17):** barrier pre-flight #971 (notif RLS 0045 + 52-event freeze 0046) → in-16/gv-3/gv-6 merged; **rv-20 deferred** (blocked on the unbuilt runtime-verification attempt-writer / rv-11) and **in-5 deferred** (requirement compiler needs an LLM-intent design, not lexical matching) — both branches preserved on origin. **Wave-2 (2026-07-17):** pre-flight #975 (gov 0047 + wave-2 4-event 0048) → **gv-7** (#977, deterministic policy compiler + append-only revision store), **in-3** (#978, typed integration event emitter + read surface), **mq-3** (#979, ddmin/QuickXPlain safe-subset solver); **bh-1** (#976, IssueLoop aggregate + immutable findings, 0049) and **ds-0** (#981, DesignContractV2 + design foundation, 0050) landed the back-half + design spines. **Wave-3 (2026-07-17):** barrier #983 (0051–0055 + 7-event freeze) → **bh-4** (#985 symptom store), **bh-9** (#982 DeployAdapter/release_instances), **bh-2** (#988 provenance/triage-task), **bh-3** (#986 webhook hardening). **mq-4** (#987 partition leases) landed after the coordinator-regression fix. Two real bugs the audits missed but full CI caught: #989 (invalid inbox_sources kind, masked since bh-1) + #990 (vitest .codex/worktrees contamination). **Wave-4 (2026-07-17):** barrier #992 (0056–0060 + event freeze) → **bh-5** (#995), **bh-7** (#997 forge intake + sibling-outbox), **mq-5** (#996), **gv-8** (#994 repo_visibility), **ds-1** (#993 web adapter foundation). **Wave-5 (2026-07-17):** barrier #999 (0061–0062) → **mq-11** (#1002 IntegrationNodeMaterializer), **in-4** (#1000), **ds-2** (#1003 web adapter MVP), **gv-9** (#1001, migration 0063, policy bindings + immutable effective-policy receipts — one-active-binding-per-project via `is_active` partial unique index, fixing the A→B→A tier-re-promotion supersession bug the grok audit caught). Next free migration slot: **0064**. Each RLS proof asserts as the non-superuser `tanren_app` role + is wired into a `smoke-rls-*` recipe.
+² Strict completion **35/142 = 25%**. Serial chain in-1/gv-2/rv-4/mq-2 (2026-07-16). **Wave-1 parallel fan-out (2026-07-16/17):** barrier pre-flight #971 (notif RLS 0045 + 52-event freeze 0046) → in-16/gv-3/gv-6 merged; **rv-20 deferred** (blocked on the unbuilt runtime-verification attempt-writer / rv-11) and **in-5 deferred** (requirement compiler needs an LLM-intent design, not lexical matching) — both branches preserved on origin. **Wave-2 (2026-07-17):** pre-flight #975 (gov 0047 + wave-2 4-event 0048) → **gv-7** (#977, deterministic policy compiler + append-only revision store), **in-3** (#978, typed integration event emitter + read surface), **mq-3** (#979, ddmin/QuickXPlain safe-subset solver); **bh-1** (#976, IssueLoop aggregate + immutable findings, 0049) and **ds-0** (#981, DesignContractV2 + design foundation, 0050) landed the back-half + design spines. **Wave-3 (2026-07-17):** barrier #983 (0051–0055 + 7-event freeze) → **bh-4** (#985 symptom store), **bh-9** (#982 DeployAdapter/release_instances), **bh-2** (#988 provenance/triage-task), **bh-3** (#986 webhook hardening). **mq-4** (#987 partition leases) landed after the coordinator-regression fix. Two real bugs the audits missed but full CI caught: #989 (invalid inbox_sources kind, masked since bh-1) + #990 (vitest .codex/worktrees contamination). **Wave-4 (2026-07-17):** barrier #992 (0056–0060 + event freeze) → **bh-5** (#995), **bh-7** (#997 forge intake + sibling-outbox), **mq-5** (#996), **gv-8** (#994 repo_visibility), **ds-1** (#993 web adapter foundation). **Wave-5 (2026-07-17):** barrier #999 (0061–0062) → **mq-11** (#1002 IntegrationNodeMaterializer), **in-4** (#1000), **ds-2** (#1003 web adapter MVP), **gv-9** (#1001, migration 0063, policy bindings + immutable effective-policy receipts — one-active-binding-per-project via `is_active` partial unique index, fixing the A→B→A tier-re-promotion supersession bug the grok audit caught). **Wave-6 (2026-07-17):** barrier #1006 (0064–0068 + 16-event freeze + conformance-fake + contract-type pre-seed) → **rv-7** (#1008 FixtureLeaseAdapter + `/internal/fixture-leases` HTTP), **rv-8** (#1007 SideEffectObserverAdapter + immutable observations), **gv-11** (#1009 private-repo visibility enforced predicate + reviewer-App identity + HTTP 409), **mq-6** (#1010 granular Merkle proof-unit graph). **mq-6 was the wave's key adversarial catch: all 82 tests passed but the grok audit returned NO_GO — the per-unit reuse graph was a DEAD PATH production never invoked, with a conformance fake desynced from the SQL order (the mq-4/mq-11 class).** One repair round wired it into the live gate (`PgBatchChecker.driveThroughIntegrationNode → IntegrationProofUnitGraph → proofUnits.evaluate()`, `work.run()` skipped on reuse), fixed the fake to newest-order with a dual-impl conformance assertion, and added a real-Postgres record→reuse test; re-audit GO. Tracked follow-ups: #24 (rv-8 duplicate-detection advisory lock), #25 (gv-11 auto-invoke in gate), #26 (mq-6 real stamp-digest binding + multi-unit production reuse). Next free migration slot: **0069**. Each RLS proof asserts as the non-superuser `tanren_app` role + is wired into a `smoke-rls-*` recipe.
 
 > **Honesty flag — the 142 is partly aspirational.** The **MVP tier (~78 nodes, the
 > v97 acceptance target) is fully specced.** The **full tier has 40 nodes of spec
@@ -55,24 +55,24 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 
 ## merge-queue (16)
 
-| Node  | Phase | Status  | Purpose                                                             | Deps             |
-| ----- | ----- | ------- | ------------------------------------------------------------------- | ---------------- |
-| mq-1  | MVP   | ✅ done | v96 regression lock + typed authority reasons (policy ≠ infra)      | SP·4             |
-| mq-2  | MVP   | ✅ done | MergeAuthority-V2 multi-member eval, 7 typed dispositions           | mq-1 · SP·1/3    |
-| mq-3  | MVP   | ✅ done | Generalized safe-subset solver (ddmin / QuickXPlain) (#979)         | mq-2 · SP·3      |
-| mq-4  | MVP   | ✅ done | Member isolation + partition-scoped leases (no project-wide lock)   | mq-2 · SP·1      |
-| mq-5  | MVP   | ✅ done | Atomic land-group reconciliation (one CAS, all members)             | mq-2/3 · SP·3/4  |
-| mq-11 | MVP   | ✅ done | IntegrationNodeMaterializer behind jj WorkspaceVcsCore (#1002)      | mq-5 · SP·3/4    |
-| mq-6  | full  | ⬜ todo | Granular Merkle proof graph — per-unit reuse                        | mq-2 · SP·3/5    |
-| mq-7  | full  | ⬜ todo | Flake classification + exact quarantine + epochs                    | mq-3/6 · SP·5    |
-| mq-8  | full  | ⬜ todo | EAGER speculative beam search (build before ready)                  | mq-4/6 · SP·4    |
-| mq-9  | full  | ⬜ todo | IntegrationGraphScheduler + semantic partitions + dynamic batches   | mq-3/4/6         |
-| mq-10 | full  | ⬜ todo | Autonomous repair + re-spec router (RespecPacketV1)                 | mq-2/3 · SP·1/2  |
-| mq-12 | full  | ⬜ todo | Fragment/F2 evidence-contract extension                             | mq-6/7 · SP·2/5  |
-| mq-13 | full  | ⬜ todo | Deploy/verify/demo/rollback loop extension                          | mq-5/10 · SP·5/6 |
-| mq-14 | full  | ⬜ todo | QueuePolicyV1 + full comparator ops (freeze/pause/windows/commands) | mq-2/4/9 · SP·4  |
-| mq-15 | full  | ⬜ todo | Dashboard merge-train viz + exportable signed artifacts             | mq-2/3/6/7/10/13 |
-| mq-16 | full  | ⬜ todo | Merge-Queue-V2 backfill / one-way authority cutover                 | mq-2/5 · SP·8    |
+| Node  | Phase | Status  | Purpose                                                                  | Deps             |
+| ----- | ----- | ------- | ------------------------------------------------------------------------ | ---------------- |
+| mq-1  | MVP   | ✅ done | v96 regression lock + typed authority reasons (policy ≠ infra)           | SP·4             |
+| mq-2  | MVP   | ✅ done | MergeAuthority-V2 multi-member eval, 7 typed dispositions                | mq-1 · SP·1/3    |
+| mq-3  | MVP   | ✅ done | Generalized safe-subset solver (ddmin / QuickXPlain) (#979)              | mq-2 · SP·3      |
+| mq-4  | MVP   | ✅ done | Member isolation + partition-scoped leases (no project-wide lock)        | mq-2 · SP·1      |
+| mq-5  | MVP   | ✅ done | Atomic land-group reconciliation (one CAS, all members)                  | mq-2/3 · SP·3/4  |
+| mq-11 | MVP   | ✅ done | IntegrationNodeMaterializer behind jj WorkspaceVcsCore (#1002)           | mq-5 · SP·3/4    |
+| mq-6  | full  | ✅ done | Granular Merkle proof graph — per-unit reuse, wired to live gate (#1010) | mq-2 · SP·3/5    |
+| mq-7  | full  | ⬜ todo | Flake classification + exact quarantine + epochs                         | mq-3/6 · SP·5    |
+| mq-8  | full  | ⬜ todo | EAGER speculative beam search (build before ready)                       | mq-4/6 · SP·4    |
+| mq-9  | full  | ⬜ todo | IntegrationGraphScheduler + semantic partitions + dynamic batches        | mq-3/4/6         |
+| mq-10 | full  | ⬜ todo | Autonomous repair + re-spec router (RespecPacketV1)                      | mq-2/3 · SP·1/2  |
+| mq-12 | full  | ⬜ todo | Fragment/F2 evidence-contract extension                                  | mq-6/7 · SP·2/5  |
+| mq-13 | full  | ⬜ todo | Deploy/verify/demo/rollback loop extension                               | mq-5/10 · SP·5/6 |
+| mq-14 | full  | ⬜ todo | QueuePolicyV1 + full comparator ops (freeze/pause/windows/commands)      | mq-2/4/9 · SP·4  |
+| mq-15 | full  | ⬜ todo | Dashboard merge-train viz + exportable signed artifacts                  | mq-2/3/6/7/10/13 |
+| mq-16 | full  | ⬜ todo | Merge-Queue-V2 backfill / one-way authority cutover                      | mq-2/5 · SP·8    |
 
 ## runtime-verification (26)
 
@@ -84,8 +84,8 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | rv-4  | MVP   | ✅ done        | Behavior coverage edges + affected selection (#969)               | rv-1/2             |
 | rv-5  | MVP   | 🧱 spine-built | Preview deployment adapter (Fly lifecycle) (SP·6)                 | rv-1 · SP·3        |
 | rv-6  | MVP   | 🧱 spine-built | Driver adapters — Playwright + API/CLI/package/mobile             | rv-2/5             |
-| rv-7  | MVP   | ⬜ todo        | Fixture lease adapter (isolated tenant/channel/data)              | rv-5/8             |
-| rv-8  | MVP   | ⬜ todo        | Side-effect observer adapter (Slack; cursor/watermark)            | rv-7/12            |
+| rv-7  | MVP   | ✅ done        | Fixture lease adapter (isolated tenant/channel/data) (#1008)      | rv-5/8             |
+| rv-8  | MVP   | ✅ done        | Side-effect observer adapter (Slack; cursor/watermark) (#1007)    | rv-7/12            |
 | rv-9  | MVP   | 🧱 spine-built | Render-capture + content-addressed artifact store (SP·3)          | rv-6               |
 | rv-10 | MVP   | 🧱 spine-built | Per-behavior verdict store (runs/attempts/verdicts)               | rv-6/9             |
 | rv-11 | MVP   | 🧱 spine-built | A1 executable-acceptance orchestrator                             | rv-5/6/7/10        |
@@ -180,7 +180,7 @@ by `integrated-build-dag.html` + `build-workflow.mjs.txt`; this file tracks _sta
 | gv-8      | MVP   | ✅ done      | Governance tiers + four presets (incl. private/regulated)                                                                                                                                                                                                                                                                                                                                 | gv-7                |
 | gv-9      | MVP   | ✅ done      | Policy bindings + effective-policy snapshots (receipt) (#1001, 0063)                                                                                                                                                                                                                                                                                                                      | gv-7/8 · SP·3       |
 | gv-10     | MVP   | ⬜ todo      | Governance fragment kernel + F2 authoring (shares SP·2)                                                                                                                                                                                                                                                                                                                                   | gv-7 · SP·2/1       |
-| gv-11     | MVP   | ⬜ todo      | Private-repo visibility as enforced predicate                                                                                                                                                                                                                                                                                                                                             | gv-7/9              |
+| gv-11     | MVP   | ✅ done      | Private-repo visibility as enforced predicate (#1009)                                                                                                                                                                                                                                                                                                                                     | gv-7/9              |
 | gv-12     | MVP   | ⬜ todo      | Core review rules + dedicated reviewer identity                                                                                                                                                                                                                                                                                                                                           | gv-2/9 · SP·4       |
 | gv-13     | MVP   | ⬜ todo      | Policy simulator / validate / explain + contradiction witnesses                                                                                                                                                                                                                                                                                                                           | gv-7/9 · SP·5       |
 | gv-14     | MVP   | ⬜ todo      | Governance admin HTTP API + import facade                                                                                                                                                                                                                                                                                                                                                 | gv-7/8/9/13         |
