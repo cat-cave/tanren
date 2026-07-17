@@ -938,7 +938,7 @@ smoke-rls-merge-partitions:
 # WAVE-4 barrier claims these RLS smoke recipe names before their owning lanes
 # supply the tests. Each lane replaces only its PLACEHOLDER path.
 smoke-rls-symptom-evidence:
-  echo "wave-4 placeholder — the bh-5 lane replaces this with its real smoke-rls test when the node lands"
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/symptomProbe.rls.integration.test.ts
 
 smoke-rls-issue-source:
   echo "wave-4 placeholder — the bh-7 lane replaces this with its real smoke-rls test when the node lands"
