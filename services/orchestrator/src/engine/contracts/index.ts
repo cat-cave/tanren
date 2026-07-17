@@ -78,3 +78,4 @@ export * from "./authoringKernel.js";
 export * from "./integrationEffect.js";
 export * from "./integrationBindingOutput.js";
 export * from "./integrationRequirement.js";
+export * from "./symptomContract.js";
