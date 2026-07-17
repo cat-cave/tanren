@@ -18,6 +18,7 @@ import {
 import { DirectApiDeployAdapter } from "../../src/engine/deploy/directApiDeployAdapter.js";
 import { scriptedDeployTransport, type ScriptedDeployTransport } from "./fakes/scriptedDeployTransport.js";
 import { scriptedUrlProbe, instantVerifyPollPolicy } from "./fakes/scriptedUrlProbe.js";
+import { releaseInstancesStub } from "../helpers/releaseInstancesStub.js";
 
 const TOKEN_REF = "secret://org/deploy-token";
 const TOKEN_VALUE = "fly_or_vercel_super_secret_token";
@@ -85,6 +86,7 @@ function adapter(transport: ScriptedDeployTransport, urlStatus = 200) {
     provisioner: { transport, secrets: secrets(), allowFlyStaticDeploy: true },
     urlProbe: probe,
     poll: instantVerifyPollPolicy(),
+    releaseInstances: releaseInstancesStub(),
   });
   return { instance, probe };
 }

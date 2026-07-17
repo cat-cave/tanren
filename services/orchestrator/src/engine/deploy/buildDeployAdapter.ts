@@ -61,7 +61,10 @@ import {
 } from "./manualExternalDeployAdapter.js";
 import type { EventStore } from "../eventStore.js";
 import { DeployAdapterConfigError } from "./deployAdapterErrors.js";
-import type { ReleaseInstancesRepository } from "../repositories/releaseInstances.js";
+import type pg from "pg";
+import { PgReleaseInstancesRepository, type ReleaseInstancesRepository } from "../repositories/index.js";
+
+export { DIRECT_API_ADAPTER_KIND } from "./directApiDeployAdapter.js";
 
 /**
  * The adapter classes whose implementations exist on disk (with a scripted
@@ -86,7 +89,9 @@ export interface BuildDeployAdapterDeps {
   urlProbe?: UrlReachabilityProbe;
   /** The verify poll cadence (the spacing between polls; defaults to the production cadence). */
   poll?: VerifyPollPolicy;
-  /** Durable release lifecycle persistence for the extended direct-api adapter. */
+  /** Runtime pool used to construct durable direct-api release persistence. */
+  pool?: pg.Pool;
+  /** Test seam for a durable direct-api release repository; production normally supplies `pool`. */
   releaseInstances?: ReleaseInstancesRepository;
   /** Scalar integration-node lineage used when building outside a preview input. */
   integrationNodeId?: string;
@@ -149,11 +154,18 @@ export function buildDeployAdapter(kind: string, deps: BuildDeployAdapterDeps): 
   }
   switch (kind) {
     case DIRECT_API_ADAPTER_KIND:
+      if (deps.releaseInstances === undefined && deps.pool === undefined) {
+        throw new DeployAdapterConfigError(
+          DIRECT_API_ADAPTER_KIND,
+          "pool",
+          "wire the runtime pool (or a durable releaseInstances repository) so direct_api lifecycle writes cannot be skipped",
+        );
+      }
       return new DirectApiDeployAdapter({
         provisioner: deps.provisioner,
         urlProbe,
         poll,
-        ...(deps.releaseInstances === undefined ? {} : { releaseInstances: deps.releaseInstances }),
+        releaseInstances: deps.releaseInstances ?? new PgReleaseInstancesRepository(deps.pool!),
         ...(deps.integrationNodeId === undefined ? {} : { integrationNodeId: deps.integrationNodeId }),
       });
     case MANUAL_EXTERNAL_ADAPTER_KIND: {

@@ -91,7 +91,6 @@ export { InboxStore, type CreateSourceInput } from "./inbox.js";
 export { AuditsStore, type CreateAuditJobInput } from "./audits.js";
 export {
   ReleaseInstancesStore,
-  PgReleaseInstancesRepository,
   ReleaseInstanceNotFoundError,
   InvalidReleaseStateTransitionError,
   RELEASE_STATES,
@@ -106,6 +105,7 @@ export {
   type TeardownPreviewInput,
   type MarkLiveReleaseInput,
 } from "./releaseInstances.js";
+export { PgReleaseInstancesRepository } from "./pgReleaseInstances.js";
 export {
   WebhookEventStore,
   type WebhookEvent,

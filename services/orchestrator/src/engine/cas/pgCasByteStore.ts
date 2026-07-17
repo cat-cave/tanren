@@ -94,7 +94,15 @@ export class PgCasByteStore implements CasByteStore {
            $1, $2, $3, $4, 'inline_pg',
            NULL, $5, NULL, 'none', 'standard'
          )
-         ON CONFLICT (org_id, digest) DO NOTHING`,
+         ON CONFLICT (org_id, digest) DO UPDATE SET
+           byte_size = EXCLUDED.byte_size,
+           media_type = EXCLUDED.media_type,
+           storage_backend = EXCLUDED.storage_backend,
+           storage_key = EXCLUDED.storage_key,
+           inline_bytes = EXCLUDED.inline_bytes,
+           provider_checksum = COALESCE(EXCLUDED.provider_checksum, cas_artifacts.provider_checksum)
+         WHERE cas_artifacts.storage_backend = 'object_store'
+           AND cas_artifacts.media_type = 'application/vnd.tanren.provider-artifact-reference+json'`,
         [input.orgId, digest, input.bytes.byteLength, input.mediaType, Buffer.from(input.bytes)],
       );
     });

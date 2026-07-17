@@ -105,7 +105,7 @@ export function deployOnMergePool(state: DeployOnMergePoolState): pg.Pool {
           auth_expires_at: null,
           auth_status: "active",
           capabilities: "capabilities" in grant ? (grant.capabilities ?? []) : ["deploy"],
-          operations: ["attach_runtime_env", "deploy", "verify"],
+          operations: ["attach_runtime_env", "deploy", "resolve_artifact_identity", "verify"],
           provider_scopes: [],
           resource_constraints: defaultIntegrationResourceConstraints(),
           policy_revision: "integration-catalog.v2",

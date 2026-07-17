@@ -1,12 +1,10 @@
-import { runWithOrgScope } from "@tanren/db";
-import type pg from "pg"; import { z } from "zod";
-import type {
-  ReleaseEnvironment,
-  ReleaseInstanceRecord,
-  ReleaseState,
-} from "../contracts/deployAdapter.js";
+// cspell:ignore hashtextextended
+import type pg from "pg";
+import { z } from "zod";
+import type { ReleaseEnvironment, ReleaseInstanceRecord, ReleaseState } from "../contracts/deployAdapter.js";
 import { parseDigest, parseProviderChecksum, type Digest, type ProviderChecksum } from "../contracts/cas.js";
 import { parseBehaviorRevisionId, type BehaviorRevisionId } from "../contracts/behaviorRevision.js";
+import { ensureReleaseArtifact } from "./releaseInstanceArtifacts.js";
 type QueryClient = Pick<pg.Pool | pg.PoolClient, "query">;
 export const RELEASE_STATES = [
   "built",
@@ -145,7 +143,11 @@ export class ReleaseInstanceNotFoundError extends Error {
 }
 export class InvalidReleaseStateTransitionError extends Error {
   override readonly name = "InvalidReleaseStateTransitionError";
-  constructor(readonly releaseInstanceId: string, readonly from: ReleaseState, readonly to: ReleaseState) {
+  constructor(
+    readonly releaseInstanceId: string,
+    readonly from: ReleaseState,
+    readonly to: ReleaseState,
+  ) {
     super(`release instance ${releaseInstanceId} cannot transition from ${from} to ${to}`);
   }
 }
@@ -171,7 +173,8 @@ function isoDate(value: unknown): string {
 function decodeReleaseInstance(row: RawReleaseInstanceRow): ReleaseInstanceRecord {
   const behaviorRevisionIds = row.behavior_revision_ids;
   if (!Array.isArray(behaviorRevisionIds)) throw new Error("release_instances: invalid behavior_revision_ids");
-  const providerChecksum = row.provider_checksum === null ? null : parseProviderChecksum(text(row.provider_checksum, "provider_checksum"));
+  const providerChecksum =
+    row.provider_checksum === null ? null : parseProviderChecksum(text(row.provider_checksum, "provider_checksum"));
   return {
     releaseInstanceId: text(row.id, "id"),
     orgId: text(row.org_id, "org_id"),
@@ -188,12 +191,18 @@ function decodeReleaseInstance(row: RawReleaseInstanceRow): ReleaseInstanceRecor
     url: typeof row.url === "string" ? row.url : "",
     region: row.region === null ? null : text(row.region, "region"),
     previousReleaseInstanceId:
-      row.previous_release_instance_id === null ? null : text(row.previous_release_instance_id, "previous_release_instance_id"),
+      row.previous_release_instance_id === null
+        ? null
+        : text(row.previous_release_instance_id, "previous_release_instance_id"),
     state: ReleaseStateValue.parse(text(row.state, "state")),
     createdAt: isoDate(row.created_at),
   };
 }
-async function getById(client: QueryClient, orgId: string, releaseInstanceId: string): Promise<ReleaseInstanceRecord | undefined> {
+async function getById(
+  client: QueryClient,
+  orgId: string,
+  releaseInstanceId: string,
+): Promise<ReleaseInstanceRecord | undefined> {
   const result = await client.query<RawReleaseInstanceRow>(
     `SELECT ${RELEASE_COLUMNS}
        FROM release_instances ri
@@ -223,9 +232,40 @@ async function findByDeployment(
   );
   return result.rows[0] === undefined ? undefined : decodeReleaseInstance(result.rows[0]);
 }
+async function supersedeLockedLive(
+  client: QueryClient,
+  input: Pick<SupersedePriorLiveInput, "orgId" | "projectId" | "releaseInstanceId"> & {
+    exceptReleaseInstanceId?: string;
+  },
+): Promise<ReleaseInstanceRecord | undefined> {
+  // The advisory lock serializes an empty-live-set race; FOR UPDATE then locks every
+  // current live row before it is superseded. Both operations run inside the caller's runWithOrgScope transaction.
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    `${input.orgId}:${input.projectId}:production`,
+  ]);
+  const locked = await client.query<{ id: string }>(
+    `SELECT id FROM release_instances
+      WHERE org_id = $1 AND project_id = $2 AND environment = 'production' AND state = 'live'
+        AND ($3::text IS NULL OR id <> $3)
+      ORDER BY created_at DESC, id DESC
+      FOR UPDATE`,
+    [input.orgId, input.projectId, input.exceptReleaseInstanceId ?? null],
+  );
+  const ids = locked.rows.map((row) => row.id);
+  if (ids.length === 0) return undefined;
+  await client.query(
+    `UPDATE release_instances SET state = 'superseded'
+      WHERE org_id = $1 AND id = ANY($2::text[])`,
+    [input.orgId, ids],
+  );
+  const requested = input.releaseInstanceId;
+  const priorId = requested !== undefined && requested !== null && ids.includes(requested) ? requested : ids[0]!;
+  return getById(client, input.orgId, priorId);
+}
 export const ReleaseInstancesStore = {
   async create(client: QueryClient, input: CreateReleaseInstanceInput): Promise<ReleaseInstanceRecord> {
     const releaseInstanceId = input.releaseInstanceId ?? input.deploymentId;
+    await ensureReleaseArtifact(client, input);
     await client.query(
       `INSERT INTO release_instances
          (org_id, id, project_id, provider, app_id, environment, deployment_id, source_ref,
@@ -264,7 +304,11 @@ export const ReleaseInstancesStore = {
     if (created === undefined) throw new ReleaseInstanceNotFoundError(releaseInstanceId);
     return created;
   },
-  async getById(client: QueryClient, orgId: string, releaseInstanceId: string): Promise<ReleaseInstanceRecord | undefined> {
+  async getById(
+    client: QueryClient,
+    orgId: string,
+    releaseInstanceId: string,
+  ): Promise<ReleaseInstanceRecord | undefined> {
     return getById(client, orgId, releaseInstanceId);
   },
   async getByDeployment(
@@ -348,30 +392,18 @@ export const ReleaseInstancesStore = {
     client: QueryClient,
     input: SupersedePriorLiveInput,
   ): Promise<ReleaseInstanceRecord | undefined> {
-    const prior =
-      input.releaseInstanceId !== undefined && input.releaseInstanceId !== null
-          ? await getById(client, input.orgId, input.releaseInstanceId)
-          : await ReleaseInstancesStore.latestLive(
-              client,
-              input.orgId,
-              input.projectId,
-              input.provider,
-              input.appId,
-              input.exceptReleaseInstanceId,
-            );
-    if (prior === undefined) return undefined;
-    if (prior.state === "superseded") return prior;
-    return ReleaseInstancesStore.transition(client, {
-      orgId: input.orgId,
-      releaseInstanceId: prior.releaseInstanceId,
-      state: "superseded",
-    });
+    return supersedeLockedLive(client, input);
   },
   async applyPreview(client: QueryClient, input: CreateReleaseInstanceInput): Promise<ReleaseInstanceRecord> {
     const current = (await ReleaseInstancesStore.listForProject(client, input.orgId, input.projectId)).find(
-      (row) => row.provider === input.provider && row.appId === input.appId && row.artifactDigest === input.artifactDigest && row.state === "built",
+      (row) =>
+        row.provider === input.provider &&
+        row.appId === input.appId &&
+        row.artifactDigest === input.artifactDigest &&
+        row.state === "built",
     );
-    if (current === undefined) return ReleaseInstancesStore.create(client, { ...input, environment: "preview", state: "preview" });
+    if (current === undefined)
+      return ReleaseInstancesStore.create(client, { ...input, environment: "preview", state: "preview" });
     await ReleaseInstancesStore.transition(client, {
       orgId: input.orgId,
       releaseInstanceId: current.releaseInstanceId,
@@ -394,7 +426,8 @@ export const ReleaseInstancesStore = {
   async promote(client: QueryClient, input: PromoteReleaseInput): Promise<ReleaseInstanceRecord> {
     const target = await findByDeployment(client, input.orgId, input.provider, input.appId, input.deploymentId);
     if (target === undefined) throw new ReleaseInstanceNotFoundError(input.deploymentId);
-    if (target.artifactDigest !== input.artifactDigest) throw new Error("promote artifact digest does not match release instance");
+    if (target.artifactDigest !== input.artifactDigest)
+      throw new Error("promote artifact digest does not match release instance");
     const prior = await ReleaseInstancesStore.supersedePriorLive(client, {
       orgId: input.orgId,
       projectId: input.projectId,
@@ -424,24 +457,9 @@ export const ReleaseInstancesStore = {
   async rollback(client: QueryClient, input: RollbackReleaseInput): Promise<ReleaseInstanceRecord> {
     const target = await getById(client, input.orgId, input.releaseInstanceId);
     if (target === undefined) throw new ReleaseInstanceNotFoundError(input.releaseInstanceId);
-    if (target.artifactDigest !== input.targetArtifactDigest) throw new Error("rollback artifact digest does not match release instance");
-    const prior = await ReleaseInstancesStore.latestLive(
-      client,
-      input.orgId,
-      input.projectId,
-      target.provider,
-      target.appId,
-      target.releaseInstanceId,
-    );
-    if (prior !== undefined) {
-      await ReleaseInstancesStore.supersedePriorLive(client, {
-        orgId: input.orgId,
-        projectId: input.projectId,
-        provider: target.provider,
-        appId: target.appId,
-        releaseInstanceId: prior.releaseInstanceId,
-      });
-    }
+    if (target.artifactDigest !== input.targetArtifactDigest)
+      throw new Error("rollback artifact digest does not match release instance");
+    await supersedeLockedLive(client, { ...input, exceptReleaseInstanceId: target.releaseInstanceId });
     return ReleaseInstancesStore.transition(client, {
       orgId: input.orgId,
       releaseInstanceId: input.releaseInstanceId,
@@ -451,10 +469,7 @@ export const ReleaseInstancesStore = {
       url: input.url,
     });
   },
-  async teardownPreview(
-    client: QueryClient,
-    input: TeardownPreviewInput,
-  ): Promise<ReleaseInstanceRecord | undefined> {
+  async teardownPreview(client: QueryClient, input: TeardownPreviewInput): Promise<ReleaseInstanceRecord | undefined> {
     const existing = await findByDeployment(client, input.orgId, input.provider, input.appId, input.deploymentId);
     if (existing === undefined || existing.state === "torn_down") return existing;
     return ReleaseInstancesStore.transition(client, {
@@ -483,17 +498,3 @@ export const ReleaseInstancesStore = {
     });
   },
 } as const;
-export class PgReleaseInstancesRepository implements ReleaseInstancesRepository {
-  constructor(private readonly pool: pg.Pool) {}
-  create(input: CreateReleaseInstanceInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.create(client, input)); }
-  getById(orgId: string, releaseInstanceId: string) { return runWithOrgScope(this.pool, orgId, (client) => ReleaseInstancesStore.getById(client, orgId, releaseInstanceId)); }
-  getByDeployment(input: GetReleaseInstanceByDeploymentInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.getByDeployment(client, input)); }
-  listForProject(orgId: string, projectId: string) { return runWithOrgScope(this.pool, orgId, (client) => ReleaseInstancesStore.listForProject(client, orgId, projectId)); }
-  transition(input: TransitionReleaseInstanceInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.transition(client, input)); }
-  supersedePriorLive(input: SupersedePriorLiveInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.supersedePriorLive(client, input)); }
-  applyPreview(input: CreateReleaseInstanceInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.applyPreview(client, input)); }
-  promote(input: PromoteReleaseInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.promote(client, input)); }
-  rollback(input: RollbackReleaseInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.rollback(client, input)); }
-  teardownPreview(input: TeardownPreviewInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.teardownPreview(client, input)); }
-  markLive(input: MarkLiveReleaseInput) { return runWithOrgScope(this.pool, input.orgId, (client) => ReleaseInstancesStore.markLive(client, input)); }
-}
