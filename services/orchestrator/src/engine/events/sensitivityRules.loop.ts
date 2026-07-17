@@ -11,14 +11,15 @@ function rulesFor(eventName: string, entries: ReadonlyArray<[string, Sensitivity
 }
 
 export const specLoopStageSensitivityRules: SensitivityRule[] = [
-  // SPEC-LOOP REDESIGN: the checker emits completeness findings (no binary passed); the
-  // auditor is findings-only (no passed/recommendedAction). The findings list IS the
-  // verdict — public, since each becomes a real task / DAG spec, never a secret.
+  // SPEC-LOOP REDESIGN: the checker/auditor findings drive the loop; their `passed`
+  // projections exist only for notification promotion. All fields are public: each
+  // finding becomes a real task / DAG spec, never a secret.
   ...rulesFor("checker.verdict", [
     ["runId", "public"],
     ["taskId", "public"],
     ["subtaskIndex", "public"],
     ["complete", "public"],
+    ["passed", "public"],
     ["reasoning", "public"],
     ["behaviorIdsFailed", "public"],
     ["behaviorIdsFailed[]", "public"],
@@ -52,6 +53,7 @@ export const specLoopStageSensitivityRules: SensitivityRule[] = [
   ]),
   ...rulesFor("auditor.verdict", [
     ["runId", "public"],
+    ["passed", "public"],
     ["findings", "public"],
     ["findings[].id", "public"],
     ["findings[].severity", "public"],

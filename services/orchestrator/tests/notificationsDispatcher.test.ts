@@ -380,14 +380,12 @@ describe("NotificationDispatcher", () => {
 });
 
 describe("effectiveSeverityFor", () => {
-  it("renders checker.verdict at its base severity (findings-only — no passed-based promotion)", () => {
-    // The verdict payloads are FINDINGS-ONLY now (no `passed` flag), so there is no
-    // per-instance promotion — the event takes its registry default (`info`).
-    const sev = effectiveSeverityFor({
-      eventType: "checker.verdict",
-      payload: { runId: "r", taskId: "t", subtaskIndex: 0, complete: false, reasoning: "no", findings: [] },
-    });
-    expect(sev).toBe("info");
+  it.each(["checker.verdict", "auditor.verdict"] as const)("promotes %s when passed=false", (eventType) => {
+    expect(effectiveSeverityFor(verdictEvent(eventType, false))).toBe("warn");
+  });
+
+  it.each(["checker.verdict", "auditor.verdict"] as const)("keeps %s at info when passed=true", (eventType) => {
+    expect(effectiveSeverityFor(verdictEvent(eventType, true))).toBe("info");
   });
 
   it("uses the registry default for non-verdict events", () => {
@@ -398,15 +396,6 @@ describe("effectiveSeverityFor", () => {
         payload: { taskId: "t", cli: "codex", refKind: "credential/mystery", reason: "x" },
       }),
     ).toBe("fail");
-  });
-
-  it("renders auditor.verdict at its base severity (findings-only — no passed-based promotion)", () => {
-    expect(
-      effectiveSeverityFor({
-        eventType: "auditor.verdict",
-        payload: { runId: "r", findings: [] },
-      }),
-    ).toBe("info");
   });
 
   it("does not promote run.completed when the outcome lacks 'fail'", () => {
@@ -466,4 +455,24 @@ function baseRegistry(
     ntfy: overrides.ntfy ?? new CapturingChannel("ntfy"),
   };
   return { ...baseWithSafeNtfy, ...overrides };
+}
+
+function verdictEvent(eventType: "checker.verdict" | "auditor.verdict", passed: boolean): TypedEvent {
+  if (eventType === "checker.verdict") {
+    return {
+      eventType,
+      payload: {
+        runId: "run_1",
+        taskId: "task_1",
+        subtaskIndex: 0,
+        complete: passed,
+        passed,
+        reasoning: "verdict",
+        behaviorIdsFailed: [],
+        findings: [],
+        emptyIncrementalDiff: false,
+      },
+    };
+  }
+  return { eventType, payload: { runId: "run_1", passed, findings: [] } };
 }

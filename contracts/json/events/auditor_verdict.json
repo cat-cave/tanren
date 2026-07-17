@@ -38,6 +38,9 @@
       },
       "type": "array"
     },
+    "passed": {
+      "type": "boolean"
+    },
     "runId": {
       "type": "string"
     }

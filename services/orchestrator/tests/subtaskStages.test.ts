@@ -379,12 +379,12 @@ describe("runCheckerStage", () => {
     expect(decision.kind).toBe("pass");
     const verdict = h.find("checker.verdict")!;
     expect(verdict.payload.complete).toBe(true);
+    expect(verdict.payload.passed).toBe(true);
     expect(verdict.payload.reasoning).toBe(completeCheck.reasoning);
     expect(verdict.payload.findings).toEqual([]);
     expect(verdict.payload.behaviorIdsFailed).toEqual([]);
     expect(h.names()).not.toContain("checker.rejected");
     expect(h.taskOutcomes.get("task_check")).toBe("passed");
-
     // Insert metadata: a "check subtask N" title under the writer, owned by the
     // answerer agent, carrying the adapter cli + null model.
     const row = h.task("task_check");
@@ -393,13 +393,11 @@ describe("runCheckerStage", () => {
     expect(row.agentKind).toBe("answerer");
     expect(row.cli).toBe("fake");
     expect(row.model).toBeNull();
-
     // task.started / checker.started both carry the "check" kind.
     expect(h.find("task.started")!.payload.taskKind).toBe("check");
     expect(h.find("checker.started")!.payload.taskKind).toBe("check");
     // The pass-branch task.completed also carries the "check" kind.
     expect(h.find("task.completed")!.payload.taskKind).toBe("check");
-
     // Checker cost: fixed model + default rawUsage role/subtaskIndex.
     const cost = h.cost("task_check");
     expect(cost.model).toBe("tanren-checker");
@@ -416,6 +414,7 @@ describe("runCheckerStage", () => {
     // the emitted completeness findings + the downstream-blocked behavior ids.
     const verdict = h.find("checker.verdict")!;
     expect(verdict.payload.complete).toBe(false);
+    expect(verdict.payload.passed).toBe(false);
     expect(verdict.payload.behaviorIdsFailed).toEqual(["B1"]);
     expect(verdict.payload.findings).toEqual([
       { id: "missing-file", title: "required file not created", body: "downstream tasks import it", behaviorId: "B1" },
@@ -447,9 +446,9 @@ describe("runAuditorStage", () => {
     // The auditor task id is a generated `task_<uuid>` (not an empty string).
     expect(auditorTaskId).toMatch(/^task_[0-9a-f-]{36}$/u);
     const verdict = h.find("auditor.verdict")!;
-    // SPEC-LOOP REDESIGN: findings-only (no passed/recommendedAction/outstandingBehaviorIds).
+    // `passed` is a notification projection; workflow control remains findings-only.
     expect(verdict.payload.findings).toEqual([]);
-    expect(verdict.payload).not.toHaveProperty("passed");
+    expect(verdict.payload.passed).toBe(true);
     expect(verdict.payload).not.toHaveProperty("recommendedAction");
     expect(h.names()).not.toContain("auditor.rejected");
     expect(h.taskOutcomes.get(auditorTaskId)).toBe("passed");
@@ -485,6 +484,7 @@ describe("runAuditorStage", () => {
     expect(h.names()).not.toContain("auditor.rejected");
     const verdict = h.find("auditor.verdict")!;
     expect(verdict.payload.findings).toEqual(findings);
+    expect(verdict.payload.passed).toBe(false);
     expect(h.taskOutcomes.get(auditorTaskId)).toBe("passed");
     expect(h.find("task.completed")!.payload.taskKind).toBe("audit");
   });

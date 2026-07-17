@@ -3,7 +3,7 @@ import type pg from "pg";
 import { defaultIntegrationResourceConstraints } from "../../src/engine/contracts/integrationAuthority.js";
 import { InMemorySecretStore } from "../../src/engine/contracts/secretStore.js";
 import { parseDigest } from "../../src/engine/contracts/cas.js";
-import type { AppendEventInput, EventStore } from "../../src/engine/eventStore.js";
+import type { AppendEventInput, EventStore, PriorEventInput } from "../../src/engine/eventStore.js";
 import type { EventName } from "../../src/engine/events/index.js";
 import { DeployOnMergeWatcher } from "../../src/engine/postMerge/deployOnMerge.js";
 import type { ScriptedDeployTransport } from "../conformance/fakes/scriptedDeployTransport.js";
@@ -28,12 +28,22 @@ export interface DeployOnMergePoolState {
   alreadySkipped?: boolean;
   noMergeSha?: boolean;
   appEnv?: Record<string, unknown>[];
+  triggerGateHeld?: boolean;
 }
 
 export function deployOnMergePool(state: DeployOnMergePoolState): pg.Pool {
   const query = async (sql: string, params: readonly unknown[] = []) => {
     const text = sql.trim();
     if (/^(BEGIN|COMMIT|ROLLBACK|SET LOCAL|SET )/u.test(text)) return { rows: [], rowCount: 0 };
+    if (/pg_try_advisory_lock/u.test(sql)) {
+      if (state.triggerGateHeld === true) return { rows: [{ acquired: false }], rowCount: 1 };
+      state.triggerGateHeld = true;
+      return { rows: [{ acquired: true }], rowCount: 1 };
+    }
+    if (/pg_advisory_unlock/u.test(sql)) {
+      state.triggerGateHeld = false;
+      return { rows: [{ pg_advisory_unlock: true }], rowCount: 1 };
+    }
     if (/FROM events e/u.test(sql) && params[1] === "merge.completed") {
       if (!state.merged) return { rows: [], rowCount: 0 };
       const payload = state.noMergeSha === true ? { prNumber: 7 } : { prNumber: 7, mergeSha: MERGE_SHA };
@@ -166,8 +176,18 @@ export function deployOnMergePool(state: DeployOnMergePoolState): pg.Pool {
 
 export class RecordingDeployEventStore implements EventStore {
   readonly appends: Array<{ eventType: EventName; payload: unknown; ambientOrgId?: string }> = [];
+  private readonly idempotencyKeys = new Set<string>();
+
   async append<N extends EventName>(input: AppendEventInput<N>): Promise<void> {
     this.appends.push({ eventType: input.eventType, payload: input.payload, ambientOrgId: getJobOrgId() });
+  }
+
+  async appendPriorIfAbsent<N extends EventName>(input: PriorEventInput<N>): Promise<boolean> {
+    const key = `${input.runId}:${input.idempotencyKey}`;
+    if (this.idempotencyKeys.has(key)) return false;
+    this.idempotencyKeys.add(key);
+    await this.append(input);
+    return true;
   }
 }
 

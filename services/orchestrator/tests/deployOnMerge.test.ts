@@ -95,6 +95,36 @@ describe("DeployOnMergeWatcher (a deploy happened)", () => {
       }),
     ).resolves.toMatchObject({ state: "live", environment: "production" });
   });
+
+  it("serializes concurrent merge wakes: one deploy.triggered and one provider build per run", async () => {
+    const transport = scriptedDeployTransport("vercel", []);
+    await transport.request({
+      method: "POST",
+      url: "https://api.vercel.com/v9/projects",
+      headers: {},
+      body: { name: "acme-widget" },
+    });
+    const state = { merged: true, config: VERCEL_TARGET, grant: VERCEL_GRANT };
+    const pool = fakePool(state);
+    const events = new RecordingEventStore();
+    const releaseInstances = new DeployOnMergeReleaseInstances();
+    const watcher = () =>
+      new DeployOnMergeWatcher({
+        pool,
+        secrets: secrets(),
+        transport,
+        eventStore: events,
+        urlProbe: scriptedUrlProbe(),
+        verifyPoll: instantVerifyPollPolicy(),
+        releaseInstances,
+      });
+
+    await Promise.all([watcher().check(RUN_ID), watcher().check(RUN_ID)]);
+
+    expect(events.appends.filter((event) => event.eventType === "deploy.triggered")).toHaveLength(1);
+    expect(transport.deploysTriggered()).toHaveLength(1);
+  });
+
   it("fails LOUD on a provider ERROR terminal — escalates on non-convergence, not a count", async () => {
     const transport = scriptedDeployTransport("vercel", []);
     await transport.request({
