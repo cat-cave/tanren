@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { QueryClient } from "../data/orgScopedDb.js";
 import { PgEventStore } from "../eventStore.js";
+import { recordEffectivePolicySnapshot } from "./effectivePolicySnapshotStore.js";
 import { compilePolicy, type CompiledPolicy } from "./policyCompiler.js";
 import { PolicyAstSchema, type PolicyAst } from "./policyAst.js";
+import { createPolicyRevision, findPolicyRevisionByHash, type PolicyRevision } from "./policyRevisionStore.js";
 import { GovernanceTierPresetSchema, governanceTierPreset, type GovernanceTierPreset } from "./tierPresets.js";
 
 const DigestSchema = z.string().regex(/^sha256:[0-9a-f]{64}$/u);
@@ -61,6 +63,7 @@ export interface BindGovernanceTierInput {
   readonly orgId: string;
   readonly projectId: string;
   readonly tierId: string;
+  readonly createdBy?: string;
 }
 
 export class GovernanceTierNotFoundError extends Error {
@@ -203,6 +206,38 @@ async function existingBinding(
   return row === undefined ? undefined : decodeBinding(row);
 }
 
+async function latestBinding(
+  client: QueryClient,
+  orgId: string,
+  projectId: string,
+): Promise<PolicyBinding | undefined> {
+  const result = await client.query(
+    `SELECT id, project_id, tier_id, effective_policy_hash, created_at::text
+       FROM policy_bindings
+      WHERE org_id = $1 AND project_id = $2
+      ORDER BY created_at DESC, id DESC
+      LIMIT 1`,
+    [orgId, projectId],
+  );
+  const row = result.rows[0];
+  return row === undefined ? undefined : decodeBinding(row);
+}
+
+async function bindingRevision(
+  client: QueryClient,
+  input: BindGovernanceTierInput,
+  tier: GovernanceTier,
+): Promise<PolicyRevision> {
+  const existing = await findPolicyRevisionByHash(client, input.orgId, input.projectId, tier.canonicalHash);
+  if (existing !== undefined) return existing;
+  return createPolicyRevision(client, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    sourceDocument: tier.tierJson,
+    createdBy: input.createdBy ?? "system:governance-binding",
+  });
+}
+
 async function enforceRepositoryVisibility(
   client: QueryClient,
   orgId: string,
@@ -226,17 +261,21 @@ async function enforceRepositoryVisibility(
 export async function bindGovernanceTier(
   client: QueryClient,
   input: BindGovernanceTierInput,
-): Promise<{ readonly tier: GovernanceTier; readonly binding: PolicyBinding }> {
+): Promise<{ readonly tier: GovernanceTier; readonly binding: PolicyBinding; readonly policyRevisionId: string }> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`governance-binding:${input.projectId}`]);
   const tier = await getTier(client, input.orgId, input.projectId, input.tierId);
   const compiled = compileStoredTier(tier);
+  const revision = await bindingRevision(client, input, tier);
+  if (revision.policyHash !== compiled.policyHash) throw new GovernanceTierIntegrityError(tier.id);
   const visibility = repositoryVisibility(compiled, tier.id);
   const existing = await existingBinding(client, input.orgId, input.projectId, tier.id);
   if (existing !== undefined) {
     if (existing.effectivePolicyHash !== compiled.policyHash) throw new GovernanceTierIntegrityError(tier.id);
     await enforceRepositoryVisibility(client, input.orgId, input.projectId, visibility);
-    return { tier, binding: existing };
+    return { tier, binding: existing, policyRevisionId: revision.id };
   }
 
+  const prior = await latestBinding(client, input.orgId, input.projectId);
   const id = `policy_binding_${randomUUID()}`;
   const inserted = await client.query(
     `INSERT INTO policy_bindings (org_id, project_id, id, tier_id, effective_policy_hash)
@@ -252,21 +291,42 @@ export async function bindGovernanceTier(
       throw new GovernanceTierIntegrityError(tier.id);
     }
     await enforceRepositoryVisibility(client, input.orgId, input.projectId, visibility);
-    return { tier, binding: concurrent };
+    return { tier, binding: concurrent, policyRevisionId: revision.id };
   }
   const binding = decodeBinding(row);
   await enforceRepositoryVisibility(client, input.orgId, input.projectId, visibility);
   await new PgEventStore(client).append({
     orgId: input.orgId,
     projectId: input.projectId,
-    eventType: "governance.tier.activated",
+    eventType: "governance.binding.activated",
     payload: {
       projectId: tier.projectId,
+      bindingId: binding.id,
       tierId: tier.id,
-      tierName: tier.tierName,
-      policyBindingId: binding.id,
+      policyRevisionId: revision.id,
       effectivePolicyHash: binding.effectivePolicyHash,
     },
   });
-  return { tier, binding };
+  await recordEffectivePolicySnapshot(client, {
+    orgId: input.orgId,
+    projectId: input.projectId,
+    bindingId: binding.id,
+    subjectKind: "activation",
+    subjectId: binding.id,
+    createdBy: input.createdBy ?? "system:governance-binding",
+  });
+  if (prior !== undefined) {
+    await new PgEventStore(client).append({
+      orgId: input.orgId,
+      projectId: input.projectId,
+      eventType: "governance.binding.superseded",
+      payload: {
+        projectId: input.projectId,
+        bindingId: prior.id,
+        supersededByBindingId: binding.id,
+        tierId: prior.tierId,
+      },
+    });
+  }
+  return { tier, binding, policyRevisionId: revision.id };
 }

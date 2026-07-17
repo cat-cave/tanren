@@ -14,6 +14,7 @@
 
 import type pg from "pg";
 import { migrateProjectConfig } from "../config/projectConfig.js";
+import { recordEffectivePolicySnapshot } from "../governance/effectivePolicySnapshotStore.js";
 import { buildAuthorityLandStore } from "./mergeAuthorityLandFinalizer.js";
 import { resolveLandTimeSignals, resolveLandTimeFindings } from "./landSignals.js";
 import { PgBudgetGate } from "../dag/budgetGate.js";
@@ -264,6 +265,13 @@ export async function buildBundleForMergeStage(
   // BEFORE building the bundle — an unresolvable config throws here, so a land is never
   // authorized with an empty `""` hash.
   const gateConfigHash = await resolveMergeCandidateGateConfigHash(codeHost, context);
+  const effectivePolicySnapshot = await recordEffectivePolicySnapshot(pool, {
+    orgId: row.org_id,
+    projectId: context.projectId,
+    subjectKind: "run",
+    subjectId: context.runId,
+    createdBy: "system:merge-authority",
+  });
   return buildMergeAuthorityBundle({
     pool,
     // PLANE-SPLIT (REQUIRED — audit D-R3.2): the durable land finalize routes through the
@@ -273,7 +281,7 @@ export async function buildBundleForMergeStage(
     orgId: row.org_id,
     projectConfigRaw: row.project_config,
     // gv-3 — the REAL effective-policy identity (not the schema-literal `version`).
-    policyIdentity: context.policyIdentity,
+    policyIdentity: effectivePolicySnapshot.effectivePolicyHash,
     // gv-3 — the REAL gate-config hash (not `""`), fail-closed above.
     gateConfigHash,
     gateOutcome: landSignals.gateOutcome,

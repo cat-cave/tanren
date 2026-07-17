@@ -194,9 +194,10 @@ describeDb("governance tiers — deterministic, append-only, and org-scoped", ()
 
     const events = await runWithOrgScope(pool, ORG_A, (client) =>
       client.query<{ event_type: string; binding_id: string | null }>(
-        `SELECT event_type, payload->>'policyBindingId' AS binding_id
+        `SELECT event_type, payload->>'bindingId' AS binding_id
            FROM events
           WHERE org_id = $1 AND project_id = $2
+            AND event_type IN ('governance.tier.created', 'governance.binding.activated')
             AND payload->>'tierId' = $3
           ORDER BY id`,
         [ORG_A, PROJECT_A, privateTier.id],
@@ -204,7 +205,7 @@ describeDb("governance tiers — deterministic, append-only, and org-scoped", ()
     );
     expect(events.rows).toEqual([
       { event_type: "governance.tier.created", binding_id: null },
-      { event_type: "governance.tier.activated", binding_id: activated.binding.id },
+      { event_type: "governance.binding.activated", binding_id: activated.binding.id },
     ]);
   });
 });
