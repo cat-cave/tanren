@@ -14,6 +14,7 @@ import { templatesSensitivityRules } from "./sensitivityRules.templates.js";
 import { windowPauseSensitivityRules } from "./sensitivityRules.windowPause.js";
 import {
   benchmarkSensitivityRules,
+  designSystemSensitivityRules,
   eventVocabularyW0SensitivityRules,
   governanceVocabularySensitivityRules,
   wave1SensitivityRules,
@@ -466,6 +467,8 @@ export const sensitivityRules: SensitivityRule[] = [
   // Mission-complete WAVE-2 governance policy-revision freeze (gv-7); every frozen
   // payload path is public.
   ...governanceVocabularySensitivityRules,
+  // Mission-complete ds-0 DESIGN-SYSTEM vocab freeze; every frozen payload path is public.
+  ...designSystemSensitivityRules,
 ];
 
 function rulesFor(eventName: string, entries: ReadonlyArray<[string, SensitivityRule["tag"]]>): SensitivityRule[] {

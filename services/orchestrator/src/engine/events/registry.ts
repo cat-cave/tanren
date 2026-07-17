@@ -96,6 +96,7 @@ import {
   IntegrationProvisionedPayload,
   wave1EventRegistry,
   governanceVocabularyRegistry,
+  designSystemVocabularyRegistry,
   NotificationEnqueuedPayload,
   NotificationFailedPayload,
   NotificationSentPayload,
@@ -182,13 +183,13 @@ import {
   IntegrationProofReusedPayload,
   IntegrationRebasePayload,
 } from "./schemas/dag.js";
-// Single source of truth mapping event names → typed Zod payload schemas. To add: (1)
-// Zod schema under events/schemas/, (2) wire here, (3) sensitivity tags in
-// sensitivityRules.ts, (4) regenerate events.event_type CHECK via codegen:events + db:generate.
+// Single source of truth mapping event names → typed Zod payload schemas. To add: (1) Zod schema under
+// events/schemas/, (2) wire here, (3) sensitivity tags in sensitivityRules.ts, (4) regenerate the CHECK.
 export const EventRegistry = {
   ...w0EventRegistry,
   ...wave1EventRegistry,
   ...governanceVocabularyRegistry,
+  ...designSystemVocabularyRegistry,
   // Run lifecycle
   "run.queued": RunQueuedPayload,
   "run.started": RunStartedPayload,
@@ -196,7 +197,6 @@ export const EventRegistry = {
   "run.failed": RunFailedPayload,
   // task #82 — window-pause auto-resume cycle.
   ...windowPauseEventRegistry,
-
   // Task lifecycle
   "task.queued": TaskQueuedPayload,
   "task.started": TaskStartedPayload,

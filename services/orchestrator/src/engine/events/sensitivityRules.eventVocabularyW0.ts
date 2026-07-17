@@ -3,6 +3,7 @@ import type { SensitivityRule } from "./sensitivity.js";
 export { benchmarkSensitivityRules } from "./sensitivityRules.benchmark.js";
 export { wave1SensitivityRules } from "./sensitivityRules.wave1.js";
 export { governanceVocabularySensitivityRules } from "./sensitivityRules.governanceVocabulary.js";
+export { designSystemSensitivityRules } from "./sensitivityRules.designSystem.js";
 
 function publicRules(eventName: string, paths: readonly string[]): SensitivityRule[] {
   return paths.map((path) => ({ eventName, path, tag: "public" }));
