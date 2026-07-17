@@ -154,8 +154,8 @@ export interface CostRecord {
   org_id: string;
 }
 
-// Wave-6 barrier column stubs. SQL behavior deliberately stays in the four
-// lane-owned conformance drivers, so this backing store owns shapes only.
+// Wave-6 barrier column stubs. Lane-owned conformance drivers add SQL behavior
+// beside these shapes as each repository becomes live.
 export interface FixtureLeaseRecord {
   org_id: string;
   project_id: string;

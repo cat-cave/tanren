@@ -31,7 +31,14 @@ import {
   projectConfigConflict,
 } from "./budget.js";
 import { checkFullProjectConfigPatch, checkGenericProjectCreateConfig } from "./createConfigGuard.js";
-import { GovernancePutSchema, handleGovernanceGet, handleGovernancePut } from "./governance.js";
+import {
+  createRepositoryVisibilityService,
+  GovernancePutSchema,
+  handleGovernanceGet,
+  handleGovernancePut,
+  mountRepositoryVisibilityRoutes,
+  type RepositoryVisibilityService,
+} from "./governance.js";
 import { GreenfieldCreateSchema, handleGreenfieldCreate, type GreenfieldCreateDeps } from "./greenfield.js";
 import { handleProjectArchive, handleProjectUnarchive, handleProjectUpgrade } from "./lifecycle.js";
 
@@ -46,6 +53,7 @@ interface ProjectRoutesOptions {
   bootstrapProject?: GreenfieldCreateDeps["bootstrapProject"];
   greenfieldPreflightDeploy?: GreenfieldCreateDeps["preflightDeploy"];
   greenfieldPrepareDeploy?: GreenfieldCreateDeps["prepareDeploy"];
+  repositoryVisibilityService?: RepositoryVisibilityService;
 }
 
 const ProjectCreateSchema = z.object({
@@ -59,6 +67,14 @@ const ProjectCreateSchema = z.object({
 
 export function createProjectRoutes(options: ProjectRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
+  const repositoryVisibilityService =
+    options.repositoryVisibilityService ??
+    createRepositoryVisibilityService({
+      pool: options.pool,
+      secrets: options.secrets,
+      githubHttp: options.githubHttp,
+      ...(options.githubAppMinter === undefined ? {} : { githubAppMinter: options.githubAppMinter }),
+    });
 
   app.get("/:orgId/projects", async (c) => {
     const actor = requireActor(c);
@@ -239,6 +255,8 @@ export function createProjectRoutes(options: ProjectRoutesOptions) {
     }
     return handleGovernancePut(c, options.pool, orgId, c.req.param("projectId"), parsed.data, actor.userId);
   });
+
+  mountRepositoryVisibilityRoutes(app, repositoryVisibilityService);
 
   // The project LIFECYCLE surface: archive PAUSES the project (cancels its in-flight
   // runs; the walker + reconciler then skip it), unarchive RESUMES it. Both org-admin
