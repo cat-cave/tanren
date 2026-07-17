@@ -35,7 +35,21 @@ export {
   type CreateIssueLoopInput,
   type AppendSourceFindingInput,
   type LinkIssueLoopEdgeInput,
+  type UpsertIssueLoopForSourceInput,
+  type AppendSourceFindingResult,
+  type TransitionIssueLoopInput,
+  type TransitionIssueLoopResult,
 } from "./issueLoops.js";
+export {
+  SourceSyncOutboxStore,
+  SOURCE_SYNC_STATES,
+  sourceSyncPayloadHash,
+  type SourceSyncState,
+  type SourceSyncOutboxRow,
+  type EnqueueSourceSyncInput,
+  type EnqueueSourceSyncResult,
+  type SourceSyncClaimInput,
+} from "./sourceSyncOutbox.js";
 export {
   SymptomContractStore,
   SymptomContractNotFoundError,

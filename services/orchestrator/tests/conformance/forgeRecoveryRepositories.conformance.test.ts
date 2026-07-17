@@ -19,7 +19,6 @@ import { ForgeRecoveryDb, forgeRecoveryClientForOrg } from "./forgeRecoveryMemor
 const ORG_A = "org_a";
 const ORG_B = "org_b";
 const repos = pgRepositories;
-
 function db(): ForgeRecoveryDb {
   return new ForgeRecoveryDb();
 }
@@ -33,7 +32,6 @@ function clientB(d: ForgeRecoveryDb): QueryClient {
 // An `IngestedItem` shape for the candidate upsert conformance cases.
 const item = (externalId: string, projectId: string | null) =>
   ({ externalId, title: "T", body: "B", severity: "info", projectId }) as const;
-
 function seedSpec(d: ForgeRecoveryDb, over: Partial<ForgeRecoveryDb["specs"][number]> = {}): void {
   d.specs.push({
     spec_id: "spec_a",
@@ -66,7 +64,6 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.discovery.getSpecMetadata(clientA(d), "spec_missing", systemActor)).toEqual({ found: false });
       expect(await repos.discovery.setSpecMetadata(clientA(d), "spec_missing", "{}", systemActor)).toBe(false);
     });
-
     it("lists existing specs bounded: active (non-terminal) first, then by recency (§7.5)", async () => {
       const d = db();
       // Insertion order: an old merged, a newer merged, then an active in_flight.
@@ -82,7 +79,6 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
         { specId: "s_old", title: "Zeta", status: "merged" },
       ]);
     });
-
     it("scopes metadata + list reads to the org (off-scope sees zero)", async () => {
       const d = db();
       seedSpec(d, { metadata: { x: 1 } });
@@ -92,7 +88,6 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
       expect(await repos.discovery.setSpecMetadata(clientB(d), "spec_a", "{}", systemActor)).toBe(false);
     });
   });
-
   describe("recovery", () => {
     function seedRun(d: ForgeRecoveryDb): void {
       d.runs.push({
@@ -443,6 +438,24 @@ describe("Repositories conformance: forge/recovery (in-memory pg)", () => {
     });
   });
 
+  it("sourceSyncOutbox enqueues, claims once, reclaims an expired lease, and verifies the returned row", async () => {
+    const d = db();
+    const queued = await repos.sourceSyncOutbox.enqueue(clientA(d), {
+      orgId: ORG_A,
+      issueLoopId: "loop_a",
+      sourceId: "src_a",
+      operation: "close",
+      payload: {},
+    });
+    const claim = (workerId: string) =>
+      repos.sourceSyncOutbox.claim(clientA(d), { id: queued.id, workerId, leaseMs: 60_000 });
+    expect(await claim("worker_a")).toMatchObject({ id: queued.id, state: "pending", claimOwner: "worker_a" });
+    expect(await claim("worker_b")).toBeUndefined();
+    d.sourceSyncOutbox[0]!.claim_expires_at = new Date(0).toISOString();
+    expect(await claim("worker_b")).toMatchObject({ id: queued.id, state: "pending", claimOwner: "worker_b" });
+    expect(await repos.sourceSyncOutbox.markVerified(clientA(d), queued.id, "worker_b")).toBe(true);
+    expect(await repos.sourceSyncOutbox.listRunnable(clientA(d), 10)).toEqual([]);
+  });
   describe("audits", () => {
     it("creates, reads, toggles, and records a job on the caller's client; cross-org fan-out", async () => {
       const d = db();

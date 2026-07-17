@@ -56,6 +56,12 @@ export interface WebhookProcessorDeps {
   // process-attempt identity and still cannot settle another live claim.
   workerId?: string;
   claimLeaseMs?: number;
+  /**
+   * Optional companion record for a claimed GitHub issue delivery. Production
+   * supplies the IssueSourceAdapter recorder; the webhook event still has one
+   * durable persistence/claim/retry path here.
+   */
+  recordIssueObservation?: (source: InboxSource, event: WebhookEvent) => Promise<void>;
 }
 
 // Map a persisted webhook event's payload to an ingest item. Only `issues` is
@@ -99,7 +105,17 @@ export async function processWebhookEvent(deps: WebhookProcessorDeps, event: Web
     return false;
   }
 
-  const mapped = mapEvent(event, source);
+  let mapped: ReturnType<typeof mapEvent>;
+  try {
+    // bh-7 observes the exact delivery bh-3 already persisted and claimed. It
+    // does not create a second webhook processor; a failed observation leaves
+    // this event recoverable for this processor's normal sweeper retry.
+    await deps.recordIssueObservation?.(source, event);
+    mapped = mapEvent(event, source);
+  } catch (error) {
+    await markFailure(deps, event, messageOf(error), false, workerId);
+    return false;
+  }
   if (mapped.kind === "skip") {
     // A non-ingest action (closed/deleted/PR) is a real terminal — mark processed.
     await runWithOrgScope(deps.pool, event.orgId, (client) => WebhookEventStore.complete(client, event.id, workerId));

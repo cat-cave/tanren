@@ -250,6 +250,9 @@ async function buildApp(answerer: TriageAnswerer, pool: pg.Pool) {
     secrets,
     answererFactory: () => answerer,
     autoRoute: intakeAutoRouteDeps(),
+    // This suite isolates bh-3's processor behavior; bh-7 has its own RLS
+    // integration proof through the same processor.
+    recordIssueObservation: async () => {},
   });
 }
 

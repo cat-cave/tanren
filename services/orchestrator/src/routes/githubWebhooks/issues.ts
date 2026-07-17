@@ -31,6 +31,7 @@ import {
   verifyGithubSignature,
   type WebhookProcessorDeps,
 } from "../../engine/forge/intake/index.js";
+import { ingestGithubWebhookObservation } from "../../engine/forge/githubIssueSourceAdapter.js";
 import { pgRepositories } from "../../engine/contracts/repositories.js";
 import { type InboxSource, type TriageAnswerer } from "../../engine/forge/inbox/index.js";
 import type { AutoRouteDeps } from "../../engine/forge/inbox/index.js";
@@ -48,6 +49,8 @@ export interface IssueWebhookRouteDeps {
   // The autonomous DAG-insert deps (system actor). Used by the background processor.
   // Defaults to the plain platform-admin system actor when the caller omits it.
   autoRoute?: AutoRouteDeps;
+  /** Test seam for the bh-7 issue-loop companion record. */
+  recordIssueObservation?: WebhookProcessorDeps["recordIssueObservation"];
 }
 
 /** Resolve a source system-scoped (the receiver has no tenant context in the path). */
@@ -63,6 +66,11 @@ export function createIssueWebhookRoutes(deps: IssueWebhookRouteDeps) {
     pool: deps.pool,
     answererFactory: deps.answererFactory,
     autoRoute: deps.autoRoute ?? intakeAutoRouteDeps(),
+    recordIssueObservation:
+      deps.recordIssueObservation ??
+      (async (source, event) => {
+        await ingestGithubWebhookObservation(deps.pool, source, event);
+      }),
   };
 
   app.post("/github/webhooks/issues/:sourceId", async (c) => {

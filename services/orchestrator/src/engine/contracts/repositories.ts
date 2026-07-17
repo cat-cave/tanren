@@ -46,6 +46,7 @@ import {
   FragmentsStore,
   EntityClaimStore,
   ReleaseInstancesStore,
+  SourceSyncOutboxStore,
 } from "../repositories/index.js";
 
 /** A pool or a checked-out (org-scoped) client — anything that can run a query. */
@@ -108,6 +109,7 @@ export interface Repositories {
   readonly entityClaims: typeof EntityClaimStore;
   /** Extended deploy lifecycle rows and their behavior-revision bindings. */
   readonly releaseInstances: typeof ReleaseInstancesStore;
+  readonly sourceSyncOutbox: typeof SourceSyncOutboxStore;
 }
 
 /**
@@ -144,6 +146,7 @@ export const pgRepositories: Repositories = {
   fragments: FragmentsStore,
   entityClaims: EntityClaimStore,
   releaseInstances: ReleaseInstancesStore,
+  sourceSyncOutbox: SourceSyncOutboxStore,
 } as const;
 
 export type { ActorRef };

@@ -39,6 +39,23 @@ export {
   type WebhookProcessorDeps,
 } from "./webhookProcessor.js";
 export { terminalizeInboxSource, deferInboxSourceRetry, type PermanentSourceFailure } from "./sourceTerminalization.js";
+
+export {
+  GithubIssueSourceAdapter,
+  ingestGithubWebhookObservation,
+  type GitHubIssueSourceAdapterDeps,
+} from "../githubIssueSourceAdapter.js";
+export {
+  ManualIssueSourceAdapter,
+  enqueueResolutionSync,
+  ingestIssueObservation,
+  type IssueSourceAdapter,
+  type IssueObservation,
+  type IssueSourceIngestResult,
+  type ResolutionTransitionInput,
+  type ResolutionTransitionResult,
+} from "../issueSourceAdapter.js";
+export { processSourceSync, sweepSourceSync, type SourceSyncWorkerDeps } from "../sourceSyncWorker.js";
 export {
   loadRunnableInboxSource,
   isInboxSourceBoundaryError,
