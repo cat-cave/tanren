@@ -9,6 +9,8 @@ export { wave4EventRegistry } from "./wave4Vocabulary.js";
 export { wave5EventRegistry } from "./wave5Vocabulary.js";
 export { wave6EventRegistry } from "./wave6Vocabulary.js";
 export { wave5And6EventRegistry } from "./wave5And6Vocabulary.js";
+export { resolutionClusterEventRegistry } from "./resolutionClusterVocabulary.js";
+export { wave5And6AndResolutionClusterEventRegistry } from "./wave5And6AndResolutionClusterVocabulary.js";
 export { ReviewApprovedPayload, ReviewChangesRequestedPayload } from "./reviewForgeReceipt.js";
 
 // External integration events: GitHub (branch/PR), the review lifecycle, and the

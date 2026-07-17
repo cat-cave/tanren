@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "issueLoopId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "resolutionDecisionId": {
+      "type": "string"
+    },
+    "resolutionJobId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "resolutionJobId",
+    "resolutionDecisionId"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.issue_loop.verified"
+}

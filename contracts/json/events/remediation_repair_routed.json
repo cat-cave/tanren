@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "failureSignatureHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "issueLoopId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "remediationAttemptId": {
+      "type": "string"
+    },
+    "specId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "remediationAttemptId",
+    "specId",
+    "failureSignatureHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.remediation.repair_routed"
+}

@@ -98,6 +98,16 @@ export const NAV_GROUPS: NavGroup[] = [
         phase: "2b",
         spec: "P2B-0008",
       },
+      // bh-14b reservation: the shell serves a documented placeholder until
+      // the Self-Healing route body mounts from the pre-reserved screens seam.
+      {
+        id: "selfHealing",
+        glyph: "✦",
+        label: "Self-Healing",
+        path: "/self-healing",
+        phase: "3+",
+        spec: "bh-14b",
+      },
     ],
   },
   {

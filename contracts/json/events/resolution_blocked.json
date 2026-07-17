@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "inputSnapshotHash": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "issueLoopId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "resolutionDecisionId": {
+      "type": "string"
+    },
+    "resolutionJobId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "resolutionJobId",
+    "resolutionDecisionId",
+    "inputSnapshotHash"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.resolution.blocked"
+}

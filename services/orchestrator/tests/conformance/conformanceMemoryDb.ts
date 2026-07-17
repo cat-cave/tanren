@@ -154,6 +154,59 @@ export interface CostRecord {
   org_id: string;
 }
 
+// Back-half cluster barrier column stubs. The serialized node owners add SQL
+// handlers beside these shapes; this pre-flight keeps the shared fake ready.
+export interface ResolutionJobRecord {
+  org_id: string;
+  project_id: string;
+  id: string;
+  issue_loop_id: string;
+  contract_id: string;
+  release_instance_id: string | null;
+  stage: string;
+  state: string;
+  lease_owner: string | null;
+  lease_expiry: Date | null;
+  idempotency_key: string;
+  attempt: number;
+  prior_attempt_id: string | null;
+}
+
+export interface ResolutionDecisionRecord {
+  org_id: string;
+  project_id: string;
+  id: string;
+  resolution_job_id: string;
+  issue_loop_id: string;
+  decision: string;
+  input_snapshot_hash: string;
+  created_at: Date;
+}
+
+export interface RemediationAttemptRecord {
+  org_id: string;
+  project_id: string;
+  id: string;
+  issue_loop_id: string;
+  iteration: number;
+  hypothesis: string;
+  spec_id: string | null;
+  run_id: string | null;
+  pr_ref: string | null;
+  merge_sha: string | null;
+  prior_attempt_id: string | null;
+  failure_signature: string;
+  created_at: Date;
+}
+
+export interface BehaviorVerificationRunRecord {
+  org_id: string;
+  id: string;
+  stage: string | null;
+  resolution_job_id: string | null;
+  classification: string | null;
+}
+
 // Wave-6 barrier column stubs. Lane-owned conformance drivers add SQL behavior
 // beside these shapes as each repository becomes live.
 export interface FixtureLeaseRecord {
@@ -261,6 +314,10 @@ export class MemoryDb {
   runTasks: RunTaskRecord[] = [];
   events: EventRecord[] = [];
   costRecords: CostRecord[] = [];
+  resolutionJobs: ResolutionJobRecord[] = [];
+  resolutionDecisions: ResolutionDecisionRecord[] = [];
+  remediationAttempts: RemediationAttemptRecord[] = [];
+  behaviorVerificationRuns: BehaviorVerificationRunRecord[] = [];
   fixtureLeases: FixtureLeaseRecord[] = [];
   behaviorEffectObservations: BehaviorEffectObservationRecord[] = [];
   effectObserverWatermarks: EffectObserverWatermarkRecord[] = [];

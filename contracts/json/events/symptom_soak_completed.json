@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "assertionIds": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "evidenceRefs": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "issueLoopId": {
+      "type": "string"
+    },
+    "projectId": {
+      "type": "string"
+    },
+    "resolutionJobId": {
+      "type": "string"
+    },
+    "verificationRunId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "projectId",
+    "issueLoopId",
+    "resolutionJobId",
+    "verificationRunId",
+    "assertionIds",
+    "evidenceRefs"
+  ],
+  "type": "object",
+  "x-tanren-schema-id": "tanren.event.symptom.soak.completed"
+}
