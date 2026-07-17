@@ -16,6 +16,7 @@ import {
 } from "../../engine/governance/policyRevisionStore.js";
 import type { ActorContextEnv } from "../../middleware/auth.js";
 import { actorCanAccessOrg, actorIsOrgAdmin } from "../orgs/access.js";
+import { createGovernanceTierRoutes } from "./tiers.js";
 
 const CreateRevisionBodySchema = z
   .object({
@@ -42,6 +43,8 @@ interface AuthorizedProject {
 
 export function createGovernanceRoutes(options: GovernanceRoutesOptions) {
   const app = new Hono<ActorContextEnv>();
+
+  app.route("/", createGovernanceTierRoutes(options));
 
   app.post("/:orgId/projects/:projectId/governance/revisions", async (c) => {
     const authorized = await authorizeProject(c, options.pool, true);
