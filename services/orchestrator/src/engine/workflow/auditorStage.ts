@@ -153,15 +153,16 @@ async function runAuditorTerminalBlock(
 ): Promise<AuditorStageResult> {
   const runtimeSeconds = secondsSince(startedAt);
   emitStageTiming("audit", Date.now() - startedAt, { runId: args.runId });
-  // SPEC-LOOP REDESIGN: the auditor emits FINDINGS as its sole currency. `findings` is
-  // a REQUIRED field on the parsed `AuditAnswer` (no `.default([])`), so the verdict
-  // ALWAYS carries a real, explicitly-emitted array. We persist it VERBATIM (no
-  // `?? []`): a clean `[]` here can ONLY mean the auditor explicitly emitted an empty
-  // list, never a missing/omitted one (that would have failed to parse upstream).
+  // SPEC-LOOP REDESIGN: the auditor emits FINDINGS as its sole workflow currency.
+  // `findings` is REQUIRED on the parsed `AuditAnswer` (no `.default([])`), so the
+  // verdict always carries a real, explicitly-emitted array. `passed` is a derived
+  // notification projection only: it never drives triage or merge posture.
   const findings = auditorFindings(result.verdict);
   // PRE-TERMINAL `auditor.verdict` wrapped: a throw here lands as
   // `event_append_failed` rather than the fail-closed `crashed`.
-  await wrapEventAppend(() => args.appendEvent("auditor.verdict", { runId: args.runId, findings }, auditorTaskId));
+  await wrapEventAppend(() =>
+    args.appendEvent("auditor.verdict", { runId: args.runId, passed: findings.length === 0, findings }, auditorTaskId),
+  );
   await recordAnswererCost({
     ctx: args.costCtx,
     adapter: args.adapter,

@@ -372,6 +372,7 @@ async function runCheckerStageBody(args: CheckerStageInput): Promise<CheckerDeci
         taskId: args.checkerTaskId,
         subtaskIndex: args.subtask.index,
         complete: decision.kind === "pass",
+        passed: decision.kind === "pass",
         reasoning: result.verdict.reasoning,
         behaviorIdsFailed: decision.kind === "reject" ? [...decision.behaviorIdsFailed] : [],
         findings: result.verdict.findings.map((f) => ({

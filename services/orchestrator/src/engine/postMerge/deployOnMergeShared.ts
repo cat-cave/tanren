@@ -36,6 +36,7 @@ import {
 import { buildDeployAdapter, DIRECT_API_ADAPTER_KIND } from "../deploy/buildDeployAdapter.js";
 import { type SecretStore, type DeployHttpTransport, type FlyImageBuilder } from "./deployOnMergeDeployDeps.js";
 import { attachRuntimeAppEnv, loadDeployOperationGrant, missingDeployGrantError } from "./deployOnMergeRuntime.js";
+import { PgDeployTriggerGate, type DeployTriggerGate } from "./deployTriggerGate.js";
 const log = createLogger("deploy-on-merge");
 
 /** The deploy artifact a project carries in its config once a deploy capability was provisioned. */
@@ -109,6 +110,7 @@ export interface DeployOnMergeWatcherDeps {
    */
   flyImageBuilder?: FlyImageBuilder;
   releaseInstances?: ReleaseInstancesRepository;
+  triggerGate?: DeployTriggerGate;
 }
 
 /**
@@ -119,10 +121,12 @@ export interface DeployOnMergeWatcherDeps {
 export class DeployOnMergeWatcher {
   private readonly eventStore: EventStore;
   private readonly releaseInstances: ReleaseInstancesRepository;
+  private readonly triggerGate: DeployTriggerGate;
 
   constructor(private readonly deps: DeployOnMergeWatcherDeps) {
     this.eventStore = deps.eventStore ?? deps.runStateWriter ?? new PgEventStore(deps.pool);
     this.releaseInstances = deps.releaseInstances ?? new PgReleaseInstancesRepository(deps.pool);
+    this.triggerGate = deps.triggerGate ?? new PgDeployTriggerGate(deps.pool);
   }
 
   /**
@@ -150,64 +154,64 @@ export class DeployOnMergeWatcher {
     // scope) lives on `.orgId` (incomplete) or `.target.orgId` (configured).
     const orgId = resolved.kind === "configured" ? resolved.target.orgId : resolved.orgId;
 
-    // Idempotent on ANY terminal outcome — GATE EARLY so the pre-resolution `deploy.skipped`
-    // branches below cannot self-loop the run-activity bus. `deploy.skipped` NOTIFYs the same
-    // wake path (per `eventStore.ts`), so without this gate a merge with no_sha /
-    // config_incomplete would re-wake into the same branch, re-append, and storm at every
-    // `warn`. A VERIFIED / FAILED deploy is likewise terminal (the FAILED verify-retry append
-    // wakes the subscriber; without the gate it would re-verify + re-append). One append per
-    // merge suffices — the throw at the pre-resolution branches is fail-loud, not a signal
-    // to re-drive.
-    if (await this.alreadyTerminal(lineage)) return;
+    const gate = await this.triggerGate.run(runId, async () => {
+      // The terminal read and every external effect are inside the cross-process
+      // gate. Two `merge.completed` listeners therefore cannot both observe a
+      // pre-terminal run and trigger two provider builds.
+      if (await this.alreadyTerminal(lineage)) return;
 
-    // A merge with NO mergeSha cannot deploy — DURABLE `deploy.skipped` then fail LOUD.
-    if (merged.kind === "no_sha") {
-      const detail = `run ${runId} merge.completed carries no mergeSha — cannot determine the merged commit to deploy`;
-      await appendDeploySkipped(this.verifyCtx, {
-        runId,
-        projectId,
-        orgId,
-        reason: "merge_sha_missing",
-        detail,
-      });
-      throw new Error(`deployOnMerge: ${detail}`);
-    }
-
-    // A deploy is expected but the config has no COMPLETE target — DURABLE `deploy.skipped`
-    // (vs a console-only swallow) then fail LOUD.
-    if (resolved.kind === "incomplete") {
-      const detail =
-        `project '${projectId}' (org '${orgId}') links a deploy integration (deploy expected) but ` +
-        `its config has no complete deploy target: ${resolved.reason}. Set deployProvider + deployAppId.`;
-      await appendDeploySkipped(this.verifyCtx, {
-        runId,
-        projectId,
-        orgId,
-        reason: "config_incomplete",
-        detail,
-      });
-      throw new Error(`deployOnMerge: ${detail} Refusing to silently skip.`);
-    }
-    const target = resolved.target;
-    const mergedInfo = merged.info;
-    if (target.orgId !== mergedInfo.orgId) {
-      throw new Error(`deployOnMerge: target organization does not match validated run '${runId}'`);
-    }
-
-    // FAIL-CLOSED + LOUD + DURABLE: a deploy is now genuinely EXPECTED (a target
-    // resolved). ANY throw — denied egress, a missing/lost grant, the provider
-    // build/release failing, the env attach failing — must surface as a durable
-    // `deploy.failed` (→ a `warn`) so the merge can never look "done" with no live URL.
-    // `verifyWithRetry` records its OWN verify-phase failure first (the `verifyPhase`
-    // guard skips a duplicate trigger-phase append for it).
-    const recorded = { verifyPhase: false };
-    try {
-      await this.driveExpectedDeploy(runId, mergedInfo, target, recorded);
-    } catch (error) {
-      if (!recorded.verifyPhase) {
-        await appendDeployFailed(this.verifyCtx, { runId, projectId, target, phase: "trigger" });
+      // A merge with NO mergeSha cannot deploy — DURABLE `deploy.skipped` then fail LOUD.
+      if (merged.kind === "no_sha") {
+        const detail = `run ${runId} merge.completed carries no mergeSha — cannot determine the merged commit to deploy`;
+        await appendDeploySkipped(this.verifyCtx, {
+          runId,
+          projectId,
+          orgId,
+          reason: "merge_sha_missing",
+          detail,
+        });
+        throw new Error(`deployOnMerge: ${detail}`);
       }
-      throw error;
+
+      // A deploy is expected but the config has no COMPLETE target — DURABLE `deploy.skipped`
+      // (vs a console-only swallow) then fail LOUD.
+      if (resolved.kind === "incomplete") {
+        const detail =
+          `project '${projectId}' (org '${orgId}') links a deploy integration (deploy expected) but ` +
+          `its config has no complete deploy target: ${resolved.reason}. Set deployProvider + deployAppId.`;
+        await appendDeploySkipped(this.verifyCtx, {
+          runId,
+          projectId,
+          orgId,
+          reason: "config_incomplete",
+          detail,
+        });
+        throw new Error(`deployOnMerge: ${detail} Refusing to silently skip.`);
+      }
+      const target = resolved.target;
+      const mergedInfo = merged.info;
+      if (target.orgId !== mergedInfo.orgId) {
+        throw new Error(`deployOnMerge: target organization does not match validated run '${runId}'`);
+      }
+
+      // FAIL-CLOSED + LOUD + DURABLE: a deploy is now genuinely EXPECTED (a target
+      // resolved). ANY throw — denied egress, a missing/lost grant, the provider
+      // build/release failing, the env attach failing — must surface as a durable
+      // `deploy.failed` (→ a `warn`) so the merge can never look "done" with no live URL.
+      // `verifyWithRetry` records its OWN verify-phase failure first (the `verifyPhase`
+      // guard skips a duplicate trigger-phase append for it).
+      const recorded = { verifyPhase: false };
+      try {
+        await this.driveExpectedDeploy(runId, mergedInfo, target, recorded);
+      } catch (error) {
+        if (!recorded.verifyPhase) {
+          await appendDeployFailed(this.verifyCtx, { runId, projectId, target, phase: "trigger" });
+        }
+        throw error;
+      }
+    });
+    if (!gate.acquired) {
+      log.info("another worker owns the deploy trigger for this run", { runId, projectId });
     }
   }
 
@@ -310,14 +314,20 @@ export class DeployOnMergeWatcher {
       { repo: merged.repoSlug, ref: merged.ref },
     );
 
-    // Record the deploy — the deploy target + resolved live URL + deployment id, all
-    // non-secret. Under the run's org scope so the tenant `events` write is allowed.
+    // Record the deploy with the pre-existing `(run_id, idempotency_key)` unique
+    // index. The advisory gate above prevents a duplicate provider build; this
+    // durable first-wins append is the crash/retry backstop for the event itself.
     await runWithJobOrgId(target.orgId, async () => {
-      await this.eventStore.append({
+      const appendIfAbsent = this.eventStore.appendPriorIfAbsent?.bind(this.eventStore);
+      if (appendIfAbsent === undefined) {
+        throw new Error("deployOnMerge: deploy.triggered requires the durable appendPriorIfAbsent event seam");
+      }
+      const appended = await appendIfAbsent({
         runId,
         projectId: merged.projectId,
         orgId: target.orgId,
         eventType: "deploy.triggered",
+        idempotencyKey: "deploy.triggered",
         payload: {
           provider: target.provider,
           appId: target.appId,
@@ -335,6 +345,9 @@ export class DeployOnMergeWatcher {
           ...deployAuditEnvelope(target),
         },
       });
+      if (!appended) {
+        throw new Error(`deployOnMerge: duplicate deploy.triggered claim for run '${runId}'`);
+      }
     });
 
     // PROVE the deploy: poll the provider to a READY terminal + smoke-check the URL.

@@ -19,13 +19,20 @@ export interface EventContext {
 
 // effectiveSeverityFor: the registry's default-severity map is the base
 // rate; a few payload shapes carry per-instance severity hints (run.completed
-// outcome "fail", release.finalized cleanedUp=false, demo.completed failed>0)
-// so the matrix is actionable without proliferating event names.
+// outcome "fail", checker/auditor verdict passed=false, release.finalized
+// cleanedUp=false, demo.completed failed>0) so the matrix is actionable without
+// proliferating event names.
 export function effectiveSeverityFor(event: TypedEvent): Severity {
   const base = defaultSeverityFor(event.eventType);
   if (event.eventType === "run.completed") {
     const payload = event.payload as { outcome?: string };
     if (typeof payload.outcome === "string" && payload.outcome.includes("fail")) {
+      return promote(base);
+    }
+  }
+  if (event.eventType === "checker.verdict" || event.eventType === "auditor.verdict") {
+    const payload = event.payload as { passed?: boolean };
+    if (payload.passed === false) {
       return promote(base);
     }
   }

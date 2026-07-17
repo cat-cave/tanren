@@ -215,10 +215,11 @@ export const CheckerCompletedPayload = z
   })
   .strict();
 
-// SPEC-LOOP REDESIGN: the checker is COMPLETENESS-FINDINGS-ONLY (no binary
-// `passed`). `complete` is the deterministic loop's read (findings.length === 0);
-// `findings` is the emitted completeness list (all treated as P0). `reasoning` is the
-// narration; `behaviorIdsFailed` collects the downstream-blocked behaviors.
+// SPEC-LOOP REDESIGN: the checker is COMPLETENESS-FINDINGS-ONLY for workflow
+// control. `complete` is the deterministic loop's read (findings.length === 0);
+// `passed` is a redundant notification projection so the dispatcher can promote
+// an actionable negative verdict without interpreting findings. `findings` is the
+// emitted completeness list (all treated as P0); `reasoning` is the narration.
 const CheckerFindingPayload = z
   .object({
     id: z.string(),
@@ -234,6 +235,7 @@ export const CheckerVerdictPayload = z
     taskId: z.string(),
     subtaskIndex: z.number().int(),
     complete: z.boolean(),
+    passed: z.boolean().optional(),
     reasoning: z.string(),
     behaviorIdsFailed: z.array(z.string()),
     findings: z.array(CheckerFindingPayload),
@@ -275,9 +277,9 @@ export const AuditorCompletedPayload = z
   })
   .strict();
 
-// SPEC-LOOP REDESIGN: the auditor is FINDINGS-ONLY (no `passed`/`recommendedAction`).
-// The explicit P0–P3 findings list IS the verdict; the loop's triage + the project
-// posture decide what each severity means for the merge.
+// SPEC-LOOP REDESIGN: the auditor is FINDINGS-ONLY for workflow control. The explicit
+// P0–P3 findings list IS the verdict; the optional `passed` projection lets notification
+// routing promote a negative verdict without changing the loop's triage/posture rules.
 const AuditorFindingPayload = z
   .object({
     id: z.string(),
@@ -291,6 +293,7 @@ const AuditorFindingPayload = z
 export const AuditorVerdictPayload = z
   .object({
     runId: z.string(),
+    passed: z.boolean().optional(),
     // The explicit P0–P3 findings list — the SOLE audit currency. REQUIRED.
     findings: z.array(AuditorFindingPayload),
   })
