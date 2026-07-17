@@ -222,7 +222,7 @@ describeDb("in-16 — transactional delivery outbox on authorized land", () => {
       runWithOrgScope(ownerPool, ORG_ID, (client) =>
         applyFinalizeLand(client, finalizeInput({ authorityDecisionId: "decision-does-not-exist" })),
       ),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/foreign key/u);
 
     expect(await mergeCompletedCount()).toBe(0);
     expect(await specStatus()).toBe("in_flight");
