@@ -963,7 +963,7 @@ smoke-rls-effect-observations:
   TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/effectObserver.rls.integration.test.ts
 
 smoke-rls-integration-proof-units:
-  echo "wave-6 barrier stub — mq-6 lane replaces body"
+  DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run --no-file-parallelism services/orchestrator/tests/integrationProofUnits.rls.integration.test.ts
 
 smoke-rls-repo-visibility:
   DATABASE_URL="${DATABASE_URL:-postgres://tanren:tanren@localhost:5432/tanren}" TANREN_RLS_DB_TEST=1 corepack pnpm exec vitest run services/orchestrator/tests/repositoryVisibilityObservations.rls.integration.test.ts

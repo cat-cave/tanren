@@ -29,6 +29,8 @@ import type {
   MaterializedIntegrationNodeRecord,
 } from "../../../src/engine/merge/integrationNodeMaterializer.js";
 
+export { createInMemoryIntegrationProofUnitStore } from "./inMemoryIntegrationProofUnits.js";
+
 interface QueueRow {
   queueId: string;
   runId: string;

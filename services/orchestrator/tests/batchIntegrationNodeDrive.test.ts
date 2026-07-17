@@ -27,8 +27,10 @@ import {
   driveBatchThroughNode,
 } from "../src/engine/merge/batchIntegrationNodeDrive.js";
 import type { JjLocalIntegrationResult } from "../src/engine/dag/jjLocalIntegration.js";
+import { IntegrationProofUnitGraph } from "../src/engine/dag/integrationProofUnits.js";
 import type { CoverageAuthorityReadyNodeInput } from "../src/engine/runtimeVerification/coverageAuthorityMaterializer.js";
 import { BatchGateProofEvidenceV1 } from "../src/engine/merge/multiMemberAuthorityEvidence.js";
+import { createInMemoryIntegrationProofUnitStore } from "./conformance/fakes/inMemoryMergeQueue.js";
 
 /** The gate spy signature (a recompute-only gate over the open workspace). */
 type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
@@ -37,6 +39,7 @@ type GateFn = () => Promise<{ verdict: BatchCheckVerdict; passed: boolean }>;
 class FakeNodeStore implements BatchNodeStore {
   readonly nodes = new Map<string, IntegrationNode>();
   readonly proofs = new Map<string, { nodeId: string; verdict: string; evidence?: unknown }>();
+  readonly proofUnits = createInMemoryIntegrationProofUnitStore();
   // Stays EMPTY — the jj-local path writes no host ref.
   hostRefsWritten: string[] = [];
 
@@ -61,6 +64,18 @@ class FakeNodeStore implements BatchNodeStore {
       treeHash: input.treeHash,
       status: "ready",
     });
+    if (!this.proofUnits.db.integrationNodes.some((node) => node.node_id === nodeId)) {
+      this.proofUnits.db.integrationNodes.push({
+        node_id: nodeId,
+        org_id: input.orgId,
+        project_id: input.projectId,
+        proof_root: null,
+        quarantine_epoch: null,
+        toolchain_hash: null,
+        design_contract_version: null,
+        behavior_manifest_hash: null,
+      });
+    }
     return nodeId;
   }
 
@@ -156,6 +171,7 @@ function deps(
 ): BatchNodeDriveDeps {
   return {
     nodes: store,
+    proofUnits: new IntegrationProofUnitGraph(store.proofUnits, events),
     eventStore: events as never,
     jjWorkspaceDeps: { ssh: {} as never } as never,
     integrate: fakeIntegratePort(store, integratedBaseSha),
@@ -226,7 +242,8 @@ describe("driveBatchThroughNode — §3 proof reuse at the batch verdict site", 
     const second = await driveBatchThroughNode(FACTS, d2);
     expect(second.result).toBe("pass");
     expect(gate2).not.toHaveBeenCalled();
-    // The skip is narrated.
+    // The production entrypoint's proof-unit graph narrates the skip.
+    expect(events2.appended.some((e) => e.eventType === "integration.proof_unit.reused")).toBe(true);
     expect(events2.appended.some((e) => e.eventType === "integration.proof.reused")).toBe(true);
   });
 

@@ -14,7 +14,9 @@ import { bootstrapCommand, type CiConfigV1 } from "../ci/index.js";
 import type { CommandSubstrate } from "../contracts/commandSubstrate.js";
 import type { GovernancePosture } from "../config/shared.js";
 import type { EventStore } from "../eventStore.js";
+import { IntegrationProofUnitGraph } from "../dag/integrationProofUnits.js";
 import type { LiveJjWorkspace } from "../providers/liveJjWorkspace.js";
+import { PgIntegrationProofUnitRepository } from "../repositories/integrationProofUnits.js";
 import type { EventName, EventPayload } from "../events/index.js";
 import {
   DEFAULT_BOOTSTRAP_COMMAND,
@@ -43,6 +45,14 @@ export interface BatchNodeGateClosureDeps {
   quarantinedStepNames?: ReadonlySet<string>;
   /** Exact test-filter environment covered by the proof's app-env hash. */
   appEnv?: Record<string, string>;
+}
+
+/** Build the durable graph the production batch gate evaluates before running work. */
+export function batchProofUnitGraph(
+  pool: ConstructorParameters<typeof PgIntegrationProofUnitRepository>[0],
+  events: EventStore,
+): IntegrationProofUnitGraph {
+  return new IntegrationProofUnitGraph(new PgIntegrationProofUnitRepository(pool), events);
 }
 
 /**

@@ -42,7 +42,7 @@ import type { GitHubHttpClient, GithubAppTokenMinter } from "../providers/github
 import { resolveVcsToken } from "../credentials/vcsCredentials.js";
 import { PgIntegrationNodeModel } from "../dag/integrationNodesPg.js";
 import { driveBatchThroughNode } from "./batchIntegrationNodeDrive.js";
-import { batchNodeGate, batchNodeResolveConfig } from "./batchNodeGate.js";
+import { batchNodeGate, batchNodeResolveConfig, batchProofUnitGraph } from "./batchNodeGate.js";
 import { createLogger } from "../observability/logger.js";
 import { buildCoverageAuthorityReadyNodeMaterializer } from "../runtimeVerification/coverageAuthorityMaterializer.js";
 import { activeQuarantineVersion, loadActiveQuarantine, quarantineEnv } from "../workflow/ciQuarantine.js";
@@ -251,6 +251,7 @@ export class PgBatchChecker implements BatchChecker {
         },
         {
           nodes: new PgIntegrationNodeModel(this.deps.pool),
+          proofUnits: batchProofUnitGraph(this.deps.pool, eventStore),
           eventStore,
           jjWorkspaceDeps: {
             facts: {
