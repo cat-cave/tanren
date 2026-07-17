@@ -10,12 +10,13 @@
 // returned `ProvisionOutcome` and the emitted event carry ref NAMES, never values.
 
 import { z } from "zod";
-import type {
-  AuthorizeOperationResult,
-  IntegrationAuthority,
-  IntegrationOperationTarget,
+import {
+  projectIntegrationOperationTarget,
+  type AuthorizeOperationResult,
+  type IntegrationAuthority,
+  type IntegrationOperationTarget,
 } from "../contracts/integrationAuthority.js";
-import { projectIntegrationOperationTarget } from "../contracts/integrationAuthority.js";
+import type { IntegrationStateWriter } from "../contracts/integrationStateWriter.js";
 import { IntegrationConnectionsStore } from "../repositories/integrationConnections.js";
 import type { IntegrationQueryClient } from "../repositories/integrationQuery.js";
 import type { EventStore } from "../eventStore.js";
@@ -32,7 +33,7 @@ import {
   type ProvisionMode,
 } from "../contracts/integrationProvisioner.js";
 import type { ActorRef } from "../state/actor.js";
-import { persistProvisionedArtifact } from "./provisioningPersistence.js";
+import { persistProvisionedArtifact, runProvisioningLifecycle } from "./provisioningPersistence.js";
 
 /**
  * The canonical capability → provider-kind correspondence. Onboarding asks for a
@@ -112,6 +113,16 @@ export interface ProvisionRequest {
   stack?: string;
   /** Human label used to name the created leaf resource + match in brownfield. */
   name?: string;
+  /**
+   * Present only for a first-class lifecycle reconciliation. Legacy onboarding
+   * has no requirement row and deliberately leaves this absent; it must not
+   * manufacture a compatibility reconciliation identity.
+   */
+  reconciliation?: {
+    reconciliationId: string;
+    claimOwner: string;
+    leaseMs: number;
+  };
 }
 
 /** A structured "the org hasn't linked this provider yet" response (not a throw). */
@@ -268,6 +279,8 @@ export interface ProvisioningEngineDeps {
   actor: ActorRef;
   /** Sole eligibility authority — required for any secret/provider construction. */
   authority: IntegrationAuthority;
+  /** Control-plane lifecycle writer; reconciliation workers require this seam. */
+  integrationStateWriter?: IntegrationStateWriter;
   /** Override the provisioner construction (tests pass a fake); prod uses the registry. */
   buildProvisioner?: (kind: string) => IntegrationProvisioner;
 }
@@ -281,6 +294,28 @@ export async function provisionCapability(
   deps: ProvisioningEngineDeps,
   request: ProvisionRequest,
 ): Promise<ProvisionOutcome> {
+  const reconciliation = request.reconciliation;
+  if (reconciliation !== undefined) {
+    const writer = deps.integrationStateWriter;
+    if (writer === undefined) {
+      throw new Error("integration reconciliation requires an IntegrationStateWriter");
+    }
+    const capabilityRequest = { ...request, reconciliation: undefined };
+    const lifecycle = await runProvisioningLifecycle({
+      writer,
+      claim: { orgId: request.orgId, ...reconciliation },
+      work: () => provisionCapability(deps, capabilityRequest),
+      completion: (outcome) => ({
+        status: outcome.status === "provisioned" ? "succeeded" : "needs_attention",
+        ...(outcome.status === "provisioned" ? {} : { failureClassification: "provisioning_unresolved" }),
+      }),
+      stateUnknown: { failureClassification: "provider_or_persistence_unknown" },
+    });
+    if (lifecycle.status === "not_claimed") {
+      throw new Error(`integration reconciliation '${reconciliation.reconciliationId}' is not claimable`);
+    }
+    return lifecycle.result;
+  }
   const providerKind = resolveProviderKind(request.capability, request.providerKind);
   if (providerKind === "slack") {
     // The current Slack notification channel accepts incoming-webhook refs; a

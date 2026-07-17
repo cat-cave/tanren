@@ -40,6 +40,7 @@ export * from "./mtlsChannel.js";
 // Direct/Http impls live under `engine/worker/**` (they carry the store / Node
 // surface), imported directly by the worker/boot — not re-exported here.
 export * from "./runStateWriter.js";
+export * from "./integrationStateWriter.js";
 export * from "./recoveryPreparation.js";
 export * from "./notificationOutbox.js";
 export * from "./secretStore.js";

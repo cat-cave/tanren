@@ -14,6 +14,8 @@ import type {
   ProjectContext,
   ProvisionedArtifact,
 } from "../../../src/engine/contracts/integrationProvisioner.js";
+import type { IntegrationStateWriter } from "../../../src/engine/contracts/integrationStateWriter.js";
+import { runProvisioningLifecycle } from "../../../src/engine/integrations/provisioningPersistence.js";
 
 export interface InMemoryProvisionerOptions {
   /** The capability id(s) this fake satisfies (default ["errors"]). */
@@ -21,6 +23,19 @@ export interface InMemoryProvisionerOptions {
   /** Pre-existing provider resources for brownfield discover() (default none). */
   existing?: ExistingResource[];
 }
+
+export interface InMemoryProvisioningReconciliation {
+  writer: IntegrationStateWriter;
+  reconciliationId: string;
+  claimOwner: string;
+  leaseMs: number;
+  grant: OrgGrant;
+  projectCtx: ProjectContext;
+}
+
+export type InMemoryProvisioningReconciliationResult =
+  | { status: "not_claimed" }
+  | { status: "completed"; artifact: ProvisionedArtifact };
 
 /**
  * A behavioral IntegrationProvisioner over an in-memory resource set. `provision`
@@ -69,6 +84,27 @@ export class InMemoryIntegrationProvisioner implements IntegrationProvisioner {
       throw new Error(`cannot bind unknown resource '${existingResourceId}'`);
     }
     return this.artifactFor(existingResourceId, grant);
+  }
+
+  /**
+   * Fixture data-plane path: external provider state lives in this fake, while
+   * every durable reconciliation transition goes through the writer seam. The
+   * fake intentionally exposes no query/direct-lifecycle mutation method.
+   */
+  async reconcile(input: InMemoryProvisioningReconciliation): Promise<InMemoryProvisioningReconciliationResult> {
+    const lifecycle = await runProvisioningLifecycle({
+      writer: input.writer,
+      claim: {
+        orgId: input.projectCtx.orgId,
+        reconciliationId: input.reconciliationId,
+        claimOwner: input.claimOwner,
+        leaseMs: input.leaseMs,
+      },
+      work: () => this.provision(input.grant, input.projectCtx),
+      completion: () => ({ status: "succeeded" }),
+      stateUnknown: { failureClassification: "fake_provider_or_persistence_unknown" },
+    });
+    return lifecycle.status === "not_claimed" ? lifecycle : { status: "completed", artifact: lifecycle.result };
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await

@@ -8,6 +8,11 @@ import { InboxStore } from "../repositories/inbox.js";
 import { SourceKind } from "../forge/inbox/types.js";
 import { ChannelKind } from "../notifications/schemas.js";
 import type { ActorRef } from "../state/actor.js";
+import type {
+  CompleteIntegrationReconciliationInput,
+  IntegrationStateWriter,
+  MarkIntegrationReconciliationStateUnknownInput,
+} from "../contracts/integrationStateWriter.js";
 
 interface ArtifactPersistenceRequest {
   projectId: string;
@@ -20,6 +25,59 @@ export interface PersistedIntegrationSurfaces {
   notificationTargetId?: string;
   projectConfigKeys: string[];
   deployRef?: string;
+}
+
+/** The data-plane hand-off for one provider operation's durable lifecycle row. */
+export interface ProvisioningLifecycleWork<T> {
+  writer: IntegrationStateWriter;
+  claim: {
+    orgId: string;
+    reconciliationId: string;
+    claimOwner: string;
+    leaseMs: number;
+  };
+  work(): Promise<T>;
+  completion(result: T): Omit<CompleteIntegrationReconciliationInput, "orgId" | "reconciliationId" | "claimOwner">;
+  stateUnknown: Omit<MarkIntegrationReconciliationStateUnknownInput, "orgId" | "reconciliationId" | "claimOwner">;
+}
+
+export type ProvisioningLifecycleResult<T> = { status: "not_claimed" } | { status: "completed"; result: T };
+
+/**
+ * Run provider/persistence work only while the control-plane writer holds the
+ * reconciliation claim. This module deliberately has no integration_reconciliations
+ * SQL: lifecycle state can move only through {@link IntegrationStateWriter}.
+ */
+export async function runProvisioningLifecycle<T>(
+  input: ProvisioningLifecycleWork<T>,
+): Promise<ProvisioningLifecycleResult<T>> {
+  const claimed = await input.writer.claim(input.claim);
+  if (claimed === undefined) return { status: "not_claimed" };
+  try {
+    const result = await input.work();
+    const complete = input.completion(result);
+    const completed = await input.writer.complete({
+      orgId: input.claim.orgId,
+      reconciliationId: input.claim.reconciliationId,
+      claimOwner: input.claim.claimOwner,
+      ...complete,
+    });
+    if (!completed) {
+      throw new Error(`integration reconciliation '${input.claim.reconciliationId}' lost its claim before completion`);
+    }
+    return { status: "completed", result };
+  } catch (error) {
+    // A provider might have completed just before a persistence failure. Do not
+    // replay that effect blindly: record the frozen state_unknown transition via
+    // the writer and let a reconciler inspect the provider idempotency key.
+    await input.writer.stateUnknown({
+      orgId: input.claim.orgId,
+      reconciliationId: input.claim.reconciliationId,
+      claimOwner: input.claim.claimOwner,
+      ...input.stateUnknown,
+    });
+    throw error;
+  }
 }
 
 /** Persist every populated artifact surface without ever reading secret values. */
