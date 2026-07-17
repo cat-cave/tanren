@@ -459,6 +459,7 @@ export * from "./schemaIntegrationOperations.js";
 export * from "./schemaIntegrationEnvironment.js";
 export * from "./schemaIntegrationSelection.js";
 export * from "./schemaProjectDerivations.js";
+export { issueLoops, sourceFindings, issueLoopEdges } from "./schemaIssueLoops.js";
 export { fragments } from "./schemaFragments.js";
 export { entityClaims } from "./schemaClaims.js";
 export { environments } from "./schemaEnvironments.js";
